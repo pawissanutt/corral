@@ -247,7 +247,7 @@ fn claimed_owner_action_lands_with_agent_marker_but_direct_build_landing_stays_r
         let input = container.journal_owner_input("A-1", NewOwnerInput {
             generation: grant.generation, turn: None, source: OwnerInputSource::Pane,
             sha256: corral_core::agent::paths::sha256_hex(b"Finish it here"), text: "Finish it here".into(),
-            truncated: false, command: None, answers: None, request: "owner-input".into(),
+            truncated: false, command: None, answers: None, request: "owner-input".into(), binding: None,
         });
         container.state.receipts.push(RequestReceipt {
             version: AGENT_RECORD_VERSION, request_id: "finish-here".into(), op: "owner_action".into(),

@@ -82,9 +82,19 @@ fn board_driver_sessions_inbox_badge_and_cowork_done() {
     println!("TUI DRIVER assistants panel and PM inbox:\n{text}");
     app.handle_key(code(KeyCode::Esc));
     let text = render(&mut app);
+    // The shared responsibility label replaces the bare `asst` marker on T-007's own card:
+    // same column, within that card's lines (not any matching label elsewhere).
+    let col = |line: &str, needle: &str| line.find(needle).map(|byte| line[..byte].chars().count());
+    let lines: Vec<&str> = text.lines().collect();
+    let (row, id_col) = lines
+        .iter()
+        .enumerate()
+        .find_map(|(i, l)| col(l, "T-007").map(|c| (i, c)))
+        .expect("T-007 card rendered");
     assert!(
-        text.lines()
-            .any(|l| l.contains("T-007") && l.contains("asst")),
+        lines[row + 1..(row + 4).min(lines.len())]
+            .iter()
+            .any(|l| col(l, "Co-work · A-1") == Some(id_col)),
         "{text}"
     );
     app.handle_key(key('Y'));

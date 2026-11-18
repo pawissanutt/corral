@@ -3,7 +3,7 @@ import { Check } from "typebox/value";
 
 import { sessionTodoTool, todoTool } from "../src/roles/common/todo.ts";
 import worker from "../src/roles/worker/index.ts";
-import pm from "../src/roles/pm/index.ts";
+import assistant from "../src/roles/assistant/index.ts";
 import reviewer from "../src/roles/reviewer/index.ts";
 import type { RoleModule } from "../src/roles/types.ts";
 
@@ -39,18 +39,19 @@ test("todo rejects invalid variants, missing fields, and nested authority", () =
   ]) expect(Check(todoTool.parameters, payload)).toBeFalse();
 });
 
-for (const role of [worker, pm, reviewer] satisfies readonly RoleModule[]) {
+for (const role of [worker, assistant, reviewer] satisfies readonly RoleModule[]) {
   for (const todo of [undefined, false, true]) {
     test(`${role.role} todo=${String(todo)} selects only the launch-authorized loadout`, () => {
       const context = {
-        identity: { store: "s", project: "demo", role: role.role, generation: 1 },
+        identity: { store: "s", project: "demo", role: role.role },
         cwd: "/tmp", model: "m", ...(todo === undefined ? {} : { todo }),
       };
       const tools = role.tools(context);
       const enabled = todo === true && role.role !== "reviewer";
-      const spec = role.role === "pm" ? sessionTodoTool : todoTool;
-      expect(tools.filter((tool) => tool.name === "corral_todo")).toEqual(enabled ? [spec] : []);
-      expect(tools.every((tool) => role.corralOps.includes(tool.op))).toBeTrue();
+      const spec = role.role === "assistant" ? sessionTodoTool : todoTool;
+      const todoTools = tools.filter((tool) => tool.name === "corral_todo");
+      expect(todoTools).toEqual(enabled ? [spec] : []);
+      expect(todoTools.map((tool) => tool.op)).toEqual(enabled ? ["todo"] : []);
     });
   }
 }

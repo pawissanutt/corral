@@ -11,7 +11,7 @@ import { ReviewStore } from "./review-store.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
 
-const identity = { store: "st-0123456789abcdef", project: "", role: "assistant" as const, assistant: "A-22", generation: 1 };
+const identity = { store: "st-0123456789abcdef", project: "", role: "assistant" as const, assistant: "A-22" };
 const snapshot: PanelSnapshot = { bound: true, model: "provider/model", effort: "high", streaming: false, context: undefined,
   tokens: 0, tools: [], contextFiles: [], skills: [], jobs: [], auxiliary: null, steering: 0, followUps: 0, ledgerStale: false,
   ledger: { plan: "P3", revision: 9, spec_revision: "spec", phases: [{ id: "ui", label: "Project panels", steps: [

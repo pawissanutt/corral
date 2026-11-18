@@ -1,8 +1,8 @@
 // Configured worker argv hooks (T-572): pre-tool, post-tool and turn-end programs run without a
 // shell in the worktree, outside the in-process network guard. Before each launch the host
-// appends a durable `corral_hook` entry to the bound session, then `started` and `completed`;
-// recovery reads them so a lost hook makes its call outcome_unknown. Nothing is replayed.
+// records the invocation as `prepared`, then `started` and `completed`. Hooks are never replayed.
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 import { z } from "zod";
 
@@ -47,7 +47,6 @@ export interface HookRecord {
 
 export interface HookHost {
   readonly cwd: string;
-  readonly generation: number;
   /** Appends one durable record; it must be written before the hook is launched. */
   record(entry: HookRecord): void;
 }
@@ -70,8 +69,6 @@ function tail(text: string): string {
 }
 
 export class Hooks {
-  private seq = 0;
-
   constructor(private readonly settings: HookSettings, private readonly host: HookHost) {}
 
   private matching(hooks: readonly HookCommand[], tool: string): HookCommand[] {
@@ -111,16 +108,16 @@ export class Hooks {
   private run(
     phase: HookPhase, hook: HookCommand, scope: Partial<ToolScope>, extra: Record<string, unknown>,
   ): Promise<Outcome> {
-    const invocation = `hk-${this.host.generation}-${++this.seq}`;
+    const invocation = `hk-${randomUUID()}`;
     const base = {
       invocation, phase, hook: hook.name,
       ...(scope.tool !== undefined ? { tool: scope.tool } : {}),
       ...(scope.toolCallId !== undefined ? { tool_call_id: scope.toolCallId } : {}),
       ...(scope.turn !== undefined ? { turn: scope.turn } : {}),
     };
-    let stdin = JSON.stringify({ ...base, generation: this.host.generation, ...extra });
+    let stdin = JSON.stringify({ ...base, ...extra });
     if (Buffer.byteLength(stdin) > STDIN_MAX_BYTES) {
-      stdin = JSON.stringify({ ...base, generation: this.host.generation, input: { omitted: "too_large" } });
+      stdin = JSON.stringify({ ...base, input: { omitted: "too_large" } });
     }
     this.host.record({ ...base, state: "prepared" });
     return new Promise((resolve) => {

@@ -1,24 +1,23 @@
 // Offline manual smoke: the production rich pane and tools, disposable files, no herdr server.
-// Run: bun test/fixtures/todo-ui.ts [worker|pm|assistant]; click Todo, try /todo and /todo down,
-// then Ctrl+D to exit. The pm and assistant variants show a session request plan (T-679).
-import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+// Run: bun test/fixtures/todo-ui.ts [worker|assistant]; click Todo, try /todo and /todo down,
+// then Ctrl+D to exit. The assistant variant shows a session request plan.
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { EventLog } from "../../src/bridge/events.ts";
 import { loadModules } from "../../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../../src/host/restrict.ts";
 import { HostSession, authContext } from "../../src/host/session.ts";
 import type { HostIdentity } from "../../src/roles/types.ts";
-import { CorralClient, sha256Hex } from "../../src/tools/corral.ts";
+import { CorralClient } from "../../src/tools/corral.ts";
 import { fixtureTransport } from "./auth/index.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "../support/fixture-install.ts";
-import { writeFakeCorral } from "../support/fake-corral.ts";
 
-const role = (process.argv[2] ?? "worker") as "worker" | "pm" | "assistant";
-if (!["worker", "pm", "assistant"].includes(role)) throw new Error(`unknown role ${role}`);
+const role = (process.argv[2] ?? "worker") as "worker" | "assistant";
+if (!["worker", "assistant"].includes(role)) throw new Error(`unknown role ${role}`);
 const session = role !== "worker";
-const assets = buildFixtureInstall();
+const assets = buildFixtureInstall({ omit: ["role"] });
 const work = mkdtempSync(join(tmpdir(), "corral-todo-ui-"));
 let host: HostSession | undefined;
 try {
@@ -29,18 +28,16 @@ try {
   mkdirSync(cwd);
   restrictEnvironment(process.env);
   const identity: HostIdentity = role === "worker"
-    ? { store: "st-demo", project: "demo", role, task: "T-DEMO", run: "R1", generation: 1 }
-    : role === "pm" ? { store: "st-demo", project: "demo", role, generation: 1 }
-      : { store: "st-demo", project: "", role, assistant: "A-1", generation: 1 };
+    ? { store: "st-demo", project: "demo", role, task: "T-DEMO", run: "R1" }
+    : { store: "st-demo", project: "", role, assistant: "A-1" };
   const modules = await loadModules(assets.dir, role);
   const transport = modules.auth.transport?.(authContext());
   if (!transport) throw new Error("fixture transport missing");
   const network = guardedFetch(transport);
   globalThis.fetch = network.fetch;
   const sdk = await import("@earendil-works/pi-coding-agent");
-  const corral = writeFakeCorral(work);
   const progress = session ? {
-    revision: 7, spec_revision: role === "pm" ? "pm:" : "assistant:A-1", plan: "P2",
+    revision: 7, spec_revision: `session:${basename(work)}`, plan: "P2",
     phases: [
       { id: "triage", label: "Triage the owner's request", steps: [
         { id: "read", label: "Read the board and the open questions", status: { state: "done" }, criteria: [] },
@@ -57,7 +54,7 @@ try {
       { step: "ask", on: { kind: "owner", question: "Raise the paid-call budget for T-680?" } },
     ],
   } : {
-    revision: 3, spec_revision: "demo",
+    revision: 3, spec_revision: "T-DEMO", plan: "P1",
     phases: [
       { id: "investigate", label: "Investigation", steps: [
         { id: "read", label: "Read existing UI", status: { state: "done" } },
@@ -75,17 +72,14 @@ try {
       ] },
     ],
   };
-  corral.snapshot(role === "worker" ? { runs: [{ id: "R1", progress }] }
-    : role === "pm" ? { container: { todo: progress, todo_requests: null } }
-      : { container: { state: { todo: progress, todo_requests: null } } });
+  writeFileSync(join(work, "todo.json"), JSON.stringify({ version: 1, plans: session ? 2 : 1, progress, history: [], deadlines: [] }));
   host = await HostSession.create({
-    sdk, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol", todo: true,
-    modules, network, events: new EventLog(1),
-    client: new CorralClient({ corral: corral.path, root: work, identity,
-      hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" }),
+    sdk, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol", todo: true, runtimeDir: work,
+    modules, network, events: new EventLog(),
+    client: new CorralClient({ corral: "", root: work, cwd, identity }),
     sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
   });
-  await host.hello("n".repeat(64), "fixture-pane", sha256Hex("c".repeat(64)));
+  await host.startLocal();
   fixtureTransport().script([
     { toolCalls: [{ callId: "todo-done", name: "corral_todo",
       arguments: { op: "done", step: session ? "route" : "widget" } }] },

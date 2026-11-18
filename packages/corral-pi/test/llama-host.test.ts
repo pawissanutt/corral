@@ -10,9 +10,9 @@ import type { HostCapabilities } from "../src/host/config.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession } from "../src/host/session.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
+import { CorralClient } from "../src/tools/corral.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 import { nextEvent } from "./support/wait.ts";
 
 test("a local host binds, answers, reloads and persists token usage without cloud credentials", async () => {
@@ -26,7 +26,7 @@ test("a local host binds, answers, reloads and persists token usage without clou
   const capabilities: HostCapabilities = {
     catalog: 3, digest: "a".repeat(64), preset: "standard", enabled: ["llama_cpp.enabled"], llama_cpp: local,
   };
-  const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-578", run: "R1" };
+  const identity = { store: "st-demo", project: "demo", role: "worker" as const, task: "T-578", run: "R1" };
   const requests: string[] = [];
   const network = guardedFetch(async (url) => {
     requests.push(String(url));
@@ -45,11 +45,8 @@ test("a local host binds, answers, reloads and persists token usage without clou
     globalThis.fetch = network.fetch;
     const sdk = await import("@earendil-works/pi-coding-agent");
     const modules = await loadModules(assets.dir, "worker");
-    const events = new EventLog(1);
-    const corral = writeFakeCorral(work);
-    const client = new CorralClient({
-      corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
-    });
+    const events = new EventLog();
+    const client = new CorralClient({ corral: writeFakeEngine(work).path, root: work, cwd: work, identity });
     host = await HostSession.create({
       sdk, identity, cwd: work, agentDir: join(work, "agent"), provider: "llama.cpp",
       model: "new-family/new.gguf", capabilities, client, events, network,
@@ -60,14 +57,14 @@ test("a local host binds, answers, reloads and persists token usage without clou
       sessionManager: sdk.SessionManager.create(work, join(work, "sessions")),
     });
     await host.session.bindExtensions({});
-    await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+    await host.startLocal();
     // When an ordinary turn is submitted before and after reload.
     for (const stage of ["initial", "reloaded"]) {
       if (stage === "reloaded") await host.session.reload();
       const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-      expect((await host.submit({
-        text: "Answer locally", busyPolicy: "prompt", idempotencyKey: stage, origin: "test",
-      }, stage)).disposition).toBe("started");
+      expect((await host.submitLocal({
+        text: "Answer locally", busyPolicy: "prompt", origin: "owner",
+      })).disposition).toBe("started");
       await ended;
       await host.drained();
     }

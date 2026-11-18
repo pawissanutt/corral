@@ -9,7 +9,6 @@ import { HostSession, authContext } from "../src/host/session.ts";
 import { CorralClient } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
 import { startPanelHost, type PanelHost } from "./support/panel-host.ts";
 import { nextEvent, within } from "./support/wait.ts";
 import { keyData } from "../src/ui/keymap.ts";
@@ -160,15 +159,15 @@ test("the plain host keeps its fallback: no native panels are created", async ()
   try {
     restrictEnvironment(process.env);
     const sdk = await import("@earendil-works/pi-coding-agent");
-    const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
+    const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
     const modules = await loadModules(assets.dir, "worker");
     const send = modules.auth.transport?.(authContext());
     if (!send) throw new Error("fixture transport unavailable");
     const network = guardedFetch(send);
     globalThis.fetch = network.fetch as typeof globalThis.fetch;
-    const client = new CorralClient({ corral: writeFakeCorral(work).path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
+    const client = new CorralClient({ corral: "", root: work, cwd: work, identity });
     host = await HostSession.create({ sdk, identity, cwd: work, agentDir: join(work, "agent"), model: "gpt-6.1-sol", modules, client,
-      events: new EventLog(1), network, ui: "plain", sessionManager: sdk.SessionManager.create(work, join(work, "sessions")) });
+      events: new EventLog(), network, ui: "plain", sessionManager: sdk.SessionManager.create(work, join(work, "sessions")) });
     expect(host.panels).toBeUndefined();
   } finally {
     await host?.close(); assets.cleanup(); rmSync(work, { recursive: true, force: true }); globalThis.fetch = oldFetch;

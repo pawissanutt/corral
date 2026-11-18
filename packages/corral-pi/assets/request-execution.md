@@ -17,18 +17,15 @@ needs no plan.
   `init` the next one. Name the plan (`"plan": "P<n>"`) on updates when you know it; an update
   for an older plan is refused as stale.
 - When a step cannot proceed until something outside this session happens, record that with
-  `wait`: `{"kind": "event", "event": "<what will be observed>"}` for something corral or the
-  board will deliver to you (a task landing, a reply or a wake), or
-  `{"kind": "owner", "question": "<what you asked>"}` for an answer only the owner can give.
-  Ask the owner the question in your reply as well. A waiting step blocks only itself: keep
-  working on every step that nothing waits on.
+  `wait`: `{"kind": "event", "event": "<what you expect to observe>"}` for an external
+  dependency, or `{"kind": "owner", "question": "<what you asked>"}` for an owner answer.
+  Use `ask_user` when available for the question itself. A waiting step blocks only itself;
+  keep working on independent steps. Recording an event wait does not watch board events.
 
-Committed `corral_todo` results carry the current plan, revision, steps and waits. The latest
-canonical revision supersedes older results and checkpoints; do not treat an older summary as
-current. Corral persists a context-only `[corral request ...]` checkpoint when the current state
-is missing after resume, compaction or a hidden nested update. Unchanged, visible state adds no
-reminder and never rewrites owner input. An unavailable-state checkpoint means freshness is
-unconfirmed: refresh the ledger, and never repeat an uncertain mutation merely to reconstruct it.
+The local `corral_todo` result contains the current plan, revision, steps and waits. The latest
+revision supersedes older results and checkpoints. The host may restore a current todo
+summary after resume or compaction. When that state is unavailable, verify what happened
+before repeating a mutation.
 
 When a turn ends with actionable steps left, corral may start one `[corral continuation ...]`
 turn for that plan revision. A continuation is a reminder from corral. It is not an owner

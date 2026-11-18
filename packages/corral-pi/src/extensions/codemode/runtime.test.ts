@@ -42,7 +42,7 @@ function harness() {
   const waiting = new Set<{ kind: string; match: (data: Record<string, unknown>) => boolean; resolve: (data: Record<string, unknown>) => void }>();
   const notices: string[] = [];
   const runtime = new CodeRuntime({
-    generation: 1, clock,
+    clock,
     journal: (data, customType = CODE_CALL_ENTRY) => { journal.push({ customType, data: structuredClone(data) }); },
     emit: (kind, data) => {
       events.push({ kind, data });
@@ -135,7 +135,12 @@ test("detached cells retain late calls, settle live, release watchers and restor
   fx.runtime.watch("parent", () => { seen.push({ at: fx.clock.now(), status: fx.runtime.snapshot("parent")?.status }); });
   let resumed: CodeRuntime | undefined;
   try {
-    const detached = await fx.runtime.run("parent", 'await tools.read({path:"first"}); await tools.read({path:"later"}); print("notice-only"); return 42;', executor, undefined, 0);
+    const detached = await fx.runtime.run("parent", `
+      await tools.read({path:"first"});
+      const reply = await tools.read({path:"later"});
+      print("notice-only");
+      return reply.next[0] === "read another file";
+    `, executor, undefined, 0);
     expect(detached.status).toBe("detached");
     fx.clock.advance(10);
     first.resolve(outcome(1));
@@ -144,10 +149,16 @@ test("detached cells retain late calls, settle live, release watchers and restor
     fx.clock.advance(90);
     expect(seen.at(-1)?.status).toBe("detached");
     fx.clock.advance(10);
-    later.resolve(outcome(2));
+    const refused = outcome(2, true);
+    const refusal = { reason: "missing file", next: ["read another file"] };
+    later.resolve({ ...refused, result: { ...refused.result, content: [], structuredContent: refusal } });
     await fx.event("code_cell", data => data.phase === "settled");
     const final = fx.runtime.snapshot("parent");
-    expect(final).toMatchObject({ status: "ok", durationMs: 110, calls: { total: 2, ok: 2, running: 0 } });
+    expect(final).toMatchObject({ status: "ok", durationMs: 110, calls: { total: 2, ok: 1, failed: 1, running: 0 } });
+    expect(final?.children[1]).toMatchObject({ structured: refusal, preview: JSON.stringify(refusal),
+      ok: false, code: "tool_error", effect: "unknown" });
+    expect(await fx.event("code_call", data => data.phase === "settled" && data.call === "cell-1.2"))
+      .toMatchObject({ structured: refusal, ok: false });
     expect(final?.children.every(child => child.late && child.durationMs !== undefined)).toBe(true);
     fx.clock.advance(90);
     expect(seen.at(-1)?.status).toBe("ok");
@@ -163,13 +174,14 @@ test("detached cells retain late calls, settle live, release watchers and restor
     const saved = entries[0]?.data.report as Record<string, unknown>;
     expect("outputs" in saved).toBe(false);
     expect("value" in saved).toBe(false);
-    resumed = new CodeRuntime({ generation: 2, history: () => entries.map(entry => entry.data),
+    resumed = new CodeRuntime({ history: () => entries.map(entry => entry.data),
       emit: () => {}, journal: () => {}, notify: async () => "delivered" });
     expect(resumed.snapshot("parent")).toMatchObject({ status: "ok", durationMs: 110, calls: { total: 2, running: 0 } });
-    expect(resumed.snapshot("parent")?.children[1]).toMatchObject({ late: true, ok: true });
+    expect(resumed.snapshot("parent")?.children[1]).toMatchObject({ late: true, ok: false, structured: refusal });
     await fx.runtime.notified();
     expect(fx.notices[0]).toContain("notice-only");
-    expect(fx.notices[0]).toContain("Return value: 42");
+    expect(fx.notices[0]).toContain("Return value: true");
+    expect(fx.notices[0]).toContain(JSON.stringify(refusal));
   } finally {
     first.resolve(outcome(1));
     later.resolve(outcome(2));
@@ -199,17 +211,20 @@ test("children that finish after their settled cell update retained and resumed 
     expect(report.status).toBe("error");
     expect(report.calls.running).toBe(2);
     fx.clock.advance(30);
-    gates[1]!.resolve(outcome(2));
+    const second = outcome(2);
+    const detail = { state: "file", range: { start: 1, end: 3 } };
+    gates[1]!.resolve({ ...second, result: { ...second.result, structuredContent: detail } });
     gates[2]!.resolve(outcome(3));
     await fx.event("code_call", data => data.phase === "settled" && data.call === "cell-1.3");
     expect(fx.runtime.snapshot("parent")?.calls).toMatchObject({ total: 3, ok: 2, failed: 1, running: 0 });
     expect(fx.runtime.snapshot("parent")?.children.slice(1).every(child => child.ok && child.late && child.durationMs === 30)).toBe(true);
     expect(report.calls.running).toBe(0);
-    resumed = new CodeRuntime({ generation: 2, history: () => fx.journal.map(entry => entry.data),
+    resumed = new CodeRuntime({ history: () => fx.journal.map(entry => entry.data),
       emit: () => {}, journal: () => {}, notify: async () => "delivered" });
     expect(resumed.snapshot("parent")?.calls).toMatchObject({ total: 3, ok: 2, failed: 1, running: 0 });
     expect(resumed.snapshot("parent")?.children.slice(1).every(child => child.ok && child.late && child.durationMs === 30)).toBe(true);
-    expect(resumed.snapshot("parent")?.children[1]).toMatchObject({ resultLines: 1, resultBytes: 11 });
+    expect(resumed.snapshot("parent")?.children[1]).toMatchObject({ resultLines: 1, resultBytes: 11, structured: detail });
+    expect(resumed.snapshot("parent")?.children[1]?.effect).toBeUndefined();
   } finally {
     gates.forEach((gate, n) => gate.resolve(outcome(n + 1)));
     await fx.runtime.close();

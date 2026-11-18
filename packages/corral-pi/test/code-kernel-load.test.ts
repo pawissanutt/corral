@@ -40,7 +40,7 @@ for (const [name, code] of Object.entries(SPINS)) {
       await within(new Promise((resolve) => setTimeout(resolve, 0)), 10_000, "a host timer during the spin");
       expect(kernel.status().running).toBe("spin");
       kernel.cancel("spin");
-      expect(await spinning.result).toMatchObject({ status: "cancelled", stateLost: true, generation: 1 });
+      expect(await spinning.result).toMatchObject({ status: "cancelled", stateLost: true });
       expect(events.some((event) => event.kind === "state_lost" && event.reason === "cancelled")).toBeTrue();
       await kernel.reset();
       expect(kernel.status().retiring).toBe(0);
@@ -78,11 +78,11 @@ for (const [name, code] of Object.entries(DETACHED)) {
       const result = kernel.submit(code, { timeoutMs: 300 }).result;
       // The host's event loop still turns while the worker spins past the cell's completion.
       await within(new Promise((resolve) => setTimeout(resolve, 0)), 10_000, "a host timer during the spin");
-      expect(await result).toMatchObject({ status: "timeout", stateLost: true, generation: 1 });
+      expect(await result).toMatchObject({ status: "timeout", stateLost: true });
       expect(events.some((event) => event.kind === "state_lost" && event.reason === "timeout")).toBeTrue();
       await kernel.reset();
       expect(kernel.status().retiring).toBe(0);
-      expect(await kernel.submit("return typeof kept").result).toMatchObject({ status: "ok", value: "undefined", generation: 2 });
+      expect(await kernel.submit("return typeof kept").result).toMatchObject({ status: "ok", value: "undefined", stateLost: false });
     } finally {
       await kernel.close();
     }

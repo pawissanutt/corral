@@ -5,7 +5,7 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::{
-    Actor, Blocked, Engine, LaunchSpec, Next, Op, Origin, Outcome, Role, Run, SessionRef,
+    Actor, Blocked, Engine, LaunchSpec, Next, Op, Origin, Outcome, Role, Run, Runner, SessionRef,
     SessionStatus, Status, Store, Task, TaskEdit, as_refusal,
     checkout::Checkout,
     config::{CommandContext, EffectiveProject, render_command, valid_env_key},
@@ -22,6 +22,7 @@ pub(crate) struct LaunchRequest<'a> {
     pub profile: &'a str,
     pub note: Option<&'a str>,
     pub project: Option<&'a EffectiveProject>,
+    pub fresh: bool,
 }
 
 #[derive(Default)]
@@ -167,6 +168,7 @@ impl Engine {
                     profile: &profile,
                     note: None,
                     project: Some(&project),
+                    fresh: false,
                 },
             )?;
             set_lifecycle(&mut task, Status::Running);
@@ -224,7 +226,7 @@ impl Engine {
             } else {
                 Origin::Owner
             };
-            self.runner
+            self.session_runner()
                 .send(session, text, origin)
                 .map_err(|error| {
                     if let Some(refusal) = as_refusal(&error) {
@@ -273,11 +275,22 @@ impl Engine {
     }
 
     pub fn stop(&self, id: &str) -> Result<Run> {
+        self.stop_selected(id, None)
+    }
+
+    /// Stop the addressed live run, not another role's run on the same task.
+    pub fn stop_run(&self, id: &str, run: &str) -> Result<Run> {
+        self.stop_selected(id, Some(run))
+    }
+
+    fn stop_selected(&self, id: &str, selected: Option<&str>) -> Result<Run> {
         self.store.transaction(|store| {
             let mut task = store.require_task(id)?;
             let runs = store.live_runs_for_task(id)?;
             for mut run in runs.into_iter().rev() {
-                if self.live_session(&run)?.is_none() {
+                if selected.is_some_and(|selected| selected != run.id)
+                    || self.live_session(&run)?.is_none()
+                {
                     continue;
                 }
                 self.end_run(store, &mut run, Outcome::Stopped, true)?;
@@ -362,6 +375,7 @@ impl Engine {
                     profile: &profile,
                     note,
                     project: project.as_ref(),
+                    fresh,
                 },
             )?;
             set_lifecycle(&mut task, Status::Running);
@@ -451,6 +465,7 @@ impl Engine {
             profile,
             note,
             project,
+            fresh,
         } = request;
         let definition = self
             .config
@@ -485,7 +500,13 @@ impl Engine {
         let parent = self.state_dir.join("runs").join(&task.id);
         fs::create_dir_all(&parent).context("create task run directory")?;
         let dir = parent.join(&run.id);
-        fs::create_dir(&dir).with_context(|| format!("create run directory {}", dir.display()))?;
+        let pi = definition.harness == "pi";
+        if pi {
+            crate::runner::pi::private_dir(&dir, false)?;
+        } else {
+            fs::create_dir(&dir)
+                .with_context(|| format!("create run directory {}", dir.display()))?;
+        }
         pending.dir = Some(dir.clone());
         let prompt_file = dir.join("prompt.md");
         let bin = crate::binary_path()?;
@@ -517,10 +538,14 @@ impl Engine {
                 },
             ),
         ];
-        let mut env = Vec::with_capacity(exports.len() + project.map_or(0, |p| p.env.len()));
+        let mut env = Vec::with_capacity(
+            exports.len() + usize::from(pi) + project.map_or(0, |p| p.env.len()),
+        );
         if let Some(project) = project {
             for (key, value) in &project.env {
-                if exports.iter().any(|(reserved, _)| reserved == key) {
+                if exports.iter().any(|(reserved, _)| reserved == key)
+                    || (pi && key == "CORRAL_FRESH")
+                {
                     continue;
                 }
                 ensure!(
@@ -529,6 +554,10 @@ impl Engine {
                 );
                 env.push((key.clone(), value.clone()));
             }
+        }
+        if pi {
+            // Only the engine decides whether the new host inherits its transcript.
+            env.push(("CORRAL_FRESH".into(), if fresh { "1" } else { "0" }.into()));
         }
         env.extend(exports.map(|(key, value)| (key.to_owned(), value.to_owned())));
         let spec = LaunchSpec {
@@ -542,7 +571,12 @@ impl Engine {
                 ("run".into(), run.id.clone()),
             ],
         };
-        let session = self.runner.start(&spec).context("start agent session")?;
+        let session = if pi {
+            self.session_runner().start(&spec)
+        } else {
+            self.runner.start(&spec)
+        }
+        .context("start agent session")?;
         pending.session = Some(session.clone());
         run.session = Some(session);
         store.insert_run(&run)?;
@@ -579,7 +613,7 @@ impl Engine {
         if run.ended.is_none()
             && let Some(session) = &run.session
             && self
-                .runner
+                .session_runner()
                 .status(session)
                 .with_context(|| format!("read session {}:{}", run.task, run.id))?
                 != SessionStatus::Gone
@@ -633,7 +667,7 @@ impl Engine {
 impl PendingLaunch {
     fn rollback(&mut self, engine: &Engine, mut error: anyhow::Error) -> anyhow::Error {
         if let Some(session) = self.session.take()
-            && let Err(cleanup) = engine.runner.stop(&session)
+            && let Err(cleanup) = engine.session_runner().stop(&session)
         {
             error = error.context(format!("failed to close uncommitted launch: {cleanup:#}"));
         }

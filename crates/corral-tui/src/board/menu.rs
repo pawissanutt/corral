@@ -91,7 +91,14 @@ pub(crate) const CHIP_ITEMS: [Item; 5] = [
 ];
 
 impl CardMenu {
-    pub(crate) fn new(task: &Task, anchor: Option<Rect>, pinned: bool) -> CardMenu {
+    /// `handoff` is the board's cached canonical responsibility; continuation keys follow its
+    /// plan-only goal exactly as the `N`/`U`/`T` key handler does.
+    pub(crate) fn new(
+        task: &Task,
+        anchor: Option<Rect>,
+        pinned: bool,
+        handoff: Option<&corral_ops::assistant::workflow::handoff::status::Responsibility>,
+    ) -> CardMenu {
         let mut items = items_for(task.status, pinned);
         if task.tracker {
             items.retain(|(key, _, _)| *key != KeyCode::Char('d'));
@@ -103,6 +110,17 @@ impl CardMenu {
             // No implementation pane yet: the plan is what there is to open, reply to or decide.
             items.retain(|(key, _, _)| !matches!(key, KeyCode::Char('r' | 'a')));
             items.push((KeyCode::Char('r'), "r", "plan…"));
+        }
+        if corral_ops::assistant::workflow::handoff::status::transfer_fenced(task) {
+            // Explicit transfer actions; `s open assistant` stays inspection only.
+            items.push((KeyCode::Char('W'), "W", "work on this here"));
+            items.push((KeyCode::Char('K'), "K", "save for later"));
+            if !handoff.is_some_and(|h| h.plan_only) {
+                items.push((KeyCode::Char('T'), "T", "take over and finish"));
+            } else {
+                items.push((KeyCode::Char('N'), "N", "continue planning"));
+                items.push((KeyCode::Char('U'), "U", "review this plan"));
+            }
         }
         if recoverable(task) {
             // Opens a read-only preview; applying needs the sheet's separate confirmation.
@@ -202,5 +220,56 @@ impl CardMenu {
             f.render_widget(Paragraph::new(line).style(style), row);
             hits.push(row, Hit::Item(ZONE, i));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use corral_ops::assistant::workflow::handoff::{
+        Goal,
+        status::{Driver, Responsibility},
+    };
+
+    fn keys(menu: &CardMenu) -> Vec<KeyCode> {
+        menu.items.iter().map(|(key, _, _)| *key).collect()
+    }
+
+    /// Menu continuation keys follow the canonical goal, never plan presence, so a pointer
+    /// offers exactly what the `N`/`U`/`T` handler accepts.
+    #[test]
+    fn continuation_items_follow_the_canonical_goal_not_plan_presence() {
+        let fx = crate::board::tests::seeded();
+        let mut task = fx.ctx.store.list().unwrap().remove(0);
+        task.cowork = Some(corral_core::Cowork {
+            completion: None,
+            session: "A-1".into(),
+            scratch: "work".into(),
+            run: "R1".into(),
+            review: corral_core::CoworkReview::TransferV1,
+            owner_confirmed: false,
+            review_waiver: None,
+        });
+        let handoff = |plan_only, goal| Responsibility {
+            driver: Driver::Board,
+            label: "Board".into(),
+            waiting: None,
+            plan_only,
+            goal: Some(goal),
+            pin: None,
+        };
+        // A saved research/draft plan without a formal board plan: N/U, not T.
+        task.plan = None;
+        task.plans.clear();
+        let draft = handoff(true, Goal::PlanContinue);
+        let k = keys(&CardMenu::new(&task, None, false, Some(&draft)));
+        assert!(k.contains(&KeyCode::Char('N')) && k.contains(&KeyCode::Char('U')));
+        assert!(!k.contains(&KeyCode::Char('T')));
+        // An implementation transfer that carries a plan: T, not N/U.
+        task.plan = Some("P1".into());
+        let ship = handoff(false, Goal::ImplementationShip);
+        let k = keys(&CardMenu::new(&task, None, false, Some(&ship)));
+        assert!(k.contains(&KeyCode::Char('T')));
+        assert!(!k.contains(&KeyCode::Char('N')) && !k.contains(&KeyCode::Char('U')));
     }
 }

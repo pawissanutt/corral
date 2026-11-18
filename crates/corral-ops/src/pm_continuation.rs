@@ -27,11 +27,12 @@ struct QuotaSignal {
 
 /// Publish from the native event transaction; never discover quota by scanning PM history.
 pub(crate) fn record_signal(ctx: &Ctx, state: &AgentRunState) -> Result<()> {
-    if state.binding.role != AgentRole::Pm { return Ok(()); }
+    if state.binding.role != AgentRole::Pm {
+        return Ok(());
+    }
     let config = &ctx.store.config;
     let profile = crate::agent::pi::profile::pm_current(ctx)?;
-    if !policy::profile_configured(config, &profile, AgentRole::Pm)
-        && state.paid_episode.is_none()
+    if !policy::profile_configured(config, &profile, AgentRole::Pm) && state.paid_episode.is_none()
     {
         return Ok(());
     }

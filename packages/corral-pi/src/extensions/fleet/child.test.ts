@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -63,7 +62,7 @@ function fixture() {
     execution: { sessionFile: join(dir, "transcripts", "research.jsonl"), sessionId: "canonical-child", maxTurns: 10 },
     onEvent() {}, onToolStart(name) { starts.push(name); }, onTurn() {},
     async ask() { return "answer"; }, openingPrompt() { return "Peer messages may arrive."; }, reviewVerdict() {},
-    async message() { throw new Error("not used"); }, async roster() { return "parent"; },
+    async message() { throw new Error("not used"); }, roster() { return "parent"; },
   };
   const options: SdkRunnerOptions = { sdk, models: { getModel: () => ({}) } as unknown as ModelRuntime,
     context: { dir, session: { worktree: dir, name: "fixture" }, settings: { maxParallel: 1, profiles: [] } },
@@ -159,33 +158,21 @@ test("bound slices intersect SDK base tools and honor the supplied write refusal
   } finally { f.cleanup(); }
 });
 
-test("research reserves deadline synthesis and reports immutable review snapshot coverage", async () => {
+test("research reserves a tool-free synthesis request at the deadline", async () => {
   const f = fixture();
-  const snapshot = (name: string) => {
-    const path = join(f.dir, name);
-    writeFileSync(path, name);
-    return { path, bytes: Buffer.byteLength(name), digest: createHash("sha256").update(name).digest("hex") };
-  };
   f.hooks.execution!.deadlineAt = 5000;
-  f.hooks.execution!.review = { association: { workflow: "workflow", review: "review", digest: "digest" },
-    plan: snapshot("plan"), context: snapshot("context") };
-  let checks = 0;
-  f.hooks.execution!.checkReview = async () => { checks++; };
   f.body(async () => {
-    const reader = f.registered.get("read_review_snapshot")!;
-    await reader.execute("plan", { document: "plan", offset: 0 }, undefined, undefined, undefined as never);
     await f.emit("before_agent_start");
     await f.emit("turn_start");
     await f.emit("context", { messages: [] });
-    f.messages.push(answer("Only the plan was read"));
+    f.messages.push(answer("Summarized findings"));
     await f.emit("turn_end");
   });
   try {
     const handle = createSdkRunner({ ...f.options, bound: true, parentLoadout: ["read"], now: () => 1 })
-      .run({ id: "review", title: "Review", brief: "Review the plan", owns: [], kind: "explore" },
+      .run({ id: "explore", title: "Explore", brief: "Gather evidence", owns: [], kind: "explore" },
         { profile: "fixture", provider: "fixture", model: "fixture" }, f.hooks, new AbortController().signal);
-    expect(await handle.done).toMatchObject({ turns: 1, researchReport: { status: "partial", stopReason: "time_reserve", snapshotCoverage: "incomplete" } });
-    expect(checks).toBe(1);
+    expect(await handle.done).toMatchObject({ turns: 1, researchReport: { stopReason: "time_reserve" } });
   } finally { f.cleanup(); }
 });
 

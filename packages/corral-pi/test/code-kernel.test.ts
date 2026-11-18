@@ -60,7 +60,7 @@ test("top-level variables, functions and classes persist across cells; top-level
       'const data = await tools.echo({ n: 2 }); function twice(x) { return x * 2 } class Box { constructor(v) { this.v = v } }' +
       ' let label = "kept"; data.n + 1',
     ).result;
-    expect(first).toMatchObject({ status: "ok", generation: 1, stateLost: false, outputs: [] });
+    expect(first).toMatchObject({ status: "ok", stateLost: false, outputs: [] });
     expect(first.value).toBeUndefined();
     const second = await kernel.submit('const doubled = twice(data.n); return [doubled, new Box(label).v, await Promise.resolve("awaited")];').result;
     expect(json(second)).toEqual([4, "kept", "awaited"]);
@@ -91,7 +91,7 @@ test("each bound session has its own kernel; a closed session starts empty witho
     const again = kernels.kernel("session-a");
     expect(again).not.toBe(a);
     const fresh = await again.submit("return typeof secret").result;
-    expect(fresh).toMatchObject({ value: "undefined", generation: 1 });
+    expect(fresh).toMatchObject({ status: "ok", value: "undefined", stateLost: false });
     expect(echoes).toBe(1);
   } finally {
     await kernels.closeAll();
@@ -180,7 +180,7 @@ test("a queued cell is cancelled without ever running", async () => {
   }
 });
 
-test("cancelling an active cell aborts its call and replaces the generation, so its suspended code never resumes", async () => {
+test("cancelling an active cell aborts its call and replaces the worker, so its suspended code never resumes", async () => {
   let signal: AbortSignal | undefined;
   const late = deferred<unknown>();
   const { kernel, next } = harness({
@@ -195,21 +195,21 @@ test("cancelling an active cell aborts its call and replaces the generation, so 
     await holding;
     const lost = next((event) => event.kind === "state_lost");
     expect(kernel.cancel(active.cell)).toBeTrue();
-    expect(await lost).toMatchObject({ reason: "cancelled", generation: 1, cells: 1 });
-    expect(await active.result).toMatchObject({ status: "cancelled", stateLost: true, generation: 1 });
+    expect(await lost).toMatchObject({ reason: "cancelled", cells: 1 });
+    expect(await active.result).toMatchObject({ status: "cancelled", stateLost: true });
     expect(signal?.aborted).toBeTrue();
     const discarded = next((event) => event.kind === "call_discarded" && cellOf(event) === active.cell);
     late.resolve("too late");
     await discarded;
     const after = await kernel.submit("return [typeof resume, typeof count];").result;
-    expect(after).toMatchObject({ status: "ok", generation: 2, stateLost: false });
+    expect(after).toMatchObject({ status: "ok", stateLost: false });
     expect(json(after)).toEqual(["undefined", "undefined"]);
   } finally {
     await kernel.close();
   }
 });
 
-test("a blocked cell is cancelled by replacing its worker and the queue continues on a fresh generation", async () => {
+test("a blocked cell is cancelled by replacing its worker and the queue continues with empty state", async () => {
   const { kernel, next } = harness();
   try {
     await kernel.submit("let before = 1;").result;
@@ -219,28 +219,28 @@ test("a blocked cell is cancelled by replacing its worker and the queue continue
     await started;
     const lost = next((event) => event.kind === "state_lost");
     kernel.cancel("stuck");
-    expect(await lost).toMatchObject({ kind: "state_lost", reason: "cancelled", generation: 1, cells: 2 });
-    expect(await stuck.result).toMatchObject({ status: "cancelled", stateLost: true, generation: 1 });
-    expect(await queued.result).toMatchObject({ status: "ok", value: "undefined", generation: 2, stateLost: false });
+    expect(await lost).toMatchObject({ kind: "state_lost", reason: "cancelled", cells: 2 });
+    expect(await stuck.result).toMatchObject({ status: "cancelled", stateLost: true });
+    expect(await queued.result).toMatchObject({ status: "ok", value: "undefined", stateLost: false });
   } finally {
     await kernel.close();
   }
 });
 
-test("a deadline replaces the generation whether the cell waits or blocks", async () => {
+test("a deadline replaces the worker whether the cell waits or blocks", async () => {
   const { kernel, next } = harness({ tools: () => new Promise(() => undefined) });
   try {
     const waitingLost = next((event) => event.kind === "state_lost");
     const waiting = await kernel.submit(
       "let count = 1; let resume; await new Promise((r) => { resume = r; tools.never({}); }); count = 99;", { timeoutMs: 50 },
     ).result;
-    expect(waiting).toMatchObject({ status: "timeout", stateLost: true, generation: 1 });
-    expect(await waitingLost).toMatchObject({ reason: "timeout", generation: 1 });
+    expect(waiting).toMatchObject({ status: "timeout", stateLost: true });
+    expect(await waitingLost).toMatchObject({ reason: "timeout", cells: 1 });
     expect(json(await kernel.submit("return [typeof resume, typeof count];").result)).toEqual(["undefined", "undefined"]);
     const blockedLost = next((event) => event.kind === "state_lost");
-    expect(await kernel.submit(BLOCK, { timeoutMs: 50 }).result).toMatchObject({ status: "timeout", stateLost: true, generation: 2 });
-    expect(await blockedLost).toMatchObject({ reason: "timeout", generation: 2 });
-    expect(await kernel.submit("return 1").result).toMatchObject({ status: "ok", generation: 3 });
+    expect(await kernel.submit(BLOCK, { timeoutMs: 50 }).result).toMatchObject({ status: "timeout", stateLost: true });
+    expect(await blockedLost).toMatchObject({ reason: "timeout", cells: 2 });
+    expect(await kernel.submit("return 1").result).toMatchObject({ status: "ok", value: "1", stateLost: false });
   } finally {
     await kernel.close();
   }
@@ -253,7 +253,7 @@ test("detached Promise jobs keep a cell running until they drain, so its deadlin
     const drained = await kernel.submit(
       "let finite = []; (async () => { for (let i = 0; i < 100; i++) await null; finite.push('drained'); })(); return 1;",
     ).result;
-    expect(drained).toMatchObject({ status: "ok", value: "1", stateLost: false, generation: 1 });
+    expect(drained).toMatchObject({ status: "ok", value: "1", stateLost: false });
     expect(json(await kernel.submit("return finite").result)).toEqual(["drained"]);
     const paths = [
       `${detached} return 1;`,
@@ -261,13 +261,12 @@ test("detached Promise jobs keep a cell running until they drain, so its deadlin
       `setTimeout(() => { ${detached} throw new Error("timer"); }, 0); await new Promise(() => undefined);`,
     ];
     for (const [index, code] of paths.entries()) {
-      const generation = index + 1;
       const lost = next((event) => event.kind === "state_lost");
       expect([code, await kernel.submit(code, { timeoutMs: 100 }).result]).toMatchObject(
-        [code, { status: "timeout", stateLost: true, generation }],
+        [code, { status: "timeout", stateLost: true }],
       );
-      expect(await lost).toMatchObject({ reason: "timeout", generation });
-      expect(await kernel.submit("return 2").result).toMatchObject({ status: "ok", value: "2", generation: generation + 1 });
+      expect(await lost).toMatchObject({ reason: "timeout", cells: index === 0 ? 3 : 2 });
+      expect(await kernel.submit("return 2").result).toMatchObject({ status: "ok", value: "2", stateLost: false });
     }
   } finally {
     await kernel.close();
@@ -316,10 +315,10 @@ test("unhandled rejections are discarded, never shown in a later cell (standalon
     cwd: PACKAGE_ROOT, timeout: 30_000,
   });
   const { results, lost } = JSON.parse(stdout) as { results: CellResult[]; lost: KernelEvent[] };
-  expect(results.map(({ status, value, outputs, generation }) => ({ status, value, outputs, generation }))).toEqual([
-    { status: "ok", value: "1", outputs: [], generation: 1 },
-    { status: "ok", value: "2", outputs: [], generation: 1 },
-    { status: "ok", value: "function", outputs: [], generation: 1 },
+  expect(results.map(({ status, value, outputs, stateLost }) => ({ status, value, outputs, stateLost }))).toEqual([
+    { status: "ok", value: "1", outputs: [], stateLost: false },
+    { status: "ok", value: "2", outputs: [], stateLost: false },
+    { status: "ok", value: "function", outputs: [], stateLost: false },
   ]);
   expect(lost).toEqual([]);
 });
@@ -404,18 +403,18 @@ test("reset with a pending call reports state loss, never replays and never lets
     const first = callOf(await firstCall) ?? "";
     const lost = next((event) => event.kind === "state_lost");
     await kernel.reset();
-    expect(await lost).toMatchObject({ reason: "reset", generation: 1, cells: 2 });
-    expect(await pending.result).toMatchObject({ status: "reset", stateLost: true, generation: 1 });
+    expect(await lost).toMatchObject({ reason: "reset", cells: 2 });
+    expect(await pending.result).toMatchObject({ status: "reset", stateLost: true });
     expect(calls.get(first)?.signal.aborted).toBeTrue();
     const secondCall = next((event) => event.kind === "call_started");
     const fresh = kernel.submit("return [typeof state, await tools.slow({ n: 2 })];");
     const second = callOf(await secondCall) ?? "";
     const discarded = next((event) => event.kind === "call_discarded" && callOf(event) === first);
-    calls.get(first)?.answer.resolve("late from generation 1");
+    calls.get(first)?.answer.resolve("late from the reset worker");
     await discarded;
     calls.get(second)?.answer.resolve("fresh");
     const result = await fresh.result;
-    expect(result).toMatchObject({ status: "ok", generation: 2, stateLost: false });
+    expect(result).toMatchObject({ status: "ok", stateLost: false });
     expect(json(result)).toEqual(["undefined", "fresh"]);
     expect(executions).toBe(1);
   } finally {
@@ -533,9 +532,11 @@ test("a worker that fails to start fails its cell with a state-loss report and t
   try {
     const lost = next((event) => event.kind === "state_lost");
     const result = await kernel.submit("return 1").result;
-    expect(result).toMatchObject({ status: "error", stateLost: true, generation: 1, error: { code: "worker_failed" } });
+    expect(result).toMatchObject({ status: "error", stateLost: true, error: { code: "worker_failed" } });
     expect(await lost).toMatchObject({ reason: "worker_failed", cells: 1 });
-    expect(await kernel.submit("return 2").result).toMatchObject({ status: "error", generation: 2 });
+    const replacementLost = next((event) => event.kind === "state_lost");
+    expect(await kernel.submit("return 2").result).toMatchObject({ status: "error", stateLost: true, error: { code: "worker_failed" } });
+    expect(await replacementLost).toMatchObject({ reason: "worker_failed", cells: 1 });
   } finally {
     await kernel.close();
   }

@@ -25,6 +25,8 @@ pub(crate) struct Shared {
     pub(crate) latest_seq: AtomicU64,
     pub(crate) row_cache: crate::views::RowCache,
     pub(crate) terminal_cache: crate::topics::TerminalCache,
+    pub(crate) session_live: crate::topics::SessionLive,
+    pub(crate) chat: crate::assistant::Service,
     state: Mutex<State>,
     pub(crate) changed: Condvar,
 }
@@ -68,6 +70,8 @@ impl Shared {
             latest_seq: AtomicU64::new(0),
             row_cache: Default::default(),
             terminal_cache: Default::default(),
+            session_live: Default::default(),
+            chat: Default::default(),
             state: Mutex::new(State {
                 stop: false,
                 closed: false,
@@ -106,6 +110,17 @@ impl Shared {
         engine.actor = Actor::Owner;
         engine.pipeline = PipelineMode::Off;
         Ok(engine)
+    }
+
+    pub(crate) fn chat_placement(&self) -> Box<dyn Runner> {
+        self.runner.as_ref().map_or_else(
+            || Box::new(corral_engine::runner::ProcessRunner) as Box<dyn Runner>,
+            |runner| runner(),
+        )
+    }
+
+    pub(crate) fn private_chat_sockets(&self) -> Option<PathBuf> {
+        self.runner.as_ref().map(|_| self.root.join("sock"))
     }
 
     pub(crate) fn runner_reachable(&self, engine: &Engine) -> bool {

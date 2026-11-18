@@ -4,20 +4,19 @@ import type { HostIdentity } from "../roles/types.ts";
 import { statusBar } from "./panels-chrome.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
 
-const worker: HostIdentity = { store: "s", project: "demo", role: "worker", task: "T-1", run: "R-1", generation: 3 };
+const worker: HostIdentity = { store: "s", project: "demo", role: "worker", task: "T-1", run: "R-1" };
 const snapshot = (bound: boolean) => ({ bound, model: "openai/gpt-6.1-sol", effort: "high", cost: 0.5,
   context: { tokens: 48000, contextWindow: 200000, percent: 24 } }) as unknown as PanelSnapshot;
 const bar = (identity: HostIdentity, bound: boolean, width: number, folded?: { model: string; effort: string }) =>
   statusBar(identity, snapshot(bound), new Map(), width, false, folded);
 
-test("a build session has no binding segment, a bound role reads bound, and the role keeps three letters when tiny", () => {
+test("no role draws a binding segment, and the role keeps three letters when tiny", () => {
   for (const width of [140, 105, 92, 61, 46]) {
-    const build = bar({ ...worker, role: "build" }, false, width).map(stripTerminalSequences).join("\n");
-    expect(build).not.toContain("unbound"); expect(build).not.toContain("○");
-    const bound = bar(worker, true, width).map(stripTerminalSequences).join("\n");
-    expect(bound).toContain("● bound");
-    if (width >= 105) expect(bound).toContain("gen 3"); else expect(bound).not.toContain("gen");
-    expect(bound).toContain(width < 64 ? " WRK " : " WORKER ");
+    for (const identity of [worker, { ...worker, role: "build" as const }]) for (const bound of [true, false]) {
+      const text = bar(identity, bound, width).map(stripTerminalSequences).join("\n");
+      expect(text).not.toMatch(/bound|[●○]/);
+    }
+    expect(bar(worker, true, width).map(stripTerminalSequences).join("\n")).toContain(width < 64 ? " WRK " : " WORKER ");
   }
 });
 

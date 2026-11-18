@@ -942,6 +942,91 @@ task cohorts. The assistant role row adds `cowork: {finished, review_none, lande
 and a per-session `landed` count, so the acceptance path without a review can be counted.
 The run's usage is a slice of the session's usage, not extra spending.
 
+## Handing work to the board and taking it back
+
+Who is responsible for a scope is one shared projection, read from the canonical co-work
+record and transfer journal only, never from a task's origin, a label, process liveness or
+chat. The board card, the task overview and the assistant's `/handoff` all show the same
+text label and its real wait, for example `Co-work · A-3 · Ship when checks pass`,
+`Saved for later · Held`, `Board reviewing plan · P2 · No implementation` or
+`Board is handling this · Ship when checks pass` (the label names the selected goal and its
+stop: `Prepare only`, `Check only, never lands`, `Ship when checks pass`). A transfer whose journal cannot be
+read shows `Handoff reconciling` with the named cause instead of a guessed owner.
+
+`/handoff` in the assistant pane opens one sheet. Focus starts on the context choice
+(Task context is recommended); Enter or a click activates only the focused or clicked
+control, and Escape or Cancel changes nothing. Board-owned work offers **Save for later**
+and **Work on this here**, plus the goal to continue saved work: **Continue planning** and
+**Review this plan** for a plan scope, else **Take over and finish**. Each shows its stop and
+starts through the same continuation preview and start services. On the board, `W` (work on
+this here), `K` (save for later), `N` (continue planning), `U` (review plan) and `T` (take
+over and finish) on a handed-off card, from the keyboard or the card menu, call the same
+services. The menu offers exactly the goal actions the keys accept, from the same canonical
+plan-only projection. Each acts on the card as it was shown: the board frame carries the
+continuation pin the card was rendered with (contract, plan, transfer revision and code
+layers), and any change since then refuses as stale. Task detail's overview offers `W` and
+`K` as keys and as clickable controls, through the same services. In the assistant
+pane, the action palette's **Hand off or take back this work…** opens the same sheet as
+`/handoff`. `s open assistant` remains inspection only.
+
+Consent is a native selection, not text. After the owner selects an option, the host
+journals an owner input with source `choice`, bound to a digest of the exact action
+payload (task, contract revision, goal), workflow, authority epoch, state revision and plan.
+The host-only `handoff_choice` event then authenticates that input against the current
+binding, records it as consumed (this survives owner-input eviction and restart) and only
+then calls the shared handoff service. The binding also covers a digest of everything the sheet showed (workflow, plan,
+local reviews, the board transfer with its plan, findings and code identity, and each local
+scratch's bounded snapshot scan: HEAD, branch, exact index bytes and every file's content and
+mode): a change between display and
+consumption refuses as stale without using up the selection, and a source edit while the
+package snapshot is captured refuses before anything is committed. Scratch files are read
+no-follow, regular-only and size-capped with no diff helper or filter; a symlink, special file
+or unsupported Git state refuses the read by name instead of being fingerprinted. A
+duplicate or late answer refuses as already consumed with no effect repeated. Typed pane
+text, `owner_action` input IDs, finish confirmations and shell fallbacks are never this
+evidence. Without an interactive UI, `/handoff` reports the state and changes nothing.
+
+On an assistant-led scope the sheet offers **Save for later** and **Take over and finish**
+(or, while planning, **Save plan for later**, **Continue planning** and **Review this plan**).
+One selection prepares, previews and commits the package through the same services as the
+owner shell's `corral assistant handoff prepare/preview/commit`. The project is the session's
+own, else its single scratch project. Scope is the plan's declared execution scope for that
+project, else the scratch's changed paths; with neither, the choice refuses and nothing is
+prepared. A session without a workflow enters one from its latest pane request only after
+that scope check passes. Save holds the task; Take over and finish asks for shipping, still
+subject to the board's admission and policy. Without a project or a request, the actions are
+disabled with that reason.
+
+Conversation context packages the most recent contiguous visible messages of the current
+branch, up to 16 KiB; older messages are listed as excluded. **Preview context** shows
+exactly what would be packaged (scope, source, mode, checkpoint, range, excluded messages,
+archived against loaded counts, first prompt) and changes nothing. Its prompt starts with the
+same operational facts as the committed package (source workflow and revision, goal and stop,
+plan revision and digest, code checkpoint, review references); only the bundle hash is
+unknown until the snapshot is captured. No native fork or resume
+is created.
+
+`/plan <request>` enters planning explicitly from owner input. While planning, a ready plan
+revision with a declared execution scope offers **Implement here**: one selection opens one
+scratch worktree for that revision's scope in this pane. It is not shipping consent, creates
+no task, and a stale or draft revision refuses before the selection is consumed. The plan's
+recorded source assumptions (HEAD, base ancestry, each observed file's digest or absence) are
+revalidated first; changed source refuses as `implement_stale_source`. The choice records a
+typed grant naming its scratch before creating it, so an interruption reconciles to exactly
+that scratch: sync's handoff recovery rolls an unfinished grant forward, adopting only the
+granted branch at the granted base and its clean registered worktree; anything else stays
+unrecovered with the named cause and execution stays fenced. Executing is local authority only while that grant matches the current ready
+plan and its scratch is recorded. After a take-back, handing the granted work over continues
+the returned task rather than filing a rival. A plan artifact alone never authorizes
+execution.
+
+Compatibility: binaries that predate the `choice` source refuse a container holding one
+rather than misreading it; ordinary inputs keep their meaning. Hosts read startup state with
+`corral assistant show <id> --json --host`, which replaces receipt, budget-request and
+usage-entry rows with counts under `host_projection.omitted`, so a long session history
+cannot exceed the host's read buffer. The full `--json` output is unchanged. Update the host
+and CLI together: an older CLI rejects `--host`.
+
 ## Implement now or queue
 
 The packaged contract has the assistant settle, once, whether a change the owner asks for is

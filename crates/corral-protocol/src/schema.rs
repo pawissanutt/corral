@@ -275,7 +275,7 @@ fn document() -> Value {
                 Internal,
             ],
         ),
-        method::<assistant::AssistantCancel, assistant::CancelAck>(
+        method::<session::AssistantCancelRequest, assistant::CancelAck>(
             &mut generator,
             assistant::ASSISTANT_CANCEL,
             false,
@@ -353,8 +353,7 @@ fn document() -> Value {
                 Internal,
             ],
         ),
-        // The phase 3 host owns this reply; historical command journal types are gone.
-        method::<assistant::PromptAnswer, Value>(
+        method::<session::PromptAnswerRequest, session::SessionPromptAnswered>(
             &mut generator,
             assistant::PROMPT_ANSWER,
             false,
@@ -367,6 +366,42 @@ fn document() -> Value {
                 Unavailable,
                 Internal,
             ],
+        ),
+        method::<session::SessionCancel, session::SessionCancelReply>(
+            &mut generator,
+            session::SESSION_CANCEL,
+            false,
+            &common,
+        ),
+        method::<session::SessionTarget, session::SessionPauseReply>(
+            &mut generator,
+            session::SESSION_PAUSE,
+            false,
+            &common,
+        ),
+        method::<session::SessionTarget, session::SessionResumeReply>(
+            &mut generator,
+            session::SESSION_RESUME,
+            false,
+            &common,
+        ),
+        method::<session::SessionTarget, ()>(
+            &mut generator,
+            session::SESSION_TERMINATE,
+            false,
+            &common,
+        ),
+        method::<session::SessionTarget, session::SessionRelaunched>(
+            &mut generator,
+            session::SESSION_RELAUNCH,
+            false,
+            &common,
+        ),
+        method::<session::SessionRewind, session::RewindReply>(
+            &mut generator,
+            session::SESSION_REWIND,
+            false,
+            &common,
         ),
         method::<DevicePageQuery, DevicePage>(
             &mut generator,

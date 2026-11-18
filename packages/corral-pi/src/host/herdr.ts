@@ -1,8 +1,4 @@
-// The herdr projection of a bound host (T-605). One adapter serves every role: it reports the host
-// to its pane's herdr server as agent `corral-pi`, names the bound corral identity in display
-// metadata and tokens, and derives working, idle and blocked from the host's own turn events and
-// corral's receipts, never from the terminal. Herdr only shows what this host last reported;
-// corral stays the authority for runs, questions, receipts and recovery.
+// Optional pane projection derived from the host’s turn and question state.
 import { execFile } from "node:child_process";
 
 import type { EventLog } from "../bridge/events.ts";
@@ -10,27 +6,12 @@ import type { HostIdentity } from "../roles/types.ts";
 
 export const SOURCE = "custom:corral-pi";
 export const AGENT = "corral-pi";
-/**
- * A generation reports with sequence numbers in [epoch << 20, (epoch + 1) << 20), where epoch is
- * its hello time in milliseconds as corral recorded it. The last number of the range is corral's:
- * it releases a lost generation with it (`agent/herdr_status.rs`). Herdr ignores a report whose
- * number is not above the last it accepted from this source for the pane, so neither a late
- * report of an older generation nor that release can overwrite a later generation.
- */
+// Herdr accepts its source state updates in increasing order. Start near the wall clock.
 export const SEQ_SHIFT = 20n;
 export const TOKENS = [
-  "corral_role", "corral_project", "corral_task", "corral_run", "corral_review", "corral_assistant",
-  "corral_generation", "corral_session",
+  "corral_role", "corral_project", "corral_task", "corral_run", "corral_assistant",
+  "corral_session",
 ] as const;
-const OWNER_KINDS = new Set(["owner_only", "permission"]);
-/**
- * An answer or correction member of an inbox envelope: corral's member frame
- * (`[corral <recipient>#<seq> <kind>]`, inbox/storage.rs), then the answer's own header
- * (questions/triage.rs). Only corral's frame counts, never the same words inside other text.
- */
-const ANSWER = /^\[corral \S+#\d+ question_(?:answer|correction)\]\n(?:Corrected answer|Answer) to (\S+) \(revision (\d+)\) by \w+:/gm;
-/** Corral's pending question states (corral-core `QuestionState::pending`). */
-const PENDING = new Set(["open", "escalated"]);
 const CALL_TIMEOUT_MS = 10_000;
 
 export type HerdrState = "working" | "idle" | "blocked";
@@ -41,20 +22,9 @@ export interface HerdrTarget {
   readonly pane: string;
 }
 
-export interface PendingQuestion {
-  readonly key: string;
-  readonly kind: string;
-  readonly blocking: boolean;
-  readonly state?: string;
-  /** Corral bumps it on every transition; the projection keeps each key's newest. */
-  readonly revision?: number;
-}
-
 export interface HerdrBinding {
   readonly sessionId: string;
   readonly sessionFile: string;
-  readonly epochMs: unknown;
-  readonly questions: unknown;
 }
 
 /**
@@ -84,27 +54,6 @@ export function herdrLifecycle(
   return { herdr: new HerdrLifecycle(target, identity, (kind, data) => events.emit(kind, data)) };
 }
 
-/** An owner must answer it, or the asker said its next step depends on it. */
-export function holds(question: PendingQuestion): boolean {
-  return question.blocking || OWNER_KINDS.has(question.kind) || question.state === "escalated";
-}
-
-export function answeredKeys(text: string): { key: string; revision: number }[] {
-  return [...text.matchAll(ANSWER)].flatMap((match) => match[1] && match[2] ? [{ key: match[1], revision: Number(match[2]) }] : []);
-}
-
-export function pendingQuestions(value: unknown): PendingQuestion[] {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    const question = item as Partial<PendingQuestion> | null;
-    return question && typeof question.key === "string" && typeof question.kind === "string"
-      ? [{ key: question.key, kind: question.kind, blocking: question.blocking === true,
-        ...(typeof question.state === "string" ? { state: question.state } : {}),
-        ...(typeof question.revision === "number" ? { revision: question.revision } : {}) }]
-      : [];
-  });
-}
-
 export const runHerdr: HerdrRunner = (bin, args) => new Promise((resolve, reject) => {
   const child = execFile(bin, [...args], { timeout: CALL_TIMEOUT_MS, maxBuffer: 256 * 1024 }, (error, _stdout, stderr) => {
     if (error) reject(new Error(`${String(stderr).trim() || error.message}`.slice(-256)));
@@ -115,8 +64,7 @@ export const runHerdr: HerdrRunner = (bin, args) => new Promise((resolve, reject
 
 function display(identity: HostIdentity): string {
   const run = identity.task && identity.run ? `${identity.task}/${identity.run}` : identity.task;
-  const scope = identity.role === "pm" ? identity.project : undefined;
-  return [AGENT, identity.role, scope, run, identity.review, identity.assistant, `g${identity.generation}`]
+  return [AGENT, identity.role, run, identity.assistant]
     .filter((part) => part !== undefined && part !== "").join(" ");
 }
 
@@ -130,8 +78,7 @@ type Call = {
 
 export class HerdrLifecycle {
   private open = false;
-  private readonly questions = new Map<string, PendingQuestion>();
-  private readonly revisions = new Map<string, number>();
+  private readonly questions = new Set<string>();
   private binding: { readonly sessionId: string; readonly sessionFile: string; readonly base: bigint } | undefined;
   private used = 0n;
   private identityDue = false;
@@ -152,16 +99,9 @@ export class HerdrLifecycle {
     private readonly run: HerdrRunner = runHerdr,
   ) {}
 
-  /** Reporting starts once the generation's hello committed: its receipt fixes the sequence range. */
   bind(binding: HerdrBinding): void {
     if (this.closed || this.binding) return;
-    const epoch = binding.epochMs;
-    if (typeof epoch !== "number" || !Number.isSafeInteger(epoch) || epoch <= 0) {
-      this.failed("bind", "the hello receipt carries no herdr_seq_epoch_ms; herdr reporting stays off");
-      return;
-    }
-    this.binding = { sessionId: binding.sessionId, sessionFile: binding.sessionFile, base: BigInt(epoch) << SEQ_SHIFT };
-    for (const question of pendingQuestions(binding.questions)) this.place(question);
+    this.binding = { ...binding, base: BigInt(Date.now()) << SEQ_SHIFT };
     this.identityDue = true;
     this.kick();
   }
@@ -176,45 +116,11 @@ export class HerdrLifecycle {
     this.kick();
   }
 
-  /** A committed ask receipt: corral opened the question at `revision`. */
-  asked(question: PendingQuestion): void {
-    if (this.place({ ...question, state: question.state ?? "open", revision: question.revision ?? 1 })) this.kick();
-  }
-
-  /** Answered through the inbox or withdrawn; without a revision, corral holds it as not pending. */
-  resolved(key: string, revision?: number): void {
-    if (!this.newer(key, revision)) return;
-    if (this.questions.delete(key)) this.kick();
-  }
-
-  /**
-   * Corral's states of the container's questions (the bridge `questions` command), covering
-   * escalations and cancellations this host did not make. Each key keeps its newest revision, so a
-   * late or repeated update cannot undo a newer fact, and questions left out stay as they are.
-   */
-  apply(updates: readonly PendingQuestion[]): void {
-    let changed = false;
-    for (const update of updates) changed = this.place(update) || changed;
-    if (changed) this.kick();
-  }
-
-  private newer(key: string, revision: number | undefined): boolean {
-    if (revision === undefined) return true;
-    if (revision <= (this.revisions.get(key) ?? 0)) return false;
-    this.revisions.set(key, revision);
-    return true;
-  }
-
-  /** Holds or releases one question at its revision; true when the held set changed. */
-  private place(question: PendingQuestion): boolean {
-    if (!this.newer(question.key, question.revision)) return false;
-    const held = this.questions.has(question.key);
-    if ((question.state === undefined || PENDING.has(question.state)) && holds(question)) {
-      this.questions.set(question.key, question);
-      return true;
-    }
-    this.questions.delete(question.key);
-    return held;
+  questionChanged(id: string, pending: boolean): void {
+    const before = this.questions.has(id);
+    if (pending) this.questions.add(id);
+    else this.questions.delete(id);
+    if (before !== pending) this.kick();
   }
 
   get state(): HerdrState {
@@ -285,7 +191,7 @@ export class HerdrLifecycle {
     if (state !== "blocked") return undefined;
     const [first] = this.questions.values();
     const more = this.questions.size > 1 ? ` and ${this.questions.size - 1} more` : "";
-    return first ? `corral question ${first.key} (${first.kind})${more} awaits an answer` : undefined;
+    return first ? `corral question ${first}${more} awaits an answer` : undefined;
   }
 
   /** Identity first: herdr applies it as soon as this source holds the pane, so the agent never appears unnamed. */
@@ -306,7 +212,7 @@ export class HerdrLifecycle {
     const id = this.identity;
     const values: Record<(typeof TOKENS)[number], string | undefined> = {
       corral_role: id.role, corral_project: id.project, corral_task: id.task, corral_run: id.run,
-      corral_review: id.review, corral_assistant: id.assistant, corral_generation: String(id.generation),
+      corral_assistant: id.assistant,
       corral_session: sessionId,
     };
     return { op: "identity", args: ["pane", "report-metadata", this.target.pane, "--source", SOURCE, "--agent", AGENT,
@@ -317,13 +223,7 @@ export class HerdrLifecycle {
   private async call(call: Call): Promise<boolean> {
     const binding = this.binding;
     if (!binding) return false;
-    // The range's last number belongs to corral's release of a lost generation.
-    if (this.used >= (1n << SEQ_SHIFT) - 2n) {
-      this.failed(call.op, "this generation used its whole herdr sequence range");
-      return false;
-    }
-    this.used++;
-    const seq = (binding.base + this.used).toString();
+    const seq = (binding.base + ++this.used).toString();
     this.stats.calls++;
     try {
       await this.run(this.target.bin, [...call.args, "--seq", seq]);

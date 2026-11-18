@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { execFileSync, spawn } from "node:child_process";
-import { closeSync, cpSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
@@ -11,6 +11,8 @@ import type { Run } from "../src/build/corral-cli.ts";
 import type { BuildContext, ChildSpec, ExitRecord } from "../src/build/types.ts";
 import type { ChildHandle, ChildHooks, ChildRunner } from "../src/extensions/fleet/child.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
+import { connect, type TestClient } from "./support/bridge-client.ts";
+import { launch } from "./support/pi-process.ts";
 import { within } from "./support/wait.ts";
 
 const BUILD_TOOLS = ["task", "agent_message", "agent_roster", "agent_wait", "agent_cancel", "build_verify", "build_review", "build_resolve", "build_finish", "board_plan"];
@@ -36,16 +38,15 @@ function fixture(root: string, exit?: ExitRecord, workspace = false, bare = fals
       here: true, branch: "build/test", base: workspace ? "base" : null, ...(workspace ? { workspaceRoot: root, project: "app" } : {}),
       ...(bare ? { bare: true, repository: false } : {}), ...(exit ? { exit } : {}) } };
   saveSession(root, context.session);
+  if (workspace) {
+    mkdirSync(join(root, ".corral-next"));
+    writeFileSync(join(root, ".corral-next", "corral.toml"), `[projects.app]\ngate = ["printf 'local check'"]\n`);
+  }
   const runner = new FakeRunner();
   const calls: string[][] = [];
-  const run: Run = async (argv, options) => {
+  const run: Run = async argv => {
     calls.push([...argv]);
-    if (argv[1] === "gate") {
-      expect(options.timeoutMs).toBe(7_200_000);
-      return { code: 0, stdout: JSON.stringify({ attempt: "G1", tier: argv[argv.indexOf("--tier") + 1], head: "abc", result: "pass",
-        commands: ["check"], started: now, ended: now, receipt: "/logs/G1.json", log: "/logs/G1.log" }), stderr: "" };
-    }
-    return { code: 0, stdout: JSON.stringify({ id: "B-test", revision: 1 }), stderr: "" };
+    throw new Error(`Unexpected engine command: ${argv.join(" ")}`);
   };
   const git: Run = async argv => ({ code: 0, stdout: argv[0] === "rev-parse" ? argv.includes("--abbrev-ref") ? "build/test\n" : "abc\n" : "", stderr: "" });
   let changed = 0;
@@ -118,14 +119,14 @@ test("resumed build controls restore saved exits with no persisted children", as
   }
 });
 
-test("build evidence tools run the quick gate and retain an independent reviewer's exact verdict and resolutions", async () => {
+test("build evidence tools record the configured gate and retain the reviewer's exact verdict and resolutions", async () => {
   const root = mkdtempSync(join(tmpdir(), "build-evidence-"));
   const { controls, runner, calls } = fixture(root, undefined, true);
   try {
     controls.noteOwnerInput("Build a parser\nHandle empty input");
     const verify = await controls.tools.find(tool => tool.name === "build_verify")!.execute("verify", {}, undefined, undefined, {} as never);
-    expect(verify.details).toMatchObject({ receipt: { attempt: "G1", tier: "quick", result: "pass", log: "/logs/G1.log" } });
-    expect(calls[0]).toEqual(["build", "gate", "--session", "B-test", "--worktree", root, "--project", "app", "--tier", "quick", "--base", "base", "--json"]);
+    expect(verify.details).toMatchObject({ gate: { attempt: "G1", result: "pass" } });
+    expect(calls).toEqual([]);
     const reviewing = controls.tools.find(tool => tool.name === "build_review")!.execute("review", { focus: "Empty input" }, undefined, undefined, {} as never);
     const id = await runner.started.promise;
     const reviewer = runner.children.get(id)!;
@@ -147,58 +148,45 @@ test("build evidence tools run the quick gate and retain an independent reviewer
   } finally { await controls.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
-// Observe the real hello and one provider request, then stop before InteractiveMode takes a terminal.
-// No lifecycle, model-runtime, tool-registration or local control-plane implementation is replaced.
-const ENTRY_OBSERVER = `
-import { writeFileSync } from "node:fs";
-import { HostSession } from "./src/host/session.ts";
-import { buildCommand } from "./src/host/build.ts";
-const hello = HostSession.prototype.hello;
-HostSession.prototype.hello = async function (...args) {
-  const receipt = await hello.apply(this, args);
-  if (receipt.state !== "committed") throw new Error("build did not bind");
-  await this.session.prompt("Reply only BUILD_BOUND.", { source: "extension" });
-  await this.drained();
-  writeFileSync(4, JSON.stringify({ bound: this.bound, tools: this.session.getActiveToolNames() }) + "\\n");
-  await this.close();
-  process.exit(0);
-};
-await buildCommand(["--launch-fd", "3"], import.meta.dirname);
-`;
-
 test("the real build entry binds and advertises all build tools without creating .corral", async () => {
   const work = mkdtempSync(join(tmpdir(), "build-entry-"));
-  const assets = buildFixtureInstall({ omit: ["role"], isolatePiState: true });
+  const assets = buildFixtureInstall({ omit: ["role"], parent: work });
   const repo = join(work, "repo");
   mkdirSync(repo);
   cpSync(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"), { recursive: true });
   const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" });
   git("init", "--initial-branch=main");
   git("-c", "user.name=Build Test", "-c", "user.email=build@example.test", "commit", "--allow-empty", "-m", "base");
-  const launch = join(work, "launch.json");
-  writeFileSync(launch, JSON.stringify({ version: 1, assets: assets.dir, data_root: join(work, "data"), corral: "/unused/corral",
-    repo_root: repo, here: true, provider: "openai-codex", model: "gpt-6.1-sol",
-    settings: { exit_policy: "none", max_parallel: 2, profiles: [] } }));
-  writeFileSync(join(assets.dir, "observe-build.ts"), ENTRY_OBSERVER);
-  const fd = openSync(launch, "r");
-  const child = spawn(process.execPath, [join(assets.dir, "observe-build.ts")], {
-    cwd: assets.dir, env: { ...process.env, PI_CODING_AGENT_DIR: join(work, "pi-state") },
-    stdio: ["ignore", "pipe", "pipe", fd, "pipe"],
-  });
-  closeSync(fd);
-  let output = "", errors = "", report = "";
-  child.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString(); });
-  child.stderr?.on("data", (chunk: Buffer) => { errors += chunk.toString(); });
-  child.stdio[4]?.on("data", (chunk: Buffer) => { report += chunk.toString(); });
-  const exited = Promise.withResolvers<number | null>();
-  child.once("error", exited.reject);
-  child.once("close", exited.resolve);
+  const data = join(work, "data");
+  const socket = join(work, "build.sock");
+  const child = launch(assets.dir, ["build", "--here", "--data-dir", data, "--socket", socket, "--corral", "/unused/corral"], repo,
+    { PATH: process.env.PATH, HOME: work, TMPDIR: work, XDG_DATA_HOME: data });
+  let client: TestClient | undefined;
   try {
-    const code = await within(exited.promise, 60_000, "the real build entry");
-    if (code !== 0) throw new Error(`build entry exited ${code}: ${errors}\n${output}`);
-    const observed = JSON.parse(report) as { bound: boolean; tools: string[] };
-    expect(observed.bound).toBeTrue();
-    for (const tool of BUILD_TOOLS) expect(observed.tools).toContain(tool);
+    await child.output(/session socket ready/);
+    const connection = client = await connect(socket);
+    const call = async (command: string, args: Record<string, unknown> = {}) => {
+      const reply = await connection.request({ version: 2, id: command, command, args });
+      if (!reply.ok || !reply.result) throw new Error(`${command}: ${JSON.stringify(reply.error)}`);
+      return reply.result;
+    };
+    const hello = await call("hello");
+    expect(hello).toMatchObject({ protocol: 2, role: "build", pid: child.child.pid });
+    const id = String(hello.session_id);
+    expect(id).toMatch(/^B-[a-z0-9]+$/);
+    const state = await call("get_state");
+    expect(state.bound).toBeTrue();
+    for (const tool of BUILD_TOOLS) expect(state.active_tools).toContain(tool);
+
+    expect(await call("pause")).toMatchObject({ paused: true });
+    expect((await call("submit_input", { origin: "auto", text: "Reply only BUILD_BOUND." })).disposition).toBe("queued");
+    expect(await call("resume")).toEqual({ paused: false });
+    await child.output(/turn 1 ended/);
+    const record = JSON.parse(readFileSync(join(sessionDir(data, id), "session.json"), "utf8"));
+    expect(record).toMatchObject({ id, role: "build", sessionFile: hello.session_file, paused: false, held_input: [] });
+    expect(readFileSync(record.sessionFile, "utf8")).toContain("Reply only BUILD_BOUND.");
+    expect(await call("shutdown")).toEqual({ shutting_down: true });
+    expect(await within(child.exit, 10_000, "build shutdown")).toBe(0);
     const directories = [repo];
     while (directories.length) {
       const dir = directories.pop()!;
@@ -208,11 +196,11 @@ test("the real build entry binds and advertises all build tools without creating
       }
     }
   } finally {
-    if (child.exitCode === null) child.kill("SIGKILL");
-    await exited.promise.catch(() => {});
+    client?.close();
+    await child.stop();
     assets.cleanup(); rmSync(work, { recursive: true, force: true });
   }
-}, 120_000);
+}, 20_000);
 
 test("resumed task calls cannot overwrite a prior child's recorded history by reusing its id", async () => {
   const root = mkdtempSync(join(tmpdir(), "build-history-"));

@@ -9,7 +9,6 @@ import { AGENT_JOURNAL_MAX, AGENT_MESSAGE_MAX, AGENT_SEND_BUDGET, MAX_CHILDREN_P
 import { FleetRuntime, type FleetOptions } from "./runtime.ts";
 import type { ChildHandle, ChildHooks, ChildRunner } from "./child.ts";
 import { fleetTools, formatChildReport } from "./tools.ts";
-import type { PeerTransport } from "../peers/types.ts";
 interface ChildToolDetails { readonly children: readonly ChildSnapshot[] }
 
 test("build text deltas do not recompute session usage, while turns and tool events do", async () => {
@@ -105,21 +104,21 @@ class FakeRunner implements ChildRunner {
   finish(id: string, failed?: string): void { this.children.get(id)!.finish({ report: `Report from ${id}`, failed }); }
 }
 const spec = (id: string, extra: Partial<ChildSpec> = {}): ChildSpec => ({ id, title: id, brief: `Implement ${id}`, owns: ["src"], ...extra });
-function fixture(maxParallel = 3, peers?: PeerTransport, options: Partial<FleetOptions> = {}) {
+function fixture(maxParallel = 3, options: Partial<FleetOptions> = {}) {
   const runner = new FakeRunner(), delivered: string[] = [];
   const context: BuildContext = { dir: "/data/build/B-test", corral: "corral", settings: { maxParallel, exitPolicy: "none", profiles: [] },
     session: { version: 1, id: "B-test", name: "test", created: "", updated: "", repoRoot: "/repo", worktree: "/repo",
       branch: "build/test", base: null, here: true } };
   const runtime = new FleetRuntime({ sdk: {} as typeof Sdk, models: { getModels: () => [] } as unknown as ModelRuntime,
     approved: ["fixture"], parent: { provider: "fixture", model: "model" }, context, agentDir: "/data/agent", localTools: [],
-    runner, peers, changed() {}, deliverToParent(text) { delivered.push(text); }, now: () => 1000, ...options });
+    runner, changed() {}, deliverToParent(text) { delivered.push(text); }, now: () => 1000, ...options });
   return { runtime, runner, delivered };
 }
 async function flush(): Promise<void> { for (let turn = 0; turn < 12; turn++) await Promise.resolve(); }
 
 test("bound children commit lifecycle in order and shutdown finishes the canonical running child", async () => {
   const records: Record<string, unknown>[] = [];
-  const { runtime, runner } = fixture(1, undefined, { allowedKinds: ["slice"], record: async payload => {
+  const { runtime, runner } = fixture(1, { allowedKinds: ["slice"], record: async payload => {
     records.push(payload);
     return { session_file: `/canonical/${payload.request}.jsonl`, session_id: payload.request };
   } });
@@ -141,7 +140,7 @@ test("bound children commit lifecycle in order and shutdown finishes the canonic
 
 test("a refused child prepare starts nothing and exposes the refusal", async () => {
   const records: Record<string, unknown>[] = [];
-  const { runtime, runner } = fixture(1, undefined, { record: async payload => {
+  const { runtime, runner } = fixture(1, { record: async payload => {
     records.push(payload);
     throw new Error("auxiliary record refused: capability disabled");
   } });
@@ -157,7 +156,7 @@ test("a refused child prepare starts nothing and exposes the refusal", async () 
 test("closing during prepare records not_started without creating a child", async () => {
   const prepared = Promise.withResolvers<Record<string, unknown>>();
   const records: Record<string, unknown>[] = [];
-  const { runtime, runner } = fixture(1, undefined, { record: async payload => {
+  const { runtime, runner } = fixture(1, { record: async payload => {
     records.push(payload);
     return payload.action === "prepare" ? prepared.promise : {};
   } });
@@ -335,22 +334,12 @@ test("review verdicts are stored as given and missing verdicts fail instead of l
   } finally { await runtime.close(); }
 });
 
-test("optional peers handle external recipients and roster failures remain readable", async () => {
-  const sent: string[] = [];
-  let rosterFails = false;
-  const peers: PeerTransport = { self: () => "B-test", async send(to, text) { sent.push(`${to}: ${text}`); return { state: "queued" }; },
-    async roster() { if (rosterFails) throw new Error("Offline"); return [{ key: "pm", role: "pm", state: "live" }]; } };
-  const { runtime } = fixture(1, peers);
+test("unknown recipients are undeliverable", async () => {
+  const { runtime } = fixture();
   try {
-    expect((await runtime.message("parent", "pm", "Coordinate this")).message.delivery).toBe("queued");
-    expect(sent[0]).toContain("Coordinate this");
-    expect(await runtime.rosterText()).toContain("pm | pm | live");
-    rosterFails = true;
-    expect(await runtime.rosterText()).toContain("Offline");
+    expect(await runtime.message("parent", "unknown", "Hello", { waitReply: true }))
+      .toMatchObject({ message: { delivery: "undeliverable" }, unanswered: "recipient_finished" });
   } finally { await runtime.close(); }
-  const local = fixture().runtime;
-  try { expect((await local.message("parent", "unknown", "Hello")).message.delivery).toBe("undeliverable"); }
-  finally { await local.close(); }
 });
 
 test("fleet admits the shared cap and per-call limits rather than the obsolete eight/twelve limits", async () => {
@@ -381,13 +370,15 @@ test("all reaches the parent and live siblings, never the sender or finished age
   } finally { await runtime.close(); }
 });
 
-test("closing settles reply waits even while a peer transport dispatch is pending", async () => {
-  const dispatch = Promise.withResolvers<{ state: "delivered" }>();
-  const peers: PeerTransport = { self: () => "B-test", roster: async () => [], send: () => dispatch.promise };
-  const { runtime } = fixture(1, peers);
+test("closing settles reply waits even while in-session delivery is pending", async () => {
+  const dispatch = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const { runtime } = fixture(1, { deliverToParent() { started.resolve(); return dispatch.promise; } });
   try {
-    const waiting = runtime.message("parent", "pm", "Need an answer", { waitReply: true });
+    await runtime.start("call", [spec("a")]);
+    const waiting = runtime.message("a", "parent", "Need an answer", { waitReply: true });
+    await started.promise;
     await runtime.close();
     expect((await waiting).unanswered).toBe("recipient_finished");
-  } finally { dispatch.resolve({ state: "delivered" }); await runtime.close(); }
+  } finally { dispatch.resolve(); await runtime.close(); }
 });

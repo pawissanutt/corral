@@ -3,12 +3,12 @@
 // subprocess, assume-role goes through the fake STS, and a Bedrock host's subprocesses see no AWS_*.
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { LaunchMessageInvalid, parseLaunchMessage } from "../src/host/config.ts";
+import { parseRunFlags } from "../src/host/config.ts";
 import { restrictEnvironment } from "../src/host/restrict.ts";
 import {
   CONVERSE_URL, FIXTURE_KEY, STATIC_DEV, awsHome, bedrockHost, fakeAws, signingKey,
@@ -123,21 +123,22 @@ test("a role chain longer than four steps or with a cycle is refused", async () 
   expect((await rejection(bedrockHost(awsHome({ config: cycle }), fakeAws().send))).message).toContain("source_profile cycle");
 });
 
-test("the launch message carries an optional non-secret aws binding; older messages stay valid", () => {
-  const message = {
-    version: 1, store: "st-demo", project: "demo", role: "worker", task: "T-001", run: "R1", generation: 1,
-    secrets: { host_cap: "h".repeat(64), ctl_cap: "c".repeat(64), bind_nonce: "n".repeat(64) },
-    pane: "p2", cwd: "/work", root: "/work", corral: "/bin/corral", assets: "/assets", runtime_dir: "/runtime",
-    session_dir: "/sessions", model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", provider: "amazon-bedrock",
-  };
-  const parse = (extra: Record<string, unknown>) => parseLaunchMessage(JSON.stringify({ ...message, ...extra }));
-  expect(parse({}).aws).toBeUndefined();
-  expect(parse({ aws: null }).aws).toBeUndefined();
-  expect(parse({ aws: { profile: "dev", region: "us-west-2" } }).aws).toEqual({ profile: "dev", region: "us-west-2" });
-  expect(parse({ aws: { profile: "team.ci+bot@corp", region: "ap-southeast-2" } }).aws?.profile).toBe("team.ci+bot@corp");
-  for (const aws of ["dev", { profile: "dev" }, { profile: "dev", region: "us-gov-west-1" }, { profile: "dev", region: "cn-north-1" },
-    { profile: "dev", region: "US-WEST-2" }, { profile: "dev profile", region: "us-west-2" }, { profile: "x".repeat(65), region: "us-west-2" }]) {
-    expect(() => parse({ aws })).toThrow(LaunchMessageInvalid);
+test("run flags carry an optional non-secret AWS profile and region", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "corral-bedrock-flags-"));
+  try {
+    const args = ["--dir", "run", "--provider", "amazon-bedrock", "--model", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"];
+    const parse = (...flags: string[]) => parseRunFlags("run", [...args, ...flags], "/assets", {}, cwd);
+    expect(parse().aws).toBeUndefined();
+    expect(parse("--aws-profile", "dev", "--aws-region", "us-west-2").aws).toEqual({ profile: "dev", region: "us-west-2" });
+    expect(parse("--aws-profile", "team.ci+bot@corp", "--aws-region", "ap-southeast-2").aws?.profile).toBe("team.ci+bot@corp");
+    expect(() => parse("--aws-profile", "dev")).toThrow("valid AWS profile and region");
+    expect(() => parse("--aws-region", "us-west-2")).toThrow("valid AWS profile and region");
+    for (const [profile, region] of [["dev", "us-gov-west-1"], ["dev", "cn-north-1"], ["dev", "US-WEST-2"],
+      ["dev profile", "us-west-2"], ["x".repeat(65), "us-west-2"]] as const) {
+      expect(() => parse("--aws-profile", profile, "--aws-region", region)).toThrow("valid AWS profile and region");
+    }
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
   }
 });
 

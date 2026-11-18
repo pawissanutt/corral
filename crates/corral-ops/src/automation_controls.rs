@@ -78,6 +78,8 @@ pub fn owner_only_config_key(parts: &[&str]) -> bool {
         parts,
         ["review", ..]
             | ["projects", ..]
+            | ["build"]
+            | ["build", "api", ..]
             | ["routing"]
             | ["dispatch"]
             | ["dispatch", "ready_projects", ..]

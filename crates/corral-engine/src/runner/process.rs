@@ -1,6 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -36,15 +36,6 @@ impl Runner for ProcessRunner {
                 None,
             ));
         }
-        let log_path = dir.join("session.log");
-        let log = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .with_context(|| format!("open process log {}", log_path.display()))?;
-        let stderr = log
-            .try_clone()
-            .with_context(|| format!("clone process log {}", log_path.display()))?;
         let mut command = Command::new("sh");
         command
             .arg("-c")
@@ -53,30 +44,24 @@ impl Runner for ProcessRunner {
             .arg(&spec.command)
             .arg(&dir)
             .current_dir(&spec.cwd)
-            .envs(spec.env.iter().map(|(key, value)| (key, value)))
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log))
-            .stderr(Stdio::from(stderr));
-        detach(&mut command)?;
-        let mut child = command.spawn().with_context(|| {
-            format!(
-                "launch process session {} in {}",
-                spec.label,
-                spec.cwd.display()
-            )
-        })?;
-        let pid = child.id();
-        // Dropping Child does not stop it. Reap while this caller is alive; otherwise
-        // init inherits it. The shell, not this thread, writes the completion marker.
-        thread::spawn(move || {
-            let _ = child.wait();
-        });
-        Ok(SessionRef::Process { pid, dir })
+            .envs(spec.env.iter().map(|(key, value)| (key, value)));
+        spawn(command, dir).with_context(|| format!("launch process session {}", spec.label))
+    }
+
+    fn start_process(&self, command: Command, dir: PathBuf) -> Result<SessionRef> {
+        // Unlike task runs, a chat relaunches in the same placement directory.
+        let marker = dir.join("exit_code");
+        match fs::remove_file(&marker) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context("clear prior process exit marker"),
+        }
+        spawn(command, dir)
     }
 
     fn status(&self, session: &SessionRef) -> Result<SessionStatus> {
-        let (_, dir) = process_session(session)?;
-        Ok(if completed(dir)? {
+        let (pid, dir) = process_session(session)?;
+        Ok(if completed(dir)? || !placement_alive(pid)? {
             SessionStatus::Gone
         } else {
             SessionStatus::Working
@@ -110,10 +95,33 @@ impl Runner for ProcessRunner {
     }
 }
 
+fn spawn(mut command: Command, dir: PathBuf) -> Result<SessionRef> {
+    let log_path = dir.join("session.log");
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .with_context(|| format!("open process log {}", log_path.display()))?;
+    let stderr = log
+        .try_clone()
+        .with_context(|| format!("clone process log {}", log_path.display()))?;
+    command.stdin(Stdio::null()).stdout(log).stderr(stderr);
+    detach(&mut command)?;
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("start {:?} in {}", command.get_program(), dir.display()))?;
+    let pid = child.id();
+    // Reap while the caller is alive. Otherwise init inherits the detached host.
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(SessionRef::Process { pid, dir })
+}
+
 fn process_session(session: &SessionRef) -> Result<(u32, &Path)> {
     match session {
         SessionRef::Process { pid, dir } => Ok((*pid, dir)),
-        SessionRef::Herdr { .. } => Err(refuse(
+        SessionRef::Herdr { .. } | SessionRef::Pi { .. } => Err(refuse(
             "this session is not owned by the process runner; set runner.mode to \"herdr\" in .corral-next/corral.toml",
             Vec::new(),
         )),
@@ -145,6 +153,31 @@ fn completed(dir: &Path) -> Result<bool> {
     dir.join("exit_code")
         .try_exists()
         .with_context(|| format!("inspect process completion marker in {}", dir.display()))
+}
+
+#[cfg(unix)]
+fn placement_alive(pid: u32) -> Result<bool> {
+    let pid = libc::pid_t::try_from(pid).context("process session pid exceeds Unix pid range")?;
+    if pid <= 1 {
+        bail!("invalid process session pid {pid}");
+    }
+    // SAFETY: getsid only inspects a positive PID. A detached group leader
+    // also leads its Unix session; do not mistake another process for it.
+    let sid = unsafe { libc::getsid(pid) };
+    if sid != -1 {
+        return Ok(sid == pid);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(false)
+    } else {
+        Err(error).context("inspect detached process session")
+    }
+}
+
+#[cfg(not(unix))]
+fn placement_alive(_: u32) -> Result<bool> {
+    bail!("detached process sessions require Unix")
 }
 
 fn record_stopped(dir: &Path, code: i32) -> Result<()> {

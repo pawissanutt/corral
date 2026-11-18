@@ -3,7 +3,7 @@ use anyhow::{Context, Result, ensure};
 use corral_core::{
     Store,
     agent::{AgentRole, BudgetLedger, BudgetRequest, paths},
-    build_paid::BuildPaidLedger,
+    build_paid::{BuildPaidLedger, MixedBuildApproval},
     connection::ConnectionBinding,
     paid_episode::PaidApproval,
 };
@@ -15,6 +15,8 @@ pub struct PaidLaunch {
     pub session: String,
     pub generation: u32,
     pub cap: String,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub mixed: bool,
 }
 impl std::fmt::Debug for PaidLaunch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -54,9 +56,15 @@ fn secret() -> Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 fn approved(store: &Store, profile: &str, binding: &ConnectionBinding) -> Result<PaidApproval> {
-    let config = store.config_layers()?.config()?;
+    approved_config(&store.config_layers()?.config()?, profile, binding)
+}
+fn approved_config(
+    config: &corral_core::Config,
+    profile: &str,
+    binding: &ConnectionBinding,
+) -> Result<PaidApproval> {
     let approval = crate::availability::continuation::api_start_approval(
-        &config,
+        config,
         profile,
         AgentRole::Assistant,
     )?;
@@ -73,8 +81,77 @@ pub fn open(
     binding: &ConnectionBinding,
     session: Option<&str>,
 ) -> Result<PaidLaunch> {
-    let approval = approved(store, profile, binding)?;
+    open_with(store, profile, session, |config| {
+        Ok((approved_config(config, profile, binding)?, None))
+    })
+}
+
+pub fn open_mixed(
+    store: &Store,
+    profile: &str,
+    parent: Option<&ConnectionBinding>,
+    presets: &std::collections::BTreeMap<String, String>,
+    routes: &std::collections::BTreeMap<String, ConnectionBinding>,
+    session: Option<&str>,
+) -> Result<PaidLaunch> {
+    open_with(store, profile, session, |config| {
+        let api = config
+            .build
+            .api
+            .as_ref()
+            .context("mixed Build approval missing")?;
+        ensure!(
+            &api.profiles == presets,
+            "mixed Build preset mappings changed during launch"
+        );
+        let approved_routes: std::collections::BTreeMap<_, _> = routes
+            .iter()
+            .map(|(name, binding)| Ok((name.clone(), approved_config(config, name, binding)?)))
+            .collect::<Result<_>>()?;
+        ensure!(
+            presets
+                .values()
+                .all(|name| approved_routes.contains_key(name)),
+            "mixed Build route missing"
+        );
+        let anchor = match parent.filter(|binding| binding.connection.api_key()) {
+            Some(binding) => {
+                let approval = approved_config(config, profile, binding)?;
+                ensure!(
+                    approved_routes.get(profile) == Some(&approval),
+                    "paid Build parent not admitted to shared cap"
+                );
+                approval
+            }
+            None => approved_routes
+                .values()
+                .next()
+                .context("mixed Build has no paid child routes")?
+                .clone(),
+        };
+        Ok((
+            anchor,
+            Some(MixedBuildApproval {
+                approval: api.approval.clone(),
+                allowance_nanos: api
+                    .maximum_micros
+                    .checked_mul(1000)
+                    .context("mixed Build allowance overflows")?,
+                presets: presets.clone(),
+                routes: approved_routes,
+            }),
+        ))
+    })
+}
+
+fn open_with(
+    store: &Store,
+    profile: &str,
+    session: Option<&str>,
+    policy: impl FnOnce(&corral_core::Config) -> Result<(PaidApproval, Option<MixedBuildApproval>)>,
+) -> Result<PaidLaunch> {
     let cap = secret()?;
+    let resuming = session.is_some();
     let session = match session {
         Some(id) => {
             super::validate_session_id(id)?;
@@ -84,10 +161,13 @@ pub fn open(
     };
     let _lock = lock(store)?;
     store.records_transaction(|| {
+        let (approval, mixed) = policy(&store.config_layers()?.config()?)?;
         let ledger = match store.build_paid_ledger(&session)? {
             Some(mut ledger) => {
                 ensure!(
-                    ledger.profile == profile && ledger.approval == approval,
+                    ledger.profile == profile
+                        && ledger.approval == approval
+                        && ledger.mixed == mixed,
                     "paid route is sticky; approval changes cannot refresh its allowance"
                 );
                 ledger.generation = ledger
@@ -96,6 +176,9 @@ pub fn open(
                     .context("Build generation exhausted")?;
                 ledger.cap_sha256 = paths::sha256_hex(cap.as_bytes());
                 ledger
+            }
+            None if resuming && mixed.is_some() => {
+                anyhow::bail!("cannot attach a fresh paid allowance to an existing Build")
             }
             None => BuildPaidLedger {
                 version: 1,
@@ -107,18 +190,17 @@ pub fn open(
                 cap_sha256: paths::sha256_hex(cap.as_bytes()),
                 ledger: BudgetLedger::default(),
                 bounds: vec![],
+                mixed,
+                reservation_routes: vec![],
             },
         };
-        // Re-read policy under the financial lock, so approval changes cannot become a new balance.
-        ensure!(
-            approved(store, profile, binding)? == ledger.approval,
-            "paid policy changed during launch"
-        );
+
         store.save_build_paid_ledger(&ledger)?;
         Ok(PaidLaunch {
             session,
             generation: ledger.generation,
             cap,
+            mixed: ledger.mixed.is_some(),
         })
     })
 }
@@ -153,6 +235,8 @@ struct Call {
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
+    binding_digest: Option<String>,
+    #[serde(default)]
     usage: Option<Value>,
     #[serde(default)]
     purpose: Option<String>,
@@ -181,29 +265,42 @@ pub fn budget(store: &Store, call: Value) -> Result<Value> {
     store.records_transaction(|| {
         let mut ledger = store.build_paid_ledger(&p.session)?.context("Build allowance missing; refusing to initialize from a host request")?;
         ensure!(ledger.generation == p.generation && ledger.cap_sha256 == paths::sha256_hex(p.cap.as_bytes()), "fenced Build financial capability");
-        let binding = ledger.route()?.clone();
-        ensure!(approved(store, &ledger.profile, &binding)? == ledger.approval, "paid policy changed; explicit approval is required");
+        if let Some(mixed) = &ledger.mixed {
+            let config = store.config_layers()?.config()?;
+            let api = config.build.api.as_ref().context("mixed Build approval revoked")?;
+            ensure!(api.approval == mixed.approval && api.profiles == mixed.presets
+                && api.maximum_micros.checked_mul(1000) == Some(mixed.allowance_nanos), "mixed Build approval changed");
+            for (name, before) in &mixed.routes {
+                let binding = before.candidates.first().context("mixed Build route missing")?;
+                ensure!(&approved_config(&config, name, binding)? == before, "mixed Build route approval changed");
+            }
+        } else {
+            ensure!(approved(store, &ledger.profile, ledger.route()?)? == ledger.approval, "paid policy changed; explicit approval is required");
+        }
+        let digest = p.binding_digest.as_deref();
+        let binding = if p.action == "state" && ledger.mixed.is_some() { None } else { Some(ledger.request_route(digest)?.clone()) };
         let admitted = match p.action.as_str() {
             "state" => true,
             "reserve" | "settle" => {
+                let binding = binding.as_ref().context("Build request has no bound route")?;
                 ensure!(!p.request.is_empty() && p.provider.as_deref() == Some(binding.connection.provider()) && p.model.as_deref() == Some(binding.model.as_str()), "Build request changed approved model/provider");
                 if p.action == "reserve" {
-                    ledger.reserve(BudgetRequest { connection: Some(binding.connection), request: p.request, generation: p.generation,
-                        tokens: p.tokens, usd_nanos: p.usd_nanos, priced: p.priced, unbounded: p.unbounded, response: None })?
+                    ledger.reserve_for(BudgetRequest { connection: Some(binding.connection), request: p.request, generation: p.generation,
+                        tokens: p.tokens, usd_nanos: p.usd_nanos, priced: p.priced, unbounded: p.unbounded, response: None }, digest)?
                 } else {
-                    ledger.settle(&p.request, p.response.context("Build settlement needs response identity")?, p.tokens, p.usd_nanos)?;
+                    ledger.settle_for(&p.request, p.response.context("Build settlement needs response identity")?, p.tokens, p.usd_nanos, digest)?;
                     true
                 }
             },
             _ => anyhow::bail!("unknown Build budget action"),
         };
         let (tokens, usd_nanos) = ledger.ledger.totals();
-        let allowance = ledger.approval.allowance_nanos;
+        let allowance = ledger.allowance_nanos();
         let uncertain = ledger.ledger.requests.iter().filter(|r| r.response.is_none()).count();
         store.save_build_paid_ledger(&ledger)?;
         Ok(json!({"admitted":admitted,"exhausted":usd_nanos >= allowance,"guard_paused":false,
             "paid":{"episode":ledger.session,"epoch":ledger.generation,"allowance_nanos":allowance,"consumed_or_reserved_nanos":usd_nanos,"uncertain_requests":uncertain},
-            "connection":binding.connection,"binding_digest":binding.digest,"limits":{"max_tokens":null,"max_usd_nanos":allowance},"tokens":tokens,"usd_nanos":usd_nanos}))
+            "connection":binding.as_ref().map(|b| b.connection),"binding_digest":binding.as_ref().map(|b| &b.digest),"limits":{"max_tokens":null,"max_usd_nanos":allowance},"tokens":tokens,"usd_nanos":usd_nanos}))
     })
 }
 

@@ -9,11 +9,12 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use corral_engine::{
-    Check, CheckKind, Engine, Role, Run, SessionStatus, Status, Task, store::TaskFilter,
+    Check, CheckKind, Engine, Role, Run, Runner, SessionStatus, Status, Task, store::TaskFilter,
     usage::UsageSummary,
 };
 use corral_protocol::{
     Health,
+    assistant::ThreadEntry,
     rows::*,
     subscription::{BoardCursor, Topic},
 };
@@ -29,6 +30,11 @@ pub(crate) enum Rows {
     Projects(Vec<ProjectRow>),
     Agents(Vec<AgentRow>),
     Usage(Vec<UsageSummary>),
+    Assistant(Vec<AssistantRow>),
+    Thread {
+        scope: String,
+        rows: Vec<ThreadEntry>,
+    },
     Settings(Vec<SettingsSnapshot>),
 }
 
@@ -41,6 +47,8 @@ macro_rules! each {
             Rows::Projects($rows) => $body,
             Rows::Agents($rows) => $body,
             Rows::Usage($rows) => $body,
+            Rows::Assistant($rows) => $body,
+            Rows::Thread { rows: $rows, .. } => $body,
             Rows::Settings($rows) => $body,
         }
     };
@@ -62,6 +70,8 @@ impl Rows {
                 format!("{}_{}", run.task, run.id).into()
             }
             Self::Usage(_) => "usage".into(),
+            Self::Assistant(rows) => rows[index].id.as_str().into(),
+            Self::Thread { rows, .. } => rows[index].id.as_str().into(),
             Self::Settings(_) => "settings".into(),
         }
     }
@@ -75,6 +85,32 @@ impl Rows {
         left: &[String],
         more: bool,
     ) -> Result<corral_protocol::frame::Frame> {
+        if let Self::Thread { scope, rows } = self {
+            #[derive(Serialize)]
+            struct ThreadPage<'a> {
+                topic: Topic,
+                scope: &'a str,
+                epoch: u64,
+                rows: &'a [ThreadEntry],
+                left: &'a [String],
+                cursor: BoardCursor,
+                more: bool,
+                live: Option<corral_protocol::subscription::LiveText>,
+            }
+            return crate::topics::notification(
+                corral_protocol::SUB_DELTA,
+                ThreadPage {
+                    topic,
+                    scope,
+                    epoch,
+                    rows: &rows[range],
+                    left,
+                    cursor,
+                    more,
+                    live: None,
+                },
+            );
+        }
         #[derive(Serialize)]
         struct Page<'a, T> {
             topic: Topic,
@@ -108,7 +144,7 @@ const EXTERNAL_POLL: Duration = Duration::from_secs(2);
 /// so probing agents never holds the cache lock for health or SQLite-only reads.
 #[derive(Default)]
 pub(crate) struct RowCache {
-    entries: [Mutex<Option<Observation>>; 7],
+    entries: [Mutex<Option<Observation>>; 8],
 }
 
 struct Observation {
@@ -127,6 +163,7 @@ impl RowCache {
             Topic::Agents => 4,
             Topic::Usage => 5,
             Topic::Settings => 6,
+            Topic::Assistant => 7,
             _ => bail!("unsupported row topic"),
         };
         let mut slot = self.entries[index]
@@ -134,8 +171,10 @@ impl RowCache {
             .unwrap_or_else(|error| error.into_inner());
         let revision = shared.revision();
         let refresh = slot.as_ref().is_none_or(|old| {
-            let poll = matches!(topic, Topic::Agents | Topic::Projects | Topic::Settings)
-                || old.result.is_err();
+            let poll = matches!(
+                topic,
+                Topic::Agents | Topic::Projects | Topic::Settings | Topic::Assistant
+            ) || old.result.is_err();
             old.revision != revision || (poll && old.at.elapsed() >= EXTERNAL_POLL)
         });
         if refresh {
@@ -168,6 +207,9 @@ impl RowCache {
 fn read(shared: &Shared, topic: Topic) -> Result<Rows> {
     if topic == Topic::Health {
         return Ok(Rows::Health(vec![shared.health()]));
+    }
+    if topic == Topic::Assistant {
+        return Ok(Rows::Assistant(crate::assistant::rows(shared)?));
     }
     let engine = shared.engine()?;
     match topic {
@@ -382,7 +424,7 @@ fn agents(engine: &Engine) -> Result<Vec<AgentRow>> {
     for run in engine.store.live_runs(None)? {
         if let Some(session) = &run.session {
             let status = engine
-                .runner
+                .session_runner()
                 .status(session)
                 .with_context(|| format!("observe session {} {}", run.task, run.id))?;
             if status != SessionStatus::Gone {

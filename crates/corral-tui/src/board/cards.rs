@@ -40,6 +40,8 @@ pub(crate) struct CardExtra<'a> {
     pub automation_block: Option<&'a str>,
     /// Plan-first cards: why automation will not start the submitted plan's review.
     pub plan_review_wait: Option<&'a str>,
+    /// Shared assistant/board responsibility; `None` for ordinary board work.
+    pub handoff: Option<&'a corral_ops::assistant::workflow::handoff::status::Responsibility>,
     /// Ids of the board's Done tasks; without it, open dependencies are found by scanning `all`.
     pub done_ids: Option<&'a std::collections::HashSet<String>>,
 }
@@ -182,6 +184,31 @@ pub(super) fn recovery_qualified(extra: CardExtra) -> bool {
     extra
         .head
         .is_some_and(|h| h.summary.recovery.as_ref().is_none_or(|r| r.records > 0))
+}
+
+/// Text-labelled responsibility plus its honest wait; never colour-only.
+fn handoff_lines(extra: CardExtra, width: usize) -> Vec<Line<'static>> {
+    let Some(h) = extra.handoff else {
+        return Vec::new();
+    };
+    use corral_ops::assistant::workflow::handoff::status::Driver;
+    let colour = match h.driver {
+        Driver::Assistant => theme::CYAN,
+        Driver::Board => theme::FG,
+        Driver::Reconciling => theme::YELLOW,
+    };
+    let mut out: Vec<Line<'static>> = wrap2(&h.label, width)
+        .into_iter()
+        .map(|text| Line::styled(text, Style::new().fg(colour)))
+        .collect();
+    if let Some(waiting) = &h.waiting {
+        out.extend(
+            wrap2(waiting, width)
+                .into_iter()
+                .map(|text| Line::styled(text, theme::dim())),
+        );
+    }
+    out
 }
 
 fn automation_lines(reason: Option<&str>, width: usize) -> Vec<Line<'static>> {
@@ -574,10 +601,17 @@ pub(crate) fn card_lines(
         (false, true) => "⚠ ",
         (false, false) => "",
     };
-    let cowork = match &t.cowork {
-        Some(_) if corral_core::TaskFieldsRef::review_waived(t) => "asst no-review ",
-        Some(_) => "asst ",
-        None => "",
+    // A projected handoff label replaces the bare "asst" marker; waived review stays visible.
+    let cowork = match (&t.cowork, extra.handoff.is_some()) {
+        (Some(_), handoff) if corral_core::TaskFieldsRef::review_waived(t) => {
+            if handoff {
+                "no-review "
+            } else {
+                "asst no-review "
+            }
+        }
+        (Some(_), false) => "asst ",
+        _ => "",
     };
     let star = format!("{star}{cowork}");
     let id_w = t.id.width() + star.width();
@@ -652,8 +686,13 @@ pub(crate) fn card_lines(
             plan_wait: extra.plan_review_wait.is_some(),
             route: extra.route,
             route_warning,
+            handoff: extra.handoff.is_some(),
         };
         let mut lines = vec![compact.line(bar.clone(), width, title_style)];
+        if let Some(mut line) = handoff_lines(extra, width).into_iter().next() {
+            line.spans.insert(0, bar.clone());
+            lines.push(line);
+        }
         if let Some(hold) = &t.hold {
             for text in wrap2(&hold.refusal(), width) {
                 lines.push(Line::from(vec![
@@ -688,6 +727,10 @@ pub(crate) fn card_lines(
         ]),
     ];
     lines.extend(blocked_lines());
+    for mut line in handoff_lines(extra, width) {
+        line.spans.insert(0, bar.clone());
+        lines.push(line);
+    }
     for meta in meta_lines(t, done, config, width, now, extra) {
         let mut spans = vec![bar.clone()];
         let mut used = 0;

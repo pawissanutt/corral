@@ -6,7 +6,7 @@ import { keyCap } from "./frame.ts";
 import { pad, PANEL_BG, PANEL_MUTED, PANEL_TEXT, plainLabel, RESET } from "./panels-view.ts";
 
 export type KeyContext = "composer" | "agents" | "agent" | "changes" | "task" | "lifecycle" | "proof" | "artifacts"
-  | "inbox" | "usage" | "image" | "sidebar" | "queue" | "dialog" | "palette" | "keys" | "pager" | "board" | "choice" | "questions";
+  | "usage" | "image" | "sidebar" | "queue" | "dialog" | "palette" | "keys" | "pager" | "board" | "choice" | "questions";
 /**
  * One footer hint: a key cap and its label. A `lead` hint has no cap: it names the view that has the keys
  * (`keys → Changes · Tab to type`, short `→ Changes`) and a click on it replays Tab.
@@ -17,7 +17,7 @@ export interface Hint {
 }
 export interface HintState {
   readonly context: KeyContext;
-  readonly mode: { readonly taskBound: boolean; readonly answer: boolean; readonly lifecycle: boolean };
+  readonly mode: { readonly taskBound: boolean; readonly lifecycle: boolean };
   /** True while Chat is the open view: its tool rows fold and unfold with Pi's tool-output key. */
   readonly chat?: boolean;
   readonly streaming: boolean;
@@ -28,9 +28,7 @@ export interface HintState {
   readonly lead?: string;
   /** AgentsAction ids offered for the selected row; in `board`, the BoardAction ids offered. */
   readonly selection?: readonly string[];
-  readonly authors?: boolean; readonly legend?: boolean; readonly history?: boolean; readonly timelineSource?: "task" | "host";
-  /** Usage only: `reread` while the collector applies (a bound task/run with a reader), `chart` while it has rows to draw. */
-  readonly usage?: { readonly reread: boolean; readonly chart: boolean };
+  readonly authors?: boolean; readonly legend?: boolean;
   /** Build sessions only: who Enter reaches, whether a child can take a message, a waiting board plan, docked options. */
   readonly build?: {
     readonly target?: { readonly id: string; readonly answer: boolean }; readonly steerable: boolean;
@@ -131,7 +129,7 @@ export function viewKey(index: number): KeyId | undefined {
   const key = VIEW_KEYS[index];
   return key === undefined ? undefined : freeKey(key);
 }
-/** The key that filters or searches the focused view (Changes paths, a job's output, the Inbox): `/` stays the composer's. */
+/** The key that filters or searches the focused view (Changes paths, a job's output): `/` stays the composer's. */
 export const FILTER_KEY: KeyId = "f3";
 
 function hint(id: string, binding: string, label: string, short?: string): Hint {
@@ -235,25 +233,16 @@ function viewHints(state: HintState): Hint[] {
       return pick(J_K("file", "file"), pair("hunk", "n/p", "n", "hunk"), letter("a", "ask"), state.authors && letter("f", "by agent"),
         filter, letter("c", "compare"), letter("o", "project"), letter("r", "refresh"), ESC("chat"));
     case "task":
-      return pick(UP_DOWN("scroll", "scroll"), letter("r", "refresh"), state.mode.lifecycle && letter("g", "graph"),
-        state.mode.lifecycle && letter("l", "events"), legend, ESC("chat"));
+      return pick(UP_DOWN("scroll", "scroll"), letter("r", "refresh"), state.mode.lifecycle && letter("l", "events"), legend, ESC("chat"));
     case "lifecycle":
-      return pick(J_K("select", "select"), ESC("task"), letter("r", "reconcile"),
-        state.timelineSource === "task" && letter("h", "host"), state.timelineSource === "host" && letter("c", "canonical"), legend);
+      return pick(J_K("select", "select"), ESC(state.mode.taskBound ? "task" : "chat"), legend);
     case "proof":
-      return pick(J_K("criterion", "criterion"), ENTER("open"), letter("a", "artifacts"), legend, letter("r", "refresh"), ESC("chat"));
+      return pick(J_K("section", "section"), ENTER("expand"), letter("a", "artifacts"), legend, letter("r", "refresh"), ESC("chat"));
     case "artifacts":
-      return pick(J_K("select", "select"), ENTER("open"), ESC("proof"), letter("m", "mark"), letter("c", "compare"), letter("o", "browse"),
+      return pick(J_K("select", "select"), ENTER("open"), ESC("proof"), letter("m", "mark"), letter("c", "compare"),
         letter("x", "export"), legend, letter("r", "refresh"));
-    case "inbox":
-      return pick(J_K("select", "select"), ENTER("inspect"), state.mode.answer && letter("a", "answer flow", "answer"),
-        letter("h", state.history ? "pending" : "history"), filter, letter("r", "reread"), letter("?", "legend"), ESC("chat"));
-    case "usage": {
-      // Reread and token bars act on the collector; each shows only while the view says it can act. Absent means neither.
-      const usage = state.usage;
-      return pick(UP_DOWN("scroll", "scroll"),
-        ...escAfterFirst([usage?.reread === true && letter("r", "reread"), usage?.chart === true && letter("c", "token bars", "bars"), legend], "chat"));
-    }
+    case "usage":
+      return pick(UP_DOWN("scroll", "scroll"), ...escAfterFirst([legend], "chat"));
     case "sidebar":
       return pick(pair("tab", "←→", "\x1b[C", "tab"), UP_DOWN("select", "select"), ENTER("open"), ESC("composer"));
     case "queue":
@@ -359,11 +348,11 @@ export function footerRow(hints: readonly Hint[], tier: ChromeTier, width: numbe
 /**
  * The F1 keys list for this mode: every group holds only keys the mode offers. Rows with data run on Enter.
  * `build` adds Board (unless `board` is false: a bare session has none) and the message receiver, names each agent's
- * own keys, and has no Task, Proof or Inbox.
+ * own keys, and has no Task or Proof.
  * `sidebarKey` is the chosen sidebar toggle; `questionsKey` the owner-question key when it is free.
  */
 export function keyGroups(mode: {
-  readonly taskBound: boolean; readonly answer: boolean; readonly jobs: boolean;
+  readonly taskBound: boolean; readonly jobs: boolean;
   readonly queueControl: boolean; readonly lifecycle: boolean; readonly build?: boolean; readonly board?: boolean;
   readonly sidebarKey?: KeyId; readonly questionsKey?: KeyId;
   /** Profile controls are installed (`/profiles`), with `profileKey` when their next-profile key was registered. */
@@ -389,13 +378,12 @@ export function keyGroups(mode: {
   const taskBound = mode.taskBound && !build;
   // The views in tab order (header.ts mainTabs): the F-key, and Alt+n when the terminal and the user leave it free.
   const views = [
-    taskBound && { key: "f5", label: "Task: the bound task, its plan and criteria" },
+    taskBound && { key: "f5", label: "Task: the bound task and its run" },
     { key: "f9", label: "Chat: the conversation" },
     { key: "f8", label: build ? "Agents: every agent, focus the list" : mode.jobs ? "Agents: helper calls and jobs, focus the list" : "Agents: helper calls, focus the list" },
     { key: "f7", label: build ? "Changes: files and diffs, filtered by agent" : "Changes: files and diffs in the chosen comparison" },
-    taskBound && { key: "f10", label: "Proof: criteria, gate and review" },
+    taskBound && { key: "f10", label: "Proof: gate, review and artifacts" },
     board && { key: "f10", label: "Board: tasks this session filed" },
-    !build && { key: "f11", label: "Inbox: decisions waiting for the owner" },
   ].filter((item): item is { key: string; label: string } => !!item);
   const rail = mode.sidebarKey ?? "ctrl+b", filter = keyLabel(FILTER_KEY);
   const [pageUp, pageDown, top, bottom] = ["tui.altScreen.pageUp", "tui.altScreen.pageDown", "tui.altScreen.top", "tui.altScreen.bottom"].map(piKey);
@@ -467,28 +455,15 @@ export function keyGroups(mode: {
     groups.push({ title: "Task", rows: rows(
       info("↑↓", "Scroll"),
       info("r", "Refresh"),
-      mode.lifecycle && info("g", "Lifecycle graph"),
-      mode.lifecycle && info("l", "Lifecycle events"),
-      mode.lifecycle && info("h/c", "Events: host log or canonical record"),
-      info("?", mode.lifecycle ? "Show or hide the legend, here and in Graph and events" : "Show or hide the legend"),
+      mode.lifecycle && info("l", "Host events"),
+      info("?", mode.lifecycle ? "Show or hide the legend, here and in events" : "Show or hide the legend"),
     ) });
     groups.push({ title: "Proof", rows: rows(
-      info("j/k", "Select a criterion"),
-      info("⏎", "Open its detail"),
+      info("j/k", "Select a section"),
+      info("⏎", "Expand or collapse it"),
       info("a", "Artifacts"),
       info("?", "Show or hide the legend, here and in Artifacts"),
       info("r", "Refresh"),
-    ) });
-  }
-  if (!build) {
-    groups.push({ title: "Inbox", rows: rows(
-      info("j/k", "Select an item"),
-      info("⏎", "Inspect it"),
-      mode.answer && info("a", "Answer flow instructions (nothing is sent)"),
-      info("h", "History or pending"),
-      info(filter, "Filter"),
-      info("r", "Reread"),
-      info("?", "Legend"),
     ) });
   }
   groups.push({ title: "Sidebar", rows: rows(

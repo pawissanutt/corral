@@ -229,7 +229,7 @@ function parseArgs(text: string | undefined): Record<string, unknown> {
 }
 
 /**
- * A child record as the call its tool's presenter draws: arguments, result preview, receipt fields and timing. The
+ * A child record as the call its tool's presenter draws: arguments, result preview, structured result and timing. The
  * preview is clipped, so the result's real size travels as `totals`; a record without sizes (older sessions) passes
  * empty totals, so presenters print no count rather than the preview's.
  */

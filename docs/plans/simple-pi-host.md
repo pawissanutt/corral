@@ -139,7 +139,32 @@ A role is a tool list and a prompt (`pi/roles/types.ts:132-161`). Four remain of
 | `send` | `submit_input` as a steer read at the next turn boundary (`guide:1682-1684`). `Origin::Owner` (`crates/corral-types/src/lib.rs:244`) is sent as `owner`; `Origin::Auto` (send-backs, re-review requests) as `auto`, which a paused session answers `queued` while the call succeeds |
 | `stop`, `focus` | `shutdown`, wait 10 s, then the inner `stop`; `focus` is the inner `focus` |
 
-**Live stream.** The daemon keeps the `session` topic and its page shape (`docs/app-design/SESSION-CONTROL.md:501-511`), as [simple-daemon-app.md](simple-daemon-app.md) requires. One reader per subscribed session polls `live_since` at 10 Hz as today (`crates/corral-daemon/src/topics/app/session.rs:24`, `crates/corral-ops/src/session_live.rs:38-47`), now through `pi::Client`. A host whose `last` is below the reader's cursor has restarted: the reader resets to 0, bumps an in-memory counter it reports as the page's `generation`, and sends a gap, on which the app already re-reads the transcript (`docs/app-design/SESSION-CONTROL.md:556-557`). Chat input, `cancel`, `pause`, `resume` and `answer` go from the daemon straight to `pi::Client`; they change no task state. Phase 3 therefore restores the Cancel, Pause and Resume session commands that phase 2 drops, for pi sessions only.
+**Daemon live stream.** `session.v1` serves the existing scoped `SubDelta::Session` page.
+One reader per watched scope polls `live_since` and `events_since` through `pi::Client` at
+most 10 Hz. Either ring can force a transcript reconciliation. A cursor beyond the host's
+`last` resets both cursors and changes the page's in-memory `generation`; nothing is stored.
+
+The local and paired owner APIs use the same scopes: `T-001_R1` (the Agents row id),
+`T-001/reviewer` (the current reviewer), or `A-1` (chat). Payloads are in
+`corral_protocol::{session,assistant}`:
+
+| RPC | Request → reply |
+|---|---|
+| `session.cancel` | `SessionCancel` → `SessionCancelReply` |
+| `session.pause`, `session.resume` | `SessionTarget` → `SessionPauseReply`, `SessionResumeReply` |
+| `session.terminate`, `session.relaunch` | `SessionTarget` → null, `SessionRelaunched` |
+| `session.rewind` | `SessionRewind` (`list` or a `turn`) → `RewindReply` |
+| `prompt.answer` | `SessionPromptAnswer` (scope, Pi question, option and/or text) → `SessionPromptAnswered` |
+| `assistant.send`, `assistant.cancel` | `AssistantSend` → `SendAck`; `AssistantCancelRequest` → `CancelAck` |
+| `assistant.stop`, `assistant.warm`, `assistant.session` | `AssistantStop` → `StopAck`; `AssistantWarm` → null; `AssistantSessionOp` → `AssistantRow` |
+
+Chat runs in a detached process and needs a Pi harness or profile selected in `corral.toml`,
+not automation. Each `.corral-next/chat/A-<n>/` holds `chat.json` (thread/profile/end state),
+the host's `session.json`, the Pi transcript, `spend.json`, process log, and runtime files.
+Terminate preserves the scope for relaunch; End leaves it readable but the next quick send
+uses a new id. The `assistant` topic lists sessions; `thread` is a scoped recent transcript
+projection. `views/transcript.rs` pages Pi files for `detail.get` kinds `session` and
+`session_item`. Use `op.submit` with `Op::New` at `Idea` to file an owner message as a task.
 
 ## 9. Money
 

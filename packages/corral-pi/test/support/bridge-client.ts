@@ -1,11 +1,13 @@
 import { createConnection, type Socket } from "node:net";
 
 import { LineReader } from "../../src/bridge/framing.ts";
+import type { BridgeHandlers } from "../../src/bridge/server.ts";
 import { within } from "./wait.ts";
 
 export interface Reply {
   readonly id: string | null;
-  readonly generation: number;
+  readonly version: number;
+  readonly generation?: number;
   readonly ok: boolean;
   readonly result?: Record<string, unknown>;
   readonly error?: { code: string; reason: string };
@@ -93,16 +95,15 @@ export async function connect(path: string): Promise<TestClient> {
   };
 }
 
-export async function refusalOnConnect(path: string): Promise<{ reply: Reply; closed: Promise<void> }> {
-  const socket = createConnection(path);
-  const reader = new LineReader(1 << 20);
-  const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
-  const reply = new Promise<Reply>((resolve) => {
-    socket.on("data", (chunk: Buffer) => {
-      const [line] = reader.push(chunk);
-      if (line !== undefined) resolve(parse(line));
-    });
-  });
-  socket.on("error", () => socket.destroy());
-  return { reply: await within(reply, 30_000, "the bridge's refusal"), closed: within(closed, 30_000, "the close") };
+export function testHandlers(overrides: Partial<BridgeHandlers> = {}): BridgeHandlers {
+  return {
+    hello: () => ({ protocol: 2 }), state: () => ({}),
+    submit: async () => ({ disposition: "handled" }), answer: async () => ({ status: "missing" }),
+    pause: async () => ({ paused: true }), resume: async () => ({ paused: false }),
+    cancel: async () => ({ cancelled: false }), shutdown() {},
+    rewind: async () => ({}),
+    queueState: () => ({ items: [], more: false }), queueWithdraw: () => ({ outcome: "unknown_item" }),
+    setModel: async () => ({}),
+    ...overrides,
+  };
 }

@@ -223,7 +223,7 @@ function monitorPresenter(deps: ToolRenderDeps): Presenter {
       const reason = [result?.["code"], result?.["reason"] ?? result?.["message"]].filter(part => typeof part === "string").join(": ");
       return { ...base, state: "failed", outcome: reason || "refused" };
     }
-    if (details?.["state"] !== "committed") return { ...base, state: "unknown", outcome: `${wake} · ${String(details?.["state"] ?? "no receipt")}` };
+    if (details?.["state"] !== "committed") return { ...base, state: "unknown", outcome: `${wake} · ${String(details?.["state"] ?? "not confirmed")}` };
     if (result?.["settled"] === true) return { ...base, verb: "watched", state: "ok", outcome: "already settled" };
     const deadline = typeof result?.["deadline"] === "string" ? new Date(result["deadline"]) : undefined;
     const until = deadline && !Number.isNaN(deadline.getTime()) ? ` · until ${deadline.toTimeString().slice(0, 5)}` : "";

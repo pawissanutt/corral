@@ -2,7 +2,7 @@
 // error or a stop, and the end of automatic retrying, to `presentError` (the `errorPresentation` option of the patched
 // InteractiveMode). A failure becomes one `✗` sentence saying what happened and whether anything was lost, then one
 // muted next step; the raw text and the typed failure facts are one click or Ctrl+O away. A stopped turn is one muted
-// `○ stopped` row that names who stopped it when the host knows (`stopped by you`, `stopped: the run budget was
+// `○ stopped` row that names who stopped it when the host knows (`stopped by you`, `stopped: the spending cap was
 // reached`). Presentation only: the model and the journal receive what they did before.
 import type { InteractiveModeOptions } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, wrapTextWithAnsi, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
@@ -40,6 +40,7 @@ const STOP_TEXTS: Readonly<Record<string, true>> = {
 const SUMMARY = /^(?:(claude_compaction_conflict|claude_query_incomplete|search turn limit): )?([a-z0-9.-]+): ([a-z_]+) \(([a-z]+)\)$/;
 const RETRY_STEP = "Send a message to retry.";
 const RETRY_OR_MODEL = "Send a message to retry, or choose another model.";
+const SPENDING_STEP = "Start a new run on another profile with corral retry --profile <name>.";
 const SENTENCE_ROWS = 4;
 const VERBATIM_ROWS = 2;
 const STEP_ROWS = 3;
@@ -99,8 +100,8 @@ function providerCopy(failure: ProviderFailure, input: ErrorInput, now: number, 
     case "unavailable":
       return failed(`This model is not available on the ${name}. ${lostClause(input, true)}`, "Choose another model.");
     case "local_budget":
-      return failed(`The run's budget is spent, so ${input.partial ? "the reply above stopped early" : "the request was not sent to the model"}.`,
-        "The agent cannot continue until the budget limits are raised.");
+      return failed(`This session reached its spending cap, so ${input.partial ? "the reply above stopped early" : "the request was not sent to the model"}.`,
+        SPENDING_STEP);
     case "network_policy":
       return failed(`This session's network policy blocked the request. ${lostClause(input, false)}`,
         "The destination is not allowed here; retrying is blocked the same way.");
@@ -109,49 +110,10 @@ function providerCopy(failure: ProviderFailure, input: ErrorInput, now: number, 
   }
 }
 
-/** A `budget record refused: {...}` refusal: the code and reason corral gave, or undefined when not that shape. */
-function refusalOf(text: string): { readonly code: string; readonly reason: string } | undefined {
-  const match = /^budget record refused: (\{.*\})$/s.exec(text);
-  if (!match) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(match[1]!);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    const record = parsed as Record<string, unknown>;
-    return typeof record.code === "string" ? { code: record.code, reason: typeof record.reason === "string" ? record.reason : "" } : undefined;
-  } catch { return undefined; }
-}
-
+/** The host's refusal once `spend.json` reaches `--max-usd` (capabilities/budget.ts). */
 function hostCopy(text: string, input: ErrorInput, raw: readonly string[]): ErrorCopy | undefined {
-  const failed = (sentence: string, step: string): ErrorCopy => ({ kind: "failed", sentence, step, raw });
-  const notSent = lostClause(input, false);
-  const refusal = refusalOf(text);
-  if (refusal) {
-    if (refusal.code === "receipt_limit") {
-      const count = /holds (\d+) receipts/.exec(refusal.reason)?.[1];
-      const held = count ? `already holds ${Number(count).toLocaleString("en-US")} receipts` : "is full";
-      return failed(`Corral refused this request: the task's record ${held}. ${notSent}`,
-        "The agent cannot continue until the receipt limit is dealt with; restarting hits the same limit.");
-    }
-    if (refusal.code === "review_closed") {
-      return failed(`The review this session belongs to is closed, so corral refused the request. ${notSent}`, "This review session cannot continue.");
-    }
-    if (refusal.code === "run_ended") {
-      return failed(`The run this session belongs to has ended, so corral refused the request. ${notSent}`, "This run's session cannot continue.");
-    }
-    return failed(`Corral refused to record this request (${plainLabel(refusal.code).replace(/_/g, " ")}). ${notSent}`, RETRY_STEP);
-  }
-  if (text.startsWith("call_failed:")) {
-    if (/\bConflict \{/.test(text)) return failed(`Another corral write landed first, so this request was not recorded. ${notSent}`, RETRY_STEP);
-    if (/database is locked/.test(text)) return failed(`Corral's database was busy, so this request was not recorded. ${notSent}`, RETRY_STEP);
-    if (/signal=SIG[A-Z]+/.test(text)) return failed(`The corral call recording this request was interrupted. ${notSent}`, RETRY_STEP);
-    return failed(`A corral call recording this request failed. ${notSent}`, RETRY_STEP);
-  }
-  if (text.startsWith("call_timeout:")) return failed(`Corral did not answer in time while recording this request. ${notSent}`, RETRY_STEP);
-  if (text.startsWith("budget_accounting_refused:")) return failed(`Corral could not record the cost of this request. ${notSent}`, RETRY_STEP);
-  if (text.startsWith("cache_guard_paused:")) {
-    return failed(`The PM's cache-health hold paused model requests. ${notSent}`, "The owner resumes it with corral pm guard-resume.");
-  }
-  return undefined;
+  if (!/^spending cap reached\b/.test(text)) return undefined;
+  return { kind: "failed", sentence: `This session reached its spending cap. ${lostClause(input, false)}`, step: SPENDING_STEP, raw };
 }
 
 function transportCopy(text: string, input: ErrorInput, raw: readonly string[]): ErrorCopy | undefined {
@@ -175,8 +137,8 @@ function transportCopy(text: string, input: ErrorInput, raw: readonly string[]):
       Number.isFinite(at) ? `Sign in again, or wait for the re-check at ${clockTime(at, Date.now())}.` : "Sign in again, or choose another model.");
   }
   if (text.startsWith("budget_exhausted:")) {
-    return failed(`The run's budget is spent, so ${input.partial ? "the reply above stopped early" : "the request was not sent to the model"}.`,
-      "The agent cannot continue until the budget limits are raised.");
+    return failed(`This session reached its spending cap, so ${input.partial ? "the reply above stopped early" : "the request was not sent to the model"}.`,
+      SPENDING_STEP);
   }
   if (text.startsWith("network_refused:")) {
     return failed(`This session's network policy blocked the request. ${lostClause(input, false)}`, "The destination is not allowed here; retrying is blocked the same way.");
@@ -221,7 +183,7 @@ export function errorCopy(input: ErrorInput, now = Date.now(), cause?: StopCause
   if (input.stopReason === "aborted") {
     // Only the host's word makes it the owner's stop; a stop of an earlier run (resume, rebuild) has no known cause.
     const stopped = cause === "owner" ? "stopped by you"
-      : cause === "budget" || /^budget_exhausted/.test(text) ? "stopped: the run budget was reached"
+      : cause === "budget" || /^budget_exhausted|^spending cap reached/.test(text) ? "stopped: the spending cap was reached"
         : cause === "host" ? "stopped by corral" : "stopped";
     if (input.retryEnded) return { kind: "stopped", sentence: `${stopped}${retried}`, raw: [] };
     const notRun = input.toolCallsNotRun > 0

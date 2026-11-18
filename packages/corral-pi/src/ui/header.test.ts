@@ -4,15 +4,14 @@ import type { HostIdentity } from "../roles/types.ts";
 import { boardBadge, changesBadge, headerFrame, headerRows, mainTabs, proofBadge, tabRow, tabSpec, type HeaderInput, type TabId, type TabSpec } from "./header.ts";
 import { PANEL_LINE, PANEL_ON_ACCENT } from "./panels-view.ts";
 
-const worker: HostIdentity = { store: "s", project: "demo", role: "worker", task: "T-1", run: "R-1", generation: 1 };
-const reviewer: HostIdentity = { store: "s", project: "demo", role: "reviewer", task: "T-1", review: "V-1", generation: 1 };
-const assistant: HostIdentity = { store: "s", project: "", role: "assistant", assistant: "A-1", generation: 1 };
-const pm: HostIdentity = { store: "s", project: "demo", role: "pm", generation: 1 };
-const build: HostIdentity = { store: "s", project: "demo", role: "build", generation: 1 };
+const worker: HostIdentity = { store: "s", project: "demo", role: "worker", task: "T-1", run: "R-1" };
+const reviewer: HostIdentity = { store: "s", project: "demo", role: "reviewer", task: "T-1", run: "R-2" };
+const assistant: HostIdentity = { store: "s", project: "", role: "assistant", assistant: "A-1" };
+const build: HostIdentity = { store: "s", project: "demo", role: "build" };
 
 const BADGES: Partial<Record<TabId, TabSpec["badge"]>> = {
   conversation: { text: "●", tone: "accent" }, agents: { text: "12", tone: "accent" },
-  changes: { text: "148", tone: "text" }, evidence: { text: "✓R·", tone: "warning" }, inbox: { text: "3", tone: "warning" },
+  changes: { text: "148", tone: "text" }, evidence: { text: "✓R·", tone: "warning" },
   board: { text: "3", tone: "accent" },
 };
 const specs = (identity: HostIdentity) => mainTabs(identity).map(id => tabSpec(id, BADGES[id]));
@@ -37,14 +36,11 @@ test("the tab row never overflows, keeps the open tab's label and opens the tab 
   }
 });
 
-test("task-bound roles get Task and Proof, assistant and PM neither, and Inbox is everywhere but build", () => {
+test("task-bound roles get Task and Proof, an assistant neither", () => {
   for (const identity of [worker, reviewer]) {
     expect(mainTabs(identity)).toContain("task"); expect(mainTabs(identity)).toContain("evidence");
   }
-  for (const identity of [assistant, pm]) {
-    expect(mainTabs(identity)).not.toContain("task"); expect(mainTabs(identity)).not.toContain("evidence");
-  }
-  for (const identity of [worker, reviewer, assistant, pm]) expect(mainTabs(identity)).toContain("inbox");
+  expect(mainTabs(assistant)).toEqual(["conversation", "agents", "changes"]);
 });
 
 test("a build session has Chat, Agents, Changes and Board, with Board on F10", () => {
@@ -136,7 +132,7 @@ const cells = (line: string, from: number, to: number) => sliceByColumn(stripTer
 
 test("Chat takes no chip, and counts sit in chips after their labels at every width that has room for them", () => {
   expect(tabSpec("conversation", { text: "●", tone: "accent" }).badge).toBeUndefined();
-  for (const identity of [worker, reviewer, assistant, pm, build]) {
+  for (const identity of [worker, reviewer, assistant, build]) {
     const tabs = specs(identity);
     const text = stripTerminalSequences(tabRow(tabs, "conversation", 185).line);
     expect(text).not.toContain("●");
@@ -168,9 +164,9 @@ test("separators go first, then Changes reads Diff, then inactive labels; counts
     if (!text.includes("Agents")) { expect(text).not.toContain("│"); expect(text).not.toContain("Changes"); }
     if (text.includes("Diff")) expect(text).not.toContain("│");
   }
-  // At 80 columns the six-tab worker has lost its inactive labels, and the counts stay on the bare key caps.
-  const narrow = stripTerminalSequences(tabRow(tabs, "conversation", 80).line);
-  expect(narrow).not.toContain("Inbox"); expect(narrow).toMatch(/F11\s+3/); expect(narrow).toMatch(/F8\s+12/);
+  // At 61 columns the five-tab worker has lost its inactive labels, and the counts stay on the bare key caps.
+  const narrow = stripTerminalSequences(tabRow(tabs, "conversation", 61).line);
+  expect(narrow).not.toContain("Agents"); expect(narrow).toMatch(/F7\s+148/); expect(narrow).toMatch(/F8\s+12/);
   const quarter = stripTerminalSequences(tabRow(specs(build), "conversation", 46).line);
   expect(quarter).toContain("Chat"); expect(quarter).not.toContain("Agents"); expect(quarter).not.toContain("Board");
   for (const key of ["F9", "F8", "F7", "F10"]) expect(quarter).toContain(key);
@@ -186,12 +182,13 @@ test("the unread dot follows Chat's label at every width, and stays on the bare 
 });
 
 test("the Proof badge reads the gate in words and keeps the review only where it fits", () => {
-  const badge = proofBadge({ gate: { result: "fail", fresh: true }, review: { verdict: "approve", fresh: true }, stale: false, error: false });
-  expect(badge?.text).toBe("gate ✗ · reviewed"); expect(badge?.short).toBe("gate ✗"); expect(badge?.tone).toBe("error");
+  const badge = proofBadge({ gate: { result: "fail" }, review: { result: "pass" }, stale: false, error: false });
+  expect(badge?.text).toBe("gate ✗ · approved"); expect(badge?.short).toBe("gate ✗"); expect(badge?.tone).toBe("error");
+  expect(proofBadge({ gate: { result: "pass" }, review: { result: "pass" }, stale: false, error: false })?.tone).toBe("success");
   const tabs = mainTabs(worker).map(id => tabSpec(id, id === "evidence" ? badge : undefined));
-  expect(stripTerminalSequences(tabRow(tabs, "evidence", 140).line)).toContain("gate ✗ · reviewed");
+  expect(stripTerminalSequences(tabRow(tabs, "evidence", 140).line)).toContain("gate ✗ · approved");
   const narrow = stripTerminalSequences(tabRow(tabs, "evidence", 64).line);
-  expect(narrow).toContain("gate ✗"); expect(narrow).not.toContain("reviewed");
+  expect(narrow).toContain("gate ✗"); expect(narrow).not.toContain("approved");
 });
 
 test("row 2 stays at 61 columns on a tall terminal, and the attention chip names decisions where it fits", () => {

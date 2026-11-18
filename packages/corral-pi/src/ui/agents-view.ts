@@ -243,7 +243,7 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
   let selectedRow = -1;
 
   if (!model.bound && (model.jobs.length > 0 || model.agents.some(agent => agent.source === "helper"))) {
-    push(row(PANEL_WARNING + "! Host unbound · these observations may be stale", width));
+    push(row(PANEL_WARNING + "! Host closed · these observations may be stale", width));
   }
   if (!model.agents.length && !model.jobs.length) {
     lines.push(...wrapped(BOLD + PANEL_TEXT + "No agents yet." + UNBOLD + PANEL_MUTED + " Agents and background jobs appear here when the session starts them.", "", width, 3));

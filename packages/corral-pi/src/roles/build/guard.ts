@@ -1,4 +1,4 @@
-import { relative, sep } from "node:path";
+import { join, relative, sep } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { assistantShellRefusal } from "../assistant/guard.ts";
@@ -9,12 +9,7 @@ import type { RoleContext } from "../types.ts";
 // fixed accident guards are deliberately conservative, not a shell security boundary.
 const GIT = /(?:^|[\s/;&|()`'"])git\s+(?:(?:-C|-c|--git-dir|--work-tree|--namespace)\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s+|--(?:git-dir|work-tree|namespace)=[^\s;&|]+\s+|--(?:no-pager|paginate|bare)\s+)*/g;
 
-// Only top-level commands without mutating modes belong here. In particular, search
-// has --reindex, route has reviewer setters, and attention has park/attend subcommands.
-const READ_ONLY_CORRAL: readonly string[] = [
-  "show", "list", "log", "stats", "review", "pins", "build-identity",
-  "help", "--help", "-h", "--version", "-V",
-];
+const READ_ONLY_ENGINE: readonly string[] = ["show", "list", "log", "help", "--help", "-h", "--version", "-V"];
 const CORRAL_REFUSAL = "build rule: model shell calls may only read corral state; nothing ran. "
   + "Use build_verify for gates, /board for the owner's confirmed board plan, or /finish for the owner's exit choice and landing.";
 const SHELLS: readonly string[] = ["sh", "bash", "zsh", "dash", "ksh"];
@@ -168,16 +163,18 @@ function corralShellRefusal(command: string, bare = false): string | undefined {
     if (!commands) return CORRAL_REFUSAL;
     for (const words of commands) {
       const { name, args } = shellInvocation(words);
-      if (name === "corral") {
+      if (["corral", "corral-next", "$CORRAL", "${CORRAL}"].includes(name)) {
         if (bare) return "bare session rule: do not invoke corral; no workspace, gate or board is bound. Run local checks with the shell and let the owner choose /finish.";
         let index = 0;
         while (index < args.length) {
           if (args[index] === "--root") index += 2;
-          else if (args[index]?.startsWith("--root=")) index += 1;
+          else if (args[index] === "--json" || args[index]?.startsWith("--root=")) index += 1;
           else break;
         }
-        if (args[index] === "build" && ["list", "show"].includes(args[index + 1] ?? "")) continue;
-        if (!READ_ONLY_CORRAL.includes(args[index] ?? "")) return CORRAL_REFUSAL;
+        const command = args[index] ?? "";
+        const subcommand = args[index + 1] ?? "";
+        if (command === "artifact" && (subcommand === "list" || subcommand === "show")) continue;
+        if (!READ_ONLY_ENGINE.includes(command)) return CORRAL_REFUSAL;
       } else if (SHELLS.includes(name)) {
         const flag = args.findIndex((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg) || arg === "--command");
         if (flag >= 0 && args[flag + 1] !== undefined) pending.push({ source: args[flag + 1]!, depth: depth + 1 });
@@ -209,15 +206,22 @@ export function buildShellRefusal(command: string, bare = false): string | undef
 }
 
 export type BuildWriteClassification = { allowed: true } | { allowed: false; reason: string };
-const PROTECTED: readonly string[] = [".git", ".corral", ".worktrees"];
+const PROTECTED: readonly string[] = [".git", ".corral", ".corral-next", ".worktrees"];
 
 /** Check both the tool's lexical destination and where its existing symlinks lead. */
-export function classifyBuildWrite(path: string, worktree: string): BuildWriteClassification {
+export function classifyBuildWrite(path: string, worktree: string, workspace?: string): BuildWriteClassification {
   const root = resolveToolPath(worktree, ".");
   const target = resolveToolPath(path, root);
+  if (workspace && target.endsWith(".md") && within(target, join(workspace, ".corral-next", "memory"))) {
+    const canonicalWorkspace = real(workspace);
+    const canonicalTarget = real(target);
+    if (canonicalWorkspace && canonicalTarget && within(canonicalTarget, join(canonicalWorkspace, ".corral-next", "memory"))) {
+      return { allowed: true };
+    }
+  }
   if (!within(target, root)) return { allowed: false, reason: "build rule: writes must stay inside the session worktree; nothing was written." };
   if (relative(root, target).split(sep).some((part) => PROTECTED.includes(part))) {
-    return { allowed: false, reason: "build rule: writes into .git, .corral or .worktrees are refused; nothing was written." };
+    return { allowed: false, reason: "build rule: writes into Git or corral state directories are refused; nothing was written." };
   }
   const canonicalRoot = real(root);
   const canonicalTarget = real(target);
@@ -228,7 +232,7 @@ export function classifyBuildWrite(path: string, worktree: string): BuildWriteCl
     return { allowed: false, reason: "build rule: the write destination resolves outside the session worktree; nothing was written." };
   }
   if (relative(canonicalRoot, canonicalTarget).split(sep).some((part) => PROTECTED.includes(part))) {
-    return { allowed: false, reason: "build rule: the write destination resolves into .git, .corral or .worktrees; nothing was written." };
+    return { allowed: false, reason: "build rule: the write destination resolves into Git or corral state directories; nothing was written." };
   }
   return { allowed: true };
 }
@@ -247,7 +251,8 @@ export function installBuildGuard(pi: ExtensionAPI, context: RoleContext): void 
     const path = input.path;
     if (typeof path !== "string") return { block: true, reason: "build rule: edit and write require a target path; nothing was written." };
     try {
-      const result = classifyBuildWrite(resolveToolPath(path, context.cwd), context.build.session.worktree);
+      const { session } = context.build;
+      const result = classifyBuildWrite(resolveToolPath(path, context.cwd), session.worktree, session.bare ? undefined : session.workspaceRoot);
       return result.allowed ? undefined : { block: true, reason: result.reason };
     } catch {
       return { block: true, reason: "build rule: the write destination could not be resolved safely; nothing was written." };

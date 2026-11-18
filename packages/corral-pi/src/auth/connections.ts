@@ -24,7 +24,7 @@ export function isApiConnection(id: ConnectionId): id is ApiConnectionId {
 export function resolveConnection(provider: ProviderId, selected?: ConnectionId): ConnectionId {
   const id = selected ?? (provider === "anthropic" ? "anthropic-subscription"
     : provider === "openai-codex" ? "openai-subscription"
-    : provider === "openai" ? undefined : provider);
+    : provider === "openai" ? "openai-api" : provider);
   if (!id || !isConnectionId(id) || CONNECTIONS[id].provider !== provider) {
     throw new Error("connection_invalid: unknown or incompatible connection/provider binding");
   }
@@ -54,7 +54,3 @@ export function validApiKey(key: string): boolean {
   return /^sk-[A-Za-z0-9_-]{8,4093}$/.test(key) && !key.includes("sk-ant-oat") && !key.includes("sk-ant-ort");
 }
 
-/** T-894 deliberately cannot spend. The canonical paid-episode service is a later member. */
-export function requirePaidAdmission(id: ConnectionId): void {
-  if (isApiConnection(id)) throw new Error("paid_admission_required: API connections are disabled until canonical metered admission is installed");
-}

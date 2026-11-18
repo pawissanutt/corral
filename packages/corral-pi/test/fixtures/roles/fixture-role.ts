@@ -1,5 +1,4 @@
-// Fixture roles (host-bridge tests only): upstream read plus the corral hello, event and
-// receipt_lookup operations. The control commands drive the fake transport from the bridge.
+// Fixture roles for host tests: upstream read and commands that exercise session lifecycle.
 import { Type } from "typebox";
 
 import type { Role, RoleModule } from "../../../src/roles/types.ts";
@@ -54,21 +53,18 @@ export function fixtureRole(role: Role): RoleModule {
   return {
     role,
     upstreamTools: ["read"],
-    corralOps: ["hello", "event", "receipt_lookup"],
-    tools() {
-      return [{
-        name: "corral_receipt_lookup",
-        label: "Look up a corral receipt",
-        description: "Read the stored receipt of an earlier request of this container",
-        op: "receipt_lookup",
-        parameters: Type.Object({ request_id: Type.String() }),
-        payload: (params: Record<string, unknown>) => ({ request_id: params.request_id }),
-      }];
-    },
+    tools() { return []; },
     contract() {
       return `Fixture ${role} contract for host-bridge tests. Use only the tools you are given.`;
     },
-    extend(pi) {
+    extend(pi, context) {
+      if (context.identity.store === "local" && context.promptFile) {
+        pi.on("session_start", (_event, ctx) => {
+          if (!ctx.sessionManager.getEntries().some(entry => entry.type === "message")) {
+            pi.sendUserMessage(`Read ${context.promptFile}.`);
+          }
+        });
+      }
       pi.registerTool({
         name: "fixture_forbidden",
         label: "Registered outside the loadout",
@@ -99,6 +95,14 @@ export function fixtureRole(role: Role): RoleModule {
         async handler(args) {
           const name = args.trim();
           transport().script([{ toolCalls: [{ callId: `call-${name}`, name, arguments: {} }] }, { text: "CALLED" }]);
+        },
+      });
+      pi.registerCommand("fixture-ask", {
+        description: "Make the next turn ask one question",
+        async handler() {
+          transport().script([{ toolCalls: [{ callId: "local-ask", name: "ask_user",
+            arguments: { questions: [{ question: "Which direction?", options: ["Left", "Right"] }] } }] },
+          { text: "Waiting for the owner." }]);
         },
       });
       pi.registerCommand("fixture-reload", { description: "Reload resources", async handler(_args, context) { await context.reload(); } });

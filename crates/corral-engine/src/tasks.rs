@@ -3,7 +3,7 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::{
-    Engine, Next, Op, Run,
+    Engine, Next, Op, Run, Runner,
     error::refuse,
     events::{EventKind, NewEvent},
     model::{Actor, Blocked, Outcome, Status, Task},
@@ -262,7 +262,7 @@ impl Engine {
         stop: bool,
     ) -> Result<()> {
         if stop && let Some(session) = &run.session {
-            self.runner
+            self.session_runner()
                 .stop(session)
                 .with_context(|| format!("stop session {}:{}", run.task, run.id))?;
         }
