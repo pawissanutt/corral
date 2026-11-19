@@ -24,12 +24,12 @@ pub(super) fn detail(
     engine: &Engine,
     query: &DetailGet,
 ) -> Result<Option<DetailReply>> {
-    let (body, next) = match &query.target {
+    let body = match &query.target {
         DetailRef::Session { id, .. } => {
             let session = sessions::resolve(shared, id)?;
             let (path, host, reply_refusal) = session.transcript_view();
             let scope = session.transcript_scope();
-            let (messages, older) = if let Some(path) = path {
+            let page = if let Some(path) = path {
                 match transcript::page(&session.id, &path, scope, query.page.as_deref()) {
                     Err(error)
                         if query.page.is_none()
@@ -37,32 +37,45 @@ pub(super) fn detail(
                                 .downcast_ref::<std::io::Error>()
                                 .is_some_and(|err| err.kind() == ErrorKind::NotFound) =>
                     {
-                        (Vec::new(), None)
+                        None
                     }
-                    result => result?,
+                    result => Some(result?),
                 }
             } else {
                 ensure!(
                     query.page.is_none(),
                     "invalid: session has no transcript to page"
                 );
-                (Vec::new(), None)
+                None
             };
-            (
-                DetailBody::Session(SessionPage {
-                    id: session.id,
-                    role: session.role.into(),
-                    task: session.task,
-                    run: session.run,
-                    machine: None,
-                    host,
-                    messages,
-                    older: older.clone(),
-                    replyable: reply_refusal.is_none(),
-                    reply_refusal,
-                }),
-                older,
-            )
+            let replyable = reply_refusal.is_none();
+            let etag = fingerprint(&(
+                &query.target,
+                page.as_ref().map(|page| &page.stamp),
+                &session.id,
+                session.role,
+                &session.task,
+                &session.run,
+                host,
+                replyable,
+                &reply_refusal,
+            ))?;
+            let (messages, older) = page
+                .map(|page| (page.messages, page.older))
+                .unwrap_or_default();
+            let body = DetailBody::Session(SessionPage {
+                id: session.id,
+                role: session.role.into(),
+                task: session.task,
+                run: session.run,
+                machine: None,
+                host,
+                messages,
+                older: older.clone(),
+                replyable,
+                reply_refusal,
+            });
+            return details::reply(query, engine.store.latest_seq()?, etag, body, older).map(Some);
         }
         DetailRef::SessionItem { id, token } => {
             ensure!(
@@ -72,15 +85,12 @@ pub(super) fn detail(
             let session = sessions::resolve(shared, id)?;
             let (path, _, _) = session.transcript_view();
             let path = path.context(NotFound("session has no retained transcript"))?;
-            (
-                DetailBody::SessionItem(transcript::item(
-                    &session.id,
-                    &path,
-                    session.transcript_scope(),
-                    token,
-                )?),
-                None,
-            )
+            DetailBody::SessionItem(transcript::item(
+                &session.id,
+                &path,
+                session.transcript_scope(),
+                token,
+            )?)
         }
         DetailRef::Attachment { entry, id } => {
             let path = assistant::attachment_path(shared, entry, id)?;
@@ -116,7 +126,7 @@ pub(super) fn detail(
         engine.store.latest_seq()?,
         fingerprint(&(&query.target, &body))?,
         body,
-        next,
+        None,
     )
     .map(Some)
 }
@@ -161,8 +171,8 @@ pub(crate) fn thread(
         return Ok(None);
     }
     if let (Some(session), Some(stamp)) = (session, &stamp) {
-        let (messages, _) = transcript::page(&session.id, &stamp.path, None, None)?;
-        for message in messages {
+        let page = transcript::page(&session.id, &stamp.path, None, None)?;
+        for message in page.messages {
             let owner = matches!(message.author.as_str(), "user" | "owner");
             let kind = if owner {
                 EntryKind::Message

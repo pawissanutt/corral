@@ -47,12 +47,20 @@ fn branch_cursor_skips_abandoned_entries_without_losing_pre_compaction_history()
                         "summary": "kept summary", "tokensBefore": 20}),
     );
     let (_dir, path) = fixture(entries, r#"{"id":"unfinished","parentId":"abandoned-0"}"#)?;
-    let (latest, older) = page(ID, &path, None, None)?;
+    let Page {
+        messages: latest,
+        older,
+        ..
+    } = page(ID, &path, None, None)?;
     assert!(
         matches!(latest.as_slice(), [message] if matches!(message.items.as_slice(),
             [SessionItem::Compaction { summary, tokens_before: 20 }] if summary == "kept summary"))
     );
-    let (earlier, end) = page(
+    let Page {
+        messages: earlier,
+        older: end,
+        ..
+    } = page(
         ID,
         &path,
         None,
@@ -82,13 +90,16 @@ fn large_foreign_record_pages_all_items_in_order() -> Result<()> {
         "",
     )?;
     assert!(fs::metadata(&path)?.len() > WINDOW as u64);
-    let (latest, cursor) = page(ID, &path, None, None)?;
-    let cursor = cursor.context("a split record needs an older cursor")?;
-    let (earlier, end) = page(ID, &path, None, Some(&cursor))?;
-    assert!(end.is_none());
+    let latest = page(ID, &path, None, None)?;
+    let cursor = latest
+        .older
+        .context("a split record needs an older cursor")?;
+    let earlier = page(ID, &path, None, Some(&cursor))?;
+    assert!(earlier.older.is_none());
     let mut items = earlier
+        .messages
         .iter()
-        .chain(&latest)
+        .chain(&latest.messages)
         .flat_map(|message| &message.items);
     assert!(matches!(items.next(), Some(SessionItem::Text { text }) if text == "before"));
     for index in 0..8 {
@@ -121,7 +132,9 @@ fn paired_tool_continuation_preserves_result_and_authenticates_scope_and_content
         ],
         "",
     )?;
-    let (messages, older) = page(ID, &path, None, None)?;
+    let Page {
+        messages, older, ..
+    } = page(ID, &path, None, None)?;
     assert!(older.is_none());
     let items: Vec<_> = messages.iter().flat_map(|message| &message.items).collect();
     let [
@@ -188,7 +201,7 @@ fn result_without_call_and_aborted_call_keep_distinct_states() -> Result<()> {
         ],
         "",
     )?;
-    let (messages, _) = page(ID, &path, None, None)?;
+    let messages = page(ID, &path, None, None)?.messages;
     assert!(matches!(&messages[0].items[0], SessionItem::ToolCall {
             state: SessionToolState::Failed, paired: false, call: None, name, arguments, ..
         } if name.is_empty() && arguments.is_empty()));
