@@ -39,6 +39,7 @@ mod exit;
 mod fleet;
 mod header;
 mod keys;
+mod land;
 mod log;
 mod notices;
 mod plan;
@@ -118,6 +119,7 @@ pub use fleet::{
 };
 pub use header::{DecisionsChip, ExitStatus, Header, NeedsChip, StateWord, exit_status, header};
 pub use keys::{KeyAction, KeyBinding, WEB_RESERVED, bound, keys, legend, legend_of, press};
+pub use land::GateLog;
 pub use log::{SessionLog, ended_run, log};
 pub use notices::{Notice, RecentNotices, Ring, recent};
 pub use plan::{

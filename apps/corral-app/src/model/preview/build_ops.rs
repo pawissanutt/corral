@@ -3,7 +3,8 @@
 //! question and delivers them as the next turn's input; a child's question and a proposed board
 //! plan are answered on the build's parts (`parts_ops.rs`); the exit choice (Finish) checks the
 //! option's availability and Land's reason, then walks rebase, gate and land one phase every
-//! other clock tick, the build record following it; Compact and the board's refresh run, Export
+//! other clock tick, reporting its steps and the gate's log tail as the host does and the build
+//! record following it; Compact and the board's refresh run, Export
 //! is refused with the host's reason; the queue withdraws an owner's item with its whole text and
 //! moves it among the owner's items; and a stopped build's removal reports what prune removes,
 //! refusing while its host runs.
@@ -15,7 +16,9 @@ use corral_protocol::session_host::{
     QueueMoved, QueueWithdrawn, SessionAction, SessionActionDone, SessionActionRequest,
     SessionCardAnswer, SessionCardAnswered, SessionQueueKey, SessionQueueMove, WithdrawOutcome,
 };
-use corral_protocol::session_state::{ExitBrief, ExitChoice, ExitPhase};
+use corral_protocol::session_state::{
+    ExitBrief, ExitChoice, ExitPhase, LandBrief, LandGate, LandStep, LandStepId, LandStepState,
+};
 use corral_types::Origin;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -217,7 +220,89 @@ fn brief(phase: ExitPhase, choice: Option<ExitChoice>, base: Option<String>) -> 
         landed: None,
         base_branch: base,
         repair: None,
+        land: None,
     }
+}
+
+fn land_step(id: LandStepId, state: LandStepState, at: Option<&str>) -> LandStep {
+    LandStep {
+        id,
+        state,
+        note: None,
+        started_at: at.map(str::to_owned),
+        ended_at: None,
+    }
+}
+
+/// Land's round as the sample host reports it once Land starts: the rebase running.
+fn land_round(at: &str) -> LandBrief {
+    LandBrief {
+        steps: vec![
+            land_step(LandStepId::Rebase, LandStepState::Running, Some(at)),
+            land_step(LandStepId::Gate, LandStepState::Waiting, None),
+            land_step(LandStepId::Land, LandStepState::Waiting, None),
+        ],
+        gate: None,
+    }
+}
+
+/// The exit walked into its phase at `at`: the step that ends takes its end and note, the next
+/// one starts. The gate (`attempt`) shows a few log lines while it runs and none once it passed.
+fn walk(exit: &mut ExitBrief, at: &str, session: &str, attempt: &str) {
+    let phase = exit.phase;
+    let landed = exit.landed.clone().unwrap_or_default();
+    let Some(land) = exit.land.as_mut() else {
+        return;
+    };
+    let (ended, note, started) = match phase {
+        ExitPhase::Verifying => (
+            LandStepId::Rebase,
+            sha(&format!("{session}/rebased"), 7),
+            Some(LandStepId::Gate),
+        ),
+        ExitPhase::Landing => (
+            LandStepId::Gate,
+            format!("{attempt} passed"),
+            Some(LandStepId::Land),
+        ),
+        ExitPhase::Landed => (LandStepId::Land, landed.chars().take(7).collect(), None),
+        _ => return,
+    };
+    for step in &mut land.steps {
+        if step.id == ended {
+            step.state = LandStepState::Done;
+            step.ended_at = Some(at.into());
+            step.note = Some(note.clone());
+        } else if Some(step.id) == started {
+            step.state = LandStepState::Running;
+            step.started_at = Some(at.into());
+        }
+    }
+    land.gate = match phase {
+        ExitPhase::Verifying => Some(LandGate {
+            attempt: Some(attempt.into()),
+            log: Some(format!("/var/tmp/corral/{session}/gate-{attempt}.log")),
+            command: Some("scripts/gate.sh".into()),
+            index: Some(1),
+            of: Some(1),
+            tail: [
+                "+ cargo fmt --check",
+                "+ cargo clippy --workspace --all-targets -- -D warnings",
+                "    Checking corral-protocol v0.1.0",
+                "+ cargo test --workspace",
+                "     Running unittests src/lib.rs",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        }),
+        _ => land.gate.take().map(|gate| LandGate {
+            command: None,
+            index: None,
+            of: None,
+            tail: Vec::new(),
+            ..gate
+        }),
+    };
 }
 
 fn base(feed: &Feed, id: &str) -> Option<String> {
@@ -272,7 +357,10 @@ fn exit(
     }
     host.pending.remove(index);
     host.exit = match chosen {
-        "land" => Some(brief(ExitPhase::Rebasing, Some(ExitChoice::Land), base)),
+        "land" => Some(ExitBrief {
+            land: Some(land_round(&at)),
+            ..brief(ExitPhase::Rebasing, Some(ExitChoice::Land), base)
+        }),
         "keep" => Some(brief(ExitPhase::Kept, Some(ExitChoice::Keep), base)),
         _ => None,
     };
@@ -416,6 +504,12 @@ pub(super) fn tick(feed: &mut Feed) {
                 }
             };
             let phase = exit.phase;
+            let attempt = host
+                .parts
+                .as_deref()
+                .map_or(0, |parts| parts.record.verification.len())
+                + 1;
+            walk(exit, &at, id.as_str(), &format!("G{attempt}"));
             parts_ops::exited(host, &at, phase, None);
         }
         settle(feed, id.as_str());

@@ -1,8 +1,9 @@
 //! A build's exit: Finish… docks the exit choice (or asks the host to open it), whose options,
-//! availability, landing policy and reasons are the host's; after Land, the host's exit phase
-//! walks the step rail (rebase, full gate, land), a failed gate shows its repair round, and the
-//! outcome says what was landed or kept, or what failed and what to do next. Nothing here
-//! predicts a phase: each step reads the phase the host reports.
+//! availability, landing policy and reasons are the host's; after Land, the step rail (rebase,
+//! full gate, land) is the host's own steps with their notes, times and the gate's log when it
+//! reports them (`land.rs`), else the host's exit phase walks it; a failed gate shows its repair
+//! round, and the outcome says what was landed or kept, or what failed and what to do next, under
+//! the rail that shows which step failed. Nothing here predicts a phase or a step.
 
 use corral_protocol::detail::{CardKind, SessionCard};
 use corral_protocol::session_host::{SessionAction, SessionActionRequest};
@@ -15,6 +16,7 @@ use crate::model::hue::Hue;
 
 use super::actions::{ActionGroup, row};
 use super::dock::{self, DockAction, Pending};
+use super::land::{self, GateLog};
 use super::{Action, Can, Cx, Focus, Host, SessionRole, State};
 
 /// The exit choice's summary: the host's lines, else the build's recorded diff.
@@ -42,6 +44,12 @@ pub struct ExitStep {
     /// `✓`, `✗`, `○`; none while running (the spinner).
     pub glyph: Option<&'static str>,
     pub hue: Hue,
+    /// The host's fact about the step, muted after the label: `3f2a9c1`, `G4 passed`.
+    pub note: Option<String>,
+    /// `3m 12s`.
+    pub time: Option<String>,
+    /// The gate's log, under the gate step.
+    pub log: Option<GateLog>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +120,9 @@ fn step(label: String, state: StepState) -> ExitStep {
         state,
         glyph,
         hue,
+        note: None,
+        time: None,
+        log: None,
     }
 }
 
@@ -151,10 +162,14 @@ pub fn progress(cx: &Cx<'_>) -> Option<ExitProgress> {
                 || "Repair".to_owned(),
                 |repair| format!("Repair {} of {}", repair.round, repair.of),
             );
-            let failed = exit.detail.as_deref().map_or_else(
-                || "! Full gate failed".to_owned(),
-                |detail| format!("! Full gate failed: {detail}"),
-            );
+            // A host that reports its steps words the failure itself (`Gate G4 failed: …`).
+            let failed = match (exit.detail.as_deref(), exit.land.is_some()) {
+                (Some(detail), true) => {
+                    format!("! {}", detail.strip_suffix('.').unwrap_or(detail))
+                }
+                (Some(detail), false) => format!("! Full gate failed: {detail}"),
+                (None, _) => "! Full gate failed".to_owned(),
+            };
             progress.detail = Some((
                 Hue::Held,
                 format!(
@@ -202,6 +217,17 @@ pub fn progress(cx: &Cx<'_>) -> Option<ExitProgress> {
             });
             progress.finish = Some(finish);
         }
+    }
+    if let Some(land) = &exit.land {
+        progress.steps = land::rows(land, &base, cx.feed.now)
+            .into_iter()
+            .map(|row| ExitStep {
+                note: row.note,
+                time: row.time,
+                log: row.log,
+                ..step(row.label, row.state)
+            })
+            .collect();
     }
     Some(progress)
 }

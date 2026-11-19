@@ -30,6 +30,7 @@ mod watch;
 
 use nsh_core::prelude::*;
 
+pub(super) use build_cards::gate_log;
 pub use jump::follow;
 pub use watch::watch;
 
