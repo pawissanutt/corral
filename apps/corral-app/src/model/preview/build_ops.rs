@@ -1,14 +1,15 @@
-//! The cards a sample pi host waits on, its queue, and a build's exit and removal, answered as
-//! corral-pi and corrald answer them: a question card takes one answer per question and
-//! delivers them as the next turn's input; the exit choice (Finish) checks the option's
-//! availability and Land's reason, then walks rebase, gate and land one phase every other clock
-//! tick; the queue withdraws an owner's item with its whole text and moves it among the owner's
-//! items; and a stopped build's removal reports what prune removes, refusing while its host runs.
+//! The cards a sample pi host waits on, its queue, its session actions, and a build's exit and
+//! removal, answered as corral-pi and corrald answer them: a question card takes one answer per
+//! question and delivers them as the next turn's input; a child's question and a proposed board
+//! plan are answered on the build's parts (`parts_ops.rs`); the exit choice (Finish) checks the
+//! option's availability and Land's reason, then walks rebase, gate and land one phase every
+//! other clock tick, the build record following it; Compact and the board's refresh run, Export
+//! is refused with the host's reason; the queue withdraws an owner's item with its whole text and
+//! moves it among the owner's items; and a stopped build's removal reports what prune removes,
+//! refusing while its host runs.
 
 use corral_protocol::build::{BuildRemove, BuildRemoved};
-use corral_protocol::detail::{
-    CardKind, CardOption, CardQuestion, DetailBody, DetailRef, SessionCard, SessionCards,
-};
+use corral_protocol::detail::{CardKind, CardOption, CardQuestion, SessionCard};
 use corral_protocol::rows::AssistantKind;
 use corral_protocol::session_host::{
     QueueMoved, QueueWithdrawn, SessionAction, SessionActionDone, SessionActionRequest,
@@ -19,10 +20,11 @@ use corral_types::Origin;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::pi::{deliver, question_card, resolve, scopes};
+use super::parts_ops;
+use super::pi::{deliver, question_card, resolve};
 use super::pi_rows::settle;
 use super::sample::sha;
-use super::{put, stamp};
+use super::stamp;
 use crate::model::Id;
 use crate::model::daemon::Feed;
 
@@ -30,14 +32,14 @@ fn reply(value: impl Serialize) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|error| error.to_string())
 }
 
-fn answered(status: &str) -> Result<Value, String> {
+pub(super) fn answered(status: &str) -> Result<Value, String> {
     reply(SessionCardAnswered {
         status: status.into(),
     })
 }
 
 /// The running host `session` addresses, as corrald resolves and refuses it.
-fn running(feed: &Feed, session: &str) -> Result<Id, String> {
+pub(super) fn running(feed: &Feed, session: &str) -> Result<Id, String> {
     let id = resolve(feed, session).ok_or_else(|| format!("{session} has no Pi host"))?;
     match feed.hosts.get(id.as_str()) {
         Some(host) if !host.gone => Ok(id),
@@ -56,7 +58,8 @@ fn option(id: &str, label: &str, detail: &str) -> CardOption {
     }
 }
 
-/// The sample build's deferred question: two questions, each with options and words.
+/// The sample build's own question to the owner: two choices for the guide, each with options
+/// and words.
 pub(super) fn api_question(at: &str) -> SessionCard {
     let question = |header: &str, text: &str, options: Vec<CardOption>| CardQuestion {
         header: Some(header.into()),
@@ -69,25 +72,33 @@ pub(super) fn api_question(at: &str) -> SessionCard {
     SessionCard {
         id: "q-b1".into(),
         kind: CardKind::Question,
-        title: "Preview · sample question: two choices for the session API".into(),
+        title: "Preview · sample question: two choices for the guide".into(),
         meta: None,
         body: None,
         body_more: false,
         questions: vec![
             question(
-                "API",
-                "Which API should the session module expose?",
+                "Label",
+                "Which label should the guide's examples use?",
                 vec![
-                    option("rest", "REST", "keep the current endpoints"),
-                    option("grpc", "gRPC", "switch to the new service"),
+                    option("parity", "The parity label", "new projects see one name"),
+                    option(
+                        "both",
+                        "Both labels",
+                        "the old name in brackets for one release",
+                    ),
                 ],
             ),
             question(
-                "Tokens",
-                "Where should the token store keep refresh tokens?",
+                "Notes",
+                "Where should the migration notes live?",
                 vec![
-                    option("memory", "In memory", "lost when the process restarts"),
-                    option("disk", "On disk, encrypted", "survives a restart"),
+                    option(
+                        "migrations",
+                        "docs/migrations/",
+                        "beside the other upgrade notes",
+                    ),
+                    option("guide", "In the guide", "one page to read"),
                 ],
             ),
         ],
@@ -113,6 +124,8 @@ pub(super) fn answer(feed: &mut Feed, answer: &SessionCardAnswer) -> Result<Valu
     match kind {
         CardKind::Question => question(feed, &id, index, answer),
         CardKind::Exit => exit(feed, &id, index, answer),
+        CardKind::ChildQuestion => parts_ops::answer_child(feed, &id, index, answer),
+        CardKind::BoardPlan => parts_ops::answer_plan(feed, &id, index, answer),
         _ => {
             if let Some(host) = feed.hosts.get_mut(id.as_str()) {
                 host.pending.remove(index);
@@ -128,7 +141,7 @@ pub(super) fn answer(feed: &mut Feed, answer: &SessionCardAnswer) -> Result<Valu
 }
 
 /// The words each answer gives, by its options' labels and the owner's text.
-fn words(card: &SessionCard, answer: &SessionCardAnswer) -> Result<Vec<String>, String> {
+pub(super) fn words(card: &SessionCard, answer: &SessionCardAnswer) -> Result<Vec<String>, String> {
     if answer.answers.len() != card.questions.len() {
         return Err(format!(
             "{} asks {} questions; answer each once",
@@ -224,6 +237,7 @@ fn exit(
     answer: &SessionCardAnswer,
 ) -> Result<Value, String> {
     let base = base(feed, id.as_str());
+    let at = stamp(feed.now);
     let host = feed
         .hosts
         .get_mut(id.as_str())
@@ -262,6 +276,9 @@ fn exit(
         "keep" => Some(brief(ExitPhase::Kept, Some(ExitChoice::Keep), base)),
         _ => None,
     };
+    if let Some(phase) = host.exit.as_ref().map(|exit| exit.phase) {
+        parts_ops::exited(host, &at, phase, reason);
+    }
     settle(feed, id.as_str());
     answered(if chosen == "land" {
         "started"
@@ -280,12 +297,17 @@ fn exit_card(feed: &Feed, id: &str, at: &str) -> Result<SessionCard, String> {
         .ok_or("only a build session has an exit")?;
     let base = build.base.clone().unwrap_or_else(|| "main".into());
     let branch = build.branch.clone().unwrap_or_else(|| "its branch".into());
+    let (summary, needs) = feed
+        .hosts
+        .get(id)
+        .and_then(parts_ops::exit_facts)
+        .unwrap_or_else(|| ("no commits yet".into(), None));
     let mut land = option(
         "land",
         &format!("Land on {base}"),
         &format!("rebase, full gate, fast-forward {base}"),
     );
-    land.needs_text = Some("Preview · sample: 1 major finding is open".into());
+    land.needs_text = needs;
     land.destructive = true;
     let title = format!("How should {} leave this session?", build.name);
     Ok(SessionCard {
@@ -293,9 +315,7 @@ fn exit_card(feed: &Feed, id: &str, at: &str) -> Result<SessionCard, String> {
         kind: CardKind::Exit,
         title: title.clone(),
         meta: Some("landing needs an approving review and the full gate".into()),
-        body: Some(format!(
-            "Preview · sample summary: 2 slices, 3 commits on {branch}"
-        )),
+        body: Some(format!("Preview · sample summary: {summary} on {branch}")),
         body_more: false,
         questions: vec![CardQuestion {
             header: None,
@@ -320,11 +340,21 @@ fn exit_card(feed: &Feed, id: &str, at: &str) -> Result<SessionCard, String> {
     })
 }
 
-/// A session action: the sample's builds open their exit choice (Finish); nothing else runs.
+/// A session action: Finish docks the exit choice; Compact and the board's refresh run on the
+/// build's parts; Export and a shell command are refused with the host's reason.
 pub(super) fn action(feed: &mut Feed, request: &SessionActionRequest) -> Result<Value, String> {
     let id = running(feed, &request.id)?;
-    if request.action != SessionAction::ExitOpen {
-        return Err("the preview's sessions run Finish only".into());
+    match &request.action {
+        SessionAction::ExitOpen => {}
+        SessionAction::Compact { instructions } => {
+            return parts_ops::compact(feed, &id, instructions.as_deref());
+        }
+        SessionAction::BoardRefresh => return parts_ops::board_refresh(feed, &id),
+        SessionAction::Export => return Err("this session's host does not export sessions".into()),
+        SessionAction::Shell { .. } => {
+            return Err("this session's host runs no owner shell commands".into());
+        }
+        SessionAction::Other => return Err("the host does not know that action".into()),
     }
     let at = stamp(feed.now);
     let card = exit_card(feed, id.as_str(), &at)?;
@@ -373,10 +403,9 @@ pub(super) fn tick(feed: &mut Feed) {
         .map(|(id, _)| id.clone())
         .collect();
     for id in moving {
-        if let Some(exit) = feed
-            .hosts
-            .get_mut(id.as_str())
-            .and_then(|host| host.exit.as_mut())
+        let at = stamp(feed.now);
+        if let Some(host) = feed.hosts.get_mut(id.as_str())
+            && let Some(exit) = host.exit.as_mut()
         {
             exit.phase = match exit.phase {
                 ExitPhase::Rebasing => ExitPhase::Verifying,
@@ -386,6 +415,8 @@ pub(super) fn tick(feed: &mut Feed) {
                     ExitPhase::Landed
                 }
             };
+            let phase = exit.phase;
+            parts_ops::exited(host, &at, phase, None);
         }
         settle(feed, id.as_str());
     }
@@ -494,43 +525,4 @@ pub(super) fn remove(feed: &mut Feed, request: &BuildRemove) -> Result<Value, St
             .then(|| "it ran in the project's checkout, which stays".into()),
         lines,
     })
-}
-
-/// The cards host `scope` waits on, as corrald reads them; a stopped host serves none.
-pub(super) fn cards(feed: &mut Feed, scope: &str) -> Result<(), String> {
-    let id = running(feed, scope).map_err(|why| format!("not_found: {why}"))?;
-    let cards = feed
-        .hosts
-        .get(id.as_str())
-        .map(|host| host.pending.clone())
-        .unwrap_or_default();
-    put(
-        feed,
-        DetailRef::SessionCards {
-            id: scope.to_owned(),
-        },
-        DetailBody::SessionCards(SessionCards { cards }),
-    );
-    Ok(())
-}
-
-/// Every watched scope of host `id` whose cards were read gets them again.
-pub(super) fn reread_cards(feed: &mut Feed, id: &str) {
-    let Some(cards) = feed.hosts.get(id).map(|host| host.pending.clone()) else {
-        return;
-    };
-    for scope in scopes(feed, id) {
-        let target = DetailRef::SessionCards {
-            id: scope.to_string(),
-        };
-        if feed.detail(&target).is_some() {
-            put(
-                feed,
-                target,
-                DetailBody::SessionCards(SessionCards {
-                    cards: cards.clone(),
-                }),
-            );
-        }
-    }
 }

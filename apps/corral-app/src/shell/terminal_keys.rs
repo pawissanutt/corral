@@ -1,7 +1,11 @@
 //! The terminal's key line on the last row: a legend of the keys in focus (the page's, the
 //! composer's while Ask's field has them, or the keys of the surface standing over the page), the
-//! destinations, then Ask and Go to, and the sidebar's toggle while there is room. When the grid
-//! is short of room the names give way one by one, then whole groups; a key's cap is never cut.
+//! destinations, then Ask and Go to, and the sidebar's toggle while there is room. Every entry is
+//! a whole pair, its key and what it does: a key without its word says nothing, so when the grid
+//! is short of room whole entries give way, never a word. The keys in focus come first, in their
+//! order, as many as fit; then Ask, the destinations (all or none) and the sidebar's toggle as
+//! room is left. Go to (`^K`) always ends the line, as `^K more` when keys in focus were left
+//! out: the palette lists every action of what is in view.
 
 use nsh_core::prelude::*;
 
@@ -22,86 +26,52 @@ pub(super) const PALETTE_CHORD: &str = "^K";
 /// The sidebar's toggle (`mod+b`) as the terminal spells it.
 const SIDEBAR_CHORD: &str = "^B";
 
-/// One entry of the key line: its keys, what they go to, and how late its name gives way when
-/// the line is short (0 first).
+/// One entry of the key line: its keys and what they go to.
+#[derive(Debug, Clone)]
 struct Entry {
     keys: String,
     name: &'static str,
-    keep: u8,
 }
 
 impl Entry {
-    fn new(keys: impl Into<String>, name: &'static str, keep: u8) -> Entry {
+    fn new(keys: impl Into<String>, name: &'static str) -> Entry {
         Entry {
             keys: keys.into(),
             name,
-            keep,
         }
     }
 
     /// The cap (the keys and a Cell each side), then the name a Cell after it.
-    fn cells(&self, named: bool) -> usize {
-        self.keys.chars().count()
-            + 2
-            + if named {
-                1 + self.name.chars().count()
-            } else {
-                0
-            }
+    fn cells(&self) -> usize {
+        self.keys.chars().count() + 2 + 1 + self.name.chars().count()
     }
 }
 
-/// Go to's name gives way first, then Ask's: the sidebar lists both, named.
-const KEEP_GO_TO: u8 = 1;
-const KEEP_ASK: u8 = 2;
-/// The destinations are named whenever they show: a destination's key alone (`,`, `.`) says
-/// nothing, so they go whole rather than as bare keys.
-const KEEP_DESTINATION: u8 = 3;
-/// The keys in focus keep their names longest: they are the ones the page in view (or Ask's
-/// field) answers to, and no other line of the screen lists them.
-const KEEP_PAGE: u8 = 4;
+/// What Go to says when keys in focus did not fit: the palette has them.
+const MORE_LABEL: &str = "more";
 
 /// The key line's groups in order, a line between each two: the keys in focus, the
 /// destinations, then Ask and Go to, with the sidebar's toggle after them while there is room.
 struct Line {
     own: Vec<Entry>,
     destinations: Vec<Entry>,
-    actions: Vec<Entry>,
+    /// Ask, while the page's keys are the line's.
+    ask: Option<Entry>,
+    /// Go to (`^K`), which ends the line wherever the palette reaches.
+    go_to: Option<Entry>,
     sidebar: Option<Entry>,
 }
 
-/// The group the sidebar's toggle ends: Ask and Go to's.
+/// The group Ask, Go to and the sidebar's toggle share.
 const ACTIONS_GROUP: usize = 2;
 
-/// One way of fitting the key line: names from `keep` on, the destinations or not, the
-/// sidebar's toggle or not.
-#[derive(Debug, Clone, Copy)]
+/// What a layout of the line shows: how many keys in focus, and which of the rest.
+#[derive(Debug, Clone, Copy, Default)]
 struct Fit {
-    keep: u8,
+    own: usize,
+    ask: bool,
     destinations: bool,
     sidebar: bool,
-}
-
-/// Every fit, longest first. The sidebar's toggle goes first, whole: the sidebar it opens or
-/// folds is in sight anyway. Then Go to's and Ask's names give way, which the sidebar lists too;
-/// then the destinations go whole, all named or none shown, and the sidebar's toggle comes back
-/// to say where they are named; last the names of the keys in focus. A cap never gives way to a
-/// name.
-fn fits() -> impl Iterator<Item = Fit> {
-    let fit = |keep, destinations, sidebar| Fit {
-        keep,
-        destinations,
-        sidebar,
-    };
-    [
-        fit(0, true, true),
-        fit(0, true, false),
-        fit(KEEP_ASK, true, false),
-        fit(KEEP_DESTINATION, true, false),
-        fit(0, false, true),
-    ]
-    .into_iter()
-    .chain((0..=KEEP_PAGE + 1).map(move |keep| fit(keep, false, false)))
 }
 
 /// The key line for what is in view. While Ask's field has the keys, letters typed go into it:
@@ -124,22 +94,23 @@ fn line(
     shown: &[Destination],
     session: Option<Vec<(&'static str, &'static str)>>,
 ) -> Line {
-    let go_to = Entry::new(PALETTE_CHORD, PALETTE_LABEL, KEEP_GO_TO);
+    let go_to = Entry::new(PALETTE_CHORD, PALETTE_LABEL);
     if typing {
         let own = match &session {
             Some(legend) => legend
                 .iter()
-                .map(|&(keys, name)| Entry::new(chord(keys), name, KEEP_PAGE))
+                .map(|&(keys, name)| Entry::new(chord(keys), name))
                 .collect(),
             None => COMPOSER_KEYS
                 .iter()
-                .map(|hint| Entry::new(hint.keys, hint.action, KEEP_PAGE))
+                .map(|hint| Entry::new(hint.keys, hint.action))
                 .collect(),
         };
         return Line {
             own,
             destinations: Vec::new(),
-            actions: vec![go_to],
+            ask: None,
+            go_to: Some(go_to),
             sidebar: None,
         };
     }
@@ -148,14 +119,11 @@ fn line(
             own: surface
                 .keys()
                 .into_iter()
-                .map(|(keys, name)| Entry::new(keys, name, KEEP_PAGE))
+                .map(|(keys, name)| Entry::new(keys, name))
                 .collect(),
             destinations: Vec::new(),
-            actions: if surface.reaches_past() {
-                vec![go_to]
-            } else {
-                Vec::new()
-            },
+            ask: None,
+            go_to: surface.reaches_past().then_some(go_to),
             sidebar: None,
         };
     }
@@ -173,16 +141,17 @@ fn line(
         .iter()
         .copied()
         .filter(|item| !taken(item.key()))
-        .map(|item| Entry::new(item.key(), item.label(), KEEP_DESTINATION))
+        .map(|item| Entry::new(item.key(), item.label()))
         .collect();
     Line {
         own: legend
             .into_iter()
-            .map(|(keys, name)| Entry::new(chord(keys), name, KEEP_PAGE))
+            .map(|(keys, name)| Entry::new(chord(keys), name))
             .collect(),
         destinations,
-        actions: vec![Entry::new(ASK_KEY, ASK_LABEL, KEEP_ASK), go_to],
-        sidebar: Some(Entry::new(SIDEBAR_CHORD, SIDEBAR_LABEL, 0)),
+        ask: Some(Entry::new(ASK_KEY, ASK_LABEL)),
+        go_to: Some(go_to),
+        sidebar: Some(Entry::new(SIDEBAR_CHORD, SIDEBAR_LABEL)),
     }
 }
 
@@ -192,57 +161,82 @@ fn chord(keys: &str) -> String {
 }
 
 impl Line {
-    /// The entries `fit` shows, each with the index of its group.
-    fn entries(&self, fit: Fit) -> impl Iterator<Item = (usize, &Entry)> {
-        let destinations: &[Entry] = if fit.destinations {
-            &self.destinations
-        } else {
-            &[]
-        };
-        let sidebar = self.sidebar.as_ref().filter(|_| fit.sidebar);
-        [self.own.as_slice(), destinations, self.actions.as_slice()]
-            .into_iter()
-            .enumerate()
-            .flat_map(|(group, entries)| entries.iter().map(move |entry| (group, entry)))
-            .chain(sidebar.map(|entry| (ACTIONS_GROUP, entry)))
+    /// The entries `fit` shows in the line's order, each with the index of its group; Go to
+    /// says `more` when keys in focus were left out.
+    fn entries(&self, fit: Fit) -> Vec<(usize, Entry)> {
+        let mut shown: Vec<(usize, Entry)> = self.own[..fit.own.min(self.own.len())]
+            .iter()
+            .map(|entry| (0, entry.clone()))
+            .collect();
+        if fit.destinations {
+            shown.extend(self.destinations.iter().map(|entry| (1, entry.clone())));
+        }
+        if fit.ask {
+            shown.extend(self.ask.iter().map(|entry| (ACTIONS_GROUP, entry.clone())));
+        }
+        if let Some(go_to) = &self.go_to {
+            let mut go_to = go_to.clone();
+            if fit.own < self.own.len() {
+                go_to.name = MORE_LABEL;
+            }
+            shown.push((ACTIONS_GROUP, go_to));
+        }
+        if fit.sidebar {
+            shown.extend(
+                self.sidebar
+                    .iter()
+                    .map(|entry| (ACTIONS_GROUP, entry.clone())),
+            );
+        }
+        shown
     }
 
-    /// The Cells the first `count` entries take with `fit`: the line's margins, a Cell between
-    /// two entries, and a line with a Cell each side between two groups.
-    fn cells(&self, fit: Fit, count: usize) -> usize {
+    /// The Cells `fit` takes: the line's margins, a Cell between two entries, and a line with a
+    /// Cell each side between two groups.
+    fn cells(&self, fit: Fit) -> usize {
         let mut cells = 2;
         let mut last = None;
-        for (group, entry) in self.entries(fit).take(count) {
+        for (group, entry) in self.entries(fit) {
             cells += match last {
                 None => 0,
                 Some(previous) if previous == group => 1,
                 Some(_) => 3,
             };
-            cells += entry.cells(entry.keep >= fit.keep);
+            cells += entry.cells();
             last = Some(group);
         }
         cells
     }
 
-    /// The longest fit within `room` and how many entries it shows: all of them, unless even
-    /// bare caps overflow, when the last caps go whole rather than any being cut.
-    fn layout(&self, room: usize) -> (Fit, usize) {
-        for fit in fits() {
-            let count = self.entries(fit).count();
-            if self.cells(fit, count) <= room {
-                return (fit, count);
+    /// What fits in `room`, whole pairs only: the keys in focus in their order while they fit
+    /// (Go to kept at the end), then, once all of them show, Ask, the destinations and the
+    /// sidebar's toggle, each while it fits.
+    fn layout(&self, room: usize) -> Fit {
+        let fits = |fit: Fit| self.cells(fit) <= room;
+        let mut fit = Fit::default();
+        while fit.own < self.own.len()
+            && fits(Fit {
+                own: fit.own + 1,
+                ..fit
+            })
+        {
+            fit.own += 1;
+        }
+        if fit.own == self.own.len() {
+            let grows: [fn(&mut Fit); 3] = [
+                |fit| fit.ask = true,
+                |fit| fit.destinations = true,
+                |fit| fit.sidebar = true,
+            ];
+            for grow in grows {
+                let mut more = fit;
+                grow(&mut more);
+                if fits(more) {
+                    fit = more;
+                }
             }
         }
-        let bare = Fit {
-            keep: KEEP_PAGE + 1,
-            destinations: false,
-            sidebar: false,
-        };
-        let count = (0..self.entries(bare).count())
-            .rev()
-            .find(|&count| self.cells(bare, count) <= room)
-            .unwrap_or(0);
-        (bare, count)
+        fit
     }
 }
 
@@ -356,7 +350,7 @@ pub(super) fn key_line(
             &shown,
             session.get(),
         );
-        let (fit, count) = line.layout(room);
+        let fit = line.layout(room);
         let mut row = view()
             .h(term::rows(1.0))
             .flex_shrink_0()
@@ -364,8 +358,14 @@ pub(super) fn key_line(
             .items_center()
             .px(cells(1.0))
             .overflow_hidden();
+        // A grid too narrow for even Go to shows no entry rather than a cut one.
+        let entries = if line.cells(fit) <= room {
+            line.entries(fit)
+        } else {
+            Vec::new()
+        };
         let mut last = None;
-        for (group, entry) in line.entries(fit).take(count) {
+        for (group, entry) in entries {
             match last {
                 None => {}
                 Some(previous) if previous == group => row = row.child(term::space(1.0)),
@@ -377,12 +377,7 @@ pub(super) fn key_line(
                 }
             }
             last = Some(group);
-            let keys = entry.keys.clone();
-            row = row.child(if entry.keep >= fit.keep {
-                term::legend(keys, entry.name)
-            } else {
-                term::key_cap(keys)
-            });
+            row = row.child(term::legend(entry.keys, entry.name));
         }
         row.into_element()
     })
@@ -391,6 +386,20 @@ pub(super) fn key_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The line of `legend` in focus on a session page.
+    fn session_line(typing: bool, legend: Vec<(&'static str, &'static str)>) -> Line {
+        line(
+            Destination::Agents,
+            Some(Live::Session(crate::model::Id::new("B-k3x9"))),
+            true,
+            typing,
+            None,
+            false,
+            &Destination::ALL,
+            Some(legend),
+        )
+    }
 
     #[test]
     fn key_line_never_cuts_a_key_or_shows_a_destination_key_unnamed() {
@@ -420,31 +429,84 @@ mod tests {
                     }),
                 );
                 for room in 20..=240 {
-                    let (fit, count) = line.layout(room);
+                    let fit = line.layout(room);
                     assert!(
-                        line.cells(fit, count) <= room,
+                        line.cells(fit) <= room,
                         "{destination:?} at {room}: {fit:?} overflows"
                     );
-                    let unnamed = line
+                    let destinations = line
                         .entries(fit)
-                        .take(count)
-                        .any(|(group, entry)| group == 1 && entry.keep < fit.keep);
+                        .iter()
+                        .filter(|(group, _)| *group == 1)
+                        .count();
                     assert!(
-                        !unnamed,
-                        "{destination:?} at {room}: a destination key shows without its name"
+                        destinations == 0 || destinations == line.destinations.len(),
+                        "{destination:?} at {room}: the destinations show in part"
                     );
                 }
-                // The classic 80-column grid keeps every key in focus, named.
-                let (fit, count) = line.layout(80);
-                assert!(
-                    count >= line.own.len(),
+                // The classic 80-column grid keeps every key in focus.
+                assert_eq!(
+                    line.layout(80).own,
+                    line.own.len(),
                     "{destination:?} at 80 drops own keys"
                 );
-                assert!(
-                    fit.keep <= KEEP_PAGE,
-                    "{destination:?} at 80 drops own names"
-                );
             }
+        }
+    }
+
+    /// On a session view with many keys (the Board's) the line dropped every word, the app's
+    /// own `/ Ask` and `^K Go to` too, and showed bare caps (`p   n   q  │  /   ^K`). A crowded
+    /// line keeps whole pairs: the keys in focus first and in order, as many as fit, then
+    /// `^K more` saying the palette has the rest.
+    #[test]
+    fn a_crowded_key_line_keeps_whole_pairs_and_never_a_bare_key() {
+        let board = vec![
+            ("esc", "chat"),
+            ("j", "next task"),
+            ("k", "previous task"),
+            ("⏎", "open task"),
+            ("r", "refresh board"),
+            ("p", "review plan"),
+            ("n", "plan board tasks"),
+            ("q", "close the record"),
+            ("Alt+H", "thinking"),
+            ("Ctrl+O", "expand"),
+            ("Alt+P", "next model"),
+            ("Alt+E", "effort"),
+        ];
+        for typing in [false, true] {
+            let line = session_line(typing, board.clone());
+            for room in 20..=240 {
+                let fit = line.layout(room);
+                let shown = line.entries(fit);
+                assert!(line.cells(fit) <= room, "at {room}: {fit:?} overflows");
+                assert!(
+                    shown.iter().all(|(_, entry)| !entry.name.is_empty()),
+                    "at {room}: a key shows without its word"
+                );
+                let own: Vec<&str> = shown
+                    .iter()
+                    .filter(|(group, _)| *group == 0)
+                    .map(|(_, entry)| entry.keys.as_str())
+                    .collect();
+                let first: Vec<&str> = line.own[..own.len()]
+                    .iter()
+                    .map(|entry| entry.keys.as_str())
+                    .collect();
+                assert_eq!(own, first, "at {room}: the keys in focus lost their order");
+                let last = shown
+                    .last()
+                    .map(|(_, entry)| (entry.keys.as_str(), entry.name));
+                if own.len() < line.own.len() {
+                    assert_eq!(
+                        last,
+                        Some((PALETTE_CHORD, MORE_LABEL)),
+                        "at {room}: keys were left out without `^K more`"
+                    );
+                }
+            }
+            let at_140 = line.layout(140);
+            assert!(at_140.own >= 6, "140 Cells show the Board's first keys");
         }
     }
 
@@ -465,6 +527,6 @@ mod tests {
         let keys: Vec<&str> = line.own.iter().map(|entry| entry.keys.as_str()).collect();
         let menu: Vec<&str> = Surface::Menu.keys().iter().map(|(keys, _)| *keys).collect();
         assert_eq!(keys, menu);
-        assert!(line.destinations.is_empty() && line.actions.is_empty());
+        assert!(line.destinations.is_empty() && line.ask.is_none() && line.go_to.is_none());
     }
 }

@@ -67,6 +67,8 @@ pub struct Host {
     pub(super) exit: Option<ExitBrief>,
     /// Terminated or lost: no process answers.
     pub(super) gone: bool,
+    /// What a build's host serves besides its transcript and cards.
+    pub(super) parts: Option<Box<super::parts::Parts>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

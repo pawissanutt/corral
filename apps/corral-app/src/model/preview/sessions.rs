@@ -1,6 +1,6 @@
 //! Sample chat and build sessions: each is a row of the assistant topic and a pi host whose
-//! transcript its page is read from. Engine runs are not here: they are the live runs the
-//! agents topic serves.
+//! transcript its page is read from; a build's host also serves its parts (`parts.rs`). Engine
+//! runs are not here: they are the live runs the agents topic serves.
 
 use corral_protocol::rows::*;
 use corral_protocol::session_state::Counts;
@@ -11,7 +11,7 @@ use crate::model::daemon::*;
 
 const PROFILE: &str = "omp-sol";
 
-/// The sample build session that runs, with a recorded turn and child agents.
+/// The sample build session that runs, with its children, jobs, changes, plan and board.
 pub(super) const BUILD: &str = "B-k3x9";
 
 /// The sample build session whose host stopped: listed under Show All, resumable.
@@ -31,21 +31,10 @@ pub(super) fn populate(feed: &mut Feed) {
             row.live_in = AssistantLocation::None;
         }
     }
-    build(feed, BUILD, "auth-refactor", Some("corral"), false);
-    if let Some(host) = feed.hosts.get_mut(BUILD) {
-        let at = stamp(feed.now.saturating_sub(40 * 60));
-        host.record_turn(
-            &at,
-            &["Split the auth module into a token store and a session API."],
-            vec![corral_protocol::detail::SessionItem::Text {
-                text: "Preview · sample build. Two slices, one worktree: the token store and the session API. Starting both now."
-                    .into(),
-            }],
-        );
-        // It asks the owner two things at once before the slices start.
-        host.pending.push(super::build_ops::api_question(&at));
-    }
+    build(feed, BUILD, "parity-guide", Some("corral"), false);
+    super::parts_sample::seed(feed, BUILD);
     build(feed, STOPPED_BUILD, "docs-sweep", Some("site"), true);
+    super::parts_sample::attach(feed, STOPPED_BUILD);
 }
 
 fn row(
@@ -99,13 +88,15 @@ pub(super) fn assistant(
     feed.hosts.insert(id.into(), Host::new(Role::Chat));
 }
 
-/// A build `id` named `name` in `project`, in a new worktree and branch `build/<name>`; a
-/// stopped one's host has gone and its row is cold.
+/// A build `id` named `name` in `project`, in a new worktree and branch `build/<name>`, on the
+/// configured build model; a stopped one's host has gone and its row is cold.
 pub(super) fn build(feed: &mut Feed, id: &str, name: &str, project: Option<&str>, stopped: bool) {
     let mut session = row(feed, id, AssistantKind::Build, name, None);
     session.title = name.into();
     session.cost_usd = None;
     session.cost_basis = None;
+    session.model = Some(super::parts_sample::PARENT.into());
+    session.effort = Some("medium".into());
     let root = feed
         .workspace
         .clone()

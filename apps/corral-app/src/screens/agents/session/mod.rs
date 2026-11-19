@@ -184,7 +184,7 @@ pub enum Compact {
 
 /// Session `id` in Ask (screens §11): the same model, transcript, dock and composer as its page,
 /// with no head, tabs or sidebar, which Ask's own head stands in for. `page` is
-/// `session_view(app, id)`, which Ask's head reads too. `quick` is read again as Ask opens on
+/// `ask_view(app, id)`, which Ask's head reads too. `quick` is read again as Ask opens on
 /// it: the chat it named may have ended since.
 pub fn compact(app: AppState, id: Id, page: Memo<SessionPage>, form: Compact) -> AnyElement {
     follow(app, id.clone(), page);
@@ -290,10 +290,40 @@ fn latest(app: AppState, id: Id, page: Memo<SessionPage>) -> AnyElement {
     .into_element()
 }
 
-/// The page as the model builds it now (tracked): the session page's, and Ask's.
-pub fn session_view(app: AppState, id: Id) -> Memo<SessionPage> {
-    view_of(app, id)
+/// The session's page as Ask shows it (tracked): always the chat, whatever tab or view its own
+/// page was left on; that page keeps its tab.
+pub fn ask_view(app: AppState, id: Id) -> Memo<SessionPage> {
+    computed(move || {
+        let env = app.env();
+        app.feed
+            .with(|feed| app.session.with(|state| ask_page(feed, state, &id, env)))
+    })
 }
+
+/// Session `id`'s page on its chat: its own UI state read as if Chat were shown, the stored tab
+/// and view untouched.
+fn ask_page(
+    feed: &crate::model::daemon::Feed,
+    state: &session::State,
+    id: &Id,
+    env: crate::model::effect::Env,
+) -> SessionPage {
+    let ui = state.ui(id.as_str());
+    if ui.tab == session::Tab::Chat && ui.sub.is_none() {
+        return session::page(feed, state, id, env);
+    }
+    let mut chat = ui.clone();
+    chat.tab = session::Tab::Chat;
+    chat.sub = None;
+    chat.focus = Focus::Composer;
+    let mut shown = session::State::default();
+    shown.sessions.insert(id.clone(), chat);
+    session::page(feed, &shown, id, env)
+}
+
+#[cfg(test)]
+#[path = "compact_tests.rs"]
+mod compact_tests;
 
 /// The page as the model builds it now (tracked).
 fn view_of(app: AppState, id: Id) -> Memo<SessionPage> {
@@ -479,7 +509,7 @@ fn chat(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             .flex_1()
             .min_h(px(0.0))
             .child(content),
-        move || chat.with(|c| c.as_ref().map_or(0, |c| c.transcript.rows())),
+        move || chat.with(|c| c.as_ref().map(|c| c.transcript.following())),
         move || page.with(|p| p.jump),
     )
 }

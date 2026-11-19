@@ -4,7 +4,7 @@ import { startBridge } from "../src/bridge/server.ts";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { askDialog } from "../src/host/ask-user.ts";
 import { questionEntries, questionStatus, type SessionCard } from "../src/host/remote/cards.ts";
-import { RemoteDialogs, type DialogResolution } from "../src/host/remote/dialogs.ts";
+import { RemoteDialogs, type DialogResolution, type ExistingDialog } from "../src/host/remote/dialogs.ts";
 import { installRemote } from "../src/host/remote/index.ts";
 import type { SessionState } from "../src/host/remote/state.ts";
 import { RemoteOwner } from "../src/host/remote-owner.ts";
@@ -134,6 +134,71 @@ test("a dismissed shared card rejects the other surface's late answer", async ()
     await expect(dialogs.resolve(card.id, [{ options: ["file"] }], false, { source: "remote" }))
       .rejects.toMatchObject({ code: "invalid_card_answer" });
   } finally { dialogs.close(); }
+});
+
+function withWatchedQuestion(run: (fixture: {
+  dialogs: RemoteDialogs; terminal: ExistingDialog; observed: DialogResolution[]; pending: PendingQuestions;
+}) => Promise<void>): Promise<void> {
+  const pending = new PendingQuestions({ session: () => "durable", append() {}, entries: () => [], changed() {},
+    async deliver() { return true; } });
+  const dialogs = new RemoteDialogs(() => {}, {
+    entries: () => questionEntries(pending), absent: id => questionStatus(pending.status(id)), shared: () => true,
+  });
+  const question = pending.ask("ask", [{ question: "Which?", options: ["first", "second"] }]);
+  const observed: DialogResolution[] = [];
+  const terminal = dialogs.watch(card => card.id === question.id, result => { observed.push(result); })!;
+  return run({ dialogs, terminal, observed, pending }).finally(() => { dialogs.close(); pending.close(); });
+}
+
+test("a card put aside in the app is still answered by the terminal", async () => {
+  await withWatchedQuestion(async ({ dialogs, terminal, observed }) => {
+    const phone = { source: "remote", device: "phone" } as const;
+    expect(await dialogs.resolve(terminal.id, [], true, phone)).toBe("dismissed");
+    expect(dialogs.entries().map(entry => entry.card.id)).toEqual([terminal.id]);
+    expect(observed).toEqual([{ kind: "put_aside", by: phone }]);
+    const answers = [{ options: ["first"] }];
+    expect(await terminal.answer(answers)).toBe("answered");
+    expect(observed).toEqual([{ kind: "put_aside", by: phone }, { kind: "answered", answers, by: { source: "terminal" } }]);
+    expect(dialogs.entries()).toEqual([]);
+  });
+});
+
+test("an answer from the app after its own not-now still closes the terminal's dialog", async () => {
+  await withWatchedQuestion(async ({ dialogs, terminal, observed }) => {
+    const phone = { source: "remote", device: "phone" } as const;
+    expect(await dialogs.resolve(terminal.id, [], true, phone)).toBe("dismissed");
+    expect(await dialogs.resolve(terminal.id, [], true, phone)).toBe("dismissed");
+    const answers = [{ options: ["second"] }];
+    expect(await dialogs.resolve(terminal.id, answers, false, phone)).toBe("answered");
+    expect(observed).toEqual([{ kind: "put_aside", by: phone }, { kind: "put_aside", by: phone },
+      { kind: "answered", answers, by: phone }]);
+    await expect(terminal.answer([{ options: ["first"] }])).rejects.toMatchObject({ code: "invalid_card_answer" });
+  });
+});
+
+test("a put-aside question loses its watch when withdrawn at the source", async () => {
+  await withWatchedQuestion(async ({ dialogs, terminal, observed, pending }) => {
+    const phone = { source: "remote" } as const;
+    expect(await dialogs.resolve(terminal.id, [], true, phone)).toBe("dismissed");
+    expect(pending.withdraw(terminal.id)).toBe("withdrawn");
+    expect(dialogs.entries()).toEqual([]);
+    expect(await terminal.answer([{ options: ["first"] }])).toBe("missing");
+    dialogs.close();
+    expect(observed).toEqual([{ kind: "put_aside", by: phone }, { kind: "cancelled", reason: "closed" }]);
+  });
+});
+
+test("a withdrawal during an answer settles the watch without another card snapshot", async () => {
+  await withWatchedQuestion(async ({ dialogs, terminal, observed, pending }) => {
+    const permit = Promise.withResolvers<void>();
+    const answer = dialogs.resolve(terminal.id, [{ options: ["first"] }], false, { source: "remote" }, () => permit.promise);
+    pending.withdraw(terminal.id);
+    expect(dialogs.entries()).toEqual([]);
+    expect(observed).toEqual([]);
+    permit.resolve();
+    expect(await answer).toBe("missing");
+    expect(observed).toEqual([{ kind: "cancelled", reason: "closed" }]);
+  });
 });
 
 test("remote answers finish the synchronous terminal question batch", async () => {

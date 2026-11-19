@@ -958,6 +958,37 @@
         ],
         "type": "object"
       },
+      "BuildPlanTaskPage": {
+        "description": "A byte range of one proposed board task's brief.",
+        "properties": {
+          "body": {
+            "description": "Whole UTF-8 characters, at most 40 KiB.",
+            "type": "string"
+          },
+          "bytes": {
+            "description": "Total UTF-8 bytes in the brief.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          },
+          "offset": {
+            "description": "Byte offset of this slice.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "body",
+          "bytes",
+          "offset"
+        ],
+        "type": "object"
+      },
       "BuildRecord": {
         "properties": {
           "commits": {
@@ -2314,6 +2345,22 @@
           {
             "properties": {
               "body": {
+                "$ref": "#/components/schemas/BuildPlanTaskPage"
+              },
+              "kind": {
+                "const": "build_plan_task",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
                 "$ref": "#/components/schemas/BuildRecord"
               },
               "kind": {
@@ -2796,6 +2843,26 @@
             "required": [
               "kind",
               "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "key": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "build_plan_task",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "key"
             ],
             "type": "object"
           },
@@ -10627,7 +10694,7 @@
             ]
           },
           "x-required-in": [
-            21
+            22
           ]
         },
         {
@@ -10658,7 +10725,7 @@
             "type": "string"
           },
           "x-required-in": [
-            26
+            27
           ]
         },
         {
@@ -10687,8 +10754,8 @@
             ]
           },
           "x-required-in": [
-            21,
-            23
+            22,
+            24
           ]
         },
         {
@@ -10717,7 +10784,8 @@
             18,
             19,
             20,
-            26
+            21,
+            27
           ]
         },
         {
@@ -10728,6 +10796,16 @@
           },
           "x-required-in": [
             10
+          ]
+        },
+        {
+          "name": "key",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            19
           ]
         },
         {
@@ -10812,6 +10890,10 @@
                 "type": "string"
               },
               {
+                "const": "build_plan_task",
+                "type": "string"
+              },
+              {
                 "const": "build_record",
                 "type": "string"
               },
@@ -10886,7 +10968,7 @@
             "type": "string"
           },
           "x-required-in": [
-            24
+            25
           ]
         },
         {
@@ -10906,7 +10988,7 @@
             ]
           },
           "x-required-in": [
-            22
+            23
           ]
         },
         {
@@ -10946,8 +11028,8 @@
             ]
           },
           "x-required-in": [
-            21,
-            23
+            22,
+            24
           ]
         },
         {
@@ -10971,7 +11053,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            23
+            24
           ]
         }
       ],
@@ -10993,6 +11075,10 @@
         {
           "code": "not_found",
           "message": "not_found"
+        },
+        {
+          "code": "conflict",
+          "message": "conflict"
         },
         {
           "code": "refused",

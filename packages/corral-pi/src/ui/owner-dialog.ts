@@ -24,8 +24,35 @@ export interface OwnerDialogHost {
    * too. Absent (plain hosts, tests): the card answers Pi directly and only here.
    */
   readonly dialogs?: RemoteDialogs;
+  /** A card the app already has, which the next dialog answers instead of registering its own (a child's question). */
+  readonly adoption?: DialogAdoption;
   /** A quiet one-line notice: the card was answered or dismissed from another device. */
   notice?(text: string): void;
+}
+
+/**
+ * Hands the next owner dialog to an answer whose card the app already shows (the host's card for a child's question),
+ * so the dialog registers none of its own; the adopter closes the dialog when that card is answered elsewhere and
+ * delivers the terminal's answer through it.
+ */
+export class DialogAdoption {
+  private next: ((close: () => void) => void) | undefined;
+
+  /**
+   * Runs `open`, which must present its dialog before it returns (Pi's `ui.select` and `ui.input` do); that dialog
+   * registers nothing and `bind` receives its close. A dialog `open` did not present at once registers as usual.
+   */
+  with<T>(bind: (close: () => void) => void, open: () => T): T {
+    this.next = bind;
+    try { return open(); } finally { this.next = undefined; }
+  }
+
+  /** The binding for the dialog being presented now, once. */
+  take(): ((close: () => void) => void) | undefined {
+    const next = this.next;
+    this.next = undefined;
+    return next;
+  }
 }
 
 /** One row of the list form: `match` is what the filter searches; a `disabled` item is shown but never chosen. */
@@ -86,11 +113,18 @@ function hosted(host: OwnerDialogHost): Pick<CardSpec, "budget" | "changed"> {
  * A card for Pi's `done`, registered with the session's dialog registry when the host has one. A key press then answers
  * (or with undefined cancels) the registered prompt, and Pi's `done` follows the prompt's result, whichever side gave
  * it: an answer from the app settles the card at once, so Pi closes it, focus returns where it was, and a later key
- * finds nothing to answer. Pi removing the card itself (its timeout, an abort) withdraws the app's card. Without a
- * registry, or with one that already closed, keys answer Pi directly.
+ * finds nothing to answer. Pi removing the card itself (its timeout, an abort) withdraws the app's card. An adopted
+ * card (see `DialogAdoption`) registers nothing: keys answer Pi, and its adopter closes it. Without a registry, or
+ * with one that already closed, keys answer Pi directly.
  */
 function presented(host: OwnerDialogHost, prompt: Prompt, timeoutMs: number | undefined, done: DialogDone,
   spec: (answer: (value: string | undefined) => void) => CardSpec): OwnerCard {
+  const adopted = host.adoption?.take();
+  if (adopted) {
+    const card = new OwnerCard(spec(done));
+    adopted(() => { card.close(); done(undefined); });
+    return card;
+  }
   const opened = host.dialogs?.openPrompt(prompt, timeoutMs === undefined ? undefined : { timeout: timeoutMs });
   if (!opened || opened.settled) return new OwnerCard(spec(done));
   const card = new OwnerCard({

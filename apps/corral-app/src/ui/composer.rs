@@ -215,6 +215,20 @@ pub(crate) fn state_mark(app: AppState, label: &str, hue: Hue) -> AnyElement {
 const TARGET: f32 = 44.0;
 const FIELD_MAX: f32 = 132.0;
 
+/// The drawn height of a chip in the phone composer's control row (model, effort, receiver).
+pub(crate) const PHONE_CHIP: f32 = 30.0;
+
+/// What a phone chip adds above and below its drawn height so its touch target is `TARGET`.
+pub(crate) fn chip_slop() -> EdgeInsets {
+    let slop = px((TARGET - PHONE_CHIP) / 2.0);
+    Edges {
+        top: slop,
+        right: px(0.0),
+        bottom: slop,
+        left: px(0.0),
+    }
+}
+
 /// The look of the field Ask keeps while it has no connection: its inks, size and focus ring.
 pub(crate) fn field_look(form: Form, field: Input) -> AnyElement {
     let field = field

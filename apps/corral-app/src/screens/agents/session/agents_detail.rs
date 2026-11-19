@@ -14,7 +14,7 @@ use nsh_core::prelude::*;
 use crate::model::Form;
 use crate::model::hue::Hue;
 use crate::model::session::{
-    AgentDetail, AgentsTab, Clipped, ConfirmView, EditList, FleetButton, ModelPicker, Timeline,
+    AgentDetail, Clipped, ConfirmView, EditList, FleetButton, ModelPicker, Timeline,
 };
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
@@ -26,7 +26,7 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 use super::super::super::run;
 use super::super::cards::frame;
 use super::super::hue_words;
-use super::cell;
+use super::{Tab, cell};
 
 /// Words at the detail's size in `ink`, wrapping.
 pub(super) fn words(form: Form, content: impl Into<SharedString>, ink: AdaptiveColor) -> Text {
@@ -217,17 +217,90 @@ fn edits(app: AppState, list: &EditList) -> AnyElement {
         .into_element()
 }
 
-/// The selected agent's detail.
-pub(super) fn detail(app: AppState, detail: &AgentDetail) -> AnyElement {
+/// `lead · time · tail`; only `lead` without a tail.
+pub(super) fn timed(lead: &str, time: String, tail: &str) -> String {
+    if tail.is_empty() {
+        return lead.to_owned();
+    }
+    [lead, time.as_str(), tail].join(" · ")
+}
+
+/// The selected agent's detail, built again only when what its controls and sections are made
+/// of changes; its facts line (running time, cost) and what it does now follow in place.
+pub(super) fn detail(app: AppState, tab: Tab) -> AnyElement {
+    let frame = tab.part(|t| {
+        t.detail.clone().map(|detail| AgentDetail {
+            facts: Default::default(),
+            activity: None,
+            ..detail
+        })
+    });
+    dynamic(move || {
+        frame
+            .get()
+            .flatten()
+            .map(|detail| untracked(|| detail_frame(app, tab, &detail)))
+    })
+    .into_element()
+}
+
+fn detail_frame(app: AppState, tab: Tab, detail: &AgentDetail) -> AnyElement {
     let form = app.form;
     let gap = if form == Form::Terminal { 0.0 } else { 6.0 };
+    let live = tab.part(|t| {
+        t.detail
+            .as_ref()
+            .map(|detail| (detail.facts.clone(), detail.activity.clone()))
+    });
+    let child = detail.child.clone();
+    let facts_line = cell(
+        form,
+        move || {
+            let time = tab.time(&child);
+            live.with(|live| {
+                live.as_ref()
+                    .and_then(|live| live.as_ref())
+                    .map(|((lead, tail), _)| timed(lead, time, tail))
+                    .unwrap_or_default()
+            })
+        },
+        Token::Ink3,
+        true,
+    );
+    let doing = computed(move || {
+        live.with(|live| {
+            live.as_ref()
+                .and_then(|live| live.as_ref())
+                .is_some_and(|(_, activity)| activity.is_some())
+        })
+    });
+    let activity = dynamic(move || {
+        doing.get().then(|| {
+            untracked(|| {
+                text(move || {
+                    live.with(|live| {
+                        live.as_ref()
+                            .and_then(|live| live.as_ref())
+                            .and_then(|(_, activity)| activity.clone())
+                            .map(|activity| format!("Now: {activity}"))
+                            .unwrap_or_default()
+                    })
+                })
+                .text_color(hue_words(form, Hue::Worker))
+                .when(form != Form::Terminal, |t| {
+                    t.font_family(FONT_TEXT)
+                        .text_size(px(if form == Form::Phone { 14.0 } else { 12.5 }))
+                        .line_height(px(if form == Form::Phone { 20.0 } else { 18.0 }))
+                })
+                .into_element()
+            })
+        })
+    });
     let mut facts: Vec<AnyElement> = Vec::new();
     if let Some(owns) = &detail.owns {
         facts.push(words(form, owns.clone(), color(Token::Ink2)).into_element());
     }
-    if let Some(activity) = &detail.activity {
-        facts.push(toned(form, format!("Now: {activity}"), Hue::Worker).into_element());
-    }
+    facts.push(activity);
     if let Some((said, bring)) = &detail.asks {
         let line = toned(form, said.clone(), Hue::You);
         facts.push(match bring.clone() {
@@ -315,7 +388,7 @@ pub(super) fn detail(app: AppState, detail: &AgentDetail) -> AnyElement {
             detail.state,
             &detail.title,
         ))
-        .child(cell(form, detail.facts.clone(), Token::Ink3, true))
+        .child(facts_line)
         .children(facts)
         .child(controls(app, &detail.buttons))
         .children(read)
@@ -464,21 +537,46 @@ fn models(app: AppState, picker: &ModelPicker) -> AnyElement {
         .into_element()
 }
 
-/// What the tab asks the owner above what it shows: a confirmation, else the model choices.
-pub(super) fn asked(app: AppState, tab: &AgentsTab) -> Option<AnyElement> {
-    tab.confirm
-        .as_ref()
-        .map(|ask| confirm(app, ask))
-        .or_else(|| tab.picker.as_ref().map(|picker| models(app, picker)))
+/// What the tab asks the owner above what it shows: a confirmation, else the model choices;
+/// built again only when what it asks changes.
+pub(super) fn asking(app: AppState, tab: Tab) -> AnyElement {
+    let asked = tab.part(|t| (t.confirm.clone(), t.picker.clone()));
+    dynamic(move || {
+        let (confirming, picking) = asked.get()?;
+        untracked(|| {
+            confirming
+                .as_ref()
+                .map(|ask| confirm(app, ask))
+                .or_else(|| picking.as_ref().map(|picker| models(app, picker)))
+        })
+    })
+    .into_element()
 }
 
-/// When each agent ran: one bar per agent on the shared axis, its end glyph after it.
-pub(super) fn timeline(app: AppState, timeline: &Timeline) -> AnyElement {
+/// When each agent ran: one bar per agent on the shared axis, its end glyph after it. The rows
+/// are built again only when an agent starts, ends or changes state; the bars and the axis
+/// follow the clock in place.
+pub(super) fn timeline(app: AppState, tab: Tab) -> AnyElement {
+    let shape = tab.part(|t| t.timeline.clone());
+    dynamic(move || {
+        let timeline = shape.get().flatten()?;
+        Some(untracked(|| timeline_rows(app, tab, &timeline)))
+    })
+    .into_element()
+}
+
+fn timeline_rows(app: AppState, tab: Tab, timeline: &Timeline) -> AnyElement {
     let form = app.form;
     let bars = timeline.rows.iter().map(|row| {
         let action = row.action.clone();
-        let start = row.start.clamp(0.0, 1.0);
-        let width = (row.end - row.start).clamp(0.0, 1.0).max(0.01);
+        let bar = {
+            let child = row.child.clone();
+            computed(move || {
+                tab.full
+                    .with(|t| t.as_ref().and_then(|t| t.clock.bars.get(&child).copied()))
+                    .unwrap_or((0.0, 0.0))
+            })
+        };
         let label = cell(form, row.label.clone(), Token::Ink, true)
             .flex_shrink_0()
             .w(if form == Form::Terminal {
@@ -500,8 +598,11 @@ pub(super) fn timeline(app: AppState, timeline: &Timeline) -> AnyElement {
                     .absolute()
                     .top(px(0.0))
                     .bottom(px(0.0))
-                    .left(relative(start))
-                    .w(relative(width))
+                    .left(move || Length::from(relative(bar.get().0.clamp(0.0, 1.0))))
+                    .w(move || {
+                        let (start, end) = bar.get();
+                        Length::from(relative((end - start).clamp(0.0, 1.0).max(0.01)))
+                    })
                     .rounded(px(if form == Form::Terminal { 0.0 } else { 3.0 }))
                     .bg(hue_ink(row.hue)),
             );
@@ -521,14 +622,22 @@ pub(super) fn timeline(app: AppState, timeline: &Timeline) -> AnyElement {
             )
             .into_element()
     });
+    let axis = cell(
+        form,
+        move || {
+            tab.full
+                .with(|t| t.as_ref().and_then(|t| t.clock.axis_end.clone()))
+                .map(|end| format!("0s – {end}"))
+                .unwrap_or_default()
+        },
+        Token::Ink3,
+        true,
+    );
     view()
         .test_id("session-timeline")
         .gap(px(if form == Form::Terminal { 0.0 } else { 4.0 }))
-        .child(h3(
-            app,
-            timeline.heading.clone(),
-            Some(format!("0s – {}", timeline.axis_end)),
-        ))
+        .child(h3(app, timeline.heading.clone(), None))
         .children(bars.collect::<Vec<_>>())
+        .child(view().flex_row().justify_end().child(axis))
         .into_element()
 }

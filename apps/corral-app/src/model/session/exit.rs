@@ -216,16 +216,16 @@ pub(super) fn finish(state: &mut State, session: &Id, feed: &Feed) -> Vec<Effect
     if let Some(card) = pending {
         let ui = state.ui_mut(session);
         dock::leave(ui, feed.now);
-        ui.dock.aside.remove(&card);
+        ui.dock.opened.insert(card);
         ui.focus = Focus::Dock;
         return Vec::new();
     }
     let key = state.ids.next_id();
-    state
-        .ui_mut(session)
-        .dock
-        .pending
+    let dock = &mut state.ui_mut(session).dock;
+    dock.pending
         .insert(key.clone(), Pending::Action { what: "Finish" });
+    // The exit choice opens by itself once the host docks it.
+    dock.exit_wanted = true;
     vec![Effect::SessionAction {
         key,
         request: SessionActionRequest {

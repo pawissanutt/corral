@@ -5,7 +5,9 @@
 //! The rows are read from the fleet corrald last sent with the session's live pages; an agent's
 //! brief, edits, steers and report from its `SessionChild` part; the jobs from `SessionJobs`. A
 //! cost, a context share or a time the host did not report stays unknown, never zero. What the
-//! owner does goes out through `ops` as `session.child` and `session.job`.
+//! owner does goes out through `ops` as `session.child` and `session.job`. What the clock moves
+//! (running times, the timeline's bars, jobs' elapsed time) is kept apart in `AgentsTab.clock`,
+//! so everything the tab's controls are built from stays equal while only the clock ticks.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,6 +29,8 @@ use super::{Action, Can, Cx, Host, State, SubView};
 
 #[path = "child_detail.rs"]
 mod child;
+#[path = "fleet_clock.rs"]
+mod clock;
 #[path = "conversation.rs"]
 mod conversation;
 #[path = "jobs.rs"]
@@ -35,6 +39,7 @@ mod jobs;
 mod ops;
 
 pub use child::{AgentDetail, Clipped, EditLine, EditList, ModelChoiceRow, ModelPicker};
+pub use clock::AgentsClock;
 pub use conversation::{Conversation, EndLine};
 pub(super) use jobs::short_id;
 pub use jobs::{JobDetail, JobList, JobOutputView, JobRowView};
@@ -99,6 +104,8 @@ pub struct AgentsTab {
     pub messages: Option<MessageList>,
     /// What an empty tab says.
     pub empty: Option<String>,
+    /// What the clock moves; everything else is equal across a tick.
+    pub clock: AgentsClock,
 }
 
 /// What replaces the list.
@@ -123,8 +130,6 @@ pub struct AgentRowView {
     pub title: String,
     /// `slice · gpt-6`, `review · deep`, `→ <pending model>` appended while one is pending.
     pub profile_model: String,
-    /// `1m 02s`, `waiting` before it started, `–` when unknown.
-    pub time: String,
     pub cost: String,
     pub ctx: String,
     /// `4 turns`, `–` before its first.
@@ -189,9 +194,8 @@ impl FleetButton {
 pub struct Timeline {
     /// `Timeline · up to 3 at once · 3 messages`.
     pub heading: String,
+    /// The bars' extents and the axis are `AgentsClock`'s.
     pub rows: Vec<TimelineRow>,
-    /// `0s` … `4m 12s`.
-    pub axis_end: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -199,9 +203,6 @@ pub struct TimelineRow {
     pub child: String,
     /// The id as the row shows it: a helper call's shortened.
     pub label: String,
-    /// Fractions of the axis, 0 to 1.
-    pub start: f32,
-    pub end: f32,
     pub hue: Hue,
     /// `✓ ✗ !` at its end, none while it runs.
     pub glyph: Option<&'static str>,
@@ -458,7 +459,6 @@ fn row(cx: &Cx<'_>, child: &SessionChild, selected: bool) -> AgentRowView {
         state,
         title: child.title.clone(),
         profile_model: profile_model(child),
-        time: time(child, cx.feed.now),
         cost: cost_text(child.cost_usd, false),
         ctx: ctx(child),
         turns: turns(child.turns),
@@ -486,35 +486,17 @@ fn row(cx: &Cx<'_>, child: &SessionChild, selected: bool) -> AgentRowView {
     }
 }
 
-fn timeline(session: &Id, fleet: &SessionFleet, now: u64) -> Option<Timeline> {
-    let starts: Vec<u64> = fleet
-        .children
-        .iter()
-        .filter_map(|child| child.started_at)
-        .collect();
-    let first = *starts.iter().min()?;
-    let last = fleet
-        .children
-        .iter()
-        .filter_map(|child| child.ended_at)
-        .chain((now > 0).then_some(now.saturating_mul(1000)))
-        .max()
-        .unwrap_or(first)
-        .max(first + 1);
-    let span = (last - first) as f32;
-    let at = |ms: u64| (ms.saturating_sub(first)) as f32 / span;
+fn timeline(session: &Id, fleet: &SessionFleet) -> Option<Timeline> {
+    fleet.children.iter().find_map(|child| child.started_at)?;
     let rows = fleet
         .children
         .iter()
         .filter_map(|child| {
-            let start = child.started_at?;
-            let end = child.ended_at.unwrap_or(last);
+            child.started_at?;
             let (_, hue, _) = shown_state(child);
             Some(TimelineRow {
                 child: child.id.clone(),
                 label: shown_id(child),
-                start: at(start),
-                end: at(end).max(at(start)),
                 hue,
                 glyph: match child.state.as_str() {
                     "done" => Some("✓"),
@@ -547,7 +529,6 @@ fn timeline(session: &Id, fleet: &SessionFleet, now: u64) -> Option<Timeline> {
     Some(Timeline {
         heading: heading.join(" · "),
         rows,
-        axis_end: super::activity::duration((last - first) / 1000),
     })
 }
 
@@ -661,9 +642,10 @@ pub fn agents_tab(cx: &Cx<'_>, state: &State) -> AgentsTab {
         opened: opened(cx, state, fleet),
         confirm: ops::confirm_view(cx),
         picker: child::picker(cx),
-        timeline: fleet.and_then(|fleet| timeline(cx.id, fleet, cx.feed.now)),
+        timeline: fleet.and_then(|fleet| timeline(cx.id, fleet)),
         messages: fleet.and_then(|fleet| messages(cx.id, fleet, cx.feed)),
         empty,
+        clock: clock::clock(cx),
     }
 }
 

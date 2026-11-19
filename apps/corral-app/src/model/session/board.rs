@@ -2,14 +2,17 @@
 //! owner, read from its host (`BuildBoard`, refreshed with `board_refresh`). Each task shows its
 //! stage in the terminal UI's words, what it waits for, its dependencies, the host's detail and
 //! its last change; a row opens the task's own page in the app, never a copy here. The proposed
-//! plan reads in full (its reasons, each task with its brief, and how much of a brief the host
-//! kept back); its File / File and start / Revise answers are the dock's board-plan card, which
-//! Review plan brings forward. The tab's badge counts tasks not landed and is marked when one is
-//! blocked or failed. The build's record opens in a pager over the board (`record.rs`).
+//! plan reads in full (its reasons and each task with its brief; Show brief reads the part of a
+//! brief the board reply left out, `plan_brief.rs`); its File / File and start / Revise answers
+//! are the dock's board-plan card, which Review plan brings forward. The tab's badge counts tasks
+//! not landed and is marked when one is blocked or failed. The build's record opens in a pager
+//! over the board (`record.rs`).
 
 use std::collections::BTreeSet;
 
-use corral_protocol::detail::{BoardPlan, BoardTask, BuildBoard, CardKind, DetailBody, DetailRef};
+use corral_protocol::detail::{
+    BoardPlan, BoardTask, BuildBoard, CardKind, DetailBody, DetailGet, DetailRef,
+};
 use corral_protocol::session_host::{SessionAction, SessionActionRequest};
 
 use crate::model::daemon::Feed;
@@ -26,6 +29,10 @@ use super::{Action, Can, Cx, Focus, Host, SessionRole, State, Tab};
 #[path = "record.rs"]
 mod record;
 
+#[path = "plan_brief.rs"]
+mod plan_brief;
+
+pub use plan_brief::BriefRead;
 pub use record::{RecordLine, RecordPager, RecordSection, RecordView};
 
 const CAPABILITY: &str = "board";
@@ -44,6 +51,9 @@ pub struct BoardUi {
     pub opened: BTreeSet<String>,
     /// The build record shows in the pager over the board.
     pub record: bool,
+    /// Briefs whose read met a changed proposal and had the board read again, by key: each is
+    /// read again on its own only once, so a proposal that keeps changing cannot loop.
+    pub conflicted: BTreeSet<String>,
 }
 
 impl BoardUi {
@@ -51,6 +61,7 @@ impl BoardUi {
         selected: None,
         opened: BTreeSet::new(),
         record: false,
+        conflicted: BTreeSet::new(),
     };
 }
 
@@ -61,8 +72,12 @@ pub enum BoardAction {
     Step { session: Id, delta: i8 },
     /// Ask the host to read the board again (`board_refresh`); `show` also opens the tab.
     Refresh { session: Id, show: bool },
-    /// Open or fold a proposed task's brief.
+    /// Open or fold a proposed task's brief; reopening one whose read failed reads it again.
     Fold { session: Id, key: String },
+    /// Read the rest of a proposed task's brief again (Retry).
+    Brief { session: Id, key: String },
+    /// The proposal changed while a brief was read: read the board and the brief again, once.
+    Conflict { session: Id, key: String },
     /// Open the build record in the pager (on the Board tab), or close it.
     Record { session: Id, open: bool },
     /// Plan board tasks from this conversation…: the request goes into the draft, not sent.
@@ -133,10 +148,12 @@ pub struct PlanTask {
     pub depends: Option<String>,
     /// The brief's first line while folded.
     pub preview: Option<String>,
-    /// The brief as sent, while open.
+    /// The brief while open: the whole one once read, else what the board reply carried.
     pub body: Option<String>,
-    /// The host kept part of the brief back: how much.
+    /// How much the host kept back: before the owner asks for the rest, or while it cannot be read.
     pub more: Option<String>,
+    /// The read of the rest: under way, or why it failed with a Retry.
+    pub read: Option<BriefRead>,
     pub open: bool,
     pub toggle: Option<Action>,
 }
@@ -433,9 +450,13 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// `2.0 KiB`.
-fn kib(bytes: u64) -> String {
-    format!("{:.1} KiB", bytes as f64 / 1024.0)
+/// A fresh read of `target`, past any copy this device holds.
+fn read(target: DetailRef) -> Effect {
+    Effect::Detail(DetailGet {
+        target,
+        etag: None,
+        page: None,
+    })
 }
 
 fn plan(cx: &Cx<'_>, plan: &BoardPlan) -> PlanCard {
@@ -454,7 +475,7 @@ fn plan(cx: &Cx<'_>, plan: &BoardPlan) -> PlanCard {
         .map(|task| {
             let open = cx.ui.board.opened.contains(&task.key);
             let body = task.body.trim();
-            let sent = task.body.len() as u64;
+            let shown = plan_brief::shown(cx, task, open);
             let kind: Vec<&str> = [&task.kind, &task.size, &task.profile]
                 .into_iter()
                 .filter_map(|fact| fact.as_deref())
@@ -470,14 +491,9 @@ fn plan(cx: &Cx<'_>, plan: &BoardPlan) -> PlanCard {
                     .then(|| body.lines().map(str::trim).find(|line| !line.is_empty()))
                     .flatten()
                     .map(str::to_owned),
-                body: (open && !body.is_empty()).then(|| body.to_owned()),
-                more: (task.body_bytes > sent).then(|| {
-                    format!(
-                        "The host sent the first {} of this brief's {}; the rest is not available here.",
-                        kib(sent),
-                        kib(task.body_bytes)
-                    )
-                }),
+                body: shown.body,
+                more: shown.more,
+                read: shown.read,
                 open,
                 toggle: (!body.is_empty()).then(|| {
                     Action::Board(BoardAction::Fold {
@@ -567,10 +583,15 @@ pub fn board_tab(cx: &Cx<'_>) -> BoardTab {
     }
 }
 
-/// What the tab reads while it shows: the board, and the record while its pager is open.
+/// What the tab reads while it shows: the board, the rest of each open clipped brief, and the
+/// record while its pager is open.
 pub fn fetches(cx: &Cx<'_>) -> Vec<Action> {
+    let briefs = loaded(cx.feed, cx.id.as_str())
+        .and_then(|board| board.proposed.as_ref())
+        .map_or_else(Vec::new, |plan| plan_brief::fetches(cx, &plan.tasks));
     load(cx, Ok(target(cx)), Some(CAPABILITY))
         .into_iter()
+        .chain(briefs)
         .chain(
             cx.ui
                 .board
@@ -635,11 +656,33 @@ pub(super) fn act(state: &mut State, action: BoardAction, feed: &Feed) -> Vec<Ef
             effects
         }
         BoardAction::Fold { session, key } => {
-            let opened = &mut state.ui_mut(&session).board.opened;
-            if !opened.remove(&key) {
-                opened.insert(key);
+            let brief = plan_brief::target(session.as_str(), &key);
+            let failed = feed
+                .detail(&brief)
+                .is_some_and(|cache| cache.error.is_some() && !cache.loading);
+            let board = &mut state.ui_mut(&session).board;
+            if board.opened.remove(&key) {
+                return Vec::new();
             }
-            Vec::new()
+            board.opened.insert(key.clone());
+            if !failed {
+                return Vec::new();
+            }
+            board.conflicted.remove(&key);
+            vec![read(brief)]
+        }
+        BoardAction::Brief { session, key } => {
+            state.ui_mut(&session).board.conflicted.remove(&key);
+            vec![read(plan_brief::target(session.as_str(), &key))]
+        }
+        BoardAction::Conflict { session, key } => {
+            state.ui_mut(&session).board.conflicted.insert(key.clone());
+            vec![
+                read(DetailRef::BuildBoard {
+                    id: session.to_string(),
+                }),
+                read(plan_brief::target(session.as_str(), &key)),
+            ]
         }
         BoardAction::Record { session, open } => {
             let effects = if open {

@@ -1,9 +1,11 @@
 //! The session's background jobs on the Agents tab, read from the host's `SessionJobs` part:
-//! their group (`Jobs · 1 running`), the selected job's detail (command, directory, state and
-//! elapsed time, output size, exit code, armed watches, the last lines of output) and its
-//! controls, and the opened job's output (`SessionJobOutput`): the newest bytes first, re-read
-//! as the host announces a change while it runs, paged toward older bytes on request. A running
-//! job offers Stop (asked once) and Background; a finished one offers neither.
+//! their group (`Jobs · 1 running`, each job with its last output line and a peek at its last
+//! lines in place), the selected job's detail (command, directory, state and elapsed time,
+//! output size, exit code, armed watches, the last lines of output) and its controls, and the
+//! opened job's output (`SessionJobOutput`): the newest bytes first, re-read as the host
+//! announces a change while it runs, paged toward older bytes on request, searched and followed
+//! as `find` reads it. A running job offers Stop (asked once) and Background; a finished one
+//! offers neither.
 
 use corral_protocol::detail::{
     DetailBody, DetailGet, DetailRef, JobOutputPage, SessionJob, SessionJobs,
@@ -20,6 +22,11 @@ use super::super::tabs::load;
 use super::super::transcript::{Line, LineClass, line, size};
 use super::super::{Action, Can, Cx, SubView};
 use super::{FleetAction, FleetButton, control, ops};
+
+#[path = "jobs_find.rs"]
+mod find;
+
+pub use find::{FollowLine, JobSearch, Peek};
 
 /// The host capability that lists the jobs and serves their output.
 const JOBS: &str = "jobs";
@@ -46,8 +53,14 @@ pub struct JobRowView {
     pub hue: Hue,
     /// The command's first line, clipped: the job's name.
     pub command: String,
-    /// `running · 38s`, `exited 1 · 2m 10s`.
+    /// `running`, `exited 1`; how long it ran is the clock's (`AgentsClock::job`).
     pub state: String,
+    /// Its last output line, as the list carries it.
+    pub last: Option<String>,
+    /// Its last lines, while the owner peeks at them.
+    pub peek: Option<Peek>,
+    /// Opens or closes the peek.
+    pub peek_action: Action,
     pub selected: bool,
     /// Selects the job; on the selected row, opens its output.
     pub action: Action,
@@ -62,7 +75,9 @@ pub struct JobDetail {
     /// `$ cargo test -p auth`: the command's first line, clipped.
     pub command: String,
     pub dir: Option<String>,
-    /// State and elapsed time, output size, exit code, watches.
+    /// `running`, `exited 1`, in its tone; how long it ran is the clock's.
+    pub state: (Hue, String),
+    /// Output size and watches.
     pub chips: Vec<(Hue, String)>,
     /// The last lines of its output.
     pub tail: Vec<Line>,
@@ -83,6 +98,12 @@ pub struct JobOutputView {
     /// `last 40.0 KB of 1.2 MB`.
     pub span: Option<String>,
     pub lines: Vec<Line>,
+    /// The start byte of each line in the job's output.
+    pub at: Vec<u64>,
+    /// The byte after the last one shown.
+    pub end: u64,
+    /// A read of the output is on its way.
+    pub loading: bool,
     /// Where the read stands while it is not simply read.
     pub read: Option<(Hue, String)>,
     pub retry: Option<Action>,
@@ -95,6 +116,32 @@ pub struct JobOutputView {
     /// The output grows while it shows: the view keeps to its end.
     pub live: bool,
     pub buttons: Vec<FleetButton>,
+}
+
+impl JobOutputView {
+    /// The search of `query` in the loaded output, standing on match `at` (clamped to the last,
+    /// so `usize::MAX` stands on the newest); none for an empty query.
+    pub fn search(&self, query: &str, at: usize) -> Option<JobSearch> {
+        find::search(self, query, at)
+    }
+
+    /// Following the newest lines, or paused since byte `paused_since`; none once the output
+    /// does not grow here.
+    pub fn follow(&self, paused_since: Option<u64>) -> Option<FollowLine> {
+        find::follow_line(self, paused_since)
+    }
+}
+
+/// The peek's key among the tab's opened texts.
+fn peek_key(job: &str) -> String {
+    format!("peek:{job}")
+}
+
+/// The read output of `job` when it is the newest the host has.
+fn newest_text<'f>(cx: &Cx<'f>, job: &str) -> Option<&'f str> {
+    page(cx.feed.detail(&output_target(cx.id, job)))
+        .filter(|page| page.offset.saturating_add(page.text.len() as u64) >= page.bytes)
+        .map(|page| page.text.as_str())
 }
 
 fn target(session: &Id) -> DetailRef {
@@ -178,12 +225,12 @@ fn elapsed(job: &SessionJob, now: u64) -> Option<String> {
     Some(super::super::activity::duration(end.saturating_sub(start)))
 }
 
-fn state_words(job: &SessionJob, now: u64) -> String {
-    let (_, _, words) = job_state(job);
-    match elapsed(job, now) {
-        Some(time) => format!("{words} · {time}"),
-        None => words,
-    }
+/// How long each listed job ran, or runs, by job id; a job without a start has none.
+pub(super) fn elapsed_by_job(cx: &Cx<'_>) -> std::collections::BTreeMap<String, String> {
+    all(cx)
+        .iter()
+        .filter_map(|job| Some((job.id.clone(), elapsed(job, cx.feed.now)?)))
+        .collect()
 }
 
 /// The job's controls: open its output (unless it shows), and while it runs Stop (asked once)
@@ -299,7 +346,7 @@ pub(super) fn list(cx: &Cx<'_>, selected: Option<&str>) -> Option<JobList> {
         rows: jobs
             .iter()
             .map(|job| {
-                let (mark, hue, _) = job_state(job);
+                let (mark, hue, state) = job_state(job);
                 let chosen = selected == Some(job.id.as_str());
                 JobRowView {
                     test_id: format!("job-{}", job.id),
@@ -307,7 +354,23 @@ pub(super) fn list(cx: &Cx<'_>, selected: Option<&str>) -> Option<JobList> {
                     mark,
                     hue,
                     command: name(&job.command),
-                    state: state_words(job, cx.feed.now),
+                    state,
+                    last: job
+                        .tail
+                        .iter()
+                        .rev()
+                        .find(|text| !text.trim().is_empty())
+                        .cloned(),
+                    peek: cx
+                        .ui
+                        .fleet
+                        .opened
+                        .contains(&peek_key(&job.id))
+                        .then(|| find::peek(job, newest_text(cx, &job.id))),
+                    peek_action: Action::Fleet(FleetAction::More {
+                        session: cx.id.clone(),
+                        key: peek_key(&job.id),
+                    }),
                     selected: chosen,
                     action: if chosen {
                         Action::Sub {
@@ -331,12 +394,11 @@ pub(super) fn list(cx: &Cx<'_>, selected: Option<&str>) -> Option<JobList> {
 /// The selected job's detail.
 pub(super) fn detail(cx: &Cx<'_>, id: &str) -> Option<JobDetail> {
     let job = all(cx).iter().find(|job| job.id == id)?;
-    let (_, hue, _) = job_state(job);
-    let mut chips = vec![(hue, state_words(job, cx.feed.now))];
-    chips.push((
+    let (_, hue, words) = job_state(job);
+    let mut chips = vec![(
         Hue::Neutral,
         format!("{} of output", size(job.output_bytes)),
-    ));
+    )];
     chips.extend(
         job.monitors
             .iter()
@@ -347,6 +409,7 @@ pub(super) fn detail(cx: &Cx<'_>, id: &str) -> Option<JobDetail> {
         short: short_id(&job.id),
         command: format!("$ {}", name(&job.command)),
         dir: job.dir.clone(),
+        state: (hue, words),
         chips,
         tail: tail(job),
         buttons: buttons(
@@ -431,6 +494,9 @@ pub(super) fn output(cx: &Cx<'_>, id: &str) -> JobOutputView {
                 .map(|text| line(text, LineClass::Plain))
                 .collect()
         }),
+        at: shown.map_or_else(Vec::new, |page| find::starts(&page.text, page.offset)),
+        end: end.unwrap_or_default(),
+        loading,
         read: match &read {
             ReadState::Failed(_) | ReadState::Stale { .. } => Some((read.hue(), read.words())),
             ReadState::NotRead | ReadState::Reading => Some(match control(cx, JOBS) {
@@ -490,6 +556,13 @@ pub(super) fn fetches(cx: &Cx<'_>) -> Vec<Action> {
         .collect();
     if let Some(SubView::Job(job)) = &cx.ui.sub {
         wanted.extend(load(cx, Ok(output_target(cx.id, job)), Some(JOBS)));
+    }
+    // A peeked job's newest lines come from its output, read once and then as it changes.
+    for job in all(cx)
+        .iter()
+        .filter(|job| cx.ui.fleet.opened.contains(&peek_key(&job.id)))
+    {
+        wanted.extend(load(cx, Ok(output_target(cx.id, &job.id)), Some(JOBS)));
     }
     wanted
 }

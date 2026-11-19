@@ -132,7 +132,9 @@ pub fn press(key: &str, cx: &Cx<'_>) -> Option<Action> {
         "r" => diff
             .and_then(|diff| diff.newer.clone())
             .or_else(|| tab.part.reread.clone()),
-        "f3" => Some(Action::Changes(ChangesAction::FocusFilter)),
+        "f3" => Some(Action::Changes(ChangesAction::FocusFilter {
+            session: cx.id.clone(),
+        })),
         _ => None,
     }
 }

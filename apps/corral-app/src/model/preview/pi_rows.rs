@@ -123,6 +123,10 @@ pub(super) fn settle(feed: &mut Feed, id: &str) {
             row.question_id = question_id;
             if let Some(build) = row.build.as_mut() {
                 build.exit = exit;
+                if let Some(parts) = host.parts.as_deref() {
+                    build.children = parts.children_counts();
+                    build.diff = parts.record.diff.clone();
+                }
             }
             row.updated = Some(stamp(feed.now));
             row.rev += 1;
@@ -165,21 +169,50 @@ fn queue_actions(host: &Host, n: usize) -> Vec<String> {
     actions
 }
 
+/// What a build's host serves beyond what every host does.
+const BUILD_CAN: &[&str] = &[
+    "model",
+    "children",
+    "child_control",
+    "jobs",
+    "job_control",
+    "changes",
+    "usage",
+    "plan",
+    "context",
+    "commands",
+    "board",
+    "record",
+    "exit",
+    "compact",
+    "export",
+];
+
 /// The state host `id` reports: what it runs, holds and asks, and what it serves. The sample
-/// serves sending, steering, follow-ups, its queue and its cards, a worker's rewinds and a
-/// build's child agents and exit.
+/// serves sending, steering, follow-ups, its queue and its cards, a worker's rewinds, and every
+/// part of a build, whose counts and briefs come from its parts; attachments stay listed with
+/// why the preview cannot take them.
 fn state(feed: &Feed, id: &str, host: &Host) -> SessionState {
     let row = feed.assistants.get(id);
     let model = row
         .and_then(|row| row.model.clone())
         .or_else(|| feed.agents.get(id).and_then(|row| row.run.model.clone()));
-    let mut can = vec!["send", "steer", "follow_up", "queue", "cards"];
+    let mut can: Vec<(&str, Option<String>)> = ["send", "steer", "follow_up", "queue", "cards"]
+        .into_iter()
+        .map(|id| (id, None))
+        .collect();
     match host.role {
-        Role::Worker => can.push("rewind"),
-        Role::Build => can.extend(["children", "exit"]),
+        Role::Worker => can.push(("rewind", None)),
+        Role::Build => {
+            can.extend(BUILD_CAN.iter().map(|id| (*id, None)));
+            can.push((
+                "attachments",
+                Some("the preview does not upload attachments".into()),
+            ));
+        }
         Role::Chat => {}
     }
-    SessionState {
+    let mut state = SessionState {
         mode: SessionMode::Headless,
         turn: host.turn,
         open: host.busy(),
@@ -228,19 +261,26 @@ fn state(feed: &Feed, id: &str, host: &Host) -> SessionState {
         exit: host.exit.clone(),
         can: can
             .into_iter()
-            .map(|id| Capability {
+            .map(|(id, why)| Capability {
                 id: id.into(),
-                unavailable: host
-                    .gone
-                    .then(|| "the host is not running; resume it first".into()),
+                unavailable: if host.gone {
+                    Some("the host is not running; resume it first".into())
+                } else {
+                    why
+                },
             })
             .collect(),
         ..SessionState::default()
+    };
+    if let Some(parts) = host.parts.as_deref() {
+        parts.brief(&mut state);
     }
+    state
 }
 
 /// Every scope that watches host `id` gets its current state, as corrald's next page carries it,
-/// and a read of its cards follows them, as the app's re-read on the cards part would.
+/// and every part it serves that was read is read again, as the app's re-read on the host's
+/// `live_part` would.
 fn publish_state(feed: &mut Feed, id: &str) {
     let Some(host) = feed.hosts.get(id) else {
         return;
@@ -252,7 +292,7 @@ fn publish_state(feed: &mut Feed, id: &str) {
             .or_default()
             .replace_state(Some(Box::new(current.clone())));
     }
-    super::build_ops::reread_cards(feed, id);
+    super::parts::reread(feed, id);
 }
 
 /// Every host's rows, as corrald reports them once it polled each host.

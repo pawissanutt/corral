@@ -6,13 +6,15 @@ import {
 type DialogOptions = NonNullable<Parameters<ExtensionUIContext["select"]>[2]>;
 export type CardDraft = Omit<CardEntry["card"], "id" | "opened_at" | "expires_at">;
 export type AnswerSource = { source: "terminal" } | { source: "remote"; device?: string };
-export type DialogResolution =
+type DialogSettlement =
   | { kind: "answered"; answers: readonly CardAnswer[]; by: AnswerSource }
   | { kind: "cancelled"; reason: "dismissed" | "expired" | "closed"; by?: AnswerSource };
+/** A watcher can receive a put-aside notice without the underlying card settling. */
+export type DialogResolution = DialogSettlement | { kind: "put_aside"; by: AnswerSource };
 
 export interface OpenDialog {
   readonly id: string;
-  readonly result: Promise<DialogResolution>;
+  readonly result: Promise<DialogSettlement>;
   readonly settled: boolean;
   answer(answers: readonly CardAnswer[]): AnswerStatus;
   cancel(): AnswerStatus;
@@ -58,7 +60,12 @@ export class RemoteDialogs {
 
   entries(): CardEntry[] {
     if (this.closed) return [];
-    return [...(this.existing?.entries() ?? []), ...Array.from(this.dialogs.values(), dialog => dialog.entry)];
+    const existing = this.existing?.entries() ?? [];
+    for (const id of this.listeners.keys()) {
+      // A source can hide a card while its answer is in flight; the answer publishes its outcome.
+      if (!this.answering.has(id) && !existing.some(({ card }) => card.id === id)) this.absent(id);
+    }
+    return [...existing, ...Array.from(this.dialogs.values(), dialog => dialog.entry)];
   }
 
   watch(matches: (card: Readonly<CardEntry["card"]>) => boolean, listener: Listener): ExistingDialog | undefined {
@@ -91,7 +98,7 @@ export class RemoteDialogs {
     // A source may reopen the same ID after a failed attempt. Only the source may reopen it.
     if (!entry) {
       if (recent === "answered") invalidAnswer("the card has already been answered");
-      return this.existing?.absent(id) ?? "missing";
+      return this.absent(id);
     }
     const shared = this.existing?.shared() || this.listeners.has(id);
     if (shared) this.answering.add(id);
@@ -102,8 +109,13 @@ export class RemoteDialogs {
           this.remember(id, "answered");
           this.publish(id, dismiss ? { kind: "cancelled", reason: "dismissed", by } : { kind: "answered", answers, by });
         } else if (status === "dismissed") {
-          this.remember(id, "answered");
-          this.publish(id, { kind: "cancelled", reason: "dismissed", by });
+          if (this.existing?.entries().some(({ card }) => card.id === id)) this.publish(id, { kind: "put_aside", by });
+          else {
+            this.remember(id, "answered");
+            this.publish(id, { kind: "cancelled", reason: "dismissed", by });
+          }
+        } else if (status === "expired" || status === "missing" && !this.existing?.entries().some(({ card }) => card.id === id)) {
+          this.publish(id, { kind: "cancelled", reason: status === "expired" ? "expired" : "closed" });
         }
       }
       return status;
@@ -116,10 +128,10 @@ export class RemoteDialogs {
     const { signal, timeout, shared = true, validate } = opts;
     const id = `dialog-${crypto.randomUUID()}`, now = Date.now();
     const expires = timeout !== undefined && Number.isFinite(timeout) && timeout > 0 ? Math.min(now + timeout, 8.64e15) : undefined;
-    const { promise: result, resolve } = Promise.withResolvers<DialogResolution>();
-    let resolution: DialogResolution | undefined;
+    const { promise: result, resolve } = Promise.withResolvers<DialogSettlement>();
+    let resolution: DialogSettlement | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (value: DialogResolution) => {
+    const finish = (value: DialogSettlement) => {
       if (resolution) return;
       resolution = value;
       const removed = this.dialogs.delete(id);
@@ -222,9 +234,15 @@ export class RemoteDialogs {
     for (const id of this.listeners.keys()) this.publish(id, { kind: "cancelled", reason: "closed" });
   }
 
+  private absent(id: string): AnswerStatus {
+    const status = this.existing?.absent(id) ?? "missing";
+    this.publish(id, { kind: "cancelled", reason: status === "expired" ? "expired" : "closed" });
+    return status;
+  }
+
   private publish(id: string, result: DialogResolution): void {
     const listeners = this.listeners.get(id);
-    this.listeners.delete(id);
+    if (result.kind !== "put_aside") this.listeners.delete(id);
     for (const listener of listeners ?? []) {
       try { listener(result); } catch { /* A presentation observer cannot change a committed answer. */ }
     }

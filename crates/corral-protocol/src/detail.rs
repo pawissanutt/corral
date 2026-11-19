@@ -94,6 +94,10 @@ pub enum DetailRef {
     BuildBoard {
         id: String,
     },
+    BuildPlanTask {
+        id: String,
+        key: String,
+    },
     BuildRecord {
         id: String,
     },
@@ -186,6 +190,7 @@ pub enum DetailBody {
     SessionEvents(SessionEventsPage),
     SessionCommands(SessionCommands),
     BuildBoard(BuildBoard),
+    BuildPlanTask(BuildPlanTaskPage),
     BuildRecord(BuildRecord),
     Terminal(TerminalSnapshot),
     Timeline(TimelinePage),
