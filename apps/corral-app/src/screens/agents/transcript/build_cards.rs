@@ -8,17 +8,19 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::hue::Hue;
-use crate::model::session::Action;
 use crate::model::session::transcript::{
-    BuildCard, ExitEntry, ExitLine, FiledEntry, FinishCard, GateRow, PlanCard, ReviewRow,
+    BuildCard, ExitEntry, ExitLine, ExitStep, FiledEntry, FinishCard, GateRow, PlanCard, ReviewRow,
     SliceBack, SliceRow, TaskCard, Told, ToolState,
 };
+use crate::model::session::{Action, GateLog};
 use crate::state::AppState;
 use crate::ui::kit::marks::hue_ink;
+use crate::ui::kit::text::mono;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::super::run;
+use super::log_lines;
 use super::parts::{disclosure, glyph, pressable, sections, small, tinted};
 
 /// The widest a card is drawn (the terminal's 108 cells, in points).
@@ -391,6 +393,67 @@ fn exit_line(app: AppState, exit: &ExitLine) -> AnyElement {
         .into_element()
 }
 
+/// `✓ Rebase onto main  3f2a9c1  4s`, then the gate's log under the gate step.
+fn exit_step(app: AppState, step: &ExitStep) -> AnyElement {
+    let terminal = app.form == Form::Terminal;
+    let muted = |said: &str| {
+        small(
+            app,
+            if terminal {
+                format!(" {said}")
+            } else {
+                said.to_owned()
+            },
+            Token::Ink3,
+        )
+    };
+    view()
+        .min_w(px(0.0))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(if terminal { 0.0 } else { 6.0 }))
+                .min_w(px(0.0))
+                .child(glyph(app, step.state))
+                .when(terminal, |row| row.child(term::space(1.0)))
+                .child(words(app, step.words.clone(), Token::Ink).flex_shrink_0())
+                .children(
+                    step.note
+                        .as_deref()
+                        .map(|note| muted(note).flex_shrink(1.0).min_w(px(0.0)).truncate()),
+                )
+                .children(step.time.as_deref().map(|time| muted(time).flex_shrink_0())),
+        )
+        .children(step.log.as_ref().map(|log| gate_log(app, log)))
+        .into_element()
+}
+
+/// A gate's log under its step: the command and its place, the tail in the log's mono rows,
+/// then where the whole log is. test id `gate-log`.
+pub(in crate::screens::agents) fn gate_log(app: AppState, log: &GateLog) -> AnyElement {
+    let terminal = app.form == Form::Terminal;
+    view()
+        .test_id("gate-log")
+        .min_w(px(0.0))
+        .when(terminal, |block| block.pl(term::cells(2.0)))
+        .when(!terminal, |block| {
+            block.pl(px(20.0)).py(px(2.0)).gap(px(2.0))
+        })
+        .children(
+            log.head
+                .clone()
+                .map(|head| mono(app, head).text_color(color(Token::Ink2)).truncate()),
+        )
+        .children((!log.lines.is_empty()).then(|| log_lines(app, &log.lines)))
+        .children(
+            log.path
+                .clone()
+                .map(|path| small(app, path, Token::Ink3).truncate()),
+        )
+        .into_element()
+}
+
 fn finish_card(app: AppState, finish: &FinishCard, id: &str) -> AnyElement {
     let head = view().flex_row().items_center().child(
         words(app, finish.title.clone(), Token::Ink)
@@ -441,18 +504,7 @@ fn finish_card(app: AppState, finish: &FinishCard, id: &str) -> AnyElement {
                 .clone()
                 .map(|chose| small(app, chose, Token::Ink3).into_element()),
         );
-        body.extend(finish.steps.iter().map(|step| {
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
-                .child(glyph(app, step.state))
-                .when(app.form == Form::Terminal, |row| {
-                    row.child(term::space(1.0))
-                })
-                .child(words(app, step.words.clone(), Token::Ink))
-                .into_element()
-        }));
+        body.extend(finish.steps.iter().map(|step| exit_step(app, step)));
         body.extend(finish.exit.as_ref().map(|exit| exit_line(app, exit)));
     }
     if let Some(told) = &finish.told {

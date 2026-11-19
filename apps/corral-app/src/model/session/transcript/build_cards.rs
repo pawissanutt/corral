@@ -3,8 +3,8 @@
 //! fleet while it knows the slice, else the settled result, else the arguments with `outcome
 //! unknown`; under it one line per slice that came back. `build_finish`: `Build finished · d/n
 //! slices · time`, one row per slice, the branch figures, outside edits, the record's gate
-//! attempts and review rounds and the exit's progress on the latest card only (an older card
-//! says it was superseded). `board_plan`: one row with the plan's size, and whether the owner
+//! attempts and review rounds and the exit's progress on the latest card only (the host's Land
+//! steps and gate log when it reports them; an older card says it was superseded). `board_plan`: one row with the plan's size, and whether the owner
 //! still has to confirm it.
 
 use corral_protocol::build::BuildRecord;
@@ -15,7 +15,8 @@ use serde_json::Value;
 
 use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
-use crate::model::session::Tab;
+use crate::model::session::land::{self, GateLog};
+use crate::model::session::{StepState, Tab};
 
 use super::Action;
 use super::build_entries::{ExitEntry, FiledEntry, Told};
@@ -126,6 +127,12 @@ pub struct ExitLine {
 pub struct ExitStep {
     pub state: ToolState,
     pub words: String,
+    /// The host's fact about the step, muted after the words: `3f2a9c1`, `G4 passed`.
+    pub note: Option<String>,
+    /// `3m 12s`.
+    pub time: Option<String>,
+    /// The gate's log, under the gate step.
+    pub log: Option<GateLog>,
 }
 
 /// The `board_plan` row.
@@ -483,12 +490,29 @@ fn exit_line(exit: &ExitBrief, worktree: Option<&str>, branch: Option<&str>) -> 
     })
 }
 
-/// Land's steps for the phase it is in.
-fn steps(exit: &ExitBrief) -> Vec<ExitStep> {
+/// Land's steps: the host's own when it reports them, else those of the phase it is in.
+fn steps(exit: &ExitBrief, now: u64) -> Vec<ExitStep> {
+    let base = exit.base_branch.as_deref().unwrap_or("the base branch");
+    if let Some(land) = &exit.land {
+        return land::rows(land, base, now)
+            .into_iter()
+            .map(|row| ExitStep {
+                state: match row.state {
+                    StepState::Done => ToolState::Ok,
+                    StepState::Running => ToolState::Running,
+                    StepState::Failed => ToolState::Failed,
+                    StepState::Waiting => ToolState::Waiting,
+                },
+                words: row.label,
+                note: row.note,
+                time: row.time,
+                log: row.log,
+            })
+            .collect();
+    }
     if exit.choice != Some(ExitChoice::Land) {
         return Vec::new();
     }
-    let base = exit.base_branch.as_deref().unwrap_or("the base branch");
     let reached = match exit.phase {
         ExitPhase::Rebasing => 0,
         ExitPhase::Verifying | ExitPhase::Repairing => 1,
@@ -511,6 +535,9 @@ fn steps(exit: &ExitBrief) -> Vec<ExitStep> {
             std::cmp::Ordering::Greater => ToolState::Waiting,
         },
         words,
+        note: None,
+        time: None,
+        log: None,
     })
     .collect()
 }
@@ -722,7 +749,9 @@ pub(super) fn finish(id: &str, note: Option<String>, cx: Cx<'_>, action: Action)
         note,
         chose,
         exit: exit.and_then(|exit| exit_line(exit, worktree, branch)),
-        steps: exit.map(steps).unwrap_or_default(),
+        steps: exit
+            .map(|exit| steps(exit, cx.feed.now))
+            .unwrap_or_default(),
         superseded: !latest,
         action,
         told: None,
