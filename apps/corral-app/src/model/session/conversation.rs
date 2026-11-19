@@ -112,6 +112,8 @@ fn end(cx: &Cx<'_>, child: &SessionChild) -> Option<EndLine> {
 /// fact neither reports stays absent, never the parent's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenedAgent {
+    /// The agent's id in the fleet.
+    pub child: String,
     /// `a2`, a helper call's id shortened.
     pub id: String,
     pub model: ModelPill,
@@ -140,6 +142,7 @@ pub(in crate::model::session) fn opened_agent(cx: &Cx<'_>) -> Option<OpenedAgent
     };
     let picking = cx.ui.fleet.picking.as_deref() == Some(id.as_str());
     Some(OpenedAgent {
+        child: id.clone(),
         id: shown_id(row),
         model: ModelPill {
             label: row.model.clone(),
