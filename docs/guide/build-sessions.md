@@ -88,6 +88,11 @@ replaces the derived default. For example, with the named presets and API profil
 already configured:
 
 ```toml
+[build.profiles]
+ui-easy = { model = "anthropic/claude-sonnet-5-5" }
+ui-hard = { model = "anthropic/claude-opus-5-5" }
+architect = { model = "anthropic/claude-fable-5-2" }
+
 [build.api]
 approval = "owner-approved-mixed-build"
 maximum_micros = 5_000_000 # USD 5 per Build
