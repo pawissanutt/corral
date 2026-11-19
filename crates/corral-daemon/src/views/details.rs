@@ -82,13 +82,18 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
         }
         DetailRef::Plan { id } => {
             let parent = store.require_task(id)?;
-            let child_rows = rows::task_rows(
+            let mut child_rows = rows::task_rows(
                 engine,
                 store.list_tasks(&TaskFilter {
                     parent: Some(id.clone()),
                     ..Default::default()
                 })?,
             )?;
+            // A child is sent twice here, so one long document would outgrow a reply. Its own
+            // task detail serves it.
+            for row in &mut child_rows {
+                row.task.body.clear();
+            }
             let children = child_rows.iter().map(|row| row.task.clone()).collect();
             DetailBody::Plan(PlanDetail {
                 parent,

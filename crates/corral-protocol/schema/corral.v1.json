@@ -2781,7 +2781,7 @@
       "PlanDetail": {
         "properties": {
           "child_rows": {
-            "description": "Enriched rows for the same children, in the same order on each page.",
+            "description": "Enriched rows for the same children, in the same order on each page, likewise without\ntheir `body`.",
             "items": {
               "$ref": "#/components/schemas/TaskRow"
             },
@@ -2791,7 +2791,7 @@
             ]
           },
           "children": {
-            "description": "Each child's `depends_on` describes its dependency edges.",
+            "description": "The children without their `body`, which each child's own task detail serves. Each\nchild's `depends_on` describes its dependency edges.",
             "items": {
               "$ref": "#/components/schemas/Task"
             },
