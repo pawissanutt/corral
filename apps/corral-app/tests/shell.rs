@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use nsh_core::{
-    Points, Size,
+    PasteEvent, PastedFile, Points, Size,
     platform::{Idiom, Os},
 };
 use nsh_engine::{EngineConfig, Root};
@@ -672,6 +672,21 @@ fn a_build_session_is_answered_and_landed() {
     app.submit("id:field-message").unwrap();
     app.wait_for_within("text:/^✓ Landed/", Duration::from_secs(30))
         .unwrap();
+}
+
+/// A build page whose host declares attachments offers them and hears an image pasted into its
+/// field: the sample host takes none now, so the paste is refused visibly, not dropped.
+#[test]
+fn an_image_pasted_into_a_build_page_reaches_its_attachments() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.press("id:agent-B-k3x9").unwrap();
+    app.wait_for("id:field-message").unwrap();
+    app.wait_for("id:btn-attach-0").unwrap();
+    let png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
+    let mut paste = PasteEvent::default();
+    paste.files.push(PastedFile::image(png));
+    app.paste("id:field-message", &paste).unwrap();
+    app.wait_for("text:/^Not attached/").unwrap();
 }
 
 /// A stopped build's row offers Remove…; its sheet shows prune's dry run before anything goes,

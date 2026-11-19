@@ -4,7 +4,8 @@
 //! children that take a message, and the send controls. Enter sends; while the agent works Enter
 //! steers the running turn and Queue (Alt+Enter) keeps the text for after it. While the dock asks
 //! for the owner's reason (`→ land on main · your reason`, Held) or answer (`→ a2 · answer`), Enter
-//! gives the text instead, and an empty one is the model's to refuse with what is missing. While
+//! gives the text instead, and an empty one is the model's to refuse with what is missing. An
+//! image pasted into the field is staged for the message while the session takes attachments. While
 //! the draft is a `/` command the page's command menu matches, Enter runs that command instead.
 //! A control the host cannot run now is dimmed with its reason under the field. The draft lives
 //! in the session's UI state, so it survives tab switches and leaving the page; the field takes
@@ -33,7 +34,7 @@ use crate::ui::kit::overlay::counted;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-use super::{Ask, PHONE_CHIP, chip_slop};
+use super::{Ask, Attach, PHONE_CHIP, chip_slop};
 
 /// The field's test id.
 const SESSION_FIELD: &str = "field-message";
@@ -48,14 +49,15 @@ fn act(app: AppState, action: Action) {
 }
 
 /// Sends the draft with `policy`, unless the button that sends it is unavailable now. An empty
-/// draft goes out only as a reason or an answer, whose emptiness the model answers. Ask's
-/// message also carries its chips' line and the staged attachments.
+/// draft goes out only as a reason or an answer, whose emptiness the model answers. A message
+/// carries the session's staged attachments, and Ask's also its chips' line.
 fn send(
     app: AppState,
     id: &Id,
     composer: Memo<Option<SessionComposer>>,
     policy: SendPolicy,
     ask: Option<Ask>,
+    attach: Attach,
 ) {
     let ready = composer.with_untracked(|composer| {
         let composer = composer.as_ref()?;
@@ -77,15 +79,30 @@ fn send(
         super::send_ask(app, ask, id, text, policy);
         return;
     }
+    let attachments = if giving {
+        Vec::new()
+    } else {
+        match super::page_refs(app, id, attach) {
+            Ok(refs) => refs,
+            Err(why) => {
+                app.toast(why);
+                return;
+            }
+        }
+    };
+    let carried = !attachments.is_empty();
     act(
         app,
         Action::Send {
             session: id.clone(),
             text,
             policy,
-            attachments: Vec::new(),
+            attachments,
         },
     );
+    if carried {
+        app.clear_staged(id);
+    }
 }
 
 /// The session's composer. `command` is what Enter runs instead of sending while the draft is a
@@ -123,6 +140,10 @@ fn build(
 ) -> AnyElement {
     let form = app.form;
     let entry = element_ref();
+    let attach = match ask {
+        Some(ask) => Attach::ask(ask),
+        None => Attach::page(app, &id, composer),
+    };
     if form != Form::Phone {
         effect(move || {
             if focused.get() {
@@ -136,21 +157,21 @@ fn build(
                 when: When::Always,
                 ..KeyOptions::default()
             },
-            move |_| send(app, &id, composer, SendPolicy::FollowUp, ask),
+            move |_| send(app, &id, composer, SendPolicy::FollowUp, ask, attach),
         );
     }
     if ask.is_some() {
         super::focus_on_open(app, entry);
     }
-    let field = field(app, id.clone(), composer, command, entry, ask);
+    let field = field(app, id.clone(), composer, command, entry, ask, attach);
     match form {
-        Form::Phone => phone(app, id, composer, field, ask),
-        Form::Desktop | Form::Terminal => frame(app, id, composer, field, ask),
+        Form::Phone => phone(app, id, composer, field, ask, attach),
+        Form::Desktop | Form::Terminal => frame(app, id, composer, field, ask, attach),
     }
 }
 
 /// The draft field: multiline, Enter sends with the send button's policy (or runs the matched
-/// `/` command), Shift+Enter breaks the line.
+/// `/` command), Shift+Enter breaks the line; a pasted image is staged for the message.
 fn field(
     app: AppState,
     id: Id,
@@ -158,6 +179,7 @@ fn field(
     command: Memo<Option<Vec<Action>>>,
     entry: ElementRef,
     ask: Option<Ask>,
+    attach: Attach,
 ) -> AnyElement {
     let form = app.form;
     let draft = move || composer.with(|c| c.as_ref().map(|c| c.draft.clone()).unwrap_or_default());
@@ -175,6 +197,7 @@ fn field(
     };
     app.focus_when_asked(test_id, entry);
     let typed = id.clone();
+    let pasted = id.clone();
     let field = input()
         .element_ref(&entry)
         .test_id(test_id)
@@ -191,9 +214,10 @@ fn field(
             }
             let policy = composer.with_untracked(|c| c.as_ref().map(|c| c.send.policy));
             if let Some(policy) = policy {
-                send(app, &id, composer, policy, ask);
+                send(app, &id, composer, policy, ask, attach);
             }
         })
+        .on_paste(move |pasted_now: &PasteEvent| super::paste(app, &pasted, attach, pasted_now))
         .placeholder(placeholder)
         .value(draft)
         .on_change(move |text: &str| {
@@ -360,6 +384,7 @@ fn bar(
     id: Id,
     composer: Memo<Option<SessionComposer>>,
     ask: Option<Ask>,
+    attach: Attach,
 ) -> AnyElement {
     let form = app.form;
     let buttons =
@@ -415,6 +440,7 @@ fn bar(
                                     queue,
                                     ButtonKind::Ghost,
                                     ask,
+                                    attach,
                                 )
                             }))
                             .child(send_button(
@@ -424,6 +450,7 @@ fn bar(
                                 send,
                                 ButtonKind::Primary,
                                 ask,
+                                attach,
                             ))
                             .into_element()
                     })
@@ -439,6 +466,7 @@ fn send_button(
     button: SendButton,
     kind: ButtonKind,
     ask: Option<Ask>,
+    attach: Attach,
 ) -> AnyElement {
     let policy = button.policy;
     button_with(
@@ -451,7 +479,7 @@ fn send_button(
             ..ButtonOptions::default()
         },
         button.id,
-        move || send(app, &id, composer, policy, ask),
+        move || send(app, &id, composer, policy, ask, attach),
     )
 }
 
@@ -615,14 +643,15 @@ fn keys(composer: Memo<Option<SessionComposer>>) -> AnyElement {
 }
 
 /// Desktop and terminal: the box (rules in a terminal) with the title, the field and the bar;
-/// in Ask the chips and the staged attachments over the field and the attachment controls under
-/// the bar.
+/// Ask's chips and the staged attachments over the field and the attachment controls under the
+/// bar.
 fn frame(
     app: AppState,
     id: Id,
     composer: Memo<Option<SessionComposer>>,
     field: AnyElement,
     ask: Option<Ask>,
+    attach: Attach,
 ) -> AnyElement {
     if app.form == Form::Terminal {
         return view()
@@ -632,11 +661,11 @@ fn frame(
             .child(
                 view()
                     .px(term::cells(1.0))
-                    .children(ask.map(|ask| super::above(app, ask)))
+                    .child(super::above(app, &id, ask, attach))
                     .child(title(app, composer))
                     .child(field)
-                    .child(bar(app, id, composer, ask))
-                    .children(ask.map(|ask| super::attachments(app, ask)))
+                    .child(bar(app, id.clone(), composer, ask, attach))
+                    .child(super::attachments(app, &id, attach))
                     .child(reasons(app, composer)),
             )
             .into_element();
@@ -648,7 +677,7 @@ fn frame(
         .pt(px(8.0))
         .pb(px(8.0))
         .gap(px(6.0))
-        .children(ask.map(|ask| super::above(app, ask)))
+        .child(super::above(app, &id, ask, attach))
         .child(
             view()
                 .rounded(px(10.0))
@@ -662,8 +691,8 @@ fn frame(
                         .px(px(12.0))
                         .pb(px(8.0))
                         .gap(px(6.0))
-                        .child(bar(app, id, composer, ask))
-                        .children(ask.map(|ask| super::attachments(app, ask))),
+                        .child(bar(app, id.clone(), composer, ask, attach))
+                        .child(super::attachments(app, &id, attach)),
                 ),
         )
         .child(reasons(app, composer))
@@ -680,6 +709,7 @@ fn phone(
     composer: Memo<Option<SessionComposer>>,
     field: AnyElement,
     ask: Option<Ask>,
+    attach: Attach,
 ) -> AnyElement {
     let after = signal(false);
     let working = computed(move || {
@@ -744,7 +774,7 @@ fn phone(
                                 .with_untracked(|c| c.as_ref().map(|c| c.send.policy))
                                 .unwrap_or(SendPolicy::Steer)
                         };
-                        send(app, &id, composer, policy, ask);
+                        send(app, &id, composer, policy, ask, attach);
                     },
                 ),
             })
@@ -756,7 +786,7 @@ fn phone(
         .px(px(12.0))
         .pt(px(6.0))
         .gap(px(6.0))
-        .children(ask.map(|ask| super::above(app, ask)))
+        .child(super::above(app, &id, ask, attach))
         .child(title(app, composer))
         .child(choice)
         .child(
@@ -764,12 +794,12 @@ fn phone(
                 .flex_row()
                 .items_end()
                 .gap(px(8.0))
-                .children(ask.map(|ask| crate::ui::ask::plus(app, ask.built)))
+                .child(super::phone_plus(app, &id, attach))
                 .child(field)
                 .child(button),
         )
-        .children(ask.map(|_| crate::ui::ask::field_row(app)))
-        .child(bar(app, id, composer, ask))
+        .child(super::phone_field(app, &id))
+        .child(bar(app, id, composer, ask, attach))
         .child(reasons(app, composer))
         .into_element()
 }

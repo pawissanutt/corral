@@ -275,7 +275,7 @@ impl AppState {
             }
             Effect::Changes(query) => _ = requests::changes_page(query),
             Effect::Seen(seen) => _ = requests::seen_advance(seen),
-            Effect::Unattach(key) => self.unattach(&key),
+            Effect::Unattach(key) => self.unattach(None, &key),
             Effect::EndThread(chat) => {
                 self.refusal.set(None);
                 self.confirm

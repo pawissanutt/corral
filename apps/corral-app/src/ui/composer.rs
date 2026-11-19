@@ -1,10 +1,12 @@
-//! The session composer (`session`), the one composer of every session page and of Ask, and
-//! what Ask adds to it: the removable context and project chips, the staged attachments with the
-//! Screenshot, Link and File controls, the line saying why Send waits on them, and the surface
-//! Ask opens in. Ask's draft is its session's own (`draft` keeps it on this device), so the
-//! session page shows the same words. Its message goes out as `session.send`, its chips' ids as
-//! the message's first line and the staged attachments as its refs.
+//! The session composer (`session`), the one composer of every session page and of Ask; the
+//! staged attachments with the Screenshot, Link and File controls, the images pasted into its
+//! field and the line saying why Send waits on them, which Ask offers always and a session page
+//! while its host takes attachments; and what Ask adds: the removable context and project chips
+//! and the surface Ask opens in. Ask's draft is its session's own (`draft` keeps it on this
+//! device), so the session page shows the same words. A message goes out as `session.send`, Ask's
+//! chips' ids as its first line and the session's staged attachments as its refs.
 
+use corral_protocol::assistant::SendAttachment;
 use corral_protocol::session_state::SendPolicy;
 use nsh_base::{SheetEvent, sheet};
 use nsh_core::element::{Input, color as for_appearance};
@@ -12,11 +14,11 @@ use nsh_core::prelude::*;
 
 use crate::model::assistant::{self, Composer};
 use crate::model::hue::Hue;
-use crate::model::session::Action as SessionAction;
+use crate::model::session::{Action as SessionAction, SessionComposer};
 use crate::model::text::Rich;
 use crate::model::{Form, Id, Overlay};
 use crate::state::AppState;
-use crate::ui::ask::{act, chip_row, drawer, foot_controls, tray};
+use crate::ui::ask::{act, chip_row, drawer, field_row, foot_controls, plus, tray};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::text::rich_small;
@@ -37,18 +39,102 @@ pub(crate) struct Ask {
 /// Ask's additions for session `id`, whose draft this device keeps meanwhile.
 fn ask(app: AppState, id: &Id) -> Ask {
     draft::keep_draft(app, id.clone());
+    let session = id.clone();
     let built = computed(move || {
         // The project brief shows as its own chip, so it is not repeated as the record chip.
         let context = app.composer_record_context();
         let project = app.composer_project();
         let text = app.ask_draft();
-        app.ask_staged.with(|staged| {
-            app.feed.with(|feed| {
-                assistant::composer(feed, &text, staged, context.as_ref(), project.as_ref())
-            })
+        let staged = app.staged(&session);
+        app.feed.with(|feed| {
+            assistant::composer(feed, &text, &staged, context.as_ref(), project.as_ref())
         })
     });
     Ask { built }
+}
+
+/// The attachments a composer offers: Ask's always; a session page's while its host declares
+/// them, every control dimmed with the host's reason while it cannot take them now.
+#[derive(Clone, Copy)]
+pub(crate) struct Attach {
+    built: Memo<Composer>,
+    /// The controls show: Ask, or a host that declares attachments.
+    offered: Memo<bool>,
+    /// Why the session takes no attachments now.
+    refusal: Memo<Option<String>>,
+}
+
+impl Attach {
+    fn ask(ask: Ask) -> Attach {
+        Attach {
+            built: ask.built,
+            offered: computed(|| true),
+            refusal: computed(|| None),
+        }
+    }
+
+    /// A session page's: what is staged for session `id`, offered as its host declares.
+    fn page(app: AppState, id: &Id, composer: Memo<Option<SessionComposer>>) -> Attach {
+        let can =
+            computed(move || composer.with(|c| c.as_ref().and_then(|c| c.attachments.clone())));
+        let offered = computed(move || can.with(Option::is_some));
+        let refusal = computed(move || match can.get() {
+            Some(None) => None,
+            Some(Some(why)) => Some(why),
+            None => Some("this session takes no attachments".to_owned()),
+        });
+        let session = id.clone();
+        let built = computed(move || {
+            let text = composer.with(|c| c.as_ref().map(|c| c.draft.clone()).unwrap_or_default());
+            let staged = app.staged(&session);
+            let mut built = app
+                .feed
+                .with(|feed| assistant::composer(feed, &text, &staged, None, None));
+            if let Some(why) = refusal.get() {
+                for button in &mut built.attachments {
+                    button.enabled = false;
+                }
+                built.attach_note = Some(why);
+            }
+            built
+        });
+        Attach {
+            built,
+            offered,
+            refusal,
+        }
+    }
+}
+
+/// Stages the images (and files) pasted into session `id`'s composer; the pasted text is the
+/// field's own. Refused visibly where the session takes no attachments now.
+fn paste(app: AppState, id: &Id, attach: Attach, paste: &PasteEvent) {
+    if paste.files.is_empty() {
+        return;
+    }
+    match attach.refusal.get_untracked() {
+        Some(why) => app.toast(format!("Not attached: {why}.")),
+        None => app.paste(id, paste),
+    }
+}
+
+/// The refs a session page's message carries: what is staged for session `id`, every upload
+/// ready, while its host takes attachments.
+fn page_refs(app: AppState, id: &Id, attach: Attach) -> Result<Vec<SendAttachment>, String> {
+    let staged = untracked(|| app.staged(id));
+    if staged.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let Some(why) = attach.refusal.get_untracked() {
+        return Err(format!("Not sent: {why}; remove the attachments to send."));
+    }
+    if attach.built.with_untracked(|c| c.holds_send.is_some()) {
+        return Err(
+            "Not sent: an attachment is not ready yet; it is named above the field.".into(),
+        );
+    }
+    app.feed
+        .with_untracked(|feed| assistant::send_refs(&staged, feed))
 }
 
 /// Sends Ask's draft to session `id` as `session.send`: the chips' line first, the staged
@@ -59,7 +145,7 @@ fn send_ask(app: AppState, ask: Ask, id: &Id, text: String, policy: SendPolicy) 
         app.toast("Not sent: an attachment is not ready yet; it is named above the field.");
         return;
     }
-    let staged = app.ask_staged.get_untracked();
+    let staged = untracked(|| app.staged(id));
     let attachments = match app
         .feed
         .with_untracked(|feed| assistant::send_refs(&staged, feed))
@@ -84,29 +170,65 @@ fn send_ask(app: AppState, ask: Ask, id: &Id, text: String, policy: SendPolicy) 
             feed,
         )
     });
-    app.ask_staged.set(Vec::new());
+    app.clear_staged(id);
 }
 
-/// Over Ask's composer: why Send waits on the attachments, the project and record chips, the
-/// staged attachments.
-fn above(app: AppState, ask: Ask) -> AnyElement {
-    let status = computed(move || ask.built.with(|c| c.status.clone()));
-    view()
-        .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
-        .child(dynamic(move || {
-            status
-                .get()
-                .map(|line| untracked(|| saved_line(app, &line)))
-        }))
-        .child(chip_row(app, ask.built))
-        .child(tray(app, ask.built))
-        .into_element()
+/// Over the composer: why Send waits on the attachments, Ask's project and record chips, the
+/// staged attachments. A session page shows it only while something is staged.
+fn above(app: AppState, id: &Id, ask: Option<Ask>, attach: Attach) -> AnyElement {
+    let status = computed(move || attach.built.with(|c| c.status.clone()));
+    let session = id.clone();
+    let draw = move || {
+        view()
+            .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
+            .child(dynamic(move || {
+                status
+                    .get()
+                    .map(|line| untracked(|| saved_line(app, &line)))
+            }))
+            .children(ask.map(|ask| chip_row(app, ask.built)))
+            .child(tray(app, session.clone(), attach.built))
+            .into_element()
+    };
+    if ask.is_some() {
+        return draw();
+    }
+    let shown = computed(move || {
+        attach
+            .built
+            .with(|c| !c.staged.is_empty() || c.status.is_some())
+    });
+    when(move || shown.get(), move || untracked(&draw)).into_element()
 }
 
-/// Under Ask's composer on desktop and in a terminal: Screenshot, Link and File, or the open
-/// link or path field in their place.
-fn attachments(app: AppState, ask: Ask) -> AnyElement {
-    foot_controls(app, ask.built)
+/// Under the composer on desktop and in a terminal while it offers attachments: Screenshot,
+/// Link and File, or the open link or path field in their place.
+fn attachments(app: AppState, id: &Id, attach: Attach) -> AnyElement {
+    let session = id.clone();
+    dynamic(move || {
+        attach
+            .offered
+            .get()
+            .then(|| untracked(|| foot_controls(app, session.clone(), attach.built)))
+    })
+    .into_element()
+}
+
+/// The phone's "+" while the composer offers attachments.
+fn phone_plus(app: AppState, id: &Id, attach: Attach) -> AnyElement {
+    let session = id.clone();
+    dynamic(move || {
+        attach
+            .offered
+            .get()
+            .then(|| untracked(|| plus(app, session.clone(), attach.built)))
+    })
+    .into_element()
+}
+
+/// The phone's open link or path field for session `id`.
+fn phone_field(app: AppState, id: &Id) -> AnyElement {
+    field_row(app, id.clone())
 }
 
 /// The surface Ask opens in while `Overlay::Ask` is open: on desktop a drawer docked on the right
