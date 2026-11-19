@@ -48,7 +48,7 @@ import { closeResidentSession, residentLifecycle } from "../claude/resident.ts";
 import { BridgeRefusal, type AnswerInput, type RewindInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
 import { listRewinds, parseRewindCommand, recordRewind, restoreRewind, rewindPoint } from "./rewind.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
-import type { BuildContext, ChildSnapshot, FleetSnapshot } from "../build/types.ts";
+import type { BuildContext, BuildProfile, ChildSnapshot, FleetSnapshot } from "../build/types.ts";
 import { createBuildControls, type BuildControls } from "../build/host-controls.ts";
 import { type CorralClient, type ModelUsage } from "../tools/corral.ts";
 import { observeUsage } from "./model-usage.ts";
@@ -73,7 +73,7 @@ import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
 import { installModelSelection } from "./model-selection.ts";
-import { interactiveModels, sessionRoutes, type SessionRoutes } from "./capabilities.ts";
+import { childModels, childProfileProviders, interactiveModels, sessionRoutes, type SessionRoutes } from "./capabilities.ts";
 import { observeTerminalInput, type InputObservation } from "./input-observation.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
 import { installLocalProvider, LocalModelUnavailable } from "./local-models.ts";
@@ -144,6 +144,8 @@ export interface HostSessionOptions {
   readonly guidance?: CapabilityGuidance;
   /** The corral workspace root, the outermost directory whose context files may load. */
   readonly root?: string;
+  /** Named child profiles a worker's `task` children may select; Build sessions use their own. */
+  readonly childProfiles?: readonly BuildProfile[];
   /** Where `~/` in a `user_dirs` entry points; absent means the user's home directory. */
   readonly home?: string;
   /** The private directory `/corral-export` writes into; absent disables the command. */
@@ -521,6 +523,7 @@ export class HostSession {
       identity: options.identity, cwd: options.cwd, workspaceRoot: options.client.workspaceRoot,
       model: options.model, registerCapability,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
+      ...(options.childProfiles?.length ? { childProfiles: options.childProfiles } : {}),
       ...(options.capabilities ? { capabilities: options.capabilities } : {}),
       ...(options.build ? { build: options.build } : {}),
       ...(options.guidance?.settings.lsp ? { lspSettings: options.guidance.settings.lsp } : {}),
@@ -596,7 +599,7 @@ export class HostSession {
         parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
         context: { session: { worktree: options.cwd, name: `${options.identity.role} session` },
           dir: options.runtimeDir ?? join(options.agentDir, "runtime"),
-          settings: { maxParallel: settings.maxParallel, profiles: [] } },
+          settings: { maxParallel: settings.maxParallel, profiles: options.childProfiles ?? [] } },
         agentDir: options.agentDir, bound: true, allowedKinds: settings.allowedKinds,
         maxTurns: settings.maxTurns, timeoutSecs: settings.timeoutSecs,
         ...(auxiliary.explore ? { research: { settings: auxiliary.explore } } : {}),
@@ -804,7 +807,8 @@ export class HostSession {
     if (host.provider === "llama.cpp" && local === undefined) {
       throw new Error("module_invalid: llama.cpp requires its explicit configured capability");
     }
-    const extra = (options.fallback ?? []).map(choice => choice.provider)
+    const extra = [...(options.fallback ?? []).map(choice => choice.provider),
+      ...childProfileProviders(options.identity.role, route.id, options.childProfiles)]
       .filter(id => (id !== "amazon-bedrock" || options.aws) && (id !== "llama.cpp" || options.capabilities?.llama_cpp));
     const { providers, credentials } = options.routes ?? await sessionRoutes(options.modules.auth, route.id, options.identity.role, extra);
     const models = await createModelCatalog(credentials, { providers,
@@ -849,9 +853,10 @@ export class HostSession {
     host.remoteCatalog.observe(models, () => host.liveEvents.stateChanged());
     host.summaryRequest = await createSummaryRequest(options, report);
     const interactive = interactiveModels(options.identity.role);
-    host.buildProviders = interactive ? providers : [route.id];
+    host.buildProviders = childModels(options.identity.role) ? providers : [route.id];
     if (options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
-      const searchProviders = host.buildProviders.filter((id): id is ProviderId => id === "openai-codex" || id === "anthropic");
+      // Search follows the parent's own model, so it needs only the providers the parent may select.
+      const searchProviders = (interactive ? providers : [route.id]).filter((id): id is ProviderId => id === "openai-codex" || id === "anthropic");
       const search = await createModelCatalog(credentials, { providers: searchProviders });
       for (const id of searchProviders) {
         const fetch = guardedFetch(options.network.fetch, (destination) => { options.network.refuse?.(destination); }, id).fetch;

@@ -3,7 +3,7 @@ import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import { CredentialsUnavailable } from "../src/auth/paths.ts";
 import { PROVIDER_IDS, type ProviderId, PROVIDERS } from "../src/auth/providers.ts";
 import type { AuthModule } from "../src/auth/types.ts";
-import { providerCapabilities, providerTransport } from "../src/host/capabilities.ts";
+import { childProfileProviders, providerCapabilities, providerTransport, sessionRoutes } from "../src/host/capabilities.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
 
 function fixture(enabled: readonly ProviderId[]): AuthModule {
@@ -48,6 +48,18 @@ test("a bound provider policy never exposes another stored login", async () => {
   expect(await capability.credentials.list()).toEqual([{ providerId: "openai-codex", type: "oauth" }]);
   await expect(capability.credentials.modify("anthropic", async () => undefined))
     .rejects.toThrow(CredentialsUnavailable);
+});
+
+test("a worker loads its child profiles' logins; reviewers and local launches stay bound", async () => {
+  const profiles = [{ model: "anthropic/claude" }, { model: "openai/gpt" }, { model: "unknown/x" }];
+  const extra = childProfileProviders("worker", "openai-codex", profiles);
+  expect(extra).toEqual(["anthropic", "openai"]);
+  // A profile provider without a stored login is unavailable, not a startup failure.
+  const auth = fixture(["openai-codex", "anthropic"]);
+  expect((await sessionRoutes(auth, "openai-codex", "worker", extra)).providers).toEqual(["openai-codex", "anthropic"]);
+  expect((await sessionRoutes(auth, "openai-codex", "worker")).providers).toEqual(["openai-codex"]);
+  expect(childProfileProviders("reviewer", "openai-codex", profiles)).toEqual([]);
+  expect(childProfileProviders("worker", "llama.cpp", profiles)).toEqual([]);
 });
 
 test("a missing optional login is explained, but a missing initial login refuses startup", async () => {

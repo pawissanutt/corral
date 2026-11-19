@@ -77,6 +77,13 @@ run, `--dir` for the session state, `--socket` for control, `--prompt-file` for 
 assignment and `--corral` for the engine executable. Direct launches can select a
 model with `--model <provider>/<model>` and reasoning effort with `--effort`.
 Use `--headless` for socket input without a terminal.
+
+A task worker stays on its profile's model, but its `task` children can choose the
+`[build.profiles.<name>]` entries in `.corral-next/pi.toml`, the same profiles Build
+sessions use. The worker loads the logins those profiles name, including metered API
+providers, and its prompt lists them. A profile whose provider you are not logged in to
+is refused when a child selects it. A worker launched on `llama.cpp` never loads a cloud
+login for its children.
 For daemon chat, configure a Pi profile or harness and put `corral-pi` on the daemon's
 `PATH`; chat does not require automatic dispatch or landing.
 

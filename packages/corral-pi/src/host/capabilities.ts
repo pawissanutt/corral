@@ -10,6 +10,19 @@ export function interactiveModels(role: string): boolean {
   return role === "assistant" || role === "build";
 }
 
+/** Roles whose children may use every provider the session loaded, not only the launch route.
+ * A worker loads extra providers only for its configured child profiles; its own model stays bound. */
+export function childModels(role: string): boolean {
+  return interactiveModels(role) || role === "worker";
+}
+
+/** Providers a worker loads for its child profiles. A local-inference launch never reaches a cloud login. */
+export function childProfileProviders(role: string, primary: ProviderId,
+  profiles: readonly { readonly model: string }[] = []): ProviderId[] {
+  if (role !== "worker" || PROVIDERS[primary].auth === "local") return [];
+  return [...new Set(profiles.map(profile => profile.model.split("/", 1)[0]).filter(isProviderId))];
+}
+
 export function sessionRoutes(auth: AuthModule, primary: ProviderId, role: string, additional: readonly ProviderId[] = []) {
   const supported = auth.providers ?? [auth.provider];
   const policy = new Set([primary, ...additional.filter(id => supported.includes(id))]);
