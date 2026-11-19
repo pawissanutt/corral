@@ -8,8 +8,7 @@ import { registerFleet } from "./fleet.ts";
 export function installRemote(host: HostSession, owner: RemoteOwner, sessionDir: string): void {
   if (host.servesChildren) registerFleet(host.remoteRegistry, sessionDir, child => host.childTranscript(child));
   registerCards(host.remoteRegistry, {
-    entries: () => host.remoteCardEntries(), ready: () => host.remoteActionsReady,
-    absent: id => host.absentCard(id), beforeQuestion: () => owner.resume(),
+    dialogs: host.dialogs, ready: () => host.remoteActionsReady, beforeQuestion: () => owner.resume(),
   });
   host.remoteBuild.register(host.remoteRegistry);
   host.installRemoteParts();

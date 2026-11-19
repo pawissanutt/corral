@@ -1,76 +1,145 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import {
-  CARD_OPTION_MAX, cardOptions, cardQuestion, invalidAnswer, optionId, singleAnswer, type CardAnswer, type CardEntry, type CardOption,
+  CARD_OPTION_MAX, cardOptions, cardQuestion, invalidAnswer, optionId, singleAnswer, type AnswerStatus, type CardAnswer, type CardEntry,
 } from "./cards.ts";
 
-type DialogOptions = Parameters<ExtensionUIContext["select"]>[2];
+type DialogOptions = NonNullable<Parameters<ExtensionUIContext["select"]>[2]>;
+export type CardDraft = Omit<CardEntry["card"], "id" | "opened_at" | "expires_at">;
+export type AnswerSource = { source: "terminal" } | { source: "remote"; device?: string };
+export type DialogResolution =
+  | { kind: "answered"; answers: readonly CardAnswer[]; by: AnswerSource }
+  | { kind: "cancelled"; reason: "dismissed" | "expired" | "closed"; by?: AnswerSource };
+
+export interface OpenDialog {
+  readonly id: string;
+  readonly result: Promise<DialogResolution>;
+  readonly settled: boolean;
+  answer(answers: readonly CardAnswer[]): AnswerStatus;
+  cancel(): AnswerStatus;
+}
+export type Prompt =
+  | { kind: "select"; title: string; options: readonly string[]; body?: string }
+  | { kind: "confirm"; title: string; body?: string }
+  | { kind: "input"; title: string; placeholder?: string };
+export interface PromptDialog extends Omit<OpenDialog, "answer"> {
+  readonly value: Promise<string | undefined>;
+  answer(value: string): AnswerStatus;
+}
+export interface ExistingDialog {
+  readonly id: string;
+  answer(answers: readonly CardAnswer[]): Promise<AnswerStatus>;
+  dismiss(): Promise<AnswerStatus>;
+  /** Detach this view without deciding for the owner. */
+  dispose(): void;
+}
+interface ExistingCards {
+  entries(): CardEntry[];
+  absent(id: string): AnswerStatus;
+  shared(): boolean;
+}
+export interface OpenOptions extends DialogOptions {
+  validate?(answers: readonly CardAnswer[], by: AnswerSource): void;
+  /** The pre-S13 headless socket keeps its existing status on a repeated answer. */
+  shared?: boolean;
+}
+type Listener = (result: DialogResolution) => void;
+const terminal = { source: "terminal" } as const;
 const TIMEOUT_MAX = 2 ** 31 - 1;
-const RECENT_EXPIRED = 64;
-const confirmOptions: CardOption[] = [
-  { id: "yes", label: "Yes", destructive: false }, { id: "no", label: "No", destructive: false },
-];
+const RECENT_LIMIT = 128;
 
 export class RemoteDialogs {
   private readonly dialogs = new Map<string, { entry: CardEntry; close(): void }>();
-  private readonly expired = new Set<string>();
+  private readonly listeners = new Map<string, Set<Listener>>();
+  private readonly answering = new Set<string>();
+  private readonly recent = new Map<string, "answered" | "expired">();
   private closed = false;
 
-  constructor(private readonly changed: () => void) {}
+  constructor(private readonly changed: () => void, private readonly existing?: ExistingCards) {}
 
-  entries(): CardEntry[] { return [...this.dialogs.values()].map(dialog => dialog.entry); }
-  isExpired(id: string): boolean { return this.expired.has(id); }
+  entries(): CardEntry[] {
+    if (this.closed) return [];
+    return [...(this.existing?.entries() ?? []), ...Array.from(this.dialogs.values(), dialog => dialog.entry)];
+  }
 
-  context(base: ExtensionUIContext, notify: ExtensionUIContext["notify"]): ExtensionUIContext {
+  watch(matches: (card: Readonly<CardEntry["card"]>) => boolean, listener: Listener): ExistingDialog | undefined {
+    if (this.closed) return;
+    const id = this.existing?.entries().find(({ card }) => matches(card))?.card.id;
+    if (!id) return;
+    const listeners = this.listeners.get(id) ?? new Set<Listener>();
+    listeners.add(listener);
+    this.listeners.set(id, listeners);
     return {
-      ...base, notify,
-      select: (title, available, opts) => {
-        const labels = available.slice(0, CARD_OPTION_MAX);
-        const options = cardOptions(labels.map(label => ({ label })));
-        return this.open<string | undefined>({ kind: "select", title, questions: [cardQuestion(title, options)],
-          ...(available.length > labels.length ? { body: `Showing the first ${labels.length} of ${available.length} choices.` } : {}) },
-        opts, undefined, answer => {
-          if (answer.options.length !== 1 || answer.text !== undefined) invalidAnswer("select one option");
-          const selected = labels.find((label, i) => optionId(label, i) === answer.options[0]);
-          if (selected === undefined) invalidAnswer("select a listed option");
-          return selected;
-        });
+      id,
+      answer: answers => this.resolve(id, answers, false, terminal),
+      dismiss: () => this.resolve(id, [], true, terminal),
+      dispose: () => {
+        listeners.delete(listener);
+        if (!listeners.size && this.listeners.get(id) === listeners) this.listeners.delete(id);
       },
-      confirm: (title, body, opts) => this.open({ kind: "confirm", title, body, questions: [cardQuestion(title, confirmOptions)] },
-        opts, false, answer => {
-          const choice = answer.options[0];
-          if (answer.options.length !== 1 || (choice !== "yes" && choice !== "no") || answer.text !== undefined) {
-            invalidAnswer("choose yes or no");
-          }
-          return choice === "yes";
-        }),
-      input: (title, placeholder, opts) => this.open<string | undefined>({ kind: "input", title, body: placeholder,
-        questions: [cardQuestion(title, [], true)] }, opts, undefined, answer => {
-        if (answer.options.length || answer.text === undefined) invalidAnswer("enter text");
-        return answer.text;
-      }),
     };
   }
 
-  private open<T>(data: Pick<CardEntry["card"], "title" | "questions" | "body"> & { kind: "select" | "confirm" | "input" },
-    opts: DialogOptions, dismissed: T, getValue: (answer: CardAnswer) => T): Promise<T> {
-    const { signal, timeout } = opts ?? {};
-    if (this.closed || signal?.aborted) return Promise.resolve(dismissed);
+  async resolve(id: string, answers: readonly CardAnswer[], dismiss: boolean, by: AnswerSource,
+    beforeQuestion: () => Promise<unknown> = async () => {}): Promise<AnswerStatus> {
+    if (this.closed) return "missing";
+    const dialog = this.dialogs.get(id);
+    if (dialog) return dialog.entry.answer(answers, dismiss, beforeQuestion, by);
+    const recent = this.recent.get(id);
+    if (recent === "expired") return recent;
+    if (this.answering.has(id)) invalidAnswer("the card is already being answered");
+    const entry = this.existing?.entries().find(({ card }) => card.id === id);
+    // A source may reopen the same ID after a failed attempt. Only the source may reopen it.
+    if (!entry) {
+      if (recent === "answered") invalidAnswer("the card has already been answered");
+      return this.existing?.absent(id) ?? "missing";
+    }
+    const shared = this.existing?.shared() || this.listeners.has(id);
+    if (shared) this.answering.add(id);
+    try {
+      const status = await entry.answer(answers, dismiss, beforeQuestion, by);
+      if (shared && !this.closed) {
+        if (status === "delivered" || status === "answered" || status === "started") {
+          this.remember(id, "answered");
+          this.publish(id, dismiss ? { kind: "cancelled", reason: "dismissed", by } : { kind: "answered", answers, by });
+        } else if (status === "dismissed") {
+          this.remember(id, "answered");
+          this.publish(id, { kind: "cancelled", reason: "dismissed", by });
+        }
+      }
+      return status;
+    } finally {
+      if (shared) this.answering.delete(id);
+    }
+  }
+
+  open(card: CardDraft, opts: OpenOptions = {}): OpenDialog {
+    const { signal, timeout, shared = true, validate } = opts;
     const id = `dialog-${crypto.randomUUID()}`, now = Date.now();
-    const expires = timeout !== undefined && Number.isFinite(timeout) && timeout > 0 ? now + Math.min(timeout, 8.64e15 - now) : undefined;
-    const { promise, resolve } = Promise.withResolvers<T>();
+    const expires = timeout !== undefined && Number.isFinite(timeout) && timeout > 0 ? Math.min(now + timeout, 8.64e15) : undefined;
+    const { promise: result, resolve } = Promise.withResolvers<DialogResolution>();
+    let resolution: DialogResolution | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (value: T, expired = false) => {
-      if (!this.dialogs.delete(id)) return;
+    const finish = (value: DialogResolution) => {
+      if (resolution) return;
+      resolution = value;
+      const removed = this.dialogs.delete(id);
       clearTimeout(timer);
       signal?.removeEventListener("abort", expire);
-      if (expired) {
-        this.expired.add(id);
-        if (this.expired.size > RECENT_EXPIRED) this.expired.delete(this.expired.values().next().value!);
-      }
+      if (removed && value.kind === "answered" && shared) this.remember(id, "answered");
+      if (removed && value.kind === "cancelled" && value.reason === "expired") this.remember(id, "expired");
       resolve(value);
-      this.changed();
+      if (removed) this.changed();
     };
-    const expire = () => finish(dismissed, true);
+    const expire = () => finish({ kind: "cancelled", reason: "expired" });
+    const close = () => finish({ kind: "cancelled", reason: "closed" });
+    const submit = (answers: readonly CardAnswer[], dismiss: boolean, by: AnswerSource): AnswerStatus => {
+      if (!dismiss && resolution?.kind === "answered" && shared) invalidAnswer("the card has already been answered");
+      if (resolution) return resolution.kind === "cancelled" && resolution.reason === "expired" ? "expired" : "missing";
+      if (signal?.aborted || expires !== undefined && expires <= Date.now()) { expire(); return "expired"; }
+      if (!dismiss) validate?.(answers, by);
+      finish(dismiss ? { kind: "cancelled", reason: "dismissed", by } : { kind: "answered", answers, by });
+      return dismiss ? "dismissed" : "answered";
+    };
     const schedule = () => {
       if (expires === undefined) return;
       const wait = expires - Date.now();
@@ -80,24 +149,89 @@ export class RemoteDialogs {
         timer.unref();
       }
     };
-    this.dialogs.set(id, { close: expire, entry: {
-      card: { ...data, id, opened_at: new Date(now).toISOString(), expires_at: expires === undefined ? undefined : new Date(expires).toISOString() },
-      answer: (answers, dismiss) => {
-        if (!this.dialogs.has(id)) return this.expired.has(id) ? "expired" : "missing";
-        if (signal?.aborted || expires !== undefined && expires <= Date.now()) { expire(); return "expired"; }
-        const value = dismiss ? dismissed : getValue(singleAnswer(answers));
-        finish(value);
-        return dismiss ? "dismissed" : "answered";
+    if (this.closed) close();
+    else if (signal?.aborted) expire();
+    else {
+      this.dialogs.set(id, { close, entry: {
+        card: { ...card, id, opened_at: new Date(now).toISOString(), expires_at: expires === undefined ? undefined : new Date(expires).toISOString() },
+        answer: (answers, dismiss, _before, by = { source: "remote" }) => submit(answers, dismiss, by),
+      } });
+      signal?.addEventListener("abort", expire, { once: true });
+      schedule();
+      this.changed();
+    }
+    return { id, result, get settled() { return resolution !== undefined; },
+      answer: answers => submit(answers, false, terminal), cancel: () => submit([], true, terminal) };
+  }
+
+  openPrompt(prompt: Prompt, opts?: DialogOptions): PromptDialog {
+    return this.prompt(prompt, opts, true);
+  }
+
+  private prompt(prompt: Prompt, opts: DialogOptions | undefined, shared: boolean): PromptDialog {
+    const { kind, title } = prompt;
+    const labels = kind === "select" ? [...prompt.options] : [];
+    const options = kind === "select" ? cardOptions(labels.slice(0, CARD_OPTION_MAX).map(label => ({ label })))
+      : kind === "confirm" ? [{ id: "yes", label: "Yes", destructive: false }, { id: "no", label: "No", destructive: false }] : [];
+    let body = kind === "input" ? prompt.placeholder : prompt.body;
+    if (labels.length > CARD_OPTION_MAX) {
+      const limit = `Showing the first ${CARD_OPTION_MAX} of ${labels.length} choices.`;
+      body = body ? `${body}\n\n${limit}` : limit;
+    }
+    const decode = (answers: readonly CardAnswer[], by: AnswerSource): string => {
+      const { options, text } = singleAnswer(answers);
+      if (kind === "input") {
+        if (options.length || text === undefined) invalidAnswer("enter text");
+        return text;
+      }
+      const id = options[0];
+      if (id === undefined || text !== undefined) invalidAnswer("select one option");
+      if (kind === "confirm") {
+        if (id === "yes") return "Yes";
+        if (id === "no") return "No";
+        invalidAnswer("choose yes or no");
+      }
+      const selected = labels.find((label, i) => (by.source === "terminal" || i < CARD_OPTION_MAX) && optionId(label, i) === id);
+      if (selected === undefined) invalidAnswer("select a listed option");
+      return selected;
+    };
+    const dialog = this.open({ kind, title, body, questions: [cardQuestion(title, options, kind === "input")] },
+      { ...opts, shared, validate: decode });
+    return { id: dialog.id, result: dialog.result, cancel: dialog.cancel, get settled() { return dialog.settled; },
+      value: dialog.result.then(result => result.kind === "answered" ? decode(result.answers, result.by) : undefined),
+      answer: text => {
+        if (kind === "input") return dialog.answer([{ options: [], text }]);
+        const index = labels.indexOf(text);
+        return dialog.answer([{ options: [kind === "confirm" ? text === "Yes" ? "yes" : text === "No" ? "no" : "" :
+          index < 0 ? "" : optionId(text, index)] }]);
       },
-    } });
-    signal?.addEventListener("abort", expire, { once: true });
-    schedule();
-    this.changed();
-    return promise;
+    };
+  }
+
+  context(base: ExtensionUIContext, notify: ExtensionUIContext["notify"]): ExtensionUIContext {
+    return { ...base, notify,
+      select: (title, options, opts) => this.prompt({ kind: "select", title, options }, opts, false).value,
+      confirm: async (title, body, opts) => await this.prompt({ kind: "confirm", title, body }, opts, false).value === "Yes",
+      input: (title, placeholder, opts) => this.prompt({ kind: "input", title, placeholder }, opts, false).value,
+    };
   }
 
   close(): void {
     this.closed = true;
     for (const dialog of this.dialogs.values()) dialog.close();
+    for (const id of this.listeners.keys()) this.publish(id, { kind: "cancelled", reason: "closed" });
+  }
+
+  private publish(id: string, result: DialogResolution): void {
+    const listeners = this.listeners.get(id);
+    this.listeners.delete(id);
+    for (const listener of listeners ?? []) {
+      try { listener(result); } catch { /* A presentation observer cannot change a committed answer. */ }
+    }
+  }
+
+  private remember(id: string, status: "answered" | "expired"): void {
+    this.recent.set(id, status);
+    if (this.recent.size > RECENT_LIMIT) this.recent.delete(this.recent.keys().next().value!);
   }
 }

@@ -1,6 +1,7 @@
 import { BridgeRefusal, SESSION_PART_MAX } from "../../bridge/protocol.ts";
 import { utf8Prefix } from "../../roles/assistant/owner-action.ts";
 import { ANSWER_MAX_BYTES, QUESTION_TTL, validAnswer, type PendingQuestions } from "../pending-questions.ts";
+import type { AnswerSource, RemoteDialogs } from "./dialogs.ts";
 import type { RemoteRegistry } from "./registry.ts";
 import type { CardBrief } from "./state.ts";
 
@@ -22,7 +23,7 @@ export interface CardAnswer { options: string[]; text?: string }
 export type AnswerStatus = "delivered" | "answered" | "started" | "dismissed" | "expired" | "missing";
 export interface CardEntry {
   card: Omit<SessionCard, "body_more">;
-  answer(answers: readonly CardAnswer[], dismiss: boolean, beforeQuestion: () => Promise<unknown>): AnswerStatus | Promise<AnswerStatus>;
+  answer(answers: readonly CardAnswer[], dismiss: boolean, beforeQuestion: () => Promise<unknown>, by?: AnswerSource): AnswerStatus | Promise<AnswerStatus>;
 }
 
 const size = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
@@ -124,8 +125,11 @@ export function cardBrief({ id, kind, title, child, expires_at }: CardEntry["car
   return { id, kind, title: utf8Prefix(title, 160), child, expires_at };
 }
 
-function parseAnswer(args: Record<string, unknown>): { card: string; answers: CardAnswer[]; dismiss: boolean } {
-  const { card, answers = [], dismiss = false } = args;
+function parseAnswer(args: Record<string, unknown>): { card: string; answers: CardAnswer[]; dismiss: boolean; device?: string } {
+  const { card, answers = [], dismiss = false, device } = args;
+  if (device !== undefined && (typeof device !== "string" || Buffer.byteLength(device) > 64)) {
+    throw new BridgeRefusal("bad_input", "device must be a string of at most 64 bytes");
+  }
   if (typeof card !== "string" || !/^[A-Za-z0-9._:-]{1,160}$/.test(card) || typeof dismiss !== "boolean" ||
       !Array.isArray(answers) || answers.length > 4) throw new BridgeRefusal("bad_input", "invalid card answer");
   const parsed: CardAnswer[] = [];
@@ -137,13 +141,13 @@ function parseAnswer(args: Record<string, unknown>): { card: string; answers: Ca
         text !== undefined && (typeof text !== "string" || (textBytes += Buffer.byteLength(text)) > ANSWER_MAX_BYTES)) {
       throw new BridgeRefusal("bad_input", "invalid card answer");
     }
-    parsed.push({ options, text });
+    parsed.push(text === undefined ? { options } : { options, text });
   }
-  return { card, answers: parsed, dismiss };
+  return { card, answers: parsed, dismiss, device };
 }
 
 export function registerCards(registry: RemoteRegistry, source: {
-  entries(): CardEntry[]; ready(): boolean; absent(id: string): AnswerStatus; beforeQuestion(): Promise<unknown>;
+  dialogs: RemoteDialogs; ready(): boolean; beforeQuestion(): Promise<unknown>;
 }): void {
   registry.register({ name: "cards", parse: ({ after }) => {
     if (after !== undefined && (typeof after !== "string" || Buffer.byteLength(after) > 128)) {
@@ -153,7 +157,7 @@ export function registerCards(registry: RemoteRegistry, source: {
   }, run: after => {
     const cards: SessionCard[] = [];
     let bytes = 256, next: string | undefined;
-    for (const { card: raw } of sortedCards(source.entries())) {
+    for (const { card: raw } of sortedCards(source.dialogs.entries())) {
       if (after !== undefined && key(raw) <= after) continue;
       const card = cardDetail(raw);
       bytes += size(card) + 1;
@@ -163,10 +167,10 @@ export function registerCards(registry: RemoteRegistry, source: {
     }
     return { cards };
   } });
-  registry.register({ name: "card_answer", parse: parseAnswer, run: async ({ card, answers, dismiss }) => {
+  registry.register({ name: "card_answer", parse: parseAnswer, run: async ({ card, answers, dismiss, device }) => {
     if (!source.ready()) throw new BridgeRefusal("host_not_ready", "session is not accepting card answers");
-    const entry = source.entries().find(entry => entry.card.id === card);
-    const status = entry ? await entry.answer(answers, dismiss, source.beforeQuestion) : source.absent(card);
+    const status = await source.dialogs.resolve(card, answers, dismiss,
+      { source: "remote", ...(device === undefined ? {} : { device }) }, source.beforeQuestion);
     return { status };
   } });
 }

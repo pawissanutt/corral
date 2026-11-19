@@ -5,11 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { createBuildControls } from "../src/build/host-controls.ts";
+import { createBuildControls, type BuildControls } from "../src/build/host-controls.ts";
 import { loadSession, saveSession, sessionDir } from "../src/build/session-store.ts";
 import type { Run } from "../src/build/corral-cli.ts";
 import type { BuildContext, ChildSpec, ExitRecord } from "../src/build/types.ts";
 import type { ChildHandle, ChildHooks, ChildRunner } from "../src/extensions/fleet/child.ts";
+import { RemoteBuild } from "../src/host/remote/build.ts";
+import { RemoteDialogs } from "../src/host/remote/dialogs.ts";
+import type { BuildEntry } from "../src/ui/build/build-entries.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { connect, type TestClient } from "./support/bridge-client.ts";
 import { launch } from "./support/pi-process.ts";
@@ -30,7 +33,7 @@ class FakeRunner implements ChildRunner {
   }
 }
 
-function fixture(root: string, exit?: ExitRecord, workspace = false, bare = false) {
+function fixture(root: string, exit?: ExitRecord, workspace = false, bare = false, engine?: Run) {
   const now = new Date().toISOString();
   const context: BuildContext = { dir: sessionDir(root, "B-test"), corral: "/unused/corral",
     settings: { maxParallel: 2, exitPolicy: "none", profiles: [] },
@@ -44,8 +47,9 @@ function fixture(root: string, exit?: ExitRecord, workspace = false, bare = fals
   }
   const runner = new FakeRunner();
   const calls: string[][] = [];
-  const run: Run = async argv => {
+  const run: Run = async (argv, options) => {
     calls.push([...argv]);
+    if (engine) return engine(argv, options);
     throw new Error(`Unexpected engine command: ${argv.join(" ")}`);
   };
   const git: Run = async argv => ({ code: 0, stdout: argv[0] === "rev-parse" ? argv.includes("--abbrev-ref") ? "build/test\n" : "abc\n" : "", stderr: "" });
@@ -117,6 +121,57 @@ test("resumed build controls restore saved exits with no persisted children", as
       expect(controls.panelState()).toMatchObject({ target: "parent", fleet: { children: [] }, exit: { phase: choice === "keep" ? "kept" : "landed", record } });
     } finally { await controls.close(); rmSync(root, { recursive: true, force: true }); }
   }
+});
+
+function terminalDecisions(controls: BuildControls) {
+  const entries: BuildEntry<unknown>[] = [];
+  const appended = Promise.withResolvers<void>();
+  const build = new RemoteBuild(controls, {
+    fleet: () => controls.ui.fleet, children: () => [], ready: () => true, headless: () => false, working: () => false,
+    changed() {}, mark() {}, error: appended.reject,
+    async post(entry) { entries.push(entry); appended.resolve(); },
+  });
+  const dialogs = new RemoteDialogs(() => {}, { entries: () => build.entries(), absent: () => "missing", shared: () => true });
+  return { dialogs, entries, appended: appended.promise };
+}
+
+test("a board filed from the terminal posts its entry once", async () => {
+  const root = mkdtempSync(join(tmpdir(), "terminal-board-"));
+  const { controls, calls } = fixture(root, undefined, true, false, async argv => {
+    if (argv[3] !== "new") throw new Error(`unexpected board command: ${argv.join(" ")}`);
+    const id = argv.includes("--parent") ? "T-002" : "T-001";
+    return { code: 0, stderr: "", stdout: JSON.stringify({ task: { id, title: argv.at(-1), status: "backlog" } }) };
+  });
+  const { dialogs, entries, appended } = terminalDecisions(controls);
+  try {
+    controls.board!.propose({ title: "Plan", why: "", tasks: [{ key: "slice", title: "Slice", body: "", depends: [] }] });
+    const dock = dialogs.watch(card => card.kind === "board_plan", () => {})!;
+    expect(await dock.answer([{ options: ["file"] }])).toBe("started");
+    await within(appended, 2000, "board filing conversation entry");
+    await expect(dialogs.resolve(dock.id, [{ options: ["file_start"] }], false, { source: "remote" }))
+      .rejects.toMatchObject({ code: "invalid_card_answer" });
+    expect(calls.map(argv => argv[3])).toEqual(["new", "new"]);
+    expect(entries).toHaveLength(1);
+    expect(entries).toMatchObject([{ customType: "corral_build_board",
+      details: { filed: [{ id: "T-002", title: "Slice", depends: [] }], started: false } }]);
+  } finally { dialogs.close(); await controls.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("Iterate answered remotely posts its terminal conversation outcome once", async () => {
+  const root = mkdtempSync(join(tmpdir(), "remote-iterate-"));
+  const { controls } = fixture(root);
+  const { dialogs, entries, appended } = terminalDecisions(controls);
+  try {
+    controls.exit.open();
+    const exit = dialogs.entries().find(entry => entry.card.kind === "exit")!.card.id;
+    expect(await dialogs.resolve(exit, [{ options: ["iterate"] }], false, { source: "remote" })).toBe("started");
+    await within(appended, 2000, "Iterate conversation entry");
+    await expect(dialogs.resolve(exit, [{ options: ["keep"] }], false, { source: "remote" }))
+      .rejects.toMatchObject({ code: "invalid_card_answer" });
+    expect(controls.exit.state().phase).toBe("none");
+    expect(entries).toHaveLength(1);
+    expect(entries).toMatchObject([{ customType: "corral_build_exit", details: { choice: "iterate", phase: "none" } }]);
+  } finally { dialogs.close(); await controls.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("build evidence tools record the configured gate and retain the reviewer's exact verdict and resolutions", async () => {
