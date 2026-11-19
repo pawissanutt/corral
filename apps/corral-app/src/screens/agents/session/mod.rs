@@ -1,28 +1,44 @@
 //! The one session page every session opens in, of every role: the header with the way back,
 //! the state word and the ⋯ actions, the tab strip with the tabs the model offers, the main view
-//! (the transcript, the Agents tab, or the read-only log of a session without a Pi host), the
-//! dock, the composer (or the bar standing in its place while the session takes no message),
-//! and the status bar. Every fact is the model's (`model::session::page`); every press runs the
-//! session reducer. Desktop and terminal stack the parts top to bottom across the page; the
-//! phone pushes the page with the transcript scrolling and the dock, the composer and the
-//! status fixed at the bottom.
+//! (the transcript, the Usage view, the Agents, Changes, Board, Task or Proof tab, or the
+//! read-only log of a session without a Pi host) with the sidebar's rail beside it when the page
+//! is wide, the dock, the composer (or what takes its place: a decision card, the one
+//! confirmation of a destructive option, an answer card, or the bar standing in for it while the
+//! session takes no message) with the `/` command menu over it, and the status bar. Every fact
+//! is the model's (`model::session::page`); every press runs the session reducer. Desktop and
+//! terminal stack the parts top to bottom across the page; the phone pushes the page with the
+//! transcript scrolling and the dock, the composer and the status fixed at the bottom. While
+//! the page is on top the window's title says who the session is and whether it needs you.
 
 mod agents_tab;
+mod board;
+mod cards;
+mod changes;
+mod command_menu;
+mod decision;
 mod dock;
+mod exit;
 mod header;
 mod pager;
+mod proof;
+mod questions;
+mod sidebar;
 mod status;
 mod tabs;
+mod task;
+mod usage;
 
 pub(in crate::screens::agents) use header::popup;
 
 use corral_protocol::detail::DetailRef;
+use nsh_core::desktop::WindowAttributes;
+use nsh_core::element::desktop::current_window;
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
-use crate::model::session::{self, Body, Chat, Cx, Facts, KeyAction, SessionPage};
+use crate::model::session::{self, Body, Chat, Cx, Facts, Focus, KeyAction, SessionPage};
 use crate::model::text::span;
 use crate::model::work::{session_task, task_ref};
 use crate::model::{Form, Id};
@@ -39,12 +55,28 @@ use super::transcript::{self, watch};
 
 /// How far from its end a scroll still counts as at its end, in points.
 const END_SLACK: f32 = 24.0;
+/// The page's content width from which the sidebar's rail sits beside the main view: points on
+/// desktop, Cells in a terminal.
+const RAIL_FROM: f32 = 960.0;
+const RAIL_FROM_CELLS: f32 = 105.0;
+/// The window's title while no session page is on top.
+const APP_TITLE: &str = "Corral";
 
 /// The page of session `id` on desktop and in a terminal.
 pub fn page(app: AppState, id: Id) -> AnyElement {
     let page = view_of(app, id.clone());
     follow(app, id.clone(), page);
     bind_keys(app, id.clone());
+    window_title(page);
+    let commands = command_menu::matches(page);
+    let room = signal(None::<f32>);
+    let rail = computed(move || {
+        let wide = match app.form {
+            Form::Terminal => term::page_columns(app) >= RAIL_FROM_CELLS,
+            _ => room.get().is_some_and(|width| width >= RAIL_FROM),
+        };
+        wide && page.with(|p| p.sidebar.as_ref().is_some_and(|sidebar| !sidebar.hidden))
+    });
     view()
         .size_full()
         .flex_1()
@@ -54,14 +86,50 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
         .when(app.form != Form::Terminal, |frame| {
             frame.bg(color(Token::Bg))
         })
+        .on_layout(move |frame: &Bounds<Points>| {
+            let width = Some(frame.size.width.0);
+            if room.get_untracked() != width {
+                room.set(width);
+            }
+        })
         .child(header::head(app, page))
         .child(banner(app, page))
         .child(tabs::strip(app, page))
-        .child(main(app, page))
-        .child(dock::dock(app, page))
-        .child(bottom(app, page, id))
+        .child(
+            view()
+                .flex_1()
+                .min_h(px(0.0))
+                .flex_row()
+                .child(main(app, page))
+                .child(dynamic(move || {
+                    rail.get().then(|| untracked(|| sidebar::rail(app, page)))
+                })),
+        )
+        .child(dock::dock(app, page, rail))
+        .child(command_menu::menu(app, id.clone(), commands))
+        .child(bottom(app, page, id, commands))
         .child(status::bar(app, page))
         .into_element()
+}
+
+/// While the page is on top, the window's title is the session's (`▲ needs you · <target>`,
+/// `● working · <target>`); the app's again once it leaves.
+fn window_title(page: Memo<SessionPage>) {
+    let window = current_window();
+    let title = computed(move || page.with(|p| p.header.title.clone()));
+    {
+        let window = window.clone();
+        effect(move || {
+            let mut attributes = WindowAttributes::default();
+            attributes.title = Some(title.get());
+            window.set(attributes);
+        });
+    }
+    cleanup(move || {
+        let mut attributes = WindowAttributes::default();
+        attributes.title = Some(APP_TITLE.to_owned());
+        window.set(attributes);
+    });
 }
 
 /// The page of session `id` on the phone: the shell's head names the session, its trailing ⋯
@@ -71,6 +139,7 @@ pub fn phone(app: AppState, id: Id) -> PhonePage {
     let page = view_of(app, id.clone());
     follow(app, id.clone(), page);
     let title = untracked(|| page.with(|p| p.header.target.clone()));
+    let commands = command_menu::matches(page);
     let body = view()
         .flex_1()
         .min_h(px(0.0))
@@ -84,8 +153,9 @@ pub fn phone(app: AppState, id: Id) -> PhonePage {
         .bg(color(Token::Bg))
         .border_t_1()
         .border_color(color(Token::Rule))
-        .child(dock::dock(app, page))
-        .child(bottom(app, page, id))
+        .child(dock::dock(app, page, computed(|| false)))
+        .child(command_menu::menu(app, id.clone(), commands))
+        .child(bottom(app, page, id, commands))
         .child(status::bar(app, page))
         .into_element();
     PhonePage {
@@ -202,7 +272,12 @@ fn banner(app: AppState, page: Memo<SessionPage>) -> AnyElement {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shown {
     Chat,
+    Usage,
     Agents,
+    Changes,
+    Board,
+    Task,
+    Proof,
     Log,
 }
 
@@ -210,19 +285,30 @@ fn main(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     let shown = computed(move || {
         page.with(|p| match &p.body {
             Body::Chat(_) => Shown::Chat,
+            Body::Usage(_) => Shown::Usage,
             Body::Agents(_) => Shown::Agents,
+            Body::Changes(_) => Shown::Changes,
+            Body::Board(_) => Shown::Board,
+            Body::Task(_) => Shown::Task,
+            Body::Proof(_) => Shown::Proof,
             Body::Log(_) => Shown::Log,
         })
     });
     view()
         .flex_1()
+        .min_w(px(0.0))
         .min_h(px(0.0))
         .flex_col()
         .child(dynamic(move || {
             let shown = shown.get();
             untracked(|| match shown {
                 Shown::Chat => chat(app, page),
+                Shown::Usage => usage::tab(app, page),
                 Shown::Agents => agents_tab::tab(app, page),
+                Shown::Changes => changes::tab(app, page),
+                Shown::Board => board::tab(app, page),
+                Shown::Task => task::tab(app, page),
+                Shown::Proof => proof::tab(app, page),
                 Shown::Log => pager::pager(app, page),
             })
         }))
@@ -230,7 +316,8 @@ fn main(app: AppState, page: Memo<SessionPage>) -> AnyElement {
 }
 
 /// Chat: the transcript in its own scroll, which keeps to the newest rows as they arrive unless
-/// the owner scrolled up; before the first row, who receives the message.
+/// the owner scrolled up (then a control counts what arrived and returns to the end); before
+/// the first row, who receives the message.
 fn chat(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     let chat = computed(move || {
         page.with(|p| match &p.body {
@@ -244,20 +331,20 @@ fn chat(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                 .map(|chat| untracked(|| chat_content(app, chat)))
         })
     });
-    let surface = follow_end(
+    let content = if app.form == Form::Terminal {
+        view().px(term::cells(1.0)).child(shown).into_element()
+    } else {
+        shown
+    };
+    transcript::follow(
+        app,
         scroll()
             .test_id("session-transcript")
             .flex_1()
-            .min_h(px(0.0)),
-        move || chat.with(|_| ()),
-    );
-    if app.form == Form::Terminal {
-        surface
-            .child(view().px(term::cells(1.0)).child(shown))
-            .into_element()
-    } else {
-        surface.child(shown).into_element()
-    }
+            .min_h(px(0.0))
+            .child(content),
+        move || chat.with(|c| c.as_ref().map_or(0, |c| c.transcript.rows())),
+    )
 }
 
 fn chat_content(app: AppState, chat: &Chat) -> AnyElement {
@@ -322,19 +409,53 @@ fn term_or_hint(app: AppState, keys: &'static str, name: &'static str) -> AnyEle
         .into_element()
 }
 
-/// The composer, or the bar in its place while the session takes no message (not running,
-/// ended, read-only), with Resume or Relaunch where the host can be started again.
-fn bottom(app: AppState, page: Memo<SessionPage>, id: Id) -> AnyElement {
+/// What the composer's place shows: the one confirmation a destructive option asks for, a
+/// decision card, an open answer card, the composer, or the bar standing in for it while the
+/// session takes no message (not running, ended, read-only), with Resume or Relaunch where the
+/// host can be started again. `commands` are the `/` rows the draft matches.
+fn bottom(
+    app: AppState,
+    page: Memo<SessionPage>,
+    id: Id,
+    commands: Memo<Vec<session::ActionRow>>,
+) -> AnyElement {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Place {
+        Confirm,
+        Decision,
+        Answer,
+        Composer,
+        Bar,
+    }
+    let place = computed(move || {
+        page.with(|p| {
+            if p.dock.confirm.is_some() {
+                Place::Confirm
+            } else if p.dock.decision.is_some() {
+                Place::Decision
+            } else if p.dock.answer.is_some() {
+                Place::Answer
+            } else if p.composer.is_some() {
+                Place::Composer
+            } else {
+                Place::Bar
+            }
+        })
+    });
     let composer = computed(move || page.with(|p| p.composer.clone()));
-    let has = computed(move || composer.with(Option::is_some));
+    let focused = computed(move || page.with(|p| p.focus == Focus::Composer));
+    let command = command_menu::chosen(id.clone(), commands);
     let bar = computed(move || page.with(|p| p.bar.clone()));
     dynamic(move || {
-        if has.get() {
-            let id = id.clone();
-            untracked(|| session_composer(app, id, composer))
-        } else {
-            untracked(|| dock::host_bar(app, bar))
-        }
+        let place = place.get();
+        let id = id.clone();
+        untracked(|| match place {
+            Place::Confirm => decision::confirm(app, page),
+            Place::Decision => decision::decision(app, page),
+            Place::Answer => questions::answer(app, page),
+            Place::Composer => session_composer(app, id, composer, command, focused),
+            Place::Bar => dock::host_bar(app, bar),
+        })
     })
     .into_element()
 }

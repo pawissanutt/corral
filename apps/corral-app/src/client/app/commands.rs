@@ -104,10 +104,6 @@ impl AppState {
                 name,
                 result,
             } => self.attach_loaded(feed, upload, kind, name, result),
-            ClientRequest::PromptAnswer {
-                request_id,
-                request,
-            } => self.operation(feed, request_id, PROMPT_ANSWER, value(request)),
             ClientRequest::Session {
                 request_id,
                 method,

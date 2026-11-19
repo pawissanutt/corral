@@ -2,11 +2,24 @@
 //! `/` command menu. Each row says its key and its terminal command where it has one; a row the
 //! host cannot run now stays listed with its reason and does not run. The run controls (Cancel
 //! turn, Pause, Resume, Rewind…, Terminate or Stop, Relaunch or Resume) and the task's Actions
-//! menu are rows here.
+//! menu are rows here; every part of the page adds its own rows through its `actions(cx)`,
+//! merged into the group its rows name.
 
 use crate::model::agents::{Control, control_label};
 
-use super::{Action, Cx, Tab};
+use super::{Action, Cx, Tab, board, changes, exit, proof, questions, sidebar, task, usage};
+
+/// Each part's rows, in catalog order.
+const PARTS: &[fn(&Cx<'_>) -> Option<ActionGroup>] = &[
+    questions::actions,
+    exit::actions,
+    sidebar::actions,
+    usage::actions,
+    changes::actions,
+    board::actions,
+    task::actions,
+    proof::actions,
+];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionActions {
@@ -40,7 +53,7 @@ pub struct ActionRow {
     pub action: Action,
 }
 
-fn row(
+pub(super) fn row(
     slug: &str,
     label: impl Into<String>,
     key: Option<&'static str>,
@@ -135,7 +148,7 @@ fn task(cx: &Cx<'_>) -> Option<ActionGroup> {
 /// The catalog of the session `cx` reads, over the tabs its page shows.
 pub fn actions(cx: &Cx<'_>) -> SessionActions {
     let tabs = super::shown_tabs(cx);
-    let groups = [
+    let mut groups: Vec<ActionGroup> = [
         Some(views(cx, &tabs)),
         Some(display(cx)),
         Some(run(cx)),
@@ -143,7 +156,13 @@ pub fn actions(cx: &Cx<'_>) -> SessionActions {
     ]
     .into_iter()
     .flatten()
-    .filter(|group| !group.rows.is_empty())
     .collect();
+    for group in PARTS.iter().filter_map(|part| part(cx)) {
+        match groups.iter_mut().find(|known| known.title == group.title) {
+            Some(known) => known.rows.extend(group.rows),
+            None => groups.push(group),
+        }
+    }
+    groups.retain(|group| !group.rows.is_empty());
     SessionActions { groups }
 }

@@ -329,15 +329,6 @@ impl State {
                     },
                 }]
             }
-            Action::AnswerQuestion {
-                session,
-                question,
-                option,
-                text,
-            } => crate::model::agents::answer_prompt(&session, question, option, text)
-                .into_iter()
-                .chain([Effect::Focus(super::COMPOSER_FIELD)])
-                .collect(),
             Action::FileEntry(entry) => {
                 let mut effects = self.file(entry, feed);
                 effects.push(Effect::Focus(super::COMPOSER_FIELD));

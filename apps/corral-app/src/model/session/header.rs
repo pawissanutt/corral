@@ -138,11 +138,20 @@ fn with_elapsed(words: &str, cx: &Cx<'_>) -> String {
     }
 }
 
+/// `Ended`, or `Ended · landed` / `Ended · kept` when the build's exit has that outcome.
+fn ended(cx: &Cx<'_>) -> StateWord {
+    match cx.exit().map(|exit| exit.phase) {
+        Some(ExitPhase::Landed) => word(false, Some("✓"), Hue::Ok, "Ended · landed"),
+        Some(ExitPhase::Kept) => word(false, None, Hue::Neutral, "Ended · kept"),
+        _ => word(false, None, Hue::Neutral, "Ended"),
+    }
+}
+
 /// The state word, in the order the screens design gives: an ended session, then what the link
 /// and the host presence say, then a build's exit status, then the turn.
 pub fn state_word(cx: &Cx<'_>) -> StateWord {
     match cx.host {
-        Host::Ended => return word(false, None, Hue::Neutral, "Ended"),
+        Host::Ended => return ended(cx),
         _ if cx.feed.link != Link::Up => return word(false, Some("!"), Hue::Held, "Unavailable"),
         Host::Unreachable => return word(false, Some("!"), Hue::Held, "Unavailable"),
         Host::NotRunning if cx.elsewhere() => {

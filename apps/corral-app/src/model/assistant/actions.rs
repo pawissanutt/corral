@@ -59,13 +59,6 @@ pub enum Action {
     NewSession,
     /// Daemon: file an owner message as an Idea in its words, with no model.
     FileEntry(String),
-    /// Daemon: answer the agent's question in place, with an option, words, or both.
-    AnswerQuestion {
-        session: String,
-        question: String,
-        option: Option<String>,
-        text: Option<String>,
-    },
     /// Daemon: send a session control (Cancel turn, Pause, Resume, Terminate, Relaunch).
     Control {
         session: String,

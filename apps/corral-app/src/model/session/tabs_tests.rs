@@ -14,7 +14,7 @@ fn capability(id: &str) -> Capability {
     }
 }
 
-/// The tabs a build's page derives from what its host declares, with every body drawn.
+/// The tabs a build's page derives from what its host declares.
 fn build_tabs(can: &[&str]) -> Vec<Tab> {
     let id = Id::from("B-k3x9");
     let mut feed = Feed::default();
@@ -30,15 +30,7 @@ fn build_tabs(can: &[&str]) -> Vec<Tab> {
     };
     let ui = Ui::default();
     let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &facts);
-    let all = [
-        Tab::Task,
-        Tab::Chat,
-        Tab::Agents,
-        Tab::Changes,
-        Tab::Board,
-        Tab::Proof,
-    ];
-    super::tabs::items(&cx, &all)
+    super::tabs::items(&cx)
         .into_iter()
         .map(|item| item.tab)
         .collect()

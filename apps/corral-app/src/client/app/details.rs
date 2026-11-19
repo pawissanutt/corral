@@ -2,6 +2,11 @@ use super::*;
 
 const MAX_PAGES: usize = 256;
 const MAX_DETAIL_BYTES: usize = 8 * 1024 * 1024;
+/// How many times in a row a detail that changed between two of its pages is read again from
+/// its first page before it is reported stale with the conflict.
+const MAX_RESTARTS: u8 = 3;
+const CHANGED: &str =
+    "Detail changed while its pages were loading; refresh to fetch a current snapshot.";
 
 /// Every session part the host announces a change of (`live_part`), by its wire name.
 pub(super) const PART_NAMES: &[&str] = &[
@@ -153,6 +158,7 @@ impl AppState {
             });
         }
         self.detail_pages.insert(key.clone(), vec![]);
+        self.detail_restarts.remove(&key);
         self.detail_bytes.insert(key.clone(), 0);
         let target = request.target.clone();
         let outgoing = self.operation(feed, id.clone(), DETAIL_GET, value(request));
@@ -185,6 +191,13 @@ impl AppState {
         let page: DetailReply = match outcome {
             Ok(value) => decode(value)?,
             Err((code, message)) => {
+                // A continuation of a detail that changed since its first page starts again.
+                if code == corral_protocol::rpc::ErrorCode::Conflict
+                    && request.page.is_some()
+                    && !walked(&request.target)
+                {
+                    return Ok(self.restart_detail(feed, &key, id, request.target, message));
+                }
                 let error = ClientError {
                     code: value(code).as_str().unwrap_or("unknown").into(),
                     message,
@@ -196,14 +209,15 @@ impl AppState {
         if walked(&request.target) {
             return Ok(self.walked_reply(feed, id, key, request, page));
         }
-        let pages = self.detail_pages.entry(key.clone()).or_default();
-        if let Some(first) = pages.first() {
-            if first.etag != page.etag {
-                self.detail_failed(feed, &key, &id, ClientError { code: "conflict".into(),
-                    message: "Detail changed while its pages were loading; refresh to fetch a current snapshot.".into() });
-                return Ok(vec![]);
-            }
+        let changed = self
+            .detail_pages
+            .get(&key)
+            .and_then(|pages| pages.first())
+            .is_some_and(|first| first.etag != page.etag);
+        if changed {
+            return Ok(self.restart_detail(feed, &key, id, request.target, CHANGED.into()));
         }
+        let pages = self.detail_pages.entry(key.clone()).or_default();
         if page.body.is_none() {
             if !pages.is_empty() || request.page.is_some() {
                 return Err("daemon returned not-modified inside a detail continuation".into());
@@ -236,6 +250,7 @@ impl AppState {
                 }
             });
             self.detail_pages.remove(&key);
+            self.detail_restarts.remove(&key);
             self.detail_inflight.remove(&key);
             self.detail_bytes.remove(&key);
             self.touch_detail(feed, &request.target);
@@ -266,8 +281,42 @@ impl AppState {
             )]);
         }
         let pages = self.detail_pages.remove(&key).unwrap_or_default();
+        self.detail_restarts.remove(&key);
         self.publish(feed, &key, &id, &request.target, pages);
         Ok(vec![])
+    }
+
+    /// A detail that changed between two of its pages is read again from its first page under
+    /// the same request, at most `MAX_RESTARTS` times in a row; then it is stale with `message`.
+    fn restart_detail(
+        &mut self,
+        feed: Signal<Feed>,
+        key: &str,
+        id: String,
+        target: DetailRef,
+        message: String,
+    ) -> Vec<Outgoing> {
+        let restarts = self.detail_restarts.entry(key.to_owned()).or_default();
+        if *restarts >= MAX_RESTARTS {
+            let error = ClientError {
+                code: "conflict".into(),
+                message,
+            };
+            self.detail_failed(feed, key, &id, error);
+            return vec![];
+        }
+        *restarts += 1;
+        self.detail_pages.insert(key.to_owned(), vec![]);
+        self.detail_bytes.insert(key.to_owned(), 0);
+        vec![out(
+            DETAIL_GET,
+            value(DetailGet {
+                target,
+                etag: None,
+                page: None,
+            }),
+            Some(id),
+        )]
     }
 
     /// A page of the walked list. A walk to a further page adds it after those walked; a
@@ -436,6 +485,7 @@ impl AppState {
     }
     fn detail_failed(&mut self, feed: Signal<Feed>, key: &str, id: &str, error: ClientError) {
         self.detail_pages.remove(key);
+        self.detail_restarts.remove(key);
         self.detail_inflight.remove(key);
         self.detail_bytes.remove(key);
         self.detail_reread.remove(key);
@@ -622,6 +672,86 @@ fn walked(target: &DetailRef) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The read the client sends next: its params, its correlation id and the request.
+    fn next_read(outgoing: &mut Vec<Outgoing>) -> (Value, Option<String>, DetailGet) {
+        let (_, params, tag) = outgoing.remove(0);
+        let get: DetailGet = serde_json::from_value(params.clone()).unwrap();
+        (params, tag, get)
+    }
+
+    fn transcript_page(etag: &str, next: Option<&str>) -> Value {
+        value(DetailReply {
+            etag: etag.into(),
+            as_of: "now".into(),
+            seq: 1,
+            next: next.map(str::to_owned),
+            body: Some(DetailBody::Session(SessionPage {
+                id: "B-1".into(),
+                role: "build".into(),
+                task: None,
+                run: None,
+                machine: None,
+                messages: vec![],
+                older: None,
+                replyable: true,
+                reply_refusal: None,
+                host: Default::default(),
+            })),
+        })
+    }
+
+    #[test]
+    fn a_transcript_that_changed_between_two_pages_is_read_again_from_the_first_page_instead_of_being_reported_as_a_conflict()
+     {
+        let runtime = nsh_core::element::Runtime::default();
+        let _entered = runtime.enter();
+        let feed = signal(Feed::default());
+        let mut app = AppState::new();
+        app.ready = true;
+        let target = DetailRef::Session { id: "B-1".into() };
+        let mut outgoing = app.detail_request(
+            feed,
+            "read".into(),
+            DetailGet {
+                target: target.clone(),
+                etag: None,
+                page: None,
+            },
+        );
+        let (params, tag, _) = next_read(&mut outgoing);
+        let mut outgoing = app
+            .detail_reply(feed, tag, params, Ok(transcript_page("v1", Some("p2"))))
+            .unwrap();
+        let (params, tag, get) = next_read(&mut outgoing);
+        assert_eq!(get.page.as_deref(), Some("p2"));
+        // corrald refuses the continuation of a transcript that changed since its first page.
+        let conflict = Err((
+            corral_protocol::rpc::ErrorCode::Conflict,
+            "changed".to_owned(),
+        ));
+        let mut outgoing = app.detail_reply(feed, tag, params, conflict).unwrap();
+        let (params, tag, get) = next_read(&mut outgoing);
+        assert_eq!(get.page, None);
+        assert_eq!(tag.as_deref(), Some("read"));
+        // A continuation answered under another etag starts again too.
+        let mut outgoing = app
+            .detail_reply(feed, tag, params, Ok(transcript_page("v2", Some("p2"))))
+            .unwrap();
+        let (params, tag, _) = next_read(&mut outgoing);
+        let mut outgoing = app
+            .detail_reply(feed, tag, params, Ok(transcript_page("v3", None)))
+            .unwrap();
+        let (params, tag, get) = next_read(&mut outgoing);
+        assert_eq!(get.page, None);
+        app.detail_reply(feed, tag, params, Ok(transcript_page("v4", None)))
+            .unwrap();
+        feed.with_untracked(|feed| {
+            let cache = &feed.details[&detail_key(&target)];
+            assert!(cache.error.is_none());
+            assert!(cache.merged.is_some());
+        });
+    }
     #[test]
     fn paged_nested_rows_merge_by_id_and_fixed_stages_do_not_duplicate() {
         let mut first = json!({"stages":[1,2,3,4],"annotations":[

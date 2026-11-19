@@ -757,6 +757,7 @@ fn content(app: AppState) -> AnyElement {
         .child(ask_surface(app))
         .child(palette(app))
         .child(crate::screens::agents::rewind_sheet(app))
+        .child(crate::screens::agents::remove_sheet(app))
         .child(crate::screens::agents::start_sheet(app))
         .child(confirmation(app))
         .child(crate::shell::refusal(app))

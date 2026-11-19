@@ -18,7 +18,7 @@ use super::{
 };
 use crate::model::{Id, daemon::*, devices::Registry};
 use corral_protocol::attachment::*;
-use corral_protocol::build::BUILD_START;
+use corral_protocol::build::{BUILD_REMOVE, BUILD_START};
 use corral_protocol::config::{CONFIG_GET, CONFIG_PUT};
 use corral_protocol::device::{
     DEVICE_PAGE, DEVICE_PAGE_LIMIT_MAX, DEVICE_REVOKE, DeviceInfo, DevicePage, DevicePageQuery,
@@ -26,7 +26,9 @@ use corral_protocol::device::{
 };
 use corral_protocol::op::OP_SUBMIT;
 use corral_protocol::session as control;
-use corral_protocol::session_host::SESSION_SEND;
+use corral_protocol::session_host::{
+    SESSION_ACTION, SESSION_CARD_ANSWER, SESSION_QUEUE_MOVE, SESSION_QUEUE_WITHDRAW, SESSION_SEND,
+};
 use corral_protocol::{self as wire, Refusal, app::*, assistant::*, detail::*, subscription::*};
 use nsh_core::prelude::*;
 use serde::Serialize;
@@ -62,10 +64,11 @@ pub(super) fn handles(event: &Event) -> bool {
         Event::Health(_) | Event::Rows { .. } | Event::Reset { .. } | Event::TopicError { .. }
     ) || matches!(event, Event::Reply { method, .. } if matches!(*method,
             APP_SESSION | OP_SUBMIT | CONFIG_GET | CONFIG_PUT | SESSION_SEND | BUILD_START |
-            DETAIL_GET | CHANGES_PAGE | SEEN_ADVANCE | DEVICE_REVOKE |
+            SESSION_CARD_ANSWER | SESSION_QUEUE_WITHDRAW | SESSION_QUEUE_MOVE | SESSION_ACTION |
+            BUILD_REMOVE | DETAIL_GET | CHANGES_PAGE | SEEN_ADVANCE | DEVICE_REVOKE |
             wire::device::PAIR_BEGIN | wire::device::PAIR_STATUS | wire::device::PAIR_CONFIRM | wire::device::PAIR_CANCEL |
             PUSH_STATUS | PUSH_SUBSCRIBE | PUSH_UNSUBSCRIBE | ASSISTANT_SEND | ASSISTANT_WARM |
-            ASSISTANT_SESSION | PROMPT_ANSWER | DEVICE_PAGE |
+            ASSISTANT_SESSION | DEVICE_PAGE |
             ASSISTANT_CANCEL | ATTACHMENT_BEGIN | ATTACHMENT_PUT | ATTACHMENT_DISCARD |
             control::SESSION_CANCEL | control::SESSION_PAUSE | control::SESSION_RESUME |
             control::SESSION_TERMINATE | control::SESSION_RELAUNCH | control::SESSION_REWIND))
@@ -77,7 +80,11 @@ fn refusable(method: &str) -> bool {
         method,
         OP_SUBMIT
             | CONFIG_PUT
-            | PROMPT_ANSWER
+            | SESSION_CARD_ANSWER
+            | SESSION_QUEUE_WITHDRAW
+            | SESSION_QUEUE_MOVE
+            | SESSION_ACTION
+            | BUILD_REMOVE
             | control::SESSION_CANCEL
             | control::SESSION_PAUSE
             | control::SESSION_RESUME
@@ -102,6 +109,9 @@ pub(super) struct AppState {
     detail_pages: BTreeMap<String, Vec<DetailReply>>,
     detail_bytes: BTreeMap<String, usize>,
     detail_reread: BTreeMap<String, u64>,
+    /// How many times in a row each detail's read started again from its first page because it
+    /// changed between two of its pages.
+    detail_restarts: BTreeMap<String, u8>,
     item_fetches: BTreeMap<String, session_items::ItemAssembly>,
     changes_inflight: bool,
     changes_cursor: Option<u64>,
@@ -124,6 +134,7 @@ impl AppState {
             detail_pages: BTreeMap::new(),
             detail_bytes: BTreeMap::new(),
             detail_reread: BTreeMap::new(),
+            detail_restarts: BTreeMap::new(),
             item_fetches: BTreeMap::new(),
             changes_inflight: false,
             changes_cursor: None,
@@ -148,6 +159,7 @@ impl AppState {
         self.detail_pages.clear();
         self.detail_bytes.clear();
         self.detail_reread.clear();
+        self.detail_restarts.clear();
         self.cancel_inflight.clear();
         for upload in self.uploads.values_mut() {
             upload.disconnected();

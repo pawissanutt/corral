@@ -150,6 +150,8 @@ pub struct RosterRow {
     pub pinned: bool,
     /// Its host is stopped and can be started again from its page.
     pub resumable: bool,
+    /// `Remove…`: a stopped build's worktree, branch and record, after its dry run.
+    pub remove: Option<Action>,
     pub selected: bool,
     /// Opens the session page.
     pub action: Action,
@@ -240,6 +242,13 @@ impl<'a> Source<'a> {
             }
             (None, None) => false,
         }
+    }
+    /// A build whose host is stopped here: its worktree, branch and record can be removed.
+    fn removable(self) -> bool {
+        self.chat.is_some_and(|chat| {
+            chat.kind == AssistantKind::Build
+                && matches!(chat.state, AssistantState::Cold | AssistantState::Ended)
+        }) && !self.elsewhere()
     }
     /// The row's state and its group.
     pub fn state(self) -> (RowState, u8) {
@@ -576,6 +585,9 @@ pub(super) fn row(source: Source<'_>, state: &State, feed: &daemon::Feed) -> Ros
         since: since.unwrap_or_else(|| "–".into()),
         pinned: source.pinned(feed),
         resumable: source.resumable(),
+        remove: source
+            .removable()
+            .then(|| Action::Remove(Id::from(source.id))),
         selected: state
             .roster_session
             .as_ref()

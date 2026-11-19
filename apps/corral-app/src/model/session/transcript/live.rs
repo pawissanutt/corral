@@ -87,6 +87,9 @@ pub struct LiveTool {
     pub elapsed_ms: Option<u64>,
     /// As `LiveMessage::settled_at`.
     pub settled_at: Option<u64>,
+    /// The ordinal of the turn's latest message when the call started (0 before any): the call
+    /// stands after that message's words and before the next message's.
+    pub after: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,6 +270,7 @@ impl LiveSession {
                             state: LiveToolState::Running,
                             elapsed_ms: None,
                             settled_at: None,
+                            after: self.messages.last().map_or(0, |message| message.ordinal),
                         });
                         self.tools.len() - 1
                     }

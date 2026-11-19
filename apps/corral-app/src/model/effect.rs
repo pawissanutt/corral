@@ -2,10 +2,12 @@
 
 use corral_protocol::app::{ChangesQuery, SeenAdvance};
 use corral_protocol::assistant::{AssistantSend, AssistantSessionOp, AssistantWarm, ContextRef};
-use corral_protocol::build::BuildStart;
+use corral_protocol::build::{BuildRemove, BuildStart};
 use corral_protocol::detail::DetailGet;
-use corral_protocol::session::SessionPromptAnswer;
-use corral_protocol::session_host::SessionSend;
+use corral_protocol::session_host::{
+    SESSION_QUEUE_MOVE, SESSION_QUEUE_WITHDRAW, SessionActionRequest, SessionCardAnswer,
+    SessionQueueKey, SessionQueueMove, SessionSend,
+};
 
 use crate::model::act::Act;
 use crate::model::id::Id;
@@ -90,11 +92,6 @@ pub enum Effect {
     /// Withdraw or discard this device's unacknowledged send under its own command id. The
     /// client removes a never-sent or refused one locally and asks corrald for the rest.
     CancelSend(Id),
-    /// Answer a question an agent asked in its session (`prompt.answer`), read by `key`.
-    Answer {
-        key: Id,
-        answer: SessionPromptAnswer,
-    },
     /// Open or close a scoped thread subscription ("quick" or A-n).
     Thread {
         scope: String,
@@ -133,10 +130,51 @@ pub enum Effect {
         key: Id,
         start: BuildStart,
     },
+    /// Answer, or dismiss, a card the session's host waits on (`session.card.answer`); the
+    /// reply (`SessionCardAnswered`) is read under `key`.
+    SessionCardAnswer {
+        key: Id,
+        answer: SessionCardAnswer,
+    },
+    /// Withdraw or move an item of the session's queue; the reply is read under `key`.
+    SessionQueue {
+        key: Id,
+        request: QueueRequest,
+    },
+    /// A session action the host runs (`session.action`: open the exit choice, …); the reply
+    /// (`SessionActionDone`) is read under `key`.
+    SessionAction {
+        key: Id,
+        request: SessionActionRequest,
+    },
+    /// Remove a stopped build's worktree, branch and record (`build.remove`), or ask what that
+    /// would remove (`dry_run`); the reply (`BuildRemoved`) is read under `key`.
+    BuildRemove {
+        key: Id,
+        remove: BuildRemove,
+    },
     /// Read `corral.toml` (`config.get`), or replace it with `put` (`config.put`); the reply is
     /// read under `key`.
     Config {
         key: Id,
         put: Option<String>,
     },
+}
+
+/// A change to a session's queue, as its own method.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueueRequest {
+    /// `session.queue.withdraw`; the reply is `QueueWithdrawn`.
+    Withdraw(SessionQueueKey),
+    /// `session.queue.move`; the reply is `QueueMoved`.
+    Move(SessionQueueMove),
+}
+
+impl QueueRequest {
+    pub const fn method(&self) -> &'static str {
+        match self {
+            Self::Withdraw(_) => SESSION_QUEUE_WITHDRAW,
+            Self::Move(_) => SESSION_QUEUE_MOVE,
+        }
+    }
 }

@@ -7,7 +7,8 @@
 //! desktop's columns as Cells, one row each, giving way one at a time as the grid narrows; words
 //! too long for their column are cut at the character. Pressing a line opens its session page;
 //! a run's line carries its Session menu (secondary press, Shift+F10 or the Menu key; a held
-//! finger on the phone; `.` while the roster has the focus).
+//! finger on the phone; `.` while the roster has the focus); a stopped build's line ends with
+//! Remove…, which opens its Remove sheet (`btn-remove-<session>`).
 //!
 //! Rows are kept by session while the roster changes, each part following its own fact, so a
 //! row the keyboard is on keeps the focus as its times and counts tick. Every word and number is
@@ -24,6 +25,7 @@ use crate::model::work::Record;
 use crate::screens::now::with_menu;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::hint::hint_on_live;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::term::{self, cells};
@@ -480,7 +482,7 @@ fn line(app: AppState, row: ReadSignal<RosterRow>, columns: Memo<Columns>) -> An
             .into_element()
     };
     let at = |column| slot(form, column, columns);
-    let cells = vec![
+    let mut cells = vec![
         at(Column::State).child(state_cell(app, row)).into_element(),
         at(Column::Role)
             .child(quiet(form, fact(row, |r| r.role.as_str()), false))
@@ -513,7 +515,30 @@ fn line(app: AppState, row: ReadSignal<RosterRow>, columns: Memo<Columns>) -> An
             .child(quiet(form, fact(row, |r| r.since.as_str()), true))
             .into_element(),
     ];
+    cells.push(remove(app, row));
     shell(app, row, open(app, row), cells)
+}
+
+/// `Remove…` on a stopped build's line: its Remove sheet asks prune's dry run first.
+fn remove(app: AppState, row: ReadSignal<RosterRow>) -> AnyElement {
+    let action = computed(move || row.with(|r| r.remove.clone()));
+    let session = untracked(|| row.with(|r| r.session.to_string()));
+    dynamic(move || {
+        let action = action.get()?;
+        let test_id = format!("btn-remove-{session}");
+        Some(untracked(|| {
+            view()
+                .flex_shrink_0()
+                .child(button(
+                    app,
+                    "Remove…",
+                    ButtonKind::Quiet,
+                    test_id,
+                    move || run_agents(app, action.clone()),
+                ))
+                .into_element()
+        }))
+    })
 }
 
 /// The phone's third line: role, model, cost and quiet time, the absent ones left out.
@@ -566,6 +591,7 @@ fn phone_line(app: AppState, row: ReadSignal<RosterRow>) -> AnyElement {
         .child(first)
         .child(doing)
         .child(quiet(app.form, move || row.with(agent_line), true))
+        .child(remove(app, row))
         .into_element();
     shell(app, row, open(app, row), vec![body])
 }

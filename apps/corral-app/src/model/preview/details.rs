@@ -47,6 +47,7 @@ pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result
             put(feed, target.clone(), DetailBody::Session(page));
             Ok(())
         }
+        DetailRef::SessionCards { id } => super::build_ops::cards(feed, id),
         DetailRef::Terminal { id } => {
             if feed.detail(target).and_then(|cache| cache.body()).is_some() {
                 return Ok(());

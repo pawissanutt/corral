@@ -1,13 +1,14 @@
 //! A session's recorded transcript as the terminal UI replays it, then its live turn. Every
-//! serialized `SessionItem` maps to a view-model here (tool rows in `tool`, markers, cards,
-//! images and the footer in `marks`); a preview followed by its continuation shows the
-//! complete item once it arrives, and words are fetched as soon as they are shown.
-
-use std::collections::BTreeSet;
+//! serialized `SessionItem` maps to a view-model here (tool rows in `tool`, cells, build cards,
+//! markers, cards, images and the footer in their modules); a preview followed by its
+//! continuation shows the complete item once it arrives, and words are fetched as soon as they
+//! are shown. Consecutive messages of one agent read as one, so a run of calls folds into one
+//! group; what the host made reads as quiet rows.
 
 use corral_protocol::detail::{
-    DetailRef, QuestionAnswer, QuestionOption, SessionItem, SessionMessage,
+    DetailRef, QuestionAnswer, QuestionOption, SessionItem, SessionMessage, SessionToolState,
 };
+use corral_protocol::session_state::InputOrigin;
 
 use crate::model::Id;
 use crate::model::agents::clock;
@@ -16,24 +17,31 @@ use crate::model::hue::Hue;
 use crate::model::text::{Rich, span};
 
 use super::super::{Ui, echo};
-use super::live::{ItemFetch, LiveSession};
+use super::items::Answered;
+use super::journal::Journal;
+use super::live::ItemFetch;
+use super::marks::Turn;
 use super::{
-    Action, Fill, Marker, Message, MessageItem, More, Prose, QuestionCard, Thinking, Transcript,
-    failure, marks, older_token, page, tool,
+    Action, EXPAND_ALL, Fill, Marker, Message, MessageItem, MessageKind, More, Prose, QuestionCard,
+    Section, TagFacts, Thinking, Transcript, bubbles, failure, group, marks, older_token, overlay,
+    page, tool, tool_jobs,
 };
 
-/// What every item mapping reads: the session, the owner's open rows and the feed.
+/// What every item mapping reads: the session, the owner's open rows, the feed and what the
+/// page's journal entries say.
 #[derive(Clone, Copy)]
 pub(super) struct Cx<'a> {
     pub id: &'a Id,
     pub ui: &'a Ui,
     pub feed: &'a daemon::Feed,
+    pub journal: &'a Journal,
 }
 
 impl Cx<'_> {
-    /// Whether the owner opened the row with this key.
+    /// Whether the row with this key shows opened: the owner opened it, or opened every row
+    /// and did not fold this one.
     pub fn open(&self, key: &str) -> bool {
-        self.ui.expanded.contains(key)
+        self.ui.expanded.contains(key) != self.ui.expanded.contains(EXPAND_ALL)
     }
 }
 
@@ -171,7 +179,7 @@ pub(super) fn first_line(text: &str) -> (&str, usize) {
 }
 
 /// The avatar letter and hue of a transcript author.
-fn avatar(author: &str) -> (&'static str, Hue) {
+pub(super) fn avatar(author: &str) -> (&'static str, Hue) {
     let who = author.to_ascii_lowercase();
     if who.starts_with("corral") || who == "system" {
         ("C", Hue::Corral)
@@ -188,6 +196,15 @@ fn avatar(author: &str) -> (&'static str, Hue) {
     } else {
         ("W", Hue::Worker)
     }
+}
+
+/// Authors whose entries are the host's or the session's own, the owner's `!command` (a row
+/// marked `you`) or what a tool returned beside its row: drawn with no avatar or header.
+fn host_made(author: &str) -> bool {
+    matches!(
+        author,
+        "system" | "custom" | "bashExecution" | "toolResult" | "tool"
+    )
 }
 
 /// A question the agent asked, open or settled, as the transcript recorded it.
@@ -231,7 +248,8 @@ fn question(
     }
 }
 
-/// Thinking: shown unless the owner folded it, or hid every thinking block of the session.
+/// Thinking: shown unless the owner folded it, or hid every thinking block of the session;
+/// then one row that shows them all again.
 pub(super) fn thinking(
     text: &str,
     key: String,
@@ -241,10 +259,22 @@ pub(super) fn thinking(
 ) -> Thinking {
     let fold = format!("{key}|fold");
     let (_, rest) = first_line(text);
+    if cx.ui.hide_thinking {
+        return Thinking {
+            text: text.to_owned(),
+            open: false,
+            hidden: "thinking hidden · Alt+H shows it".to_owned(),
+            hidden_all: true,
+            more,
+            streaming,
+            action: Action::Thinking(cx.id.clone()),
+        };
+    }
     Thinking {
         text: text.to_owned(),
-        open: !cx.open(&fold) && !cx.ui.hide_thinking,
+        open: !cx.ui.expanded.contains(&fold),
         hidden: format!("hidden · {}", lines(rest + 1)),
+        hidden_all: false,
         more,
         streaming,
         action: Action::Expand {
@@ -255,8 +285,8 @@ pub(super) fn thinking(
     }
 }
 
-/// The header of a message: author, then its time.
-fn head(author: &str, at: Option<&str>) -> Rich {
+/// The header of an agent's message: author, then its time.
+pub(super) fn head(author: &str, at: Option<&str>) -> Rich {
     let mut head: Rich = vec![span(author.to_owned()).bold()];
     if let Some(at) = at {
         head.push(span(format!(" · {at}")).dim());
@@ -264,17 +294,47 @@ fn head(author: &str, at: Option<&str>) -> Rich {
     head
 }
 
+/// An owner message's items and the input id an assistant forwarded with it: an `ask_user`
+/// answer becomes its own bubble, a forwarded message loses its `[owner input …]` line.
+fn owner_items(
+    items: &mut [MessageItem],
+    key: &str,
+    cx: Cx<'_>,
+) -> (Option<&'static str>, Option<String>) {
+    let mut tag = None;
+    let mut lead = None;
+    for item in items.iter_mut() {
+        let MessageItem::Prose(prose) = item else {
+            continue;
+        };
+        let open = cx.open(key);
+        if let Some(answers) = bubbles::answered(&prose.markdown, open) {
+            lead = Some("you answered");
+            *item = MessageItem::Answered(Answered {
+                answers,
+                open,
+                action: Action::Expand {
+                    session: cx.id.clone(),
+                    key: key.to_owned(),
+                    fetch: None,
+                },
+            });
+            continue;
+        }
+        if let Some((words, id)) = bubbles::forwarded(&prose.markdown) {
+            tag = Some(id.to_owned());
+            prose.markdown = words.to_owned();
+        }
+    }
+    (lead, tag)
+}
+
 fn message(
     message: &SessionMessage,
     cx: Cx<'_>,
     pairs: &std::collections::BTreeMap<&str, super::pairs::Pair<'_>>,
+    first_user: bool,
 ) -> Message {
-    let (letter, hue) = avatar(&message.author);
-    let author = if letter == "Y" {
-        "you".to_owned()
-    } else {
-        message.author.clone()
-    };
     let at = clock(message.at.as_deref(), cx.feed);
     // Positions inside one recorded message are stable across pages and refreshes; the message
     // is known by its time and author.
@@ -283,9 +343,28 @@ fn message(
         message.at.as_deref().unwrap_or_default(),
         message.author
     );
+    let resolved = resolve(&message.items, cx.feed);
+    let turn = Turn {
+        partial: resolved
+            .iter()
+            .any(|(item, _)| matches!(item, SessionItem::Text { text } if !text.trim().is_empty())),
+        not_run: resolved
+            .iter()
+            .filter(|(item, _)| {
+                matches!(
+                    item,
+                    SessionItem::ToolCall {
+                        state: SessionToolState::NotRun,
+                        ..
+                    }
+                )
+            })
+            .count(),
+    };
     let mut items = Vec::new();
     let mut facts = None;
-    for (n, (item, rest)) in resolve(&message.items, cx.feed).into_iter().enumerate() {
+    let mut notice = false;
+    for (n, (item, rest)) in resolved.into_iter().enumerate() {
         let key = format!("{base}|{n}");
         match item {
             SessionItem::Text { text } => items.push(MessageItem::Prose(Prose {
@@ -303,16 +382,14 @@ fn message(
             SessionItem::ToolCall { call_id, .. } => {
                 if let Some(pair) = pairs.get(call_id.as_str()) {
                     if std::ptr::eq(item, pair.first) {
-                        items.extend(
-                            tool::call(&pair.item, &key, pair.rest, cx).map(MessageItem::Tool),
-                        );
+                        items.extend(tool::call(&pair.item, &key, pair.rest, cx));
                     }
                 } else {
-                    items.extend(tool::call(item, &key, rest, cx).map(MessageItem::Tool));
+                    items.extend(tool::call(item, &key, rest, cx));
                 }
             }
             SessionItem::BashExecution { .. } => {
-                items.extend(tool::bash(item, &key, rest, cx).map(MessageItem::Tool));
+                items.extend(tool_jobs::owner(item, &key, rest, cx));
             }
             SessionItem::QuestionCard {
                 key: question_key,
@@ -328,7 +405,7 @@ fn message(
                 cx.feed,
             ))),
             SessionItem::Image { .. } => {
-                items.extend(marks::picture(item, &key, rest, cx).map(MessageItem::Picture));
+                items.extend(marks::picture(item, rest, cx).map(MessageItem::Picture));
             }
             SessionItem::Compaction { .. } | SessionItem::BranchSummary { .. } => {
                 items.extend(marks::divider(item, &key, rest, cx).map(MessageItem::Divider));
@@ -338,42 +415,197 @@ fn message(
             | SessionItem::Label { .. }
             | SessionItem::Aborted { .. }
             | SessionItem::ProviderError { .. } => {
-                items.extend(marks::marker(item, &key, rest, cx).map(MessageItem::Marker));
+                items.extend(marks::marker(item, &key, rest, cx, turn).map(MessageItem::Marker));
             }
             SessionItem::Card { title, .. } if title == marks::TURN_FOOTER => {
                 facts = Some((item, key, rest));
             }
+            SessionItem::Card { title, text, .. } if title == "Host notice" => {
+                notice = true;
+                items.extend(bubbles::notice(text).into_iter().map(|mut row| {
+                    let open = cx.open(&key);
+                    row.action = Some(rest.toggle(&key, cx));
+                    row.open = open;
+                    if !open {
+                        row.body.clear();
+                    }
+                    MessageItem::Marker(row)
+                }));
+            }
             SessionItem::Card { .. } => items.extend(marks::card(item, &key, rest, cx)),
             // `resolve` folds each continuation into the item before it.
             SessionItem::Continuation { .. } => {}
-            SessionItem::Other => items.push(MessageItem::Marker(Marker {
-                glyph: "○",
-                hue: Hue::Neutral,
-                words: "unsupported item · this version of the app cannot show it".into(),
-                open: false,
-                body: Vec::new(),
-                more: More::Whole,
-                action: None,
-            })),
+            SessionItem::Other => items.push(MessageItem::Marker(Marker::quiet(
+                "○",
+                Hue::Neutral,
+                "unsupported item · this version of the app cannot show it".into(),
+            ))),
         }
+    }
+    let owner = avatar(&message.author).0 == "Y" && !notice;
+    let quiet = notice || host_made(&message.author);
+    let (letter, hue) = avatar(&message.author);
+    if quiet {
+        for item in &mut items {
+            if let MessageItem::Marker(row) = item {
+                row.time = at.clone();
+            }
+        }
+        return Message {
+            id: message.id.clone(),
+            kind: MessageKind::Quiet,
+            avatar: letter,
+            hue,
+            head: Vec::new(),
+            author: message.author.clone(),
+            detail: at.unwrap_or_default(),
+            tag: None,
+            tag_facts: None,
+            items,
+            footer: None,
+            live: false,
+        };
+    }
+    // What the host delivered for a child (its report, a message it sent the parent) is that
+    // child's, not the owner's; owner-typed text is never read as one.
+    let typed = message
+        .input
+        .as_ref()
+        .is_some_and(|input| input.origin == InputOrigin::Owner);
+    let said = items.iter().find_map(|item| match item {
+        MessageItem::Prose(prose) => Some(prose.markdown.as_str()),
+        _ => None,
+    });
+    if owner && !typed {
+        if let Some(report) = said.and_then(bubbles::child_report) {
+            let key = format!("{base}|report");
+            return bubbles::report_message(
+                message.id.clone(),
+                report,
+                at.as_deref(),
+                cx.open(&key),
+                Action::Expand {
+                    session: cx.id.clone(),
+                    key,
+                    fetch: None,
+                },
+            );
+        }
+        if let Some((from, body)) = said.and_then(bubbles::peer_message) {
+            let lead = vec![span(from.to_owned()).bold(), span(" → parent").dim()];
+            let mut shown = bubbles::bubble(
+                message.id.clone(),
+                bubbles::head(lead, at.as_deref()),
+                vec![MessageItem::Prose(Prose {
+                    markdown: body.to_owned(),
+                    more: More::Whole,
+                    streaming: false,
+                })],
+            );
+            shown.author = from.to_owned();
+            return shown;
+        }
+    }
+    if owner {
+        let (lead, forwarded) = owner_items(&mut items, &format!("{base}|answer"), cx);
+        let head = if first_user && bubbles::child_scope(cx.id).is_some() {
+            items.extend(bubbles::brief_note(cx.id, cx.feed));
+            vec![span("brief from parent").dim()]
+        } else {
+            match lead {
+                Some(lead) => vec![span(lead).dim()],
+                None => bubbles::owner_lead(message.input.as_ref()),
+            }
+        };
+        let mut shown = bubbles::bubble(
+            message.id.clone(),
+            bubbles::head(head, at.as_deref()),
+            items,
+        );
+        shown.detail = at.unwrap_or_default();
+        match forwarded {
+            Some(id) => shown.tag = Some(id),
+            None => {
+                let (tag, device) = message
+                    .input
+                    .as_ref()
+                    .map_or((None, None), |input| bubbles::source(input, cx.feed));
+                shown.tag = tag;
+                shown.tag_facts = device.map(|device| {
+                    let key = format!("{base}|device");
+                    let open = cx.open(&key);
+                    TagFacts {
+                        open,
+                        body: if open {
+                            vec![Section::Text {
+                                label: "sent from the device".into(),
+                                text: device,
+                            }]
+                        } else {
+                            Vec::new()
+                        },
+                        action: Action::Expand {
+                            session: cx.id.clone(),
+                            key,
+                            fetch: None,
+                        },
+                    }
+                });
+            }
+        }
+        return shown;
     }
     Message {
         id: message.id.clone(),
+        kind: MessageKind::Agent,
         avatar: letter,
         hue,
-        head: head(&author, at.as_deref()),
-        author,
+        head: head(&message.author, at.as_deref()),
+        author: message.author.clone(),
         detail: at.unwrap_or_default(),
-        input: message.input.as_ref().and_then(|facts| facts.id.clone()),
+        tag: None,
+        tag_facts: None,
         items,
         footer: marks::footer(message, facts, cx),
         live: false,
     }
 }
 
-/// The continuation tokens of the words on the shown page that are not fetched yet: text and
-/// thinking show in full, as the terminal shows them, so they are fetched once on screen. Tool
-/// output, arguments, diffs, card data and images wait until the owner opens them.
+/// Consecutive messages of one agent as one message, so its words and calls read as one reply
+/// and a run of calls can fold; the merged message keeps the first's head and the latest foot.
+/// Consecutive quiet rows stand together under one blank row.
+fn merged(messages: Vec<Message>) -> Vec<Message> {
+    let mut out: Vec<Message> = Vec::with_capacity(messages.len());
+    for message in messages {
+        if let Some(last) = out.last_mut()
+            && last.kind == message.kind
+            && match message.kind {
+                MessageKind::Agent => last.author == message.author,
+                MessageKind::Quiet => true,
+                MessageKind::Bubble => false,
+            }
+        {
+            last.items.extend(message.items);
+            if message.footer.is_some() {
+                last.footer = message.footer;
+            }
+            continue;
+        }
+        out.push(message);
+    }
+    out
+}
+
+/// The time a recorded message was written, in epoch milliseconds.
+pub(super) fn millis(at: Option<&str>) -> Option<u64> {
+    let stamp: jiff::Timestamp = at?.parse().ok()?;
+    u64::try_from(stamp.as_millisecond()).ok()
+}
+
+/// The continuation tokens of what the shown page draws in full and does not hold yet: text
+/// and thinking, as the terminal shows them, and the build cards and Code Mode cells drawn from
+/// their call's arguments and result. Other tool output, arguments, diffs, card data and images
+/// wait until the owner opens them.
 pub fn fetches(feed: &daemon::Feed, id: &Id) -> Vec<String> {
     let Some(page) = page(feed.detail(&DetailRef::Session { id: id.to_string() })) else {
         return Vec::new();
@@ -386,6 +618,18 @@ pub fn fetches(feed: &daemon::Feed, id: &Id) -> Vec<String> {
                 SessionItem::Text { .. } | SessionItem::Thinking { .. },
                 SessionItem::Continuation { token, .. },
             ] if !feed.items.contains_key(token) => Some(token.clone()),
+            // A card is drawn from its call's complete arguments and result, never a clipped
+            // preview of them.
+            [
+                SessionItem::ToolCall { name, .. },
+                SessionItem::Continuation { token, .. },
+            ] if matches!(
+                name.as_str(),
+                "task" | "build_finish" | "board_plan" | "codemode"
+            ) && !feed.items.contains_key(token) =>
+            {
+                Some(token.clone())
+            }
             _ => None,
         })
         .collect()
@@ -398,8 +642,15 @@ pub fn transcript(
     cache: Option<&DetailCache>,
     feed: &daemon::Feed,
 ) -> Transcript {
-    let cx = Cx { id, ui, feed };
     let body = page(cache);
+    let recorded: &[SessionMessage] = body.map_or(&[], |page| page.messages.as_slice());
+    let journal = Journal::of(id, recorded, feed);
+    let cx = Cx {
+        id,
+        ui,
+        feed,
+        journal: &journal,
+    };
     let loading = cache.is_none_or(|cache| cache.loading);
     let earlier = ui.earlier;
     let fill = match body {
@@ -431,20 +682,50 @@ pub fn transcript(
             })
         }
     });
-    let recorded: &[SessionMessage] = body.map_or(&[], |page| page.messages.as_slice());
     let pairs = super::pairs::collect(recorded, feed);
+    let first_user = recorded
+        .iter()
+        .position(|message| avatar(&message.author).0 == "Y");
+    let mut timed: Vec<(Option<u64>, Message)> = recorded
+        .iter()
+        .enumerate()
+        .map(|(n, m)| {
+            (
+                millis(m.at.as_deref()),
+                message(m, cx, &pairs, Some(n) == first_user),
+            )
+        })
+        .filter(|(_, message)| !message.items.is_empty() || message.footer.is_some())
+        .collect();
+    // A child conversation's steers and agent messages stand before the first message that
+    // started after them; those without a time go last.
+    let at_clock = |ms: u64| {
+        let at = jiff::Timestamp::from_millisecond(i64::try_from(ms).ok()?).ok()?;
+        clock(Some(&at.to_string()), feed)
+    };
+    for (at, bubble) in bubbles::child_bubbles(id, feed, at_clock) {
+        let place = at.and_then(|at| {
+            timed
+                .iter()
+                .position(|(when, _)| when.is_some_and(|when| when > at))
+        });
+        timed.insert(place.unwrap_or(timed.len()), (at, bubble));
+    }
+    let messages: Vec<Message> = merged(timed.into_iter().map(|(_, message)| message).collect())
+        .into_iter()
+        .map(|mut message| {
+            message.items = group::fold(std::mem::take(&mut message.items), cx);
+            message
+        })
+        .collect();
     // The live turn follows the latest messages; an earlier page is not where it stands.
     let (live, after) = match feed.live.get(id.as_str()) {
-        Some(turn) if !earlier && body.is_some() => overlay(turn, recorded, cx),
+        Some(turn) if !earlier && body.is_some() => overlay::overlay(turn, recorded, cx),
         _ => (Vec::new(), Vec::new()),
     };
     Transcript {
         echoes: echo::shown(id, ui, body, feed),
-        messages: recorded
-            .iter()
-            .map(|m| message(m, cx, &pairs))
-            .filter(|message| !message.items.is_empty() || message.footer.is_some())
-            .collect(),
+        messages,
         older: cache
             .and_then(older_token)
             .map(|_| Action::Older(id.clone())),
@@ -456,151 +737,4 @@ pub fn transcript(
         live,
         after,
     }
-}
-
-/// The open turn laid over the recorded messages: its settled messages, its tool calls, then
-/// the message still being written, as one streaming assistant message; then the owner input
-/// the host holds and how the turn ended. A tool call the recorded page already holds is drawn
-/// there only, and an ending the recorded transcript states is not said twice.
-fn overlay(
-    turn: &LiveSession,
-    recorded: &[SessionMessage],
-    cx: Cx<'_>,
-) -> (Vec<Message>, Vec<MessageItem>) {
-    let calls: BTreeSet<&str> = recorded
-        .iter()
-        .flat_map(|message| &message.items)
-        .filter_map(|item| match item {
-            SessionItem::ToolCall { call_id, .. } => Some(call_id.as_str()),
-            _ => None,
-        })
-        .collect();
-    let base = format!(
-        "live|{}|{}",
-        turn.generation.unwrap_or(0),
-        turn.turn.unwrap_or(0)
-    );
-    let mut items = words(turn, true, &base, cx);
-    items.extend(
-        turn.tools
-            .iter()
-            .filter(|call| !calls.contains(call.call.as_str()))
-            .map(|call| MessageItem::Tool(tool::live(call, cx))),
-    );
-    items.extend(words(turn, false, &base, cx));
-    let live = if items.is_empty() {
-        Vec::new()
-    } else {
-        let (avatar, hue) = avatar("assistant");
-        let mut head = head("assistant", None);
-        head.push(
-            span(if turn.open {
-                " · working now"
-            } else {
-                " · not recorded yet"
-            })
-            .dim(),
-        );
-        vec![Message {
-            id: String::new(),
-            avatar,
-            hue,
-            head,
-            author: "assistant".into(),
-            detail: String::new(),
-            input: None,
-            items,
-            footer: None,
-            live: true,
-        }]
-    };
-    let mut after = Vec::new();
-    if let Some(held) = queued(turn.steer, turn.follow_up) {
-        after.push(MessageItem::Marker(quiet("→", Hue::Neutral, held)));
-    }
-    if let Some(end) = turn.ended.as_ref().filter(|_| !turn.open) {
-        // The latest recorded assistant message says how its turn ended once it is recorded.
-        let last = recorded
-            .iter()
-            .rev()
-            .find(|message| message.author == "assistant")
-            .map_or(&[][..], |message| message.items.as_slice());
-        let recorded_as = |aborted: bool| {
-            last.iter().any(|item| match item {
-                SessionItem::Aborted { .. } => aborted,
-                SessionItem::ProviderError { .. } => !aborted,
-                _ => false,
-            })
-        };
-        if let Some(error) = &end.error {
-            if !recorded_as(false) {
-                after.push(MessageItem::Marker(quiet("✗", Hue::Fail, error.clone())));
-            }
-        } else if end.aborted && !recorded_as(true) {
-            after.push(MessageItem::Marker(quiet(
-                "○",
-                Hue::Neutral,
-                "The turn was stopped.".into(),
-            )));
-        }
-    }
-    (live, after)
-}
-
-/// The live turn's messages that are settled (or still being written): thinking, then words.
-fn words(turn: &LiveSession, settled: bool, base: &str, cx: Cx<'_>) -> Vec<MessageItem> {
-    let mut items = Vec::new();
-    for message in turn
-        .messages
-        .iter()
-        .filter(|message| message.settled_at.is_some() == settled)
-    {
-        let streaming = !settled;
-        if !message.thinking.is_empty() {
-            items.push(MessageItem::Thinking(thinking(
-                &message.thinking,
-                format!("{base}|{}", message.ordinal),
-                More::Whole,
-                streaming,
-                cx,
-            )));
-        }
-        if !message.text.is_empty() {
-            items.push(MessageItem::Prose(Prose {
-                markdown: message.text.clone(),
-                more: More::Whole,
-                streaming,
-            }));
-        }
-    }
-    items
-}
-
-/// A quiet row with nothing more to open.
-fn quiet(glyph: &'static str, hue: Hue, words: String) -> Marker {
-    Marker {
-        glyph,
-        hue,
-        words,
-        open: false,
-        body: Vec::new(),
-        more: More::Whole,
-        action: None,
-    }
-}
-
-/// Owner input the host holds: `1 message steers this turn · 2 wait for the next`.
-fn queued(steer: u64, follow_up: u64) -> Option<String> {
-    let steer = match steer {
-        0 => None,
-        1 => Some("1 message steers this turn".to_owned()),
-        n => Some(format!("{n} messages steer this turn")),
-    };
-    let follow = match follow_up {
-        0 => None,
-        1 => Some("1 message waits for the next turn".to_owned()),
-        n => Some(format!("{n} messages wait for the next turn")),
-    };
-    let words: Vec<String> = steer.into_iter().chain(follow).collect();
-    (!words.is_empty()).then(|| format!("queued · {}", words.join(" · ")))
 }

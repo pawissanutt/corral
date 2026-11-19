@@ -1,11 +1,10 @@
-//! Session controls and question answers against the sample, answered under their request id
+//! Session controls against the sample, answered under their request id
 //! as corrald answers them: a pi host (a sample chat, or one of the two pi workers) cancels,
 //! pauses, resumes and rewinds; a run without a pi host refuses those with corrald's reason, a
 //! reviewer refuses Pause, and Terminate and Relaunch of a run are the engine's `stop` and
 //! `retry`.
 
 use corral_protocol::rows::AssistantState;
-use corral_protocol::session::SessionPromptAnswer;
 use corral_types::{Op, Refusal, Role, SessionRef};
 use serde_json::{Value, json};
 
@@ -45,28 +44,6 @@ pub fn control(feed: &mut Feed, key: &Id, session: &str, control: Control) {
             operation.error = Some(ClientError {
                 code: "not_found".into(),
                 message,
-            })
-        }
-    }
-    feed.operations.insert(key.clone(), operation);
-}
-
-/// Records the outcome of an answer under `key`, as the host takes it or corrald refuses it.
-pub fn answer(feed: &mut Feed, key: &Id, answer: &SessionPromptAnswer) {
-    let mut operation = Operation {
-        method: corral_protocol::assistant::PROMPT_ANSWER.into(),
-        loading: false,
-        value: None,
-        error: None,
-        refusal: None,
-    };
-    match pi_control::answer(feed, answer) {
-        Ok(value) => operation.value = Some(value),
-        Err(reason) => {
-            operation.refusal = Some(Refusal {
-                reason,
-                next: Vec::new(),
-                problems: None,
             })
         }
     }

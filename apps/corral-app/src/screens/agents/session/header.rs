@@ -1,16 +1,19 @@
 //! The session page's head (`session::Header`): back to Agents, who the session is (`build ·
 //! auth-refactor`) with its id, the needs-you and decisions chips, the state word with its mark
 //! (a current notice in its place for a few seconds), and the ⋯ menu of the session's actions;
-//! under it the muted second line. Desktop: one 46 pt row and the line under it; terminal: the
-//! same as two rows of Cells; phone: the shell's head names the session and holds ⋯, the page
-//! leads with one state line. The facts redraw on their own, so the open menu and its trigger
-//! stay mounted while the state word ticks.
+//! under it the muted second line. Pressing the needs-you chip docks the oldest waiting card; a
+//! build's `choose exit` presses to Finish…, which docks the exit choice. Desktop: one 46 pt row
+//! and the line under it; terminal: the same as two rows of Cells; phone: the shell's head names
+//! the session and holds ⋯, the page leads with one state line. The facts redraw on their own,
+//! so the open menu and its trigger stay mounted while the state word ticks. test ids
+//! `btn-needs-you`, `btn-choose-exit`.
 
+use corral_protocol::session_state::ExitPhase;
 use nsh_base::{menu, menu_item};
 use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
-use crate::model::session::{ActionRow, Header, SessionPage};
+use crate::model::session::{Action, ActionRow, DockAction, Header, SessionPage};
 use crate::model::{Form, Hue};
 use crate::screens::plans::menu_trigger;
 use crate::state::AppState;
@@ -77,7 +80,7 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                     .text_color(color(Token::Ink3)),
             )
             .child(view().flex_1().min_w(px(0.0)))
-            .child(facts(app, header))
+            .child(facts(app, page, header))
             .child(term::space(1.0))
             .child(actions(app, page));
         return view()
@@ -133,7 +136,7 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                 .text_color(color(Token::Ink3)),
         )
         .child(view().flex_1().min_w(px(0.0)))
-        .child(facts(app, header))
+        .child(facts(app, page, header))
         .child(actions(app, page));
     view()
         .flex_none()
@@ -172,15 +175,9 @@ pub(super) fn phone_line(app: AppState, page: Memo<SessionPage>) -> AnyElement {
         .pt(px(6.0))
         .pb(px(4.0))
         .child(dynamic(move || {
-            header.with(|h| untracked(|| state(app, h)))
+            header.with(|h| untracked(|| state(app, h, None)))
         }))
-        .child(dynamic(move || {
-            header.with(|h| {
-                h.needs_you
-                    .as_ref()
-                    .map(|needs| untracked(|| chip(app, needs.short.clone(), Hue::You)))
-            })
-        }))
+        .child(needs_you(app, page, true))
         .child(view().flex_1().min_w(px(0.0)))
         .child(
             text(move || header.with(|h| h.shown_id.clone()))
@@ -193,22 +190,66 @@ pub(super) fn phone_line(app: AppState, page: Memo<SessionPage>) -> AnyElement {
         .into_element()
 }
 
+/// The needs-you chip (`▲ 2 needs you`, `▲ 2` when `short`); pressing it docks the oldest card
+/// waiting on the owner.
+fn needs_you(app: AppState, page: Memo<SessionPage>, short: bool) -> AnyElement {
+    let shown = computed(move || {
+        page.with(|p| {
+            let needs = p.header.needs_you.as_ref()?;
+            let label = if short {
+                needs.short.clone()
+            } else {
+                needs.label.clone()
+            };
+            Some((label, p.dock.oldest.clone()))
+        })
+    });
+    dynamic(move || {
+        let (label, oldest) = shown.get()?;
+        Some(untracked(|| {
+            let face = chip(app, label.clone(), Hue::You);
+            match oldest {
+                Some(action) => view()
+                    .test_id("btn-needs-you")
+                    .role(AccessibilityRole::Button)
+                    .label(format!("{label}: show the oldest"))
+                    .cursor_pointer()
+                    .on_press(move || run(app, action.clone()))
+                    .child(face)
+                    .into_element(),
+                None => face,
+            }
+        }))
+    })
+}
+
+/// Finish…, while the state word says a build's exit choice waits and it is not docked.
+fn choose_exit(page: Memo<SessionPage>) -> Memo<Option<Action>> {
+    computed(move || {
+        page.with(|p| {
+            let pending = p
+                .header
+                .state
+                .exit
+                .as_ref()
+                .is_some_and(|exit| exit.phase == ExitPhase::Pending);
+            (pending && p.dock.choice.is_none())
+                .then(|| Action::Dock(DockAction::Finish(p.id.clone())))
+        })
+    })
+}
+
 /// The trailing facts: the needs-you chip, the decisions chip (pressing opens the task in Now),
 /// then the state word.
-fn facts(app: AppState, header: Memo<Header>) -> AnyElement {
+fn facts(app: AppState, page: Memo<SessionPage>, header: Memo<Header>) -> AnyElement {
     let form = app.form;
+    let finish = choose_exit(page);
     view()
         .flex_row()
         .flex_shrink_0()
         .items_center()
         .gap(px(if form == Form::Terminal { 8.0 } else { 10.0 }))
-        .child(dynamic(move || {
-            header.with(|h| {
-                h.needs_you
-                    .as_ref()
-                    .map(|needs| untracked(|| chip(app, needs.label.clone(), Hue::You)))
-            })
-        }))
+        .child(needs_you(app, page, false))
         .child(dynamic(move || {
             header.with(|h| {
                 h.decisions.clone().map(|decisions| {
@@ -227,13 +268,15 @@ fn facts(app: AppState, header: Memo<Header>) -> AnyElement {
             })
         }))
         .child(dynamic(move || {
-            header.with(|h| untracked(|| state(app, h)))
+            let finish = finish.get();
+            header.with(|h| untracked(|| state(app, h, finish)))
         }))
         .into_element()
 }
 
-/// The state word with its mark, or the current notice in its place in its tone.
-fn state(app: AppState, header: &Header) -> AnyElement {
+/// The state word with its mark, or the current notice in its place in its tone; pressable as
+/// `finish` while a build's exit choice waits undocked.
+fn state(app: AppState, header: &Header, finish: Option<Action>) -> AnyElement {
     let form = app.form;
     let words = |content: String, hue: Hue| {
         let words = text(content)
@@ -250,13 +293,22 @@ fn state(app: AppState, header: &Header) -> AnyElement {
         return words(notice.text.clone(), notice.hue).into_element();
     }
     let word = &header.state;
-    view()
+    let face = view()
         .flex_row()
         .items_center()
         .gap(px(if form == Form::Terminal { 8.0 } else { 5.0 }))
         .children(state_mark(app, word.spinner, word.glyph, word.hue))
-        .child(words(word.words.clone(), word.hue))
-        .into_element()
+        .child(words(word.words.clone(), word.hue));
+    match finish {
+        Some(action) => face
+            .test_id("btn-choose-exit")
+            .role(AccessibilityRole::Button)
+            .label(format!("{}: Finish…", word.words))
+            .cursor_pointer()
+            .on_press(move || run(app, action.clone()))
+            .into_element(),
+        None => face.into_element(),
+    }
 }
 
 /// The ⋯ menu of the session's actions, every group's rows in order; a row the host cannot run

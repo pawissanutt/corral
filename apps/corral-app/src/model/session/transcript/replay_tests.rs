@@ -4,7 +4,9 @@ use corral_protocol::detail::{
 
 use super::super::Ui;
 use super::replay::transcript;
-use super::{ItemFetch, LiveSession, LiveTool, LiveToolState, MessageItem, More, Transcript};
+use super::{
+    ItemFetch, LiveMessage, LiveSession, LiveTool, LiveToolState, MessageItem, More, Transcript,
+};
 use crate::model::Id;
 use crate::model::daemon::{self, DetailCache};
 use crate::model::hue::Hue;
@@ -107,6 +109,7 @@ fn live_tool_row_is_drawn_twice_once_the_recorded_transcript_holds_it() {
                 state: LiveToolState::Done,
                 elapsed_ms: Some(400),
                 settled_at: None,
+                after: 0,
             }],
             ..Default::default()
         },
@@ -138,7 +141,7 @@ fn provider_error_item_is_dropped() {
 
 #[test]
 fn recorded_tool_calls_settle_from_their_result_by_call_id() {
-    use crate::model::board::Mark;
+    use super::ToolState;
 
     let call = |id: &str, arguments: &str, state| SessionItem::ToolCall {
         call_id: id.into(),
@@ -154,9 +157,9 @@ fn recorded_tool_calls_settle_from_their_result_by_call_id() {
         diff: None,
         content: None,
     };
-    for (state, mark) in [
-        (SessionToolState::Done, Mark::Done),
-        (SessionToolState::Failed, Mark::Fail),
+    for (state, expected) in [
+        (SessionToolState::Done, ToolState::Ok),
+        (SessionToolState::Failed, ToolState::Failed),
     ] {
         let mut feed = feed(vec![
             call(
@@ -212,13 +215,97 @@ fn recorded_tool_calls_settle_from_their_result_by_call_id() {
             2,
             "the result must settle the call, not add a second row"
         );
-        assert_eq!(tools[0].mark, mark);
-        assert_eq!(tools[0].failed, state == SessionToolState::Failed);
+        assert_eq!(tools[0].state, expected);
+        assert_eq!(
+            tools[0].outcome_hue == Hue::Fail,
+            state == SessionToolState::Failed
+        );
         assert_eq!(tools[0].summary, "echo ready");
         assert_eq!(
-            tools[1].mark,
-            Mark::Active,
+            tools[1].state,
+            ToolState::Running,
             "a different id must stay running"
         );
     }
+}
+
+#[test]
+fn a_recorded_reply_retires_its_live_text() {
+    // The feed's recorded assistant message was written at 10:00:00, after the turn started.
+    let mut feed = feed(vec![SessionItem::Text {
+        text: "Done: the tests pass.".into(),
+    }]);
+    feed.live.insert(
+        Id::from(ID),
+        LiveSession {
+            open: false,
+            turn: Some(3),
+            started_at: Some("2026-11-15T09:59:58Z".into()),
+            messages: vec![LiveMessage {
+                ordinal: 1,
+                text: "Done: the tests pass.".into(),
+                thinking: String::new(),
+                settled_at: None,
+            }],
+            ..Default::default()
+        },
+    );
+    let page = shown(&feed);
+    assert!(
+        page.live.is_empty(),
+        "the served reply of the turn must retire its live text, not stand beside it"
+    );
+}
+
+#[test]
+fn a_live_reply_that_follows_two_tool_calls_is_shown_after_them() {
+    // The agent edited, committed, then said so; the turn ended before the page held any of it.
+    let call = |id: &str, tool: &str, args: &str| LiveTool {
+        call: id.into(),
+        tool: tool.into(),
+        args: Some(args.into()),
+        args_truncated: false,
+        partial: None,
+        state: LiveToolState::Done,
+        elapsed_ms: Some(300),
+        settled_at: Some(1),
+        after: 0,
+    };
+    let mut feed = feed(Vec::new());
+    feed.live.insert(
+        Id::from(ID),
+        LiveSession {
+            open: false,
+            turn: Some(4),
+            tools: vec![
+                call("e1", "edit", r#"{"path":"line.txt"}"#),
+                call(
+                    "b1",
+                    "bash",
+                    r#"{"command":"git add line.txt && git commit -m label"}"#,
+                ),
+            ],
+            messages: vec![LiveMessage {
+                ordinal: 2,
+                text: "The parity label is committed.".into(),
+                thinking: String::new(),
+                settled_at: Some(2),
+            }],
+            ..Default::default()
+        },
+    );
+    let page = shown(&feed);
+    let [live] = page.live.as_slice() else {
+        panic!("the live turn is one message");
+    };
+    let kinds: Vec<&str> = live
+        .items
+        .iter()
+        .map(|item| match item {
+            MessageItem::Tool(_) => "tool",
+            MessageItem::Prose(_) => "text",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(kinds, ["tool", "tool", "text"]);
 }

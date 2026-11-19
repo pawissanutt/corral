@@ -2,15 +2,17 @@
 //! session's transcript, streams the running turn on the live session stream one beat per clock
 //! tick, holds automated input while paused and delivers it on Resume or before the owner's
 //! next message, and records its turn checkpoints. Its controls (cancel, pause, resume, the
-//! rewinds) and the answers to its questions are in `pi_control.rs`. A session's transcript
-//! detail is read from its host on request, as corrald reads the file, so a recorded turn
-//! shows only once the app re-reads it.
+//! rewinds) are in `pi_control.rs`; the cards it waits on, its queue and a build's exit are
+//! answered in `build_ops.rs`. A session's transcript detail is read from its host on request,
+//! as corrald reads the file, so a recorded turn shows only once the app re-reads it.
 
 use std::collections::VecDeque;
 
-use corral_protocol::detail::{InputFacts, SessionItem, SessionMessage, SessionToolState};
+use corral_protocol::detail::{
+    InputFacts, SessionCard, SessionItem, SessionMessage, SessionToolState,
+};
 use corral_protocol::session::{RewindCheckpoint, Rewound};
-use corral_protocol::session_state::InputOrigin;
+use corral_protocol::session_state::{ExitBrief, InputOrigin};
 use corral_protocol::subscription::{
     SessionLiveEvent, SessionLiveKind, SessionLiveToolState, SessionLiveTurnState,
 };
@@ -22,11 +24,13 @@ use super::pi_script::{self, Beat, Question};
 use super::sample::sha;
 use super::stamp;
 use crate::model::Id;
-use crate::model::agents::QUESTION_CARD;
 use crate::model::daemon::Feed;
 
 /// Words streamed per clock tick.
 const WORDS_PER_TICK: usize = 3;
+
+/// The card title the transcript gives each snapshot of an owner question.
+const QUESTION_CARD: &str = "corral_owner_question";
 
 /// Which session a host runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -57,8 +61,10 @@ pub struct Host {
     seq: u64,
     pub(super) checkpoints: Vec<RewindCheckpoint>,
     pub(super) rewinds: Vec<Rewound>,
-    /// Questions waiting for the owner.
-    pub(super) pending: Vec<Question>,
+    /// Cards waiting for the owner, oldest first.
+    pub(super) pending: Vec<SessionCard>,
+    /// A build's exit, once one was asked for.
+    pub(super) exit: Option<ExitBrief>,
     /// Terminated or lost: no process answers.
     pub(super) gone: bool,
 }
@@ -75,6 +81,16 @@ pub(super) struct Input {
     pub(super) origin: Origin,
     /// The thread entry a chat message is recorded as.
     pub(super) entry: Option<String>,
+}
+
+impl Input {
+    /// The queue key of an input sent through the socket: its input id.
+    pub(super) fn key(&self) -> Option<&str> {
+        self.entry
+            .as_deref()
+            .and_then(|entry| entry.split_once("/input/"))
+            .map(|(_, key)| key)
+    }
 }
 
 /// The running turn.
@@ -213,20 +229,22 @@ fn assistant(at: &str, items: Vec<SessionItem>, stop: Option<&str>) -> SessionMe
 }
 
 /// A question snapshot, as the transcript records each change of one.
-pub(super) fn question_card(
-    at: &str,
-    question: &Question,
-    status: &str,
-    answer: Value,
-) -> Recorded {
+pub(super) fn question_card(at: &str, card: &SessionCard, status: &str, answer: Value) -> Recorded {
+    let questions: Vec<Value> = card
+        .questions
+        .iter()
+        .map(|question| {
+            json!({
+                "question": question.text,
+                "options": question.options.iter().map(|option| &option.label).collect::<Vec<_>>(),
+                "freeText": question.free_text,
+            })
+        })
+        .collect();
     let data = json!({
         "version": 1,
-        "id": question.id,
-        "questions": [{
-            "question": question.text,
-            "options": question.options,
-            "freeText": true,
-        }],
+        "id": card.id,
+        "questions": questions,
         "status": status,
         "answers": answer,
     });
@@ -238,7 +256,7 @@ pub(super) fn question_card(
             at: Some(at.into()),
             items: vec![SessionItem::Card {
                 title: QUESTION_CARD.into(),
-                text: question.text.clone(),
+                text: card.title.clone(),
                 data: Some(data.to_string()),
             }],
             model: None,
@@ -316,7 +334,8 @@ pub(super) fn watch(feed: &mut Feed, scope: &str) {
         .apply_page(Some(generation), events, false);
 }
 
-/// One clock tick: every running turn takes its next beat.
+/// One clock tick: every running turn takes its next beat, and a landing build's exit its next
+/// phase.
 pub fn tick(feed: &mut Feed) {
     let running: Vec<Id> = feed
         .hosts
@@ -327,6 +346,7 @@ pub fn tick(feed: &mut Feed) {
     for id in running {
         step(feed, &id);
     }
+    super::build_ops::tick(feed);
 }
 
 /// What a beat left to do once its events are out.
@@ -525,9 +545,10 @@ pub(super) fn finish(
         });
     }
     if let Some(question) = question {
+        let card = question.card(at);
         host.transcript
-            .push(question_card(at, &question, "pending", Value::Null));
-        host.pending.push(question);
+            .push(question_card(at, &card, "pending", Value::Null));
+        host.pending.push(card);
     }
 }
 

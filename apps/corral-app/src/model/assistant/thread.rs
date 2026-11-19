@@ -1,6 +1,6 @@
 //! Owned transcript descriptors populated from the shared feed.
 
-use super::{Action, AskUserCard, AttachmentView, Button, Chip, FileChip, WaitingBlock};
+use super::{Action, AttachmentView, Button, Chip, FileChip, WaitingBlock};
 use crate::model::text::Rich;
 
 /// An owner message, with origin and delivery state independently available.
@@ -37,8 +37,6 @@ pub enum Body {
     Markdown(String),
     /// Numbered paragraphs.
     Ordered(Vec<Rich>),
-    /// An agent's question, answered in place.
-    AskUser(AskUserCard),
     /// Host startup explanation.
     Starting { state: Chip, text: String },
 }
