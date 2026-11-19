@@ -30,6 +30,51 @@ fn call(launch: &PaidLaunch, id: &str, nanos: u64) -> Value {
 }
 
 #[test]
+fn derived_mixed_build_meters_frozen_routes_and_refuses_a_changed_preset_on_resume() {
+    let (_dir, mut store, binding) = configured();
+    let preset = corral_core::BuildProfileCfg {
+        model: "openai-codex/gpt-5.4".into(),
+        effort: None,
+        description: None,
+    };
+    store
+        .config
+        .build
+        .profiles
+        .insert("hard".into(), preset.clone());
+    store.save_config().unwrap();
+    let presets = [("hard".into(), "build-api".into())].into();
+    let routes = [("build-api".into(), binding.clone())].into();
+    let launch = open_mixed(&store, "subscription", None, &presets, &routes, None).unwrap();
+    let reserve = |id| {
+        let mut input = call(&launch, id, 5_000);
+        input["binding_digest"] = json!(binding.digest);
+        input
+    };
+    let state = budget(&store, reserve("child")).unwrap();
+    assert_eq!(state["admitted"], true);
+    assert!(state["limits"]["max_usd_nanos"].is_null());
+
+    // Renaming the preset leaves the exact paid binding unchanged, but changes the mapping.
+    store.config.build.profiles.remove("hard");
+    store.config.build.profiles.insert("heavy".into(), preset);
+    store.save_config().unwrap();
+    let changed = [("heavy".into(), "build-api".into())].into();
+    let err = open_mixed(
+        &store,
+        "subscription",
+        None,
+        &changed,
+        &routes,
+        Some(&launch.session),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("route is sticky"), "{err:#}");
+    let state = budget(&store, reserve("next-child")).unwrap();
+    assert_eq!(state["paid"]["consumed_or_reserved_nanos"], 10_000);
+}
+
+#[test]
 fn concurrent_reservations_are_recorded_and_allowance_edits_do_not_block_resume() {
     let (_dir, store, binding) = configured();
     let launch = open(&store, "build-api", &binding, None).unwrap();
@@ -66,7 +111,10 @@ fn concurrent_reservations_are_recorded_and_allowance_edits_do_not_block_resume(
     let reply = budget(&store, call(&launch, "uncertain-retry", 600)).unwrap();
     assert_eq!(reply["admitted"], true);
     assert_eq!(reply["exhausted"], false);
-    assert_eq!(budget(&store, call(&launch, "small-request", 1)).unwrap()["admitted"], true);
+    assert_eq!(
+        budget(&store, call(&launch, "small-request", 1)).unwrap()["admitted"],
+        true
+    );
     assert!(open(&store, "another-profile", &binding, Some(&launch.session)).is_err());
     // Editing the approved allowance keeps the session resumable with its recorded usage.
     let mut changed = Store::open(store.root()).unwrap();

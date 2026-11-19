@@ -402,10 +402,10 @@ fn command(
             .is_some_and(|ledger| ledger.mixed.is_some()),
         _ => false,
     };
-    let api = mixed_api(&config);
-    let mut mixed = api
-        .as_deref()
-        .filter(|_| workspace.is_some() && !bare && (args.resume.is_none() || retained_mixed));
+    let api = (workspace.is_some() && !bare && (args.resume.is_none() || retained_mixed))
+        .then(|| mixed_api(&config))
+        .flatten();
+    let mut mixed = api.as_deref();
     anyhow::ensure!(
         !recorded_mixed || retained_mixed,
         "mixed Build allowance is missing; resume cannot create a new balance"
@@ -416,7 +416,7 @@ fn command(
         let admitted = (|| -> Result<()> {
             profiles::require_host(&assets, false, false, true)?;
             for (preset, name) in &api.profiles {
-                let child = profiles::resolve(profile_config, name, &BuildArgs::default(), false)?;
+                let child = profiles::resolve(profile_config, name, &BuildArgs::default())?;
                 let binding = child
                     .binding
                     .filter(|binding| binding.connection.api_key())
@@ -449,21 +449,8 @@ fn command(
         !retained_mixed || mixed.is_some(),
         "mixed Build approval was revoked"
     );
-    let mut child_routes = std::collections::BTreeMap::new();
-    let mut paid_routes = std::collections::BTreeMap::new();
-    if let Some(api) = mixed {
-        for (preset, name) in &api.profiles {
-            let child = profiles::resolve(profile_config, name, &BuildArgs::default())?;
-            let binding = child
-                .binding
-                .filter(|binding| binding.connection.api_key())
-                .context("mixed Build child profile must use an explicitly approved API route")?;
-            super::connections::compatible(&assets, &binding)?;
-            super::hooks::preflight::connection_credential(data_root, binding.connection)?;
-            paid_routes.insert(name.clone(), binding.clone());
-            child_routes.insert(preset, binding);
-        }
-        if let Some(binding) = route
+    if mixed.is_some()
+        && let Some(binding) = route
             .binding
             .as_ref()
             .filter(|binding| binding.connection.api_key())

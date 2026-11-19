@@ -132,9 +132,10 @@ binding prevents a switch. A refused selection leaves the existing route unchang
 
 API-first admission applies to canonically bound native roles, including daemon assistants,
 and workspace Build sessions. Build keeps its ordinary worktree, off-board tools and exit
-workflow; its finite paid ledger lives in the workspace store. Parent, child and compaction
-requests share that allowance. Resume fences the previous host and retains consumed and
-uncertain reservations. Bare sessions (`corral pi --bare --profile <api-profile>`) also accept
+workflow; its workspace ledger tracks metered parent, child and compaction requests without
+enforcing an allowance. Resume fences the previous host and retains consumed and
+uncertain reservations. See [Build sessions](build-sessions.md#named-profiles-and-metered-apis)
+for preset routing. Bare sessions (`corral pi --bare --profile <api-profile>`) also accept
 API profiles; they have no corral ledger, so their API usage is not recorded. Non-workspace
 `--build` sessions still refuse API profiles.
 Paid summary profiles remain separately restricted.
