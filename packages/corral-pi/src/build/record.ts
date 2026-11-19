@@ -35,6 +35,8 @@ export interface BuildJournal {
   finish(title: string, summary?: string): void;
   gate(result: BuildGateResult): void;
   latestGate(): BuildGateResult | undefined;
+  /** The latest gate that passed on exactly `head` with exactly `commands`. */
+  passedGate(head: string, commands: readonly string[]): BuildGateResult | undefined;
   latestReview(): RecordReview | undefined;
   review(child: ChildSnapshot, head: string): RecordReview;
   resolve(round: number, finding: string, resolution: { state: "fixed" | "declined"; commit?: string; reason?: string }): void;
@@ -198,6 +200,8 @@ export function createJournal(options: {
     },
     gate(result) { data.verification.push(result); data.timeline.push({ at: result.ended, phase: "verify", detail: `${result.attempt}: ${result.result}` }); persist(); },
     latestGate: () => data.verification.at(-1),
+    passedGate: (head, commands) => data.verification.findLast(gate => gate.result === "pass" && gate.head === head
+      && gate.commands?.length === commands.length && gate.commands.every((command, index) => command === commands[index])),
     latestReview: () => data.reviews.at(-1),
     review(child: ChildSnapshot, head: string): RecordReview {
       if (!child.verdict) throw new Error(`Reviewer ${child.id} ended without a verdict${child.error ? `: ${child.error}` : "."}`);

@@ -116,6 +116,35 @@ test("a settled exit shows its choice and outcome once across the card and its e
   }
 });
 
+test("Land draws its steps in order with the gate's log under the gate step, live on the card and settled in its entry", () => {
+  const log = "/data/build/B-one/gates/0b9d6f0e.log";
+  const steps = (gate: "running" | "failed") => [
+    { id: "rebase" as const, state: "done" as const, note: "3f2a9c1" },
+    { id: "gate" as const, state: gate, startedAt: NOW - 62_000, ...(gate === "failed" ? { endedAt: NOW, note: "G4 failed" } : {}) },
+    { id: "land" as const, state: "waiting" as const },
+  ];
+  const gate = { log, command: "just check", index: 1, of: 2, tail: ["test slots::lock ... FAILED"] };
+  const record = { choice: "land" as const, at: "t" };
+  for (const width of [46, 100]) {
+    const { lines, text } = card({ summary: summary(), exit: { phase: "verifying", record, land: { base: "main", steps: steps("running"), gate } } }, width);
+    for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    const rows = ["Rebase onto main", "Gate", "slots::lock", "0b9d6f0e.log", "Fast-forward main"].map(part => text.findIndex(row => row.includes(part)));
+    expect(rows).toEqual([...rows].sort((a, b) => a - b));
+    expect(rows[0]).toBeGreaterThan(0);
+  }
+  const live = card({ summary: summary(), exit: { phase: "verifying", record, land: { base: "main", steps: steps("running"), gate } } }).text.join("\n");
+  expect(live).toContain("just check (1/2)"); expect(live).toContain("1m02s");
+  const failed: ExitState = { phase: "failed", record, detail: `Gate G4 failed: just check; log: ${log}.`, land: { base: "main", steps: steps("failed"), gate } };
+  const entry = exitEntry({ choice: "land", label: "Land on main", detail: "d" }, failed);
+  // The model reads where the log is; the owner sees its path once, under the gate step.
+  expect(entry.content).toContain(log);
+  const drawn = (buildEntryRenderer(() => undefined)({ role: "custom", ...entry, timestamp: NOW }, { expanded: false, outputPad: 1 } as never, undefined as never)
+    ?.render(100) ?? []).map(line => stripTerminalSequences(line));
+  expect(drawn.filter(line => line.includes("0b9d6f0e.log"))).toHaveLength(1);
+  expect(drawn.some(line => line.includes("slots::lock"))).toBeTrue();
+  expect(drawn.some(line => line.includes("/finish"))).toBeTrue();
+});
+
 test("slice rows and, while the exit is pending, the header are clickable, and every line fits", () => {
   for (const width of [30, 46, 52, 61, 80, 92, 140, 185]) {
     const { lines, hits, text } = card({

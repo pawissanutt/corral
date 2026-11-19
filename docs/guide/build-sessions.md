@@ -70,6 +70,19 @@ ready for the fast-forward. If the rebase conflicts or the base moves, Land fail
 and the session stays open. A failed gate can be handed to the agent for repair,
 with up to three repair rounds.
 
+Land shows its steps as they run: the rebase, the gate and the fast-forward, each
+with its time. Under the gate step you see the command that runs, the last lines
+of its log and the log's path; a failed gate keeps them. Land does not wait for a
+result it cannot use:
+
+- The gate is not run again on a commit it already passed on with the same
+  commands. When the rebase changes nothing, Land goes straight to the
+  fast-forward and names the earlier attempt.
+- If the base branch moves while the gate runs, the gate is stopped at once and
+  Land fails. Choose Land again to rebase onto the new tip.
+- If the checkout of the base branch has uncommitted changes to files the build
+  changes, Land fails before the gate, because the fast-forward would refuse.
+
 ## Stop, resume and remove
 
 Stopping a session stops its host; resume it in the app or with

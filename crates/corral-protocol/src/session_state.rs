@@ -139,6 +139,79 @@ pub struct ExitBrief {
     pub base_branch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repair: Option<Repair>,
+    /// The current round of Land, from its first step until the next exit choice opens.
+    /// Absent from a host that does not report it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub land: Option<LandBrief>,
+}
+
+/// One round of Land as its host runs it. A repair starts a new round.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LandBrief {
+    /// In the order they run: rebase, gate (absent when the session has no gate), land.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<LandStep>,
+    /// The gate this round runs or last ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<LandGate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LandStep {
+    pub id: LandStepId,
+    pub state: LandStepState,
+    /// A short fact: the rebased head, the gate attempt, what stopped it. At most 160 bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// RFC 3339.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// RFC 3339.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LandStepId {
+    Rebase,
+    Gate,
+    Land,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LandStepState {
+    Waiting,
+    Running,
+    Done,
+    Failed,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LandGate {
+    /// `G3`, once the attempt is recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<String>,
+    /// Absolute path of the gate's log on the host. At most 512 bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log: Option<String>,
+    /// The command running, or the one that failed. At most 240 bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// 1-based place of `command` among the gate's `of` commands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub of: Option<u32>,
+    /// The log's last lines, oldest first, without terminal sequences: at most 8 lines of at
+    /// most 200 bytes. Empty once the gate passed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tail: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
