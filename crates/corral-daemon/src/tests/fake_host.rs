@@ -24,7 +24,8 @@ const INITIAL: &str = concat!(
     "{\"type\":\"message\",\"id\":\"first\",\"parentId\":\"terminal\",\"timestamp\":\"2026-11-18T12:00:01Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"recorded **Pi** text\"}]}}\n",
 );
 
-type Reply = Box<dyn Fn(&mut HostState, &Value, &Path) -> Value + Send>;
+type ReplyResult = Result<Value, (&'static str, &'static str)>;
+type Reply = Box<dyn Fn(&mut HostState, &Value, &Path) -> ReplyResult + Send>;
 type Handler = fn(&mut HostState, &Value, &Path) -> Value;
 
 pub(super) struct Script {
@@ -109,7 +110,12 @@ impl Default for Script {
         Self {
             replies: handlers
                 .into_iter()
-                .map(|(command, handler)| (command, Box::new(handler) as Reply))
+                .map(|(command, handler)| {
+                    let reply = move |state: &mut HostState, request: &Value, path: &Path| {
+                        Ok(handler(state, request, path))
+                    };
+                    (command, Box::new(reply) as Reply)
+                })
                 .collect(),
             mode: "headless",
             state: None,
@@ -121,9 +127,19 @@ impl Default for Script {
 
 impl Script {
     pub(super) fn reply(
-        mut self,
+        self,
         command: &'static str,
         reply: impl Fn(&mut HostState, &Value, &Path) -> Value + Send + 'static,
+    ) -> Self {
+        self.reply_result(command, move |state, request, path| {
+            Ok(reply(state, request, path))
+        })
+    }
+
+    pub(super) fn reply_result(
+        mut self,
+        command: &'static str,
+        reply: impl Fn(&mut HostState, &Value, &Path) -> ReplyResult + Send + 'static,
     ) -> Self {
         self.replies.insert(command, Box::new(reply));
         self
@@ -228,7 +244,7 @@ impl Host {
                 .flatten()
         });
         let hello = json!({"protocol": 2, "role": role, "session_id": id, "session_file": transcript, "pid": PID});
-        replies.insert("hello", Box::new(move |_, _, _| hello.clone()));
+        replies.insert("hello", Box::new(move |_, _, _| Ok(hello.clone())));
         let listener = UnixListener::bind(&socket).unwrap();
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
         let state = Arc::new(Mutex::new(HostState {
@@ -270,11 +286,16 @@ impl Host {
                         .requests
                         .push((command.into(), request["args"].clone()));
                 }
-                let reply = match replies.get(command) {
-                    Some(respond) => json!({"id": request["id"], "version": 2, "ok": true,
-                        "result": respond(&mut state, &request, &file)}),
-                    None => json!({"id": request["id"], "version": 2, "ok": false,
-                        "error": {"code": "unknown_command", "reason": command}}),
+                let result: Result<_, (&str, &str)> = match replies.get(command) {
+                    Some(respond) => respond(&mut state, &request, &file),
+                    None => Err(("unknown_command", command)),
+                };
+                let reply = match result {
+                    Ok(result) => {
+                        json!({"id": request["id"], "version": 2, "ok": true, "result": result})
+                    }
+                    Err((code, reason)) => json!({"id": request["id"], "version": 2,
+                        "ok": false, "error": {"code": code, "reason": reason}}),
                 };
                 let _ = writeln!(stream, "{reply}");
                 if state.stopped {

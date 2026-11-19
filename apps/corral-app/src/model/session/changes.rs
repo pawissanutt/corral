@@ -59,6 +59,8 @@ pub struct ChangesUi {
     pub hunk: usize,
     /// The patch kept on screen until a newer one is applied.
     pub pinned: Option<Pinned>,
+    /// The head's folded part shows.
+    pub more: bool,
 }
 
 impl ChangesUi {
@@ -70,6 +72,7 @@ impl ChangesUi {
         file: None,
         hunk: 0,
         pinned: None,
+        more: false,
     };
 }
 
@@ -124,8 +127,14 @@ pub enum ChangesAction {
     Apply {
         session: Id,
     },
+    /// Unfold or fold the head's switches, identity, repositories and filter.
+    More {
+        session: Id,
+    },
     /// Move the keyboard focus to the path filter.
-    FocusFilter,
+    FocusFilter {
+        session: Id,
+    },
 }
 
 /// A comparison in the switch.
@@ -249,6 +258,11 @@ pub struct ChangesTab {
     /// Stands for the list when it is read but shows nothing.
     pub empty: Option<String>,
     pub selected: Option<FileDiff>,
+    /// The head's switches, identity, repositories and filter show where the head folds (a
+    /// terminal, a phone).
+    pub more: bool,
+    /// `a1's files · paths with “auth”`: what narrows the list, said on the folded head.
+    pub narrowed: Option<String>,
 }
 
 /// The comparison the tab shows.
@@ -375,6 +389,21 @@ fn matches(file: &ChangedFile, ui: &ChangesUi) -> bool {
     };
     let filter = ui.filter.trim().to_lowercase();
     author && (filter.is_empty() || file.path.to_lowercase().contains(&filter))
+}
+
+/// What narrows the list, for a head that folds its chips and filter away.
+fn narrowed(ui: &ChangesUi) -> Option<String> {
+    let mut said = Vec::new();
+    match &ui.author {
+        Some(Author::Child(child)) => said.push(format!("{child}'s files")),
+        Some(Author::Parent) => said.push("the parent's files".to_owned()),
+        None => {}
+    }
+    let filter = ui.filter.trim();
+    if !filter.is_empty() {
+        said.push(format!("paths with \u{201c}{filter}\u{201d}"));
+    }
+    (!said.is_empty()).then(|| said.join(" · "))
 }
 
 fn comparisons(cx: &Cx<'_>, served: Option<&SessionChanges>) -> Vec<ComparisonChip> {
@@ -647,6 +676,8 @@ pub fn changes_tab(cx: &Cx<'_>) -> ChangesTab {
         bound,
         error: served.and_then(|served| served.error.clone()),
         empty,
+        more: ui.more,
+        narrowed: narrowed(ui),
         selected: opened
             .as_ref()
             .map(|opened| changes_diff::file_diff(cx, opened)),
@@ -731,6 +762,7 @@ pub(super) fn act(state: &mut State, action: ChangesAction, feed: &Feed) -> Vec<
             ui.changes = ChangesUi {
                 comparison: ui.changes.comparison,
                 scope,
+                more: ui.changes.more,
                 ..ChangesUi::EMPTY
             };
             Vec::new()
@@ -795,6 +827,15 @@ pub(super) fn act(state: &mut State, action: ChangesAction, feed: &Feed) -> Vec<
             state.ui_mut(&session).changes.pinned = None;
             Vec::new()
         }
-        ChangesAction::FocusFilter => vec![Effect::Focus(FILTER_FIELD)],
+        ChangesAction::More { session } => {
+            let changes = &mut state.ui_mut(&session).changes;
+            changes.more = !changes.more;
+            Vec::new()
+        }
+        // The filter may sit in the folded part of the head: unfold it first.
+        ChangesAction::FocusFilter { session } => {
+            state.ui_mut(&session).changes.more = true;
+            vec![Effect::Focus(FILTER_FIELD)]
+        }
     }
 }

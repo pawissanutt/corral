@@ -245,6 +245,7 @@ fn document() -> Value {
             &[
                 InvalidParams,
                 NotFound,
+                Conflict,
                 Refused,
                 Expired,
                 TooLarge,

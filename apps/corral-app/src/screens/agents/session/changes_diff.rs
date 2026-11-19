@@ -67,7 +67,9 @@ fn walk(
         label,
         ButtonKind::Quiet,
         ButtonOptions {
-            key_hint: Some(key),
+            // A terminal's key line names the walk keys; the caps would push the walk past
+            // one row at 80 columns.
+            key_hint: (app.form != Form::Terminal).then_some(key),
             ..ButtonOptions::default()
         },
         format!("btn-changes-{slug}"),
@@ -77,11 +79,29 @@ fn walk(
 
 fn file(app: AppState, opened: Memo<Option<FileDiff>>) -> AnyElement {
     let form = app.form;
+    // A terminal has few rows: the path, its facts and when it was read share one line, and
+    // the walk takes the next, so the hunks start on the third.
+    let terminal = form == Form::Terminal;
     let body = computed(move || opened.with(|diff| diff.as_ref().map(|diff| diff.part.clone())));
     let body = dynamic(move || {
         body.with(|body| {
-            body.as_ref()
-                .map(|body| untracked(|| part(app, body, "changes-file")))
+            body.as_ref().map(|body| {
+                untracked(|| {
+                    if terminal && body.unavailable.is_none() && body.read.has_rows() {
+                        text(body.summary.clone())
+                            .test_id("part-changes-file-summary")
+                            .number_of_lines(1u32)
+                            .text_overflow(EllipsizeMode::Middle)
+                            .min_w(px(0.0))
+                            .flex_shrink(1.0)
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(color(Token::Ink))
+                            .into_element()
+                    } else {
+                        part(app, body, "changes-file")
+                    }
+                })
+            })
         })
     });
     let facts = text(move || {
@@ -95,6 +115,9 @@ fn file(app: AppState, opened: Memo<Option<FileDiff>>) -> AnyElement {
                 facts.push(format!("by {}", diff.authors.join(", ")));
             }
             facts.extend(diff.position.as_ref().map(|at| format!("hunk {at}")));
+            if terminal && diff.part.read.has_rows() {
+                facts.push(diff.part.read.words());
+            }
             facts.join(" · ")
         })
     })
@@ -121,7 +144,7 @@ fn file(app: AppState, opened: Memo<Option<FileDiff>>) -> AnyElement {
         .flex_row()
         .flex_wrap()
         .items_center()
-        .gap(px(if form == Form::Terminal { 8.0 } else { 4.0 }))
+        .gap(px(if terminal { 8.0 } else { 4.0 }))
         .child(walk(app, opened, "‹ Hunk", "p", "prev-hunk", |diff| {
             diff.prev_hunk.clone()
         }))
@@ -136,7 +159,11 @@ fn file(app: AppState, opened: Memo<Option<FileDiff>>) -> AnyElement {
         }))
         .child(button(
             app,
-            "Add file to message",
+            if terminal {
+                "Add file"
+            } else {
+                "Add file to message"
+            },
             ButtonKind::Ghost,
             "btn-changes-add-file",
             press(app, opened, |diff| Some(diff.capture_file.clone())),
@@ -199,11 +226,22 @@ fn file(app: AppState, opened: Memo<Option<FileDiff>>) -> AnyElement {
                 .into_element()
         })
     });
+    let head = if terminal {
+        view()
+            .flex_row()
+            .items_center()
+            .min_w(px(0.0))
+            .gap(px(16.0))
+            .child(body)
+            .child(facts)
+            .into_element()
+    } else {
+        view().child(body).child(facts).into_element()
+    };
     view()
         .test_id("changes-file")
-        .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
-        .child(body)
-        .child(facts)
+        .gap(px(if terminal { 0.0 } else { 10.0 }))
+        .child(head)
         .child(walks)
         .child(newer)
         .child(said)

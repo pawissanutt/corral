@@ -7,29 +7,34 @@
 //! brief whose card is not read yet shows its title alone. Every answer goes out as
 //! `session.card.answer` under a key whose reply this page reads; a destructive option is
 //! confirmed once on this device first, and an option that needs the owner's reason puts the
-//! composer in reason mode until the reason is given or the owner leaves it.
+//! composer in reason mode until the reason is given or the owner leaves it. Which cards show
+//! open is `fold`'s; what is read and what comes back is `reads`'.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use corral_protocol::detail::{CardKind, DetailBody, DetailGet, DetailRef, SessionCard};
-use corral_protocol::session_host::{
-    CardAnswer, SessionActionDone, SessionCardAnswer, SessionCardAnswered,
-};
+use corral_protocol::detail::{CardKind, DetailBody, DetailRef, SessionCard};
+use corral_protocol::session_host::{CardAnswer, SessionCardAnswer};
 use corral_protocol::session_state::CardBrief;
 
 use crate::model::Id;
-use crate::model::daemon::{Feed, Link, Operation};
+use crate::model::daemon::{Feed, Operation};
 use crate::model::effect::Effect;
 use crate::model::hue::Hue;
-use crate::model::nav::Form;
 
 use super::choice::{self, ChoiceCard};
 use super::dialog::{self, DecisionCard};
-use super::keys::{KeyAction, KeyBinding, bind};
 use super::questions::{self, AnswerCard, QuestionDock};
 use super::queue::{self, QueueDock};
-use super::read_state::ReadState;
-use super::{Action, Cx, Focus, Host, State, Ui, exit};
+use super::{Action, Cx, Focus, State, Ui, exit};
+
+mod fold;
+#[cfg(test)]
+mod fold_tests;
+mod reads;
+
+pub(super) use fold::escape;
+pub use fold::{keys, press};
+pub(super) use reads::{fetch, settle};
 
 /// This device's answer to one card while it is being given.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -136,8 +141,13 @@ pub struct DockUi {
     pub drafts: BTreeMap<String, CardDraft>,
     /// The owner question whose answer card is open.
     pub open: Option<String>,
-    /// Docked choices put aside with Not now; the host keeps them pending.
-    pub aside: BTreeSet<String>,
+    /// Docked choices the owner opened (by pressing their line, Alt+A, Alt+↓ or from
+    /// elsewhere); every other waiting card is one line in the dock.
+    pub opened: BTreeSet<String>,
+    /// Finish… asked the host for the exit choice: it opens when it docks.
+    pub exit_wanted: bool,
+    /// The owner folded or unfolded the queue; none follows the rule in `queue::open`.
+    pub queue_open: Option<bool>,
     pub confirming: Option<Confirming>,
     pub compose: Option<Compose>,
     pub pending: BTreeMap<Id, Pending>,
@@ -152,7 +162,9 @@ impl DockUi {
     pub const EMPTY: Self = Self {
         drafts: BTreeMap::new(),
         open: None,
-        aside: BTreeSet::new(),
+        opened: BTreeSet::new(),
+        exit_wanted: false,
+        queue_open: None,
         confirming: None,
         compose: None,
         pending: BTreeMap::new(),
@@ -164,7 +176,7 @@ impl DockUi {
 /// What the dock and its cards do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DockAction {
-    /// Bring a waiting card forward: open a question's answer card, dock a choice put aside, or
+    /// Bring a waiting card forward: open a question's answer card, open a docked choice, or
     /// give a decision card the keys.
     Bring { session: Id, card: String },
     /// Close the open answer card; its answers so far stay.
@@ -199,8 +211,8 @@ pub enum DockAction {
         card: String,
         option: String,
     },
-    /// Answer nothing: a decision card resolves as no; a docked choice is put aside and stays
-    /// pending; a question's card closes.
+    /// Answer nothing: a decision card resolves as no; a docked choice folds back to its line
+    /// and stays pending; a question's card closes.
     Dismiss { session: Id, card: String },
     /// Confirm, or cancel, the destructive option waiting for its confirmation.
     Confirm { session: Id, yes: bool },
@@ -218,6 +230,8 @@ pub enum DockAction {
     },
     /// Move a queued input one place up (-1) or down (1).
     Move { session: Id, key: String, delta: i8 },
+    /// Fold or unfold the queue.
+    ToggleQueue(Id),
     /// Read the cards behind the briefs `ids`.
     Read { session: Id, ids: Vec<String> },
     /// Give the keys to the next dock item (queue, questions, docked choice, then the composer).
@@ -227,8 +241,8 @@ pub enum DockAction {
 /// The dock of a session page.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Dock {
-    /// The first docked choice not put aside: the exit choice, a child's question, a proposed
-    /// board plan.
+    /// The first docked choice the owner opened: the exit choice, a child's question, a
+    /// proposed board plan.
     pub choice: Option<ChoiceCard>,
     pub questions: Option<QuestionDock>,
     pub queue: Option<QueueDock>,
@@ -238,8 +252,10 @@ pub struct Dock {
     pub answer: Option<AnswerCard>,
     /// The destructive option waiting for this device's one confirmation.
     pub confirm: Option<CardConfirm>,
-    /// A docked choice put aside: `The exit choice is waiting · Finish to reopen`.
-    pub aside: Option<AsideLine>,
+    /// Docked choices not opened, one line each (up to three): `▲ docs asks: … · Alt+A to answer`.
+    pub waiting: Vec<AsideLine>,
+    /// `+2 more` beyond the lines shown.
+    pub more: Option<String>,
     /// Docks the oldest waiting card (the header's needs-you chip).
     pub oldest: Option<Action>,
     /// Briefed cards whose bodies are not read: where their read stands.
@@ -254,7 +270,7 @@ impl Dock {
             && self.questions.is_none()
             && self.queue.is_none()
             && self.decision.is_none()
-            && self.aside.is_none()
+            && self.waiting.is_empty()
     }
 }
 
@@ -270,6 +286,8 @@ pub struct CardConfirm {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AsideLine {
+    /// `dock-<card>`.
+    pub id: String,
     pub text: String,
     pub action: Action,
 }
@@ -422,109 +440,11 @@ pub(super) fn compose_send(
     ))
 }
 
-fn bring(state: &mut State, session: &Id, card: String, feed: &Feed) {
-    let kind = kind(feed, session.as_str(), &card);
-    let ui = state.ui_mut(session);
-    match kind {
-        Some(CardKind::Question) => {
-            ui.dock.open = Some(card);
-            ui.focus = Focus::Questions;
-        }
-        Some(kind) if docked(kind) => {
-            ui.dock.aside.remove(&card);
-            ui.focus = Focus::Dock;
-        }
-        Some(kind) if decision(kind) => ui.focus = Focus::Dock,
-        _ => {}
-    }
-}
-
-fn dismiss(state: &mut State, session: &Id, card: String, feed: &Feed) -> Vec<Effect> {
-    let now = feed.now;
-    match kind(feed, session.as_str(), &card) {
-        Some(kind) if decision(kind) => {
-            if sending(state.ui(session.as_str()), feed, &card) {
-                return Vec::new();
-            }
-            send(state, session, &card, Vec::new(), true)
-        }
-        Some(kind) if docked(kind) => {
-            let ui = state.ui_mut(session);
-            if ui
-                .dock
-                .compose
-                .as_ref()
-                .is_some_and(|mode| mode.card() == card)
-            {
-                leave(ui, now);
-            }
-            ui.dock.aside.insert(card);
-            ui.focus = Focus::Composer;
-            let words = if kind == CardKind::Exit {
-                "The exit choice is waiting · Finish to reopen"
-            } else {
-                "The choice is still waiting · press it in the dock to reopen"
-            };
-            ui.notices.push(Hue::Neutral, words, now);
-            Vec::new()
-        }
-        _ => {
-            let ui = state.ui_mut(session);
-            ui.dock.open = None;
-            ui.focus = Focus::Composer;
-            Vec::new()
-        }
-    }
-}
-
-/// The focus order Alt+↓ walks, keeping only the items the dock shows.
-fn next(state: &mut State, session: &Id, feed: &Feed) {
-    let briefs = briefs(feed, session.as_str());
-    let ui = state.ui(session.as_str());
-    let queued = feed
-        .live
-        .get(session.as_str())
-        .and_then(|live| live.state.as_ref())
-        .is_some_and(|state| state.queue_total > 0);
-    let shown = |focus: Focus| match focus {
-        Focus::Queue => queued,
-        Focus::Questions => briefs.iter().any(|brief| brief.kind == CardKind::Question),
-        Focus::Dock => briefs.iter().any(|brief| {
-            decision(brief.kind) || (docked(brief.kind) && !ui.dock.aside.contains(&brief.id))
-        }),
-        _ => true,
-    };
-    let order = [Focus::Composer, Focus::Queue, Focus::Questions, Focus::Dock];
-    let at = order
-        .iter()
-        .position(|focus| *focus == ui.focus)
-        .unwrap_or(0);
-    let focus = (1..=order.len())
-        .map(|step| order[(at + step) % order.len()])
-        .find(|focus| shown(*focus))
-        .unwrap_or(Focus::Composer);
-    state.ui_mut(session).focus = focus;
-}
-
-fn read(state: &mut State, session: Id, ids: Vec<String>, feed: &Feed) -> Vec<Effect> {
-    let target = target(session.as_str());
-    let etag = feed
-        .detail(&target)
-        .and_then(|cache| cache.pages.first())
-        .map(|page| page.etag.clone());
-    state.ui_mut(&session).dock.asked = Some(ids);
-    vec![Effect::Detail(DetailGet {
-        target,
-        etag,
-        page: None,
-    })]
-}
-
 /// Handles a dock action. Every answer goes out as an effect; nothing is simulated here.
 pub(super) fn act(state: &mut State, action: DockAction, feed: &Feed) -> Vec<Effect> {
     match action {
         DockAction::Bring { session, card } => {
-            bring(state, &session, card, feed);
+            fold::bring(state, &session, card, feed);
             Vec::new()
         }
         DockAction::Close(session) => {
@@ -571,7 +491,7 @@ pub(super) fn act(state: &mut State, action: DockAction, feed: &Feed) -> Vec<Eff
             card,
             option,
         } => choice::choose(state, &session, &card, &option, feed),
-        DockAction::Dismiss { session, card } => dismiss(state, &session, card, feed),
+        DockAction::Dismiss { session, card } => fold::dismiss(state, &session, card, feed),
         DockAction::Confirm { session, yes } => choice::confirm(state, &session, yes, feed),
         DockAction::Own { session, card } => {
             choice::own(state, &session, card, feed);
@@ -590,184 +510,17 @@ pub(super) fn act(state: &mut State, action: DockAction, feed: &Feed) -> Vec<Eff
             key,
             delta,
         } => queue::move_item(state, &session, key, delta, feed),
-        DockAction::Read { session, ids } => read(state, session, ids, feed),
+        DockAction::ToggleQueue(session) => {
+            let open = queue::open(state.ui(session.as_str()), feed, session.as_str());
+            state.ui_mut(&session).dock.queue_open = Some(!open);
+            Vec::new()
+        }
+        DockAction::Read { session, ids } => reads::read(state, session, ids, feed),
         DockAction::Next(session) => {
-            next(state, &session, feed);
+            fold::next(state, &session, feed);
             Vec::new()
         }
     }
-}
-
-/// Follows the feed for one page's dock: reads each settled reply once, and forgets drafts,
-/// asides and modes of cards the host no longer waits on.
-pub(super) fn settle(ui: &mut Ui, scope: &str, feed: &Feed) {
-    let settled: Vec<(Id, Pending)> = ui
-        .dock
-        .pending
-        .iter()
-        .filter(|(key, _)| {
-            feed.operations
-                .get(*key)
-                .is_some_and(|operation| !operation.loading)
-        })
-        .map(|(key, pending)| (key.clone(), pending.clone()))
-        .collect();
-    for (key, pending) in settled {
-        ui.dock.pending.remove(&key);
-        let Some(operation) = feed.operations.get(&key) else {
-            continue;
-        };
-        match pending {
-            Pending::Card { card } => answered(ui, card, operation, feed.now),
-            Pending::Action { what } => match refusal(operation) {
-                Some(why) => ui
-                    .notices
-                    .push(Hue::Fail, format!("{what} refused: {why}"), feed.now),
-                None => {
-                    if let Some(text) = operation
-                        .decode::<SessionActionDone>()
-                        .and_then(|done| done.text)
-                    {
-                        ui.notices.push(Hue::Neutral, text, feed.now);
-                    }
-                }
-            },
-            pending => queue::settled(ui, pending, operation, feed.now),
-        }
-    }
-    let Some(state) = feed.live.get(scope).and_then(|live| live.state.as_ref()) else {
-        return;
-    };
-    let open: BTreeSet<&str> = state.cards.iter().map(|brief| brief.id.as_str()).collect();
-    ui.dock
-        .drafts
-        .retain(|card, _| open.contains(card.as_str()));
-    ui.dock.aside.retain(|card| open.contains(card.as_str()));
-    ui.dock
-        .answered
-        .retain(|card, _| open.contains(card.as_str()));
-    if ui
-        .dock
-        .open
-        .as_deref()
-        .is_some_and(|card| !open.contains(card))
-    {
-        ui.dock.open = None;
-    }
-    if ui
-        .dock
-        .confirming
-        .as_ref()
-        .is_some_and(|chosen| !open.contains(chosen.card.as_str()))
-    {
-        ui.dock.confirming = None;
-    }
-    if ui
-        .dock
-        .compose
-        .as_ref()
-        .is_some_and(|mode| !open.contains(mode.card()))
-    {
-        ui.dock.compose = None;
-        ui.notices.push(
-            Hue::Held,
-            "That choice no longer waits; your text stays in the draft",
-            feed.now,
-        );
-    }
-}
-
-fn answered(ui: &mut Ui, card: String, operation: &Operation, now: u64) {
-    if let Some(why) = refusal(operation) {
-        ui.notices
-            .push(Hue::Fail, format!("Answer not taken: {why}"), now);
-        return;
-    }
-    let status = operation
-        .decode::<SessionCardAnswered>()
-        .map(|reply| reply.status)
-        .unwrap_or_default();
-    match status.as_str() {
-        "expired" => ui.notices.push(
-            Hue::Held,
-            "That card expired before the answer reached the host",
-            now,
-        ),
-        "missing" => ui.notices.push(
-            Hue::Held,
-            "That card no longer waits; nothing was answered",
-            now,
-        ),
-        "answered" => {
-            ui.dock.answered.insert(card.clone(), status);
-        }
-        _ => {}
-    }
-    ui.dock.drafts.remove(&card);
-    if ui.dock.open.as_deref() == Some(card.as_str()) {
-        ui.dock.open = None;
-        ui.focus = Focus::Composer;
-    }
-}
-
-/// Why the cards cannot be answered from here now.
-fn inert(cx: &Cx<'_>) -> Option<String> {
-    if cx.feed.link != Link::Up {
-        return Some("answer when corrald is back".into());
-    }
-    match cx.host {
-        Host::NotRunning | Host::Unreachable | Host::Ended => {
-            Some("the host must be running to take an answer".into())
-        }
-        Host::Running | Host::Unknown => None,
-    }
-}
-
-/// The cards to read now: once while none was read, and again when the briefs name cards the
-/// last read did not hold. A failed read is retried from the dock, not here.
-pub(super) fn fetch(cx: &Cx<'_>) -> Option<Action> {
-    let briefs = cx
-        .state
-        .map(|state| state.cards.as_slice())
-        .unwrap_or_default();
-    if briefs.is_empty() || cx.host != Host::Running {
-        return None;
-    }
-    let cache = cx.feed.detail(&target(cx.id.as_str()));
-    if cache.is_some_and(|cache| cache.loading) {
-        return None;
-    }
-    let ids: Vec<String> = briefs.iter().map(|brief| brief.id.clone()).collect();
-    let missing = briefs
-        .iter()
-        .any(|brief| card(cx.feed, cx.id.as_str(), &brief.id).is_none());
-    let wanted = cache.is_none() || (missing && cx.ui.dock.asked.as_ref() != Some(&ids));
-    wanted.then(|| {
-        Action::Dock(DockAction::Read {
-            session: cx.id.clone(),
-            ids,
-        })
-    })
-}
-
-fn cards_read(cx: &Cx<'_>, briefs: &[CardBrief]) -> Option<CardsRead> {
-    let missing = briefs
-        .iter()
-        .any(|brief| card(cx.feed, cx.id.as_str(), &brief.id).is_none());
-    if !missing {
-        return None;
-    }
-    let target = target(cx.id.as_str());
-    let read = ReadState::of(cx.feed.detail(&target), cx.feed);
-    Some(CardsRead {
-        words: if read.has_rows() {
-            "reading…".into()
-        } else {
-            read.words()
-        },
-        hue: read.hue(),
-        retry: matches!(read, ReadState::Failed(_)).then_some(Action::Refresh(target)),
-    })
 }
 
 fn confirm(cx: &Cx<'_>) -> Option<CardConfirm> {
@@ -789,20 +542,6 @@ fn confirm(cx: &Cx<'_>) -> Option<CardConfirm> {
     })
 }
 
-fn aside_line(cx: &Cx<'_>, brief: &CardBrief) -> AsideLine {
-    let text = match brief.kind {
-        CardKind::Exit => "The exit choice is waiting · Finish to reopen".into(),
-        _ => format!("Waiting: {}", brief.title),
-    };
-    AsideLine {
-        text,
-        action: Action::Dock(DockAction::Bring {
-            session: cx.id.clone(),
-            card: brief.id.clone(),
-        }),
-    }
-}
-
 /// The dock of the session `cx` reads.
 pub fn dock(cx: &Cx<'_>) -> Dock {
     let queue = queue::queue_dock(cx);
@@ -812,22 +551,16 @@ pub fn dock(cx: &Cx<'_>) -> Dock {
             ..Dock::default()
         };
     };
-    let inert = inert(cx).filter(|_| !state.cards.is_empty());
-    let mut choice = None;
-    let mut dialog_card = None;
-    let mut aside = None;
-    for brief in &state.cards {
-        let body = card(cx.feed, cx.id.as_str(), &brief.id);
-        if docked(brief.kind) {
-            if cx.ui.dock.aside.contains(&brief.id) {
-                aside = aside.or_else(|| Some(aside_line(cx, brief)));
-            } else if choice.is_none() {
-                choice = Some(choice::card(cx, brief, body, inert.clone()));
-            }
-        } else if decision(brief.kind) && dialog_card.is_none() {
-            dialog_card = Some(dialog::card(cx, brief, body, inert.clone()));
-        }
-    }
+    let inert = reads::inert(cx).filter(|_| !state.cards.is_empty());
+    let (choice, waiting, more) = fold::docked_cards(cx, &state.cards, inert.clone());
+    let dialog_card = state
+        .cards
+        .iter()
+        .find(|brief| decision(brief.kind))
+        .map(|brief| {
+            let body = card(cx.feed, cx.id.as_str(), &brief.id);
+            dialog::card(cx, brief, body, inert.clone())
+        });
     let answer = cx
         .ui
         .dock
@@ -845,62 +578,15 @@ pub fn dock(cx: &Cx<'_>) -> Dock {
         decision: dialog_card,
         answer,
         confirm: confirm(cx),
-        aside,
+        waiting,
+        more,
         oldest: state.cards.first().map(|brief| {
             Action::Dock(DockAction::Bring {
                 session: cx.id.clone(),
                 card: brief.id.clone(),
             })
         }),
-        read: cards_read(cx, &state.cards),
+        read: reads::cards_read(cx, &state.cards),
         inert,
     }
-}
-
-/// Esc on the page while the dock holds something it closes: a confirmation, reason or answer
-/// mode, the open answer card, a decision card (it answers no), a focused docked choice.
-pub(super) fn escape(cx: &Cx<'_>) -> Option<Action> {
-    let session = cx.id.clone();
-    if cx.ui.dock.confirming.is_some() {
-        return Some(Action::Dock(DockAction::Confirm {
-            session,
-            yes: false,
-        }));
-    }
-    if cx.ui.dock.compose.is_some() {
-        return Some(Action::Dock(DockAction::Leave(session)));
-    }
-    if cx.ui.dock.open.is_some() {
-        return Some(Action::Dock(DockAction::Close(session)));
-    }
-    let briefs = cx
-        .state
-        .map(|state| state.cards.as_slice())
-        .unwrap_or_default();
-    let card = briefs
-        .iter()
-        .find(|brief| decision(brief.kind))
-        .or_else(|| {
-            (cx.ui.focus == Focus::Dock)
-                .then(|| {
-                    briefs
-                        .iter()
-                        .find(|brief| docked(brief.kind) && !cx.ui.dock.aside.contains(&brief.id))
-                })
-                .flatten()
-        })?;
-    Some(Action::Dock(DockAction::Dismiss {
-        session,
-        card: card.id.clone(),
-    }))
-}
-
-/// The dock's own keys.
-pub fn keys() -> Vec<KeyBinding> {
-    vec![bind("alt+down", "Alt+↓", "next dock item", KeyAction::Part)]
-}
-
-pub fn press(key: &str, cx: &Cx<'_>) -> Option<Action> {
-    (key == "alt+down" && cx.env.form != Form::Phone)
-        .then(|| Action::Dock(DockAction::Next(cx.id.clone())))
 }

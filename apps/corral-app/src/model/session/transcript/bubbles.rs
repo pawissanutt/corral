@@ -495,6 +495,7 @@ pub(super) fn report_message(
         Vec::new()
     };
     Message {
+        anchor: id.clone(),
         id,
         kind: MessageKind::Agent,
         avatar: "W",
@@ -581,6 +582,7 @@ pub(super) fn owner_lead(input: Option<&InputFacts>) -> Rich {
 /// A bubble message with the given head and items.
 pub(super) fn bubble(id: String, head: Rich, items: Vec<MessageItem>) -> Message {
     Message {
+        anchor: id.clone(),
         id,
         kind: MessageKind::Bubble,
         avatar: "Y",

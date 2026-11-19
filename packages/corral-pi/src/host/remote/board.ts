@@ -2,15 +2,32 @@ import { BridgeRefusal, SESSION_PART_MAX } from "../../bridge/protocol.ts";
 import type { BuildRecord, RecordUsage } from "../../build/record-types.ts";
 import type { BoardControl, BoardPlan } from "../../build/types.ts";
 import type { RemoteRegistry } from "./registry.ts";
-import { clipText, fitRows, isoTime, jsonBytes, optionalText } from "./state.ts";
+import { clipText, cursorOffset, fingerprintPart, fitRows, isoTime, jsonBytes, optionalText, parseCursor, partCursor } from "./state.ts";
 
 const KiB = 1024;
+const BOARD_KEY_BYTES = 160;
+const BRIEF_PAGE_BYTES = 40 * KiB;
+const proposalFingerprints = new WeakMap<BoardPlan, string>();
+
+/** A displayed key must identify exactly one task, even when its original key cannot fit the board. */
+function boardKeys(plan: BoardPlan): Map<string, string> {
+  const keys = new Map(plan.tasks.map(({ key }) => [key, key]));
+  for (const [index, { key }] of plan.tasks.entries()) {
+    if (clipText(key, BOARD_KEY_BYTES) === key) continue;
+    let alias = `@${index + 1}`;
+    while (keys.has(alias)) alias = `@${alias}`;
+    keys.set(key, alias);
+  }
+  return keys;
+}
 
 function boardPlan(plan: BoardPlan) {
+  const keys = boardKeys(plan);
   // Reserve room for all twenty task identities so a clipped body cannot hide a dependency.
   const tasks = plan.tasks.slice(0, 20).map(({ key, title, kind, size, profile, depends, body }) => ({
-    key: clipText(key, 160), title: clipText(title, 240), kind: optionalText(kind, 64), size: optionalText(size, 64),
-    profile: optionalText(profile, 160), depends: fitRows(depends, 0, 32, 512), body: "", body_bytes: Buffer.byteLength(body),
+    key: keys.get(key)!, title: clipText(title, 240), kind: optionalText(kind, 64), size: optionalText(size, 64),
+    profile: optionalText(profile, 160), depends: fitRows(depends.map(key => keys.get(key) ?? key), 0, 32, 512),
+    body: "", body_bytes: Buffer.byteLength(body),
   }));
   const result = { title: clipText(plan.title, 512), project: optionalText(plan.project, 256), why: clipText(plan.why, 8 * KiB), tasks };
   let room = Math.max(0, 37 * KiB - jsonBytes(result));
@@ -19,6 +36,35 @@ function boardPlan(plan: BoardPlan) {
     room -= jsonBytes(row.body) - 2;
   }
   return result;
+}
+
+function boardPlanTask(plan: BoardPlan | undefined, key: string, after?: string) {
+  const keys = plan ? boardKeys(plan) : undefined;
+  const task = plan?.tasks.slice(0, 20).find(task => keys?.get(task.key) === key);
+  if (!task || !plan) {
+    if (after !== undefined) throw new BridgeRefusal("stale_page", "the proposed board task changed or was dismissed");
+    throw new BridgeRefusal("board_plan_task_missing", "no proposed board task has this key");
+  }
+
+  // The board replaces the proposal object rather than mutating it.
+  let fingerprint = proposalFingerprints.get(plan);
+  if (fingerprint === undefined) {
+    fingerprint = fingerprintPart(plan);
+    proposalFingerprints.set(plan, fingerprint);
+  }
+  const token = fingerprintPart(["board_plan_task", fingerprint, key]);
+  const full = Buffer.from(task.body, "utf8"), bytes = full.length;
+  const offset = after === undefined ? 0 : cursorOffset(after, token);
+  if (offset > bytes || ((full[offset] ?? 0) & 0xc0) === 0x80) {
+    throw new BridgeRefusal("bad_input", "board brief cursor is not on a UTF-8 character boundary");
+  }
+  const head = { key, bytes, offset };
+  let end = Math.min(bytes, offset + BRIEF_PAGE_BYTES);
+  while (((full[end] ?? 0) & 0xc0) === 0x80) end--;
+  const budget = SESSION_PART_MAX - jsonBytes({ ...head, body: "", next: partCursor(token, bytes) });
+  const body = clipText(full.toString("utf8", offset, end), budget);
+  end = offset + Buffer.byteLength(body);
+  return { ...head, body, next: end < bytes ? partCursor(token, end) : undefined };
 }
 
 export function boardPart(board: Pick<BoardControl, "tasks" | "proposed"> | undefined, unavailable?: string) {
@@ -60,11 +106,17 @@ export function recordPart(record: BuildRecord) {
 }
 
 export function registerBoard(registry: RemoteRegistry, source: {
-  board?: BoardControl; unavailable?: string; record(): Promise<BuildRecord>; ready(): boolean;
+  board?: Pick<BoardControl, "tasks" | "proposed" | "refresh">; unavailable?: string; record(): Promise<BuildRecord>; ready(): boolean;
 }): void {
   const { board, unavailable } = source;
   registry.register({ name: "record", parse: () => undefined, run: async () => recordPart(await source.record()) });
   registry.register({ name: "board", parse: () => undefined, run: () => boardPart(board, unavailable) });
+  registry.register({ name: "board_plan_task", parse: ({ key, after }) => {
+    if (typeof key !== "string" || !key || Buffer.byteLength(key) > BOARD_KEY_BYTES) {
+      throw new BridgeRefusal("bad_input", "invalid proposed board task key");
+    }
+    return { key, after: parseCursor(after) };
+  }, run: ({ key, after }) => boardPlanTask(board?.proposed(), key, after) });
   if (board && !unavailable) registry.register({ name: "board_refresh", parse: () => undefined, run: async () => {
     if (!source.ready()) throw new BridgeRefusal("host_not_ready", "Session is not accepting board actions");
     await board.refresh();

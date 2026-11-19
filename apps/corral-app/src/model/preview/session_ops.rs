@@ -1,8 +1,9 @@
 //! `session.send` and `build.start` against the sample, answered as corrald answers them. A send
 //! goes to the session's pi host under the sender's command id, which the transcript then serves
-//! the message under (`<session>/input/<id>`); a message to a stopped chat starts its host, one
-//! to a stopped build is refused until it is resumed. A start makes a new build session on a
-//! configured project, as the daemon launches a headless host.
+//! the message under (`<session>/input/<id>`); a send to one of a build's children steers it
+//! (`parts_ops.rs`); a message to a stopped chat starts its host, one to a stopped build is
+//! refused until it is resumed. A start makes a new build session on a configured project, as
+//! the daemon launches a headless host.
 
 use corral_protocol::assistant::QUICK_THREAD;
 use corral_protocol::build::BuildStart;
@@ -22,8 +23,8 @@ pub(super) fn send(feed: &mut Feed, send: &SessionSend) -> Result<Value, String>
     if !send.attachments.is_empty() {
         return Err("Preview sends do not upload or deliver attachments; remove them first".into());
     }
-    if send.to.is_some() {
-        return Err("Preview child agents take no messages".into());
+    if let Some(child) = &send.to {
+        return super::parts_ops::steer(feed, child, send);
     }
     let id = if send.id == QUICK_THREAD {
         effects::chat_for(feed, QUICK_THREAD)?
@@ -144,6 +145,7 @@ pub(super) fn start(feed: &mut Feed, start: &BuildStart) -> Result<Value, String
             build.worktree = path;
         }
     }
+    super::parts_sample::attach(feed, &id);
     pi_rows::settle(feed, &id);
     let row = feed
         .assistants

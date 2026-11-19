@@ -16,8 +16,7 @@ mod transcript;
 pub(crate) use remove::sheet as remove_sheet;
 pub(crate) use rewind::sheet as rewind_sheet;
 pub use session::{
-    Compact, compact as ask_session, page as live_session, phone as live_session_phone,
-    session_view,
+    Compact, ask_view, compact as ask_session, page as live_session, phone as live_session_phone,
 };
 pub(crate) use start::sheet as start_sheet;
 

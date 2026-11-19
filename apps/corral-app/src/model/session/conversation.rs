@@ -17,7 +17,7 @@ use super::super::transcript::{self, Transcript};
 use super::super::{Action, Cx, DockAction, Ui};
 use super::{
     FleetAction, FleetButton, asks, card_of, child, child_detail, ctx, profile_model, scope,
-    shown_state, time,
+    shown_state,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,8 +31,9 @@ pub struct Conversation {
     pub hue: Hue,
     pub state: &'static str,
     pub title: String,
-    /// `slice · gpt-6 · 1m 02s · $0.21 · ctx 18%`.
-    pub facts: String,
+    /// `slice · gpt-6` and `$0.21 · ctx 18%`: the facts before and after its running time,
+    /// which is the clock's (`AgentsClock::time`); with no second part there is no time either.
+    pub facts: (String, String),
     pub transcript: Transcript,
     /// How it stands after its last message.
     pub end: Option<EndLine>,
@@ -127,9 +128,11 @@ pub(super) fn conversation(
             hue: Hue::Neutral,
             state: "no longer listed",
             title: id.to_owned(),
-            facts:
+            facts: (
                 "The host's fleet no longer lists this agent; its transcript is what was recorded."
                     .into(),
+                String::new(),
+            ),
             transcript,
             end: None,
             receiver: None,
@@ -137,13 +140,10 @@ pub(super) fn conversation(
         };
     };
     let (mark, hue, state) = shown_state(row);
-    let facts = [
+    let facts = (
         profile_model(row),
-        time(row, cx.feed.now),
-        cost_text(row.cost_usd, false),
-        format!("ctx {}", ctx(row)),
-    ]
-    .join(" · ");
+        [cost_text(row.cost_usd, false), format!("ctx {}", ctx(row))].join(" · "),
+    );
     Conversation {
         child: id.to_owned(),
         scope,

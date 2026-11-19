@@ -5,7 +5,8 @@ use corral_protocol::detail::{
 use super::super::Ui;
 use super::replay::transcript;
 use super::{
-    ItemFetch, LiveMessage, LiveSession, LiveTool, LiveToolState, MessageItem, More, Transcript,
+    ItemFetch, LiveMessage, LiveSession, LiveTool, LiveToolState, MessageItem, More, Reading,
+    Resume, Transcript,
 };
 use crate::model::Id;
 use crate::model::daemon::{self, DetailCache};
@@ -308,4 +309,71 @@ fn a_live_reply_that_follows_two_tool_calls_is_shown_after_them() {
         })
         .collect();
     assert_eq!(kinds, ["tool", "tool", "text"]);
+}
+
+/// Appends a message to the served page.
+fn arrive(feed: &mut daemon::Feed, author: &str, at: &str, text: &str) {
+    let target = DetailRef::Session { id: ID.into() };
+    let Some(DetailBody::Session(page)) = feed
+        .details
+        .get_mut(&daemon::detail_key(&target))
+        .and_then(|cache| cache.merged.as_mut())
+    else {
+        panic!("a served session page");
+    };
+    page.messages.push(SessionMessage {
+        id: String::new(),
+        author: author.into(),
+        at: Some(at.into()),
+        items: vec![SessionItem::Text { text: text.into() }],
+        model: None,
+        stop_reason: None,
+        usage: None,
+        input: None,
+        attachments: Vec::new(),
+    });
+}
+
+#[test]
+fn a_reader_who_scrolled_up_finds_the_same_row_after_leaving_and_reopening_the_session() {
+    let target = DetailRef::Session { id: ID.into() };
+    let mut feed = feed(vec![SessionItem::Text {
+        text: "The first reply.".into(),
+    }]);
+    arrive(&mut feed, "user", "2026-11-15T10:00:05Z", "Go on.");
+    let mut ui = Ui::default();
+    let first = transcript(&Id::from(ID), &ui, feed.detail(&target), &feed);
+    assert_eq!(
+        first.following().resume,
+        Resume::End,
+        "a session never read opens at its end"
+    );
+    // The reader scrolled up to the first reply and left; more arrived while they were away.
+    let key = first.messages[0].anchor.clone();
+    ui.reading = Reading::At {
+        key: key.clone(),
+        offset: 12,
+        rows: first.rows(),
+    };
+    arrive(
+        &mut feed,
+        "assistant",
+        "2026-11-15T10:00:09Z",
+        "The second reply.",
+    );
+    let reopened = transcript(&Id::from(ID), &ui, feed.detail(&target), &feed);
+    let following = reopened.following();
+    assert_eq!(
+        following.resume,
+        Resume::Row {
+            key,
+            offset: 12,
+            rows: first.rows(),
+        },
+        "the reopened view starts at the row the reader left"
+    );
+    assert!(
+        following.rows > first.rows(),
+        "what arrived while they were away is counted from where they left"
+    );
 }

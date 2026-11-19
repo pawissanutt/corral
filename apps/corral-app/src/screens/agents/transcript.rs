@@ -12,6 +12,7 @@
 //! cell's rows `item-<n>-<k>`), and a row that opens carries `btn-expand-<n>`; an echo carries
 //! `echo-<command id>`.
 
+mod anchors;
 pub(crate) mod attachments;
 mod bubbles;
 mod build_cards;
@@ -158,6 +159,25 @@ fn body_column(app: AppState, rows: impl IntoIterator<Item = AnyElement>) -> Any
         .into_element()
 }
 
+/// A message's block, placed among the transcript's rows by its anchor so the reading
+/// position can hold on to it.
+fn anchored(transcript: &Transcript, anchor: &str, block: AnyElement) -> AnyElement {
+    let token = anchors::token();
+    let scope = transcript.scope.to_string();
+    let key = anchor.to_owned();
+    {
+        let (scope, key) = (scope.clone(), key.clone());
+        cleanup(move || anchors::forget(&scope, &key, token));
+    }
+    view()
+        .min_w(px(0.0))
+        .on_layout(move |frame: &Bounds<Points>| {
+            anchors::placed(&scope, &key, token, frame.origin.y.0);
+        })
+        .child(block)
+        .into_element()
+}
+
 /// The transcript: a stale notice when its source is unreachable, the control for earlier
 /// messages, every message of the page in order (or why there are none), this device's sends
 /// the page does not hold yet, the live turn and the quiet rows after it, the way back to the
@@ -169,7 +189,8 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
     let mut next = 0;
     let mut messages = Vec::new();
     for message in &transcript.messages {
-        messages.push(self::message(app, message, next));
+        let block = self::message(app, message, next);
+        messages.push(anchored(transcript, &message.anchor, block));
         next += message.items.len() + usize::from(message.footer.is_some());
     }
     messages.extend(
@@ -179,7 +200,8 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
             .map(|sent| bubbles::echo(app, sent)),
     );
     for message in &transcript.live {
-        messages.push(self::message(app, message, next));
+        let block = self::message(app, message, next);
+        messages.push(anchored(transcript, &message.anchor, block));
         next += message.items.len() + usize::from(message.footer.is_some());
     }
     let after = (!transcript.after.is_empty()).then(|| {

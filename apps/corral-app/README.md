@@ -178,6 +178,14 @@ and it keeps to the newest rows unless the owner scrolled up. `` ` `` switches t
 
 **+ New session** under Assistant sessions starts a named chat session in corrald. It is disabled, with the reason beside it, while corrald serves no assistant sessions. Named sessions use the same model picker and durable transcript. Stop interrupts the current turn; End session (asks once) stops the host while retaining its record and conversation.
 
+### Agent sessions
+
+Every agent session opens on one session page, whatever its role: a task's worker or reviewer, a chat, a build session, a child agent's conversation. The page shows the transcript as the Pi terminal shows it; above the composer, the dock holds what waits on the owner (answer cards, a docked choice such as a build's exit, a child's question or a proposed board plan, and the queue with Edit, ↑, ↓ and Remove). The tabs are the parts the host serves: **Agents** (the child agents with their details, conversations and models, the messages between them, and the background jobs with their output, older bytes on request), **Changes** (the files of each comparison and one file's hunks), **Board** with the build record for a build, and **Task** and **Proof** for a task's run. The sidebar holds Context, Files and Plan; when the page is narrow it folds into one row above the composer. The ⋯ menu lists every action, an action the host cannot run with its reason, and opens Usage. The host is the source of truth: the page reads its parts through corrald and shows a sent message until the transcript holds it under the same input id. **Agents › New** starts a build session in a project; Stop and Resume control its host, and Remove… shows prune's dry run first.
+
+**Ask** is the same transcript, dock and composer over the quick chat, in a drawer on desktop and in the terminal and in a sheet on the phone. End thread finishes the quick chat; the next message starts a new one.
+
+The sample preview carries one build session, `B-k3x9` (*parity-guide*), that serves every part and answers every session action as a host would. It tells the same story as `packages/corral-pi/test/fixtures/sessions/parts.json`.
+
 ### Settings
 
 - **Devices**: this device and the paired ones, **Pair a device**, Revoke and Forget.
@@ -273,6 +281,15 @@ python3 scripts/tui-walk.py --size 140x44 fixture key:n sleep:1 screen
 ```
 
 `--size COLSxROWS` sets the terminal (default 140x44) and `--steps FILE` reads one step per line. Steps: `fixture` (Ctrl+K, `Data: fixture`, Enter: the sample preview), `key:NAME[*N]` (`enter tab stab esc up down left right home end pgup pgdn bs del space`, `ctrl+x`, `alt+x` or one character), `type:TEXT`, `wait:TEXT`, `gone:TEXT`, `sleep:SECS`, `screen`, `rows:A-B`, `attrs[:all]` and `diff` (the styled runs, to read focus and selection). The app restores its last destination, so start a walk with the destination's key (`n`, `r`, `p`, `a`, `t`, `u`, `f`, `,`, `/`); on Artifacts the filter takes letters, so go there with `key:ctrl+k type:Now key:enter` first. `--colors` (`truecolor`, `256`, `16`, `mono`) and `--background` set what the terminal reports. The driver keeps the app's saved state under `/tmp`, uses `pyte` from a virtual environment it creates under `/tmp`, and counts as the one NSH build at a time; see `AGENTS.md` for walking against a scratch daemon. It is a text capture, not a real owner's terminal.
+
+### Walking against a scratch daemon
+
+From the repository root, `just stage-parity` stages a scratch workspace under `/tmp` with one Git project and a running `corrald-next`, on the real Pi host with a scripted model provider, so a walk makes no model requests. `just stage-parity-fake <script>` stages the same with a scripted Pi host; `test/fixtures/sessions/parts.json` serves every session part (script paths are relative to `packages/corral-pi`). Each prints the workspace, the daemon socket, the browser listener and origin, a seeded build session and a `Pair:` command.
+
+- **Terminal**: from this directory, `XDG_STATE_HOME=<workspace>/app-state XDG_DATA_HOME=<workspace>/app-data CORRAL_SOCKET=<socket> nsh run --target tui --port 8891`, then enrol in Settings › Connection.
+- **Browser**: `nsh run --target web --port 8893` (the staged origin), open it in a private window, run the printed `Pair:` command and open the link it prints.
+
+Ctrl-C in the staging terminal stops the daemon and deletes the workspace.
 
 ## Keys
 

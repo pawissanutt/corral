@@ -20,6 +20,7 @@ type ScriptReply = Fields | readonly ScriptRoute[];
 type ScriptRoute = {
   /** First matching route wins; omitted fields are unrestricted. */
   readonly when?: Fields;
+  readonly absent?: readonly string[];
   readonly after_call?: string;
   readonly live?: readonly ScriptEvent[];
 } & ({ readonly reply: Fields } | { readonly refuse: { readonly code: string; readonly reason: string } });
@@ -85,6 +86,7 @@ function appendEvents(log: EventLog, events: readonly ScriptEvent[] = []): void 
 function routed(script: ScriptReply, args: Fields, completed: ReadonlySet<string>, live: EventLog): Fields {
   if (!Array.isArray(script)) return script as Fields;
   const route = (script as readonly ScriptRoute[]).find(route => (!route.after_call || completed.has(route.after_call))
+    && (route.absent ?? []).every(key => !Object.hasOwn(args, key))
     && Object.entries(route.when ?? {}).every(([key, value]) => isDeepStrictEqual(args[key], value)));
   if (!route) throw new BridgeRefusal("bad_input", "no scripted reply for these arguments");
   if ("refuse" in route) throw new BridgeRefusal(route.refuse.code, route.refuse.reason);
