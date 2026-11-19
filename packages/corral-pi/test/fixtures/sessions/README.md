@@ -14,3 +14,15 @@ Enroll this scratch client from Settings › Connection, or pair a browser in a 
 Replay the recording with `just stage-parity-fake test/fixtures/sessions/tools.json` (after recording it). Without a recording, `just stage-parity-fake` holds verification; substitute `test/fixtures/sessions/failed-gate.json`, `large.json`, or `older.json` (each under `test/fixtures/sessions/`) for a failed gate, 40 children and 300 queued inputs, or an unregistered `jobs` method. Paths passed to the recipe are relative to `packages/corral-pi` unless absolute. Fake state is frozen: reads return scripted data; controls do not run tools or advance the scenario.
 
 For other offline recordings or binary locations, run `bun --no-env-file test/support/stage.ts --provider-script /path/to/steps.json --daemon /path/to/corrald-next --engine /path/to/corral-next` from `packages/corral-pi`. The binary flags can also be set via `CORRALD_NEXT_BIN` and `CORRAL_NEXT_BIN`. Use `--listen` and `--origin` for other fixed local ports. Ctrl-C stops staging and deletes the scratch workspace.
+
+## Walk the session parts
+
+Run `just stage-parity-fake test/fixtures/sessions/parts.json` and open `parity-ready` (`B-parity`).
+
+- **Agents:** open Migration for the clipped brief, steers and model picker (the API profile is not approved for children); Docs for the pending question; Review for a finished report and findings. In Jobs, open the running job and load older output; the exited job has an exit code and no controls.
+- **Changes:** open `line.txt` for two hunks; compare the renamed guide and the clipped compatibility patch, which is marked outside the author's scope. The task candidate comparison is unavailable.
+- **Usage / sidebar:** inspect partial pricing (including an unpriced child and helper), Context with an unavailable MCP server, and Host events. Open Plan to see the five steps and history, then run **Compact context** and revisit Plan to see the retained ledger marked stale.
+- **Board / Proof:** inspect blocked and failed tasks and the clipped proposal. Try File and start, File only or Dismiss on the board card; Proof shows both gate attempts, the review, the owner decision and the timeline.
+- **Commands / model / queue:** open `/` for extension, prompt and skill entries; choose a model to distinguish Anthropic subscription from Anthropic API. Move a queued follow-up or withdraw it into the draft. **Export session** returns a host refusal; cancel on the finished Review child is refused if sent directly (the app may hide that control).
+
+Actions acknowledge or refuse without executing tools, changing the repository, or mutating the scenario; Compact alone switches the Plan reply and invalidates that detail. A method can serve a constant object or an ordered array of routes. A route can match exact values of named arguments (`when`), require an earlier successful call (`after_call`), return `reply` or `refuse`, and emit `live` events after a successful match. `$worktree` in a path is replaced by the staged checkout.

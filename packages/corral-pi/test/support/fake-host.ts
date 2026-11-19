@@ -1,10 +1,10 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { isDeepStrictEqual, parseArgs } from "node:util";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { EventLog } from "../../src/bridge/events.ts";
-import { BRIDGE_VERSION, type SubmitResult } from "../../src/bridge/protocol.ts";
+import { BRIDGE_VERSION, BridgeRefusal, type SubmitResult } from "../../src/bridge/protocol.ts";
 import { startBridge } from "../../src/bridge/server.ts";
 import { loadSession, saveSession, sessionDir } from "../../src/build/session-store.ts";
 import { prepareWorktree } from "../../src/build/worktree.ts";
@@ -16,6 +16,13 @@ import { PACKAGE_ROOT } from "./fixture-install.ts";
 
 type Fields = Record<string, unknown>;
 type ScriptEvent = { readonly kind: string; readonly data?: Fields };
+type ScriptReply = Fields | readonly ScriptRoute[];
+type ScriptRoute = {
+  /** First matching route wins; omitted fields are unrestricted. */
+  readonly when?: Fields;
+  readonly after_call?: string;
+  readonly live?: readonly ScriptEvent[];
+} & ({ readonly reply: Fields } | { readonly refuse: { readonly code: string; readonly reason: string } });
 export interface FakeHostScript {
   /** A Pi recording, relative to this script. Copied unchanged into the session. */
   readonly transcript?: string;
@@ -25,10 +32,10 @@ export interface FakeHostScript {
   readonly children_count?: number;
   readonly events?: readonly ScriptEvent[];
   readonly live?: readonly ScriptEvent[];
-  /** Constant replies; absent registered methods are unknown on the real bridge. */
-  readonly methods?: Readonly<Record<string, Fields>>;
+  /** Absent registered methods are unknown on the real bridge. */
+  readonly methods?: Readonly<Record<string, ScriptReply>>;
   readonly builtins?: Partial<Record<"hello" | "get_state" | "answer" | "pause" | "resume" | "cancel" | "rewind"
-    | "queue_state" | "queue_withdraw" | "set_model", Fields>> & { readonly submit_input?: SubmitResult };
+    | "queue_state", Fields>> & { readonly submit_input?: SubmitResult; readonly queue_withdraw?: ScriptReply; readonly set_model?: ScriptReply };
 }
 
 export const FAKE_HOST_ENTRY = fileURLToPath(import.meta.url);
@@ -75,11 +82,24 @@ function appendEvents(log: EventLog, events: readonly ScriptEvent[] = []): void 
   for (const event of events) log.emit(event.kind, event.data);
 }
 
+function routed(script: ScriptReply, args: Fields, completed: ReadonlySet<string>, live: EventLog): Fields {
+  if (!Array.isArray(script)) return script as Fields;
+  const route = (script as readonly ScriptRoute[]).find(route => (!route.after_call || completed.has(route.after_call))
+    && Object.entries(route.when ?? {}).every(([key, value]) => isDeepStrictEqual(args[key], value)));
+  if (!route) throw new BridgeRefusal("bad_input", "no scripted reply for these arguments");
+  if ("refuse" in route) throw new BridgeRefusal(route.refuse.code, route.refuse.reason);
+  appendEvents(live, route.live);
+  return route.reply;
+}
+
 /** Run the real socket protocol against a frozen scenario. The script never runs tools. */
 export async function startFakeHost(scriptPath: string, argv: readonly string[], env = process.env, cwd = process.cwd()) {
   const scriptFile = resolve(scriptPath);
-  const script = JSON.parse(readFileSync(scriptFile, "utf8")) as FakeHostScript;
+  const source = readFileSync(scriptFile, "utf8");
   const host = launch(argv, env, cwd);
+  const script = JSON.parse(source, (_key, value: unknown) =>
+    typeof value === "string" && (value === "$worktree" || value.startsWith("$worktree/"))
+      ? host.cwd + value.slice("$worktree".length) : value) as FakeHostScript;
   const sessions = join(host.dir, "sessions");
   mkdirSync(host.dir, { recursive: true, mode: 0o700 });
   const record = new SessionRecord(host.dir, host.id, host.role, host.cwd, false, host.socket);
@@ -116,9 +136,15 @@ export async function startFakeHost(scriptPath: string, argv: readonly string[],
     const fleetSeq = fleet ? live.emit("live_fleet").seq : 0;
     const stateSeq = live.emit("live_state").seq;
     const projectionBytes = Buffer.byteLength(JSON.stringify({ state, fleet }));
+    const completed = new Set<string>();
+    const dispatch = (name: string, result: ScriptReply, args: Fields) => {
+      const reply = routed(result, args, completed, live);
+      completed.add(name);
+      return reply;
+    };
     const registry = new RemoteRegistry();
     for (const [name, result] of Object.entries(script.methods ?? {})) {
-      registry.register({ name, parse: () => result, run: reply => reply });
+      registry.register({ name, parse: args => args, run: args => dispatch(name, result, args) });
     }
     const replies = script.builtins;
     if ("saveBuild" in host) host.saveBuild?.(transcript);
@@ -138,8 +164,10 @@ export async function startFakeHost(scriptPath: string, argv: readonly string[],
       queueState: limit => replies?.queue_state ?? { available: queue.length > 0,
         items: queue.slice(0, limit).map((item, index) => ({ ...item, item: item.key, mode: item.policy, state: "queued", position: index + 1 })),
         more: queue.length > limit },
-      queueWithdraw: () => replies?.queue_withdraw ?? { outcome: "unknown_item" },
-      setModel: async () => replies?.set_model ?? { model: state.model },
+      queueWithdraw: key => replies?.queue_withdraw
+        ? dispatch("queue_withdraw", replies.queue_withdraw, { key }) : { outcome: "unknown_item" },
+      setModel: async args => replies?.set_model
+        ? dispatch("set_model", replies.set_model, args) : { model: state.model },
       shutdown: () => { void bridge.close(); },
     }), {
       since(seq, byteLimit) {
