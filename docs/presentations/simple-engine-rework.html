@@ -865,7 +865,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
       <h4 class="callout-label" id="s3-1-left">Three things left for you</h4>
       <ol>
         <li><strong>Enrol the terminal app, once.</strong> Run <code>corral-app-tui</code>. It opens with “This device is not enrolled”. Go to Settings › Connection, name the device and enrol it.</li>
-        <li><strong>Pair your browser, once.</strong> In the workspace directory run <code>corrald-next pair</code> and open the link it prints. Press <strong>Pair</strong>, compare the six-digit code with <code>corrald-next pair status &lt;pair id&gt;</code>, then run <code>corrald-next pair confirm &lt;pair id&gt;</code>. The link works for two minutes.</li>
+        <li><strong>Pair your browser, once.</strong> In the workspace directory run <code>corrald-next pair</code> and open the link it prints. Press <strong>Pair</strong> in the browser. The command then shows the browser’s name and six-digit code and asks; answer <code>y</code> if the browser shows the same code. The link works for two minutes.</li>
         <li><strong>Try one task.</strong> <code>corral-next new "&lt;title&gt;" -p &lt;project&gt; --ready</code>, then <code>corral-next dispatch &lt;id&gt;</code>. The agent opens in a herdr pane.</li>
       </ol>
     </aside>
@@ -1155,10 +1155,21 @@ next: corral-next approve T-003 --onto main</code></pre></div>
 listen = "127.0.0.1:7842"
 web_origin = ["http://127.0.0.1:8890", "http://localhost:8890"]</code></pre></div>
       </li>
-      <li>Run <code>corrald-next pair</code>. It prints a link. Open it; the page has the code filled in. Press <strong>Pair</strong>.</li>
-      <li>Both sides show the same six-digit code. <code>corrald-next pair status &lt;id&gt;</code> shows it; <code>corrald-next pair confirm &lt;id&gt;</code> enrols the device.</li>
+      <li>Run <code>corrald-next pair</code>. It prints a link and waits. Open the link; the page has the code filled in. Press <strong>Pair</strong>.</li>
+      <li>The browser shows a six-digit code. The command shows the device’s name and the same code and asks <code>Pair? [y/N]</code>. Answer <code>y</code> only if the codes match; anything else cancels and enrols nothing.</li>
       <li>The device stays paired after a reload and can do everything you can.</li>
     </ol>
+    <p>What it looks like:</p>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corrald-next pair</span>
+Pairing link, valid until 23:26:34:
+http://127.0.0.1:8890/#corral-pair=corral-pair-1.…
+Open it in the browser you want to pair and press Pair there.
+Waiting for the device…
+"Browser" (app 0.1.0) wants to pair.
+Its code: 906 218
+Pair only if the device shows the same code. Pair? [y/N] <span class="cl">y</span>
+Paired dev-975a05cfa40497b7 "Browser"</code></pre></div>
+    <p>For scripts, <code>corrald-next pair --json</code> prints the offer and returns at once, and <code>corrald-next pair status</code>, <code>confirm</code> and <code>cancel</code> take a pair id.</p>
     <p>A pairing code expires after two minutes. For a device on another machine the app must be served over HTTPS, <code>web_origin</code> must name its exact origin, and the daemon needs <code>run --web-endpoint wss://host[:port]</code>; TLS comes from a reverse proxy or Tailscale Serve. Phone access from outside this machine is not set up for the new daemon.</p>
   </section>
 
@@ -1333,7 +1344,7 @@ pub struct Next    { pub op: Op, pub force: bool }</code></pre></div>
       <li>One write command: <code>op.submit { op, force }</code>. The authority field is gone.</li>
       <li>Of 19 command families, <code>task</code> and <code>review</code> are kept, <code>session</code> and <code>config</code> are reshaped, and 15 are dropped (question, queue, attention, plan, annotation, mode, assistant, message, pm, inbox, knowledge, meta, repair, run, setup). Each dropped family maps onto an engine operation or has no successor.</li>
       <li>Session controls for chat and agent sessions: cancel, pause, resume, terminate, relaunch, rewind.</li>
-      <li>Pairing: <code>corrald-next pair</code> prints a link; the browser and the CLI show the same six-digit code; <code>pair confirm</code> enrols the device. Verified in a browser: the pairing survives a page reload.</li>
+      <li>Pairing: <code>corrald-next pair</code> prints a link, waits for the device, shows its name and six-digit code and asks before enrolling it. Verified in a browser: answering yes pairs the device and the pairing survives a page reload; answering no enrols nothing.</li>
     </ul>
   </section>
 
