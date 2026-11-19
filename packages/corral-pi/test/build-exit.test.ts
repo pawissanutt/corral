@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ownerRun, json, type Run } from "../src/build/corral-cli.ts";
-import { createExit, type ExitProgressRecord } from "../src/build/exit.ts";
+import { createExit, LAND_REPAIR_ROUNDS, type ExitProgressRecord } from "../src/build/exit.ts";
 import { createJournal } from "../src/build/record.ts";
 import { summarize } from "../src/build/git.ts";
 import type { GateReceipt } from "../src/build/record-types.ts";
@@ -29,17 +29,20 @@ function git(dirty = false, commits = 2, calls: string[][] = [], branch: string 
     return { code: 0, stdout, stderr: "" };
   };
 }
-function receipt(attempt = "G1", result: GateReceipt["result"] = "pass"): GateReceipt {
+function receipt(attempt = "G1", result: GateReceipt["result"] = "pass", head = "a".repeat(40)): GateReceipt {
   return { attempt, tier: "full", head, result, commands: ["check"], started: "2026-01-01T00:00:00Z", ended: "2026-01-01T00:01:00Z",
     receipt: `/logs/${attempt}.json`, log: `/logs/${attempt}.log`, ...(result === "fail" ? { failed_command: "check" } : {}) };
 }
-function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; stale?: boolean; conflict?: boolean; patchChanged?: boolean; publishFailure?: boolean } = {}) {
+type Repair = (prompt: string, f: { commit(): void; approve(): void }) => { aborted: boolean } | Promise<{ aborted: boolean }>;
+function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; failGates?: number; repair?: Repair; stale?: boolean; conflict?: boolean; patchChanged?: boolean; publishFailure?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "build-exit-"));
   const ctx = { ...context(settings.policy), dir };
   const events: string[] = [], records: ExitRecord[] = [], calls: string[][] = [];
-  let gates = 0, lands = 0, rebased = false;
+  let gates = 0, lands = 0, rebased = false, current = head;
+  const prompts: string[] = [];
   const underlying = git(false, 2, calls);
   const gitRun: Run = async (argv, options) => {
+    if (argv[0] === "rev-parse" && argv[1] === "HEAD") return { code: 0, stdout: current, stderr: "" };
     if (argv[0] === "rebase") {
       events.push(argv.includes("--abort") ? "abort" : "rebase"); rebased = true;
       return { code: settings.conflict && !argv.includes("--abort") ? 1 : 0, stdout: "", stderr: "conflict" };
@@ -60,20 +63,28 @@ function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; stale?: bo
       events.push("gate"); gates++;
       expect(options.timeoutMs).toBe(7_200_000);
       expect(argv).toContain("full"); expect(argv).toContain(base);
-      return { code: 0, stdout: JSON.stringify(receipt(`G${gates}`, settings.failGate ? "fail" : "pass")), stderr: "" };
+      return { code: 0, stdout: JSON.stringify(receipt(`G${gates}`, settings.failGate || gates <= (settings.failGates ?? 0) ? "fail" : "pass", current)), stderr: "" };
     }
     if (argv[1] === "land") {
       events.push("land"); lands++;
-      expect(argv.slice(-5)).toEqual(["--expected-head", head, "--gate-attempt", `G${gates}`, "--json"]);
+      expect(argv.slice(-5)).toEqual(["--expected-head", current, "--gate-attempt", `G${gates}`, "--json"]);
       return settings.stale && lands === 1 ? { code: 1, stdout: "", stderr: "landing_stale: base moved" }
-        : { code: 0, stdout: JSON.stringify({ landed: head, base_branch: "main", previous: base }), stderr: "" };
+        : { code: 0, stdout: JSON.stringify({ landed: current, base_branch: "main", previous: base }), stderr: "" };
     }
     throw new Error(`Unexpected corral ${argv.join(" ")}`);
   };
   const journal = createJournal({ context: ctx, run, git: gitRun, fleet: () => fleet });
+  const repair = settings.repair;
   const control = createExit({ context: ctx, run, git: gitRun, journal, fleet: () => fleet,
-    integrationBranch: async () => "main", save: record => { records.push(record); }, changed() {} });
-  return { ctx, journal, control, events, records, calls, close() { control.close(); rmSync(dir, { recursive: true, force: true }); } };
+    integrationBranch: async () => "main", save: record => { records.push(record); }, changed() {},
+    ...(repair ? { repair: async (prompt: string) => {
+      events.push("repair"); prompts.push(prompt);
+      return repair(prompt, {
+        commit() { current = String(prompts.length).repeat(40); },
+        approve() { journal.review({ ...child(`review-${prompts.length}`, "review"), verdict: { verdict: "approve", summary: "Approved", findings: [], head: current, at: 1000 } }, current); },
+      });
+    } } : {}) });
+  return { ctx, journal, control, events, records, calls, prompts, close() { control.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 function child(id = "parser", kind: ChildSnapshot["kind"] = "slice"): ChildSnapshot {
   return { id, kind, call: "call", title: "Parser", brief: "Build parser", owns: ["src/parser.ts"], after: [], profile: "default", model: "provider/model",
@@ -103,6 +114,52 @@ describe("build exits", () => {
       expect(f.journal.record().outcome.state).toBe("open");
       expect((await f.control.choose("iterate")).phase).toBe("none");
     } finally { f.close(); }
+  });
+  test("a failing landing gate is handed to the session and Land resumes on its fix without the owner", async () => {
+    const f = fixture({ failGates: 2, repair: (_prompt, session) => { session.commit(); return { aborted: false }; } });
+    try {
+      const state = await f.control.choose("land");
+      expect(state.phase).toBe("landed");
+      expect(f.events.filter(event => event !== "record")).toEqual(["rebase", "gate", "repair", "rebase", "gate", "repair", "rebase", "gate", "land"]);
+      expect(f.prompts[0]).toContain(`rebased head ${head}`); expect(f.prompts[0]).toContain("Failed command: check");
+      expect(f.prompts[0]).toContain("/logs/G1.log"); expect(f.prompts[0]).toContain(`repair 1 of ${LAND_REPAIR_ROUNDS}`);
+      expect(f.prompts[0]).not.toContain("build_review");
+      expect(f.prompts[1]).toContain("/logs/G2.log");
+      expect(state.record).toMatchObject({ landed: "2".repeat(40), gateAttempt: "G3" });
+      expect(f.records.map(record => (record as ExitProgressRecord).progress?.phase)).toContain("repairing");
+      expect(f.journal.record().decisions.filter(decision => decision.kind === "exit")).toHaveLength(1);
+    } finally { f.close(); }
+  });
+  test("automatic landing repair is bounded and stops without a new commit or when the turn is stopped", async () => {
+    const endless = fixture({ failGate: true, repair: (_prompt, session) => { session.commit(); return { aborted: false }; } });
+    try {
+      const state = await endless.control.choose("land");
+      expect(state.phase).toBe("failed"); expect(state.detail).toContain(`/logs/G${LAND_REPAIR_ROUNDS + 1}.log`);
+      expect(endless.events.filter(event => event === "repair")).toHaveLength(LAND_REPAIR_ROUNDS);
+      expect(endless.events).not.toContain("land");
+    } finally { endless.close(); }
+    for (const [repair, why] of [[() => ({ aborted: false }), "made no new commit"], [(_p, s) => { s.commit(); return { aborted: true }; }, "was stopped"],
+      [() => { throw new Error("host_closing"); }, "host_closing"]] as const satisfies readonly (readonly [Repair, string])[]) {
+      const f = fixture({ failGates: 1, repair });
+      try {
+        const state = await f.control.choose("land");
+        expect(state.phase).toBe("failed"); expect(state.detail).toContain("/logs/G1.log"); expect(state.detail).toContain(why);
+        expect(f.events.filter(event => event !== "record")).toEqual(["rebase", "gate", "repair"]);
+      } finally { f.close(); }
+    }
+  });
+  test("under review policy a repaired head lands only with a fresh approving review or the owner's override", async () => {
+    for (const [approve, override, landed] of [[false, false, false], [true, false, true], [false, true, true]] as const) {
+      const f = fixture({ policy: "review", failGates: 1, repair: (_prompt, session) => { session.commit(); if (approve) session.approve(); return { aborted: false }; } });
+      try {
+        f.journal.review({ ...child("review-0", "review"), verdict: { verdict: "approve", summary: "Approved", findings: [], head, at: 1000 } }, head);
+        const state = await f.control.choose("land", override ? { overrideReason: "Owner accepts the risk" } : undefined);
+        expect(state.phase).toBe(landed ? "landed" : "failed");
+        expect(f.prompts[0]!.includes("build_review")).toBe(!override);
+        expect(f.journal.record().decisions.some(decision => decision.kind === "override" && decision.text.startsWith("Repair 1 commits"))).toBe(override);
+        if (!landed) { expect(state.detail).toContain("no approving review covers the repaired head"); expect(f.events).not.toContain("land"); }
+      } finally { f.close(); }
+    }
   });
   test("landing_stale retries rebase and a fresh full gate", async () => {
     const f = fixture({ stale: true });
