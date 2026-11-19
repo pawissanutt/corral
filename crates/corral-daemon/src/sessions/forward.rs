@@ -87,7 +87,7 @@ fn exchange<R: DeserializeOwned + Serialize>(
 
 #[derive(Serialize)]
 #[serde(untagged)]
-enum ActArgs {
+enum ActArgs<'a> {
     QueueKey {
         key: String,
     },
@@ -104,6 +104,7 @@ enum ActArgs {
         card: String,
         answers: Vec<CardAnswer>,
         dismiss: bool,
+        device: &'a str,
     },
     Child {
         child: String,
@@ -159,6 +160,7 @@ pub(crate) fn model(shared: &Shared, request: SessionModel) -> Result<SessionMod
 
 pub(crate) fn card_answer(
     shared: &Shared,
+    device: &str,
     request: SessionCardAnswer,
 ) -> Result<SessionCardAnswered> {
     let SessionCardAnswer {
@@ -175,6 +177,7 @@ pub(crate) fn card_answer(
             card,
             answers,
             dismiss,
+            device,
         },
         HostCall::Act,
     )
