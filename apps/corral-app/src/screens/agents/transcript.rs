@@ -20,6 +20,8 @@ mod code_cell;
 mod group;
 mod image;
 mod jump;
+#[cfg(test)]
+mod jump_tests;
 mod parts;
 mod prose;
 mod rows;
