@@ -12,9 +12,10 @@ import { subscriptionRoutes } from "../src/host/subscriptions.ts";
 import { CorralClient } from "../src/tools/corral.ts";
 import fixtureAuth from "./fixtures/auth/index.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 
-for (const role of ["assistant", "pm"] as const) test(`${role}: GPT -> Claude -> GPT preserves history and binding; removed credentials cannot commit`, async () => {
+test("assistant switches GPT -> Claude -> GPT with history; removed credentials cannot commit", async () => {
+  const role = "assistant";
   const assets = buildFixtureInstall();
   const work = mkdtempSync(join(tmpdir(), "corral-subscriptions-"));
   const oldFetch = globalThis.fetch;
@@ -51,15 +52,15 @@ for (const role of ["assistant", "pm"] as const) test(`${role}: GPT -> Claude ->
       createSdkMcpServer: (options) => ({ type: "sdk", name: options.name, instance: options }) as never,
     });
     const sdk = await import("@earendil-works/pi-coding-agent");
-    const identity = { store: "st-0123456789abcdef", project: "demo", role, generation: 1 };
-    const corral = writeFakeCorral(work);
-    const events = new EventLog(1);
+    const identity = { store: "st-0123456789abcdef", project: "demo", role } as const;
+    const corral = writeFakeEngine(work);
+    const events = new EventLog();
     const cwd = join(work, "work"); mkdirSync(cwd);
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol", modules,
-      client: new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host!.sessionId() }),
+      client: new CorralClient({ corral: corral.path, root: work, cwd, identity }),
       events, network, sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
     });
-    await host.hello("n".repeat(64), "pane-1", "c".repeat(64));
+    await host.startLocal();
     const session = host.session;
     const id = host.sessionId();
     const file = session.sessionFile;
@@ -82,7 +83,7 @@ for (const role of ["assistant", "pm"] as const) test(`${role}: GPT -> Claude ->
     expect(session.sessionFile).toBe(file);
     expect(session.messages.slice(0, history.length)).toEqual(history);
     await host.drained();
-    expect(corral.calls().map((c) => c.envelope.payload).filter((p) => p.kind === "turn_started").map((p) => [p.provider, p.model]))
+    expect(events.since(0, 64 * 1024).events.filter(event => event.kind === "turn_started").map(event => [event.provider, event.model]))
       .toEqual([["openai-codex", gpt.id], ["anthropic", claude.id], ["openai-codex", gpt.id]]);
     claudePresent = false;
     const leaf = session.sessionManager.getLeafId();

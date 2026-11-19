@@ -1,26 +1,25 @@
-// Turn checkpoints in the real worker host (T-575): each turn's start snapshot is taken before
-// its prompt is recorded and names the entry the prompt goes under, the end snapshot follows the
-// turn's edits, the worktree's own index is untouched, and a rewind's cursor reopens the session
-// on that entry without the abandoned turn while the file keeps it.
+// Worker checkpoints and rewind through the socket, on a linked worktree and a fixture provider.
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EventLog } from "../src/bridge/events.ts";
+import { type BridgeServer, startBridge } from "../src/bridge/server.ts";
 import { CHECKPOINT_ENTRY, type CheckpointRecord, Checkpoints } from "../src/capabilities/checkpoints.ts";
-import { LaunchMessageInvalid, parseLaunchMessage } from "../src/host/config.ts";
-import { openSession } from "../src/host/lifecycle.ts";
+import { workspaceSettings } from "../src/host/config.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
 import type { CapabilitySet } from "../src/roles/types.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
+import { CorralClient } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
+import { connect, testHandlers } from "./support/bridge-client.ts";
+import { within } from "./support/wait.ts";
 
 const capabilities: CapabilitySet = { catalog: 3, digest: "c".repeat(64), preset: "full", enabled: ["checkpoints"] };
 
@@ -44,15 +43,16 @@ function worktree(work: string): string {
   return cwd;
 }
 
-type Entry = { type: string; id: string; parentId: string | null; customType?: string; data?: CheckpointRecord;
-  message?: { role: string; content: unknown } };
+type Entry = { type: string; id: string; parentId: string | null; timestamp: string; customType?: string;
+  data?: CheckpointRecord; message?: { role: string; content: unknown } };
 
-test("the worker host checkpoints each turn's start and end with the entry before its prompt", async () => {
+test("rewind restores the start of a turn and continues the retained conversation", async () => {
   // Given the production worker with checkpoints, bound in a linked worktree with staged work.
   const assets = buildFixtureInstall();
   const work = mkdtempSync(join(tmpdir(), "corral-pi-checkpoints-host-"));
   const originalFetch = globalThis.fetch;
   let host: HostSession | undefined;
+  let bridge: BridgeServer | undefined;
   try {
     const cwd = worktree(work);
     writeFileSync(join(cwd, "staged.txt"), "staged\n");
@@ -65,12 +65,9 @@ test("the worker host checkpoints each turn's start and end with the entry befor
     if (!transport) throw new Error("fixture transport missing");
     const network = guardedFetch(transport);
     globalThis.fetch = network.fetch;
-    const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-575", run: "R1" };
-    const events = new EventLog(1);
-    const corral = writeFakeCorral(work);
-    const client = new CorralClient({
-      corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
-    });
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const, task: "T-575", run: "R1" };
+    const events = new EventLog();
+    const client = new CorralClient({ corral: writeFakeEngine(work).path, root: work, cwd, identity });
     host = await HostSession.create({
       sdk, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol", capabilities, client, events, network,
       guidance: { projectText: false, settings: {} },
@@ -78,7 +75,7 @@ test("the worker host checkpoints each turn's start and end with the entry befor
       sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
     });
     await host.session.bindExtensions({});
-    await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+    await host.startLocal();
     const live = host;
     const turn = async (key: string, command: string) => {
       fixtureTransport().script([
@@ -90,8 +87,7 @@ test("the worker host checkpoints each turn's start and end with the entry befor
         off = events.on((event) => { if (event.kind === "turn_ended") resolve(); });
       });
       try {
-        expect((await live.submit({ text: `${key}-turn-prompt`, busyPolicy: "prompt", idempotencyKey: key, origin: "test" }, `rq-${key}`))
-          .disposition).toBe("started");
+        expect((await live.submitLocal({ text: `${key}-turn-prompt`, busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
         await ended;
         await live.drained();
       } finally {
@@ -100,15 +96,23 @@ test("the worker host checkpoints each turn's start and end with the entry befor
     };
 
     // When two turns each change the worktree, one of them in an ignored directory too.
-    await turn("first", "echo one > a.txt && mkdir -p ignored && echo x > ignored/cache");
-    await turn("second", "echo two > a.txt && rm tracked");
+    await turn("first", "echo one > a.txt && git add a.txt && git commit -qm first -- a.txt && echo dirty > kept.txt && mkdir -p ignored && echo x > ignored/cache");
+    const firstHead = git(cwd, "rev-parse", "HEAD");
+    await turn("second", "echo two > a.txt && rm tracked && git commit -qm second -- a.txt tracked");
+    const secondHead = git(cwd, "rev-parse", "HEAD");
 
     // Then each turn has a start and an end checkpoint, in order, with refs on their commits.
     const file = live.session.sessionFile ?? "";
     const entries = readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Entry);
-    const checkpoints = entries.filter((e) => e.type === "custom" && e.customType === CHECKPOINT_ENTRY)
-      .map((e) => e.data as CheckpointRecord);
-    expect(checkpoints.map((c) => `${c.id}:${c.phase}`)).toEqual(["g1-t1:start", "g1-t1:end", "g1-t2:start", "g1-t2:end"]);
+    const checkpointEntries = entries.filter((e) => e.type === "custom" && e.customType === CHECKPOINT_ENTRY);
+    const checkpoints = checkpointEntries.map((e) => e.data as CheckpointRecord);
+    const listedCheckpoints = checkpointEntries.map(({ data, timestamp }) => {
+      expect(new Date(timestamp).toISOString()).toBe(timestamp);
+      return { ...data, at: timestamp };
+    });
+    expect(checkpoints.map(c => [c.id, c.phase])).toEqual([
+      ["R1-t1-start", "start"], ["R1-t1-end", "end"], ["R1-t2-start", "start"], ["R1-t2-end", "end"],
+    ]);
     for (const c of checkpoints) {
       expect(c.error).toBeUndefined();
       expect(git(cwd, "rev-parse", c.ref ?? "")).toBe(c.commit ?? "");
@@ -133,7 +137,7 @@ test("the worker host checkpoints each turn's start and end with the entry befor
       JSON.stringify(e.message.content).includes(text));
     const startEntry = (id: string) => entries.findIndex((e) => e.customType === CHECKPOINT_ENTRY && e.data?.id === id &&
       e.data.phase === "start");
-    for (const [id, text, leaf] of [["g1-t1", "first-turn-prompt", start1.leaf], ["g1-t2", "second-turn-prompt", start2.leaf]] as const) {
+    for (const [id, text, leaf] of [[start1.id, "first-turn-prompt", start1.leaf], [start2.id, "second-turn-prompt", start2.leaf]] as const) {
       const at = startEntry(id);
       expect(at).toBeGreaterThan(0);
       expect(at < index(text)).toBeTrue();
@@ -141,17 +145,68 @@ test("the worker host checkpoints each turn's start and end with the entry befor
     }
     expect(end1.leaf).toBeUndefined();
 
-    // When the next generation opens the session at turn 2's cursor, as after a rewind:
-    const before = readFileSync(file, "utf8");
-    const rewound = openSession(sdk, cwd, join(work, "sessions"), 2, file, false, start2.leaf);
-    // Then the conversation stops before turn 2's prompt, and the file still has every entry.
-    expect(rewound.getLeafId()).toBe(start2.leaf ?? "");
-    const prompts = JSON.stringify(rewound.buildSessionContext().messages.filter((m) => m.role === "user"));
-    expect(prompts).toContain("first-turn-prompt");
-    expect(prompts).not.toContain("second-turn-prompt");
-    expect(readFileSync(file, "utf8")).toBe(before);
-    expect(() => openSession(sdk, cwd, join(work, "sessions"), 2, file, false, "missing-entry")).toThrow();
+    writeFileSync(join(cwd, "hand.txt"), "owner edit\n");
+    writeFileSync(join(cwd, "staged.txt"), "unstaged worktree version\n");
+    const provider = fixtureTransport();
+    provider.holdNext();
+    const held = provider.whenHeld();
+    expect((await live.submitLocal({ text: "discard this open turn", busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
+    await within(held, 30_000, "the active turn waiting for a model reply");
+    const abortedBefore = provider.aborted;
+    const liveCursor = live.liveEvents.since(0, Infinity).last;
+    bridge = await startBridge({
+      path: join(work, "sock", "host.sock"), sessionId: "T-575/R1", events,
+      handlers: testHandlers({ rewind: input => live.rewind(input) }), liveEvents: live.liveEvents,
+    });
+    const socket = await connect(bridge.path);
+    const request = (command: string, args: Record<string, unknown>) => socket.request({ version: 2, id: "request", command, args });
+    const listed = (await request("rewind", { list: true })).result?.checkpoints as
+      Array<Record<string, unknown>> | undefined;
+    expect(listed).toHaveLength(listedCheckpoints.length + 1);
+    expect(listed?.slice(0, -1)).toMatchObject(listedCheckpoints);
+    expect(listed?.at(-1)).toMatchObject({ phase: "start", turn: 3 });
+    const isoStamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+    expect(listed?.at(-1)?.at).toMatch(isoStamp);
+    const reply = await request("rewind", { turn: 2 });
+    expect(reply.error).toBeUndefined();
+    expect(provider.aborted).toBe(abortedBefore + 1);
+    const rescue = String(reply.result?.rescue_ref);
+    expect(rescue).toMatch(/^refs\/worktree\/corral\/rescue\//);
+    expect(reply.result).toMatchObject({ turn: 2, head: firstHead, from_head: secondHead });
+    expect(reply.result?.at).toMatch(isoStamp);
+    expect(git(cwd, "symbolic-ref", "HEAD")).toBe("refs/heads/corral/T-575");
+    expect(git(cwd, "rev-parse", "HEAD")).toBe(firstHead);
+    expect(readFileSync(join(cwd, "tracked"), "utf8")).toBe("initial\n");
+    expect(readFileSync(join(cwd, "a.txt"), "utf8")).toBe("one\n");
+    expect(readFileSync(join(cwd, "kept.txt"), "utf8")).toBe("dirty\n");
+    expect(readFileSync(join(cwd, "ignored/cache"), "utf8")).toBe("x\n");
+    expect(existsSync(join(cwd, "hand.txt"))).toBeFalse();
+    expect(git(cwd, "rev-parse", `${rescue}^1`)).toBe(secondHead);
+    expect(git(cwd, "show", `${rescue}:a.txt`)).toBe("two");
+    expect(git(cwd, "show", `${rescue}:hand.txt`)).toBe("owner edit");
+    expect(git(cwd, "show", `${rescue}:staged.txt`)).toBe("unstaged worktree version");
+    expect(git(cwd, "show", `${rescue}^2:staged.txt`)).toBe("staged");
+    expect((await request("rewind", { list: true })).result).toEqual({
+      checkpoints: listedCheckpoints.slice(0, 3), rewinds: [reply.result],
+    });
+    expect((await request("live_since", { seq: liveCursor })).result?.gap).toMatchObject({ reconcile: true });
+    socket.close();
+
+    const cut = readFileSync(file, "utf8");
+    expect(cut).toContain("first-turn-prompt");
+    expect(cut).not.toContain("second-turn-prompt");
+    expect(cut).not.toContain("discard this open turn");
+    expect(JSON.parse(cut.trimEnd().split("\n").at(-1) ?? "").data).toEqual(start2);
+    const prompts = () => live.session.messages.filter(m => m.role === "user").map(m => m.content);
+    const before = prompts();
+    expect(JSON.stringify(before)).toContain("first-turn-prompt");
+    expect(JSON.stringify(before)).not.toContain("second-turn-prompt");
+    await turn("followup", "echo continued > a.txt");
+    expect(prompts().slice(0, -1)).toEqual(before);
+    expect(JSON.stringify(prompts().at(-1))).toContain("followup-turn-prompt");
+    expect(readFileSync(join(cwd, "a.txt"), "utf8")).toBe("continued\n");
   } finally {
+    await bridge?.close();
     host?.session.dispose();
     globalThis.fetch = originalFetch;
     assets.cleanup();
@@ -161,14 +216,15 @@ test("the worker host checkpoints each turn's start and end with the entry befor
 }, 0);
 
 test("a failed snapshot is recorded with its error and never throws into the turn", () => {
-  // Given a cwd that is not a git worktree.
+  // An unborn repository has no HEAD even when TMPDIR sits inside another Git worktree.
   const work = mkdtempSync(join(tmpdir(), "corral-pi-checkpoints-"));
   try {
+    git(work, "init", "-qb", "main");
     const recorded: CheckpointRecord[] = [];
-    const checkpoints = new Checkpoints({ cwd: work, generation: 3, run: "R2", record: (entry) => recorded.push(entry) });
+    const checkpoints = new Checkpoints({ cwd: work, run: "R2", record: entry => recorded.push(entry) });
     // When a turn starts, then the entry names the failure and carries no commit or cursor.
     const entry = checkpoints.capture("start", 4, "leaf-1");
-    expect(entry.id).toBe("g3-t4");
+    expect(entry.id).toBe("R2-t4-start");
     expect(typeof entry.error).toBe("string");
     expect(entry.commit).toBeUndefined();
     expect(recorded).toEqual([entry]);
@@ -177,22 +233,15 @@ test("a failed snapshot is recorded with its error and never throws into the tur
   }
 });
 
-test("a launch carries a rewind cursor only with its resumed session, and checkpoints only for workers", () => {
-  const message = {
-    version: 1, store: "st-demo", project: "demo", role: "worker", task: "T-575", run: "R1", generation: 2,
-    secrets: { host_cap: "h".repeat(64), ctl_cap: "c".repeat(64), bind_nonce: "n".repeat(64) },
-    pane: "p1", cwd: "/work/wt", root: "/work", corral: "/bin/corral", assets: "/assets", runtime_dir: "/runtime",
-    session_dir: "/sessions", model: "gpt-6.1-sol", resume_session: "/sessions/s.jsonl",
-  };
-  expect(parseLaunchMessage(JSON.stringify({ ...message, resume_leaf: "a1b2c3d4" })).resumeLeaf).toBe("a1b2c3d4");
-  expect(parseLaunchMessage(JSON.stringify(message)).resumeLeaf).toBeUndefined();
-  for (const invalid of [
-    { ...message, resume_leaf: "a1", resume_session: undefined }, { ...message, resume_leaf: "bad leaf" },
-    { ...message, role: "reviewer", review: "R1-review1", capabilities },
-  ]) {
-    expect(() => parseLaunchMessage(JSON.stringify(invalid))).toThrow(LaunchMessageInvalid);
+test("workspace settings enable checkpoints only for workers with a run", () => {
+  const work = mkdtempSync(join(tmpdir(), "corral-pi-checkpoint-settings-"));
+  try {
+    expect(workspaceSettings(work, "worker", "R1").capabilities.enabled).toContain("checkpoints");
+    expect(workspaceSettings(work, "worker").capabilities.enabled).not.toContain("checkpoints");
+    expect(workspaceSettings(work, "reviewer", "R1").capabilities.enabled).not.toContain("checkpoints");
+  } finally {
+    rmSync(work, { recursive: true, force: true });
   }
-  expect(parseLaunchMessage(JSON.stringify({ ...message, capabilities })).capabilities?.enabled).toEqual(["checkpoints"]);
 });
 
 test("a checkpoint re-hashes a racily clean file as git does", () => {
@@ -211,7 +260,7 @@ test("a checkpoint re-hashes a racily clean file as git does", () => {
     writeFileSync(join(cwd, "a.txt"), "two\n");
     utimesSync(join(cwd, "a.txt"), tick, tick);
     // When the host checkpoints, then the snapshot has the new content, as `git status` sees it.
-    const entry = new Checkpoints({ cwd, generation: 1, run: "R1", record: () => undefined }).capture("start", 1, "l");
+    const entry = new Checkpoints({ cwd, run: "R1", record: () => undefined }).capture("start", 1, "l");
     expect(git(cwd, "show", `${entry.commit}:a.txt`)).toBe("two");
     expect(git(cwd, "status", "--porcelain")).toBe("M a.txt");
   } finally {

@@ -116,7 +116,7 @@ test("the extension exposes the three tools and configures rust-analyzer by argv
   expect(rust?.command).toEqual(["rust-analyzer"]);
 });
 
-test("generation settings select a configured server without exposing mutating LSP tools", async () => {
+test("session settings select a configured server without exposing mutating LSP tools", async () => {
   const settings = { languages: { example: { command: process.execPath, args: [FAKE], extensions: { ".fk": "fake" }, root_markers: ["marker"] } } };
   const made = lspToolkit({ root, servers: configuredServers(settings), limits: LIMITS });
   toolkits.push(made);

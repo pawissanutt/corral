@@ -31,16 +31,12 @@ pub const SEARCH_LABEL: &str = "Search";
 /// A top-level destination in the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Destination {
-    /// The inbox.
-    Inbox,
-    /// The current workspace.
+    /// The current workspace; its first group is what needs you.
     Now,
     /// Recent changes.
     Changes,
     /// Plans.
     Plans,
-    /// Builds: interactive sessions that implemented, verified, reviewed and landed work.
-    Builds,
     /// Agents.
     Agents,
     /// Items to review.
@@ -49,91 +45,85 @@ pub enum Destination {
     Timeline,
     /// Usage.
     Usage,
+    /// Every task's artifacts: the finder.
+    Artifacts,
     /// Settings.
     Settings,
 }
 
 impl Destination {
-    /// Sidebar badges use the same canonical owner moves as their destination groups.
-    pub fn attention_count(self, counts: &corral_protocol::rows::AttentionCounts) -> Option<u64> {
-        match self {
-            Self::Inbox => Some(counts.inbox),
-            Self::Now => Some(counts.now),
-            Self::Plans => Some(counts.plans),
-            Self::Review => Some(counts.review),
-            _ => None,
-        }
-    }
     /// Destinations in navigation order.
-    pub const ALL: [Destination; 10] = [
-        Self::Inbox,
+    pub const ALL: [Destination; 9] = [
         Self::Now,
         Self::Changes,
         Self::Plans,
-        Self::Builds,
         Self::Agents,
         Self::Review,
         Self::Timeline,
         Self::Usage,
+        Self::Artifacts,
         Self::Settings,
     ];
     /// The display label.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Inbox => "Inbox",
             Self::Now => "Now",
             Self::Changes => "Changes",
             Self::Plans => "Plans",
-            Self::Builds => "Builds",
             Self::Agents => "Agents",
             Self::Review => "Review",
             Self::Timeline => "Timeline",
             Self::Usage => "Usage",
+            Self::Artifacts => "Artifacts",
             Self::Settings => "Settings",
         }
     }
     /// The storage and identifier slug.
     pub const fn slug(self) -> &'static str {
         match self {
-            Self::Inbox => "inbox",
             Self::Now => "now",
             Self::Changes => "changes",
             Self::Plans => "plans",
-            Self::Builds => "builds",
             Self::Agents => "agents",
             Self::Review => "review",
             Self::Timeline => "timeline",
             Self::Usage => "usage",
+            Self::Artifacts => "artifacts",
             Self::Settings => "settings",
         }
     }
-    /// Finds a destination by its slug.
+    /// Finds a destination by its slug; the merged Inbox and Builds slugs open their new homes.
     pub fn from_slug(slug: &str) -> Option<Destination> {
-        Self::ALL.into_iter().find(|item| item.slug() == slug)
+        match slug {
+            "inbox" => Some(Self::Now),
+            "builds" => Some(Self::Agents),
+            _ => Self::ALL.into_iter().find(|item| item.slug() == slug),
+        }
     }
     /// The destination's keyboard shortcut.
     pub const fn key(self) -> char {
         match self {
-            Self::Inbox => 'i',
             Self::Now => 'n',
             Self::Changes => '.',
             Self::Plans => 'p',
-            Self::Builds => 'b',
             Self::Agents => 'a',
             Self::Review => 'r',
             Self::Timeline => 't',
             Self::Usage => 'u',
+            Self::Artifacts => 'f',
             Self::Settings => ',',
         }
     }
-    /// Finds a destination by its keyboard shortcut.
+    /// Finds a destination by its keyboard shortcut; `i`, the former Inbox key, opens Now.
     pub fn from_key(key: char) -> Option<Destination> {
+        if key == 'i' {
+            return Some(Self::Now);
+        }
         Self::ALL.into_iter().find(|item| item.key() == key)
     }
     /// The phone tab containing this destination.
     pub const fn phone_tab(self) -> PhoneTab {
         match self {
-            Self::Inbox => PhoneTab::Inbox,
             Self::Now => PhoneTab::Now,
             Self::Agents => PhoneTab::Agents,
             Self::Plans => PhoneTab::Plans,
@@ -147,39 +137,35 @@ impl Destination {
 pub enum SettingsSection {
     /// Device settings.
     Devices,
-    /// Machine settings.
-    Machines,
+    /// This daemon: its host, listener and workspace.
+    Daemon,
     /// Connection settings.
     Connection,
     /// Notification settings.
     Notifications,
-    /// Assistant settings.
-    Assistant,
-    /// Autopilot and grants settings.
-    Autopilot,
+    /// The `corral.toml` editor.
+    Config,
     /// General settings.
     General,
 }
 impl SettingsSection {
     /// Settings sections in navigation order.
-    pub const ALL: [SettingsSection; 7] = [
+    pub const ALL: [SettingsSection; 6] = [
         Self::Devices,
-        Self::Machines,
+        Self::Daemon,
         Self::Connection,
         Self::Notifications,
-        Self::Assistant,
-        Self::Autopilot,
+        Self::Config,
         Self::General,
     ];
     /// The display label.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Devices => "Devices",
-            Self::Machines => "Machines",
+            Self::Daemon => "This daemon",
             Self::Connection => "Connection",
             Self::Notifications => "Notifications",
-            Self::Assistant => "Assistant",
-            Self::Autopilot => "Autopilot & grants",
+            Self::Config => "Configuration",
             Self::General => "General",
         }
     }
@@ -187,11 +173,10 @@ impl SettingsSection {
     pub const fn slug(self) -> &'static str {
         match self {
             Self::Devices => "devices",
-            Self::Machines => "machines",
+            Self::Daemon => "daemon",
             Self::Connection => "connection",
             Self::Notifications => "notifications",
-            Self::Assistant => "assistant",
-            Self::Autopilot => "autopilot",
+            Self::Config => "config",
             Self::General => "general",
         }
     }
@@ -204,9 +189,7 @@ impl SettingsSection {
 /// A phone navigation tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PhoneTab {
-    /// The inbox tab.
-    Inbox,
-    /// The current workspace tab.
+    /// The current workspace tab, opening at what needs you.
     Now,
     /// The agents tab.
     Agents,
@@ -217,26 +200,19 @@ pub enum PhoneTab {
 }
 impl PhoneTab {
     /// Phone tabs in display order.
-    pub const ALL: [PhoneTab; 5] = [
-        Self::Inbox,
-        Self::Now,
-        Self::Agents,
-        Self::Plans,
-        Self::More,
-    ];
+    pub const ALL: [PhoneTab; 4] = [Self::Now, Self::Agents, Self::Plans, Self::More];
     /// Destinations listed under More.
     pub const MORE: [Destination; 6] = [
         Destination::Changes,
-        Destination::Builds,
         Destination::Review,
         Destination::Timeline,
         Destination::Usage,
+        Destination::Artifacts,
         Destination::Settings,
     ];
     /// The display label.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Inbox => "Inbox",
             Self::Now => "Now",
             Self::Agents => "Agents",
             Self::Plans => "Plans",
@@ -246,7 +222,6 @@ impl PhoneTab {
     /// The identifier slug.
     pub const fn slug(self) -> &'static str {
         match self {
-            Self::Inbox => "inbox",
             Self::Now => "now",
             Self::Agents => "agents",
             Self::Plans => "plans",
@@ -256,11 +231,10 @@ impl PhoneTab {
     /// The tab's zero-based index.
     pub const fn index(self) -> u32 {
         match self {
-            Self::Inbox => 0,
-            Self::Now => 1,
-            Self::Agents => 2,
-            Self::Plans => 3,
-            Self::More => 4,
+            Self::Now => 0,
+            Self::Agents => 1,
+            Self::Plans => 2,
+            Self::More => 3,
         }
     }
     /// Finds a tab by its zero-based index.
@@ -270,7 +244,6 @@ impl PhoneTab {
     /// The tab's destination, if it opens one directly.
     pub const fn destination(self) -> Option<Destination> {
         match self {
-            Self::Inbox => Some(Destination::Inbox),
             Self::Now => Some(Destination::Now),
             Self::Agents => Some(Destination::Agents),
             Self::Plans => Some(Destination::Plans),
@@ -286,30 +259,6 @@ pub enum Overlay {
     Ask,
     /// The command palette.
     Palette,
-}
-/// The recipient selected in Ask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AskTarget {
-    /// The assistant.
-    Assistant,
-    /// The PM.
-    Pm,
-}
-impl AskTarget {
-    /// The display label.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Assistant => "Assistant",
-            Self::Pm => "PM",
-        }
-    }
-    /// The identifier slug.
-    pub const fn slug(self) -> &'static str {
-        match self {
-            Self::Assistant => "assistant",
-            Self::Pm => "pm",
-        }
-    }
 }
 /// The selected appearance preference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -405,10 +354,7 @@ pub enum Form {
 impl Form {
     /// The initial destination for this form.
     pub const fn home(self) -> Destination {
-        match self {
-            Self::Phone => Destination::Inbox,
-            Self::Desktop | Self::Terminal => Destination::Now,
-        }
+        Destination::Now
     }
 }
 
@@ -570,11 +516,9 @@ pub fn explicit_record_filter(
     if filter == ProjectFilter::All {
         return None;
     }
-    let projects = match live {
-        Live::Task(id) | Live::Review(id) => feed.board.task(id)?.project.as_slice(),
-        Live::Build(id) => feed.builds.get(id)?.project.as_slice(),
-        Live::Plan(id) if feed.capable(corral_protocol::PROJECTS_V1) => {
-            feed.plans.get(id)?.projects.as_slice()
+    let projects: &[String] = match live {
+        Live::Task(id) | Live::Review(id) | Live::Plan(id) => {
+            feed.board.task(id)?.row.task.project.as_slice()
         }
         _ => return None,
     };
@@ -660,216 +604,5 @@ pub fn phone_navigation(feed: &crate::model::daemon::Feed) -> Vec<NavigationItem
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn destination_keys_round_trip() {
-        for destination in Destination::ALL {
-            assert_eq!(Destination::from_key(destination.key()), Some(destination));
-        }
-    }
-    #[test]
-    fn keys_are_ignored_while_overlay_is_open() {
-        let mut nav = NavState::new(Form::Desktop);
-        nav.open(Overlay::Ask);
-        let before = nav.clone();
-        assert!(!nav.press_key('i'));
-        assert!(!nav.press_key('/'));
-        assert_eq!(nav, before);
-    }
-    #[test]
-    fn newest_overlay_closes_first() {
-        let mut nav = NavState::new(Form::Desktop);
-        nav.open(Overlay::Ask);
-        nav.open(Overlay::Palette);
-        nav.open(Overlay::Ask);
-        assert_eq!(nav.close_newest(), Some(Overlay::Ask));
-        assert_eq!(nav.close_newest(), Some(Overlay::Palette));
-        assert_eq!(nav.close_newest(), None);
-    }
-
-    #[test]
-    fn explicitly_opening_hidden_plans_and_reviews_reveals_their_requested_records() {
-        use crate::model::projects::{FilterScreen, Filters, ProjectFilter};
-        use corral_protocol::rows::{PlanRow, PlanState, ProjectRow};
-
-        let mut feed = crate::model::daemon::Feed {
-            store: Some("store".into()),
-            ..Default::default()
-        };
-        feed.capabilities
-            .insert(corral_protocol::PROJECTS_V1.into());
-        for project in ["A", "B"] {
-            feed.projects.insert(
-                project.into(),
-                ProjectRow {
-                    id: project.into(),
-                    path: project.into(),
-                    open: 0,
-                    running: 0,
-                    review: 0,
-                    needs_me: 0,
-                    in_pm_scope: false,
-                    autopilot: false,
-                    rev: 1,
-                },
-            );
-        }
-        for (id, project) in [("T-1", "A"), ("T-2", "B")] {
-            feed.plans.insert(
-                id.into(),
-                PlanRow {
-                    id: id.into(),
-                    title: id.into(),
-                    projects: vec![project.into()],
-                    role: None,
-                    linked: None,
-                    state: PlanState::Drafting,
-                    revision: None,
-                    delivery: None,
-                    members_total: 0,
-                    members_landed: 0,
-                    blockers: vec![],
-                    accepted_at: None,
-                    rev: 1,
-                },
-            );
-        }
-        feed.board.apply_batch(
-            1,
-            vec![crate::model::daemon::Task {
-                id: "T-2".into(),
-                title: "Review B".into(),
-                project: Some("B".into()),
-                plan: None,
-                goal: None,
-                group: crate::model::daemon::Group::Other,
-                rail: std::array::from_fn(|_| crate::model::daemon::Step {
-                    mark: crate::model::board::Mark::Next,
-                    sha7: None,
-                    at: None,
-                }),
-                now: "review".into(),
-                now_code: "review".into(),
-                age_since: None,
-                since: None,
-                held_reason: None,
-                questions: 0,
-                attention: vec![],
-                agent: None,
-                cost: None,
-                cost_estimated: false,
-                rev: 1,
-            }],
-            &[],
-        );
-        for form in [Form::Desktop, Form::Terminal, Form::Phone] {
-            let mut filters = Filters::default();
-            filters.set(
-                "store",
-                FilterScreen::Plans,
-                ProjectFilter::Project("A".into()),
-            );
-            let mut nav = NavState::new(form);
-            let live = Live::Plan("T-2".into());
-            let (screen, filter) = explicit_record_filter(&feed, &filters, &live).unwrap();
-            filters.set("store", screen, filter);
-            nav.open_live(live.clone(), form);
-            let filter = filters.get("store", FilterScreen::Plans, &feed);
-            assert_eq!(filter, ProjectFilter::Project("B".into()));
-            assert_eq!(
-                crate::model::plans::current_plan_filtered(&nav.selection, &feed, &filter),
-                Some("T-2".into()),
-            );
-            assert_eq!(explicit_record_filter(&feed, &filters, &live), None);
-            filters.set(
-                "store",
-                FilterScreen::Review,
-                ProjectFilter::Project("A".into()),
-            );
-            let live = Live::Review("T-2".into());
-            let (screen, filter) = explicit_record_filter(&feed, &filters, &live).unwrap();
-            assert_eq!(screen, FilterScreen::Review);
-            filters.set("store", screen, filter);
-            nav.open_live(live.clone(), form);
-            assert_eq!(
-                filters.get("store", FilterScreen::Review, &feed),
-                ProjectFilter::Project("B".into()),
-            );
-            assert_eq!(nav.selection.review.as_deref(), Some("T-2"));
-            assert_eq!(explicit_record_filter(&feed, &filters, &live), None);
-        }
-    }
-
-    #[test]
-    fn live_records_select_everywhere_and_push_only_where_the_form_stacks_them() {
-        use crate::model::id::Id;
-        for form in [Form::Desktop, Form::Terminal, Form::Phone] {
-            let mut nav = NavState::new(form);
-            let task = Live::Task(Id::from("T-9"));
-            nav.open_live(task.clone(), form);
-            assert_eq!(nav.destination, Destination::Now);
-            assert_eq!(nav.selection.task.as_deref(), Some("T-9"));
-            assert_eq!(nav.live(), (form == Form::Phone).then_some(&task));
-            let question = Live::Question(Id::from("T-9/R1/Q1"));
-            nav.open_live(question.clone(), form);
-            nav.open_live(question.clone(), form);
-            assert_eq!(nav.live(), Some(&question));
-            assert_eq!(nav.pages.len(), if form == Form::Phone { 2 } else { 1 });
-            assert!(nav.back());
-            assert_eq!(nav.selection.question.as_deref(), Some("T-9/R1/Q1"));
-        }
-    }
-
-    #[test]
-    fn repeated_settings_section_opens_remain_observable() {
-        let mut nav = NavState::new(Form::Phone);
-        nav.go_settings(SettingsSection::Devices);
-        let first = nav.clone();
-        nav.go_settings(SettingsSection::Devices);
-        assert_ne!(nav, first);
-        assert_eq!(nav.section_opens, first.section_opens.wrapping_add(1));
-        let opens = nav.section_opens;
-        nav.go(Destination::Settings);
-        assert_eq!(nav.section_opens, opens);
-        nav.section_opens = u32::MAX;
-        nav.go_settings(SettingsSection::Devices);
-        assert_eq!(nav.section_opens, 0);
-    }
-
-    #[test]
-    fn navigating_to_the_current_destination_remains_observable() {
-        let mut nav = NavState::new(Form::Phone);
-        let first = nav.clone();
-        nav.go(nav.destination);
-        assert_ne!(nav, first);
-        assert_eq!(nav.goes, first.goes.wrapping_add(1));
-        let goes = nav.goes;
-        nav.go_settings(SettingsSection::Devices);
-        assert_eq!(nav.goes, goes.wrapping_add(1));
-        nav.goes = u32::MAX;
-        nav.go(nav.destination);
-        assert_eq!(nav.goes, 0);
-    }
-
-    #[test]
-    fn a_wide_choice_never_unfolds_a_narrow_sidebar_and_survives_the_return_to_wide() {
-        let mut pref = SidebarPref::Auto;
-        pref = pref.toggled(false).toggled(false);
-        assert_eq!(pref, SidebarPref::Expanded);
-        // Narrow: folded whatever was chosen wide, and the toggle keeps the wide choice.
-        assert!(pref.collapsed(true));
-        assert_eq!(pref.toggled(true), SidebarPref::Expanded);
-        // Wide again: the choice made wide shows again.
-        assert!(!pref.collapsed(false));
-        assert!(SidebarPref::Collapsed.collapsed(false));
-        for pref in [
-            SidebarPref::Auto,
-            SidebarPref::Expanded,
-            SidebarPref::Collapsed,
-        ] {
-            assert_eq!(SidebarPref::from_slug(pref.slug()), Some(pref));
-        }
-    }
-}
+#[path = "nav_tests.rs"]
+mod tests;

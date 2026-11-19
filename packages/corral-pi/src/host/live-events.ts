@@ -59,8 +59,12 @@ export class LiveEvents {
   private fleetJson = "";
   private fleetSeq = 0;
 
-  constructor(generation: number, capacity = 512) {
-    this.events = new EventLog(generation, capacity);
+  constructor(capacity = 512) {
+    this.events = new EventLog(capacity);
+  }
+
+  rewound(turn: number): void {
+    this.events.invalidate("live_rewind", { turn });
   }
 
   /** Initially empty fleets stay silent; an empty replacement after activity is a sequenced clear. */
@@ -97,7 +101,9 @@ export class LiveEvents {
     if (!this.fleet || seq >= this.fleetSeq && !initial.gap) return initial;
     const fleet = { ...this.fleet, children: [...this.fleet.children], messages: [...this.fleet.messages] };
     // Leave room for at least one intact event and JSON field punctuation.
-    const budget = Math.max(0, maxBytes - EVENT_MAX_BYTES - 256);
+    const first = initial.events[0];
+    const required = first?.kind === "owner_prompt" ? Buffer.byteLength(JSON.stringify(first)) : EVENT_MAX_BYTES;
+    const budget = Math.max(0, maxBytes - required - 256);
     let size = Buffer.byteLength(JSON.stringify(fleet));
     while (size > budget && (fleet.messages.length || fleet.children.length)) {
       if (fleet.messages.length) fleet.messages.shift();

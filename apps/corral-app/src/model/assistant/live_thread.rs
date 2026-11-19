@@ -1,28 +1,27 @@
 //! A served thread as transcript items: durable entries in order, the streamed answer from the
-//! running turn's text, the PM's replies folded under the items they answer, and this device's
-//! own sends still in its outbox. Loading, empty, stale and error states are said plainly.
+//! running turn's text, and this device's own sends still in its outbox. Loading, empty, stale
+//! and error states are said plainly.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use corral_protocol::assistant::{
-    AssistantSend, ContextRef, EntryCard, EntryKind, MessageState as WireState, ThreadEntry,
-    ToolLine, TurnCompletion,
+    AssistantSend, ContextRef, EntryKind, MessageState as WireState, ThreadEntry, ToolLine,
+    TurnCompletion,
 };
 
 use super::cards::{WAIT_LIFETIME, WAIT_NOTE};
-use super::live_cards::{IdeaEntry, act_chip, action_card, idea_card, prompt_body, question_card};
 use super::views::button;
 use super::{
-    Action, AssistantMessage, Body, Chip, OwnerMessage, PmMessage, PmReply, QUICK, QueueNote,
-    RollDivider, SourceLink, State, ThreadItem, ToolRow, WaitingBlock, clock, entry_session,
-    fact_chips, quick_id, record_link, row, saved_as_written, send_chips, subject,
-    wait_explanation, wait_label,
+    Action, AssistantMessage, Body, Chip, OwnerMessage, QUICK, QueueNote, RollDivider, SourceLink,
+    State, ThreadItem, ToolRow, WaitingBlock, clock, entry_session, fact_chips, question_card,
+    quick_id, record_link, row, send_chips, wait_explanation, wait_label,
 };
+use crate::model::act::{self, ActStatus};
 use crate::model::daemon::{CommandStatus, Feed, Link};
 use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::Live;
-
+use crate::model::session_feed::LiveSession;
 /// An owner message's outlined tag from its served state.
 fn tag(state: Option<&WireState>) -> Chip {
     let (label, hue) = match state {
@@ -33,8 +32,9 @@ fn tag(state: Option<&WireState>) -> Chip {
         ),
         Some(WireState::Delivered | WireState::PmDelivered) => ("delivered".into(), Hue::Neutral),
         Some(WireState::Late) => ("late · cannot instruct".into(), Hue::Held),
-        Some(WireState::QueuedForPm) => ("queued for PM".into(), Hue::Held),
-        Some(WireState::PmReplied) => ("PM replied".into(), Hue::Ok),
+        Some(WireState::QueuedForPm | WireState::PmReplied) => {
+            ("state unknown".into(), Hue::Neutral)
+        }
         Some(WireState::Saved { task }) => (format!("saved · {task}"), Hue::Neutral),
         Some(WireState::Withdrawn) => ("withdrawn".into(), Hue::Neutral),
         Some(WireState::Other) => ("state unknown".into(), Hue::Neutral),
@@ -53,6 +53,7 @@ fn attachment(links: &[ContextRef]) -> Option<String> {
 
 fn owner(state: &State, feed: &Feed, entry: &ThreadEntry) -> OwnerMessage {
     let (files, opened) = fact_chips(state, feed, &entry.id, &entry.attachments);
+    let (file, filed) = filing(state, feed, entry);
     OwnerMessage {
         author: "you",
         provenance: entry
@@ -74,7 +75,47 @@ fn owner(state: &State, feed: &Feed, entry: &ThreadEntry) -> OwnerMessage {
         attachment: attachment(&entry.links),
         files,
         opened,
+        file,
+        filed,
     }
+}
+
+/// File as idea under an owner message, and how a filing sent from here went: the new task's
+/// id, or what stopped it. The button stays while nothing is filed, so a refused filing can be
+/// sent again; a message corrald already saved or withdrew has none.
+fn filing(
+    state: &State,
+    feed: &Feed,
+    entry: &ThreadEntry,
+) -> (Option<super::Button>, Option<Chip>) {
+    let key = state.live.filed.get(entry.id.as_str());
+    let status = key.and_then(|key| act::status(feed, key.as_str()));
+    let chip = status.as_ref().map(|status| match status {
+        ActStatus::Pending | ActStatus::Running => Chip::new("filing as idea…", Hue::Corral),
+        ActStatus::Done => match key.and_then(|key| act::created(feed, key.as_str())) {
+            Some(task) => Chip::new(format!("filed as idea · {task}"), Hue::Ok),
+            None => Chip::new("filed as idea", Hue::Ok),
+        },
+        ActStatus::Refused(refusal) => {
+            Chip::new(format!("not filed · {}", refusal.reason), Hue::Fail)
+        }
+        ActStatus::Failed(why) => Chip::new(format!("not filed · {why}"), Hue::Fail),
+    });
+    let settled = matches!(
+        entry.state,
+        Some(WireState::Saved { .. } | WireState::Withdrawn)
+    );
+    let open = status
+        .as_ref()
+        .is_none_or(|status| matches!(status, ActStatus::Failed(_) | ActStatus::Refused(_)));
+    let file = (open
+        && !settled
+        && entry
+            .text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty()))
+    .then(|| button("File as idea", Action::FileEntry(entry.id.clone())));
+    (file, chip)
 }
 
 fn tools(lines: &[ToolLine]) -> (Option<String>, Vec<ToolRow>) {
@@ -120,13 +161,9 @@ fn markdown(text: &str) -> Vec<Body> {
 
 /// What every assistant message of this thread shares.
 struct Thread<'a> {
-    state: &'a State,
     feed: &'a Feed,
     author: String,
     session: Option<String>,
-    can_send: bool,
-    /// Tasks the owner's own message was filed as, as written, with no model.
-    as_written: BTreeSet<String>,
     scope: &'a str,
 }
 
@@ -135,17 +172,6 @@ impl Thread<'_> {
         let (tool_summary, tools) = tools(&entry.tools);
         AssistantMessage {
             key: entry.id.clone(),
-            anchored: self.state.anchor.as_ref().is_some_and(|(scope, key)| {
-                let matches_scope = match scope {
-                    super::ThreadRef::Live(scope) => scope.as_str() == self.scope,
-                };
-                matches_scope
-                    && entry.card.as_ref().is_some_and(|card| match card {
-                        EntryCard::Prompt { key: entry_key, .. }
-                        | EntryCard::Question { key: entry_key, .. } => entry_key == key,
-                        _ => false,
-                    })
-            }),
             // Each reply names the session that wrote it, never whichever is current now.
             id: entry_session(&entry.id).map_or_else(|| self.author.clone(), str::to_owned),
             at: clock(&entry.at, self.feed),
@@ -179,191 +205,97 @@ impl Thread<'_> {
         }
     }
 
-    fn card(&self, entry: &ThreadEntry, card: &EntryCard) -> Option<Body> {
-        Some(match card {
-            EntryCard::Idea {
-                task,
-                title,
-                labels,
-                criteria,
-                duplicates,
-                words,
-            } => Body::Filed(idea_card(
-                self.state,
-                self.feed,
-                IdeaEntry {
-                    entry,
-                    task,
-                    title,
-                    labels,
-                    criteria,
-                    duplicates,
-                    words,
-                    author: entry_session(&entry.id).unwrap_or(&self.author),
-                    as_written: self.as_written.contains(task.as_str()),
-                },
-            )),
-            EntryCard::Action {
-                command,
-                class,
-                outcome,
-                input,
-            } => Body::Action(action_card(
-                entry,
-                command,
-                *class,
-                outcome.as_ref(),
-                input.as_ref(),
-            )),
-            EntryCard::Question {
-                key,
-                rev,
-                options,
-                answer,
-                accepts_text,
-            } => Body::AskUser(question_card(
-                self.state,
-                self.feed,
-                entry,
-                key,
-                *rev,
-                options,
-                answer.as_ref(),
-                *accepts_text,
-            )),
-            EntryCard::Prompt {
-                key,
-                rev,
-                tool,
-                path,
-                preview,
-                choices,
-                needs_presence,
-            } => prompt_body(
-                self.state,
-                self.feed,
-                entry,
-                key,
-                *rev,
-                tool.as_ref(),
-                path.as_ref(),
-                preview,
-                choices,
-                *needs_presence,
-            ),
-            EntryCard::PmItem { .. } | EntryCard::Other => return None,
-        })
-    }
-
-    /// An assistant reply or card entry, with the streamed text while its turn runs.
-    fn reply(&self, entry: &ThreadEntry, live: Option<(&str, u64, bool)>) -> AssistantMessage {
-        let text = match live {
-            Some((text, _, _)) => text,
-            None if entry.kind == EntryKind::Answer => entry.text.as_deref().unwrap_or(""),
-            None if entry.card.is_none() => entry.text.as_deref().unwrap_or(""),
-            None => "",
+    /// An assistant reply or card entry, as recorded.
+    fn reply(&self, entry: &ThreadEntry) -> AssistantMessage {
+        let text = if entry.kind == EntryKind::Answer || entry.card.is_none() {
+            entry.text.as_deref().unwrap_or("")
+        } else {
+            ""
         };
-        let mut body = markdown(text);
-        let card = entry.card.as_ref().and_then(|card| self.card(entry, card));
-        let filed = matches!(card, Some(Body::Filed(_)));
-        let asks = match &entry.card {
-            Some(EntryCard::Question { answer, .. }) => answer.is_none() && entry.state.is_none(),
-            Some(EntryCard::Prompt { choices, .. }) => !choices.is_empty() && entry.state.is_none(),
-            _ => false,
-        };
-        body.extend(card);
+        let body = markdown(text);
         let mut message = self.message(entry, body);
-        self.turn(&mut message, live);
-        // corrald's settlement of the turn outranks the stream: a canonical completion ends
-        // the caret and Stop whatever the last streamed step said.
-        if let Some(completion) = entry.completion {
-            message.streaming = false;
-            message.stop = None;
-            message.state = None;
-            match completion {
-                TurnCompletion::Completed => {}
-                TurnCompletion::Aborted => {
-                    message.state = Some(Chip::new("stopped", Hue::Neutral));
-                    message.stopped_note = Some("This turn was stopped · partial answer kept.");
-                }
-                TurnCompletion::Failed => {
-                    message.state = Some(Chip::new("turn failed", Hue::Fail));
-                    message.stopped_note = Some("This turn failed · what arrived is kept.");
-                }
-                TurnCompletion::Other => {
-                    message.state = Some(Chip::new("turn ended · outcome unknown", Hue::Neutral));
-                }
+        match entry.completion {
+            Some(TurnCompletion::Aborted) => {
+                message.state = Some(Chip::new("cancelled", Hue::Neutral));
+                message.stopped_note = Some("This turn was cancelled · partial answer kept.");
             }
-        }
-        if message.state.is_none() {
-            message.state = if asks {
-                Some(Chip::new("waiting on you", Hue::You))
-            } else if filed && entry.kind == EntryKind::Answer {
-                Some(Chip::new("answered and filed", Hue::Neutral))
-            } else {
-                None
-            };
-        }
-        // Records an answer rests on are cited once the turn completes.
-        if message.streaming {
-            message.sources.clear();
+            Some(TurnCompletion::Failed) => {
+                message.state = Some(Chip::new("turn failed", Hue::Fail));
+                message.stopped_note = Some("This turn failed · what arrived is kept.");
+            }
+            Some(TurnCompletion::Other) => {
+                message.state = Some(Chip::new("turn ended · outcome unknown", Hue::Neutral));
+            }
+            Some(TurnCompletion::Completed) | None => {}
         }
         message
     }
 
-    /// The streaming caret, Stop and the stopped note of a running or stopped turn.
-    fn turn(&self, message: &mut AssistantMessage, live: Option<(&str, u64, bool)>) {
-        let Some((_, turn, done)) = live else {
-            return;
-        };
-        let stopping = self
-            .session
-            .as_ref()
-            .and_then(|session| self.state.live.stopping.get(session))
-            == Some(&turn);
-        if !done {
-            // A turn still answering has no amount of its own yet.
-            message.cost = None;
+    /// The answer still streaming in from the running turn, with its caret and Cancel; it
+    /// stays until the thread records the turn's answer.
+    fn streaming(&self, live: &LiveSession) -> Option<AssistantMessage> {
+        let text = live
+            .messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if text.is_empty() && !live.open {
+            return None;
+        }
+        let session = self.session.clone()?;
+        let mut message = self.message(
+            &self.placeholder(format!("{session}/live")),
+            markdown(&text),
+        );
+        message.at = "now".into();
+        // A turn still answering has no amount of its own yet, and cites its records once done.
+        message.cost = None;
+        message.sources.clear();
+        if live.open {
             message.streaming = true;
-            message.state = Some(if stopping {
-                Chip::new("stopping", Hue::Neutral)
-            } else {
-                Chip::new("answering", Hue::Corral)
-            });
-            if let Some(session) = &self.session {
-                let mut stop = button(
-                    "Stop",
-                    Action::Stop {
-                        session: session.clone(),
-                        turn,
-                    },
-                );
-                stop.enabled = self.can_send && !stopping;
-                message.stop = Some(stop);
-            }
+            message.state = Some(Chip::new("answering", Hue::Corral));
+            message.stop = Some(button(
+                "Cancel",
+                Action::Control {
+                    session,
+                    control: crate::model::agents::Control::Cancel,
+                },
+            ));
+        } else if live.ended.as_ref().is_some_and(|end| end.aborted) {
+            message.state = Some(Chip::new("cancelled", Hue::Neutral));
+            message.stopped_note = Some("This turn was cancelled · partial answer kept.");
+        }
+        Some(message)
+    }
+    /// An entry standing for content the thread has not recorded: the running turn's answer,
+    /// a question waiting for the owner.
+    fn placeholder(&self, id: String) -> ThreadEntry {
+        ThreadEntry {
+            id,
+            rev: 0,
+            at: String::new(),
+            kind: EntryKind::Answer,
+            device: None,
+            via: None,
+            text: None,
+            state: None,
+            model: row(self.feed, self.scope).and_then(|row| row.profile.clone()),
+            cost_usd: None,
+            tools: Vec::new(),
+            links: Vec::new(),
+            card: None,
+            attachments: Vec::new(),
+            typed_at: None,
+            part: None,
+            completion: None,
+            cost_basis: None,
         }
     }
 
-    /// The waiting block under a stored message, with File as idea now and Withdraw.
-    fn waiting(
-        &self,
-        entry: &ThreadEntry,
-        reason: &corral_protocol::rows::WaitReason,
-        full: bool,
-    ) -> WaitingBlock {
-        let mut buttons = Vec::new();
-        let filing = subject("file", &entry.id);
-        let withdrawing = subject("withdraw", &entry.id);
-        let status = act_chip(self.state, self.feed, &filing, "File as idea")
-            .or_else(|| act_chip(self.state, self.feed, &withdrawing, "Withdraw"));
-        for (label, action) in [
-            ("File as idea now", Action::FileEntry(entry.id.clone())),
-            ("Withdraw", Action::WithdrawEntry(entry.id.clone())),
-        ] {
-            let mut control = button(label, action);
-            control.enabled = status.as_ref().is_none_or(|chip| chip.hue == Hue::Fail);
-            buttons.push(control);
-        }
+    /// The waiting block under a stored message.
+    fn waiting(&self, reason: &corral_protocol::rows::WaitReason, full: bool) -> WaitingBlock {
         WaitingBlock {
             state: Chip::new(
                 format!("waiting for assistant · {}", wait_label(reason)),
@@ -371,15 +303,13 @@ impl Thread<'_> {
             ),
             explanation: full.then(|| wait_explanation(reason, self.feed)),
             note: if full { WAIT_NOTE } else { "" },
-            buttons,
-            status,
             lifetime: WAIT_LIFETIME,
         }
     }
 }
 
 /// The served thread `scope` ("quick" or A-n) as transcript items.
-pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Vec<ThreadItem> {
+pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
     let topic = feed.topics.get(&format!("thread:{scope}"));
     let Some(snapshot) = feed.threads.get(scope) else {
         return vec![ThreadItem::Note(
@@ -392,7 +322,6 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
             },
         )];
     };
-    let row = row(feed, scope);
     // The thread's current session: the quick thread's newest generation by rows or entries,
     // whichever arrived first; a named thread is its own session.
     let current = if scope == QUICK {
@@ -400,59 +329,17 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
     } else {
         Some(scope.to_owned())
     };
-    let mut thread = Thread {
-        state,
+    let thread = Thread {
         feed,
         author: current.clone().unwrap_or_else(|| scope.to_owned()),
         session: current.clone(),
-        can_send,
-        as_written: BTreeSet::new(),
         scope,
     };
     let entries = super::live_parts::assemble(&snapshot.entries);
-    let pm_items: BTreeSet<&str> = entries
-        .iter()
-        .filter(|entry| entry.kind == EntryKind::PmMessage)
-        .filter_map(|entry| match &entry.card {
-            Some(EntryCard::PmItem { id, .. }) => Some(id.as_str()),
-            _ => None,
-        })
-        .collect();
-    let replies: BTreeMap<&str, PmReply> = entries
-        .iter()
-        .filter(|entry| entry.kind == EntryKind::PmReply)
-        .filter_map(|entry| match &entry.card {
-            Some(EntryCard::PmItem { id, .. }) => Some((
-                id.as_str(),
-                PmReply {
-                    at: clock(&entry.at, feed),
-                    text: entry.text.clone().unwrap_or_default(),
-                },
-            )),
-            _ => None,
-        })
-        .collect();
-    // An Idea card and the owner's "saved as written" state name the same filing once; the
-    // Idea card (with its commands) stands for it.
-    let ideas: BTreeSet<&str> = entries
-        .iter()
-        .filter_map(|entry| match &entry.card {
-            Some(EntryCard::Idea { task, .. }) => Some(task.as_str()),
-            _ => None,
-        })
-        .collect();
-    thread.as_written = entries
-        .iter()
-        .filter_map(|entry| match &entry.state {
-            Some(WireState::Saved { task }) => Some(task.clone()),
-            _ => None,
-        })
-        .collect();
     // The waiting block under a message already shows the failure that left it waiting; the
     // notice recording that same failure right after it is the same event, shown once. Any
     // other notice, including a later repeat of the same failure, is its own event.
     let mut explained: Option<String> = None;
-    let live = snapshot.live.as_ref();
     let last_waiting = entries
         .iter()
         .rev()
@@ -471,12 +358,7 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
                         // Only the full block (the latest waiting message) shows the reason.
                         let full = last_waiting.as_ref() == Some(&entry.id);
                         explained = full.then(|| reason.text.trim().to_owned());
-                        items.push(ThreadItem::Waiting(thread.waiting(entry, reason, full)));
-                    }
-                    Some(WireState::Saved { task }) if !ideas.contains(task.as_str()) => {
-                        let mut card = saved_as_written(task, entry.text.as_deref().unwrap_or(""));
-                        card.attribution = "Idea · filed from your words, as written · no AI used to file";
-                        items.push(ThreadItem::Saved(card));
+                        items.push(ThreadItem::Waiting(thread.waiting(reason, full)));
                     }
                     Some(WireState::Withdrawn) => items.push(ThreadItem::Note(
                         "withdrawn by you · nothing was filed or run · the text stays here for reference".into(),
@@ -484,20 +366,6 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
                     _ => {}
                 }
             }
-            EntryKind::PmMessage => {
-                items.push(ThreadItem::Pm(pm_item(state, feed, entry, &replies)))
-            }
-            EntryKind::PmReply => match &entry.card {
-                Some(EntryCard::PmItem { id, .. }) if pm_items.contains(id.as_str()) => {}
-                Some(EntryCard::PmItem { id, .. }) => items.push(ThreadItem::PmReply {
-                    id: id.clone(),
-                    reply: PmReply {
-                        at: clock(&entry.at, feed),
-                        text: entry.text.clone().unwrap_or_default(),
-                    },
-                }),
-                _ => items.push(ThreadItem::Note(entry.text.clone().unwrap_or_default())),
-            },
             EntryKind::Roll => items.push(ThreadItem::Roll(RollDivider {
                 text: entry
                     .text
@@ -522,60 +390,30 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
                     items.push(ThreadItem::Note(text));
                 }
             }
-            EntryKind::Answer
-            | EntryKind::Idea
-            | EntryKind::Action
-            | EntryKind::Question
-            | EntryKind::Prompt => {
-                let streamed = live
-                    .filter(|live| live.entry == entry.id)
-                    .filter(|live| !super::live_parts::covers(entry, &live.text))
-                    .map(|live| (live.text.as_str(), live.turn, live.done));
-                items.push(ThreadItem::Assistant(thread.reply(entry, streamed)));
+            EntryKind::Answer | EntryKind::Question | EntryKind::Prompt => {
+                items.push(ThreadItem::Assistant(thread.reply(entry)))
             }
-            EntryKind::Other => items.push(ThreadItem::Note(
+            EntryKind::Idea
+            | EntryKind::Action
+            | EntryKind::PmMessage
+            | EntryKind::PmReply
+            | EntryKind::Other => items.push(ThreadItem::Note(
                 "An entry this version of the app cannot show.".into(),
             )),
         }
     }
-    // A turn still streaming with no entry yet, of this thread's current session only: a quick
-    // thread that rolled to a new generation never shows the previous one's reply as its own,
-    // and a finished turn waits for its entry.
-    if let Some(live) = live.filter(|live| {
-        !live.done
-            && !snapshot.entries.contains_key(live.entry.as_str())
-            && current
-                .as_deref()
-                .is_some_and(|session| entry_session(&live.entry) == Some(session))
-    }) {
+    // The running turn's answer as it streams in, then what the agent asks the owner.
+    if let Some(message) = feed.live.get(scope).and_then(|live| thread.streaming(live)) {
+        items.push(ThreadItem::Assistant(message));
+    }
+    if let Some(prompt) = crate::model::agents::prompt(feed, scope) {
         let mut message = thread.message(
-            &ThreadEntry {
-                id: live.entry.clone(),
-                rev: 0,
-                at: String::new(),
-                kind: EntryKind::Answer,
-                device: None,
-                via: None,
-                text: None,
-                state: None,
-                model: row.and_then(|row| row.profile.clone()),
-                cost_usd: None,
-                tools: Vec::new(),
-                links: Vec::new(),
-                card: None,
-                attachments: Vec::new(),
-                typed_at: None,
-                part: None,
-                completion: None,
-                cost_basis: None,
-            },
-            markdown(&live.text),
+            &thread.placeholder(format!("{scope}/ask/{}", prompt.question)),
+            vec![Body::AskUser(question_card(&prompt))],
         );
         message.at = "now".into();
-        thread.turn(
-            &mut message,
-            Some((live.text.as_str(), live.turn, live.done)),
-        );
+        message.cost = None;
+        message.state = Some(Chip::new("waiting on you", Hue::You));
         items.push(ThreadItem::Assistant(message));
     }
     outbox(&mut items, feed, scope, &snapshot.entries);
@@ -612,56 +450,6 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str, can_send: bool) -> Ve
         ));
     }
     items
-}
-
-/// A PM item, its folded reply, and Withdraw while the PM has not replied.
-fn pm_item(
-    state: &State,
-    feed: &Feed,
-    entry: &ThreadEntry,
-    replies: &BTreeMap<&str, PmReply>,
-) -> PmMessage {
-    let (id, revision) = match &entry.card {
-        Some(EntryCard::PmItem { id, revision }) => (Some(id.clone()), *revision),
-        _ => (None, 0),
-    };
-    let open = matches!(
-        entry.state,
-        Some(WireState::QueuedForPm | WireState::PmDelivered | WireState::Delivered)
-    );
-    let remembered = id.as_deref().map(|id| subject("withdraw", id));
-    let status = remembered
-        .as_deref()
-        .and_then(|remembered| act_chip(state, feed, remembered, "Withdraw"));
-    let buttons = match &id {
-        Some(id) if open && revision > 0 => {
-            let mut withdraw = button(
-                "Withdraw",
-                Action::WithdrawPm {
-                    id: id.clone(),
-                    revision,
-                },
-            );
-            withdraw.enabled = status.as_ref().is_none_or(|chip| chip.hue == Hue::Fail);
-            vec![withdraw]
-        }
-        _ => Vec::new(),
-    };
-    let mut message = owner(state, feed, entry);
-    message.tag.hue = match entry.state {
-        Some(WireState::PmReplied) => Hue::Ok,
-        Some(WireState::Delivered | WireState::PmDelivered) => Hue::Neutral,
-        _ => Hue::Held,
-    };
-    PmMessage {
-        reply: id.as_deref().and_then(|id| replies.get(id).cloned()),
-        id: id.unwrap_or_else(|| "PMI on arrival".into()),
-        note: matches!(entry.state, Some(WireState::QueuedForPm))
-            .then_some("Delivered when the PM next takes input; supervision is not interrupted."),
-        owner: message,
-        buttons,
-        status,
-    }
 }
 
 /// This device's own sends to `scope` that the thread does not show yet: queued offline,
@@ -756,7 +544,7 @@ fn outbox(
                     }
                 }
         };
-        let message = OwnerMessage {
+        items.push(ThreadItem::Owner(OwnerMessage {
             author: "you",
             provenance: "this device".into(),
             at: clock(&send.typed_at, feed),
@@ -766,19 +554,9 @@ fn outbox(
             attachment: attachment(&send.context),
             files: send_chips(feed, &send.attachments),
             opened: None,
-        };
-        if send.target == corral_protocol::assistant::AskTarget::Pm {
-            items.push(ThreadItem::Pm(PmMessage {
-                owner: message,
-                id: "PMI on arrival".into(),
-                reply: None,
-                note: None,
-                buttons: Vec::new(),
-                status: None,
-            }));
-        } else {
-            items.push(ThreadItem::Owner(message));
-        }
+            file: None,
+            filed: None,
+        }));
         if note.is_some() || !buttons.is_empty() {
             items.push(ThreadItem::Queued(QueueNote {
                 text: note.unwrap_or_default(),

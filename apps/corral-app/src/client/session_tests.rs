@@ -69,9 +69,8 @@ fn notification(stream: &mut UnixStream, method: &str, params: Value) {
     );
 }
 fn health() -> Value {
-    json!({"daemon":"healthy", "reasons":[], "runtimes":[], "pm":"absent",
-        "loop":{"pass_seq":1,"last_pass_at":null,"last_pass_ms":null,"age_secs":null},
-        "pid":1,"version":"test"})
+    json!({"daemon":"healthy", "runner_reachable":true, "last_sync_at":null,
+        "last_sync_error":null, "pid":1, "version":"test"})
 }
 fn handshake(listener: UnixListener) -> UnixStream {
     let (mut stream, _) = listener.accept().unwrap();
@@ -90,30 +89,28 @@ fn handshake(listener: UnixListener) -> UnixStream {
         &hello,
         json!({
             "proto":{"major":wire::PROTO_MAJOR,"minor":wire::PROTO_MINOR},
-            "caps":["board.v1"],"daemon":{"version":"test","store":"st-test","epoch":1},
+            "caps":["tasks.v1"],"daemon":{"version":"test","store":"st-test","epoch":1},
             "health":health()
         }),
     );
     let health_open = request(&mut stream);
-    let board_open = request(&mut stream);
+    let tasks_open = request(&mut stream);
     assert_eq!(health_open.method, wire::SUB_OPEN);
-    assert_eq!(board_open.method, wire::SUB_OPEN);
+    assert_eq!(tasks_open.method, wire::SUB_OPEN);
     assert_eq!(health_open.params["topic"], "health");
-    assert_eq!(board_open.params["topic"], "board");
-    respond(&mut stream, &board_open, json!({}));
+    assert_eq!(tasks_open.params["topic"], "tasks");
+    respond(&mut stream, &tasks_open, json!({}));
     respond(&mut stream, &health_open, json!({}));
     stream
 }
 fn row(id: &str, title: &str) -> Value {
-    json!({"id":id,"title":title,"project":null,"plan":null,"goal":null,
-        "group":"queued", "rail":[
-            {"glyph":"pending","sha7":null,"at":null},
-            {"glyph":"pending","sha7":null,"at":null},
-            {"glyph":"pending","sha7":null,"at":null},
-            {"glyph":"pending","sha7":null,"at":null}],
-        "now":{"code":"queued","text":"queued","since":null},
-        "held_reason":null,"questions":0,"attention":[],"agent":null,
-        "cost_usd":null,"cost_basis":null,"last_event":null,"rev":1})
+    let task = crate::model::daemon::bare_task(
+        id,
+        title,
+        corral_types::Status::Ready,
+        jiff::Timestamp::UNIX_EPOCH,
+    );
+    serde_json::to_value(crate::model::daemon::task_row(task)).unwrap()
 }
 fn page(
     stream: &mut UnixStream,
@@ -127,7 +124,7 @@ fn page(
     notification(
         stream,
         wire::SUB_DELTA,
-        json!({"topic":"board","epoch":epoch,
+        json!({"topic":"tasks","epoch":epoch,
         "rows":rows,"left":left,"cursor":{"rev":rev,"after":after},"more":more}),
     );
 }
@@ -140,26 +137,25 @@ fn ack(stream: &mut UnixStream, topic: Topic, rev: u64, after: Option<&str>) -> 
     assert_eq!(ack.cursor.after.as_deref(), after);
     request
 }
-fn board(session: &mut Session) -> (u64, Vec<wire::board::BoardRow>, Vec<String>, bool) {
+type TasksPage = (u64, Vec<wire::rows::TaskRow>, Vec<String>, bool);
+
+fn tasks(session: &mut Session) -> TasksPage {
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         match session.next() {
-            Event::Board {
-                epoch,
-                rows,
-                left,
+            Event::Rows {
+                delta: wire::subscription::SubDelta::Tasks { delta },
                 replacement,
-            } => return (epoch, rows, left, replacement),
+            } => return (delta.epoch, delta.rows, delta.left, replacement),
             Event::Health(_)
             | Event::Reply { .. }
             | Event::Rows { .. }
             | Event::Reset { .. }
             | Event::TopicError { .. }
-            | Event::Live { .. }
             | Event::Notice { .. } => {}
             Event::Idle => assert!(
                 std::time::Instant::now() < deadline,
-                "board was not delivered"
+                "tasks were not delivered"
             ),
             Event::Closed(reason) => panic!("session closed: {reason}"),
         }
@@ -182,7 +178,7 @@ fn paged_snapshot_and_delta_are_two_batches_and_every_page_is_acknowledged() {
             vec![],
             true,
         );
-        let first_ack = ack(&mut stream, Topic::Board, 1, Some("T-9"));
+        let first_ack = ack(&mut stream, Topic::Tasks, 1, Some("T-9"));
         send(
             &mut stream,
             json!({"jsonrpc":"2.0","method":"future.notification"}),
@@ -207,7 +203,7 @@ fn paged_snapshot_and_delta_are_two_batches_and_every_page_is_acknowledged() {
             false,
         );
         respond(&mut stream, &health_ack, json!({}));
-        let second_ack = ack(&mut stream, Topic::Board, 1, None);
+        let second_ack = ack(&mut stream, Topic::Tasks, 1, None);
         respond(&mut stream, &second_ack, json!({}));
         page(
             &mut stream,
@@ -218,21 +214,21 @@ fn paged_snapshot_and_delta_are_two_batches_and_every_page_is_acknowledged() {
             vec!["T-9"],
             false,
         );
-        let delta_ack = ack(&mut stream, Topic::Board, 2, None);
+        let delta_ack = ack(&mut stream, Topic::Tasks, 2, None);
         respond(&mut stream, &delta_ack, json!({}));
     });
     let (mut session, _) = Session::connect(&path).unwrap();
     session.open(Topic::Health).unwrap();
-    session.open(Topic::Board).unwrap();
-    let (epoch, rows, left, replacement) = board(&mut session);
+    session.open(Topic::Tasks).unwrap();
+    let (epoch, rows, left, replacement) = tasks(&mut session);
     assert_eq!(epoch, 1);
     assert_eq!(rows.len(), 2);
     assert!(left.is_empty());
     assert!(replacement);
-    let (epoch, rows, left, replacement) = board(&mut session);
+    let (epoch, rows, left, replacement) = tasks(&mut session);
     assert_eq!(epoch, 1);
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].title, "updated");
+    assert_eq!(rows[0].task.title, "updated");
     assert_eq!(left, ["T-9"]);
     assert!(!replacement);
     server.join().unwrap();
@@ -254,17 +250,17 @@ fn sub_reset_reopens_without_since_and_delivers_a_complete_replacement() {
             vec![],
             false,
         );
-        let old_ack = ack(&mut stream, Topic::Board, 1, None);
+        let old_ack = ack(&mut stream, Topic::Tasks, 1, None);
         respond(&mut stream, &old_ack, json!({}));
         notification(
             &mut stream,
             wire::SUB_RESET,
-            json!({"topic":"board","epoch":2}),
+            json!({"topic":"tasks","epoch":2}),
         );
         let reopened = request(&mut stream);
         assert_eq!(reopened.method, wire::SUB_OPEN);
         let open: SubOpen = serde_json::from_value(reopened.params.clone()).unwrap();
-        assert_eq!(open.topic, Topic::Board);
+        assert_eq!(open.topic, Topic::Tasks);
         assert!(open.since.is_none());
         page(
             &mut stream,
@@ -275,7 +271,7 @@ fn sub_reset_reopens_without_since_and_delivers_a_complete_replacement() {
             vec![],
             true,
         );
-        let first_ack = ack(&mut stream, Topic::Board, 1, Some("T-10"));
+        let first_ack = ack(&mut stream, Topic::Tasks, 1, Some("T-10"));
         respond(&mut stream, &reopened, json!({}));
         respond(&mut stream, &first_ack, json!({}));
         page(
@@ -287,19 +283,19 @@ fn sub_reset_reopens_without_since_and_delivers_a_complete_replacement() {
             vec![],
             false,
         );
-        let last_ack = ack(&mut stream, Topic::Board, 1, None);
+        let last_ack = ack(&mut stream, Topic::Tasks, 1, None);
         respond(&mut stream, &last_ack, json!({}));
     });
     let (mut session, _) = Session::connect(&path).unwrap();
     session.open(Topic::Health).unwrap();
-    session.open(Topic::Board).unwrap();
-    let (epoch, rows, _, _) = board(&mut session);
+    session.open(Topic::Tasks).unwrap();
+    let (epoch, rows, _, _) = tasks(&mut session);
     assert_eq!(epoch, 1);
-    assert_eq!(rows[0].id, "T-9");
-    let (epoch, rows, left, replacement) = board(&mut session);
+    assert_eq!(rows[0].task.id, "T-9");
+    let (epoch, rows, left, replacement) = tasks(&mut session);
     assert_eq!(epoch, 2);
     assert_eq!(rows.len(), 2);
-    assert!(rows.iter().all(|row| row.id != "T-9"));
+    assert!(rows.iter().all(|row| row.task.id != "T-9"));
     assert!(left.is_empty());
     assert!(replacement);
     server.join().unwrap();
@@ -341,7 +337,7 @@ fn reopened_thread_does_not_ack_or_publish_the_retired_live_page() {
     });
     let (mut session, _) = Session::connect(&path).unwrap();
     session.open(Topic::Health).unwrap();
-    session.open(Topic::Board).unwrap();
+    session.open(Topic::Tasks).unwrap();
     let scope = json!({"topic":"thread","scope":"quick","since":null});
     session.request(wire::SUB_OPEN, scope.clone()).unwrap();
     ready.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -362,7 +358,6 @@ fn reopened_thread_does_not_ack_or_publish_the_retired_live_page() {
                 break;
             }
             Event::Idle => assert!(std::time::Instant::now() < deadline),
-            Event::Live { .. } => panic!("retired live text reached the reopened thread"),
             Event::Closed(reason) => panic!("session closed: {reason}"),
             _ => {}
         }
@@ -385,7 +380,7 @@ fn tagged_request_preserves_correlation_and_original_params_in_reply() {
     });
     let (mut session, _) = Session::connect(&path).unwrap();
     session.open(Topic::Health).unwrap();
-    session.open(Topic::Board).unwrap();
+    session.open(Topic::Tasks).unwrap();
     session
         .request_tagged(
             wire::PING,

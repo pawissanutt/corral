@@ -1,7 +1,7 @@
 //! What the Timeline shows, read tracked: the selected feed's recorded Timeline and Burnup
 //! details in the viewer's time zone (the one the driver put on the feed). Also keeps those
-//! details requested while the page is open and revalidates them when the board moves; the
-//! burn-up is the scope the owner picked.
+//! details requested while the page is open; the client revalidates them as tasks, plans and
+//! runs change. The burn-up is the scope the owner picked.
 
 use corral_protocol::detail::{DetailBody, DetailRef};
 use jiff::tz::TimeZone;
@@ -9,7 +9,6 @@ use nsh_core::prelude::*;
 
 use crate::model::daemon::{DetailCache, Feed};
 use crate::model::timeline::{self, BurnupSeries, Gap, Plot};
-use crate::model::usage::completeness_label;
 use crate::state::AppState;
 
 /// Where a recorded detail stands.
@@ -33,8 +32,6 @@ pub struct Shown {
     pub gaps_empty: Option<&'static str>,
     pub burnup: Option<BurnupSeries>,
     pub burnup_status: Status,
-    /// How complete corrald's count of the burn-up is, said even when it found no change to plot.
-    pub burnup_coverage: Option<String>,
 }
 
 impl Shown {
@@ -88,7 +85,9 @@ pub fn shown(app: AppState) -> Shown {
                 let plot = cache
                     .and_then(DetailCache::body)
                     .and_then(|body| match body {
-                        DetailBody::Timeline(page) => Some(timeline::live_plot(page, window, feed)),
+                        DetailBody::Timeline(page) => {
+                            Some(timeline::live_plot(page, window, state.grouping, feed))
+                        }
                         _ => None,
                     });
                 let gaps = plot
@@ -99,8 +98,7 @@ pub fn shown(app: AppState) -> Shown {
             }
             None => (None, Status::Loading, Vec::new()),
         };
-        let (burnup, burnup_status, burnup_coverage) =
-            burnup_parts(feed, &timeline::burnup_request(&state), now);
+        let (burnup, burnup_status) = burnup_parts(feed, &timeline::burnup_request(&state), now);
         Shown {
             gaps_empty: plot
                 .is_some()
@@ -111,27 +109,22 @@ pub fn shown(app: AppState) -> Shown {
             gaps,
             burnup,
             burnup_status,
-            burnup_coverage,
         }
     })
 }
 
-/// A burn-up detail as drawn: its series, where its request stands, and how complete corrald's
-/// count of it is.
-pub type BurnupParts = (Option<BurnupSeries>, Status, Option<String>);
+/// A burn-up detail as drawn: its series and where its request stands.
+pub type BurnupParts = (Option<BurnupSeries>, Status);
 
 fn burnup_parts(feed: &Feed, request: &DetailRef, now: u64) -> BurnupParts {
     let cache = feed.detail(request);
-    let body = cache.and_then(DetailCache::body);
-    let coverage = body.and_then(|body| match body {
-        DetailBody::Burnup(burnup) => completeness_label(&burnup.completeness),
-        _ => None,
-    });
-    let series = body.and_then(|body| match body {
-        DetailBody::Burnup(burnup) => timeline::burnup_series(burnup, now, feed),
-        _ => None,
-    });
-    (series, state_of(cache), coverage)
+    let series = cache
+        .and_then(DetailCache::body)
+        .and_then(|body| match body {
+            DetailBody::Burnup(burnup) => timeline::burnup_series(burnup, now, feed),
+            _ => None,
+        });
+    (series, state_of(cache))
 }
 
 /// Tracked: one fixed scope's burn-up, for a page outside the Timeline (a project's).
@@ -150,20 +143,8 @@ pub fn keep_burnup(app: AppState, request: DetailRef) {
     });
 }
 
-/// A number that moves whenever a board row's revision does, so the recorded spans are
-/// revalidated as work changes phase.
-fn board_mark(feed: &Feed) -> u64 {
-    feed.board
-        .tasks()
-        .iter()
-        .fold(feed.board.epoch, |mark, task| {
-            mark.wrapping_mul(31).wrapping_add(task.rev)
-        })
-}
-
 /// Keeps the Timeline and Burnup details requested while the page is open: requested when the
-/// range, grouping, burn-up scope or day changes, revalidated (with their etags) when the board
-/// moves.
+/// range, grouping, burn-up scope or day changes.
 pub fn keep_loaded(app: AppState) {
     let wanted = computed(move || {
         if !app.daemon() {
@@ -175,26 +156,16 @@ pub fn keep_loaded(app: AppState) {
             Some((
                 timeline::request(&state, &window),
                 timeline::burnup_request(&state),
-                board_mark(feed),
             ))
         })
     });
-    let last = stored(None::<u64>);
     effect(move || {
-        let Some((spans, burnup, mark)) = wanted.get() else {
+        let Some((spans, burnup)) = wanted.get() else {
             return;
         };
         untracked(|| {
-            let moved = last
-                .replace(Some(mark))
-                .is_some_and(|before| before != mark);
-            if moved {
-                app.refresh(spans);
-                app.refresh(burnup);
-            } else {
-                app.load(spans);
-                app.load(burnup);
-            }
+            app.load(spans);
+            app.load(burnup);
         });
     });
 }

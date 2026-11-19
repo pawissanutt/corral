@@ -10,7 +10,7 @@ impl AppState {
         id: String,
         request: DetailGet,
     ) -> Vec<Outgoing> {
-        let request = match request {
+        let mut request = match request {
             DetailGet {
                 target: DetailRef::SessionItem { id, token },
                 ..
@@ -20,11 +20,21 @@ impl AppState {
             request => request,
         };
         let key = detail_key(&request.target);
+        // The finder's list is walked: each page is asked for as the owner reaches it and adds
+        // to those before, rather than all of them being fetched and merged up front.
+        let walked = walked(&request.target);
+        if walked && request.page.is_none() && request.etag.is_none() {
+            // Revalidated page by page from its first: each unchanged page walked stays.
+            request.etag = feed.with_untracked(|feed| {
+                feed.details
+                    .get(&key)
+                    .filter(|cache| cache.merged.is_some() && cache.error.is_none())
+                    .and_then(|cache| cache.pages.first())
+                    .map(|page| page.etag.clone())
+            });
+        }
         // One page of a paged list is shown at a time, so a new page retires its siblings.
-        let paged = matches!(
-            &request.target,
-            DetailRef::Filings { .. } | DetailRef::Closed { .. }
-        );
+        let paged = walked || matches!(&request.target, DetailRef::Closed { .. });
         let mut retired = if paged {
             let list = std::mem::discriminant(&request.target);
             feed.with_untracked(|feed| {
@@ -74,7 +84,12 @@ impl AppState {
             cache.stale = true;
             cache.error = (!self.ready).then(offline);
         });
-        self.retained.select(&request, &id);
+        // A walked list is revalidated from its first page, never from a page walked to.
+        let remembered = DetailGet {
+            page: request.page.clone().filter(|_| !walked),
+            ..request.clone()
+        };
+        self.retained.select(&remembered, &id);
         if !self.ready {
             self.touch_detail(feed, &request.target);
             self.trim_retained(feed);
@@ -142,6 +157,9 @@ impl AppState {
                 return Ok(vec![]);
             }
         };
+        if walked(&request.target) {
+            return Ok(self.walked_reply(feed, id, key, request, page));
+        }
         let pages = self.detail_pages.entry(key.clone()).or_default();
         if let Some(first) = pages.first() {
             if first.etag != page.etag {
@@ -189,22 +207,12 @@ impl AppState {
             return Ok(vec![]);
         }
         let next = page.next.clone();
-        let size = cache::bytes(&page);
-        let bytes = self.detail_bytes.entry(key.clone()).or_default();
-        *bytes = bytes.saturating_add(size);
-        pages.push(page);
-        if pages.len() > MAX_PAGES || *bytes > MAX_DETAIL_BYTES {
-            self.detail_failed(
-                feed,
-                &key,
-                &id,
-                ClientError {
-                    code: "too_large".into(),
-                    message: "Detail exceeds this device's bounded cache (8 MiB).".into(),
-                },
-            );
+        let held = self.detail_pages.get(&key).map_or(0, Vec::len);
+        if self.over_budget(feed, &key, &id, &page, held) {
             return Ok(vec![]);
         }
+        let pages = self.detail_pages.entry(key.clone()).or_default();
+        pages.push(page);
         if let Some(next) = next {
             self.touch_detail(feed, &request.target);
             self.trim_retained(feed);
@@ -221,7 +229,124 @@ impl AppState {
                 Some(id),
             )]);
         }
-        let mut pages = self.detail_pages.remove(&key).unwrap_or_default();
+        let pages = self.detail_pages.remove(&key).unwrap_or_default();
+        self.publish(feed, &key, &id, &request.target, pages);
+        Ok(vec![])
+    }
+
+    /// A page of the walked list. A walk to a further page adds it after those walked; a
+    /// revalidation keeps each saved page corrald finds unchanged (asking for the next with its
+    /// own etag while the chain of tokens is the saved one) and takes each changed one, until
+    /// as many pages as were walked are current.
+    fn walked_reply(
+        &mut self,
+        feed: Signal<Feed>,
+        id: String,
+        key: String,
+        request: DetailGet,
+        page: DetailReply,
+    ) -> Vec<Outgoing> {
+        let saved = feed.with_untracked(|feed| {
+            feed.details
+                .get(&key)
+                .map(|cache| cache.pages.clone())
+                .unwrap_or_default()
+        });
+        let chain = self.detail_pages.remove(&key).unwrap_or_default();
+        if request.page.is_some() && chain.is_empty() && request.etag.is_none() {
+            if self.over_budget(feed, &key, &id, &page, saved.len()) {
+                return vec![];
+            }
+            let mut pages = saved;
+            pages.push(page);
+            self.publish(feed, &key, &id, &request.target, pages);
+            return vec![];
+        }
+        let at = chain.len();
+        let current = match page.body {
+            Some(_) => page,
+            None => match saved.get(at).filter(|kept| kept.etag == page.etag) {
+                Some(kept) => DetailReply {
+                    as_of: page.as_of,
+                    seq: page.seq,
+                    ..kept.clone()
+                },
+                None => {
+                    let error = ClientError {
+                        code: "invalid_reply".into(),
+                        message: "corrald said an artifact page is unchanged that this device does not hold.".into(),
+                    };
+                    self.detail_failed(feed, &key, &id, error);
+                    return vec![];
+                }
+            },
+        };
+        if self.over_budget(feed, &key, &id, &current, chain.len()) {
+            return vec![];
+        }
+        let next = current.next.clone();
+        let mut chain = chain;
+        chain.push(current);
+        let following = chain.len();
+        match next.filter(|_| following < saved.len()) {
+            Some(token) => {
+                // The saved page is still the one this token names only if the chain led to it.
+                let etag = (saved[following - 1].next.as_deref() == Some(token.as_str()))
+                    .then(|| saved[following].etag.clone());
+                self.detail_pages.insert(key, chain);
+                vec![out(
+                    DETAIL_GET,
+                    value(DetailGet {
+                        target: request.target,
+                        etag,
+                        page: Some(token),
+                    }),
+                    Some(id),
+                )]
+            }
+            None => {
+                self.publish(feed, &key, &id, &request.target, chain);
+                vec![]
+            }
+        }
+    }
+
+    /// Adds `page` to the bytes the request has fetched, after the `held` pages before it; once
+    /// over this device's bound the request fails instead.
+    fn over_budget(
+        &mut self,
+        feed: Signal<Feed>,
+        key: &str,
+        id: &str,
+        page: &DetailReply,
+        held: usize,
+    ) -> bool {
+        let bytes = self.detail_bytes.entry(key.to_owned()).or_default();
+        *bytes = bytes.saturating_add(cache::bytes(page));
+        if held < MAX_PAGES && *bytes <= MAX_DETAIL_BYTES {
+            return false;
+        }
+        self.detail_failed(
+            feed,
+            key,
+            id,
+            ClientError {
+                code: "too_large".into(),
+                message: "Detail exceeds this device's bounded cache (8 MiB).".into(),
+            },
+        );
+        true
+    }
+
+    /// Publishes the request's pages, merged, as the detail's current snapshot.
+    fn publish(
+        &mut self,
+        feed: Signal<Feed>,
+        key: &str,
+        id: &str,
+        target: &DetailRef,
+        mut pages: Vec<DetailReply>,
+    ) {
         let seq = pages.iter().map(|page| page.seq).max().unwrap_or(0);
         let as_of = pages.last().map(|page| page.as_of.clone());
         if let Some(first) = pages.first_mut() {
@@ -230,29 +355,29 @@ impl AppState {
                 first.as_of = as_of;
             }
         }
-        self.detail_bytes.remove(&key);
+        self.detail_bytes.remove(key);
         let merged = match merge_pages(&pages) {
             Ok(merged) => merged,
             Err(message) => {
                 self.detail_failed(
                     feed,
-                    &key,
-                    &id,
+                    key,
+                    id,
                     ClientError {
                         code: "invalid_reply".into(),
                         message,
                     },
                 );
-                return Ok(vec![]);
+                return;
             }
         };
-        self.detail_inflight.remove(&key);
-        let reread = self.detail_reread.remove(&key);
+        self.detail_inflight.remove(key);
+        let reread = self.detail_reread.remove(key);
         feed.update(|feed| {
             if matches!(&merged, Some(DetailBody::Session(_))) {
-                feed.settle_session(&request.target, reread);
+                feed.settle_session(target, reread);
             }
-            if let Some(cache) = feed.details.get_mut(&key) {
+            if let Some(cache) = feed.details.get_mut(key) {
                 cache.pages = pages;
                 cache.merged = merged;
                 cache.loading = false;
@@ -261,18 +386,17 @@ impl AppState {
             }
             let response = feed
                 .details
-                .get(&key)
+                .get(key)
                 .and_then(|cache| cache.pages.first())
                 .map(value);
-            if let Some(operation) = feed.operations.get_mut(id.as_str()) {
+            if let Some(operation) = feed.operations.get_mut(id) {
                 operation.loading = false;
                 operation.value = response;
                 operation.error = None;
             }
         });
-        self.touch_detail(feed, &request.target);
+        self.touch_detail(feed, target);
         self.trim_retained(feed);
-        Ok(vec![])
     }
     fn detail_failed(&mut self, feed: Signal<Feed>, key: &str, id: &str, error: ClientError) {
         self.detail_pages.remove(key);
@@ -429,6 +553,11 @@ fn item_key(item: &Value) -> Option<&str> {
     item.get("id").or_else(|| item.get("day"))?.as_str()
 }
 
+/// Whether the detail is a list the owner walks a page at a time: the artifact finder's.
+fn walked(target: &DetailRef) -> bool {
+    matches!(target, DetailRef::Artifacts { .. })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,10 +606,6 @@ mod artifact_tests {
         assert_eq!(artifact.content, "AAECAw==");
     }
 }
-
-#[cfg(test)]
-#[path = "filings_tests.rs"]
-mod filings_tests;
 
 #[cfg(test)]
 #[path = "closed_tests.rs"]

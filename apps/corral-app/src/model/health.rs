@@ -8,7 +8,9 @@ use std::borrow::Cow;
 
 use corral_protocol::app as wire;
 
-use crate::model::daemon::{DaemonLevel, Feed, Link, PmLevel, RuntimeLevel};
+use corral_protocol::DaemonState;
+
+use crate::model::daemon::{Feed, Group, Link};
 use crate::model::devices::DeviceLink;
 use crate::model::effect::{Conn, Effect};
 use crate::model::nav::{Destination, Form, SettingsSection};
@@ -126,8 +128,8 @@ pub struct Workspace {
     pub path: Cow<'static, str>,
     /// The autopilot summary.
     pub autopilot: &'static str,
-    /// The device name.
-    pub device: Cow<'static, str>,
+    /// The device name; none while this device has no name yet, so the shell says "This device" once.
+    pub device: Option<Cow<'static, str>>,
     /// The action signing identity.
     pub via: Cow<'static, str>,
 }
@@ -183,10 +185,7 @@ impl Snapshot {
     }
     /// Whether the destination has a count requiring the user's attention.
     pub fn needs_you(&self, destination: Destination) -> bool {
-        matches!(
-            destination,
-            Destination::Inbox | Destination::Now | Destination::Plans | Destination::Review
-        ) && self.count(destination).is_some()
+        destination == Destination::Now && self.count(destination).is_some()
     }
     /// The destination body line for this state.
     pub fn body_line(&self, destination: Destination) -> Cow<'static, str> {
@@ -213,15 +212,14 @@ pub enum Availability {
 /// The capability a destination needs; Now (the board) and Settings need none.
 pub const fn capability(destination: Destination) -> Option<&'static str> {
     match destination {
-        Destination::Inbox => Some(wire::INBOX_V1),
         Destination::Changes => Some(wire::CHANGES_V1),
         Destination::Plans => Some(wire::PLANS_V1),
-        Destination::Builds => Some(wire::BUILDS_V1),
         Destination::Agents => Some(wire::AGENTS_V1),
         Destination::Review => Some(wire::REVIEW_V1),
         Destination::Timeline => Some(wire::TIMELINE_V1),
         Destination::Usage => Some(wire::USAGE_V1),
-        Destination::Now | Destination::Settings => None,
+        // Artifacts are a detail of the core wire, which every corrald serves.
+        Destination::Now | Destination::Artifacts | Destination::Settings => None,
     }
 }
 
@@ -261,16 +259,9 @@ pub fn unavailable_line(feed: &Feed, destination: Destination) -> String {
     }
 }
 
-/// Canonical open owner moves, never inferred from task status or PM work.
+/// Open tasks the owner moves next: Blocked ones and reviews ready to land.
 pub fn needs_you(feed: &Feed) -> usize {
-    crate::model::inbox::attention_counts_filtered(feed, &crate::model::ProjectFilter::All).total
-        as usize
-}
-
-/// Plans waiting for the owner's acceptance.
-pub fn awaiting_plans(feed: &Feed) -> usize {
-    crate::model::inbox::attention_counts_filtered(feed, &crate::model::ProjectFilter::All).plans
-        as usize
+    feed.board.count(Group::NeedsYou)
 }
 
 /// The authenticated name of this device: the daemon's session, else its enrolment.
@@ -291,7 +282,7 @@ pub fn day_label(date: &str) -> Option<String> {
 }
 
 /// A banner action, absent on phone where the banner is informational.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BannerButton {
     /// The button's copy.
     pub label: &'static str,
@@ -302,7 +293,7 @@ pub struct BannerButton {
 }
 
 /// The warning above stale or degraded board content.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConnectionBanner {
     /// Warning, failure or neutral information.
     pub tone: Tone,
@@ -384,13 +375,18 @@ pub fn daemon_env(feed: &Feed, form: Form) -> crate::model::effect::Env {
     let conn = if !feed.ready() {
         Conn::Down
     } else {
-        match feed.health.as_ref().map(|health| health.level) {
-            Some(DaemonLevel::Healthy) => Conn::Healthy,
-            Some(DaemonLevel::Degraded) => Conn::Degraded,
+        match feed.health.as_ref().map(|health| health.daemon) {
+            Some(DaemonState::Healthy) => Conn::Healthy,
+            Some(DaemonState::Degraded) => Conn::Degraded,
             _ => Conn::Down,
         }
     };
     Env { conn, form }
+}
+
+/// corrald answers on the socket, but this device has not enrolled, so no board is served.
+fn unenrolled(feed: &Feed) -> bool {
+    feed.transport_ready && feed.device == DeviceLink::Unenrolled
 }
 
 /// Projects the last daemon reading without borrowing session-owned strings.
@@ -399,7 +395,7 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
     let refused = matches!(feed.device, DeviceLink::Failed(_));
     let (value, tone): (Cow<'static, str>, Tone) = if refused {
         ("not connected".into(), Tone::Fail)
-    } else if feed.transport_ready && feed.device == DeviceLink::Unenrolled {
+    } else if unenrolled(feed) {
         ("not enrolled".into(), Tone::Warn)
     } else if down {
         (
@@ -412,21 +408,21 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
             Tone::Warn,
         )
     } else {
-        match feed.health.as_ref().map(|health| health.level) {
-            Some(DaemonLevel::Healthy) => ("healthy".into(), Tone::Ok),
-            Some(DaemonLevel::Degraded) => (
+        match feed.health.as_ref().map(|health| health.daemon) {
+            Some(DaemonState::Healthy) => ("healthy".into(), Tone::Ok),
+            Some(DaemonState::Degraded) => (
                 format!(
                     "degraded · {}",
                     feed.health
                         .as_ref()
-                        .map(|health| health.reasons.join(", "))
+                        .and_then(|health| health.last_sync_error.clone())
                         .unwrap_or_default()
                 )
                 .into(),
                 Tone::Warn,
             ),
-            Some(DaemonLevel::Down) => ("down".into(), Tone::Fail),
-            Some(DaemonLevel::Unknown) => ("unknown".into(), Tone::Muted),
+            Some(DaemonState::Down) => ("down".into(), Tone::Fail),
+            Some(DaemonState::Other) => ("unknown".into(), Tone::Muted),
             None => ("connecting".into(), Tone::Muted),
         }
     };
@@ -436,37 +432,18 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
         tone,
     }];
     if let Some(health) = &feed.health {
-        for runtime in &health.runtimes {
-            let (value, tone) = match runtime.level {
-                RuntimeLevel::Ok => ("ok", Tone::Ok),
-                RuntimeLevel::Unreachable => ("unreachable", Tone::Fail),
-                RuntimeLevel::Unknown => ("unknown", Tone::Muted),
-            };
-            segments.push(Segment {
-                name: runtime.kind.clone().into(),
-                value: value.into(),
-                tone: if down { Tone::Warn } else { tone },
-            });
-        }
-        let (value, tone) = if crate::model::WorkspaceMode::of(feed)
-            == crate::model::WorkspaceMode::AssistantOnly
-        {
-            ("off — no projects", Tone::Muted)
+        let (value, tone) = if health.runner_reachable {
+            ("reachable", Tone::Ok)
         } else {
-            match health.pm {
-                PmLevel::Live => ("live", Tone::Ok),
-                PmLevel::Relaunching => ("relaunching", Tone::Warn),
-                PmLevel::Absent => ("absent", Tone::Fail),
-                PmLevel::Unknown => ("unknown", Tone::Muted),
-            }
+            ("unreachable", Tone::Fail)
         };
         segments.push(Segment {
-            name: "PM".into(),
+            name: "runner".into(),
             value: value.into(),
             tone: if down { Tone::Warn } else { tone },
         });
     }
-    let reach = if refused {
+    let reach = if refused || unenrolled(feed) {
         None
     } else if down {
         Some(feed.synced.as_ref().map_or_else(
@@ -489,9 +466,7 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
             },
         ))
     };
-    let attention =
-        crate::model::inbox::attention_counts_filtered(feed, &crate::model::ProjectFilter::All);
-    let count = attention.total;
+    let count = needs_you(feed);
     let workspace_name = feed.workspace.as_deref().and_then(|path| {
         path.trim_end_matches('/')
             .rsplit('/')
@@ -506,26 +481,13 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
     };
     let name = workspace_name.unwrap_or("corrald").to_owned();
     let device = device_name(feed);
-    let mode = feed.settings.values().next().map(|settings| {
-        use corral_protocol::rows::OperatingMode;
-        match settings.mode {
-            OperatingMode::Assist => "Mode · assist",
-            OperatingMode::Autopilot
-                if crate::model::settings::live::grant_on(settings, "automation.paused") =>
-            {
-                "Mode · autopilot (paused)"
-            }
-            OperatingMode::Autopilot => "Mode · autopilot",
-            OperatingMode::Other => "Mode · unknown",
-        }
-    });
-    let counts = Destination::ALL
+    let mode = feed
+        .settings
+        .as_ref()
+        .map(|settings| automation(&settings.config));
+    let counts = (count > 0)
+        .then(|| (Destination::Now, u32::try_from(count).unwrap_or(u32::MAX)))
         .into_iter()
-        .filter_map(|destination| {
-            destination
-                .attention_count(&attention)
-                .map(|count| (destination, u32::try_from(count).unwrap_or(u32::MAX)))
-        })
         .collect();
     Snapshot::new(
         DataState::Daemon,
@@ -550,9 +512,7 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
                 .unwrap_or_default()
                 .into(),
             autopilot: mode.unwrap_or(""),
-            device: device
-                .map(|name| Cow::Owned(name.to_owned()))
-                .unwrap_or(Cow::Borrowed("this device")),
+            device: device.map(|name| Cow::Owned(name.to_owned())),
             via: device
                 .map(|name| Cow::Owned(format!("you on {name}")))
                 .unwrap_or(Cow::Borrowed("you on this device")),
@@ -563,7 +523,18 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
 
 /// Live connection warnings never offer a simulated daemon restart.
 pub fn daemon_connection_banner(feed: &Feed, form: Form) -> Option<ConnectionBanner> {
-    let (tone, text, label) = if !feed.ready() {
+    let (tone, text, label) = if unenrolled(feed) {
+        (
+            Tone::Warn,
+            vec![
+                span("This device is not enrolled.").bold(),
+                span(
+                    " corrald is reachable; enrol this device in Settings › Connection to load the board.",
+                ),
+            ],
+            "Open Connection",
+        )
+    } else if !feed.ready() {
         let stale = if feed.board.complete {
             feed.synced.as_ref().map_or_else(
                 || " Showing the last received board, marked stale.".to_owned(),
@@ -580,11 +551,20 @@ pub fn daemon_connection_banner(feed: &Feed, form: Form) -> Option<ConnectionBan
     } else if let Some(health) = feed
         .health
         .as_ref()
-        .filter(|health| health.level == DaemonLevel::Degraded)
+        .filter(|health| health.daemon == DaemonState::Degraded)
     {
         (
             Tone::Warn,
-            vec![span(format!("corrald degraded · {}.", health.reasons.join(", "))).bold()],
+            vec![
+                span(format!(
+                    "corrald degraded · {}.",
+                    health
+                        .last_sync_error
+                        .as_deref()
+                        .unwrap_or("no reason given")
+                ))
+                .bold(),
+            ],
             "Details",
         )
     } else {
@@ -605,16 +585,30 @@ pub fn daemon_connection_banner(feed: &Feed, form: Form) -> Option<ConnectionBan
             vec![BannerButton {
                 label,
                 effect: Effect::GoSettings(SettingsSection::Connection),
-                quiet: true,
+                quiet: !unenrolled(feed),
             }]
         },
     })
 }
 
+/// The workspace's two automation switches from `[defaults]` in the served `corral.toml`.
+fn automation(config: &serde_json::Map<String, serde_json::Value>) -> &'static str {
+    let Some(defaults) = config.get("defaults").filter(|value| value.is_object()) else {
+        return "Automation · unknown";
+    };
+    let on = |key: &str| defaults[key].as_bool() == Some(true);
+    match (on("auto_dispatch"), on("auto_land")) {
+        (true, true) => "Automation · dispatch and land",
+        (true, false) => "Automation · dispatch",
+        (false, true) => "Automation · land",
+        (false, false) => "Automation · off",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::daemon::{DaemonHealth, Runtime};
+    use corral_protocol::Health as Reading;
 
     #[test]
     fn refused_identity_offers_connection_recovery_in_every_form() {
@@ -634,6 +628,24 @@ mod tests {
     }
 
     #[test]
+    fn a_reachable_daemon_awaiting_enrolment_is_not_reported_unreachable_or_offline() {
+        let feed = Feed {
+            transport_ready: true,
+            device: DeviceLink::Unenrolled,
+            ..Feed::default()
+        };
+        let banner = daemon_connection_banner(&feed, Form::Terminal).expect("enrolment banner");
+        let words: String = banner.text.iter().map(|span| span.text.as_str()).collect();
+        assert!(!words.contains("not reachable"), "{words}");
+        assert!(
+            daemon_snapshot(&feed, Form::Terminal)
+                .health
+                .reach
+                .is_none()
+        );
+    }
+
+    #[test]
     fn ask_is_unknown_before_negotiation_and_refused_only_by_a_negotiated_daemon() {
         let mut feed = Feed::default();
         for link in [Link::Connecting, Link::Down] {
@@ -644,7 +656,7 @@ mod tests {
             );
         }
         feed.link = Link::Up;
-        feed.capabilities.insert(wire::INBOX_V1.into());
+        feed.capabilities.insert(wire::PLANS_V1.into());
         assert_eq!(
             capability_availability(&feed, wire::ASSISTANT_V1),
             Availability::Missing(wire::ASSISTANT_V1)
@@ -661,18 +673,14 @@ mod tests {
         let feed = Feed {
             link: Link::Down,
             synced: Some("12:34".into()),
-            health: Some(DaemonHealth {
-                level: DaemonLevel::Healthy,
-                reasons: Vec::new(),
-                runtimes: vec![Runtime {
-                    kind: "herdr".into(),
-                    level: RuntimeLevel::Ok,
-                }],
-                pm: PmLevel::Live,
-                pass_seq: 1,
-                last_pass: None,
-                last_pass_ms: None,
+            health: Some(Reading {
+                daemon: DaemonState::Healthy,
+                runner_reachable: true,
+                last_sync_at: None,
+                last_sync_error: None,
+                pid: 1,
                 version: "1".into(),
+                slots: None,
             }),
             ..Feed::default()
         };
@@ -706,8 +714,8 @@ mod tests {
             link: Link::Up,
             ..Feed::default()
         };
-        feed.capabilities.insert(wire::INBOX_V1.into());
-        assert_eq!(availability(&feed, Destination::Inbox), Availability::Ready);
+        feed.capabilities.insert(wire::PLANS_V1.into());
+        assert_eq!(availability(&feed, Destination::Plans), Availability::Ready);
         assert_eq!(availability(&feed, Destination::Now), Availability::Ready);
         assert_eq!(
             availability(&feed, Destination::Usage),
@@ -737,7 +745,7 @@ mod tests {
         let snapshot = daemon_snapshot(&feed, Form::Terminal);
         let workspace = snapshot.workspace.as_ref().expect("workspace");
         assert_eq!(workspace.name, "workspace");
-        assert_eq!(workspace.device, "owner-laptop");
+        assert_eq!(workspace.device.as_deref(), Some("owner-laptop"));
         assert_eq!(workspace.via, "you on owner-laptop");
         assert_eq!(
             snapshot.health.source.as_deref(),
@@ -753,7 +761,10 @@ mod tests {
         );
         let workspace = unknown.workspace.as_ref().expect("workspace");
         assert_eq!(workspace.name, "corrald");
-        assert_eq!(workspace.device, "this device");
+        assert_eq!(
+            workspace.device, None,
+            "an unnamed device is not named twice"
+        );
         assert_eq!(workspace.via, "you on this device");
         assert_eq!(unknown.health.source.as_deref(), Some("corrald"));
     }

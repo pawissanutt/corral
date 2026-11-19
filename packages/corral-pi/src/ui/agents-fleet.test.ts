@@ -15,7 +15,7 @@ import { NativeWorkbench } from "./workbench.ts";
 
 const NOW = Date.now();
 const F8 = "\x1b[19~";
-const worker = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 3 };
+const worker = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
 beforeAll(() => sdk.initTheme("dark", false));
 const work = mkdtempSync(join(tmpdir(), "corral-agents-fleet-"));
 afterAll(() => rmSync(work, { recursive: true, force: true }));
@@ -29,7 +29,7 @@ function fleet(children: readonly ChildSnapshot[], mail: readonly AgentMessage[]
   return { children, mail, maxParallel: 3, startedAt: NOW - 60_000 };
 }
 function helper(request: string, kind: HelperInspection["kind"]): HelperInspection {
-  return { request, kind, model: "provider/model-a", generation: 1, phase: "completed", createdAt: NOW - 40_000, startedAt: NOW - 39_000,
+  return { request, kind, model: "provider/model-a", phase: "completed", createdAt: NOW - 40_000, startedAt: NOW - 39_000,
     endedAt: NOW - 30_000, prompt: `Look into ${request}`, result: "Answer", truncated: false, messages: [] };
 }
 function snapshot(extra: Partial<PanelSnapshot> = {}): PanelSnapshot {

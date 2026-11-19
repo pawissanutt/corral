@@ -1,18 +1,16 @@
-//! Plans plumbing over the served feed: keeping a shown plan's detail (and its open diff)
-//! loaded, current and pinned in the client's cache, the pushed phone page of a plan, and the
-//! plan graph Now's panel embeds.
+//! Plans plumbing over the served feed: keeping a shown plan's detail loaded, current and pinned
+//! in the client's cache, the pushed phone page of a plan, and the plan graph Now's panel
+//! embeds.
 
 use corral_protocol::detail::DetailRef;
-use corral_protocol::rows::PlanState as WireState;
+use corral_protocol::rows::PlanRow;
 use nsh_core::prelude::*;
 
-use crate::model::act::{self, ActStatus};
 use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
-use crate::model::plans::{self, Action, Button, GraphInput, Lens, LiveAction};
+use crate::model::plans::{self, Action, Button, GraphInput, LiveAction};
 use crate::model::projects::FilterScreen;
 use crate::model::text::span;
-use crate::model::work;
 use crate::model::{Form, Id};
 use crate::screens::PhonePage;
 use crate::state::AppState;
@@ -21,72 +19,13 @@ use crate::ui::kit::text::dim;
 
 use super::{command, graph};
 
-/// What the client's cache holds of a detail. Missing covers a copy the cache let go of, so a
-/// shown plan whose copy was dropped is asked for again rather than left loading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Cached {
-    Missing,
-    Loading,
-    Current,
-    Stale,
-    Failed,
-}
-
-fn cached(feed: &Feed, target: &DetailRef) -> Cached {
-    match feed.detail(target) {
-        None => Cached::Missing,
-        Some(cache) if cache.loading => Cached::Loading,
-        Some(cache) if cache.error.is_some() => Cached::Failed,
-        Some(cache) if cache.stale => Cached::Stale,
-        Some(_) => Cached::Current,
-    }
-}
-
-/// What keeps one served plan current: its row revision, what the cache holds of it, of its
-/// task (whose owner revision the plan's commands carry) and of the diff open on it, and whether
-/// a command about it lost to a newer revision.
+/// What keeps one served plan current: its row (the parent and its child counts, which move
+/// whenever a member does) and whether the cache's copy failed.
 #[derive(Debug, Clone, PartialEq)]
 struct Want {
     plan: Id,
-    rev: Option<u64>,
-    cached: Cached,
-    task_cached: Cached,
-    diff: Option<DetailRef>,
-    diff_cached: Cached,
-    conflict: bool,
-}
-
-fn want(app: AppState, plan: Id) -> Want {
-    let (lens, keys) = app.plans.with(|state| {
-        let keys: Vec<Id> = [&state.live.accept, &state.live.changes]
-            .into_iter()
-            .flatten()
-            .filter(|sent| sent.plan == plan)
-            .map(|sent| sent.key.clone())
-            .collect();
-        (state.live.lens_of(&plan).cloned(), keys)
-    });
-    let diff = match lens {
-        Some(Lens::Diff { from, to }) => Some(DetailRef::PlanDiff {
-            id: plan.to_string(),
-            from,
-            to,
-        }),
-        _ => None,
-    };
-    app.feed.with(|feed| Want {
-        rev: feed.plans.get(plan.as_str()).map(|row| row.rev),
-        cached: cached(feed, &plan_ref(&plan)),
-        task_cached: cached(feed, &work::task_ref(&plan)),
-        diff_cached: diff
-            .as_ref()
-            .map_or(Cached::Missing, |target| cached(feed, target)),
-        conflict: keys
-            .iter()
-            .any(|key| matches!(act::status(feed, key), Some(ActStatus::Conflict(_)))),
-        diff,
-        plan,
-    })
+    row: Option<PlanRow>,
+    failed: bool,
 }
 
 fn plan_ref(plan: &Id) -> DetailRef {
@@ -95,83 +34,65 @@ fn plan_ref(plan: &Id) -> DetailRef {
     }
 }
 
-/// Loads the plan (and its open diff) when first shown, gone stale or dropped from the cache,
-/// and revalidates it when its row revision moves or a command about it met a newer revision.
-/// With `commands`, the plan's task detail too, so the plan's verbs can carry its canonical
-/// owner revision (RC-03). A failed request is fetched again only when the plan is shown anew:
-/// the detail offers Retry. While shown, what it loads is pinned, so the cache keeps it over
-/// older details. Requests and pins go to the source the view mounted on (`AppState::scope`).
-fn keep_current(app: AppState, commands: bool, plan: impl Fn() -> Option<Id> + 'static) {
+fn want(feed: &Feed, plan: Id) -> Want {
+    Want {
+        row: feed.plans.get(plan.as_str()).cloned(),
+        failed: feed
+            .detail(&plan_ref(&plan))
+            .is_some_and(|cache| cache.error.is_some() && !cache.loading),
+        plan,
+    }
+}
+
+/// Loads the plan when first shown or dropped from the cache, and revalidates it when its row
+/// moves. A failed request is fetched again only when the plan is shown anew: the detail offers
+/// Retry. While shown, the detail is pinned, so the cache keeps it over older details. Requests
+/// and pins go to the source the view mounted on (`AppState::scope`).
+fn keep_current(app: AppState, plan: impl Fn() -> Option<Id> + 'static) {
     let app = untracked(|| app.scope());
     let wanted = computed(move || {
         if !app.daemon() {
             return None;
         }
-        plan().map(|id| want(app, id))
+        let id = plan()?;
+        Some(app.feed.with(|feed| want(feed, id)))
     });
     let last = stored(None::<Want>);
-    let pinned = stored(Vec::<DetailRef>::new());
+    let pinned = stored(None::<DetailRef>);
     effect(move || {
         let Some(now) = wanted.get() else {
             return;
         };
         let before = last.replace(Some(now.clone()));
         let target = plan_ref(&now.plan);
-        let task = commands.then(|| work::task_ref(&now.plan));
         untracked(|| {
             let fresh = before.as_ref().is_none_or(|before| before.plan != now.plan);
-            let moved = !fresh
-                && before.as_ref().is_some_and(|before| {
-                    before.rev != now.rev || (!before.conflict && now.conflict)
-                });
-            pin(
-                app,
-                pinned,
-                [Some(target.clone()), task.clone(), now.diff.clone()],
-            );
+            if pinned.with(|pinned| pinned.as_ref() != Some(&target)) {
+                if let Some(gone) = pinned.replace(Some(target.clone())) {
+                    app.watch_detail(gone, false);
+                }
+                app.watch_detail(target.clone(), true);
+            }
+            let moved = !fresh && before.as_ref().is_some_and(|before| before.row != now.row);
             if moved {
                 app.refresh(target);
-            } else if fresh || now.cached != Cached::Failed {
+            } else if fresh || !now.failed {
                 app.load(target);
-            }
-            if let Some(task) = task {
-                if moved {
-                    app.refresh(task);
-                } else if fresh || now.task_cached != Cached::Failed {
-                    app.load(task);
-                }
-            }
-            if let Some(diff) = now.diff.clone()
-                && (fresh || now.diff_cached != Cached::Failed)
-            {
-                app.load(diff);
             }
         });
     });
     // The owner may already be letting go of its values when this runs.
     cleanup(move || {
-        for gone in pinned.try_with(std::mem::take).unwrap_or_default() {
+        if let Some(gone) = pinned.try_with(Option::take).flatten() {
             app.watch_detail(gone, false);
         }
     });
 }
 
-/// Pins `wanted` in the client's cache and lets go of what was pinned before and no longer is.
-fn pin(app: AppState, pinned: Stored<Vec<DetailRef>>, wanted: [Option<DetailRef>; 3]) {
-    let wanted: Vec<DetailRef> = wanted.into_iter().flatten().collect();
-    let was = pinned.replace(wanted.clone());
-    for gone in was.iter().filter(|target| !wanted.contains(target)) {
-        app.watch_detail(gone.clone(), false);
-    }
-    for new in wanted.iter().filter(|target| !was.contains(target)) {
-        app.watch_detail(new.clone(), true);
-    }
-}
-
 /// Keeps the desktop and terminal detail's plan current: the root selection, or the first plan
 /// the Plans scope lists.
 pub(super) fn keep_selected_loaded(app: AppState) {
-    keep_current(app, true, move || {
+    keep_current(app, move || {
         let selection = app.selection();
         let filter = app.project_filter(FilterScreen::Plans);
         app.feed
@@ -179,46 +100,11 @@ pub(super) fn keep_selected_loaded(app: AppState) {
     });
 }
 
-/// Keeps the executing plans' details loaded so their list rows can show member strips;
-/// revalidates one when its row revision moves. A complete plan's members have all landed, and
-/// a long history of them would crowd the bounded cache, so its detail loads when it is opened.
-/// Requests go to the source the view mounted on (`AppState::scope`).
-pub(super) fn keep_rows_loaded(app: AppState) {
-    let app = untracked(|| app.scope());
-    let rows = computed(move || {
-        if !app.daemon() {
-            return vec![];
-        }
-        app.feed.with(|feed| {
-            feed.plans
-                .values()
-                .filter(|row| matches!(row.state, WireState::Executing))
-                .map(|row| (Id::from(&row.id), row.rev))
-                .collect::<Vec<_>>()
-        })
-    });
-    let last = stored(Vec::<(Id, u64)>::new());
-    effect(move || {
-        let now = rows.get();
-        let before = last.replace(now.clone());
-        untracked(|| {
-            for (id, rev) in &now {
-                let target = plan_ref(id);
-                if before.iter().any(|(was, old)| was == id && old != rev) {
-                    app.refresh(target);
-                } else {
-                    app.load(target);
-                }
-            }
-        });
-    });
-}
-
 /// The pushed phone page of a plan (`Live::Plan`); its detail is kept current while the page
 /// is up.
 pub fn live_plan_phone(app: AppState, id: Id) -> PhonePage {
     let shown = id.clone();
-    keep_current(app, true, move || Some(shown.clone()));
+    keep_current(app, move || Some(shown.clone()));
     let env = app.env();
     let page = app.plans.with(|state| {
         app.feed
@@ -237,14 +123,11 @@ enum GraphState {
 }
 
 /// A served plan's member graph alone, for Now's plan panel: loads and keeps the plan current
-/// itself, rings `member`, and opens a member's task (or its open question) on press.
+/// itself, rings `member`, and opens a member's task on press.
 pub fn live_graph(app: AppState, plan: Id, member: Option<Id>) -> AnyElement {
     let shown = plan.clone();
-    // Now's panel offers no plan commands, so the plan's task detail is not needed here.
-    keep_current(app, false, move || Some(shown.clone()));
-    let target = DetailRef::Plan {
-        id: plan.to_string(),
-    };
+    keep_current(app, move || Some(shown.clone()));
+    let target = plan_ref(&plan);
     let input = {
         let plan = plan.clone();
         computed(move || {
@@ -252,7 +135,7 @@ pub fn live_graph(app: AppState, plan: Id, member: Option<Id>) -> AnyElement {
                 plans::plan_detail(feed, &plan).map(|detail| {
                     let mut input = plans::graph_input(feed, &plan, detail);
                     // In another destination a card opens its member rather than selecting it
-                    // in a Plans tracker that is not on screen.
+                    // in a Plans detail that is not on screen.
                     for member in &mut input.members {
                         member.select = member.open.clone();
                     }
@@ -299,7 +182,7 @@ pub fn live_graph(app: AppState, plan: Id, member: Option<Id>) -> AnyElement {
                 }
             }))
             .into_element(),
-        GraphState::Empty => dim(app, "No members are published for this plan yet.").into_element(),
+        GraphState::Empty => dim(app, "This plan has no members yet.").into_element(),
         GraphState::Loading => loading(app, plans::DETAIL_LOADING, &[(0.5, 12.0), (0.8, 54.0)]),
         GraphState::Failed(why) => error(
             app,

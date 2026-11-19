@@ -1,34 +1,37 @@
 //! The selected session's panel (`.apanel`, the mock's `agentPanel`), from `RosterPanel`: the
-//! head (state, role, id, project, close; the name; profile, runtime, pane and since), the
-//! Summary | Terminal tabs with Open session, then the Summary (what waits on the owner, what
-//! the session does now with its activity, its steps, what it said and did) or the pane's
-//! terminal, and the reply box pinned under them. Every press goes through the roster's
-//! selection (`run_roster`), never the full session route.
+//! head (state, role, id, project, close; the name; profile, model, harness, pane and since),
+//! the Summary | Terminal tabs with Open session and the run's Session menu, how its latest pane
+//! request ended, then the Summary (what waits on the owner, what the session does now and,
+//! from a corrald that serves transcripts, what it said and did) or the pane's terminal, and the
+//! reply box pinned under them. Every press goes through the roster's selection
+//! (`run_roster`), never the full session route.
 //!
 //! The panel keeps what it shows loaded while it stays open (`RosterPanel::wants`), as the
-//! session page does: the transcript read once and again when the session's row changes, the
-//! pane's screen streamed (or revalidated once a tick where corrald does not stream) while the
-//! Terminal tab shows, a waiting question read once.
+//! session page does: the transcript read once and again when the run's row changes, the pane's
+//! screen streamed (or revalidated once a tick where corrald does not stream) while the Terminal
+//! tab shows.
 
 use corral_protocol::detail::{DetailRef, STREAM_TERMINAL_V1};
 use nsh_core::prelude::*;
 
-use crate::model::Form;
 use crate::model::agents::{Action, RosterPanel, RosterPanelTab};
 use crate::model::daemon::Link;
 use crate::model::hue::Hue;
+use crate::model::{Form, Id};
 use crate::screens::assistant;
 use crate::state::AppState;
 use crate::ui::icons::Icon;
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
+use crate::ui::kit::marks::hue_ink;
 use crate::ui::term::{self, cells};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::console::{self, BIG};
 use super::panel_summary::summary;
-use super::session::{self, Rows, Termbar};
-use super::{reply, run_roster, segs};
+use super::session;
+use super::surface;
+use super::{controls, reply, run_roster, segs};
 
 /// The panel's width beside the roster (desktop points; the mock's 448 less its rule and
 /// paddings' rounding) and over it (`min(460px, 100%)`).
@@ -46,6 +49,10 @@ pub(super) enum Place {
     Over,
     Full,
 }
+
+/// The panel's Open session (its test id), which takes the keyboard focus when a pressed
+/// roster row goes out of sight under the panel it opened.
+pub(super) const OPEN_SESSION: &str = "btn-open-session";
 
 /// The panel of the selected session in its place, or nothing while none is selected. It is
 /// built anew for each session, so a draft, an open tool line or a stream belongs to one.
@@ -91,6 +98,7 @@ fn body(app: AppState, panel: Memo<Option<RosterPanel>>, place: Memo<Place>) -> 
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(head(app, current, place))
+        .child(pane_outcome(app, current))
         .child(content)
         .child(words);
     let at = move |wanted: Place| move || place.get() == wanted;
@@ -176,26 +184,26 @@ fn keep_loaded(app: AppState, current: Memo<RosterPanel>) {
             }
         });
     });
-    let rev = computed({
+    let row = computed({
         let id = id.clone();
-        move || {
-            app.feed
-                .with(|feed| feed.agents.get(id.as_str()).map(|row| row.rev))
-        }
+        move || app.feed.with(|feed| feed.agents.get(id.as_str()).cloned())
     });
-    let seen = stored(None::<Option<u64>>);
+    let seen = stored(None::<Option<corral_protocol::rows::AgentRow>>);
     {
         let id = id.clone();
         effect(move || {
-            let now = rev.get();
+            let now = row.get();
             let earlier = app
                 .agents
                 .with_untracked(|state| state.earlier.contains(id.as_str()));
-            if let Some(before) = seen.replace(Some(now))
+            let target = DetailRef::Session { id: id.to_string() };
+            // Only what the panel wants: a run's transcript only from a corrald serving them.
+            let wanted = current.with_untracked(|p| p.wants.contains(&target));
+            if let Some(before) = seen.replace(Some(now.clone()))
                 && before != now
                 && !earlier
+                && wanted
             {
-                let target = DetailRef::Session { id: id.to_string() };
                 untracked(|| scoped.refresh(target));
             }
         });
@@ -236,7 +244,7 @@ fn keep_loaded(app: AppState, current: Memo<RosterPanel>) {
         app.feed
             .with(|feed| (feed.link == Link::Up).then_some(feed.now))
     });
-    let tried = stored(None::<Option<u64>>);
+    let tried = stored(None::<Option<corral_protocol::rows::AgentRow>>);
     effect(move || {
         let Some(pane) = pane.get().filter(|_| !streamed.get()) else {
             tried.replace(None);
@@ -247,8 +255,8 @@ fn keep_loaded(app: AppState, current: Memo<RosterPanel>) {
             return;
         }
         untracked(|| {
-            let row = rev.get();
-            let changed = tried.replace(Some(row)) != Some(row);
+            let now = row.get();
+            let changed = tried.replace(Some(now.clone())) != Some(now);
             let target = DetailRef::Terminal { id: pane };
             let failed = app.feed.with(|feed| {
                 feed.detail(&target)
@@ -261,7 +269,7 @@ fn keep_loaded(app: AppState, current: Memo<RosterPanel>) {
     });
 }
 
-/// The head's facts, apart from which tab is chosen: the head is redrawn when these change.
+/// The head's facts, redrawn when they change.
 #[derive(Clone, PartialEq)]
 struct Head {
     chip: String,
@@ -272,16 +280,27 @@ struct Head {
     name: String,
     facts: String,
     close_label: String,
+    close_short: &'static str,
     close: Action,
+}
+
+/// The head's controls: the tabs, Open session and the Session menu. They are drawn apart from
+/// the facts, so a run's state changing under an open Session menu (Pause turns its chip to
+/// idle) leaves the menu and its trigger mounted, and the keyboard focus the closing menu puts
+/// back on the trigger lands on a live view.
+#[derive(Clone, PartialEq)]
+struct HeadControls {
     tabs: Vec<(&'static str, &'static str, Action)>,
     open_label: &'static str,
     open: Action,
+    menu: Option<Id>,
 }
 
 /// The head (`.phd`): the state chip, role, id and project with close at the trailing edge (a
 /// back arrow while the panel covers the whole roster); the name; the facts line in mono; the
 /// tabs and Open session. Desktop 14 18 12 under a rule; terminal Cells over a joined rule.
 fn head(app: AppState, current: Memo<RosterPanel>, place: Memo<Place>) -> AnyElement {
+    let terminal = app.form == Form::Terminal;
     let shown = computed(move || {
         current.with(|p| Head {
             chip: p.chip.clone(),
@@ -292,7 +311,12 @@ fn head(app: AppState, current: Memo<RosterPanel>, place: Memo<Place>) -> AnyEle
             name: p.name.clone(),
             facts: p.facts.clone(),
             close_label: p.close_label.clone(),
+            close_short: p.close_short,
             close: p.close.clone(),
+        })
+    });
+    let controls = computed(move || {
+        current.with(|p| HeadControls {
             tabs: p
                 .tabs
                 .iter()
@@ -300,22 +324,38 @@ fn head(app: AppState, current: Memo<RosterPanel>, place: Memo<Place>) -> AnyEle
                 .collect(),
             open_label: p.open_label,
             open: p.open.clone(),
+            menu: p.menu.clone(),
         })
     });
     let chosen = computed(move || {
         current.with(|p| p.tabs.iter().find(|tab| tab.selected).map(|tab| tab.id))
     });
-    dynamic(move || shown.with(|head| untracked(|| head_view(app, head, chosen, place))))
+    let block = view()
+        .flex_none()
+        .child(dynamic(move || {
+            shown.with(|head| untracked(|| head_facts(app, head, place)))
+        }))
+        .child(dynamic(move || {
+            controls.with(|controls| untracked(|| head_controls(app, controls, chosen)))
+        }));
+    if terminal {
+        return view()
+            .flex_none()
+            .child(block.px(cells(1.0)))
+            .child(term::hrule())
+            .into_element();
+    }
+    block
+        .px(px(SIDE))
+        .pt(px(14.0))
+        .pb(px(12.0))
+        .border_b_1()
+        .border_b_color(color(Token::Rule))
+        .into_element()
 }
 
-fn head_view(
-    app: AppState,
-    head: &Head,
-    chosen: Memo<Option<&'static str>>,
-    place: Memo<Place>,
-) -> AnyElement {
-    let form = app.form;
-    let terminal = form == Form::Terminal;
+fn head_facts(app: AppState, head: &Head, place: Memo<Place>) -> AnyElement {
+    let terminal = app.form == Form::Terminal;
     let meta = |words: String, mono: bool| {
         let t = text(words)
             .number_of_lines(1u32)
@@ -358,6 +398,19 @@ fn head_view(
             .line_height(px(21.0))
     };
     let facts = (!head.facts.is_empty()).then(|| meta(head.facts.clone(), true));
+    view()
+        .child(first)
+        .child(name)
+        .children(facts)
+        .into_element()
+}
+
+fn head_controls(
+    app: AppState,
+    head: &HeadControls,
+    chosen: Memo<Option<&'static str>>,
+) -> AnyElement {
+    let terminal = app.form == Form::Terminal;
     let options = head
         .tabs
         .iter()
@@ -371,45 +424,38 @@ fn head_view(
         })
         .collect();
     let open = head.open.clone();
-    let controls = view()
+    let open_handle = element_ref();
+    app.focus_when_asked(OPEN_SESSION, open_handle);
+    view()
         .flex_row()
         .flex_wrap()
         .items_center()
         .gap(px(8.0))
         .when(!terminal, |row| row.mt(px(10.0)))
         .child(segs::track(app, options))
-        .child(button(
+        .child(button_with(
             app,
             head.open_label,
             ButtonKind::Quiet,
-            "btn-open-session",
+            ButtonOptions {
+                focus: Some(open_handle),
+                ..ButtonOptions::default()
+            },
+            OPEN_SESSION,
             move || run_roster(app, open.clone()),
-        ));
-    let block = view()
-        .flex_none()
-        .child(first)
-        .child(name)
-        .children(facts)
-        .child(controls);
-    if terminal {
-        return view()
-            .flex_none()
-            .child(block.px(cells(1.0)))
-            .child(term::hrule())
-            .into_element();
-    }
-    block
-        .px(px(SIDE))
-        .pt(px(14.0))
-        .pb(px(12.0))
-        .border_b_1()
-        .border_b_color(color(Token::Rule))
+        ))
+        .children(head.menu.clone().map(|id| controls::session_menu(app, id)))
         .into_element()
 }
 
 /// Close, named for the session: a cross, or a back arrow while the panel covers the roster.
+/// The terminal draws no icons, so its Close is words, short ones: the row names the session.
 fn close(app: AppState, head: &Head, place: Memo<Place>) -> AnyElement {
-    let label = head.close_label.clone();
+    let label = if app.form == Form::Terminal {
+        head.close_short.to_owned()
+    } else {
+        head.close_label.clone()
+    };
     let action = head.close.clone();
     dynamic(move || {
         let glyph = if place.get() == Place::Full {
@@ -435,14 +481,42 @@ fn close(app: AppState, head: &Head, place: Memo<Place>) -> AnyElement {
     })
 }
 
+/// How the run's latest pane request (keys, Focus pane) ended, in its tone, under the head;
+/// nothing before the first (`pane-status`).
+fn pane_outcome(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
+    let status = computed(move || current.with(|p| p.pane.clone()));
+    dynamic(move || {
+        status.with(|status| {
+            status.as_ref().map(|(hue, words)| {
+                let ink = match hue {
+                    Hue::Neutral => color(Token::Ink3),
+                    hue => hue_ink(*hue),
+                };
+                let line = text(words.clone()).test_id("pane-status").text_color(ink);
+                if app.form == Form::Terminal {
+                    return view().flex_none().px(cells(1.0)).child(line).into_element();
+                }
+                view()
+                    .flex_none()
+                    .px(px(SIDE))
+                    .py(px(8.0))
+                    .border_b_1()
+                    .border_b_color(color(Token::Rule))
+                    .child(line.font_family(FONT_TEXT).text_size(px(12.0)))
+                    .into_element()
+            })
+        })
+    })
+}
+
 /// The Terminal tab: the pane's toolbar over its screen, as the session page draws them.
 fn terminal(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
-    let rows = computed(move || current.with(|p| p.terminal.as_ref().map(Rows::of)));
-    let bar = computed(move || current.with(|p| p.terminal.as_ref().map(Termbar::of)));
+    let rows = computed(move || current.with(|p| p.terminal.as_ref().map(surface::Rows::of)));
+    let bar = computed(move || current.with(|p| p.terminal.as_ref().map(surface::Termbar::of)));
     let top = dynamic(move || {
         bar.with(|bar| {
             bar.as_ref()
-                .map(|bar| untracked(|| session::toolbar(app, bar, run_roster)))
+                .map(|bar| untracked(|| surface::toolbar(app, bar, run_roster)))
         })
     });
     if app.form == Form::Terminal {
@@ -451,8 +525,8 @@ fn terminal(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
             .min_h(px(0.0))
             .child(top)
             .child(term::hrule())
-            .child(session::surface_scroll(rows).child(dynamic(move || {
-                rows.with(|rows| session::rows_view(app, rows.as_ref(), BIG, (0.0, 0.0)))
+            .child(surface::surface_scroll(rows).child(dynamic(move || {
+                rows.with(|rows| surface::rows_view(app, rows.as_ref(), BIG, (0.0, 0.0)))
             })))
             .into_element();
     }
@@ -462,10 +536,10 @@ fn terminal(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
         .flex_col()
         .child(top)
         .child(
-            session::surface_scroll(rows)
+            surface::surface_scroll(rows)
                 .bg(console::ground())
                 .child(dynamic(move || {
-                    rows.with(|rows| session::rows_view(app, rows.as_ref(), BIG, (14.0, 12.0)))
+                    rows.with(|rows| surface::rows_view(app, rows.as_ref(), BIG, (14.0, 12.0)))
                 })),
         )
         .into_element()

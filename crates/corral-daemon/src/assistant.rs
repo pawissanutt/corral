@@ -1,505 +1,698 @@
-//! Daemon-owned pane-less hosts. Input is persisted on a bounded worker queue; the
-//! independent supervisor pumps children even when no app is connected. Neither waits
-//! for model completion, and a delivered/uncertain turn is never automatically resent.
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard, mpsc};
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
-
-use anyhow::{Context, Result};
-use corral_core::Store;
-use corral_ops::{
-    Ctx,
-    agent::app_runtime::{self as runtime, AuthenticatedDevice, Runtime},
+//! The quick thread and named chats are Pi sessions, not a separate message store.
+use std::{
+    collections::BTreeMap,
+    fs::{self, DirBuilder},
+    io::{ErrorKind, Write},
+    os::unix::fs::DirBuilderExt,
+    path::PathBuf,
+    sync::Mutex,
+    time::Duration,
 };
-use corral_protocol::{assistant as wire, attachment, rpc::ErrorCode, subscription::LiveText};
-use serde_json::Value;
 
-use crate::state::Shared;
+use anyhow::{Context, Result, bail, ensure};
+use corral_engine::{
+    Config, Runner, refuse,
+    runner::pi::{self, ChatLaunch, Client, Disposition, PiRunner},
+};
+use corral_protocol::{
+    assistant::*,
+    rows::*,
+    session::{AssistantCancelRequest, SessionCancel, SessionCancelReply, SessionRelaunched},
+};
+use corral_types::{Origin, SessionRef};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 
-type Failure = (ErrorCode, String);
-const QUEUE: usize = 32;
-const HOSTS: usize = 8;
-const POLL: Duration = Duration::from_millis(100);
-const REQUEST_WAIT: Duration = Duration::from_secs(25);
+use crate::{sessions, state::Shared, views::NotFound};
 
+pub(crate) mod attachments;
+
+#[derive(Default)]
 pub(crate) struct Service {
-    jobs: mpsc::SyncSender<Job>,
-    live: Mutex<BTreeMap<String, Arc<LiveText>>>,
-    quick: Mutex<Option<String>>,
-    threads: Mutex<Vec<JoinHandle<()>>>,
+    // Serialize creation and mutations. Readers observe atomically replaced chat files.
+    inputs: Mutex<BTreeMap<u64, Input>>,
+    uploads: Mutex<()>,
 }
 
-struct Job {
-    device: String,
-    request: Request,
-    reply: mpsc::Sender<Result<Value, Failure>>,
+struct Input {
+    cmd_id: String,
+    entry: String,
+    turn: Option<u64>,
 }
 
-pub(crate) enum Request {
-    Send(wire::AssistantSend),
-    Cancel(wire::AssistantCancel),
-    AttachBegin(attachment::AttachmentBegin),
-    AttachPut(attachment::AttachmentPut),
-    AttachDiscard(attachment::AttachmentDiscard),
-    Warm(wire::AssistantWarm),
-    Stop(wire::AssistantStop),
-    Session(wire::AssistantSessionOp),
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Meta {
+    quick: bool,
+    profile: String,
+    task: Option<String>,
+    ended: bool,
 }
 
-fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
-    value.lock().unwrap_or_else(|problem| problem.into_inner())
+struct Chat {
+    number: u64,
+    dir: PathBuf,
+    meta: Meta,
 }
 
-fn context(ctx: &Ctx) -> Result<Ctx> {
-    Ok(Ctx {
-        store: Store::open_unobserved(ctx.store.root())?,
-        herdr: ctx.herdr.clone(),
-        resource_probe: Arc::clone(&ctx.resource_probe),
+#[derive(Deserialize)]
+struct HostState {
+    turn: Turn,
+    paused: bool,
+    #[serde(default)]
+    last_error: Option<String>,
+    #[serde(default)]
+    owner_questions: Vec<Question>,
+}
+
+#[derive(Deserialize)]
+struct Turn {
+    current: u64,
+    open: bool,
+}
+
+#[derive(Deserialize)]
+struct Question {
+    id: Option<String>,
+    question: String,
+}
+
+fn root(shared: &Shared) -> PathBuf {
+    shared.root().join(crate::STATE_DIR).join("chat")
+}
+
+fn socket_root(shared: &Shared) -> Option<PathBuf> {
+    // An injected runner uses the fixture workspace's private socket directory.
+    shared.private_chat_sockets()
+}
+
+fn number(id: &str) -> Option<u64> {
+    let s = id.strip_prefix("A-")?;
+    let number = s.parse().ok()?;
+    (number != 0 && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit())).then_some(number)
+}
+
+fn records(shared: &Shared) -> Result<Vec<Chat>> {
+    let path = root(shared);
+    let dir = match fs::read_dir(&path) {
+        Ok(dir) => dir,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let mut chats = Vec::new();
+    for file in dir {
+        let file = file.context("read chat directory entry")?;
+        let Some(n) = file.file_name().to_str().and_then(number) else {
+            continue;
+        };
+        let path = file.path();
+        if let Some(meta) = sessions::read_json(&path.join("chat.json"))? {
+            chats.push(Chat {
+                number: n,
+                dir: path,
+                meta,
+            });
+        }
+    }
+    chats.sort_unstable_by_key(|chat| chat.number);
+    Ok(chats)
+}
+
+fn lookup(shared: &Shared, scope: &str) -> Result<Option<Chat>> {
+    if scope == QUICK_THREAD {
+        return Ok(records(shared)?
+            .into_iter()
+            .rev()
+            .find(|chat| chat.meta.quick));
+    }
+    let n = number(scope).context("invalid: expected chat id A-<number> or quick")?;
+    let dir = root(shared).join(scope);
+    Ok(
+        sessions::read_json(&dir.join("chat.json"))?.map(|meta| Chat {
+            number: n,
+            dir,
+            meta,
+        }),
+    )
+}
+
+fn require(shared: &Shared, scope: &str) -> Result<Chat> {
+    lookup(shared, scope)?.context(NotFound("chat session not found"))
+}
+
+impl Chat {
+    fn id(&self) -> String {
+        format!("A-{}", self.number)
+    }
+
+    fn save(&self) -> Result<()> {
+        let mut file = tempfile::NamedTempFile::new_in(&self.dir).context("create chat record")?;
+        serde_json::to_writer(&mut file, &self.meta).context("write chat record")?;
+        file.flush().context("flush chat record")?;
+        file.persist(self.dir.join("chat.json"))
+            .context("replace chat record")?;
+        Ok(())
+    }
+
+    fn resolve(&self, shared: &Shared) -> Result<sessions::Session> {
+        let host = sessions::host_record(&self.dir)?;
+        let placement = host
+            .as_ref()
+            .filter(|_| !self.meta.ended)
+            .map(|host| pi::chat_session(&self.dir, host.pid, socket_root(shared).as_deref()))
+            .transpose()?;
+        Ok(sessions::Session {
+            id: self.id(),
+            role: "assistant",
+            task: self.meta.task.clone(),
+            run: None,
+            session: placement,
+            transcript: host.map(|host| host.session_file),
+            ended: self.meta.ended,
+        })
+    }
+
+    fn start(&self, shared: &Shared, config: &Config) -> Result<SessionRef> {
+        ensure!(!self.meta.ended, "chat has ended");
+        let (harness, profile) = profile(config, &self.meta.profile)?;
+        let project = self
+            .meta
+            .task
+            .as_deref()
+            .map(|task| -> Result<_> { Ok(shared.engine()?.store.require_task(task)?.project) })
+            .transpose()?
+            .flatten();
+        let (session, _) =
+            PiRunner::new(shared.chat_placement().as_ref()).start_chat(ChatLaunch {
+                workspace: shared.root(),
+                dir: &self.dir,
+                socket_root: socket_root(shared).as_deref(),
+                harness,
+                profile,
+                task: self.meta.task.as_deref(),
+                project: project.as_deref(),
+            })?;
+        shared.publish();
+        Ok(session)
+    }
+
+    fn stop(&self, shared: &Shared) -> Result<()> {
+        if let Some(session) = self.resolve(shared)?.session {
+            let client = Client::for_session(&session)?;
+            // No process action from a stale pid recorded by a host that has already exited.
+            if let Some(hello) = client.hello_if_available()? {
+                ensure!(
+                    hello.session_id == self.id(),
+                    "Pi socket answers for a different chat session"
+                );
+                let session =
+                    pi::chat_session(&self.dir, hello.pid, socket_root(shared).as_deref())?;
+                PiRunner::new(shared.chat_placement().as_ref()).stop(&session)?;
+            }
+        }
+        shared.publish();
+        Ok(())
+    }
+}
+
+pub(crate) fn resolve(shared: &Shared, scope: &str) -> Result<sessions::Session> {
+    require(shared, scope)?.resolve(shared)
+}
+
+/// Built-ins alone are not an opt-in. A Pi harness override or any named Pi
+/// profile in corral.toml enables owner chat, independent of automation.
+pub(crate) fn configured(shared: &Shared) -> Result<bool> {
+    let text = crate::config::get(shared)?.toml;
+    let doc: toml::Table = toml::from_str(&text).context("parse chat configuration")?;
+    Ok(doc
+        .get("harnesses")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|harnesses| harnesses.contains_key("pi"))
+        || doc
+            .get("profiles")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|profiles| {
+                profiles.values().any(|profile| {
+                    profile
+                        .as_table()
+                        .and_then(|profile| profile.get("harness"))
+                        .and_then(toml::Value::as_str)
+                        == Some("pi")
+                })
+            })
+        || doc
+            .get("defaults")
+            .and_then(toml::Value::as_table)
+            .and_then(|defaults| defaults.get("profile"))
+            .and_then(toml::Value::as_str)
+            == Some("pi"))
+}
+
+fn config(shared: &Shared) -> Result<Config> {
+    if !configured(shared)? {
+        return Err(refuse(
+            "chat requires a configured Pi harness or profile in corral.toml",
+            vec![],
+        ));
+    }
+    Config::load(&shared.root().join(crate::STATE_DIR).join("corral.toml"))
+}
+
+fn profile<'a>(
+    config: &'a Config,
+    name: &str,
+) -> Result<(
+    &'a corral_engine::config::Harness,
+    &'a corral_engine::config::Profile,
+)> {
+    let Some(profile) = config
+        .profiles
+        .get(name)
+        .filter(|profile| profile.harness == "pi")
+    else {
+        return Err(refuse(
+            format!("chat profile {name:?} must use the Pi harness"),
+            vec![],
+        ));
+    };
+    let harness = config
+        .harnesses
+        .get("pi")
+        .context("Pi harness is not configured")?;
+    Ok((harness, profile))
+}
+
+fn default_profile(config: &Config) -> &str {
+    let is_pi = |name: &str| config.profiles.get(name).is_some_and(|p| p.harness == "pi");
+    if let Some(name) = config
+        .defaults
+        .profile
+        .as_deref()
+        .filter(|name| is_pi(name))
+    {
+        name
+    } else {
+        config
+            .profiles
+            .iter()
+            .find(|(name, p)| {
+                p.harness == "pi"
+                    && (*name != "pi"
+                        || p.model.is_some()
+                        || p.effort.is_some()
+                        || !p.args.is_empty())
+            })
+            .map_or("pi", |(name, _)| name.as_str())
+    }
+}
+
+fn create(shared: &Shared, quick: bool, task: Option<String>, profile: String) -> Result<Chat> {
+    if let Some(task) = &task {
+        shared.engine()?.store.require_task(task)?;
+    }
+    let root = root(shared);
+    fs::create_dir_all(&root).context("create workspace chat directory")?;
+    let mut n = records(shared)?.last().map_or(0, |chat| chat.number);
+    loop {
+        n = n.checked_add(1).context("chat id space exhausted")?;
+        let dir = root.join(format!("A-{n}"));
+        match DirBuilder::new().mode(0o700).create(&dir) {
+            Ok(()) => {
+                let chat = Chat {
+                    number: n,
+                    dir,
+                    meta: Meta {
+                        quick,
+                        profile,
+                        task,
+                        ended: false,
+                    },
+                };
+                chat.save()?;
+                shared.publish();
+                return Ok(chat);
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error).with_context(|| format!("create {}", dir.display())),
+        }
+    }
+}
+
+fn current(shared: &Shared, config: &Config, scope: &str) -> Result<Chat> {
+    match lookup(shared, scope)? {
+        Some(chat) if !chat.meta.ended => Ok(chat),
+        Some(chat) => create(shared, chat.meta.quick, chat.meta.task, chat.meta.profile),
+        None if scope == QUICK_THREAD => create(shared, true, None, default_profile(config).into()),
+        None => Err(NotFound("chat session not found").into()),
+    }
+}
+
+impl Chat {
+    fn row(self, shared: &Shared) -> Result<AssistantRow> {
+        let chat = self;
+        let resolved = chat.resolve(shared)?;
+        let host = resolved.session.as_ref().and_then(|session| {
+            let client = Client::for_session(session).ok()?;
+            client
+                .request_with_timeout::<_, HostState>(
+                    "get_state",
+                    json!({}),
+                    Duration::from_millis(250),
+                )
+                .ok()
+        });
+        let state = if chat.meta.ended {
+            AssistantState::Ended
+        } else if let Some(host) = &host {
+            if host.paused {
+                AssistantState::Paused
+            } else if !host.owner_questions.is_empty() {
+                AssistantState::Waiting
+            } else if host.turn.open {
+                AssistantState::Working
+            } else if host.last_error.is_some() {
+                AssistantState::Failed
+            } else {
+                AssistantState::Ready
+            }
+        } else {
+            AssistantState::Cold
+        };
+        let live_in = if host.is_some() {
+            AssistantLocation::Daemon
+        } else {
+            AssistantLocation::None
+        };
+        let turn = host
+            .as_ref()
+            .map(|host| host.turn.current)
+            .filter(|turn| *turn > 0);
+        let (wait, question_id) = host.map_or((None, None), |host| {
+            if let Some(q) = host.owner_questions.into_iter().next() {
+                let wait = WaitReason {
+                    code: "owner_question".into(),
+                    text: q.question,
+                    retry_at: None,
+                };
+                (
+                    Some(wait),
+                    q.id.filter(|_| state == AssistantState::Waiting),
+                )
+            } else {
+                let wait = host.last_error.map(|text| WaitReason {
+                    code: "host_error".into(),
+                    text,
+                    retry_at: None,
+                });
+                (wait, None)
+            }
+        });
+        Ok(AssistantRow {
+            id: chat.id(),
+            kind: if chat.meta.quick {
+                AssistantKind::Quick
+            } else {
+                AssistantKind::Session
+            },
+            title: if chat.meta.quick {
+                "Quick thread".into()
+            } else {
+                format!("Chat {}", chat.number)
+            },
+            state,
+            live_in,
+            profile: Some(chat.meta.profile),
+            connection: None,
+            focus: chat.meta.task,
+            pending: 0,
+            turn,
+            cost_usd: None,
+            cost_basis: None,
+            wait,
+            question_id,
+            rev: shared.revision(),
+        })
+    }
+}
+
+pub(crate) fn rows(shared: &Shared) -> Result<Vec<AssistantRow>> {
+    records(shared)?
+        .into_iter()
+        .map(|chat| chat.row(shared))
+        .collect()
+}
+
+pub(crate) fn send(shared: &Shared, device: &str, request: AssistantSend) -> Result<SendAck> {
+    ensure!(
+        !request.text.trim().is_empty() && request.text.len() <= MESSAGE_TEXT_MAX,
+        "invalid: chat message must be nonblank and within the message limit"
+    );
+    ensure!(
+        matches!(request.target, AskTarget::Assistant | AskTarget::Pm),
+        "invalid: unknown chat target"
+    );
+    let mut inputs = shared
+        .chat
+        .inputs
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let config = config(shared)?;
+    let chat = current(shared, &config, &request.thread)?;
+    let session = chat.start(shared, &config)?;
+    let client = Client::for_session(&session)?;
+    let files = attachments::prepare(shared, device, &chat.dir, &request.attachments)?;
+    let result: pi::SubmitReply = if files.is_empty() {
+        client.submit_input(&request.text, Origin::Owner)?
+    } else {
+        client.request(
+            "submit_input",
+            json!({"text": request.text, "origin": "owner", "attachments": files}),
+        )?
+    };
+    if result.disposition == Disposition::Rejected {
+        return Err(refuse(
+            result.reason.unwrap_or_else(|| "Pi rejected input".into()),
+            vec![],
+        ));
+    }
+    let entry = format!("{}/input/{}", chat.id(), result.request_id);
+    // Only an active turn's transient handle; never an idempotency/replay journal.
+    if let Some(turn) = result.turn {
+        inputs.insert(
+            chat.number,
+            Input {
+                cmd_id: request.cmd_id,
+                entry: entry.clone(),
+                turn: Some(turn),
+            },
+        );
+    }
+    shared.publish();
+    Ok(SendAck {
+        entry,
+        state: if result.disposition == Disposition::Handled {
+            MessageState::Delivered
+        } else {
+            MessageState::Sent
+        },
+        replayed: false,
     })
 }
 
-pub(crate) fn start(ctx: &Ctx, shared: &Arc<Shared>) -> Result<()> {
-    let (jobs, receiver) = mpsc::sync_channel(QUEUE);
-    let service = Arc::new(Service {
-        jobs,
-        live: Mutex::new(BTreeMap::new()),
-        quick: Mutex::new(None),
-        threads: Mutex::new(Vec::new()),
-    });
-    let mut input_ctx = context(ctx)?;
-    let input_shared = Arc::clone(shared);
-    let input = std::thread::Builder::new()
-        .name("corrald-app-input".into())
-        .spawn(move || {
-            while !input_shared.lock().closed {
-                let job: Job = match receiver.recv_timeout(POLL) {
-                    Ok(job) => job,
-                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                };
-                let result = input_ctx
-                    .reload_config()
-                    .map_err(failure)
-                    .and_then(|_| execute(&input_ctx, &input_shared, &job.device, job.request));
-                if result.is_ok() {
-                    input_shared.wake_projection();
-                }
-                let _ = job.reply.send(result);
-            }
-        })
-        .context("starting app input worker")?;
-    lock(&service.threads).push(input);
-    // Publish before spawning so a partial startup is still joined by Cleanup.
-    *lock(&shared.assistant) = Some(Arc::clone(&service));
-    let host_ctx = context(ctx)?;
-    let host_shared = Arc::clone(shared);
-    let hosts = std::thread::Builder::new()
-        .name("corrald-assistant-hosts".into())
-        .spawn(move || {
-            supervise(host_ctx, host_shared, service);
-        })
-        .context("starting pane-less assistant supervisor")?;
-    if let Some(service) = lock(&shared.assistant).as_ref() {
-        lock(&service.threads).push(hosts);
-    }
+pub(crate) fn cancel(shared: &Shared, request: AssistantCancelRequest) -> Result<CancelAck> {
+    let (control, entry) = match request {
+        AssistantCancelRequest::Session(control) => (control, None),
+        AssistantCancelRequest::Input(request) => {
+            let inputs = shared
+                .chat
+                .inputs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let Some((&number, input)) = inputs
+                .iter()
+                .find(|(_, input)| input.cmd_id == request.cmd_id)
+            else {
+                return Ok(CancelAck {
+                    cancelled: false,
+                    entry: None,
+                    state: None,
+                });
+            };
+            (
+                SessionCancel {
+                    id: format!("A-{number}"),
+                    turn: input.turn,
+                },
+                Some(input.entry.clone()),
+            )
+        }
+    };
+    let result: SessionCancelReply = sessions::cancel(shared, control)?;
+    Ok(CancelAck {
+        cancelled: result.cancelled,
+        entry,
+        state: None,
+    })
+}
+
+pub(crate) fn warm(shared: &Shared, request: AssistantWarm) -> Result<()> {
+    let _lock = shared
+        .chat
+        .inputs
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let config = config(shared)?;
+    let chat = current(shared, &config, &request.thread)?;
+    chat.start(shared, &config)?;
     Ok(())
 }
 
-pub(crate) fn available(shared: &Shared) -> bool {
-    lock(&shared.assistant).is_some()
-}
-
-pub(crate) fn request(shared: &Shared, device: &str, request: Request) -> Result<Value, Failure> {
-    let service = lock(&shared.assistant)
-        .clone()
-        .ok_or((ErrorCode::Unavailable, "assistant_unavailable".into()))?;
-    let (reply, receive) = mpsc::channel();
-    service
-        .jobs
-        .try_send(Job {
-            device: device.into(),
-            request,
-            reply,
-        })
-        .map_err(|problem| match problem {
-            mpsc::TrySendError::Full(_) => (ErrorCode::Busy, "assistant_queue_full".into()),
-            mpsc::TrySendError::Disconnected(_) => {
-                (ErrorCode::Unavailable, "assistant_unavailable".into())
-            }
-        })?;
-    receive.recv_timeout(REQUEST_WAIT).map_err(|_| {
-        (
-            ErrorCode::Unavailable,
-            "assistant_result_uncertain_recover_same_id".into(),
-        )
-    })?
-}
-
-fn authenticated(shared: &Shared, id: &str) -> Result<AuthenticatedDevice, Failure> {
-    let devices = shared
-        .devices()
-        .ok_or((ErrorCode::Unavailable, "devices_unavailable".into()))?;
-    let (info, authority) = devices
-        .authenticated(id)
-        .map_err(|problem| problem.wire())?;
-    Ok(AuthenticatedDevice {
-        id: info.id,
-        name: info.name,
-        reply: authority.reply,
-        act: authority.act,
-        assistant: authority.assistant,
-        assistant_act: authority.assistant_act,
+pub(crate) fn stop(shared: &Shared, request: AssistantStop) -> Result<StopAck> {
+    terminate(shared, &request.session)?;
+    Ok(StopAck {
+        session: request.session,
+        turn: request.turn,
+        outcome: StopOutcome::Accepted,
+        reason: None,
     })
 }
 
-fn execute(ctx: &Ctx, shared: &Shared, id: &str, request: Request) -> Result<Value, Failure> {
-    if !ctx.store.config.daemon.commands {
-        return Err((ErrorCode::Refused, "commands_disabled".into()));
-    }
-    // Do not trust a connection-time grant: queued input can outlive device revocation.
-    let device = authenticated(shared, id)?;
-    if !device.assistant {
-        return Err((ErrorCode::Refused, "authority_assistant".into()));
-    }
-    match request {
-        Request::Send(request) => {
-            // Accepted sends always replay before journal tombstones or capacity checks.
-            if ctx
-                .store
-                .app_send_entry(id, &request.cmd_id)
-                .map_err(failure)?
-                .is_none()
-            {
-                crate::commands::assistant::reserve_send(shared, id, &request)?;
-            }
-            runtime::send(ctx, &device, &request)
-                .and_then(value)
-                .map_err(failure)
-        }
-        Request::Cancel(request) => {
-            if let Some(ack) = runtime::cancel(ctx, &device, &request.cmd_id).map_err(failure)? {
-                return value(ack).map_err(failure);
-            }
-            crate::commands::assistant::cancel(shared, id, &request.cmd_id)?;
-            value(wire::CancelAck {
-                cancelled: true,
-                entry: None,
-                state: None,
-            })
-            .map_err(failure)
-        }
-        Request::AttachBegin(request) => runtime::attachments::begin(ctx, &device, &request)
-            .and_then(value)
-            .map_err(failure),
-        Request::AttachPut(request) => runtime::attachments::put(ctx, &device, &request)
-            .and_then(value)
-            .map_err(failure),
-        Request::AttachDiscard(request) => runtime::attachments::discard(ctx, &device, &request)
-            .and_then(|()| value(serde_json::json!({})))
-            .map_err(failure),
-        Request::Warm(request) => runtime::warm(ctx, &device, &request.thread)
-            .and_then(value)
-            .map_err(failure),
-        Request::Stop(request) => runtime::stop(ctx, &device, &request.session, request.turn)
-            .and_then(value)
-            .map_err(failure),
-        Request::Session(request) => runtime::session(ctx, &device, &request)
-            .and_then(value)
-            .map_err(failure),
-    }
+pub(crate) fn terminate(shared: &Shared, id: &str) -> Result<()> {
+    let mut inputs = shared
+        .chat
+        .inputs
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let chat = require(shared, id)?;
+    chat.stop(shared)?;
+    inputs.remove(&chat.number);
+    Ok(())
 }
 
-fn value(value: impl serde::Serialize) -> Result<Value> {
-    serde_json::to_value(value).context("encoding assistant result")
+pub(crate) fn relaunch(shared: &Shared, id: &str) -> Result<SessionRelaunched> {
+    let _lock = shared
+        .chat
+        .inputs
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let chat = require(shared, id)?;
+    if chat.meta.ended {
+        return Err(refuse(
+            "chat thread ended; send a message to start a new session",
+            vec![],
+        ));
+    }
+    chat.start(shared, &config(shared)?)?;
+    Ok(SessionRelaunched { id: chat.id() })
 }
 
-fn failure(problem: anyhow::Error) -> Failure {
-    let message = problem.to_string();
-    let code = message.split(':').next().unwrap_or("");
-    let kind = match code {
-        "conflict" | "stale_revision" | "payload_mismatch" | "digest_mismatch"
-        | "offset_mismatch" | "cmd_id_in_use" => ErrorCode::Conflict,
-        "not_found" => ErrorCode::NotFound,
-        "refused"
-        | "authority_assistant"
-        | "authority_reply"
-        | "authority_act"
-        | "not_app_safe"
-        | "attachment_type_unsupported"
-        | "attachment_too_large"
-        | "attachment_quota"
-        | "attachment_expired"
-        | "attachment_unknown"
-        | "attachments_unsupported_target"
-        | "assistant_ended"
-        | "assistant_failed"
-        | "already_paused"
-        | "not_paused"
-        | "not_daemon_hosted"
-        | "cancelled" => ErrorCode::Refused,
-        "confirm_required" => ErrorCode::ConfirmRequired,
-        "invalid_params" | "invalid_scope" => ErrorCode::InvalidParams,
-        "busy" => ErrorCode::Busy,
-        _ => ErrorCode::Unavailable,
-    };
-    (kind, bounded(&message, 512).to_owned())
-}
-
-fn supervise(mut ctx: Ctx, shared: Arc<Shared>, service: Arc<Service>) {
-    let mut hosts = BTreeMap::<String, Runtime>::new();
-    let mut next_scan = Instant::now();
-    let mut next_sweep = Instant::now();
-    while !shared.lock().closed {
-        if Instant::now() >= next_sweep {
-            if let Err(problem) = ctx
-                .store
-                .app_upload_sweep(|id| runtime::input::device_by_id(&ctx.store, id).is_ok())
-            {
-                eprintln!("corrald attachment cleanup: {problem:#}");
-            }
-            next_sweep = Instant::now() + Duration::from_secs(60);
+pub(crate) fn session(shared: &Shared, operation: AssistantSessionOp) -> Result<AssistantRow> {
+    match operation {
+        AssistantSessionOp::New {
+            task,
+            profile: choice,
+        } => {
+            let _lock = shared
+                .chat
+                .inputs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let config = config(shared)?;
+            let choice = choice.unwrap_or_else(|| default_profile(&config).into());
+            profile(&config, &choice)?;
+            let chat = create(shared, false, task, choice)?;
+            chat.start(shared, &config)?;
+            chat.row(shared)
         }
-        if Instant::now() >= next_scan {
-            // Configuration changes affect new provider sessions, without retargeting a live turn.
-            match ctx
-                .reload_config()
-                .and_then(|_| runtime::pending_scopes(&ctx))
-            {
-                Ok(scopes) => {
-                    for scope in scopes {
-                        if hosts.len() >= HOSTS {
-                            break;
+        AssistantSessionOp::End { session } => {
+            let mut inputs = shared
+                .chat
+                .inputs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let mut chat = require(shared, &session)?;
+            chat.stop(shared)?;
+            chat.meta.ended = true;
+            chat.save()?;
+            inputs.remove(&chat.number);
+            shared.publish();
+            chat.row(shared)
+        }
+        AssistantSessionOp::Pause { session } => {
+            sessions::pause(shared, &session)?;
+            require(shared, &session)?.row(shared)
+        }
+        AssistantSessionOp::Resume { session } => {
+            sessions::resume(shared, &session)?;
+            require(shared, &session)?.row(shared)
+        }
+        AssistantSessionOp::SetProfile {
+            thread,
+            profile: choice,
+        } => {
+            let _lock = shared
+                .chat
+                .inputs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let config = config(shared)?;
+            profile(&config, &choice)?;
+            let mut chat = current(shared, &config, &thread)?;
+            if chat.meta.profile != choice {
+                let active = chat.resolve(shared)?.session;
+                let mut restart = false;
+                if let Some(session) = &active {
+                    let client = Client::for_session(session)?;
+                    if client.hello_if_available()?.is_some() {
+                        let state: HostState = client.request("get_state", json!({}))?;
+                        if state.turn.open {
+                            return Err(refuse(
+                                "wait for the current turn or cancel it before changing profile",
+                                vec![],
+                            ));
                         }
-                        if hosts.contains_key(&scope) {
-                            continue;
-                        }
-                        match runtime::start(&ctx, &scope) {
-                            Ok(host) => {
-                                if let Ok(Some(live)) = runtime::live(&ctx, &scope) {
-                                    merge_live(&service, &scope, live);
-                                }
-                                hosts.insert(scope, host);
-                            }
-                            Err(problem) => eprintln!("corrald assistant start: {problem:#}"),
-                        }
+                        chat.stop(shared)?;
+                        restart = true;
                     }
                 }
-                Err(problem) => eprintln!("corrald assistant scheduling: {problem:#}"),
-            }
-            if let Ok(scope) = runtime::resolve_scope(&ctx, "quick") {
-                *lock(&service.quick) = scope;
-            }
-            next_scan = Instant::now() + Duration::from_secs(1);
-        }
-        let mut exited = Vec::new();
-        for (scope, host) in &mut hosts {
-            match runtime::pump(&ctx, host) {
-                Ok(update) => {
-                    for live in update.live {
-                        merge_live(&service, scope, live);
-                    }
-                    if update.changed {
-                        shared.wake_projection();
-                    }
-                    if update.exited {
-                        exited.push(scope.clone());
-                    }
+                chat.meta.profile = choice;
+                chat.save()?;
+                if restart {
+                    chat.start(shared, &config)?;
                 }
-                Err(problem) => {
-                    eprintln!("corrald assistant pump: {problem:#}");
-                    let _ = runtime::shutdown(&ctx, host);
-                    exited.push(scope.clone());
-                    shared.wake_projection();
-                }
+                shared.publish();
             }
+            chat.row(shared)
         }
-        for scope in exited {
-            hosts.remove(&scope);
-            if let Some(live) = lock(&service.live).get_mut(&scope) {
-                Arc::make_mut(live).done = true;
-            }
-        }
-        shared.wait(POLL, false);
-    }
-    for host in hosts.values_mut() {
-        if let Err(problem) = runtime::shutdown(&ctx, host) {
-            eprintln!("corrald assistant shutdown: {problem:#}");
+        AssistantSessionOp::TakeOver { .. } | AssistantSessionOp::Other => {
+            bail!("invalid: chat has no take-over operation; use the same session directly")
         }
     }
 }
 
-fn merge_live(service: &Service, scope: &str, incoming: LiveText) {
-    let mut streams = lock(&service.live);
-    if !streams.contains_key(scope) && streams.len() >= HOSTS * 4 {
-        // Only completed streams can be dropped; live hosts are capped separately.
-        if let Some(victim) = streams
-            .iter()
-            .find(|(_, live)| live.done)
-            .map(|(key, _)| key.clone())
-        {
-            streams.remove(&victim);
-        } else {
-            return;
-        }
-    }
-    let entry = streams.entry(scope.into()).or_insert_with(|| {
-        Arc::new(LiveText {
-            entry: incoming.entry.clone(),
-            turn: incoming.turn,
-            offset: 0,
-            text: String::new(),
-            done: false,
-        })
-    });
-    let entry = Arc::make_mut(entry);
-    if entry.entry != incoming.entry || entry.turn != incoming.turn {
-        *entry = LiveText {
-            entry: incoming.entry.clone(),
-            turn: incoming.turn,
-            offset: 0,
-            text: String::new(),
-            done: false,
-        };
-    }
-    // Ignore duplicated prefixes, never splice text across a missing streamed range.
-    let end = entry.text.len() as u64;
-    if incoming.offset > end {
-        return;
-    }
-    let overlap = (end - incoming.offset) as usize;
-    if overlap < incoming.text.len() && incoming.text.is_char_boundary(overlap) {
-        let remaining = corral_protocol::assistant::TURN_TEXT_MAX.saturating_sub(entry.text.len());
-        entry
-            .text
-            .push_str(bounded(&incoming.text[overlap..], remaining));
-    }
-    entry.done |= incoming.done;
+pub(crate) fn attach_begin(
+    shared: &Shared,
+    device: &str,
+    request: corral_protocol::attachment::AttachmentBegin,
+) -> Result<corral_protocol::attachment::UploadAck> {
+    attachments::begin(shared, device, request)
 }
 
-fn bounded(text: &str, max: usize) -> &str {
-    let mut end = text.len().min(max);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
+pub(crate) fn attach_put(
+    shared: &Shared,
+    device: &str,
+    request: corral_protocol::attachment::AttachmentPut,
+) -> Result<corral_protocol::attachment::UploadAck> {
+    attachments::put(shared, device, request)
 }
 
-/// Cumulative turn buffer. Topics transfer it from their acknowledged byte offset.
-pub(crate) fn live(shared: &Shared, scope: &str) -> Option<Arc<LiveText>> {
-    lock(&shared.assistant).as_ref().and_then(|service| {
-        let quick = lock(&service.quick);
-        let scope = if scope == "quick" {
-            quick.as_deref()?
-        } else {
-            scope
-        };
-        lock(&service.live).get(scope).cloned()
-    })
+pub(crate) fn attach_discard(
+    shared: &Shared,
+    device: &str,
+    request: corral_protocol::attachment::AttachmentDiscard,
+) -> Result<()> {
+    attachments::discard(shared, device, request)
 }
 
-pub(crate) fn join(shared: &Shared) {
-    let Some(service) = lock(&shared.assistant).clone() else {
-        return;
-    };
-    let threads = std::mem::take(&mut *lock(&service.threads));
-    for thread in threads {
-        if thread.join().is_err() {
-            eprintln!("corrald assistant worker failed");
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn live_replay_merges_only_contiguous_utf8_and_bounds_the_turn() {
-        let (jobs, _) = mpsc::sync_channel(1);
-        let service = Service {
-            jobs,
-            live: Mutex::default(),
-            quick: Mutex::default(),
-            threads: Mutex::default(),
-        };
-        let event = |offset, text: &str, done| LiveText {
-            entry: "entry-1".into(),
-            turn: 1,
-            offset,
-            text: text.into(),
-            done,
-        };
-        merge_live(&service, "A-1", event(0, "hé", false));
-        merge_live(&service, "A-1", event(0, "hé", false));
-        merge_live(&service, "A-1", event(9, "gap", true));
-        assert_eq!(lock(&service.live)["A-1"].text, "hé");
-        assert!(!lock(&service.live)["A-1"].done);
-        merge_live(&service, "A-1", event(3, "llo", true));
-        assert_eq!(lock(&service.live)["A-1"].text, "héllo");
-        assert!(lock(&service.live)["A-1"].done);
-        let oversized = "é".repeat(wire::TURN_TEXT_MAX);
-        merge_live(&service, "A-1", event(6, &oversized, true));
-        let streams = lock(&service.live);
-        assert!(streams["A-1"].text.len() <= wire::TURN_TEXT_MAX);
-        assert!(
-            streams["A-1"]
-                .text
-                .is_char_boundary(streams["A-1"].text.len())
-        );
-    }
-
-    #[test]
-    fn accepted_send_recovery_precedes_cancel_journal_admission() {
-        let mut fixture = crate::tests::Fixture::new();
-        fixture.ctx.store.config.daemon.commands = true;
-        let shared = Arc::new(Shared::new());
-        crate::devices::start(&fixture.ctx, &shared, None).unwrap();
-        let info = shared
-            .devices()
-            .unwrap()
-            .enrol_native("Owner", "test", "test")
-            .unwrap();
-        let device = authenticated(&shared, &info.id).unwrap();
-        let send = wire::AssistantSend {
-            cmd_id: "accepted".into(),
-            thread: "quick".into(),
-            target: wire::AskTarget::Assistant,
-            text: "typed".into(),
-            typed_at: corral_core::clock::now().to_string(),
-            context: Vec::new(),
-            attachments: Vec::new(),
-        };
-        let accepted = runtime::send(&fixture.ctx, &device, &send).unwrap();
-        fixture
-            .ctx
-            .store
-            .update_app_message(&accepted.entry, |message| {
-                message.state = "delivered".into();
-                Ok(())
-            })
-            .unwrap();
-        // No command service exists: any accidental fresh-id journal admission would fail.
-        let cancel: wire::CancelAck = serde_json::from_value(
-            execute(
-                &fixture.ctx,
-                &shared,
-                &info.id,
-                Request::Cancel(wire::AssistantCancel {
-                    cmd_id: send.cmd_id.clone(),
-                }),
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert!(!cancel.cancelled);
-        assert_eq!(cancel.entry.as_deref(), Some(accepted.entry.as_str()));
-        let replay: wire::SendAck = serde_json::from_value(
-            execute(&fixture.ctx, &shared, &info.id, Request::Send(send)).unwrap(),
-        )
-        .unwrap();
-        assert!(replay.replayed);
-        assert_eq!(replay.entry, accepted.entry);
-        shared.close();
-    }
+pub(crate) fn attachment_path(shared: &Shared, entry: &str, id: &str) -> Result<PathBuf> {
+    attachments::detail_path(shared, entry, id)
 }

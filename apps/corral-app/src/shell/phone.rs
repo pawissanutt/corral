@@ -19,17 +19,17 @@ use nsh_core::{
 };
 
 use self::nav::{Entry, Nav};
-use super::{confirmation, destinations, lock, stale, toast};
+use super::{confirmation, destinations, lock, refusal, stale, toast};
 use crate::{
     model::{
         Availability, DataState, Destination, Live, Overlay, PhoneTab, ProjectFilter, Route,
+        SettingsSection,
         nav::{ASK_BUTTON, ASK_BUTTON_LABEL, NavigationItem, NavigationTarget, phone_navigation},
         projects::{PROJECTS_HEADING, PROJECTS_MORE_SUBTITLE, Projects},
         work::{self, MoreRow},
     },
     screens::{
-        self, PhoneBar, PhonePage, agents, assistant, builds, inbox, now, plans, projects, review,
-        settings,
+        self, PhoneBar, PhonePage, agents, assistant, now, plans, projects, review, settings,
     },
     state::AppState,
     ui::{
@@ -102,7 +102,9 @@ pub fn shell(app: AppState) -> AnyElement {
         .child(composer::ask_surface(app))
         .child(ask::share(app))
         .child(palette::palette(app))
+        .child(crate::screens::agents::rewind_sheet(app))
         .child(confirmation(app))
+        .child(refusal(app))
         .child(crate::screens::now::verb_composer(app))
         .child(when(
             move || app.lock.get(),
@@ -218,13 +220,11 @@ fn page_of(app: AppState, entry: Entry) -> (PhonePage, bool) {
 /// A live record's pushed page, from its domain.
 fn live_page(app: AppState, live: Live) -> PhonePage {
     match live {
-        Live::Question(key) => inbox::live_question_phone(app, key),
         Live::Task(id) => now::live_task_phone(app, id),
         Live::Plan(id) => plans::live_plan_phone(app, id),
         Live::Session(id) => agents::live_session_phone(app, id),
         Live::Thread(id) => assistant::live_thread_phone(app, id),
         Live::Review(task) => review::live_review_phone(app, task),
-        Live::Build(id) => builds::live_build_phone(app, id),
     }
 }
 
@@ -270,6 +270,10 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
         }
         _ => SharedString::from(title).into_reactive(),
     };
+    // Configuration with unsaved edits stays on a back press or swipe until the confirm sheet
+    // has asked; every other page pops at once.
+    let config = matches!(entry, Entry::Section(SettingsSection::Config));
+    let holds = computed(move || config && app.settings.with(|state| state.config.dirty()));
     let page = nav_page()
         .title(title.clone())
         .header_style_with(|s| {
@@ -277,9 +281,16 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
                 .text_color(color(Token::Ink))
                 .tint_color(color(Token::Ink2))
         })
+        .pop_on_back(move || !holds.get())
         // The browser's back and Escape slide this page out before it is dismissed: the page
         // under it shows again first.
-        .on_back_press(move || nav.uncover(depth))
+        .on_back_press(move || {
+            if holds.get_untracked() {
+                app.asks_before_leaving_config();
+            } else {
+                nav.uncover(depth);
+            }
+        })
         .on_dismiss(move || nav.back_to(depth));
     let page = if matches!(os(), Os::Ios | Os::Android) {
         match trailing {
@@ -633,13 +644,13 @@ fn system_tabs(nav: Nav) -> AnyElement {
 /// The SF Symbol of a tab on iOS.
 fn symbol(target: &NavigationTarget) -> &'static str {
     match target {
-        NavigationTarget::Tab(PhoneTab::Inbox) => "tray",
         NavigationTarget::Tab(PhoneTab::Now) => "bolt",
         NavigationTarget::Tab(PhoneTab::Agents)
         | NavigationTarget::Destination(Destination::Agents) => "terminal",
         NavigationTarget::Tab(PhoneTab::Plans) => "list.bullet.rectangle",
         NavigationTarget::Tab(PhoneTab::More) => "ellipsis",
         NavigationTarget::Destination(Destination::Usage) => "chart.bar",
+        NavigationTarget::Destination(Destination::Artifacts) => "doc.text.magnifyingglass",
         NavigationTarget::Destination(Destination::Settings) => "gearshape",
         NavigationTarget::Destination(_) => "circle",
         NavigationTarget::Ask => "bubble.left",
@@ -686,12 +697,12 @@ fn app_tab(nav: Nav, item: NavigationItem) -> AnyElement {
         }
     };
     let glyph = tab_icon(&target);
-    let inbox = target == NavigationTarget::Tab(PhoneTab::Inbox);
+    let now_tab = target == NavigationTarget::Tab(PhoneTab::Now);
     let glyph = view()
         .relative()
         .size(px(TAB_ICON))
         .child(dynamic(move || icon(glyph, TAB_ICON, ink())))
-        .when(inbox, |v| v.child(inbox_badge(app)));
+        .when(now_tab, |v| v.child(needs_badge(app)));
     // The test id sits on the icon and label; a press there reaches the tab.
     let face = view()
         .test_id(&id)
@@ -705,11 +716,11 @@ fn app_tab(nav: Nav, item: NavigationItem) -> AnyElement {
                 .style_when(selected, |s| s.font_weight(FontWeight::BOLD))
                 .text_color(ink),
         );
-    // The tab's own name, so it is announced even while a page's bar hides the face; Inbox
+    // The tab's own name, so it is announced even while a page's bar hides the face; Now
     // carries its needs-you count, which the badge otherwise announces alone.
     let name = move || {
         Some(SharedString::from(
-            match (inbox, app.snapshot().count_words(Destination::Inbox)) {
+            match (now_tab, app.snapshot().count_words(Destination::Now)) {
                 (true, Some(words)) => format!("{label}, {words}"),
                 _ => label.to_owned(),
             },
@@ -729,12 +740,12 @@ fn app_tab(nav: Nav, item: NavigationItem) -> AnyElement {
         .into_element()
 }
 
-/// The Inbox count as a badge at the icon's top trailing corner (`.ptab .badge`).
-fn inbox_badge(app: AppState) -> AnyElement {
+/// Now's needs-you count as a badge at the icon's top trailing corner (`.ptab .badge`).
+fn needs_badge(app: AppState) -> AnyElement {
     view()
         .absolute()
         .top(px(-2.0))
         .left(px(TAB_ICON / 2.0 + 6.0))
-        .child(atoms::count(app, Destination::Inbox))
+        .child(atoms::count(app, Destination::Now))
         .into_element()
 }

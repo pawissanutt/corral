@@ -396,7 +396,6 @@ mod tests {
             app_version: "1.0".into(),
             enrolled_at: "2026-01-01T00:00:00Z".into(),
             revoked_at: None,
-            authority: None,
             last_seen: None,
             reach: None,
         }

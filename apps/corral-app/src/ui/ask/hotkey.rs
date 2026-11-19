@@ -56,6 +56,7 @@ pub(super) fn hotkey(app: AppState) -> AnyElement {
                 title: TITLE.into(),
                 sub: Some(LIFETIME.into()),
                 body: content(app),
+                foot: None,
                 done: Some(HIDE.into()),
                 confirm: None,
             },

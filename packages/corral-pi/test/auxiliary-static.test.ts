@@ -18,20 +18,19 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
   const originalFetch = globalThis.fetch;
   try {
     for (const tree of ["src/roles", "assets"]) cpSync(join(PACKAGE_ROOT, tree), join(assets.dir, tree), { recursive: true });
-    for (const role of ["worker", "reviewer", "pm", "planner", "plan_reviewer"] as Role[]) {
+    for (const role of ["worker", "reviewer", "assistant", "build"] satisfies Role[]) {
       const modules = await loadModules(assets.dir, role);
       const transport = modules.auth.transport?.(authContext());
       if (!transport) throw new Error("fixture transport missing");
       const network = guardedFetch(transport);
       globalThis.fetch = network.fetch;
-      const identity = { store: "st-demo", project: "demo", role, generation: 1, task: "T-571", run: "R1" };
+      const identity = { store: "st-demo", project: "demo", role, task: "T-571", run: "R1" };
       async function profile(enabled: string[], expertSettings = true) {
         const host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", modules,
-          network, events: new EventLog(1), capabilities: { catalog: 6, digest: "a".repeat(64), preset: "full", enabled },
+          network, events: new EventLog(), capabilities: { catalog: 6, digest: "a".repeat(64), preset: "full", enabled },
           guidance: { projectText: false, settings: { subagents: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 120 }, oracle: { model: null, timeout_secs: 120 },
-            shadow: { model: "gpt-6-luna", timeout_secs: 60, max_per_hour: 30 },
             ...(expertSettings ? { expert: { model: "gpt-6.1-sol", max_turns: 24, timeout_secs: 600, max_parallel: 1 } } : {}) } },
-          client: new CorralClient({ corral: "/unused", root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => "" }),
+          client: new CorralClient({ corral: "/unused", root: cwd, cwd, identity }),
           sessionManager: sdk.SessionManager.inMemory(cwd),
         });
         try {
@@ -50,21 +49,18 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
       const schema = JSON.stringify(task!.parameters);
       expect(schema).toContain('"explore"');
       expect(schema.includes('"slice"')).toBe(role === "worker");
-      expect(schema.includes('"review"')).toBe(role === "worker");
+      expect(schema.includes('"review"')).toBe(role === "worker" || role === "assistant");
       expect(fleet.tools.filter(tool => ["agent_wait", "agent_cancel"].includes(tool.name))).toHaveLength(2);
-      if (role === "pm") {
+      if (role === "assistant") {
         const beforeExpert = await profile([], false);
         expect(base).toEqual(beforeExpert);
         expect(base.tools.some(tool => tool.name === "corral_expert")).toBe(false);
         const expert = await profile(["expert"]);
         expect(expert.tools.filter(tool => tool.name === "corral_expert")).toHaveLength(1);
         expect(expert.tools.filter(tool => tool.name !== "corral_expert")).toEqual(base.tools);
-        const shadow = await profile(["shadow"]);
-        expect(shadow.prompt).toBe(base.prompt);
-        expect(shadow.tools).toEqual(base.tools);
       }
       for (const preset of ["strict", "standard", "full"]) {
-        const explore = role !== "pm" && (preset === "full" || (preset === "standard" && role !== "reviewer"));
+        const explore = preset === "full" || (preset === "standard" && role !== "reviewer");
         const enabled = [...(explore ? ["subagents"] : []), ...(preset === "full" ? ["oracle"] : [])];
         const candidate = enabled.length ? await profile(enabled) : base;
         const promptDelta = candidate.promptBytes - base.promptBytes;

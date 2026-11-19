@@ -27,7 +27,7 @@ pub fn page(app: AppState) -> AnyElement {
         untracked(move || {
             qtable(
                 app,
-                &[Width::Fixed(120.0), Width::Fill],
+                &[Width::Fixed(144.0), Width::Fill],
                 rows.into_iter()
                     .map(|(key, value)| {
                         vec![

@@ -1,33 +1,43 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { TOML } from "bun";
+import { CONNECTIONS, isApiConnection, isConnectionId, resolveConnection } from "../auth/connections.ts";
 import { isProviderId } from "../auth/providers.ts";
-import { isApiConnection } from "../auth/connections.ts";
-import { parseBinding } from "../host/connections.ts";
-import type { BuildContext, BuildProfileRoute } from "./types.ts";
+import type { BuildProfile } from "./types.ts";
 
-/** Used for inherited launch messages and saved route snapshots, never as financial admission. */
-export function parseBuildProfileRoute(value: unknown): BuildProfileRoute {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("build_profile_invalid: route must be an object");
-  const route = value as BuildProfileRoute;
-  if (typeof route.name !== "string" || !route.name.trim() || route.name.length > 128 || typeof route.label !== "string"
-      || !isProviderId(route.provider) || typeof route.model !== "string" || !route.model.trim() || /\s/.test(route.model)
-      || (route.effort !== undefined && typeof route.effort !== "string")) throw new Error("build_profile_invalid: malformed route");
-  const binding = parseBinding(route.binding, route.provider, route.model, route.effort);
-  const paid = Boolean(binding && isApiConnection(binding.connection));
-  if (paid !== Boolean(route.paid)) throw new Error("build_profile_invalid: API route lacks approved provenance");
-  if (route.paid && (!/^[a-f0-9]{64}$/i.test(route.paid.policy_digest) || typeof route.paid.approval !== "string" || !route.paid.approval.trim()
-      || !Number.isSafeInteger(route.paid.allowance_nanos) || route.paid.allowance_nanos <= 0 || !Array.isArray(route.paid.candidates)
-      || route.paid.candidates.length !== 1 || route.paid.candidates[0]?.digest !== binding?.digest)) throw new Error("build_profile_invalid: malformed approved provenance");
-  return { ...route, ...(binding ? { binding } : {}) };
+export function readWorkspaceToml(root: string, file: "pi.toml" | "corral.toml"): Record<string, unknown> {
+  try { return TOML.parse(readFileSync(join(root, ".corral-next", file), "utf8")) as Record<string, unknown>; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
 }
 
-/** Preview only. Runtime/auth/model preflight and a supervised restart precede persistence. */
-export async function selectBuildProfile(build: BuildContext, name: string): Promise<BuildProfileRoute> {
-  const selected = build.profileCatalog?.find(route => route.name === name);
-  if (!selected || selected.available === false) throw new Error(selected?.reason ?? `profile_unavailable: ${name}`);
-  const route = parseBuildProfileRoute(selected);
-  const current = build.session.route;
-  // Spending caps are disabled: a paid route is sticky by profile and exact route only.
-  if ((current?.paid || build.session.mixedPaid) && (route.name !== current?.name || route.binding?.digest !== current?.binding?.digest)) {
-    throw new Error("paid_admission_required: paid Build route is sticky; resume it with its original profile");
-  }
-  return route;
+export function readBuildProfiles(root: string): BuildProfile[] {
+  const { build } = readWorkspaceToml(root, "pi.toml") as { build?: { profiles?: Record<string, unknown> } };
+  return Object.entries(build?.profiles ?? {}).map(([name, value]) => {
+    const profile = value as Partial<BuildProfile> | undefined;
+    const model = typeof profile?.model === "string" && /^([^/]+)\/([^\s\0]+)$/.exec(profile.model);
+    const provider = model && model[1];
+    if (!model || !isProviderId(provider) || (profile?.effort !== undefined && typeof profile.effort !== "string")
+      || (profile?.description !== undefined && typeof profile.description !== "string")) {
+      throw new Error(`Invalid Build child profile ${name}: expected a provider/model and optional effort, description and API connection`);
+    }
+    const selected = profile?.connection;
+    if (selected !== undefined && (!isConnectionId(selected) || !isApiConnection(selected) || CONNECTIONS[selected].provider !== provider)) {
+      throw new Error(`Invalid API connection for Build child profile ${name}`);
+    }
+    const connection = resolveConnection(provider, selected);
+    return { name, model: profile!.model!, effort: profile!.effort, description: profile!.description,
+      ...(isApiConnection(connection) ? { connection } : {}) };
+  });
+}
+
+export function buildProfileArgs(root: string, name: string): string[] {
+  const { profiles } = readWorkspaceToml(root, "corral.toml") as {
+    profiles?: Record<string, { harness?: string; model?: string; effort?: string; args?: string[] }>;
+  };
+  const profile = profiles?.[name];
+  if (profile?.harness !== "pi") throw new Error(`Build profile ${name} must name a [profiles.${name}] entry with harness = "pi"`);
+  return [...(profile.model ? ["--model", profile.model] : []), ...(profile.effort ? ["--effort", profile.effort] : []), ...profile.args ?? []];
 }

@@ -1,22 +1,21 @@
 //! Local project pages reuse served summaries; opening one requires no new daemon RPC. The page
 //! is Now scoped to one project ([`project_now`]) beside the project's own facts, with its
-//! plans, its sessions, its builds and its burn-up.
+//! plans, its sessions and its burn-up.
 use std::borrow::Cow;
 
-use super::{NowGroup, ProjectFilter, contains_project, is_open};
-use crate::model::agents::{session_shown_id, session_status};
-use crate::model::work::{self, NowPage, NowRow, Press};
-use crate::model::{Form, Hue, Id, Live, Selection, daemon::Feed, timeline::BurnupScope};
 use corral_protocol::detail::DetailRef;
-use corral_protocol::rows::{AgentStatus, PlanState};
+use corral_protocol::rows::{AgentRow, PlanRow};
+use corral_types::{SessionStatus, Status};
+use serde_json::{Map, Value};
+
+use super::{NowGroup, ProjectFilter, contains_project, is_open};
+use crate::model::work::{self, NowPage, Press};
+use crate::model::{Form, Hue, Id, Live, Selection, daemon::Feed, timeline::BurnupScope};
 
 pub const PLANS_HEADING: &str = "Plans";
-pub const PLANS_HINT: &str = "Plans that name this project. A row opens the plan.";
+pub const PLANS_HINT: &str = "Plans (parent tasks) in this project. A row opens the plan.";
 pub const SESSIONS_HEADING: &str = "Sessions";
-pub const SESSIONS_HINT: &str =
-    "Agent sessions working on this project's tasks. A row opens the session.";
-pub const BUILDS_HEADING: &str = "Recent builds";
-pub const NO_BUILDS: &str = "No published builds for this project.";
+pub const SESSIONS_HINT: &str = "Live runs on this project's tasks. A row opens the session.";
 /// The side column's name for screen readers.
 pub const FACTS_LABEL: &str = "Project facts";
 /// What a count corrald does not report shows: unknown, never zero.
@@ -35,7 +34,7 @@ pub struct ProjectFact {
     /// `project-count-<slug>` on the counts.
     pub test_id: Option<String>,
 }
-/// A plan naming the project: its id, title and state chip; a press opens it.
+/// A plan in the project: its id, title and state chip; a press opens it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectPlan {
     pub id: Id,
@@ -44,12 +43,12 @@ pub struct ProjectPlan {
     pub hue: Hue,
     pub open: Press,
 }
-/// A session whose task belongs to the project: its id, name and state chip; what it is doing
+/// A live run on one of the project's tasks: its id, name and state chip; what it is doing
 /// in its hint; a press opens it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectSession {
     pub id: Id,
-    /// The id the row shows, as the Agents roster shows it: the session's task, else itself.
+    /// The id the row shows: the run's task.
     pub shown_id: String,
     pub name: String,
     pub state: &'static str,
@@ -57,13 +56,7 @@ pub struct ProjectSession {
     pub doing: String,
     pub open: Press,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectBuild {
-    pub id: Id,
-    pub title: String,
-    pub state: String,
-}
-/// Said in place of the owner moves and moving tasks while the project has no open work.
+/// Said in place of the moving tasks while the project has no open work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectEmpty {
     pub heading: &'static str,
@@ -77,7 +70,6 @@ pub struct ProjectPage {
     pub facts: Vec<ProjectFact>,
     pub plans: Vec<ProjectPlan>,
     pub sessions: Vec<ProjectSession>,
-    pub builds: Vec<ProjectBuild>,
     pub burnup_request: DetailRef,
     pub empty: Option<ProjectEmpty>,
     pub open_now_label: &'static str,
@@ -95,16 +87,15 @@ pub fn not_found(id: &Id) -> (&'static str, String) {
     )
 }
 
-/// Now's page in the project's scope, grouped by who acts next, with nothing selected: the
-/// page has no side panel of its own, so a row opens its record (a task on Now, a question,
-/// plan or review on its page) and the side column always holds the project's digest.
+/// Now's page in the project's scope, grouped by who moves next, with nothing selected: the
+/// page has no side panel of its own, so a row opens its task and the side column always holds
+/// the project's digest.
 pub fn project_now(state: &work::State, feed: &Feed, form: Form, project: &Id) -> NowPage {
     // A selection made on Now must not take this page's side column from the digest.
-    let state = if state.selected_ask.is_none() && state.digest_only {
+    let state = if state.digest_only {
         Cow::Borrowed(state)
     } else {
         Cow::Owned(work::State {
-            selected_ask: None,
             digest_only: true,
             ..state.clone()
         })
@@ -117,25 +108,16 @@ pub fn project_now(state: &work::State, feed: &Feed, form: Form, project: &Id) -
         &ProjectFilter::Project(project.clone()),
         NowGroup::State,
     );
-    for row in page
+    for task in page
         .sections
         .iter_mut()
         .flat_map(|section| section.rows.iter_mut())
-    {
-        match row {
-            NowRow::Ask(ask) => {
-                if let Some(open) = ask.button.action.clone() {
-                    ask.select = open;
-                }
-            }
-            NowRow::Task(task) => opens(&mut task.action),
-        }
-    }
-    for task in page
-        .waiting
-        .groups
-        .iter_mut()
-        .flat_map(|group| group.rows.iter_mut())
+        .chain(
+            page.waiting
+                .groups
+                .iter_mut()
+                .flat_map(|group| group.rows.iter_mut()),
+        )
     {
         opens(&mut task.action);
     }
@@ -149,73 +131,121 @@ fn opens(action: &mut Press) {
     }
 }
 
-/// The plan state's chip: its word and hue.
-fn plan_chip(state: PlanState) -> (&'static str, Hue) {
-    match state {
-        PlanState::Drafting => ("drafting", Hue::Neutral),
-        PlanState::Reviewing => ("in plan review", Hue::Corral),
-        PlanState::PlanFailed => ("plan failed", Hue::Fail),
-        PlanState::Awaiting => ("needs you", Hue::You),
-        PlanState::Executing => ("executing", Hue::Corral),
-        PlanState::Approved => ("approved", Hue::Ok),
-        PlanState::Complete => ("complete", Hue::Ok),
-        PlanState::Cancelled => ("cancelled", Hue::Neutral),
-        PlanState::Other => ("state unknown", Hue::Neutral),
+/// A plan's chip from its children: one blocked needs the owner; any running or in review is
+/// executing; all done is complete.
+fn plan_chip(plan: &PlanRow) -> (&'static str, Hue) {
+    let has = |statuses: &[Status]| {
+        plan.child_counts
+            .iter()
+            .any(|count| count.count > 0 && statuses.contains(&count.status))
+    };
+    if has(&[Status::Blocked]) {
+        ("needs you", Hue::You)
+    } else if has(&[Status::Running, Status::Review]) {
+        ("executing", Hue::Corral)
+    } else if !has(&[
+        Status::Idea,
+        Status::Backlog,
+        Status::Ready,
+        Status::Running,
+        Status::Blocked,
+        Status::Review,
+    ]) && has(&[Status::Done])
+    {
+        ("complete", Hue::Ok)
+    } else {
+        ("waiting", Hue::Neutral)
     }
 }
 
-/// The project's agent sessions: those whose task is on the board under this project, as the
-/// Agents roster joins them. Workspace sessions (the PM) serve every project and are not listed.
+/// A live run's state chip.
+fn session_chip(row: &AgentRow) -> (&'static str, Hue) {
+    match row.status {
+        SessionStatus::Working => ("working", Hue::Worker),
+        SessionStatus::Blocked { .. } => ("needs you", Hue::You),
+        SessionStatus::Idle => ("idle", Hue::Neutral),
+        SessionStatus::Gone => ("gone", Hue::Fail),
+    }
+}
+
+/// The project's live runs: those whose task is open under this project, blocked ones first.
 fn sessions(feed: &Feed, id: &Id) -> Vec<ProjectSession> {
     let mut rows: Vec<_> = feed
         .agents
-        .values()
-        .filter(|row| !row.role.eq_ignore_ascii_case("pm"))
-        .filter(|row| {
-            row.task
-                .as_deref()
-                .and_then(|task| feed.board.task(task))
-                .is_some_and(|task| task.project.as_deref() == Some(id.as_str()))
+        .iter()
+        .filter(|(_, row)| {
+            feed.board
+                .task(&row.run.task)
+                .is_some_and(|task| task.project() == Some(id.as_str()))
         })
         .collect();
-    rows.sort_by(|a, b| {
-        (a.status != AgentStatus::Asking, &a.id).cmp(&(b.status != AgentStatus::Asking, &b.id))
+    rows.sort_by_key(|(key, row)| {
+        (
+            !matches!(row.status, SessionStatus::Blocked { .. }),
+            (*key).clone(),
+        )
     });
     rows.into_iter()
-        .map(|row| {
-            let (state, hue) = session_status(row.status).chip();
-            let id = Id::from(row.id.as_str());
+        .map(|(key, row)| {
+            let (state, hue) = session_chip(row);
+            let run = &row.run;
             ProjectSession {
-                open: Press::Open(Live::Session(id.clone())),
-                id,
-                shown_id: session_shown_id(row),
-                name: row.title.clone(),
+                open: Press::Open(Live::Session(key.clone())),
+                id: key.clone(),
+                shown_id: run.task.clone(),
+                name: format!("{} · {} · {}", run.id, run.role.as_str(), run.profile),
                 state,
                 hue,
-                doing: if row.now.trim().is_empty() {
-                    "Doing now unknown".into()
-                } else {
-                    row.now.clone()
+                doing: match &row.status {
+                    SessionStatus::Blocked { excerpt } => excerpt.clone(),
+                    _ => run
+                        .summary
+                        .clone()
+                        .unwrap_or_else(|| "Doing now unknown".into()),
                 },
             }
         })
         .collect()
 }
 
-/// Path, PM scope, autopilot, open and running, each unknown while corrald does not report it.
+/// A project switch: the project's own setting, else the workspace default from Settings.
+fn switch(project: Option<&Map<String, Value>>, feed: &Feed, key: &str) -> Option<bool> {
+    project
+        .and_then(|config| config.get(key))
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            feed.settings
+                .as_ref()?
+                .config
+                .get("defaults")?
+                .get(key)?
+                .as_bool()
+        })
+}
+
+/// Path, the two automation switches, open and running, each unknown while corrald does not
+/// report it.
 fn facts(
     path: Option<&str>,
-    pm: Option<bool>,
-    autopilot: Option<bool>,
-    open: Option<u32>,
-    running: Option<u32>,
+    dispatch: Option<bool>,
+    land: Option<bool>,
+    open: Option<u64>,
+    running: Option<u64>,
 ) -> Vec<ProjectFact> {
-    let word = |known: Option<bool>, on: &str, off: &str| {
-        known
-            .map_or(UNKNOWN, |known| if known { on } else { off })
-            .to_owned()
+    let switch = |label, known: Option<bool>, on: &str, off: &str| ProjectFact {
+        label,
+        value: known
+            .map_or(UNKNOWN, |known| if known { "on" } else { "off" })
+            .to_owned(),
+        hint: match known {
+            Some(true) => on.to_owned(),
+            Some(false) => off.to_owned(),
+            None => NO_STATISTICS.to_owned(),
+        },
+        mono: false,
+        test_id: None,
     };
-    let count = |slug: &str, label: &'static str, value: Option<u32>, hint: &str| ProjectFact {
+    let count = |slug: &str, label: &'static str, value: Option<u64>, hint: &str| ProjectFact {
         label,
         value: value.map_or_else(|| UNKNOWN_COUNT.to_owned(), |n| n.to_string()),
         hint: if value.is_some() {
@@ -238,30 +268,18 @@ fn facts(
             mono: path.is_some(),
             test_id: None,
         },
-        ProjectFact {
-            label: "PM",
-            value: word(pm, "in scope", "outside scope"),
-            hint: match pm {
-                Some(true) => "The workspace PM's approved scope includes this project.",
-                Some(false) => "The workspace PM's approved scope does not include this project.",
-                None => NO_STATISTICS,
-            }
-            .into(),
-            mono: false,
-            test_id: None,
-        },
-        ProjectFact {
-            label: "Autopilot",
-            value: word(autopilot, "on", "off"),
-            hint: match autopilot {
-                Some(true) => "An active autopilot grant names this project.",
-                Some(false) => "No autopilot grant names this project.",
-                None => NO_STATISTICS,
-            }
-            .into(),
-            mono: false,
-            test_id: None,
-        },
+        switch(
+            "Auto dispatch",
+            dispatch,
+            "Ready tasks are dispatched automatically.",
+            "Ready tasks wait for a dispatch.",
+        ),
+        switch(
+            "Auto land",
+            land,
+            "Reviewed tasks land automatically.",
+            "Reviewed tasks wait for Approve and land.",
+        ),
         count(
             "open",
             "Open",
@@ -272,7 +290,7 @@ fn facts(
             "running",
             "Running",
             running,
-            "Open tasks with a live worker session",
+            "Open tasks with a running worker",
         ),
     ]
 }
@@ -285,65 +303,52 @@ pub fn page(feed: &Feed, id: &Id) -> Option<ProjectPage> {
         .projects
         .get(id)
         .filter(|_| feed.capable(corral_protocol::PROJECTS_V1));
+    let config = row.map(|row| &row.config);
     let plans = feed
         .plans
         .values()
-        .filter(|plan| plan.projects.iter().any(|name| name == id.as_str()))
+        .filter(|plan| plan.parent.project.as_deref() == Some(id.as_str()))
         .map(|plan| {
-            let (state, hue) = plan_chip(plan.state);
-            let plan_id = Id::from(&plan.id);
+            let (state, hue) = plan_chip(plan);
+            let plan_id = Id::new(&plan.parent.id);
             ProjectPlan {
                 open: Press::Open(Live::Plan(plan_id.clone())),
                 id: plan_id,
-                title: plan.title.clone(),
+                title: plan.parent.title.clone(),
                 state,
                 hue,
             }
         })
         .collect();
-    let mut builds = feed
-        .builds
-        .values()
-        .filter(|build| build.project.as_deref() == Some(id.as_str()))
-        .collect::<Vec<_>>();
-    builds.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| a.id.cmp(&b.id)));
-    let builds = builds
-        .into_iter()
-        .take(10)
-        .map(|build| ProjectBuild {
-            id: Id::from(&build.id),
-            title: build.title.clone(),
-            state: build.state.clone(),
-        })
-        .collect();
-    let idle = row.map_or_else(
-        || {
-            !feed
-                .board
-                .tasks()
-                .iter()
-                .any(|task| is_open(task) && task.project.as_deref() == Some(id.as_str()))
-        },
-        |row| row.open == 0,
-    );
+    let mine = || {
+        feed.board
+            .tasks()
+            .iter()
+            .filter(|task| is_open(task) && task.project() == Some(id.as_str()))
+    };
+    let idle = row.map_or_else(|| mine().next().is_none(), |row| row.open == 0);
+    let running = feed.board.complete.then(|| {
+        mine()
+            .filter(|task| task.status() == Status::Running)
+            .count() as u64
+    });
     let empty = idle.then_some(ProjectEmpty {
         heading: "Not managed yet",
-        body: "Ask to file work for it. Tasks, plans and builds filed for this project show here.",
+        body: "Ask to file work for it. Tasks and plans filed for this project show here.",
     });
     Some(ProjectPage {
         id: format!("project-{id}"),
         project: id.clone(),
         title: id.to_string(),
         facts: facts(
-            row.map(|row| row.path.as_str()),
-            row.map(|row| row.in_pm_scope),
-            row.map(|row| row.autopilot),
+            config.and_then(|config| config.get("path")?.as_str()),
+            switch(config, feed, "auto_dispatch"),
+            switch(config, feed, "auto_land"),
             row.map(|row| row.open),
-            row.map(|row| row.running),
+            running,
         ),
         plans,
         sessions: sessions(feed, id),
-        builds,
         burnup_request: DetailRef::Burnup {
             scope: BurnupScope::Project(id.to_string()).key(),
         },

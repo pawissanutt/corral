@@ -1,8 +1,8 @@
-//! Path to done (`.pathl`): what still stands between an executing plan and its completion, in
-//! order. Each step is its mark and title, the current one in its hue and ink; under a step its
-//! open members (mark, short text, an action where the owner can act) and its warning on the
-//! held ground with the action that resolves it. Every line's sentence is its hint; the phone,
-//! which has no hover, writes it under the line, and a terminal after it, dimmed.
+//! Path to done (`.pathl`): what still stands between a plan and its completion, in order. Each
+//! step is its mark and title, the current one in its hue and ink; under a step its open members
+//! (mark, short text, a Blocked member's served next step) and its warning on the held ground
+//! with the next step that resolves it, when one is served. Every line's sentence is its hint;
+//! the phone, which has no hover, writes it under the line, and a terminal after it, dimmed.
 
 use nsh_core::prelude::*;
 
@@ -127,7 +127,8 @@ fn line(app: AppState, words: Text, hint: &str, act: Option<AnyElement>) -> AnyE
 
 /// A step's action as the model's command, at `kind`, with its hint.
 fn action(app: AppState, brief: &BriefAction, kind: ButtonKind) -> AnyElement {
-    let mut drawn = Button::new(brief.label, brief.action.clone()).hinted(brief.hint.clone());
+    let mut drawn =
+        Button::new(brief.label.clone(), brief.action.clone()).hinted(brief.hint.clone());
     drawn.kind = kind;
     command(app, &drawn, false)
 }
@@ -259,7 +260,10 @@ fn warned(app: AppState, warning: &PathWarning) -> AnyElement {
         app,
         words(app, warning.text.clone(), size, color(Token::Ink)),
         &warning.hint,
-        Some(action(app, &warning.action, ButtonKind::Ghost)),
+        warning
+            .action
+            .as_ref()
+            .map(|brief| action(app, brief, ButtonKind::Ghost)),
     ));
     if form == Form::Terminal {
         return view()

@@ -1,29 +1,22 @@
 //! The Diff tab (`.diff`) and a Brief file's patch shown in place: each file's head, its hunks
 //! with their headers, unified or side-by-side rows with their add/del tints and the
-//! highlighted word, the discussions between the rows they follow, and collapsed, loading or
-//! unavailable files. The rows are built here rather than with `nsh_base`'s DiffView because
-//! the mockup sets a discussion card between two rows, which DiffView does not host. On a
-//! served candidate a code line is pressable: it opens a new comment on that line.
+//! highlighted word, and collapsed, loading or unavailable files.
 
 use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
 
 use crate::model::board::LineKind;
 use crate::model::review::{
-    Action, Button, CommentView, DiffContent, DiffView, FileBody, FileView, HunkView, LineAt,
-    NumberedLine, SplitRow, UnifiedRow,
+    Button, DiffContent, DiffView, FileBody, FileView, HunkView, NumberedLine, SplitRow, UnifiedRow,
 };
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::kit::chip::{chip, illus};
 use crate::ui::kit::marks::hue_ink;
-use crate::ui::kit::page::panel;
 use crate::ui::kit::text::dim;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
-use super::compose::{composer, status_line};
 use super::{Ctx, act, button_id, command, rich_at, ring};
 
 /// One code row: 11.5 pt at the mockup's line height of 1.6.
@@ -31,9 +24,6 @@ const LINE: f32 = 18.0;
 /// The old and new number columns (`38px 38px`) and the sign column (`14px`).
 const GUTTER: f32 = 38.0;
 const SIGN: f32 = 14.0;
-/// The comment card's indent past the gutters (`padding-left: 90px`) and its widest.
-const COMMENT_INDENT: f32 = 90.0;
-const COMMENT_MAX: f32 = 640.0;
 /// The highlighted word (`--add-word`, `--del-word`): the state colour over the line's tint.
 const WORD_ALPHA: f32 = 0.3;
 /// The least touch target on a phone.
@@ -66,50 +56,30 @@ fn file_block(cx: &Ctx, file: &FileView) -> AnyElement {
     view()
         .when(!terminal, |block| block.mb(px(14.0)))
         .child(file_head(cx, file))
-        .children(loose(cx, file))
         .child(file_patch(cx, file))
         .when(terminal, |block| block.child(term::blank()))
         .into_element()
 }
 
 /// An expanded file's patch in place under its Brief row, which carries its name, counts and
-/// collapse: the illustrative tag and Ask at the trailing edge, the discussions shown away from
-/// their lines, then the hunks.
+/// collapse: Ask at the trailing edge, then the hunks.
 pub(super) fn file_body(cx: &Ctx, file: &FileView) -> AnyElement {
-    let app = cx.app;
-    let terminal = app.form == Form::Terminal;
-    let tools: Vec<AnyElement> = file
-        .illustrative
-        .map(|tag| illus(app, tag))
-        .into_iter()
-        .chain(file.ask.iter().map(|ask| command(cx, ask)))
-        .collect();
+    let terminal = cx.app.form == Form::Terminal;
     view()
         .when(!terminal, |block| {
             block.gap(px(8.0)).pt(px(8.0)).pb(px(4.0))
         })
-        .when(!tools.is_empty(), |block| {
-            block.child(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .justify_end()
-                    .gap(px(8.0))
-                    .children(tools),
-            )
-        })
-        .children(loose(cx, file))
+        .children(file.ask.as_ref().map(|ask| {
+            view()
+                .flex_row()
+                .items_center()
+                .justify_end()
+                .gap(px(8.0))
+                .child(command(cx, ask))
+                .into_element()
+        }))
         .child(file_patch(cx, file))
         .into_element()
-}
-
-/// The discussions whose line is not among the shown ones, above the hunks.
-fn loose(cx: &Ctx, file: &FileView) -> Vec<AnyElement> {
-    file.loose
-        .iter()
-        .filter_map(|&at| file.discussions.get(at))
-        .map(|talk| discussion(cx, talk, true))
-        .collect()
 }
 
 /// The file's patch: its hunks and notes, or the line that stands where they would be.
@@ -121,7 +91,7 @@ fn file_patch(cx: &Ctx, file: &FileView) -> AnyElement {
         FileBody::Unavailable(line) => quiet_box(cx, line.clone(), Hue::Fail),
         FileBody::Hunks { hunks, notes, tail } => view()
             .gap(px(if terminal { 0.0 } else { 8.0 }))
-            .children(hunks.iter().map(|part| hunk(cx, file, part)))
+            .children(hunks.iter().map(|part| hunk(cx, part)))
             .children(
                 notes
                     .iter()
@@ -133,8 +103,8 @@ fn file_patch(cx: &Ctx, file: &FileView) -> AnyElement {
 }
 
 /// `.ev-file`: the mono path with its counts, cut in the middle so its root and file name both
-/// stay, the illustrative tag, then Ask and Collapse at the trailing edge. A phone has no room
-/// for all of them on one line: the path takes the whole first line, the rest the second.
+/// stay, then Ask and Collapse at the trailing edge. A phone has no room for all of them on one
+/// line: the path takes the whole first line, the rest the second.
 fn file_head(cx: &Ctx, file: &FileView) -> AnyElement {
     let app = cx.app;
     let form = app.form;
@@ -142,13 +112,7 @@ fn file_head(cx: &Ctx, file: &FileView) -> AnyElement {
         .truncate()
         .text_overflow(EllipsizeMode::Middle)
         .into_element();
-    let mut parts = Vec::with_capacity(6);
-    if let Some(tag) = file.illustrative {
-        if form == Form::Terminal {
-            parts.push(term::space(1.0));
-        }
-        parts.push(illus(app, tag));
-    }
+    let mut parts = Vec::with_capacity(3);
     parts.push(view().flex_1().min_w(px(0.0)).into_element());
     parts.extend(file.ask.iter().map(|ask| command(cx, ask)));
     parts.extend(file.collapse.iter().map(|collapse| command(cx, collapse)));
@@ -195,11 +159,11 @@ fn quiet_box(cx: &Ctx, line: String, hue: Hue) -> AnyElement {
 
 /// The framed hunk: header on the sunk ground, then the rows. A terminal has no frame: the
 /// header quiet, the rows under it.
-fn hunk(cx: &Ctx, file: &FileView, part: &HunkView) -> AnyElement {
+fn hunk(cx: &Ctx, part: &HunkView) -> AnyElement {
     let app = cx.app;
     let rows = match &part.content {
-        DiffContent::Unified(rows) => unified_rows(cx, file, rows),
-        DiffContent::Split(rows) => split_rows(cx, file, rows),
+        DiffContent::Unified(rows) => unified_rows(app, rows),
+        DiffContent::Split(rows) => split_rows(app, rows),
     };
     if app.form == Form::Terminal {
         return view()
@@ -228,100 +192,45 @@ fn hunk(cx: &Ctx, file: &FileView, part: &HunkView) -> AnyElement {
         .into_element()
 }
 
-fn placed(cx: &Ctx, file: &FileView, at: &[usize], out: &mut Vec<AnyElement>) {
-    out.extend(
-        at.iter()
-            .filter_map(|&index| file.discussions.get(index))
-            .map(|talk| discussion(cx, talk, false)),
-    );
+fn unified_rows(app: AppState, rows: &[UnifiedRow]) -> Vec<AnyElement> {
+    rows.iter()
+        .map(|row| unified_line(app, &row.line))
+        .collect()
 }
 
-/// The line a press on `line` comments on: a deletion by its old number, else its new one.
-fn line_at(file: &FileView, line: &NumberedLine, old_side: bool) -> Option<LineAt> {
-    let old_side = old_side || line.kind == LineKind::Del;
-    let number = if old_side { line.old } else { line.new }?;
-    Some(LineAt {
-        path: file.path.clone(),
-        old_side,
-        line: number,
-    })
-}
-
-/// Makes a code row open a new comment on its line when the file allows it.
-fn pressable(cx: &Ctx, file: &FileView, line: &NumberedLine, old_side: bool, row: View) -> View {
-    let (Some(candidate), Some(at)) = (
-        file.candidate.clone(),
-        line_at(file, line, old_side).filter(|_| file.annotatable),
-    ) else {
-        return row;
-    };
-    let label = format!(
-        "Comment on {} {}",
-        if at.old_side { "old line" } else { "line" },
-        at.line
-    );
-    let action = Action::Annotate { candidate, at };
-    let test_id = button_id(&action);
-    let press = act(cx, action);
-    row.cursor_pointer()
-        .role(AccessibilityRole::Button)
-        .label(label)
-        .test_id(&test_id)
-        .hover(|s| s.bg(color(Token::Hover)))
-        .focus_visible(ring)
-        .on_press(move || press())
-}
-
-/// Unified rows, each discussion after the row the model attaches it to.
-fn unified_rows(cx: &Ctx, file: &FileView, rows: &[UnifiedRow]) -> Vec<AnyElement> {
-    let mut out = Vec::with_capacity(rows.len() + 1);
-    for row in rows {
-        out.push(unified_line(cx, file, &row.line));
-        placed(cx, file, &row.discussions, &mut out);
-    }
-    out
-}
-
-/// Side-by-side rows, each discussion after the row the model attaches it to.
-fn split_rows(cx: &Ctx, file: &FileView, rows: &[SplitRow]) -> Vec<AnyElement> {
-    let mut out = Vec::with_capacity(rows.len() + 1);
-    for row in rows {
-        out.push(
+fn split_rows(app: AppState, rows: &[SplitRow]) -> Vec<AnyElement> {
+    rows.iter()
+        .map(|row| {
             view()
                 .flex_row()
-                .child(half(cx, file, row.left.as_ref(), false))
-                .child(half(cx, file, row.right.as_ref(), true))
-                .into_element(),
-        );
-        placed(cx, file, &row.discussions, &mut out);
-    }
-    out
+                .child(half(app.form, row.left.as_ref(), false))
+                .child(half(app.form, row.right.as_ref(), true))
+                .into_element()
+        })
+        .collect()
 }
 
 /// A unified row: old and new numbers (the phone keeps only the new, as the mockup hides the
 /// first column), the sign and the code on the line's tint.
-fn unified_line(cx: &Ctx, file: &FileView, line: &NumberedLine) -> AnyElement {
-    let app = cx.app;
+fn unified_line(app: AppState, line: &NumberedLine) -> AnyElement {
     let form = app.form;
-    let row = if form == Form::Terminal {
-        view().child(terminal_line(line))
-    } else {
-        view()
-            .flex_row()
-            .bg(tint(line.kind))
-            .when(form == Form::Desktop, |row| {
-                row.child(gutter(app.form, line.old))
-            })
-            .child(gutter(app.form, line.new))
-            .child(sign(app.form, line))
-            .child(code_cell(app.form, line))
-    };
-    pressable(cx, file, line, false, row).into_element()
+    if form == Form::Terminal {
+        return view().child(terminal_line(line)).into_element();
+    }
+    view()
+        .flex_row()
+        .bg(tint(line.kind))
+        .when(form == Form::Desktop, |row| {
+            row.child(gutter(form, line.old))
+        })
+        .child(gutter(form, line.new))
+        .child(sign(form, line))
+        .child(code_cell(form, line))
+        .into_element()
 }
 
 /// One side of a split row; a missing side is the sunk ground, not a context line.
-fn half(cx: &Ctx, file: &FileView, line: Option<&NumberedLine>, new_side: bool) -> AnyElement {
-    let form = cx.app.form;
+fn half(form: Form, line: Option<&NumberedLine>, new_side: bool) -> AnyElement {
     let cell = view()
         .flex_1()
         .min_w(px(0.0))
@@ -332,14 +241,12 @@ fn half(cx: &Ctx, file: &FileView, line: Option<&NumberedLine>, new_side: bool) 
         });
     match line {
         None => cell.bg(color(Token::BgSunk)).into_element(),
-        Some(line) => {
-            let cell = cell
-                .bg(tint(line.kind))
-                .child(gutter(form, if new_side { line.new } else { line.old }))
-                .child(sign(form, line))
-                .child(code_cell(form, line));
-            pressable(cx, file, line, !new_side, cell).into_element()
-        }
+        Some(line) => cell
+            .bg(tint(line.kind))
+            .child(gutter(form, if new_side { line.new } else { line.old }))
+            .child(sign(form, line))
+            .child(code_cell(form, line))
+            .into_element(),
     }
 }
 
@@ -486,108 +393,6 @@ fn code_cell(form: Form, line: &NumberedLine) -> AnyElement {
                 .child(after.to_owned()),
         )
         .into_element()
-}
-
-/// A discussion (`.cm`): where it sits when shown away from its line, its messages as
-/// attributed cards with their state tags, the thread's Resolve or Reopen, the lines of
-/// commands sent about it, then the owner's composer.
-fn discussion(cx: &Ctx, talk: &CommentView, away: bool) -> AnyElement {
-    let app = cx.app;
-    let form = app.form;
-    let tags: Vec<AnyElement> = talk
-        .anchor
-        .iter()
-        .filter(|_| away)
-        .map(|anchor| illus(app, anchor.clone()))
-        .chain(
-            talk.chips
-                .iter()
-                .map(|tag| chip(app, tag.label.clone(), tag.hue)),
-        )
-        .collect();
-    let tags = (!tags.is_empty()).then(|| {
-        view()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .gap(px(6.0))
-            .children(tags)
-            .into_element()
-    });
-    let actions = (!talk.actions.is_empty()).then(|| {
-        view()
-            .flex_row()
-            .flex_wrap()
-            .gap(px(6.0))
-            .children(talk.actions.iter().map(|button| command(cx, button)))
-            .into_element()
-    });
-    let messages: Vec<AnyElement> = talk
-        .messages
-        .iter()
-        .map(|message| {
-            if form == Form::Terminal {
-                view()
-                    .child(rich_at(app, &message.attribution, 0.0, Token::Ink3, false))
-                    .child(text(message.text.clone()).text_color(color(Token::Ink)))
-                    .into_element()
-            } else {
-                card(view())
-                    .border_color(color(Token::Rule2))
-                    .child(rich_at(app, &message.attribution, 11.5, Token::Ink3, false).mb(px(3.0)))
-                    .child(
-                        text(message.text.clone())
-                            .font_family(FONT_TEXT)
-                            .text_size(px(if form == Form::Phone { 14.0 } else { 12.5 }))
-                            .line_height(px(if form == Form::Phone { 20.0 } else { 19.0 }))
-                            .text_color(color(Token::Ink)),
-                    )
-                    .into_element()
-            }
-        })
-        .collect();
-    let content = view()
-        .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
-        .children(tags)
-        .children(messages)
-        .children(actions)
-        .children(talk.status.iter().map(|line| status_line(cx, line)))
-        .children(talk.composer.as_ref().map(|edit| {
-            view()
-                .max_w(px(COMMENT_MAX))
-                .child(composer(cx, edit))
-                .into_element()
-        }));
-    if form == Form::Terminal {
-        return view()
-            .pl(term::cells(2.0))
-            .child(panel(app, None, content.into_element()))
-            .into_element();
-    }
-    view()
-        .pl(px(if away || form == Form::Phone {
-            12.0
-        } else {
-            COMMENT_INDENT
-        }))
-        .pr(px(14.0))
-        .py(px(10.0))
-        .bg(color(Token::Bg))
-        .border_t(px(1.0))
-        .border_b(px(1.0))
-        .border_color(color(Token::Rule))
-        .when(away, |block| block.mb(px(8.0)).rounded(px(6.0)).border_1())
-        .child(content)
-        .into_element()
-}
-
-fn card(s: View) -> View {
-    s.max_w(px(COMMENT_MAX))
-        .px(px(12.0))
-        .py(px(8.0))
-        .rounded(px(8.0))
-        .border_1()
-        .bg(color(Token::Surface))
 }
 
 /// A collapsed file: the whole framed block is the button, a chevron before the model's

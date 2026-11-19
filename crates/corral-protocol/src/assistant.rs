@@ -1,7 +1,5 @@
 //! One chat surface, with explicit assistant or PM delivery targets.
 use crate::{
-    app::{ActClass, ConfirmProof},
-    cmd,
     detail::question::{QuestionAnswer, QuestionOption},
     rows::WaitReason,
 };
@@ -15,7 +13,6 @@ pub const ASSISTANT_STOP: &str = "assistant.stop";
 pub const ASSISTANT_SESSION: &str = "assistant.session";
 pub const PROMPT_ANSWER: &str = "prompt.answer";
 pub const QUICK_THREAD: &str = "quick";
-pub const PROMPT_PREVIEW: &str = "prompt.preview";
 pub const MESSAGE_TEXT_MAX: usize = 16 * 1024;
 pub const LIVE_TEXT_MAX: usize = 32 * 1024;
 pub const TURN_TEXT_MAX: usize = 256 * 1024;
@@ -148,13 +145,6 @@ pub struct PromptAnswer {
     pub key: String,
     pub rev: u32,
     pub choice: PromptChoice,
-    pub confirm: Option<ConfirmProof>,
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct PromptPreview {
-    pub key: String,
-    pub rev: u32,
-    pub choice: PromptChoice,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -237,7 +227,7 @@ pub struct ThreadEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<TurnCompletion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cost_basis: Option<crate::board::CostBasis>,
+    pub cost_basis: Option<crate::rows::CostBasis>,
     pub links: Vec<ContextRef>,
     pub card: Option<EntryCard>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -282,9 +272,10 @@ pub enum EntryCard {
         words: String,
     },
     Action {
-        command: Box<cmd::Command>,
-        class: ActClass,
-        outcome: Option<cmd::CmdResult>,
+        /// Historical display data, not a command that can be submitted.
+        command: serde_json::Value,
+        class: String,
+        outcome: Option<serde_json::Value>,
         input: Option<String>,
     },
     Question {
@@ -292,8 +283,7 @@ pub enum EntryCard {
         rev: u32,
         options: Vec<QuestionOption>,
         answer: Option<QuestionAnswer>,
-        /// Submit `QuestionCommand::Answer` using this key/rev, owner=true and option=None.
-        /// False after settlement; old servers omit this capability.
+        /// Whether the historical question card offered an owner reply.
         #[serde(default)]
         accepts_text: bool,
     },

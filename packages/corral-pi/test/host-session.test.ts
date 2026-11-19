@@ -1,40 +1,36 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { Text, stripTerminalSequences, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "../node_modules/@earendil-works/pi-tui/dist/layout.js";
 
 import { EventLog } from "../src/bridge/events.ts";
 import { startBridge } from "../src/bridge/server.ts";
-import { loadPeerLookup } from "../src/host/peer.ts";
-import { connect } from "./support/bridge-client.ts";
-import type { SubmitInput } from "../src/bridge/protocol.ts";
+import { connect, testHandlers } from "./support/bridge-client.ts";
+import type { SessionInput } from "../src/bridge/protocol.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { BUILTIN_EXTENSIONS, NetworkRefused, guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
+import { CorralClient } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { forbiddenRuns, holdNextInput } from "./fixtures/roles/fixture-role.ts";
-import { type FakeCorral, writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 import { type FixtureInstall, buildFixtureInstall } from "./support/fixture-install.ts";
 import { expectReplacementsRefused } from "./support/replacement.ts";
 import { nextEvent, within } from "./support/wait.ts";
 import { historyUI } from "./support/history-ui.ts";
 
-const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 1 };
-const CTL = "c".repeat(64);
-const NONCE = "n".repeat(64);
+const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
 const originalFetch = globalThis.fetch;
 
 let assets: FixtureInstall;
 let work: string;
-let corral: FakeCorral;
 let events: EventLog;
 let host: HostSession;
 
-const input = (text: string, busyPolicy: SubmitInput["busyPolicy"], key: string): SubmitInput =>
-  ({ text, busyPolicy, idempotencyKey: key, origin: "test" });
+const submit = (text: string, busyPolicy: SessionInput["busyPolicy"]) =>
+  host.submitLocal({ text, busyPolicy, origin: "owner" });
 
 beforeAll(async () => {
   assets = buildFixtureInstall();
@@ -47,18 +43,16 @@ beforeAll(async () => {
   writeFileSync(join(cwd, ".pi/prompts/leak.md"), "Leaked prompt template.\n");
   restrictEnvironment(process.env);
   const modules = await loadModules(assets.dir, "worker");
-  events = new EventLog(identity.generation);
+  events = new EventLog();
   const transport = modules.auth.transport?.(authContext());
   if (!transport) throw new Error("the fixture auth module supplies a transport");
   const network = guardedFetch(transport, (destination) => events.emit("network_refused", { destination }));
   globalThis.fetch = network.fetch as typeof globalThis.fetch;
   const sdk = await import("@earendil-works/pi-coding-agent");
-  corral = writeFakeCorral(work);
-  const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host.sessionId() });
+  const client = new CorralClient({ corral: writeFakeEngine(work).path, root: work, cwd, identity });
   client.history = async request => {
     if (request.kind === "tasks") return [{ id: "T-999", title: "Historical task" }];
     if (request.kind === "task") return { id: "T-999", runs: [{ id: "R1", ended: "yesterday", summary: "Recorded historical summary" }] };
-    if (request.kind === "questions") return [];
     if (request.kind === "transcript") return '{"type":"message","message":{"role":"user","content":"Historical input"}}\n';
     throw new Error("Unsupported history fixture read");
   };
@@ -66,9 +60,12 @@ beforeAll(async () => {
     sdk, identity, cwd, agentDir: join(work, "pi-agent"), model: "gpt-6.1-sol", modules, client, events, network,
     sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
   });
+  await host.session.bindExtensions({});
 }, 60_000);
 
-afterAll(() => {
+afterAll(async () => {
+  await host?.close();
+  await host?.drained();
   globalThis.fetch = originalFetch;
   assets.cleanup();
   rmSync(work, { recursive: true, force: true });
@@ -90,7 +87,8 @@ function captureInspector(bound: boolean): void {
   expect(host.session.model?.id).toBe("gpt-6.1-sol");
   // Header row 1 names the bound task and run; the tab row offers the task-bound views.
   expect(chrome[0]).toContain("T-001 · R1");
-  for (const tab of ["Task", "Chat", "Agents", "Changes", "Proof", "Inbox"]) expect(chrome[2]).toContain(tab);
+  for (const tab of ["Task", "Chat", "Agents", "Changes", "Proof"]) expect(chrome[2]).toContain(tab);
+  expect(chrome[2]).not.toContain("Inbox");
   // The host's binding reaches the panels: a disconnected host's status bar reads `○ unbound`, a bound one `● bound`.
   expect(panels.workbench.sideSource().bound).toBe(bound);
   // No agents, jobs, plan or failed read: the collapsed row carries no summary, so it is one row set into its own rule.
@@ -100,65 +98,62 @@ function captureInspector(bound: boolean): void {
   expect(visibleWidth(inline[0] ?? "")).toBe(80);
   // The model label belongs to the real composer, not the header or the sidebar.
   expect([...chrome, ...rail].join("\n")).not.toContain("gpt-6.1-sol");
-  const evidence = resolve(import.meta.dirname, "../../../.evidence");
-  mkdirSync(evidence, { recursive: true });
-  writeFileSync(join(evidence, `T-689-host-${bound ? "bound" : "disconnected"}-render.txt`),
-    [...chrome, "", ...rail, "", ...plain(inline)].join("\n"));
 }
 
-test("host inspector renders real disconnected state in wide and inline layouts without model calls", () => captureInspector(false));
+test("the host's disconnected state reaches its header and responsive sidebar without model calls", () => captureInspector(false));
 
-test("input before hello is rejected; hello binds the generation through corral", async () => {
-  expect(await host.submit(input("Reply only EARLY.", "prompt", "k0"), "rq-0")).toEqual({ disposition: "rejected", reason: "host_not_bound" });
-  await host.hello(NONCE, "pane-1", sha256Hex(CTL));
+test("input is rejected before local startup, which binds and persists the active transcript", async () => {
+  expect(await submit("Reply only EARLY.", "prompt")).toEqual({ disposition: "rejected", reason: "host_not_ready" });
+  await host.startLocal();
   expect(host.bound).toBeTrue();
   captureInspector(true);
-  const [hello] = corral.calls();
-  expect(hello?.argv).toEqual(["agent", "call", "--op", "hello"]);
-  expect(hello?.envelope.request_id).toBe("ev-1-0");
-  expect(hello?.envelope.auth.bind_nonce).toBe(NONCE);
-  expect(hello?.envelope.payload.ctl_cap_sha256).toBe(sha256Hex(CTL));
-  expect(String(hello?.envelope.payload.session_file).startsWith(join(work, "sessions"))).toBeTrue();
-  expect(hello?.envelope.payload.pane).toBe("pane-1");
-  expect(hello?.stdin).not.toContain(CTL);
+  const file = host.session.sessionFile;
+  if (!file) throw new Error("the locally bound host has no transcript");
+  expect(file.startsWith(join(work, "sessions"))).toBeTrue();
+  expect(existsSync(file)).toBeTrue();
+  expect(host.state().session).toMatchObject({ bound_id: host.sessionId(), file });
+  expect(events.since(0, 64 * 1024).events.filter(event => event.kind === "bound")).toMatchObject([
+    { session_id: host.sessionId() },
+  ]);
 });
 
-test("idle input starts a turn, reported to corral as turn_started and turn_ended", async () => {
+test("idle input starts a turn and emits local lifecycle events", async () => {
   const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 1);
-  expect(await host.submit(input("Reply only STARTED.", "prompt", "k1"), "rq-1")).toEqual({ disposition: "started", turn: 1 });
+  expect(await submit("Reply only STARTED.", "prompt")).toEqual({ disposition: "started", turn: 1 });
   await ended;
-  await host.drained();
-  const lifecycle = corral.calls().filter((call) => call.envelope.op === "event").map((call) => call.envelope.payload);
-  expect(lifecycle).toEqual([
-    { kind: "turn_started", turn: 1, origin: { kind: "bridge", idempotency_key: "k1" }, provider: "openai-codex", model: "gpt-6.1-sol" },
-    { kind: "turn_ended", turn: 1 },
+  const lifecycle = events.since(0, 64 * 1024).events.filter(event => event.kind === "turn_started" || event.kind === "turn_ended");
+  expect(lifecycle).toMatchObject([
+    { kind: "turn_started", turn: 1, origin: { kind: "bridge" }, provider: "openai-codex", model: "gpt-6.1-sol" },
+    { kind: "turn_ended", turn: 1, cancelled: false },
   ]);
 });
 
 test("busy input is queued for steer and follow_up, rejected for prompt, and never claims completion", async () => {
   const transport = fixtureTransport();
-  expect(await host.submit(input("/fixture-hold", "prompt", "k2"), "rq-2")).toEqual({ disposition: "handled" });
+  expect(await submit("/fixture-hold", "prompt")).toEqual({ disposition: "handled" });
   const held = transport.whenHeld();
-  expect(await host.submit(input("Reply only HELD.", "prompt", "k3"), "rq-3")).toEqual({ disposition: "started", turn: 2 });
+  expect(await submit("Reply only HELD.", "prompt")).toEqual({ disposition: "started", turn: 2 });
   await within(held, 30_000, "the held response");
-  expect(await host.submit(input("Reply only STEERED.", "steer", "k4"), "rq-4")).toEqual({ disposition: "queued" });
-  expect(await host.submit(input("Reply only FOLLOWED.", "follow_up", "k5"), "rq-5")).toEqual({ disposition: "queued" });
-  expect(await host.submit(input("Reply only BUSY.", "prompt", "k6"), "rq-6")).toEqual({ disposition: "rejected", reason: "busy" });
+  expect(await submit("Reply only STEERED.", "steer")).toEqual({ disposition: "queued" });
+  expect(await submit("Reply only FOLLOWED.", "follow_up")).toEqual({ disposition: "queued" });
+  expect(await submit("Reply only BUSY.", "prompt")).toEqual({ disposition: "rejected", reason: "busy" });
+  expect(host.session.getSteeringMessages()).toEqual(["Reply only STEERED."]);
+  expect(host.session.getFollowUpMessages()).toEqual(["Reply only FOLLOWED."]);
   expect(host.state().streaming).toBeTrue();
   expect(host.state().turn).toEqual({ current: 2, open: true });
   const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 2);
-  expect(await host.submit(input("/fixture-release", "prompt", "k7"), "rq-7")).toEqual({ disposition: "handled" });
+  expect(await submit("/fixture-release", "prompt")).toEqual({ disposition: "handled" });
   await ended;
-  const delivered = (host.state().delivery as { records: { idempotencyKey: string; requestId: string }[] }).records;
-  expect(delivered.map((record) => record.idempotencyKey)).toEqual(["k1", "k2", "k3", "k4", "k5", "k6", "k7"]);
+  expect(host.session.getSteeringMessages()).toEqual([]);
+  expect(host.session.getFollowUpMessages()).toEqual([]);
 });
 
 test("cancel aborts the current turn only", async () => {
   const transport = fixtureTransport();
   expect(await host.cancel(undefined)).toEqual({ cancelled: false, reason: "idle" });
-  await host.submit(input("/fixture-hold", "prompt", "k8"), "rq-8");
+  await submit("/fixture-hold", "prompt");
   const held = transport.whenHeld();
-  expect(await host.submit(input("Reply only CANCEL.", "prompt", "k9"), "rq-9")).toEqual({ disposition: "started", turn: 3 });
+  expect(await submit("Reply only CANCEL.", "prompt")).toEqual({ disposition: "started", turn: 3 });
   await within(held, 30_000, "the held response");
   expect(await host.cancel(99)).toEqual({ cancelled: false, reason: "turn_not_current", turn: 3 });
   const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 3);
@@ -166,22 +161,21 @@ test("cancel aborts the current turn only", async () => {
   expect((await ended).cancelled).toBeTrue();
 });
 
-test("events carry generation 1 and a strictly increasing sequence; corral got each lifecycle event once", async () => {
-  await host.drained();
+test("local events have an increasing sequence and one lifecycle pair per turn", () => {
   const page = events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
-  expect(page.events.every((event) => event.generation === 1)).toBeTrue();
   const seqs = page.events.map((event) => event.seq);
   expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
   expect(new Set(seqs).size).toBe(seqs.length);
-  const turns = page.events.filter((event) => ["turn_started", "turn_ended"].includes(event.kind));
-  const ids = corral.calls().filter((call) => call.envelope.op === "event").map((call) => call.envelope.request_id);
-  expect(ids).toEqual(turns.map((event) => `ev-1-${event.seq}`));
+  const turns = page.events.filter(event => event.kind === "turn_started" || event.kind === "turn_ended");
+  expect(turns.map(event => [event.kind, event.turn])).toEqual([
+    ["turn_started", 1], ["turn_ended", 1], ["turn_started", 2], ["turn_ended", 2], ["turn_started", 3], ["turn_ended", 3],
+  ]);
 });
 
 test("input held before upstream preflight is never reported rejected, and its turn keeps the bridge origin", async () => {
   const held = holdNextInput();
   let reported: unknown;
-  const submitted = host.submit(input("HOLD_INPUT Reply only LATE.", "prompt", "k-late"), "rq-late");
+  const submitted = submit("HOLD_INPUT Reply only LATE.", "prompt");
   void submitted.then((result) => { reported = result; });
   await within(held.entered, 30_000, "upstream to hold the input");
   expect(reported).toBeUndefined();
@@ -190,51 +184,41 @@ test("input held before upstream preflight is never reported rejected, and its t
   const turn = (host.state().turn as { current: number }).current + 1;
   held.release();
   expect(await submitted).toEqual({ disposition: "started", turn });
-  expect((await started).origin).toEqual({ kind: "bridge", idempotency_key: "k-late" });
+  expect((await started).origin).toEqual({ kind: "bridge" });
   await ended;
-  await host.drained();
-  const reportedOrigin = corral.calls().map((call) => call.envelope.payload)
-    .find((payload) => payload.kind === "turn_started" && payload.turn === turn);
-  expect(reportedOrigin?.origin).toEqual({ kind: "bridge", idempotency_key: "k-late" });
 });
 
 test("through the bridge, input still before preflight at the reply deadline is pending, then settles started with its origin", async () => {
   const server = await startBridge({
-    path: join(work, "e2e.sock"), ctlCap: CTL, generation: 1, uid: process.getuid?.() ?? -1, peer: await loadPeerLookup(),
-    events, inputReplyMs: 50,
-    handlers: {
-      hello: () => ({}), state: () => ({}), cancel: async () => ({}), shutdown: () => undefined,
-      submit: (submission, requestId) => host.submit(submission, requestId),
-    },
+    path: join(work, "e2e.sock"), sessionId: "fixture", events, inputReplyMs: 50,
+    handlers: testHandlers({ submit: submission => host.submitLocal(submission) }),
   });
   const client = await connect(join(work, "e2e.sock"));
   const held = holdNextInput();
-  const args = { text: "HOLD_INPUT Reply only DEFERRED.", busy_policy: "prompt", idempotency_key: "k-deferred", origin: "test" };
-  const frame = { version: 1, id: "rq-deferred", ctl_cap: CTL, generation: 1, command: "submit_input", args };
+  const args = { text: "HOLD_INPUT Reply only DEFERRED.", busy_policy: "prompt", origin: "owner" };
+  const frame = { version: 2, id: "rq-deferred", command: "submit_input", args };
   const first = client.request(frame);
   await within(held.entered, 30_000, "upstream to hold the input");
   const reply = (await first).result;
   expect([reply?.disposition, reply?.reason]).toEqual(["pending", "preflight_pending"]);
-  const settled = nextEvent(events, (event) => event.kind === "input_settled" && event.idempotency_key === "k-deferred");
+  const settled = nextEvent(events, (event) => event.kind === "input_settled" && event.request_id === frame.id);
   const started = nextEvent(events, (event) => event.kind === "turn_started");
   const ended = nextEvent(events, (event) => event.kind === "turn_ended");
   held.release();
   const outcome = await settled;
   expect(outcome.disposition).toBe("started");
-  expect((await started).origin).toEqual({ kind: "bridge", idempotency_key: "k-deferred" });
+  expect((await started).origin).toEqual({ kind: "bridge" });
   expect((await started).turn).toBe(outcome.turn);
   await ended;
-  const replay = (await client.request({ ...frame, id: "rq-deferred-2" })).result;
-  expect([replay?.disposition, replay?.turn, replay?.replayed]).toEqual(["started", outcome.turn, true]);
   expect(events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
-    .filter((event) => event.idempotency_key === "k-deferred" && event.disposition === "rejected")).toHaveLength(0);
+    .filter((event) => event.request_id === frame.id && event.disposition === "rejected")).toHaveLength(0);
   client.close();
   await server.close();
 });
 
 async function expectRestricted(): Promise<void> {
   const state = host.state();
-  expect([...(state.active_tools as string[])].sort()).toEqual(["agent_message", "agent_roster", "corral_receipt_lookup", "read"]);
+  expect([...(state.active_tools as string[])].sort()).toEqual(["agent_message", "agent_roster", "read"]);
   const resources = state.resources as { extensions: string[]; skills: number; prompts: number; context_files: number };
   expect(resources.skills).toBe(0);
   expect(resources.prompts).toBe(0);
@@ -247,10 +231,9 @@ async function expectRestricted(): Promise<void> {
     steeringMode: "all", followUpMode: "all",
   });
   for (const tool of ["fixture_forbidden", "bash"]) {
-    const tag = `${tool}-${host.state().last_seq}`;
-    await host.submit(input(`/fixture-call ${tool}`, "prompt", `call-${tag}`), "rq-call");
+    await submit(`/fixture-call ${tool}`, "prompt");
     const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-    expect((await host.submit(input("Reply only CALL.", "prompt", `run-${tag}`), "rq-run")).disposition).toBe("started");
+    expect((await submit("Reply only CALL.", "prompt")).disposition).toBe("started");
     await ended;
     const result = host.session.messages.findLast((message) => message.role === "toolResult") as
       { toolName: string; isError: boolean; content: { text?: string }[] } | undefined;
@@ -270,7 +253,7 @@ async function expectRestricted(): Promise<void> {
 
 test("only the role loadout is active, before and after reload", async () => {
   await expectRestricted();
-  expect((await host.submit(input("/fixture-reload", "prompt", "reload"), "rq-reload")).disposition).toBe("handled");
+  expect((await submit("/fixture-reload", "prompt")).disposition).toBe("handled");
   await expectRestricted();
   const network = host.state().network as { refused: number; allowed: number };
   expect(network.refused).toBe(2);
@@ -278,8 +261,10 @@ test("only the role loadout is active, before and after reload", async () => {
 }, 60_000);
 
 test("while bound, every native session replacement is refused and later delivery and tool calls stay in the bound file", async () => {
-  // Given the bound host and the session file its hello reported to corral:
-  const boundFile = String(corral.calls()[0]?.envelope.payload.session_file);
+  const state = host.state();
+  if (typeof state.session !== "object" || !state.session || !("file" in state.session)) throw new Error("missing session state");
+  const boundFile = state.session.file;
+  if (typeof boundFile !== "string") throw new Error("the locally bound host has no transcript");
   expect(host.session.sessionFile).toBe(boundFile);
   // Historical inspection uses the panel's read channel, not Pi's replacement APIs.
   const before = host.state(), bytes = readFileSync(boundFile, "utf8");
@@ -289,27 +274,25 @@ test("while bound, every native session replacement is refused and later deliver
   expect(history.frames.join("\n")).toContain("Historical input");
   expect(history.ui.getEditorText()).toBe(draft);
   expect(host.state().identity).toEqual(before.identity);
-  expect(host.state().generation).toEqual(before.generation);
   expect(host.state().role).toEqual(before.role);
   expect(host.state().session).toEqual(before.session);
   expect(readFileSync(boundFile, "utf8")).toBe(bytes);
   // When the owner attempts /new, /resume, /fork and import after browsing:
   await expectReplacementsRefused(host, events);
   // Then a delivery and a tool call made afterwards are written to the bound file, after its marker.
-  await host.submit(input("/fixture-call read", "prompt", "call-after"), "rq-call-after");
+  await submit("/fixture-call read", "prompt");
   const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-  expect((await host.submit(input("Reply only AFTER.", "prompt", "after-replace"), "rq-after")).disposition).toBe("started");
+  expect((await submit("Reply only AFTER.", "prompt")).disposition).toBe("started");
   await ended;
   const entries = readFileSync(boundFile, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-  const marker = entries.findIndex((entry) => entry.customType === "corral_host_bound");
-  const delivered = entries.findIndex((entry) => entry.customType === "corral_fixture_delivery"
-    && entry.data.idempotencyKey === "after-replace");
+  const marker = entries.findIndex(entry => entry.customType === "corral_host_started");
+  const delivered = entries.findIndex(entry => entry.type === "message" && entry.message.role === "user"
+    && JSON.stringify(entry.message.content).includes("Reply only AFTER."));
   const called = entries.findIndex((entry, index) => index > delivered && entry.type === "message"
     && entry.message.role === "assistant"
     && entry.message.content.some((item: { type: string; name?: string }) => item.type === "toolCall" && item.name === "read"));
   expect(marker).toBeGreaterThanOrEqual(0);
   expect(delivered).toBeGreaterThan(marker);
   expect(called).toBeGreaterThan(delivered);
-  expect(entries[marker].data.session_id).toBe(host.sessionId());
   expect((host.state().session as { created: number }).created).toBe(1);
 }, 60_000);

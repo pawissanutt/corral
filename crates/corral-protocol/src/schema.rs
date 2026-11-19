@@ -88,9 +88,16 @@ fn document() -> Value {
     ];
     use device::*;
     use rpc::ErrorCode::{
-        Busy, ConfirmRequired, Conflict, Expired, Internal, InvalidParams, NotFound, Refused,
-        Revoked, Unavailable,
+        Busy, Conflict, Expired, Internal, InvalidParams, NotFound, Refused, Revoked, Unavailable,
     };
+    let mut op_submit = method::<op::OpSubmit, op::OpReply>(
+        &mut generator,
+        op::OP_SUBMIT,
+        false,
+        &[InvalidParams, Refused, Unavailable, Internal],
+    );
+    op_submit["x-error-data-schema"] =
+        json!({"refused": generator.subschema_for::<schema_types::Refusal>()});
     let methods = vec![
         method::<Hello, Welcome>(
             &mut generator,
@@ -106,37 +113,25 @@ fn document() -> Value {
         method::<Nudge, NudgeAck>(&mut generator, NUDGE, false, &common),
         method::<HealthGet, Health>(&mut generator, HEALTH_GET, false, &common),
         method::<Stop, Stopped>(&mut generator, DAEMON_STOP, false, &common),
-        method::<read::ReadRequest, read::ReadReply>(
+        op_submit,
+        method::<config::ConfigGet, config::ConfigDocument>(
             &mut generator,
-            READ,
+            config::CONFIG_GET,
             false,
-            &[
-                rpc::ErrorCode::InvalidParams,
-                rpc::ErrorCode::Unauthenticated,
-                rpc::ErrorCode::Refused,
-                rpc::ErrorCode::Busy,
-                rpc::ErrorCode::Internal,
-                rpc::ErrorCode::Unavailable,
-            ],
+            &common,
         ),
-        method::<cmd::CmdSubmit, cmd::CmdResult>(
+        method::<config::ConfigDocument, ()>(&mut generator, config::CONFIG_PUT, false, &common),
+        method::<pane::PaneFocus, ()>(
             &mut generator,
-            cmd::CMD_SUBMIT,
+            pane::PANE_FOCUS,
             false,
-            &[
-                rpc::ErrorCode::Refused,
-                rpc::ErrorCode::Busy,
-                rpc::ErrorCode::Expired,
-                rpc::ErrorCode::InvalidParams,
-                rpc::ErrorCode::Unauthenticated,
-                rpc::ErrorCode::Unavailable,
-            ],
+            &[InvalidParams, NotFound, Unavailable, Internal],
         ),
-        method::<cmd::CmdResultQuery, cmd::CmdResult>(
+        method::<pane::PaneKeys, ()>(
             &mut generator,
-            cmd::CMD_RESULT,
+            pane::PANE_KEYS,
             false,
-            &[rpc::ErrorCode::InvalidParams, rpc::ErrorCode::Unavailable],
+            &[InvalidParams, NotFound, Unavailable, Internal],
         ),
         method::<SubOpen, ()>(&mut generator, SUB_OPEN, false, &common),
         method::<SubDelta, ()>(&mut generator, SUB_DELTA, true, &[]),
@@ -234,33 +229,6 @@ fn document() -> Value {
             false,
             &common,
         ),
-        method::<app::ActPreviewRequest, app::ActPreview>(
-            &mut generator,
-            app::ACT_PREVIEW,
-            false,
-            &[InvalidParams, Refused, Conflict, Unavailable, Internal],
-        ),
-        method::<app::ActSubmit, cmd::CmdResult>(
-            &mut generator,
-            app::ACT_SUBMIT,
-            false,
-            &[
-                InvalidParams,
-                Refused,
-                ConfirmRequired,
-                Conflict,
-                Busy,
-                Expired,
-                Unavailable,
-                Internal,
-            ],
-        ),
-        method::<cmd::CmdResultQuery, cmd::CmdResult>(
-            &mut generator,
-            app::ACT_RESULT,
-            false,
-            &[InvalidParams, Unavailable, Internal],
-        ),
         method::<detail::DetailGet, detail::DetailReply>(
             &mut generator,
             app::DETAIL_GET,
@@ -286,19 +254,13 @@ fn document() -> Value {
             false,
             &[InvalidParams, Unavailable, Internal],
         ),
-        method::<app::DeviceSetAuthority, DeviceInfo>(
+        method::<app::AppSessionRequest, PushStatus>(&mut generator, PUSH_STATUS, false, &common),
+        method::<PushSubscribe, PushStatus>(&mut generator, PUSH_SUBSCRIBE, false, &common),
+        method::<app::AppSessionRequest, PushStatus>(
             &mut generator,
-            app::DEVICE_SET_AUTHORITY,
+            PUSH_UNSUBSCRIBE,
             false,
-            &[
-                InvalidParams,
-                NotFound,
-                Refused,
-                Revoked,
-                Conflict,
-                Unavailable,
-                Internal,
-            ],
+            &common,
         ),
         method::<assistant::AssistantSend, assistant::SendAck>(
             &mut generator,
@@ -313,7 +275,7 @@ fn document() -> Value {
                 Internal,
             ],
         ),
-        method::<assistant::AssistantCancel, assistant::CancelAck>(
+        method::<session::AssistantCancelRequest, assistant::CancelAck>(
             &mut generator,
             assistant::ASSISTANT_CANCEL,
             false,
@@ -364,7 +326,7 @@ fn document() -> Value {
             false,
             &[InvalidParams, Refused, Busy, Unavailable, Internal],
         ),
-        method::<assistant::AssistantStop, ()>(
+        method::<assistant::AssistantStop, assistant::StopAck>(
             &mut generator,
             assistant::ASSISTANT_STOP,
             false,
@@ -391,9 +353,9 @@ fn document() -> Value {
                 Internal,
             ],
         ),
-        method::<assistant::PromptPreview, app::ActPreview>(
+        method::<session::PromptAnswerRequest, session::SessionPromptAnswered>(
             &mut generator,
-            assistant::PROMPT_PREVIEW,
+            assistant::PROMPT_ANSWER,
             false,
             &[
                 InvalidParams,
@@ -405,20 +367,41 @@ fn document() -> Value {
                 Internal,
             ],
         ),
-        method::<assistant::PromptAnswer, cmd::CmdResult>(
+        method::<session::SessionCancel, session::SessionCancelReply>(
             &mut generator,
-            assistant::PROMPT_ANSWER,
+            session::SESSION_CANCEL,
             false,
-            &[
-                InvalidParams,
-                NotFound,
-                Refused,
-                ConfirmRequired,
-                Conflict,
-                Expired,
-                Unavailable,
-                Internal,
-            ],
+            &common,
+        ),
+        method::<session::SessionTarget, session::SessionPauseReply>(
+            &mut generator,
+            session::SESSION_PAUSE,
+            false,
+            &common,
+        ),
+        method::<session::SessionTarget, session::SessionResumeReply>(
+            &mut generator,
+            session::SESSION_RESUME,
+            false,
+            &common,
+        ),
+        method::<session::SessionTarget, ()>(
+            &mut generator,
+            session::SESSION_TERMINATE,
+            false,
+            &common,
+        ),
+        method::<session::SessionTarget, session::SessionRelaunched>(
+            &mut generator,
+            session::SESSION_RELAUNCH,
+            false,
+            &common,
+        ),
+        method::<session::SessionRewind, session::RewindReply>(
+            &mut generator,
+            session::SESSION_REWIND,
+            false,
+            &common,
         ),
         method::<DevicePageQuery, DevicePage>(
             &mut generator,

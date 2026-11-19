@@ -5,7 +5,7 @@ import { fleetTools } from "../extensions/fleet/tools.ts";
 import type { InputWake } from "../extensions/input-wake.ts";
 import { createSdkRunner, type ChildRunner } from "../extensions/fleet/child.ts";
 import { createBoard } from "./board.ts";
-import { gitRun, ownerRun, type Run } from "./corral-cli.ts";
+import { engineRun, gitRun, type Run } from "./corral-cli.ts";
 import { createExit } from "./exit.ts";
 import { loadSession, saveSession } from "./session-store.ts";
 import { boardPlanTool, buildEvidenceTools, buildFinishTool } from "./tools.ts";
@@ -15,8 +15,8 @@ import { buildShellRefusal } from "../roles/build/guard.ts";
 
 export interface BuildControlsOptions extends Omit<FleetOptions, "models" | "approved" | "localTools" | "context"> {
   readonly context: BuildContext;
-  readonly paidModels?: Parameters<typeof createSdkRunner>[0]["paidModels"];
   readonly models: () => ModelRuntime;
+  readonly apiModels?: Parameters<typeof createSdkRunner>[0]["apiModels"];
   readonly approved: () => readonly string[];
   readonly localTools: () => readonly ToolDefinition[];
   readonly run?: Run;
@@ -61,16 +61,16 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
       options.changed();
     },
   });
-  const run: Run = context.session.bare ? async () => { throw new Error("Bare sessions cannot invoke corral"); } : options.run ?? ownerRun(context.corral);
+  const run = options.run ?? engineRun(context.corral);
   const git = options.git ?? gitRun();
-  journal = createJournal({ context, run, git, fleet: () => fleet.snapshot(), changed: options.changed, now: options.now,
+  journal = createJournal({ context, git, fleet: () => fleet.snapshot(), changed: options.changed, now: options.now,
     session: () => loadSession(dataRoot, session.id) });
   const buildJournal = journal;
   const initialized = buildJournal.refresh().catch(error => {
     try { void Promise.resolve(options.deliverToParent(`Build record Git snapshot failed: ${error instanceof Error ? error.message : String(error)}`)).catch(() => {}); }
     catch { /* A reporting failure does not block the interactive session. */ }
   });
-  const exit = createExit({ context, run, git, fleet: () => fleet.snapshot(), journal: buildJournal,
+  const exit = createExit({ context, git, fleet: () => fleet.snapshot(), journal: buildJournal,
     changed: options.changed, now: options.now, ...(options.repairLand ? { repair: options.repairLand } : {}),
     save(record) {
       // The entry records the transcript after binding, later than this composition is created.
@@ -91,7 +91,7 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     if (reused) return { content: [{ type: "text", text: `Child id ${reused.id} belongs to this session's saved history. Choose a new id.` }], details: {}, isError: true };
     return start(...args);
   };
-  const tools = [...fleetDefinitions, ...buildEvidenceTools({ context, run, git, fleet, journal: buildJournal }), buildFinishTool(() => exit.open(), buildJournal,
+  const tools = [...fleetDefinitions, ...buildEvidenceTools({ context, git, fleet, journal: buildJournal }), buildFinishTool(() => exit.open(), buildJournal,
     () => ["rebasing", "verifying", "repairing", "landing"].includes(exit.state().phase)),
     ...(board ? [boardPlanTool(plan => board.propose(plan), () => {
       if (!session.workspaceRoot) return "This session is outside a corral workspace.";
@@ -134,10 +134,9 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
       board?.close();
       await fleet.close();
       await initialized;
-      const publication = await buildJournal.publish();
-      if (publication) {
-        try { await options.deliverToParent(publication); } catch { /* Closing still completes when parent delivery is closed. */ }
-      }
+      await buildJournal.refresh().catch(error => {
+        return Promise.resolve(options.deliverToParent(`Build record Git snapshot failed: ${String(error)}`)).catch(() => {});
+      });
     },
   };
 }

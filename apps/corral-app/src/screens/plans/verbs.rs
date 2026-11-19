@@ -1,12 +1,10 @@
-//! A served plan's record verbs (RC-03: cancel the plan, add or move a member): the Actions menu
-//! at the end of the detail head and the context menu of its list row (desktop and terminal: the
-//! secondary press, Shift+F10 or the Menu key; phone: a held finger opens the action sheet).
-//! Both are Now's verb menus over `work::record_verbs`, so no screen keeps a second list of
-//! commands or other enabled conditions. A verb with fields opens the shared verb composer the
-//! shells host; an unavailable verb stays in the menu, dimmed, with the model's reason. The
-//! plan's task detail, whose owner revision the commands carry, is kept loaded by `live.rs`.
+//! A plan's Actions menu (a plan is its parent task, so every engine operation applies): the
+//! menu at the end of the detail head and the context menu of its list row (desktop and
+//! terminal: the secondary press, Shift+F10 or the Menu key; phone: a held finger opens the
+//! action sheet). Both are Now's verb menus over `work::record_verbs`, so no screen keeps a
+//! second list of commands. A verb with fields opens the shared verb composer the shells host.
 //!
-//! Also the press-opened menu's trigger, shared with Timeline's burn-up scope.
+//! Also the press-opened menu's trigger, shared with Review and Timeline's burn-up scope.
 
 use nsh_core::prelude::*;
 
@@ -28,14 +26,14 @@ pub(super) fn head_menu(app: AppState, plan: Id) -> AnyElement {
     let spoken = format!("{VERB_MENU_LABEL} for {plan}");
     verb_menu(
         app,
-        Record::Plan(plan),
+        Record::Task(plan),
         menu_trigger(app, VERB_MENU_LABEL, spoken, "btn-plan-actions"),
     )
 }
 
 /// `row` with the verb menu of the served plan `plan`.
 pub(super) fn row_menu(app: AppState, plan: Id, row: AnyElement) -> AnyElement {
-    with_menu(app, Record::Plan(plan), row)
+    with_menu(app, Record::Task(plan), row)
 }
 
 /// What opens a press-opened menu: outlined as a ghost button, the words then a downward

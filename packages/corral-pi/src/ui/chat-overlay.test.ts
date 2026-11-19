@@ -61,13 +61,13 @@ test("the empty state shows until the first transcript row and never comes back"
 });
 
 test("the empty Chat names who receives the message per role, with send, F1 and quit", () => {
-  const text = (role: "build" | "pm" | "assistant" | "worker") =>
-    emptyChatLines({ identity: { store: "s", project: "demo", role, generation: 1, ...(role === "assistant" ? { assistant: "A-7" } : {}) }, send: "⏎", quit: "Ctrl+C" }, 90)
+  const text = (role: "build" | "assistant" | "worker") =>
+    emptyChatLines({ identity: { store: "s", project: "demo", role, ...(role === "assistant" ? { assistant: "A-7" } : {}) }, send: "⏎", quit: "Ctrl+C" }, 90)
       .map(line => stripTerminalSequences(line)).join("\n");
-  expect(text("build")).toContain("Build session, unbound."); expect(text("build")).toContain("/finish");
+  expect(text("build")).toContain("Build session."); expect(text("build")).not.toContain("unbound"); expect(text("build")).toContain("/finish");
   expect(text("worker")).toContain("Waiting for corral's first instruction"); expect(text("worker")).not.toContain("/finish");
-  expect(text("pm")).toContain("demo"); expect(text("assistant")).toContain("A-7");
-  for (const role of ["build", "pm", "assistant", "worker"] as const) {
+  expect(text("assistant")).toContain("A-7");
+  for (const role of ["build", "assistant", "worker"] as const) {
     expect(text(role)).toContain("⏎ send"); expect(text(role)).toContain("F1 keys"); expect(text(role)).toContain("Ctrl+C twice quits");
   }
 });

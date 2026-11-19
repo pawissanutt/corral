@@ -45,7 +45,7 @@ pub struct Story {
     pub context: Rich,
     /// Run, gate, review and land.
     pub stages: Vec<StoryStage>,
-    /// Next, You, Needs, Unblocks and Cost.
+    /// Next, You, Needs and Unblocks.
     pub fields: Vec<StoryField>,
     /// Open session, Ask about this and Review candidate.
     pub buttons: Vec<Button>,

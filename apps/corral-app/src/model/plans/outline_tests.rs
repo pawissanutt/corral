@@ -1,253 +1,151 @@
-use corral_protocol::board::{RailGlyph, RailStep};
-use corral_protocol::detail::{PlanDetail, PlanMember};
-use corral_protocol::rows::{
-    AttentionActor, AttentionDestination, AttentionMove, InboxKind, InboxRow, InboxState,
-    PlanRow as WirePlan, PlanState,
-};
+use corral_protocol::detail::PlanDetail;
+use corral_protocol::rows::{PlanRow, StatusCount};
+use corral_types::{Blocked, Next, Op, Status};
+use jiff::Timestamp;
 
-use super::{Action, LiveAction, State, page_stats, path_to_done, plan_outline};
+use super::{LiveAction, State, path_to_done, plan_outline};
 use crate::model::board::Mark;
-use crate::model::daemon::Feed;
+use crate::model::daemon::{Feed, Task, bare_task, task_row};
 use crate::model::effect::{Conn, Effect, Env};
-use crate::model::glance::StatIcon;
 use crate::model::nav::Form;
 use crate::model::projects::ProjectFilter;
-use crate::model::{Id, Live, Selection};
+use crate::model::{Id, Selection};
 
-fn member(id: &str, marks: [RailGlyph; 4]) -> PlanMember {
-    PlanMember {
-        id: id.into(),
-        title: id.into(),
-        layer: Some(1),
-        state: "running".into(),
-        rail: marks.map(|glyph| RailStep {
-            glyph,
-            sha7: None,
-            at: None,
-        }),
+fn task(id: &str, status: Status) -> corral_types::Task {
+    let mut task = bare_task(id, id, status, Timestamp::UNIX_EPOCH);
+    if id != "T-1" {
+        task.parent = Some("T-1".into());
     }
+    task
 }
 
-fn detail(members: Vec<PlanMember>) -> PlanDetail {
-    PlanDetail {
-        id: "T-1".into(),
-        role: None,
-        linked: None,
-        revision: None,
-        revisions: Vec::new(),
-        owner_decisions: Vec::new(),
-        state: PlanState::Executing,
-        document: None,
-        reviews: Vec::new(),
-        members,
-        edges: Vec::new(),
-        scenarios: Some(6),
-        mapped: Some(0),
-        acceptable: false,
-        accept_blockers: Vec::new(),
-    }
-}
-
-fn row(state: PlanState) -> WirePlan {
-    WirePlan {
-        id: "T-1".into(),
-        title: "Plan".into(),
-        role: None,
-        linked: None,
-        state,
-        revision: Some("P2".into()),
-        delivery: None,
-        members_total: 3,
-        members_landed: 0,
-        blockers: Vec::new(),
-        accepted_at: None,
-        projects: Vec::new(),
-        rev: 1,
-    }
-}
-
-fn owner_move(id: &str, task: &str, kind: InboxKind) -> InboxRow {
-    InboxRow {
-        id: id.into(),
-        kind,
-        task: Some(task.into()),
-        plan: Some("T-1".into()),
-        project: None,
-        title: "Owner move".into(),
-        from: "worker".into(),
-        asked_at: None,
-        needed_by: None,
-        blocking: true,
-        state: InboxState::Open,
-        question_rev: (kind == InboxKind::WorkerQuestion).then_some(1),
-        answerable: true,
-        unanswerable_reason: None,
-        attention: Some(AttentionMove {
-            whose_move: AttentionActor::Owner,
-            reason: "Owner decision".into(),
-            next_step: "Answer".into(),
-            command: None,
-            destination: AttentionDestination::Plans,
-        }),
-        rev: 1,
-    }
-}
-
-#[test]
-fn path_counts_landed_members_not_passed_stages_and_has_one_current_step() {
-    use RailGlyph::{Active, Pass, Pending};
-    let feed = Feed::default();
-    let plan = Id::from("T-1");
-    let mut detail = detail(vec![
-        member("T-2", [Pass; 4]),
-        member("T-3", [Pass, Pass, Pass, Pending]),
-        member("T-4", [Pass, Active, Pending, Pending]),
-    ]);
-    let path = path_to_done(&feed, &plan, &detail);
-    assert_eq!((path.landed, path.total, path.current), (1, 3, Some(1)));
-    assert_eq!(
-        path.steps
+fn plan(counts: &[(Status, u64)]) -> PlanRow {
+    PlanRow {
+        parent: task("T-1", Status::Backlog),
+        child_counts: counts
             .iter()
-            .filter(|step| step.mark == Mark::Active)
-            .count(),
-        1
-    );
-    assert_eq!(path.steps[1].items.len(), 2);
-    detail.members = vec![
-        member("T-2", [Pass; 4]),
-        member("T-3", [Pass; 4]),
-        member("T-4", [Pass; 4]),
-    ];
-    let path = path_to_done(&feed, &plan, &detail);
-    assert_eq!((path.landed, path.current), (3, Some(2)));
-    detail.mapped = Some(6);
-    let path = path_to_done(&feed, &plan, &detail);
-    assert_eq!(path.current, Some(3));
-    assert_eq!(
-        path.steps
-            .iter()
-            .filter(|step| step.mark == Mark::Active)
-            .count(),
-        1
-    );
-    detail.state = PlanState::Complete;
-    let path = path_to_done(&feed, &plan, &detail);
-    assert_eq!(path.current, None);
-    assert!(path.steps.iter().all(|step| step.mark == Mark::Done));
+            .map(|(status, count)| StatusCount {
+                status: *status,
+                count: *count,
+            })
+            .collect(),
+    }
+}
+
+fn blocked(id: &str) -> corral_types::Task {
+    let mut task = task(id, Status::Blocked);
+    task.blocked = Some(Blocked {
+        reason: "worker failed".into(),
+        detail: None,
+        next: vec![Next {
+            op: Op::Retry {
+                id: id.into(),
+                profile: None,
+                fresh: false,
+                note: None,
+            },
+            force: false,
+        }],
+    });
+    task
 }
 
 #[test]
-fn awaiting_plan_counts_once_even_with_multiple_owner_attention_rows() {
+fn a_plan_with_a_blocked_member_lists_under_needs_you_from_its_counts_alone() {
     let mut feed = Feed::default();
-    feed.plans.insert("T-1".into(), row(PlanState::Awaiting));
-    feed.inbox.insert(
-        "accept".into(),
-        owner_move("accept", "T-1", InboxKind::PlanAcceptance),
-    );
-    feed.inbox.insert(
-        "decision".into(),
-        owner_move("decision", "T-1", InboxKind::OwnerDecision),
-    );
-    let stats = page_stats(&feed, &ProjectFilter::All);
-    assert_eq!(stats.len(), 1);
-    assert_eq!(stats[0].icon, StatIcon::NeedsYou);
-    assert_eq!(stats[0].value, "1");
-}
-
-#[test]
-fn owner_question_answer_stays_on_the_member_path_item() {
-    use RailGlyph::{Active, Pass, Pending};
-    let mut feed = Feed::default();
-    feed.plans.insert("T-1".into(), row(PlanState::Executing));
-    let detail = detail(vec![member("T-2", [Pass, Active, Pending, Pending])]);
-    feed.inbox.insert(
-        "question-2".into(),
-        owner_move("question-2", "T-2", InboxKind::WorkerQuestion),
-    );
-    let path = path_to_done(&feed, &Id::from("T-1"), &detail);
-    let item = &path.steps[1].items[0];
-    assert_eq!(
-        item.action.as_ref().map(|action| &action.action),
-        Some(&Action::Live(LiveAction::Question(Id::from("question-2"))))
-    );
-    assert_eq!(page_stats(&feed, &ProjectFilter::All)[0].value, "1");
-}
-
-#[test]
-fn keys_walk_an_unlinked_design_ahead_of_a_linked_one_as_the_list_draws_them() {
-    let mut feed = Feed::default();
-    let approved = |id: &str, linked: Option<&str>| WirePlan {
-        id: id.into(),
-        linked: linked.map(Into::into),
-        ..row(PlanState::Approved)
+    let row = plan(&[(Status::Done, 1), (Status::Blocked, 1), (Status::Ready, 1)]);
+    feed.plans.insert(Id::new("T-1"), row);
+    let outline = plan_outline(&Selection::default(), &feed, &ProjectFilter::All);
+    assert_eq!(outline.sections[0].label, "Needs you");
+    let row = &outline.sections[0].rows[0];
+    assert!(row.selected);
+    let super::OutlineSecond::Members {
+        segments, progress, ..
+    } = &row.second
+    else {
+        panic!("a plan with children draws its member bar");
     };
-    feed.plans
-        .insert("T-1".into(), approved("T-1", Some("T-9")));
-    feed.plans.insert("T-2".into(), approved("T-2", None));
-    let shown: Vec<Id> = plan_outline(&Selection::default(), &feed, &ProjectFilter::All)
-        .sections
-        .iter()
-        .flat_map(|section| &section.rows)
-        .map(|row| row.id.clone())
-        .collect();
-    assert_eq!(shown, [Id::from("T-2"), Id::from("T-1")]);
-    let env = Env {
-        conn: Conn::Healthy,
-        form: Form::Desktop,
+    assert_eq!(segments.len(), 3);
+    assert_eq!(progress, "1/3");
+}
+
+#[test]
+fn path_to_done_lists_open_members_and_runs_a_blocked_ones_served_next_step() {
+    let mut feed = Feed::default();
+    let stuck = blocked("T-3");
+    feed.board_received(1, vec![Task::new(task_row(stuck.clone()))], &[], true);
+    let detail = PlanDetail {
+        parent: task("T-1", Status::Backlog),
+        children: vec![
+            task("T-2", Status::Done),
+            stuck,
+            task("T-4", Status::Dropped),
+        ],
+        child_rows: None,
     };
-    let mut state = State::default();
-    let walk = |state: &mut State, key: &str, selection: &Selection| match state.key_live_filtered(
-        key,
-        None,
-        selection,
+    let path = path_to_done(&feed, &Id::new("T-1"), &detail);
+    assert_eq!((path.done, path.total), (1, 2));
+    assert_eq!(path.current, Some(0));
+    assert_eq!(path.steps[0].mark, Mark::Active);
+    let items = &path.steps[0].items;
+    assert_eq!(items.len(), 1);
+    let Some(next) = &items[0].action else {
+        panic!("a blocked member offers its served next step");
+    };
+    let super::Action::Live(press) = next.action.clone();
+    let effects = State::default().reduce_live(
+        press,
         &feed,
-        env,
-        &ProjectFilter::All,
-    ) {
-        Some(effects) => match effects.as_slice() {
-            [Effect::Select(Live::Plan(id))] => Some(id.clone()),
-            _ => None,
+        Env {
+            conn: Conn::Healthy,
+            form: Form::Desktop,
         },
-        None => None,
-    };
-    assert_eq!(
-        walk(&mut state, "j", &Selection::default()),
-        Some(Id::from("T-1"))
     );
-    let on_last = Selection {
-        plan: Some(Id::from("T-1")),
-        ..Selection::default()
-    };
-    assert_eq!(walk(&mut state, "k", &on_last), Some(Id::from("T-2")));
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::Act(act)] if matches!(act.op, Op::Retry { .. }) && !act.force
+    ));
+    assert!(matches!(
+        next.action,
+        super::Action::Live(LiveAction::Next { index: 0, .. })
+    ));
 }
 
+/// A plan page lists its children as the rows corrald serves for them, also those the open board
+/// does not carry: a child in Review whose gate failed draws that failure on its card, and a Done
+/// one counts as done on the path.
 #[test]
-fn a_long_plan_lists_eight_open_members_first_those_waiting_on_you_then_the_rest_as_one_line() {
-    use RailGlyph::Pending;
+fn a_plan_page_lists_its_children_from_their_served_rows() {
     let mut feed = Feed::default();
-    let members: Vec<PlanMember> = (1..=40)
-        .map(|n| member(&format!("T-{}", 100 + n), [Pending; 4]))
+    feed.board_received(1, vec![], &[], true);
+    let mut red = task_row(task("T-2", Status::Review));
+    red.gate = Some(corral_types::Check {
+        task: "T-2".into(),
+        kind: corral_types::CheckKind::Gate,
+        key: "4a72ec4f00".into(),
+        result: corral_types::CheckResult::Fail,
+        notes: None,
+        log: None,
+        by: corral_types::Actor::Auto,
+        at: Timestamp::UNIX_EPOCH,
+        round: None,
+        run: None,
+    });
+    let landed = task_row(task("T-3", Status::Done));
+    let detail = PlanDetail {
+        parent: task("T-1", Status::Backlog),
+        children: vec![red.task.clone(), landed.task.clone()],
+        child_rows: Some(vec![red, landed]),
+    };
+    let plan = Id::new("T-1");
+    let brief = super::plan_brief(&feed, &plan, &detail);
+    let members: Vec<&str> = brief
+        .graph
+        .members
+        .iter()
+        .map(|member| member.id.as_str())
         .collect();
-    // The last three of forty wait on the owner: urgency, not plan order, brings them up.
-    for task in ["T-138", "T-139", "T-140"] {
-        let key = format!("q-{task}");
-        feed.inbox.insert(
-            key.as_str().into(),
-            owner_move(&key, task, InboxKind::WorkerQuestion),
-        );
-    }
-    let path = path_to_done(&feed, &Id::from("T-1"), &detail(members));
-    let items = &path.steps[1].items;
-    assert_eq!(items.len(), 9);
-    for (item, task) in items.iter().zip(["T-138", "T-139", "T-140"]) {
-        assert!(
-            item.text.starts_with(task),
-            "{} leads with {task}",
-            item.text
-        );
-    }
-    let rest = &items[8];
-    assert_eq!(rest.text, "+32 more");
-    assert!(rest.action.is_none());
-    assert_eq!(rest.hint, "32 more members: 32 waiting");
+    assert_eq!(members, ["T-2", "T-3"]);
+    assert_eq!(brief.graph.members[0].stage.marks[1], Mark::Fail);
+    assert_eq!((brief.path.done, brief.path.total), (1, 2));
 }

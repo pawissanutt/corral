@@ -3,7 +3,7 @@
 use super::{
     app::{self, AppState, Outgoing},
     core::Event,
-    credentials, map,
+    credentials,
     requests::{self, ClientRequest},
     session::Session,
 };
@@ -75,9 +75,7 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                 Ok((mut session, welcome, capable, saved)) => {
                     let store = welcome.daemon.store.clone();
                     state.welcomed(feed, &welcome);
-                    feed.update(|feed| {
-                        feed.welcome_received(welcome.daemon.store, map::health(welcome.health))
-                    });
+                    feed.update(|feed| feed.welcome_received(welcome.daemon.store, welcome.health));
                     let mut current = None;
                     let mut outgoing = Vec::new();
                     if !capable {
@@ -125,7 +123,13 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                         session = returned;
                         tick(feed);
                         if app::handles(&event) {
-                            if matches!(&event, Event::Board { .. }) {
+                            if matches!(
+                                &event,
+                                Event::Rows {
+                                    delta: corral_protocol::subscription::SubDelta::Tasks { .. },
+                                    ..
+                                }
+                            ) {
                                 failures = 0;
                             }
                             match state.event_async(feed, event).await {
@@ -202,11 +206,9 @@ pub(super) fn start(feed: Signal<Feed>, socket: Result<PathBuf, String>) {
                                 }
                             },
                             Event::Health(_)
-                            | Event::Board { .. }
                             | Event::Rows { .. }
                             | Event::Reset { .. }
-                            | Event::TopicError { .. }
-                            | Event::Live { .. } => {
+                            | Event::TopicError { .. } => {
                                 feed.update(|feed| {
                                     feed.link_lost("unhandled daemon application event".into())
                                 });

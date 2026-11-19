@@ -199,7 +199,7 @@ test("browser settings respect role availability and must be resolved by corral"
   expect(browserSettings("worker", ["browser"], resolved)).toEqual(settings);
   expect(browserSettings("worker", [], resolved)).toBeUndefined();
   expect(() => browserSettings("reviewer", ["browser"], resolved)).toThrow(/not available to the reviewer/);
-  expect(browserSettings("pm", ["browser"], resolved)).toEqual(settings);
+  expect(browserSettings("assistant", ["browser"], resolved)).toEqual(settings);
   expect(() => browserSettings("worker", ["browser"], { browser: { origins: ["ftp://x"], timeout_ms: 1 } })).toThrow(/malformed/);
   expect(() => browserSettings("worker", ["browser"], undefined)).toThrow(/malformed/);
 });

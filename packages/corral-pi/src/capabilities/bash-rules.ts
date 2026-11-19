@@ -1,8 +1,4 @@
-// Bash allow/ask/deny rules (T-572). Rust resolves the rules once per generation; the host
-// decides every bash call, top-level or nested, before it runs. Deny wins over ask and ask
-// over allow. An ask runs only after the owner answers a corral_ask permission question bound
-// to that exact command, and the rerun is decided again from the start.
-import { createHash } from "node:crypto";
+// Session-configured allow/ask/deny rules; deny wins over ask and ask wins over allow.
 
 import { z } from "zod";
 
@@ -27,7 +23,6 @@ export interface BashDecision {
   readonly segment?: string;
 }
 
-export const PERMISSION_REF = "bash-permission:";
 const NESTING_MAX = 4;
 /**
  * A shell invocation: its options (`-o name`, `--long`, short clusters such as `-lc`), then the
@@ -92,85 +87,4 @@ export function decideBash(command: string, rules: BashRuleSettings): BashDecisi
   const unmatched = parts.find((piece) => !allowed.some((matcher) => matcher.test(piece)));
   if (parts.length > 0 && unmatched === undefined) return { action: "allow", rule: "allow list" };
   return { action: rules.default, ...(unmatched ? { segment: unmatched } : {}) };
-}
-
-export function commandDigest(command: string): string {
-  return createHash("sha256").update(command).digest("hex");
-}
-
-const ANSWER = /^(?:Corrected answer|Answer) to (\S+) \(revision \d+\) by (\w+):/;
-const OPTION = /\nChosen option: ([^\n]*)$/;
-
-/**
- * One-shot owner grants for `ask` commands. A grant exists only when this host refused the
- * exact command, a committed corral_ask of kind permission quoted it and named its digest, and
- * the inbox delivered the owner's answer to that question choosing `allow`. The PM cannot
- * answer permission questions; a correction to any other option revokes an unused grant.
- */
-export class BashPermissions {
-  private readonly requested = new Map<string, string>();
-  private readonly questions = new Map<string, string>();
-  private readonly granted = new Set<string>();
-
-  request(command: string, decision: BashDecision): string {
-    const digest = commandDigest(command);
-    this.requested.set(digest, command);
-    return `bash rule ${JSON.stringify(decision.rule ?? `default ${decision.action}`)} requires owner permission for `
-      + `${JSON.stringify(decision.segment ?? command)}. Nothing ran. To ask, call corral_ask with kind "permission", `
-      + `options ["allow", "deny"], context_refs ["${PERMISSION_REF}${digest}"] and a text that quotes the exact `
-      + "command. When the owner's answer arrives choosing allow, run the identical command once more: each answer "
-      + "permits one run.";
-  }
-
-  observeAsk(input: Record<string, unknown>, receipt: unknown): boolean {
-    const result = receipt as { state?: unknown; result?: { key?: unknown } } | undefined;
-    const key = result?.state === "committed" ? result.result?.key : undefined;
-    if (input.kind !== "permission" || typeof key !== "string" || typeof input.text !== "string") return false;
-    const refs = Array.isArray(input.context_refs) ? input.context_refs : [];
-    for (const ref of refs) {
-      if (typeof ref !== "string" || !ref.startsWith(PERMISSION_REF)) continue;
-      const digest = ref.slice(PERMISSION_REF.length);
-      const command = this.requested.get(digest);
-      if (command !== undefined && input.text.includes(command)) {
-        this.questions.set(key, digest);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  observeAnswer(text: string): "granted" | "revoked" | undefined {
-    const envelope = /^\[corral envelope (\S+)@env\d+\]\n\[corral framing escaped-v1\]\n\n/.exec(text);
-    if (envelope) {
-      const marker = `\n\n[corral ${envelope[1]}#`;
-      const members = (`\n\n${text.slice(envelope[0].length)}`).split(marker).slice(1);
-      let result: "granted" | "revoked" | undefined;
-      for (const member of members) {
-        const frame = /^\d+ (question_answer|question_correction)\]\n/.exec(member);
-        if (!frame) continue;
-        result = this.observeAnswerBody(member.slice(frame[0].length)) ?? result;
-      }
-      return result;
-    }
-    // Frozen envelopes from older versions lack unambiguous member boundaries.
-    if (text.startsWith("[corral envelope ")) return undefined;
-    return this.observeAnswerBody(text);
-  }
-
-  private observeAnswerBody(text: string): "granted" | "revoked" | undefined {
-    const header = ANSWER.exec(text);
-    const digest = header ? this.questions.get(header[1] ?? "") : undefined;
-    if (!header || digest === undefined) return undefined;
-    const option = OPTION.exec(text)?.[1]?.trim().toLowerCase();
-    if (header[2] !== "Pm" && option === "allow") {
-      this.granted.add(digest);
-      return "granted";
-    }
-    this.granted.delete(digest);
-    return "revoked";
-  }
-
-  consume(command: string): boolean {
-    return this.granted.delete(commandDigest(command));
-  }
 }

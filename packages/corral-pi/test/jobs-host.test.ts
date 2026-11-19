@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,15 +12,14 @@ import { EventLog } from "../src/bridge/events.ts";
 import { type JobRuntime, startTimeOf } from "../src/extensions/jobs/runtime.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
-import { HostSession, authContext } from "../src/host/session.ts";
+import { HostSession } from "../src/host/session.ts";
 import { reviewerRole } from "../src/roles/reviewer/index.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
 import type { CapabilitySet, RoleContext } from "../src/roles/types.ts";
-import { CorralClient, sha256Hex, toolRequestId } from "../src/tools/corral.ts";
-import { fixtureTransport } from "./fixtures/auth/index.ts";
-import { requestBody } from "./fixtures/auth/fake-transport.ts";
+import { CorralClient } from "../src/tools/corral.ts";
+import { fakeCodexTransport, requestBody } from "./fixtures/auth/fake-transport.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 import { nextEvent } from "./support/wait.ts";
 
 const capabilities: CapabilitySet = {
@@ -30,72 +29,89 @@ const guidance = {
   settings: { background_shell: { max_jobs: 2, max_output_bytes: 4096, max_runtime_secs: 60 } }, projectText: false,
 };
 
-test("background_shell gives only the worker job tools, and another tool cannot nest the receipted monitor", async () => {
-  // Given a worker host with background_shell and a nested tool that tries the monitor.
+test("a worker starts, peeks and kills managed jobs; a nested monitor wakes it once after exit", async () => {
   const assets = buildFixtureInstall();
   const cwd = mkdtempSync(join(tmpdir(), "corral-pi-jobs-host-"));
+  const gate = join(cwd, "gate"), ready = join(cwd, "ready");
   try {
     restrictEnvironment(process.env);
     const sdk = await import("@earendil-works/pi-coding-agent");
     const modules = await loadModules(assets.dir, "worker");
-    const transport = modules.auth.transport?.(authContext());
-    if (!transport) throw new Error("fixture transport missing");
+    const transport = fakeCodexTransport();
     const declared: { name: string; description: string }[][] = [];
     const network = guardedFetch(async (input, init) => {
       type DeclaredTool = { name: string; description: string };
       const body = requestBody(init) as { tools?: DeclaredTool[]; input?: { tools?: DeclaredTool[] }[] };
       declared.push([...(body.tools ?? []), ...(body.input ?? []).flatMap(item => item.tools ?? [])]);
-      return transport(input, init);
+      return transport.send(input, init);
     }, undefined, "openai-codex");
     const role = workerRole(PACKAGE_ROOT);
     const nested: ToolDefinition = {
       name: "fixture_nested", label: "Nested monitor", description: "Exercises nested execution",
-      parameters: Type.Object({}),
-      async execute(_id, _params, signal, _update, ctx) {
-        const outcome = await ctx.executeTool("corral_job_monitor", { job: "j1-1", on: "exit" }, { signal });
-        expect(outcome.isError).toBeTrue();
+      parameters: Type.Object({ job: Type.String() }),
+      async execute(_id, { job }: { job: string }, signal, _update, ctx) {
+        await readFile(ready, "utf8");
+        const outcome = await ctx.executeTool("corral_job_monitor", { job, on: "exit" }, { signal });
+        expect(outcome.isError).toBeFalse();
         return outcome.result;
       },
     };
-    const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-565", run: "R1" };
-    const events = new EventLog(1);
-    const corral = writeFakeCorral(cwd);
-    let host: HostSession | undefined;
-    const client = new CorralClient({
-      corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
-    });
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const, task: "T-565", run: "R1" };
+    const events = new EventLog();
+    const engine = writeFakeEngine(cwd);
+    const client = new CorralClient({ corral: engine.path, root: cwd, cwd, identity });
     const options = {
-      sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol",
+      sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", ui: "plain" as const,
       capabilities: { ...capabilities, enabled: [...capabilities.enabled, "codemode"] }, guidance, client, events,
       network, runtimeDir: join(cwd, "runtime"),
       sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")),
     };
-    host = await HostSession.create({
+    const host = await HostSession.create({
       ...options,
       modules: { ...modules, role: {
         ...role, localToolNames: [...role.localToolNames ?? [], nested.name],
         localTools: (context: RoleContext) => [...role.localTools?.(context) ?? [], nested],
       } },
     });
-    const gate = join(cwd, "gate");
-    expect(spawnSync("mkfifo", [gate]).status).toBe(0);
+    for (const fifo of [gate, ready]) expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
     try {
       await host.session.bindExtensions({});
-      await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
-      expect(["job_start", "job_output", "job_kill", "corral_job_monitor"].every((name) => host?.loadout.includes(name)))
+      await host.startLocal();
+      expect(["job_start", "job_output", "job_kill", "corral_job_monitor"].every((name) => host.loadout.includes(name)))
         .toBeTrue();
-      // When the model starts a job, tries the monitor nested, then registers it directly.
-      fixtureTransport().script([
-        { toolCalls: [{ callId: "start", name: "job_start", arguments: { command: `cat ${gate} >/dev/null` } }] },
-        { toolCalls: [{ callId: "nested", name: nested.name, arguments: {} }] },
-        { toolCalls: [{ callId: "monitor", name: "corral_job_monitor", arguments: { job: "j1-1", on: "exit" } }] },
-        { text: "Waiting for the job" },
+      // Hold the jobs behind FIFOs until their returned IDs can be used by the next turn.
+      transport.script([
+        { toolCalls: [{ callId: "start", name: "job_start", arguments: { command: `cat "${gate}" >/dev/null; echo BUILT` } }] },
+        { toolCalls: [{ callId: "start-b", name: "bash", arguments: {
+          command: `echo ready > "${ready}"; exec sleep 30`, wait_ms: 0,
+        } }] },
+        { text: "Jobs launched" },
       ]);
       const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-      expect((await host.submit({ text: "go", busyPolicy: "prompt", idempotencyKey: "go", origin: "test" }, "rq-go"))
-        .disposition).toBe("started");
+      expect((await host.submitLocal({ text: "go", busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
       await ended;
       await host.drained();
+      const result = (id: string) => host.session.messages.find(message => message.role === "toolResult" &&
+        message.toolCallId.startsWith(`${id}|`));
+      const ids = ["start", "start-b"].map(id => {
+        const message = result(id);
+        const details = message?.role === "toolResult" && !message.isError ? message.details : undefined;
+        return details && typeof details === "object" && "job" in details ? details.job : undefined;
+      });
+      const [job, second] = ids;
+      if (typeof job !== "string" || typeof second !== "string") {
+        throw new Error(`job IDs missing: ${JSON.stringify([result("start"), result("start-b")])}`);
+      }
+
+      transport.script([
+        { toolCalls: [{ callId: "peek", name: "job_output", arguments: { job } }] },
+        { toolCalls: [{ callId: "nested", name: nested.name, arguments: { job } }] },
+        { toolCalls: [{ callId: "kill", name: "job_kill", arguments: { job: second } }] },
+        { text: "Waiting for the job" },
+      ]);
+      const armed = nextEvent(events, event => event.kind === "turn_ended");
+      expect((await host.submitLocal({ text: "Watch the first job", busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
+      await armed;
       // The legacy scripted caller still runs, but neither provider schemas nor Code Mode advertise it.
       expect(declared.length).toBeGreaterThan(0);
       for (const tools of declared) {
@@ -105,29 +121,37 @@ test("background_shell gives only the worker job tools, and another tool cannot 
         expect(description).toContain("bash");
         expect(description).not.toContain("job_start");
       }
-      const exited = nextEvent(events, (event) => event.kind === "job_exited");
+      expect(result("peek")).toMatchObject({ isError: false, details: { job, state: "running" } });
+      expect(result("kill")).toMatchObject({ isError: false, details: { job: second, state: "exited", signal: "SIGTERM" } });
+      const monitor = result("nested");
+      expect(monitor).toMatchObject({ isError: false, details: { state: "armed", job, on: "exit" } });
+      const details = monitor?.role === "toolResult" ? monitor.details : undefined;
+      if (!details || typeof details !== "object" || !("wait" in details) || !("deadline" in details)) {
+        throw new Error("monitor result missing its wait or deadline");
+      }
+      expect(typeof details.wait).toBe("string");
+      expect(typeof details.deadline === "string" && Number.isFinite(Date.parse(details.deadline))).toBeTrue();
+      expect(host.state().jobs).toMatchObject([
+        { job, state: "running" }, { job: second, state: "exited", group_clear: true },
+      ]);
+
+      const exited = nextEvent(events, event => event.kind === "job_exited" && event.job === job);
+      const woken = nextEvent(events, event => event.kind === "turn_ended" && event.turn === 3);
+      transport.script([{ text: "Build complete" }]);
       await writeFile(gate, "go\n");
       await exited;
-      // Then the nested attempt never reached corral, the direct monitor carried its tool-call request ID, and
-      // the job was recorded before and after it ran.
-      const jobCalls = corral.calls().map((call) => call.envelope).filter((e) => e.op === "job" || e.op === "job_monitor");
-      expect(jobCalls.map((e) => e.op === "job" ? e.payload.action : e.op))
-        .toEqual(["prepare", "started", "job_monitor", "exited"]);
-      const sessionId = host.sessionId();
-      const callId = (name: string) => host?.session.messages.flatMap((message) =>
-        message.role === "assistant" ? message.content.filter((part) => part.type === "toolCall") : [])
-        .find((part) => part.name === name)?.id ?? "";
-      expect(jobCalls[2]?.request_id).toBe(toolRequestId(sessionId, callId("corral_job_monitor")));
-      expect(jobCalls[0]?.request_id).toBe(toolRequestId(sessionId, `${callId("job_start")}/prepare`));
-      // Callable from Code Mode (journaled), so the host's check, not exposure, refuses other nesting.
-      expect(host.session.getAllTools().find(tool => tool.name === "corral_job_monitor")?.exposure).toBe("direct");
-      expect(events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
-        .filter((event) => event.kind === "tool_denied").map((event) => [event.tool, event.nested]))
-        .toEqual([["corral_job_monitor", true]]);
-      expect((host.state().jobs as { job: string; state: string }[]).map((job) => [job.job, job.state]))
-        .toEqual([["j1-1", "exited"]]);
+      await woken;
+      expect(readFileSync(join(cwd, "runtime", "jobs", `${job}.log`), "utf8")).toBe("BUILT\n");
+      const notices = host.session.messages.flatMap(message => message.role === "user"
+        ? (typeof message.content === "string" ? [message.content] : message.content.flatMap(part => part.type === "text" ? [part.text] : []))
+        : []).filter(text => text.includes("[command monitor") || text.includes("[command completed"));
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toContain(`[command monitor ${job}] job exited`);
+      expect(host.state().jobs).toMatchObject([
+        { job, state: "exited", exit_code: 0, group_clear: true }, { job: second, state: "exited" },
+      ]);
     } finally {
-      host.session.dispose();
+      await host.close();
     }
     // And a reviewer launched with the capability is refused as a mismatched install.
     const reviewerModules = await loadModules(assets.dir, "reviewer");
@@ -136,16 +160,16 @@ test("background_shell gives only the worker job tools, and another tool cannot 
       modules: { ...reviewerModules, role: reviewerRole(PACKAGE_ROOT) },
       sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions-reviewer")),
     })).rejects.toThrow("module_invalid");
-    // And a worker module that allows no job ops (a fixture role) starts without the job tools.
+    // Without the capability, a worker has none of the managed job tools.
     const without = await HostSession.create({
       ...options,
-      modules: { ...modules, role: { ...role, corralOps: role.corralOps.filter((op) => op !== "job" && op !== "job_monitor") } },
+      capabilities: { ...capabilities, enabled: [] }, modules: { ...modules, role },
       sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions-plain")),
     });
     try {
       expect(without.loadout.some((name) => name.startsWith("job_") || name === "corral_job_monitor")).toBeFalse();
     } finally {
-      without.session.dispose();
+      await without.close();
     }
   } finally {
     assets.cleanup();
@@ -153,72 +177,45 @@ test("background_shell gives only the worker job tools, and another tool cannot 
   }
 }, 120_000);
 
-test("host close fences a job whose prepare is in flight", async () => {
+test("host close clears normal and TERM-resistant job groups", async () => {
   const assets = buildFixtureInstall();
   const cwd = mkdtempSync(join(tmpdir(), "corral-pi-close-start-"));
+  let host: HostSession | undefined;
   try {
     restrictEnvironment(process.env);
     const sdk = await import("@earendil-works/pi-coding-agent");
     const modules = await loadModules(assets.dir, "worker");
-    const transport = modules.auth.transport?.(authContext());
-    if (!transport) throw new Error("fixture transport missing");
-    const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-565", run: "R1" };
-    const events = new EventLog(1);
-    const corral = writeFakeCorral(cwd);
-    let host: HostSession | undefined;
-    const client = new CorralClient({ corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64),
-      sessionId: () => host?.sessionId() ?? "" });
-    let holdPrepare = false;
-    let prepared!: () => void;
-    const prepareEntered = new Promise<void>((resolve) => { prepared = resolve; });
-    let release!: () => void;
-    const barrier = new Promise<void>((resolve) => { release = resolve; });
-    const call = client.call.bind(client);
-    client.call = async (op, request) => {
-      const receipt = await call(op, request);
-      if (holdPrepare && op === "job" && request.payload.action === "prepare") {
-        prepared();
-        await barrier;
-      }
-      return receipt;
-    };
+    const transport = fakeCodexTransport();
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const, task: "T-565", run: "R1" };
+    const events = new EventLog();
+    const engine = writeFakeEngine(cwd);
+    const client = new CorralClient({ corral: engine.path, root: cwd, cwd, identity });
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol",
-      capabilities, guidance: { ...guidance, settings: { background_shell: { ...guidance.settings.background_shell, max_jobs: 3 } } },
-      client, events, network: guardedFetch(transport, undefined, "openai-codex"),
+      capabilities, guidance,
+      client, events, network: guardedFetch(transport.send, undefined, "openai-codex"),
       runtimeDir: join(cwd, "runtime"), modules: { ...modules, role: workerRole(PACKAGE_ROOT) },
       sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")) });
     await host.session.bindExtensions({});
-    await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+    await host.startLocal();
     const jobs = (host as unknown as { jobs: JobRuntime }).jobs;
     const ready = join(cwd, "ready");
     expect(spawnSync("mkfifo", [ready]).status).toBe(0);
-    const normal = await jobs.start("sleep 30", "normal");
-    const stubborn = await jobs.start(`trap '' TERM; echo ready > ${ready}; exec sleep 30`, "stubborn");
+    const normal = await jobs.start("sleep 30");
+    const stubborn = await jobs.start(`trap '' TERM; echo ready > "${ready}"; exec sleep 30`);
     await readFile(ready, "utf8");
-    holdPrepare = true;
-    const shutdown = jobs.shutdown.bind(jobs);
-    let closing!: () => void;
-    const shutdownEntered = new Promise<void>((resolve) => { closing = resolve; });
-    jobs.shutdown = () => { const result = shutdown(); closing(); return result; };
-    fixtureTransport().script([{ toolCalls: [{ callId: "start", name: "job_start", arguments: { command: "sleep 30" } }] }]);
-    await host.submit({ text: "go", busyPolicy: "prompt", idempotencyKey: "go", origin: "test" }, "rq-go");
-    await prepareEntered;
-    const closed = host.close();
-    await shutdownEntered;
-    release();
-    await closed;
-    const actions = corral.calls().map((item) => item.envelope).filter((item) => item.op === "job")
-      .map((item) => item.payload.action);
-    expect(actions.filter((action) => action === "prepare")).toHaveLength(3);
-    expect(actions.filter((action) => action === "started")).toHaveLength(2);
-    for (const job of [normal, stubborn]) expect(startTimeOf(job.pid as number)).toBeUndefined();
+    await host.close();
+    for (const { pid } of [normal, stubborn]) {
+      if (typeof pid !== "number") throw new Error("job did not report its launcher PID");
+      expect(startTimeOf(pid)).toBeUndefined();
+    }
   } finally {
+    await host?.close();
     assets.cleanup();
     rmSync(cwd, { recursive: true, force: true });
   }
 }, 120_000);
 
-test("background jobs obey the worker's bash rules: deny and ask stop job_start before anything is recorded", async () => {
+test("background jobs obey bash rules before a command is started", async () => {
   // Given a worker with background_shell and bash rules that deny rm and ask before touch.
   const assets = buildFixtureInstall();
   const cwd = mkdtempSync(join(tmpdir(), "corral-pi-jobs-rules-"));
@@ -226,18 +223,14 @@ test("background jobs obey the worker's bash rules: deny and ask stop job_start 
     restrictEnvironment(process.env);
     const sdk = await import("@earendil-works/pi-coding-agent");
     const modules = await loadModules(assets.dir, "worker");
-    const transport = modules.auth.transport?.(authContext());
-    if (!transport) throw new Error("fixture transport missing");
-    const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-565", run: "R1" };
-    const events = new EventLog(1);
-    const corral = writeFakeCorral(cwd);
-    let host: HostSession | undefined;
-    const client = new CorralClient({
-      corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
-    });
-    host = await HostSession.create({
+    const transport = fakeCodexTransport();
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const, task: "T-565", run: "R1" };
+    const events = new EventLog();
+    const engine = writeFakeEngine(cwd);
+    const client = new CorralClient({ corral: engine.path, root: cwd, cwd, identity });
+    const host = await HostSession.create({
       sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", client, events,
-      network: guardedFetch(transport, undefined, "openai-codex"), runtimeDir: join(cwd, "runtime"),
+      network: guardedFetch(transport.send, undefined, "openai-codex"), runtimeDir: join(cwd, "runtime"),
       capabilities: { ...capabilities, enabled: ["background_shell", "bash_rules"] },
       guidance: { projectText: false, settings: {
         ...guidance.settings, bash_rules: { allow: [], ask: ["touch asked*"], deny: ["rm *"], default: "allow" },
@@ -247,33 +240,32 @@ test("background jobs obey the worker's bash rules: deny and ask stop job_start 
     });
     try {
       await host.session.bindExtensions({});
-      await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+      await host.startLocal();
       // When the model starts a denied, an ask-gated and an allowed job.
-      fixtureTransport().script([
+      transport.script([
         { toolCalls: [{ callId: "deny", name: "job_start", arguments: { command: "rm notes.txt" } }] },
         { toolCalls: [{ callId: "ask", name: "job_start", arguments: { command: "touch asked.txt" } }] },
-        { toolCalls: [{ callId: "allow", name: "job_start", arguments: { command: "true" } }] },
+        { toolCalls: [{ callId: "allow", name: "bash", arguments: { command: "true" } }] },
         { text: "Done" },
       ]);
       const ended = nextEvent(events, (event) => event.kind === "turn_ended");
       const exited = nextEvent(events, (event) => event.kind === "job_exited");
-      expect((await host.submit({ text: "go", busyPolicy: "prompt", idempotencyKey: "go", origin: "test" }, "rq-go"))
-        .disposition).toBe("started");
+      expect((await host.submitLocal({ text: "go", busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
       await ended;
       await exited;
       await host.drained();
-      // Then only the allowed command became a job; the others were refused before any record.
-      const live = host;
-      const result = (name: string) => live.session.messages.filter((m) => m.role === "toolResult" && m.toolName === "job_start")
-        .map((m) => (m.role === "toolResult" ? { isError: m.isError, text: m.content.map((p) => (p.type === "text" ? p.text : "")).join("") } : undefined))[["deny", "ask", "allow"].indexOf(name)];
-      expect(result("deny")).toEqual({ isError: true, text: 'bash rule "rm *" denies "rm notes.txt"; nothing ran' });
-      expect(result("ask")?.isError).toBeTrue();
-      expect(result("allow")?.isError).toBeFalse();
-      const prepared = corral.calls().map((call) => call.envelope)
-        .filter((e) => e.op === "job" && e.payload.action === "prepare").map((e) => e.payload.command);
-      expect(prepared).toEqual(["true"]);
+      // Only the allowed command acquired a job, and the confirmation is visible to the owner.
+      const results = host.session.messages.flatMap(message => message.role === "toolResult" ? [message] : []);
+      const denied = results.find(message => message.toolCallId.startsWith("deny|"));
+      expect(denied).toMatchObject({ isError: true, content: [
+        { type: "text", text: 'bash rule "rm *" denies "rm notes.txt"; nothing ran' },
+      ] });
+      expect(results.find(message => message.toolCallId.startsWith("ask|"))?.isError).toBeTrue();
+      expect(results.find(message => message.toolCallId.startsWith("allow|"))?.isError).toBeFalse();
+      expect(host.pendingOwnerQuestions().map(question => question.options)).toEqual([["allow", "deny"]]);
+      expect(host.state().jobs).toMatchObject([{ state: "exited", exit_code: 0 }]);
     } finally {
-      host.session.dispose();
+      await host.close();
     }
   } finally {
     assets.cleanup();

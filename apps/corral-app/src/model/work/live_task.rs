@@ -1,12 +1,14 @@
-//! The selected daemon task in the inspector and on the phone's task page: its board row's
-//! facts with the task detail corrald serves (owner revision, body, run, dependencies, holds,
-//! artifacts, plan position, log tail), the detail's loading, stale and error states, and the
-//! commands the task's state allows, each with this device's last command and its outcome.
+//! The selected daemon task in the inspector and on the phone's task page: its served row (the
+//! task, its live run, its gate and review checks, whether it is ready) with the task detail
+//! corrald serves (runs, checks, artifacts, events), the detail's loading, stale and error
+//! states, a Blocked task's reason, detail and next steps, every engine operation, and this
+//! device's last operation on it with its outcome.
 
-use corral_protocol::detail::{DetailBody, DetailRef, TaskDetail, TaskHold};
+use corral_protocol::detail::{DetailBody, DetailRef, TaskDetail};
+use corral_types::{Outcome, Role, Run, SessionRef, Status};
 
 use crate::model::act::{self, ActStatus};
-use crate::model::board::{Actor, Mark, STAGES, daemon_actor, money, stage_word};
+use crate::model::board::{Actor, Mark, STAGES, daemon_actor, stage_word};
 use crate::model::daemon::{self, Feed, Link};
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
@@ -15,9 +17,9 @@ use crate::model::text::{Rich, span};
 use crate::model::{Id, Live, Selection};
 
 use super::{
-    Button, ButtonKind, Dependency, EMPTY_BOARD, GroupKey, Inspector, NO_BOARD, NowTab, Press,
-    Progress, Record, Stage, State, Tail, TailLine, ago, daemon_selection_filtered, group_key,
-    stamp, task_question, task_session, when,
+    Button, ButtonKind, Dependency, EMPTY_BOARD, Inspector, NO_BOARD, NowTab, Press, Record, Stage,
+    State, Tail, TailLine, daemon_selection_filtered, group_key, group_label, session_for, stamp,
+    stamp_at, when_at,
 };
 
 /// The detail reference of a task.
@@ -93,17 +95,50 @@ pub enum Fact {
     Text(Rich),
     /// Task ids that open the task.
     Tasks(Vec<Dependency>),
-    /// The owner's canonical attention destination (question, review, plan or task).
+    /// The owner's move, as one button.
     Answer(Button),
 }
 
-/// This device's last command on the task, with its outcome as far as the device knows.
+/// This device's last operation on the task, with its outcome as far as the device knows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SentLine {
     pub text: String,
     pub hue: Hue,
-    /// Ask corrald for an unknown outcome under the same command id.
-    pub recover: Option<Button>,
+}
+
+/// Why a Blocked task stopped and what gets it moving: the engine's reason, its detail, the
+/// reply box when the recommended step is a reply, and one button per other served next step,
+/// the first one primary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockedCard {
+    pub reason: String,
+    pub detail: Option<String>,
+    pub reply: Option<ReplyBox>,
+    pub next: Vec<Button>,
+}
+
+/// The recommended reply step in place: what the owner types goes out as that step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyBox {
+    pub task: Id,
+    /// The step's place in the served `next` list.
+    pub index: usize,
+    /// The field's spoken name.
+    pub label: String,
+    pub placeholder: &'static str,
+    /// The send button: the step as the refusal sheet would name it ("Reply", "Reply anyway").
+    pub send: String,
+}
+
+impl ReplyBox {
+    /// What pressing send runs with `text`.
+    pub fn press(&self, text: String) -> Press {
+        Press::Answer {
+            task: self.task.clone(),
+            index: self.index,
+            text,
+        }
+    }
 }
 
 /// The selected daemon task's story.
@@ -111,25 +146,24 @@ pub struct SentLine {
 pub struct LiveStory {
     pub id: String,
     pub title: String,
-    /// The heading of the group the task is in: who acts next.
+    /// The heading of the group the task is in: who moves next, or its closed status.
     pub who: &'static str,
     pub who_hue: Hue,
-    /// `· plan T-885`, opening the plan.
+    /// `· plan T-885`, opening the parent task's plan.
     pub plan: Option<(String, Press)>,
     /// The changed-since-visit chip, when the changes feed holds an unseen event for it.
     pub changed: Option<String>,
-    /// The task's goal, or its canonical status where it has none.
+    /// Words under the title; the engine serves none beyond the body.
     pub summary: Rich,
-    /// The task body's canonical Markdown, exactly as corrald bounds it.
+    /// The task body's Markdown, exactly as the engine stores it.
     pub body: Option<String>,
-    /// Run, gate, review, land, with each stage's sha and age where the daemon knows them.
+    /// Run, gate, review, land, with each stage's sha and age where the row records them.
     pub stages: [Stage; 4],
-    pub progress: Option<Progress>,
-    /// The progress's own words, if corrald gives any.
-    pub progress_note: Option<String>,
+    /// A Blocked task's reason, detail and next steps.
+    pub blocked: Option<BlockedCard>,
     /// Labelled facts in display order; facts corrald left out are absent.
     pub facts: Vec<(&'static str, Fact)>,
-    /// Open session, Ask about this, Review candidate, and the task's legal commands.
+    /// Open session, Ask about this, Review candidate, and every engine operation.
     pub actions: Vec<Button>,
     pub note: Option<DetailNote>,
     pub sent: Option<SentLine>,
@@ -139,18 +173,20 @@ pub struct LiveStory {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveEvidence {
     pub title: String,
-    /// Each artifact's title and its source reference with its media type.
+    /// Each artifact's title and its reference with its kind.
     pub rows: Vec<(String, String)>,
     pub empty: Option<&'static str>,
     pub note: Option<DetailNote>,
+    /// The finder over every task's artifacts, narrowed to this one.
+    pub find: Button,
 }
 
-/// The selected daemon task's run, session hand-off and log tail.
+/// The selected daemon task's run, session hand-off and terminal capture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveSession {
     pub description: &'static str,
     pub open: Option<Button>,
-    /// The run's identity, profile and timing.
+    /// The run's identity, role, profile and timing.
     pub run: Rich,
     pub tail: Option<Tail>,
     pub empty: Option<&'static str>,
@@ -161,8 +197,8 @@ pub struct LiveSession {
 pub const NO_ARTIFACTS: &str = "No artifacts recorded for this task.";
 /// Said by the Session tab when the task has no run.
 pub const NO_RUN: &str = "No run for this task yet.";
-/// Said where the log tail would be when corrald captured none.
-pub const NO_TAIL: &str = "No log lines captured for this run.";
+/// Said where the terminal would be when no capture of the run's session is loaded.
+pub const NO_TAIL: &str = "No terminal capture loaded; open the session to see its terminal.";
 
 /// The inspector in the Daemon state, for the selected task on the board.
 pub fn daemon_inspector_filtered(
@@ -212,7 +248,7 @@ pub fn task_inspector(
 
 /// A stage's detail: its candidate sha and how long ago it reached its state; an active stage
 /// takes the hue of whoever acts on it.
-pub(super) fn stage(step: &daemon::Step, index: usize, now: u64, actor: Actor) -> Stage {
+fn stage(step: &daemon::Step, index: usize, now: u64, actor: Actor) -> Stage {
     let active = step.mark == Mark::Active;
     let detail = [
         step.sha7.clone().unwrap_or_default(),
@@ -237,162 +273,91 @@ pub(super) fn stage(step: &daemon::Step, index: usize, now: u64, actor: Actor) -
     }
 }
 
-/// `reason · since 18:40 · by owner`, leaving out what corrald does not record.
-fn hold_text(hold: &TaskHold, feed: &Feed) -> Rich {
-    let mut text = vec![
-        span(
-            hold.reason
-                .clone()
-                .unwrap_or_else(|| "no reason recorded".into()),
-        )
-        .hue(Hue::Held),
-    ];
-    if let Some(since) = hold.since.as_deref().map(|at| when(at, feed)) {
-        text.push(span(format!(" · since {since}")).dim());
-    }
-    if let Some(by) = &hold.by {
-        text.push(span(format!(" · by {by}")).dim());
-    }
-    text
+/// The run the task's facts describe: the live one on its row, else the latest the detail
+/// lists.
+fn current_run<'a>(feed: &'a Feed, task: &'a daemon::Task) -> Option<&'a Run> {
+    task.row.run.as_ref().or_else(|| {
+        loaded_task(feed, &task.id)?
+            .runs
+            .iter()
+            .max_by_key(|run| run.started)
+    })
 }
 
-/// The kinds of attention keys (`T-935/escalation/2026-…Z` reads `escalation`), comma-separated,
-/// each once in first-seen order; a key without that shape is shown whole.
-fn attention_kinds(keys: &[String]) -> String {
-    let mut kinds: Vec<&str> = Vec::new();
-    for key in keys {
-        let kind = key
-            .split_once('/')
-            .and_then(|(_, rest)| rest.split_once('/'))
-            .map_or(key.as_str(), |(kind, _)| kind);
-        if !kinds.contains(&kind) {
-            kinds.push(kind);
-        }
-    }
-    kinds.join(", ")
-}
-
-/// The task's run line: `R2 · pi-sol · gpt-5 high · started 18:40`, or, before the detail
-/// arrives, the board row's agent.
-pub(super) fn run_text(
-    detail: Option<&TaskDetail>,
-    agent: Option<&daemon::Agent>,
-    feed: &Feed,
-) -> Rich {
-    if let Some(run) = detail.and_then(|detail| detail.run.as_ref()) {
-        let mut text = vec![span(run.id.clone()).mono()];
-        let model = [run.model.as_deref(), run.effort.as_deref()]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(" ");
-        for part in [run.profile.clone(), (!model.is_empty()).then_some(model)]
-            .into_iter()
-            .flatten()
-        {
-            text.push(span(format!(" · {part}")));
-        }
-        if let Some(started) = run.started_at.as_deref() {
-            text.push(span(format!(" · started {}", when(started, feed))).dim());
-        }
-        if let Some(ended) = run.ended_at.as_deref() {
-            text.push(span(format!(" · ended {}", when(ended, feed))).dim());
-        }
-        return text;
-    }
-    let Some(agent) = agent else {
+/// `R2 · worker · omp-sol · gpt-5 high · started 18:40 · ended 19:02`.
+fn run_text(run: Option<&Run>, feed: &Feed) -> Rich {
+    let Some(run) = run else {
         return Vec::new();
     };
-    let mut text = vec![span(agent.role.clone())];
-    for part in [&agent.profile, &agent.runtime, &agent.machine]
+    let mut text = vec![span(run.id.clone()).mono()];
+    let model = [run.model.as_deref(), run.effort.as_deref()]
         .into_iter()
         .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for part in [
+        Some(run.role.as_str().to_owned()),
+        Some(run.profile.clone()),
+        (!model.is_empty()).then_some(model),
+    ]
+    .into_iter()
+    .flatten()
     {
         text.push(span(format!(" · {part}")));
     }
+    text.push(span(format!(" · started {}", when_at(run.started, feed))).dim());
+    if let Some(ended) = run.ended {
+        text.push(span(format!(" · ended {}", when_at(ended, feed))).dim());
+    }
     text
 }
 
-/// The status of this device's last command on the task.
-pub(super) fn sent_line(state: &State, feed: &Feed, task: &str) -> Option<SentLine> {
+/// The status of this device's last operation on the task.
+fn sent_line(state: &State, feed: &Feed, task: &str) -> Option<SentLine> {
     let sent = state.sent_for(task)?;
-    let status = act::status(feed, &sent.key);
-    let (words, hue) = match &status {
+    let (words, hue) = match act::status(feed, &sent.key) {
         None => ("Waiting to send".to_owned(), Hue::Neutral),
-        Some(status) => (
-            status.line(),
-            match status {
+        Some(status) => {
+            let hue = match &status {
                 ActStatus::Done => Hue::Ok,
-                ActStatus::Failed(_) | ActStatus::Refused(_) | ActStatus::Conflict(_) => Hue::Fail,
-                ActStatus::Unknown => Hue::Held,
-                _ => Hue::Neutral,
-            },
-        ),
+                ActStatus::Failed(_) | ActStatus::Refused(_) => Hue::Fail,
+                ActStatus::Pending | ActStatus::Running => Hue::Neutral,
+            };
+            (status.line(), hue)
+        }
     };
     Some(SentLine {
         text: format!("{} · {words}", sent.title),
         hue,
-        recover: (status == Some(ActStatus::Unknown)).then(|| {
-            Button::new(
-                "Check result",
-                Press::Recover(sent.key.clone()),
-                ButtonKind::Quiet,
-            )
-            .enabled(feed.link == Link::Up)
-        }),
     })
 }
 
-/// Shared table controls, including the same disabled reasons shown in row menus.
-pub(super) fn verbs(state: &State, feed: &Feed, id: &Id) -> Vec<Button> {
-    let waiting = state
-        .sent_for(id)
-        .and_then(|sent| act::status(feed, &sent.key))
-        .is_some_and(|status| status.uncertain());
-    super::record_verbs(feed, &Record::Task(id.clone()))
+/// Every engine operation on the task, all enabled: the engine decides.
+fn verbs(id: &Id, feed: &Feed) -> Vec<Button> {
+    super::record_verbs(&Record::Task(id.clone()), feed)
         .into_iter()
-        .map(|verb| {
-            let mut button = Button::new(verb.label, verb.press, ButtonKind::Ghost)
-                .enabled(verb.enabled && !waiting);
-            button.reason = if waiting {
-                Some("Check the previous command's result before acting again.".into())
-            } else {
-                verb.reason
-            };
-            button
-        })
+        .map(|verb| Button::new(verb.label, verb.press, ButtonKind::Ghost))
         .collect()
 }
 
-/// Open session, Ask about this and Review candidate, in the mockup's order and wording; the
-/// phone's shorter labels.
-pub fn task_buttons(feed: &Feed, task: &daemon::Task, phone: bool) -> Vec<Button> {
-    // Only a recorded candidate can be reviewed: the run's head in the task detail, or a
-    // candidate sha on the board's gate or review stage. A stage's mark alone says nothing.
-    let candidate = loaded_task(feed, &task.id)
-        .and_then(|detail| detail.run.as_ref()?.head.as_ref())
-        .is_some()
-        || task.rail[1..=2].iter().any(|step| step.sha7.is_some());
-    record_buttons(
-        &task.id,
-        task_session(feed, task),
-        Some(task.rev),
-        candidate,
-        phone,
-    )
+/// Whether the task has a candidate to review: it is in Review, a gate ran on its head, or a
+/// worker run finished.
+fn has_candidate(feed: &Feed, task: &daemon::Task) -> bool {
+    task.status() == Status::Review
+        || task.row.gate.is_some()
+        || loaded_task(feed, &task.id).is_some_and(|detail| {
+            detail
+                .runs
+                .iter()
+                .any(|run| run.role == Role::Worker && run.outcome == Some(Outcome::Done))
+        })
 }
 
-/// Open session (when the task has one), Ask about this at the revision shown, and Review
-/// candidate (when one is recorded).
-pub(super) fn record_buttons(
-    id: &Id,
-    session: Option<Id>,
-    rev: Option<u64>,
-    candidate: bool,
-    phone: bool,
-) -> Vec<Button> {
+/// Open session (when the task has one), Ask about this and Review candidate (when there is a
+/// candidate), in the mockup's order and wording; the phone's shorter labels.
+pub fn task_buttons(feed: &Feed, task: &daemon::Task, phone: bool) -> Vec<Button> {
     let mut buttons = Vec::new();
-    if let Some(session) = session {
+    if let Some(session) = session_for(feed, &task.id) {
         buttons.push(Button::new(
             if phone { "Session" } else { "Open session" },
             Press::Open(Live::Session(session)),
@@ -406,15 +371,15 @@ pub(super) fn record_buttons(
     buttons.push(Button::new(
         "Ask about this",
         Press::Ask {
-            about: Live::Task(id.clone()),
-            rev,
+            about: Live::Task(task.id.clone()),
+            rev: None,
         },
         ButtonKind::Ghost,
     ));
-    if candidate {
+    if has_candidate(feed, task) {
         buttons.push(Button::new(
             if phone { "Review" } else { "Review candidate" },
-            Press::Open(Live::Review(id.clone())),
+            Press::Open(Live::Review(task.id.clone())),
             if phone {
                 ButtonKind::Ghost
             } else {
@@ -425,58 +390,134 @@ pub(super) fn record_buttons(
     buttons
 }
 
-/// The detail's facts in display order: what the task needs (each id opening its task), its
-/// hold and park, its plan position and its canonical status.
-pub(super) fn detail_facts(
-    detail: &TaskDetail,
-    feed: &Feed,
-    facts: &mut Vec<(&'static str, Fact)>,
-) {
-    let needs: Vec<Dependency> = detail
-        .dependencies
-        .iter()
-        .map(|dependency| Dependency {
-            id: dependency.id.clone(),
-            mark: if dependency.satisfied {
-                Mark::Done
-            } else {
-                Mark::Next
-            },
-            show_mark: true,
-            action: Press::Open(Live::Task(dependency.id.as_str().into())),
-        })
-        .collect();
-    facts.push((
-        "Needs",
-        if needs.is_empty() {
-            Fact::Text(vec![span("nothing")])
-        } else {
-            Fact::Tasks(needs)
-        },
-    ));
-    if let Some(hold) = &detail.hold {
-        facts.push(("Held", Fact::Text(hold_text(hold, feed))));
+/// The reply box's field (`field-reply`), which Now's `R` puts the keyboard focus in.
+pub const REPLY_FIELD: &str = "field-reply";
+
+/// The selected task's reply box, when its Blocked card recommends a reply.
+pub fn reply_box(task: &daemon::Task) -> Option<ReplyBox> {
+    blocked_card(task)?.reply
+}
+
+/// The Blocked card of a task: its reason, detail and one button per next step, labelled as
+/// the operation it runs ("Dispatch anyway" for a forced one). A recommended reply is the reply
+/// box instead of a button.
+fn blocked_card(task: &daemon::Task) -> Option<BlockedCard> {
+    let blocked = task.blocked()?;
+    let reply = blocked
+        .next
+        .first()
+        .filter(|next| matches!(next.op, corral_types::Op::Reply { .. }))
+        .map(|next| ReplyBox {
+            task: task.id.clone(),
+            index: 0,
+            label: format!("Reply to {}", task.id),
+            placeholder: "What the worker should hear",
+            send: act::label(&next.op, next.force),
+        });
+    Some(BlockedCard {
+        reason: blocked.reason.clone(),
+        detail: blocked.detail.clone(),
+        next: blocked
+            .next
+            .iter()
+            .enumerate()
+            .skip(usize::from(reply.is_some()))
+            .map(|(index, next)| {
+                Button::new(
+                    act::label(&next.op, next.force),
+                    Press::Next {
+                        task: task.id.clone(),
+                        index,
+                    },
+                    if index == 0 {
+                        ButtonKind::Primary
+                    } else {
+                        ButtonKind::Ghost
+                    },
+                )
+            })
+            .collect(),
+        reply,
+    })
+}
+
+/// Who moves next, for the story's heading; a closed task is named by its status.
+fn standing(task: &daemon::Task) -> (&'static str, Hue) {
+    match task.status() {
+        Status::Done => ("Done", Hue::Ok),
+        Status::Dropped => ("Dropped", Hue::Neutral),
+        _ => {
+            let key = group_key(task.group);
+            (group_label(key), key.hue())
+        }
     }
-    if let Some(park) = &detail.park {
-        facts.push(("Parked", Fact::Text(hold_text(park, feed))));
+}
+
+/// A dependency's status in a word and a mark: done, dropped, still to do, or moving.
+fn dependency_state(status: Status) -> (Mark, &'static str) {
+    let mark = match status {
+        Status::Done => Mark::Done,
+        Status::Dropped => Mark::Na,
+        Status::Running | Status::Blocked | Status::Review => Mark::Active,
+        Status::Idea | Status::Backlog | Status::Ready => Mark::Next,
+    };
+    (mark, status.as_str())
+}
+
+/// What the task waits on, each with its status as corrald serves it (Done and Dropped ones
+/// included); an id corrald does not know is said plainly and opens nothing.
+fn needs(feed: &Feed, task: &daemon::Task) -> Fact {
+    let ids = &task.task().depends_on;
+    if ids.is_empty() {
+        return Fact::Text(vec![span("no other task")]);
     }
-    if let Some(position) = &detail.plan_context {
-        facts.push((
-            "Plan",
-            Fact::Text(vec![
-                span(position.plan.clone()).mono(),
-                span(format!(
-                    " · layer {} of {} · {}/{} landed",
-                    position.layer, position.layers, position.landed, position.total
-                )),
-            ]),
-        ));
-    }
-    facts.push(("Status", Fact::Text(vec![span(detail.status.clone())])));
+    let served = task.row.dependencies.as_ref();
+    Fact::Tasks(
+        ids.iter()
+            .map(|id| {
+                let status = match served {
+                    Some(served) => served
+                        .iter()
+                        .find(|dependency| dependency.id == *id)
+                        .and_then(|dependency| dependency.status),
+                    None => feed.board.task(id).map(daemon::Task::status),
+                };
+                let known = status.is_some() || served.is_none();
+                let (mark, word) = match status {
+                    Some(status) => {
+                        let (mark, word) = dependency_state(status);
+                        (Some(mark), word)
+                    }
+                    None if known => (None, "not open"),
+                    None => (None, "unknown task"),
+                };
+                Dependency {
+                    id: id.clone(),
+                    mark,
+                    status: word,
+                    action: known.then(|| Press::Open(Live::Task(Id::new(id)))),
+                }
+            })
+            .collect(),
+    )
+}
+
+/// `P1 · bug · S · omp-sol`, leaving out what the task does not set.
+fn shape(task: &corral_types::Task) -> String {
+    [
+        Some(task.priority.as_str()),
+        task.kind.as_deref(),
+        task.size.as_deref(),
+        task.profile.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ")
 }
 
 /// `· plan T-885`, opening the plan.
-pub(super) fn plan_link(plan: &str) -> (String, Press) {
+fn plan_link(plan: &str) -> (String, Press) {
     (
         format!("· plan {plan}"),
         Press::Open(Live::Plan(plan.into())),
@@ -484,7 +525,7 @@ pub(super) fn plan_link(plan: &str) -> (String, Press) {
 }
 
 /// The changed-since-visit chip, when the changes feed holds an unseen event for the task.
-pub(super) fn changed_chip(feed: &Feed, id: &str) -> Option<String> {
+fn changed_chip(feed: &Feed, id: &str) -> Option<String> {
     let since = feed
         .seen
         .as_ref()
@@ -496,126 +537,69 @@ pub(super) fn changed_chip(feed: &Feed, id: &str) -> Option<String> {
     })
 }
 
-/// The detail's recorded progress, and its own words if corrald gives any.
-pub(super) fn progress(detail: Option<&TaskDetail>) -> (Option<Progress>, Option<String>) {
-    let Some(progress) = detail.and_then(|detail| detail.progress.as_ref()) else {
-        return (None, None);
-    };
-    let (done, total) = (progress.completed as usize, progress.total as usize);
-    (
-        Some(Progress {
-            label: "Progress",
-            done,
-            total,
-            figure: format!("{done}/{total}"),
-        }),
-        progress.text.clone(),
-    )
-}
-
-/// Build the selected daemon task's story.
+/// Build a task's story, from its served row and, once it arrives, its detail.
 pub fn live_story(state: &State, feed: &Feed, task: &daemon::Task, form: Form) -> LiveStory {
-    let detail = loaded_task(feed, &task.id);
-    let key = super::served::task_group(feed, task);
-    let mut standing = super::standing(task, detail);
-    if key != group_key(task.group) {
-        standing.who = super::group_label(key);
-        standing.hue = key.hue();
-    }
+    let (who, who_hue) = standing(task);
+    let blocked = blocked_card(task);
     let mut facts: Vec<(&'static str, Fact)> = Vec::new();
 
-    let mut doing = vec![span(standing.now.clone())];
-    let age = super::when::age(task.since, feed.now);
+    let mut doing = vec![span(task.now())];
+    let age = super::when::age(task.since(), feed.now);
     if !age.is_empty() {
         doing.push(span(format!(" · for {age}")).dim());
     }
     facts.push(("Now", Fact::Text(doing)));
 
-    let asked = task_question(feed, &task.id).is_some();
-    if let Some(button) = super::served::attention_button(feed, &task.id) {
-        facts.push(("You", Fact::Answer(button)));
-    } else if let Some(next) = detail.and_then(|detail| detail.owner_next.clone()) {
-        facts.push(("You", Fact::Text(vec![span(next).hue(Hue::You)])));
-    } else if detail.is_some() && key != GroupKey::You {
+    if task.group == daemon::Group::NeedsYou && task.status() == Status::Review {
+        facts.push((
+            "You",
+            Fact::Answer(Button::new(
+                "Review and land",
+                Press::Open(Live::Review(task.id.clone())),
+                ButtonKind::Primary,
+            )),
+        ));
+    } else if task.group != daemon::Group::NeedsYou {
         facts.push(("You", Fact::Text(vec![span("nothing needed").hue(Hue::Ok)])));
     }
-    if task.questions != 0 && !asked {
-        facts.push((
-            "Questions",
-            Fact::Text(vec![span(format!("{} open", task.questions)).hue(Hue::You)]),
-        ));
-    }
-
-    if let Some(detail) = detail {
-        detail_facts(detail, feed, &mut facts);
-    } else if let Some(reason) = &task.held_reason {
-        facts.push((
-            "Held",
-            Fact::Text(vec![span(reason.clone()).hue(Hue::Held)]),
-        ));
-    }
-
-    let run = run_text(detail, task.agent.as_ref(), feed);
+    facts.push(("Needs", needs(feed, task)));
+    let run = run_text(current_run(feed, task), feed);
     if !run.is_empty() {
+        facts.push(("Run", Fact::Text(run)));
+    }
+    if let Some(project) = task.project() {
+        facts.push(("Project", Fact::Text(vec![span(project.to_owned())])));
+    }
+    facts.push(("Shape", Fact::Text(vec![span(shape(task.task()))])));
+    if task.task().round > 0 {
         facts.push((
-            if detail.and_then(|detail| detail.run.as_ref()).is_some() {
-                "Run"
-            } else {
-                "Agent"
-            },
-            Fact::Text(run),
+            "Round",
+            Fact::Text(vec![span(task.task().round.to_string())]),
         ));
     }
-    if let Some(project) = &task.project {
-        facts.push(("Project", Fact::Text(vec![span(project.clone())])));
-    }
-    if task.cost.is_some() {
-        let amount = span(money(task.cost.map(|cost| cost as f32)));
-        let word = if task.cost_estimated {
-            " estimated"
-        } else {
-            " reported"
-        };
-        facts.push(("Cost", Fact::Text(vec![amount, span(word).dim()])));
-    }
-    if !task.attention.is_empty() {
-        facts.push((
-            "Attention",
-            Fact::Text(vec![span(attention_kinds(&task.attention))]),
-        ));
-    }
+    facts.push((
+        "Status",
+        Fact::Text(vec![span(task.status().as_str().to_owned())]),
+    ));
 
-    let plan = task.plan.clone().or_else(|| {
-        detail
-            .and_then(|detail| detail.plan_context.as_ref())
-            .map(|position| position.plan.clone())
-    });
     let mut actions = if form == Form::Phone {
         Vec::new()
     } else {
         task_buttons(feed, task, false)
     };
-    actions.extend(verbs(state, feed, &task.id));
-    let (progress, progress_note) = progress(detail);
+    actions.extend(verbs(&task.id, feed));
     let actor = daemon_actor(task.group);
     LiveStory {
         id: task.id.to_string(),
-        title: detail.map_or_else(|| task.title.clone(), |detail| detail.title.clone()),
-        who: standing.who,
-        who_hue: standing.hue,
-        plan: plan.as_deref().map(plan_link),
+        title: task.title().to_owned(),
+        who,
+        who_hue,
+        plan: task.parent().map(plan_link),
         changed: changed_chip(feed, &task.id),
-        summary: task
-            .goal
-            .clone()
-            .map(|goal| vec![span(goal)])
-            .unwrap_or_default(),
-        body: detail
-            .map(|detail| detail.body_excerpt.clone())
-            .filter(|body| !body.trim().is_empty()),
+        summary: Vec::new(),
+        body: Some(task.task().body.clone()).filter(|body| !body.trim().is_empty()),
         stages: std::array::from_fn(|index| stage(&task.rail[index], index, feed.now, actor)),
-        progress,
-        progress_note,
+        blocked,
         facts,
         actions,
         note: detail_note(feed, &task.id),
@@ -632,9 +616,9 @@ pub fn live_evidence(feed: &Feed, id: &str) -> LiveEvidence {
                 .artifacts
                 .iter()
                 .map(|artifact| {
-                    let source = match &artifact.media_type {
-                        Some(kind) => format!("{} · {kind}", artifact.source_ref),
-                        None => artifact.source_ref.clone(),
+                    let source = match &artifact.kind {
+                        Some(kind) => format!("{} · {kind}", artifact.reference()),
+                        None => artifact.reference(),
                     };
                     (artifact.title.clone(), source)
                 })
@@ -646,60 +630,61 @@ pub fn live_evidence(feed: &Feed, id: &str) -> LiveEvidence {
         empty: (detail.is_some() && rows.is_empty()).then_some(NO_ARTIFACTS),
         rows,
         note: detail_note(feed, id),
+        find: Button::new(
+            crate::model::artifacts::FIND_IN_ALL,
+            Press::FindArtifacts(Id::from(id)),
+            ButtonKind::Ghost,
+        ),
     }
 }
 
-/// The task's log tail as corrald captured it: read-only, labelled with its capture time.
+/// The task's terminal as last captured, when a capture of its run's session is loaded: the
+/// Agents terminal reads the same capture.
 pub fn task_tail(feed: &Feed, task: &daemon::Task) -> Option<Tail> {
-    tail_for(feed, &task.id, task.agent.as_ref())
-}
-
-/// A task's captured log tail by id; `agent` is its board row's, absent off the board.
-pub(super) fn tail_for(feed: &Feed, id: &Id, agent: Option<&daemon::Agent>) -> Option<Tail> {
-    let detail = loaded_task(feed, id)?;
-    let row = feed
-        .agents
-        .values()
-        .find(|row| row.task.as_deref() == Some(id.as_str()));
-    let as_of = feed
-        .detail(&task_ref(id))
-        .and_then(|cache| cache.pages.last())
-        .map(|page| ago(&page.as_of, feed))
-        .filter(|age| !age.is_empty());
-    let pane = row
-        .and_then(|row| row.pane.clone())
-        .unwrap_or_else(|| "−".into());
-    let runtime = row
-        .and_then(|row| row.runtime.clone())
-        .or_else(|| agent?.runtime.clone())
-        .unwrap_or_default();
+    let session = session_for(feed, &task.id)?;
+    let cache = feed.detail(&DetailRef::Terminal {
+        id: session.to_string(),
+    })?;
+    let Some(DetailBody::Terminal(capture)) = cache.body() else {
+        return None;
+    };
+    let run = feed.agents.get(&session).map(|row| &row.run);
+    let pane = match run.and_then(|run| run.session.as_ref()) {
+        Some(SessionRef::Herdr { pane, .. }) => pane.clone(),
+        _ => "−".into(),
+    };
+    let at = capture
+        .captured_at
+        .parse::<jiff::Timestamp>()
+        .ok()
+        .map(|at| stamp_at(at, feed))
+        .filter(|at| !at.is_empty());
     Some(Tail {
-        id: id.to_string(),
+        id: task.id.to_string(),
         pane,
-        runtime,
-        label: as_of.map_or_else(|| "log tail".into(), |age| format!("log tail · {age} ago")),
-        snapshot: true,
+        runtime: run.map(|run| run.harness.clone()).unwrap_or_default(),
+        label: match (capture.live, at) {
+            (true, _) => "live".into(),
+            (false, Some(at)) => format!("captured {at}"),
+            (false, None) => "captured".into(),
+        },
+        snapshot: !capture.live,
         illustrative: None,
-        lines: detail.log_tail.iter().map(TailLine::new).collect(),
+        lines: capture.lines.iter().map(TailLine::new).collect(),
         cursor: false,
-        action: super::served::session_for(feed, id, agent)
-            .map(|session| Press::Open(Live::Session(session))),
+        action: Some(Press::Open(Live::Session(session))),
     })
 }
 
 /// Build the selected daemon task's Session tab.
 pub fn live_session(feed: &Feed, task: &daemon::Task) -> LiveSession {
-    session_tab(feed, &task.id, task.agent.as_ref())
-}
-
-/// A task's Session tab by id; `agent` is its board row's, absent off the board.
-pub(super) fn session_tab(feed: &Feed, id: &Id, agent: Option<&daemon::Agent>) -> LiveSession {
-    let detail = loaded_task(feed, id);
-    let tail = tail_for(feed, id, agent).filter(|tail| !tail.lines.is_empty());
-    let run = run_text(detail, agent, feed);
+    let detail = loaded_task(feed, &task.id);
+    let tail = task_tail(feed, task).filter(|tail| !tail.lines.is_empty());
+    let run = run_text(current_run(feed, task), feed);
+    let id = &task.id;
     LiveSession {
-        description: "Structured transcript in its session; below, the run's latest log lines as corrald captured them.",
-        open: super::served::session_for(feed, id, agent).map(|session| {
+        description: "Structured transcript in its session; below, its terminal as last captured.",
+        open: session_for(feed, id).map(|session| {
             Button::new(
                 format!("Open {id} session"),
                 Press::Open(Live::Session(session)),
@@ -708,7 +693,7 @@ pub(super) fn session_tab(feed: &Feed, id: &Id, agent: Option<&daemon::Agent>) -
         }),
         empty: if detail.is_some() && run.is_empty() {
             Some(NO_RUN)
-        } else if detail.is_some() && tail.is_none() {
+        } else if !run.is_empty() && tail.is_none() {
             Some(NO_TAIL)
         } else {
             None

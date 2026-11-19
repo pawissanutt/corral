@@ -1,14 +1,10 @@
 //! Opt-in, content-free Web Push. Only the push service receives the ECE ciphertext;
 //! a browser reconnects through Noise before it can learn any workspace facts.
-use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt;
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use corral_protocol::{
-    DaemonState,
-    rows::{AttentionActor, InboxKind, InboxRow, InboxState},
-    subscription::Topic,
-};
+use corral_types::{Event, EventKind};
 use isahc::config::{Configurable, RedirectPolicy};
 use web_push::{
     ContentEncoding, IsahcWebPushClient, SubscriptionInfo, VapidSignatureBuilder, WebPushClient,
@@ -17,7 +13,7 @@ use web_push::{
 
 use super::*;
 
-type Attention = BTreeMap<PushKind, BTreeSet<String>>;
+const ATTEMPT_INTERVAL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct Registration {
@@ -26,14 +22,14 @@ pub(super) struct Registration {
     delivered: Option<String>,
     error: Option<String>,
     #[serde(default)]
-    sent: Attention,
+    sent: u64,
     #[serde(default)]
     attempted: Option<String>,
     #[serde(default)]
     revision: u64,
 }
 
-pub(super) struct Service {
+struct Transport {
     pem: Vec<u8>,
     public: String,
     subject: String,
@@ -41,11 +37,8 @@ pub(super) struct Service {
     client: IsahcWebPushClient,
 }
 
-impl Service {
-    pub(super) fn configured(config: &corral_core::PushCfg) -> Result<Option<Self>> {
-        let Some(path) = &config.vapid_private_key else {
-            return Ok(None);
-        };
+impl Transport {
+    fn configured(path: &Path, subject: &str, origins: &[String]) -> Result<Self> {
         anyhow::ensure!(
             path.is_absolute(),
             "daemon.push.vapid_private_key must be absolute"
@@ -57,19 +50,18 @@ impl Service {
         );
         anyhow::ensure!(metadata.len() <= 8192, "VAPID key exceeds 8 KiB");
         anyhow::ensure!(
-            config.subject.starts_with("mailto:") || config.subject.starts_with("https://"),
+            subject.starts_with("mailto:") || subject.starts_with("https://"),
             "daemon.push.subject must be a mailto: or https: contact"
         );
         anyhow::ensure!(
-            !config.subject.chars().any(char::is_control) && config.subject.len() <= 512,
+            !subject.chars().any(char::is_control) && subject.len() <= 512,
             "invalid daemon.push.subject"
         );
         anyhow::ensure!(
-            !config.origins.is_empty()
-                && config
-                    .origins
+            !origins.is_empty()
+                && origins
                     .iter()
-                    .all(|origin| origin.as_str().starts_with("https://")),
+                    .all(|origin| endpoint_origin(origin).as_deref() == Some(origin.as_str())),
             "daemon.push.origins must explicitly allow HTTPS push-service origins"
         );
         let pem = std::fs::read(path).context("reading private VAPID key")?;
@@ -85,17 +77,13 @@ impl Service {
             .build()
             .context("creating bounded Web Push HTTP client")?
             .into();
-        Ok(Some(Self {
+        Ok(Self {
             pem,
             public,
-            subject: config.subject.clone(),
-            origins: config
-                .origins
-                .iter()
-                .map(|origin| origin.as_str().to_owned())
-                .collect(),
+            subject: subject.into(),
+            origins: origins.to_vec(),
             client,
-        }))
+        })
     }
 
     fn validate(&self, subscription: &PushSubscription) -> Result<(), DeviceError> {
@@ -162,16 +150,96 @@ fn allow_endpoint(endpoint: &str, origins: &[String]) -> Result<(), DeviceError>
     }
 }
 
+#[derive(Default)]
+struct Signals {
+    through: AtomicU64,
+    stop: AtomicBool,
+}
+
+pub(super) struct Service {
+    transport: Arc<Transport>,
+    signals: Arc<Signals>,
+    wake: SyncSender<()>,
+}
+
+impl Service {
+    fn start(registry: Arc<Registry>, transport: Transport) -> Result<Self> {
+        let transport = Arc::new(transport);
+        let signals = Arc::new(Signals::default());
+        let (wake, notified) = mpsc::sync_channel(1);
+        let worker_transport = Arc::clone(&transport);
+        let worker_signals = Arc::clone(&signals);
+        std::thread::Builder::new()
+            .name("corrald-web-push".into())
+            .spawn(move || {
+                // A bounded wakeup coalesces batches. Retry failed or rate-limited
+                // deliveries on a timer even if no new event arrives.
+                while !matches!(
+                    notified.recv_timeout(Duration::from_secs(15)),
+                    Err(RecvTimeoutError::Disconnected)
+                ) && !worker_signals.stop.load(Ordering::Acquire)
+                {
+                    tick(&registry, &worker_transport, &worker_signals);
+                }
+            })
+            .context("starting Web Push worker")?;
+        Ok(Self {
+            transport,
+            signals,
+            wake,
+        })
+    }
+
+    fn observe(&self, through: u64) {
+        if self.signals.through.fetch_max(through, Ordering::AcqRel) < through {
+            let _ = self.wake.try_send(());
+        }
+    }
+}
+
+impl Drop for Service {
+    fn drop(&mut self) {
+        self.signals.stop.store(true, Ordering::Release);
+    }
+}
+
 impl Devices {
+    pub(crate) fn configure_push(
+        &mut self,
+        private_key: Option<&Path>,
+        subject: &str,
+        origins: &[String],
+    ) -> Result<()> {
+        self.push = private_key
+            .map(|path| {
+                let transport = Transport::configured(path, subject, origins)?;
+                Service::start(Arc::clone(&self.registry), transport)
+            })
+            .transpose()?;
+        Ok(())
+    }
+
+    /// The runtime supplies newly committed events. Network I/O runs on the push worker.
+    pub(crate) fn observe(&self, events: &[Event]) {
+        if let Some(service) = &self.push
+            && let Some(through) = attention_seq(events)
+        {
+            service.observe(through);
+        }
+    }
+
     pub(crate) fn push_status(&self, device: &str) -> Result<PushStatus, DeviceError> {
-        let record = self.active(&lock(&self.store), device)?;
-        Ok(self.push_status_record(&record))
+        let records = lock(&self.registry.records);
+        Ok(self.push_status_record(Registry::active(&records, device)?))
     }
 
     fn push_status_record(&self, record: &DeviceRecord) -> PushStatus {
         PushStatus {
             available: self.push.is_some() && record.platform == DevicePlatform::Web,
-            vapid_public: self.push.as_ref().map(|service| service.public.clone()),
+            vapid_public: self
+                .push
+                .as_ref()
+                .map(|service| service.transport.public.clone()),
             enabled: record.push.subscription.is_some(),
             kinds: record.push.kinds.clone(),
             last_delivered: record.push.delivered.clone(),
@@ -188,18 +256,14 @@ impl Devices {
             .push
             .as_ref()
             .ok_or_else(|| DeviceError::Unavailable("web_push_not_configured".into()))?;
-        service.validate(&request.subscription)?;
+        service.transport.validate(&request.subscription)?;
         if request.kinds.is_empty() || request.kinds.len() > 5 {
             return Err(DeviceError::Invalid("select_push_kinds"));
         }
         request.kinds.sort();
         request.kinds.dedup();
-        let base = lock(&self.store);
-        let store = base.reattributed();
-        let _guard = store
-            .try_lock("devices")?
-            .ok_or(DeviceError::Conflict("device_registry_busy"))?;
-        let mut record = self.active(&store, device)?;
+        let mut records = lock(&self.registry.records);
+        let mut record = Registry::active(&records, device)?.clone();
         if record.platform != DevicePlatform::Web {
             return Err(DeviceError::Refused("web_push_requires_browser_device"));
         }
@@ -212,27 +276,17 @@ impl Devices {
             subscription: Some(request.subscription),
             kinds: request.kinds,
             revision,
+            sent: service.signals.through.load(Ordering::Acquire),
             ..Registration::default()
         };
-        attribute(&store, &format!("app:{device}"))?;
-        store.records_transaction(|| {
-            AREA.save(&store, device, &record)?;
-            store.log_event(
-                None,
-                "device_push_enabled",
-                json!({"device":device,"kinds":record.push.kinds}),
-            )
-        })?;
-        Ok(self.push_status_record(&record))
+        let status = self.push_status_record(&record);
+        self.registry.save(&mut records, device, record)?;
+        Ok(status)
     }
 
     pub(crate) fn push_unsubscribe(&self, device: &str) -> Result<PushStatus, DeviceError> {
-        let base = lock(&self.store);
-        let store = base.reattributed();
-        let _guard = store
-            .try_lock("devices")?
-            .ok_or(DeviceError::Conflict("device_registry_busy"))?;
-        let mut record = self.active(&store, device)?;
+        let mut records = lock(&self.registry.records);
+        let mut record = Registry::active(&records, device)?.clone();
         let revision = record
             .push
             .revision
@@ -242,242 +296,102 @@ impl Devices {
             revision,
             ..Registration::default()
         };
-        attribute(&store, &format!("app:{device}"))?;
-        store.records_transaction(|| {
-            AREA.save(&store, device, &record)?;
-            store.log_event(None, "device_push_disabled", json!({"device":device}))
-        })?;
-        Ok(self.push_status_record(&record))
+        let status = self.push_status_record(&record);
+        self.registry.save(&mut records, device, record)?;
+        Ok(status)
     }
 }
 
-fn attention(rows: &[InboxRow], unhealthy: bool) -> Attention {
-    let mut groups = Attention::new();
-    for row in rows {
-        if row.state != InboxState::Open
-            || !row
-                .attention
-                .as_ref()
-                .is_some_and(|a| a.whose_move == AttentionActor::Owner)
-        {
-            continue;
-        }
-        let kind = match row.kind {
-            InboxKind::PlanAcceptance => PushKind::PlanAwaitingAcceptance,
-            InboxKind::Stuck => PushKind::Stuck,
-            InboxKind::Escalated => PushKind::Escalated,
-            _ => PushKind::NeedsYou,
-        };
-        groups.entry(kind).or_default().insert(row.id.clone());
-    }
-    if unhealthy {
-        groups
-            .entry(PushKind::DaemonUnhealthy)
-            .or_default()
-            .insert("degraded".into());
-    }
-    groups
-}
-
-pub(super) fn start(devices: &Arc<Devices>, shared: &Arc<Shared>) -> Result<()> {
-    if devices.push.is_none() {
-        return Ok(());
-    }
-    let devices = Arc::downgrade(devices);
-    let shared = Arc::clone(shared);
-    std::thread::Builder::new()
-        .name("corrald-web-push".into())
-        .spawn(move || {
-            let mut watch = None;
-            let mut cached = None;
-            while !shared.lock().stop {
-                let Some(devices) = devices.upgrade() else {
-                    break;
-                };
-                if let Err(error) = tick(&devices, &shared, &mut watch, &mut cached) {
-                    eprintln!("corrald Web Push: {error:#}");
-                }
-                let state = shared.lock();
-                drop(
-                    shared
-                        .changed
-                        .wait_timeout_while(state, Duration::from_secs(15), |state| !state.stop)
-                        .unwrap_or_else(|error| error.into_inner()),
-                );
-            }
-        })
-        .context("starting Web Push worker")?;
-    Ok(())
-}
-
-fn tick(
-    devices: &Devices,
-    shared: &Shared,
-    watch: &mut Option<crate::views::Watch>,
-    cached: &mut Option<(u64, bool, Attention)>,
-) -> Result<()> {
-    let pending: Vec<_> = AREA
-        .list(&lock(&devices.store))?
-        .into_iter()
-        .filter(|(_, record)| record.revoked_at.is_none() && record.push.subscription.is_some())
-        .collect();
-    if pending.is_empty() {
-        *watch = None;
-        *cached = None;
-        return Ok(());
-    }
-    if watch.is_none() {
-        *watch = Some(crate::views::watch(
-            shared,
-            crate::views::Key::new(Topic::Inbox, None)?,
-        )?);
-    }
-    let snapshot = match watch
-        .as_ref()
-        .map(crate::views::Watch::snapshot)
-        .transpose()?
-    {
-        Some(Some(snapshot)) => snapshot,
-        _ => return Ok(()),
-    };
-    let crate::views::Rows::Inbox(rows) = &snapshot.rows else {
-        anyhow::bail!("push watch is not inbox")
-    };
-    let unhealthy = lock(&shared.health_topic).1.daemon == DaemonState::Degraded;
-    let current =
-        cached.get_or_insert_with(|| (snapshot.rev, unhealthy, attention(rows, unhealthy)));
-    if current.0 != snapshot.rev || current.1 != unhealthy {
-        *current = (snapshot.rev, unhealthy, attention(rows, unhealthy));
-    }
-    for (id, record) in pending {
-        if shared.lock().stop {
-            break;
-        }
-        deliver(devices, &id, &record.push, &current.2)?;
-    }
-    Ok(())
-}
-
-fn deliver(devices: &Devices, id: &str, pending: &Registration, current: &Attention) -> Result<()> {
-    let selected = current
+fn attention_seq(events: &[Event]) -> Option<u64> {
+    events
         .iter()
-        .filter(|(kind, _)| pending.kinds.contains(kind));
-    if selected.clone().eq(pending.sent.iter()) {
-        return Ok(());
-    }
-    let selected = selected.map(|(kind, ids)| (*kind, ids.clone())).collect();
-    let needs_send = has_new(&selected, &pending.sent);
-    let now = corral_core::clock::now();
-    if needs_send
-        && pending
+        .filter(|event| {
+            event.task.is_some() && matches!(event.kind, EventKind::Blocked | EventKind::Ready)
+        })
+        .map(|event| event.seq)
+        .max()
+}
+
+fn is_due(record: &DeviceRecord, through: u64, now: jiff::Timestamp) -> bool {
+    record.revoked_at.is_none()
+        && record.push.subscription.is_some()
+        && record.push.kinds.contains(&PushKind::NeedsYou)
+        && record.push.sent < through
+        && !record
+            .push
             .attempted
             .as_deref()
             .and_then(|at| at.parse::<jiff::Timestamp>().ok())
-            .is_some_and(|at| now.as_second().saturating_sub(at.as_second()) < 60)
-    {
-        return Ok(());
+            .is_some_and(|at| {
+                now.as_second().saturating_sub(at.as_second()) < ATTEMPT_INTERVAL.as_secs() as i64
+            })
+}
+
+fn tick(registry: &Registry, transport: &Transport, signals: &Signals) {
+    let through = signals.through.load(Ordering::Acquire);
+    if through == 0 {
+        return;
     }
-    let batch = format!("web-push:{id}:{}:{}", pending.revision, now.as_second());
-    // Reserve the minute durably before network I/O. Re-check revocation/subscription
-    // under the registry lock; never overwrite a concurrent unsubscribe or authority edit.
-    {
-        let base = lock(&devices.store);
-        let store = base.reattributed();
-        let _guard = store
-            .try_lock("devices")?
-            .context("push registry is busy")?;
-        let mut record = devices
-            .active(&store, id)
-            .map_err(|e| anyhow::anyhow!("{}", e.wire().1))?;
-        if record.push.revision != pending.revision || record.push.subscription.is_none() {
-            return Ok(());
+    let now = jiff::Timestamp::now();
+    let pending: Vec<_> = lock(&registry.records)
+        .iter()
+        .filter(|(_, record)| is_due(record, through, now))
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in pending {
+        if signals.stop.load(Ordering::Acquire) {
+            return;
         }
-        if !needs_send {
-            record.push.sent = selected;
-            AREA.save(&store, id, &record)?;
-            return Ok(());
+        if let Err(error) = deliver(registry, transport, &id, through) {
+            eprintln!("corrald Web Push: {error:#}");
         }
+    }
+}
+
+fn deliver(registry: &Registry, transport: &Transport, id: &str, through: u64) -> Result<()> {
+    let now = jiff::Timestamp::now();
+    // Reserve the minute durably before network I/O. Recheck after taking the
+    // lock so a concurrent revoke or unsubscribe cannot reserve a delivery.
+    let (revision, subscription) = {
+        let mut records = lock(&registry.records);
+        let Some(record) = records
+            .get(id)
+            .filter(|record| is_due(record, through, now))
+        else {
+            return Ok(());
+        };
+        let Some(subscription) = record.push.subscription.clone() else {
+            return Ok(());
+        };
+        let mut record = record.clone();
+        let revision = record.push.revision;
         record.push.attempted = Some(now.to_string());
-        store.set_attribution(Actor::System, "web-push")?;
-        store.records_transaction(|| {
-            AREA.save(&store, id, &record)?;
-            store.log_event(
-                None,
-                "notification_claimed",
-                notice_fact(&batch, id, now, None),
-            )?;
-            Ok(())
-        })?;
-    }
-    let Some(service) = &devices.push else {
-        return Ok(());
+        registry.save(&mut records, id, record)?;
+        (revision, subscription)
     };
-    let Some(subscription) = &pending.subscription else {
-        return Ok(());
-    };
-    let result = allow_endpoint(&subscription.endpoint, &service.origins)
-        .map_err(|error| anyhow::anyhow!("{}", error.wire().1))
-        .and_then(|()| service.message(subscription))
+    let result = allow_endpoint(&subscription.endpoint, &transport.origins)
+        .map_err(anyhow::Error::new)
+        .and_then(|()| transport.message(&subscription))
         .and_then(|message| {
-            futures_lite::future::block_on(service.client.send(message)).map_err(Into::into)
+            futures_lite::future::block_on(transport.client.send(message)).map_err(Into::into)
         });
-    let base = lock(&devices.store);
-    let store = base.reattributed();
-    let _guard = store
-        .try_lock("devices")?
-        .context("push registry is busy")?;
-    let Some(mut record) = AREA.load(&store, id)? else {
+    let mut records = lock(&registry.records);
+    let Some(record) = records.get(id) else {
         return Ok(());
     };
-    if record.revoked_at.is_some() || record.push.revision != pending.revision {
+    if record.revoked_at.is_some() || record.push.revision != revision {
         return Ok(());
     }
-    store.set_attribution(Actor::System, "web-push")?;
-    let (event, outcome) = if result.is_ok() {
+    let mut record = record.clone();
+    if result.is_ok() {
         record.push.delivered = Some(now.to_string());
         record.push.error = None;
-        record.push.sent = selected;
-        (
-            "owner_notified",
-            corral_core::NoticeOutcome::Notified { at: now },
-        )
+        record.push.sent = through;
     } else {
-        // Endpoint URLs contain subscription secrets. Never persist HTTP error bodies.
+        // Endpoint URLs contain subscription secrets. Never persist service error bodies.
         record.push.error = Some("push_service_refused_or_unreachable".into());
-        (
-            "owner_notify_failed",
-            corral_core::NoticeOutcome::Failed {
-                at: now,
-                error: "push_service_refused_or_unreachable".into(),
-            },
-        )
-    };
-    store.records_transaction(|| {
-        AREA.save(&store, id, &record)?;
-        store.log_event(None, event, notice_fact(&batch, id, now, Some(outcome)))
-    })?;
-    Ok(())
-}
-
-fn notice_fact(
-    batch: &str,
-    device: &str,
-    at: jiff::Timestamp,
-    outcome: Option<corral_core::NoticeOutcome>,
-) -> Value {
-    // A content-free workspace aggregate has no task/condition coverage. It is a
-    // physical send in the shared notice accounting, not a task acknowledgement.
-    json!({
-        "batch_id": batch, "producer": "web_push", "source": device,
-        "claimed_at": at, "claim_ids": [batch], "coverage": [],
-        "exemption_basis": null, "outcome": outcome, "device": device,
-    })
-}
-
-fn has_new(current: &Attention, previous: &Attention) -> bool {
-    current
-        .iter()
-        .any(|(kind, ids)| previous.get(kind).is_none_or(|old| !ids.is_subset(old)))
+    }
+    registry.save(&mut records, id, record)
 }
 
 #[cfg(test)]
@@ -510,64 +424,54 @@ mod tests {
     }
 
     #[test]
-    fn resolving_attention_never_sends_a_new_push_but_a_new_owner_move_does() {
-        let old = BTreeMap::from([(
-            PushKind::NeedsYou,
-            BTreeSet::from(["question-a".into(), "question-b".into()]),
-        )]);
-        let remaining =
-            BTreeMap::from([(PushKind::NeedsYou, BTreeSet::from(["question-b".into()]))]);
-        assert!(!has_new(&remaining, &old));
-        assert!(!has_new(&Attention::new(), &old));
-        assert!(has_new(&old, &remaining));
-        let unhealthy = BTreeMap::from([(
-            PushKind::DaemonUnhealthy,
-            BTreeSet::from(["degraded".into()]),
-        )]);
-        assert!(has_new(&unhealthy, &remaining));
+    fn blocked_and_ready_are_needs_you_triggers_in_event_order() {
+        let event = |seq, kind| Event {
+            seq,
+            ts: jiff::Timestamp::UNIX_EPOCH,
+            task: Some("T-001".into()),
+            project: None,
+            run: None,
+            kind,
+            actor: corral_types::Actor::Auto,
+            detail: Value::Null,
+        };
+        assert_eq!(attention_seq(&[event(5, EventKind::Resumed)]), None);
+        assert_eq!(attention_seq(&[event(3, EventKind::Blocked)]), Some(3));
+        assert_eq!(
+            attention_seq(&[event(4, EventKind::Ready), event(5, EventKind::Edited)]),
+            Some(4)
+        );
     }
 
     #[test]
     fn subscriptions_default_off_and_unsubscribe_and_revocation_delete_only_the_target() {
-        let fixture = crate::tests::Fixture::new();
-        let shared = Arc::new(Shared::new());
-        super::super::start(&fixture.ctx, &shared, None).unwrap();
-        let devices = shared.devices().unwrap();
-        let first = devices
-            .enrol("First", "test", Some(&[1; 32]), "test")
-            .unwrap();
-        let second = devices
-            .enrol("Second", "test", Some(&[2; 32]), "test")
-            .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let devices = Devices::open(root.path()).unwrap();
+        let first = devices.enrol("First", "test", Some(&[1; 32])).unwrap();
+        let second = devices.enrol("Second", "test", Some(&[2; 32])).unwrap();
         assert!(!devices.push_status(&first.id).unwrap().enabled);
         assert!(!devices.push_status(&second.id).unwrap().enabled);
         {
-            let store = lock(&devices.store);
+            let mut records = lock(&devices.registry.records);
             for id in [&first.id, &second.id] {
-                let mut record = AREA.load(&store, id).unwrap().unwrap();
+                let mut record = records[id].clone();
                 record.push.subscription = Some(PushSubscription {
                     endpoint: "https://push.example/secret-token".into(),
                     p256dh: "test-public-key".into(),
                     auth: "test-auth".into(),
                 });
                 record.push.kinds = vec![PushKind::NeedsYou];
-                AREA.save(&store, id, &record).unwrap();
+                devices.registry.save(&mut records, id, record).unwrap();
             }
         }
         let status = devices.push_unsubscribe(&first.id).unwrap();
         assert!(!status.enabled);
         assert!(devices.push_status(&second.id).unwrap().enabled);
-        devices.revoke(&second.id, "test").unwrap();
-        let store = lock(&devices.store);
+        devices.revoke(&second.id).unwrap();
+        let reopened = Devices::open(root.path()).unwrap();
+        let records = lock(&reopened.registry.records);
         for id in [&first.id, &second.id] {
-            assert!(
-                AREA.load(&store, id)
-                    .unwrap()
-                    .unwrap()
-                    .push
-                    .subscription
-                    .is_none()
-            );
+            assert!(records[id].push.subscription.is_none());
         }
     }
 }

@@ -1,6 +1,6 @@
 // Foreground/background are observers of the same owned process, never separate launches.
 import { createHash } from "node:crypto";
-import { JobError, type JobReceipt, type JobRuntime } from "./runtime.ts";
+import { JobError, type JobRuntime, type JobInspection } from "./runtime.ts";
 import { SessionMonitors, type MonitorFact } from "./monitors.ts";
 import { readOutput, type OutputOptions } from "./output.ts";
 import { deliverNotice } from "./notices.ts";
@@ -8,7 +8,7 @@ import { renderJobResult } from "./presentation.ts";
 
 export const COMMAND_ENTRY = "corral_command";
 export interface CommandFact {
-  readonly job: string; readonly generation: number; readonly consumed: boolean;
+  readonly job: string; readonly consumed: boolean;
   readonly delivery?: "result" | "notice";
   readonly result?: Record<string, unknown>;
 }
@@ -24,8 +24,7 @@ export interface CommandUpdate {
   readonly details: { readonly job: string; readonly state: "running" };
 }
 export interface CommandOptions {
-  readonly jobs: JobRuntime; readonly generation: number; readonly waitMs?: number;
-  readonly worker: boolean;
+  readonly jobs: JobRuntime; readonly waitMs?: number;
   readonly journal: (fact: CommandFact) => void;
   readonly monitorJournal: (fact: MonitorFact) => void;
   readonly notify: (key: string, text: string) => Promise<string>;
@@ -42,14 +41,14 @@ export class Commands {
   private starting = 0;
   private notices: Promise<void> = Promise.resolve();
   private noticeScheduled = false;
-  private readonly monitors: SessionMonitors | undefined;
+  private readonly monitors: SessionMonitors;
   constructor(private readonly options: CommandOptions) {
-    this.monitors = options.worker ? undefined : new SessionMonitors({ jobs: options.jobs,
+    this.monitors = new SessionMonitors({ jobs: options.jobs,
       journal: options.monitorJournal, notify: options.notify });
   }
 
   private fact(command: Command): void {
-    this.options.journal({ job: command.job, generation: this.options.generation, consumed: command.consumed,
+    this.options.journal({ job: command.job, consumed: command.consumed,
       ...(command.result ? { result: command.result } : {}), ...(command.delivery ? { delivery: command.delivery } : {}) });
     for (const changed of this.changes) changed();
     this.options.changed?.();
@@ -121,11 +120,11 @@ export class Commands {
       this.commands.set(fact.job, command);
       this.fact(command);
     }
-    this.monitors?.bound(monitors);
+    this.monitors.bound(monitors);
     this.flush();
   }
-  pause(): void { this.enabled = false; this.monitors?.pause(); }
-  flush(): void { for (const command of this.commands.values()) this.announce(command); this.monitors?.flush(); }
+  pause(): void { this.enabled = false; this.monitors.pause(); }
+  flush(): void { for (const command of this.commands.values()) this.announce(command); this.monitors.flush(); }
   async notified(): Promise<void> {
     for (;;) {
       await Promise.resolve();
@@ -135,17 +134,17 @@ export class Commands {
     }
   }
 
-  async run(command: string, key: string, options: { timeout?: number; wait_ms?: number; nested?: boolean; signal?: AbortSignal; onUpdate?: (update: CommandUpdate) => void } = {}): Promise<Record<string, unknown>> {
+  async run(command: string, options: { timeout?: number; wait_ms?: number; nested?: boolean; signal?: AbortSignal; onUpdate?: (update: CommandUpdate) => void } = {}): Promise<Record<string, unknown>> {
     this.prune();
     if (options.signal?.aborted) throw new JobError("command cancelled before launch; nothing ran");
     this.starting++;
     let started: Record<string, unknown>;
-    try { started = await this.options.jobs.start(command, key, options.timeout); }
+    try { started = await this.options.jobs.start(command, options.timeout); }
     finally { this.starting--; }
     const job = started.job;
     if (typeof job !== "string") return started;
     if (started.state === "refused" || started.state === "not_started") {
-      this.options.journal({ job, generation: this.options.generation, consumed: true, delivery: "result", result: started });
+      this.options.journal({ job, consumed: true, delivery: "result", result: started });
       return started;
     }
     const record: Command = { job, done: this.options.jobs.settled(job), consumed: false, holds: 1,
@@ -156,7 +155,7 @@ export class Commands {
       record.result = this.options.jobs.peek(job, { max_bytes: 50 * 1024, tail_lines: 2000 });
       this.fact(record);
       this.options.settled?.(record.result);
-      this.monitors?.exited(job);
+      this.monitors.exited(job);
       this.announce(record);
     });
     // Default nested Bash must finish before the next JS statement. Only explicit wait_ms
@@ -272,6 +271,12 @@ export class Commands {
     for (const release of command.release) release();
     return { job, state: "running", background: true };
   }
+  inspection(): readonly JobInspection[] {
+    return this.options.jobs.inspection().map(job => {
+      const watches = this.monitors.inspection(job.job);
+      return { ...job, watches, monitorAttempts: watches.length };
+    });
+  }
   owns(job: string): boolean { return this.commands.has(job) && this.options.jobs.state().some(record => record.job === job); }
   pending(): boolean { return [...this.commands.values()].some(command => !command.result || !command.consumed && !command.canonicalExit); }
   state(): Record<string, unknown>[] {
@@ -296,27 +301,18 @@ export class Commands {
       if (this.commands.size + this.starting < 64) return;
       if (!command.consumed || !command.result || command.holds || command.notifying || command.result.group_clear === false) continue;
       this.options.jobs.forget(command.job);
-      this.options.journal({ job: command.job, generation: this.options.generation, consumed: true, delivery: "result",
+      this.options.journal({ job: command.job, consumed: true, delivery: "result",
         result: { job: command.job, state: "expired", reason: "acknowledged terminal cache evicted" } });
       this.commands.delete(command.job);
     }
     if (this.commands.size + this.starting >= 64) throw new JobError("completion_limit: acknowledge retained completions with job_wait before starting more commands");
   }
 
-  async monitor(job: string, on: "exit" | "line", pattern: string | undefined, timeout: number, key: string): Promise<JobReceipt> {
+  monitor(job: string, on: "exit" | "line", pattern: string | undefined, timeout: number) {
     const command = this.command(job);
-    if (this.monitors) {
-      const receipt = this.monitors.arm(job, on, pattern, timeout, `${job}:${key}`);
-      if (on === "exit") { command.canonicalExit = true; this.consume(command); }
-      if (command.result) this.monitors.exited(job);
-      return receipt;
-    }
-    // Preserve the worker's canonical monitor wake; do not add a second auto-exit message.
-    command.holds++;
-    try {
-      const receipt = await this.options.jobs.monitor(job, on, pattern, timeout, key);
-      if (receipt.state === "committed" && on === "exit") { command.canonicalExit = true; this.consume(command); }
-      return receipt;
-    } finally { command.holds--; this.announce(command); }
+    const result = this.monitors.arm(job, on, pattern, timeout);
+    if (on === "exit") { command.canonicalExit = true; this.consume(command); }
+    if (command.result) this.monitors.exited(job);
+    return result;
   }
 }

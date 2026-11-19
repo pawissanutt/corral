@@ -9,7 +9,7 @@ import { anchoredRow } from "./reading-anchor.ts";
 import type { PanelSnapshot } from "./panels-view.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
 
-const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 3 };
+const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
 const snapshot: PanelSnapshot = {
   bound: true, model: "openai-codex/example", effort: "high", streaming: false,
   context: { tokens: 1234, contextWindow: 10000, percent: 12.34 }, tokens: 5678,

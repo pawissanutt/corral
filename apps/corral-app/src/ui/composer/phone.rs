@@ -1,7 +1,7 @@
 //! The phone's composer: one row of "+" (the attachments menu), the field growing with the
-//! draft, and Send; above it who answers as one chip ("Assistant · pi-luna ▾") that opens the
-//! target switch and the model list in the flow, and the new model's note for a moment after a
-//! change. Held sideways the chip moves into the row, so a landscape sheet spends no line of its
+//! draft, and Send; above it who answers as one chip ("pi-luna ▾") that opens the model list
+//! in the flow, and the new model's note for a moment after a change. Held sideways the chip
+//! moves into the row, so a landscape sheet spends no line of its
 //! little height on it and opens with the choice folded away.
 
 use std::rc::Rc;
@@ -10,7 +10,7 @@ use std::time::Duration;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::assistant::{Action, Chip, Composer, ModelList};
+use crate::model::assistant::{Action, Composer, ModelList};
 use crate::model::text::Rich;
 use crate::state::AppState;
 use crate::ui::ask::models::{DISCLOSURE, Picked, inline_list};
@@ -20,7 +20,7 @@ use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::page_phone::short_window;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-use super::{AfterTarget, To, entry_field, saved_line, send, small, state_mark, target_switch};
+use super::{To, entry_field, saved_line, send, small};
 
 /// The touch target's floor, and the row's height with the field one line high.
 pub(super) const TARGET: f32 = 44.0;
@@ -63,7 +63,7 @@ pub(super) fn composer(
         .child(dynamic(move || {
             (!sideways.get()).then(|| untracked(|| who(app, built, open, choosing, true)))
         }))
-        .child(chooser(app, built, menu, open, choosing))
+        .child(chooser(app, menu, open, choosing))
         .child(chip_row(app, built))
         .child(tray(app, built))
         .child(field_row(app))
@@ -93,12 +93,10 @@ fn note(app: AppState, next: Memo<Option<Rich>>) -> AnyElement {
     dynamic(move || shown.get().map(|line| untracked(|| saved_line(app, &line))))
 }
 
-/// Who answers, as the model resolves it: the pressed target with its state, the model of the
-/// next message, the host's own profile note; whether there is anything to choose.
+/// Who answers, as the model resolves it: the model of the next message, the host's own
+/// profile note; whether there is anything to choose.
 #[derive(Debug, Clone, PartialEq)]
 struct Who {
-    target: Option<&'static str>,
-    state: Option<Chip>,
     model: Option<String>,
     note: Option<String>,
     choosable: bool,
@@ -106,13 +104,10 @@ struct Who {
 
 impl Who {
     fn of(composer: &Composer) -> Who {
-        let pressed = composer.targets.iter().find(|target| target.selected);
         Who {
-            target: pressed.map(|target| target.label),
-            state: pressed.and_then(|target| target.state.clone()),
             model: composer.model_name.clone(),
             note: composer.profile_note.clone(),
-            choosable: !composer.targets.is_empty() || composer.model_pill.is_some(),
+            choosable: composer.model_pill.is_some(),
         }
     }
 }
@@ -158,7 +153,7 @@ fn who(
     })
 }
 
-/// "Assistant · pi-luna ▾" or "PM ● live ▾": a 30 pt pill in a full touch target; pressing it
+/// "pi-luna ▾": a 30 pt pill in a full touch target; pressing it
 /// opens or closes the chooser.
 fn who_chip(
     app: AppState,
@@ -167,11 +162,7 @@ fn who_chip(
     open: Memo<bool>,
     choosing: Signal<bool>,
 ) -> AnyElement {
-    let spoken = [who.target.map(str::to_owned), who.model.clone()]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ");
+    let spoken = who.model.clone().unwrap_or_default();
     let words = |words: String, ink: Token| {
         text(words)
             .number_of_lines(1u32)
@@ -179,41 +170,30 @@ fn who_chip(
             .text_size(px(14.0))
             .text_color(color(ink))
     };
-    let separated = who.target.is_some() && who.model.is_some();
-    let face =
-        view()
-            .flex_row()
-            .items_center()
-            .gap(px(6.0))
-            .min_w(px(0.0))
-            .h(px(CHIP_HEIGHT))
-            .px(px(11.0))
-            .rounded(px(CHIP_HEIGHT / 2.0))
-            .border_1()
-            .border_color(color(Token::Rule2))
-            .bg(move || {
-                if open.get() {
-                    color(Token::Surface2)
-                } else {
-                    color(Token::Surface)
-                }
-            })
-            .children(who.target.map(|target| {
-                words(target.to_owned(), Token::Ink).font_weight(FontWeight::SEMIBOLD)
-            }))
-            .children(
-                who.state
-                    .as_ref()
-                    .map(|state| state_mark(app, &state.label, state.hue)),
-            )
-            .children(separated.then(|| words("·".to_owned(), Token::Ink4)))
-            .children(who.model.clone().map(|model| {
-                words(model, Token::Ink2)
-                    .flex_shrink(1.0)
-                    .min_w(px(0.0))
-                    .truncate()
-            }))
-            .child(words(DISCLOSURE.trim().to_owned(), Token::Ink3).text_size(px(11.0)));
+    let face = view()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .min_w(px(0.0))
+        .h(px(CHIP_HEIGHT))
+        .px(px(11.0))
+        .rounded(px(CHIP_HEIGHT / 2.0))
+        .border_1()
+        .border_color(color(Token::Rule2))
+        .bg(move || {
+            if open.get() {
+                color(Token::Surface2)
+            } else {
+                color(Token::Surface)
+            }
+        })
+        .children(who.model.clone().map(|model| {
+            words(model, Token::Ink2)
+                .flex_shrink(1.0)
+                .min_w(px(0.0))
+                .truncate()
+        }))
+        .child(words(DISCLOSURE.trim().to_owned(), Token::Ink3).text_size(px(11.0)));
     view()
         .test_id("btn-who")
         .role(AccessibilityRole::Button)
@@ -239,7 +219,7 @@ fn who_chip(
         .into_element()
 }
 
-/// Opens the chooser, with the model list open where the target has one, or closes both.
+/// Opens the chooser with the model list open, or closes both.
 fn toggle(app: AppState, built: Memo<Composer>, open: Memo<bool>, choosing: Signal<bool>) {
     if open.with_untracked(|open| *open) {
         choosing.set(false);
@@ -254,39 +234,21 @@ fn toggle(app: AppState, built: Memo<Composer>, open: Memo<bool>, choosing: Sign
     }
 }
 
-/// The chooser under the who chip while it is open: the Assistant | PM switch across the width
-/// and the model list. Picking a model closes it; switching to a target with a list shows that
-/// list, to one without (the PM) closes it.
+/// The chooser under the who chip while it is open: the model list. Picking a model closes it.
 fn chooser(
     app: AppState,
-    built: Memo<Composer>,
     menu: Memo<Option<ModelList>>,
     open: Memo<bool>,
     choosing: Signal<bool>,
 ) -> AnyElement {
-    let has_targets = computed(move || built.with(|c| !c.targets.is_empty()));
-    let after: AfterTarget = Rc::new(move || {
-        let (pickable, listed) =
-            built.with_untracked(|c| (c.model_pill.is_some(), c.model_menu.is_some()));
-        if !pickable {
-            choosing.set(false);
-        } else if !listed {
-            act(app, Action::ToggleModelMenu);
-        }
-    });
     let picked: Picked = Rc::new(move || choosing.set(false));
     when(
         move || open.get(),
         move || {
-            let after = after.clone();
             let picked = picked.clone();
             untracked(|| {
                 view()
                     .gap(px(6.0))
-                    .child(when(
-                        move || has_targets.get(),
-                        move || untracked(|| target_switch(app, built, Some(after.clone()))),
-                    ))
                     .child(inline_list(app, menu, picked))
                     .into_element()
             })

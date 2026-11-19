@@ -1,165 +1,21 @@
-//! The typed cards an assistant reply carries: the owner action and its receipt, the ask_user
-//! choice, the permission prompt, the filed Idea (with its edit and merge states), the Idea saved
-//! as written, and the host starting.
+//! The typed cards an assistant reply carries: the ask_user choice and the host starting.
 
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::assistant::{
-    Action, ActionCard, ActionOutcome, AskUserCard, Button, Chip, DiffLine, Editing, FILED_LABELS,
-    FiledCard, LABELS, MergeInput, PermissionCard, SavedCard, TextReply,
-};
+use crate::model::assistant::{Action, AskUserCard, Chip, WordsAnswer};
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
-use crate::ui::kit::chip::{chip, illus, stamp_small};
+use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::{dot, hue_fill, mark};
-use crate::ui::kit::text::{label_value, rich, rich_small};
+use crate::ui::kit::text::{rich, rich_small};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
+use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
-use super::parts::{
-    Edge, act, button_row, frame, meta_size, model_button, mono_line, mono_run, note_size, quote,
-    ring, spacer, strong_run, test_id, words,
-};
-
-/// The owner-action card (`.actcard`): heading, class chip, why and the cited input id over the
-/// exact command, the confirmation when one was given, then the receipt.
-pub fn action(app: AppState, card: &ActionCard) -> AnyElement {
-    let form = app.form;
-    let terminal = form == Form::Terminal;
-    let size = meta_size(form);
-    let mut head = vec![
-        words(app, card.heading, size, Token::Ink3).into_element(),
-        chip(app, card.class.label(), card.class.hue()),
-    ];
-    if let Some(why) = &card.why {
-        head.push(words(app, why.clone(), size, Token::Ink3).into_element());
-    }
-    head.push(spacer());
-    if let Some(input) = &card.input {
-        head.push(
-            words(app, "", size, Token::Ink3)
-                .child(mono_run(app, format!("{} {input}", LABELS.cites), size))
-                .into_element(),
-        );
-    }
-    let head = row(app, head, 8.0);
-    let command = mono_line(
-        app,
-        card.command.clone(),
-        if form == Form::Phone { 15.0 } else { 13.0 },
-    );
-    let mut parts = Vec::new();
-    if terminal {
-        parts.push(head.into_element());
-        parts.push(command.into_element());
-    } else {
-        parts.push(view().px(px(12.0)).pt(px(7.0)).child(head).into_element());
-        parts.push(
-            view()
-                .px(px(12.0))
-                .pt(px(2.0))
-                .pb(px(4.0))
-                .child(command)
-                .into_element(),
-        );
-    }
-    if let Some(confirmed) = &card.confirmed {
-        let line = words(
-            app,
-            format!("{} {confirmed}", LABELS.confirmed_on),
-            note_size(form),
-            Token::Ink3,
-        );
-        parts.push(if terminal {
-            line.into_element()
-        } else {
-            view().px(px(12.0)).pb(px(6.0)).child(line).into_element()
-        });
-    }
-    if terminal {
-        parts.push(term::hrule());
-    }
-    parts.push(receipt(app, &card.outcome));
-    frame(app, Edge::Plain, false, parts)
-}
-
-/// The receipt row (`.rcpt`): the stamp and its text; refused on the failure ground, waiting on
-/// the needs-you ground with Confirm and Decline at the trailing edge; a restriction has no stamp.
-fn receipt(app: AppState, outcome: &ActionOutcome) -> AnyElement {
-    let form = app.form;
-    let size = note_size(form);
-    let fill = match outcome {
-        ActionOutcome::Refused(_) => Some(Hue::Fail),
-        ActionOutcome::Waiting { .. } => Some(Hue::You),
-        ActionOutcome::Unknown(_) => Some(Hue::Held),
-        _ => None,
-    };
-    let mut parts = Vec::new();
-    if let Some(stamp) = outcome.stamp() {
-        parts.push(stamp_small(app, stamp, outcome.hue()));
-    }
-    match outcome {
-        ActionOutcome::Executed(said)
-        | ActionOutcome::Refused(said)
-        | ActionOutcome::Declined(said)
-        | ActionOutcome::Pending(said)
-        | ActionOutcome::Unknown(said) => {
-            parts.push(
-                mono_line(app, said.clone(), size)
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .into_element(),
-            );
-        }
-        ActionOutcome::Waiting {
-            explanation,
-            buttons,
-        } => {
-            parts.push(
-                view()
-                    .flex_1()
-                    .min_w(px(180.0))
-                    .child(rich_small(app, explanation))
-                    .into_element(),
-            );
-            parts.push(button_row(app, buttons, ButtonKind::Ghost, 6.0).into_element());
-        }
-        ActionOutcome::AskAndFileOnly(said) => {
-            parts.push(
-                view()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .child(rich_small(app, said))
-                    .into_element(),
-            );
-        }
-        ActionOutcome::Late { explanation, .. } => {
-            parts.push(
-                words(app, explanation.clone(), size, Token::Ink2)
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .into_element(),
-            );
-        }
-    }
-    let line = row(app, parts, 10.0).into_element();
-    let holder = view()
-        .when_some(fill, |v, hue| v.bg(hue_fill(hue)))
-        .child(line);
-    if form == Form::Terminal {
-        return holder.into_element();
-    }
-    holder
-        .px(px(12.0))
-        .py(px(8.0))
-        .border_t_1()
-        .border_t_color(color(Token::Rule))
-        .into_element()
-}
+use super::parts::{act, frame, meta_size, note_size, ring, strong_run, words};
 
 /// The ask_user card (`.askuser`): who asks and when, the question, the options with their
 /// consequences (the recorded one outlined in ink; an open one answers it when pressed), the
@@ -250,31 +106,72 @@ pub fn ask_user(app: AppState, card: &AskUserCard) -> AnyElement {
     if !card.options.is_empty() {
         parts.push(options.into_element());
     }
-    if let Some(reply) = &card.reply {
-        parts.push(text_reply(app, reply));
+    if let Some(words) = &card.words {
+        parts.push(words_answer(app, words));
     }
     if let Some(answer) = &card.answer {
         parts.push(rich_small(app, answer));
     }
-    frame(app, Edge::Asks, true, parts)
+    frame(app, parts)
 }
 
-/// The question's own-words answer: the field, then Send, which reads the field when pressed;
-/// Enter in the field sends too while Send is enabled.
-fn text_reply(app: AppState, reply: &TextReply) -> AnyElement {
-    let typed = signal(reply.value.clone());
-    let submit = reply.send.enabled.then(|| reply.send.action.clone());
-    let entry = field(app, reply.value.clone(), reply.label, typed, submit);
-    view()
-        .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
-        .child(entry)
-        .child(typed_row(
-            app,
-            std::slice::from_ref(&reply.send),
-            typed,
-            8.0,
-        ))
-        .into_element()
+/// The owner's own words as the answer: a field and Answer, Enter sending too. Blank words
+/// send nothing. test_id `field-answer` and `btn-answer`.
+fn words_answer(app: AppState, words: &WordsAnswer) -> AnyElement {
+    let form = app.form;
+    let typed = signal(String::new());
+    let send = {
+        let session = words.session.clone();
+        let question = words.question.clone();
+        move || {
+            act(
+                app,
+                Action::AnswerQuestion {
+                    session: session.clone(),
+                    question: question.clone(),
+                    option: None,
+                    text: Some(typed.get_untracked()),
+                },
+            )
+        }
+    };
+    let entry = input()
+        .test_id("field-answer")
+        .label(words.placeholder.clone())
+        .placeholder(words.placeholder.clone())
+        .placeholder_color(move || for_appearance(color(Token::Ink4)))
+        .text_color(color(Token::Ink))
+        .caret_color(move || for_appearance(color(Token::Ink)))
+        .selection_color(move || for_appearance(color(Token::Sel)))
+        .flex_1()
+        .min_w(px(0.0))
+        .on_change(move |text: &str| typed.set(text.to_owned()))
+        .on_submit({
+            let send = send.clone();
+            move |_: &str| send()
+        });
+    let entry = match form {
+        Form::Terminal => entry.bg(AdaptiveColor::TRANSPARENT).into_element(),
+        Form::Desktop | Form::Phone => entry
+            .font_family(FONT_TEXT)
+            .text_size(px(if form == Form::Phone { 15.0 } else { 13.0 }))
+            .bg(color(Token::BgSunk))
+            .border_1()
+            .border_color(color(Token::Rule2))
+            .rounded(px(6.0))
+            .px(px(8.0))
+            .py(px(5.0))
+            .into_element(),
+    };
+    let answer = button_with(
+        app,
+        "Answer",
+        ButtonKind::Primary,
+        ButtonOptions::default(),
+        "btn-answer",
+        send,
+    );
+    row(app, vec![entry, answer], 8.0).into_element()
 }
 
 /// The head of a card that asks (`.askuser .hd`): the needs-you dot, the heading, a chip at the
@@ -291,391 +188,6 @@ fn asks_head(app: AppState, heading: &str, state: Option<&Chip>) -> AnyElement {
         parts.push(chip(app, state.label.clone(), state.hue));
     }
     row(app, parts, 6.0).into_element()
-}
-
-/// The write permission (`.permcard`): who asks, its state, the file, the preview lines, the
-/// three grants and Deny, the presence note and the disclosure; the prompt's timer note under it.
-pub fn permission(app: AppState, card: &PermissionCard) -> AnyElement {
-    let form = app.form;
-    let size = meta_size(form);
-    let choices = card
-        .choices
-        .iter()
-        .map(|choice| choice.button.clone())
-        .collect::<Vec<_>>();
-    let mut parts = vec![
-        asks_head(app, &card.heading, Some(&card.state)),
-        mono_line(
-            app,
-            card.path.clone(),
-            if form == Form::Phone { 13.0 } else { 12.0 },
-        )
-        .into_element(),
-    ];
-    if !card.lines.is_empty() {
-        parts.push(diff(app, &card.lines));
-    }
-    if !choices.is_empty() {
-        parts.push(button_row(app, &choices, ButtonKind::Ghost, 6.0).into_element());
-    }
-    if let Some(note) = card.presence_note {
-        parts.push(words(app, note, size, Token::Ink3).into_element());
-    }
-    if let Some(label) = card.illustrative {
-        parts.push(illus(app, label));
-    }
-    view()
-        .gap(px(6.0))
-        .child(frame(app, Edge::Asks, true, parts))
-        .children(
-            card.timer_note
-                .clone()
-                .map(|note| words(app, note, size, Token::Ink3)),
-        )
-        .into_element()
-}
-
-/// The preview lines (`.diff .ln`): line number when known, the marker in its colour, the code
-/// cut to fit, on the added or removed ground.
-fn diff(app: AppState, lines: &[DiffLine]) -> AnyElement {
-    let form = app.form;
-    let rows = lines.iter().map(|line| {
-        let hue = match line.marker {
-            "+" => Some(Hue::Ok),
-            "-" => Some(Hue::Fail),
-            _ => None,
-        };
-        let number = diff_mono(
-            form,
-            line.line.map_or_else(String::new, |at| at.to_string()),
-            Token::Ink4,
-        );
-        let marker = diff_mono(
-            form,
-            line.marker,
-            if hue == Some(Hue::Fail) {
-                Token::Fail
-            } else {
-                Token::Ok
-            },
-        );
-        let code = diff_mono(form, line.text.clone(), Token::Ink)
-            .flex_1()
-            .min_w(px(0.0))
-            .truncate();
-        if form == Form::Terminal {
-            return view()
-                .flex_row()
-                .child(view().w(term::cells(4.0)).flex_shrink_0().child(number))
-                .child(view().w(term::cells(2.0)).flex_shrink_0().child(marker))
-                .child(code)
-                .into_element();
-        }
-        let number_column = if form == Form::Phone { 30.0 } else { 38.0 };
-        view()
-            .flex_row()
-            .items_center()
-            .when_some(hue, |line, hue| line.bg(hue_fill(hue)))
-            .child(
-                view()
-                    .w(px(number_column))
-                    .flex_shrink_0()
-                    .items_end()
-                    .pr(px(8.0))
-                    .child(number),
-            )
-            .child(view().w(px(14.0)).flex_shrink_0().child(marker))
-            .child(code)
-            .into_element()
-    });
-    let block = view().children(rows.collect::<Vec<_>>());
-    if form == Form::Terminal {
-        return block.into_element();
-    }
-    block
-        .rounded(px(6.0))
-        .border_1()
-        .border_color(color(Token::Rule))
-        .overflow_hidden()
-        .into_element()
-}
-
-fn diff_mono(form: Form, content: impl Into<SharedString>, ink: Token) -> Text {
-    let t = text(content.into())
-        .number_of_lines(1u32)
-        .text_color(color(ink));
-    if form == Form::Terminal {
-        t
-    } else {
-        t.font_family(FONT_MONO)
-            .text_size(px(11.0))
-            .line_height(px(17.6))
-    }
-}
-
-/// The filed Idea (`.filed`): the result chip and provenance, who filed it, the owner's words
-/// quoted first and unchanged, then the fields the assistant wrote (editable in the edit state),
-/// and Edit, Merge into, Discard (or Save and Cancel while editing, or the merge destination and
-/// Merge and Cancel), with the status of the last command sent for it.
-pub fn filed(app: AppState, card: &FiledCard) -> AnyElement {
-    let form = app.form;
-    let size = meta_size(form);
-    let idea = &card.idea;
-    let mut head = vec![
-        chip(app, card.chip.label.clone(), card.chip.hue),
-        view()
-            .flex_shrink(1.0)
-            .min_w(px(0.0))
-            .child(rich_small(app, &card.provenance))
-            .into_element(),
-    ];
-    if card.attached {
-        head.push(chip(app, LABELS.link_attached, Hue::Neutral));
-    }
-    if let Some(status) = &card.status {
-        head.push(chip(app, status.label.clone(), status.hue));
-    }
-    let value_size = if form == Form::Phone { 15.0 } else { 12.5 };
-    // The live title field owns its text while it is typed; Save reads it when pressed.
-    let title_text = signal(idea.title.clone());
-    let title = match card.editing {
-        Editing::No => words(app, idea.title.clone(), value_size, Token::Ink)
-            .font_weight(FontWeight::BOLD)
-            .into_element(),
-        Editing::Title => field(
-            app,
-            idea.title.clone(),
-            FILED_LABELS.title,
-            title_text,
-            None,
-        ),
-    };
-    let project = words(app, card.project.clone(), value_size, Token::Ink).into_element();
-    let mut labels = idea
-        .labels
-        .iter()
-        .map(|label| chip(app, label.clone(), Hue::Neutral))
-        .collect::<Vec<_>>();
-    if let Some(related) = &card.related {
-        labels.push(rich_small(app, related));
-    }
-    let criteria = view()
-        .gap(px(if form == Form::Terminal { 0.0 } else { 3.0 }))
-        .children(idea.criteria.iter().enumerate().map(|(at, criterion)| {
-            let entry = words(app, criterion.clone(), value_size, Token::Ink).into_element();
-            view()
-                .flex_row()
-                .items_start()
-                .child(
-                    view()
-                        .w(if form == Form::Terminal {
-                            term::cells(3.0)
-                        } else {
-                            px(18.0)
-                        })
-                        .flex_shrink_0()
-                        .child(words(app, format!("{}.", at + 1), value_size, Token::Ink)),
-                )
-                .child(view().flex_1().min_w(px(0.0)).child(entry))
-                .into_element()
-        }));
-    // A served card shows only the fields corrald sent: an empty list is not "none".
-    let has_labels = !labels.is_empty();
-    let fields = view()
-        .gap(px(if form == Form::Terminal { 0.0 } else { 5.0 }))
-        .child(label_value(app, FILED_LABELS.title, title))
-        .child(label_value(app, FILED_LABELS.project, project))
-        .when(has_labels, |fields| {
-            fields.child(label_value(
-                app,
-                FILED_LABELS.labels,
-                row(app, labels, 6.0).into_element(),
-            ))
-        })
-        .when(!idea.criteria.is_empty(), |fields| {
-            fields.child(label_value(
-                app,
-                FILED_LABELS.criteria,
-                criteria.into_element(),
-            ))
-        })
-        .when(!idea.duplicates.is_empty(), |fields| {
-            fields.child(label_value(
-                app,
-                FILED_LABELS.duplicates,
-                words(app, idea.duplicates.clone(), value_size, Token::Ink3).into_element(),
-            ))
-        });
-    let into_text = signal(String::new());
-    let mut actions = typed_row(app, &card.buttons, title_text, 8.0);
-    if let Some(note) = card.discard_note {
-        actions = actions
-            .when(form == Form::Terminal, |r| r.child(term::space(2.0)))
-            .child(words(app, note, size, Token::Ink3));
-    }
-    let mut parts = vec![
-        row(app, head, 8.0).into_element(),
-        words(app, card.attribution.clone(), size, Token::Ink3).into_element(),
-        quote(app, card.quote_label, &idea.words),
-        fields.into_element(),
-    ];
-    if let Some(merge) = &card.merge {
-        parts.push(merge_field(app, merge, into_text));
-    }
-    if !card.buttons.is_empty() {
-        parts.push(
-            actions
-                .when(form != Form::Terminal, |r| r.mt(px(4.0)))
-                .into_element(),
-        );
-    }
-    frame(app, Edge::Plain, true, parts)
-}
-
-/// Model buttons in a wrapping row, those whose command carries typed text (Save, Merge, a
-/// question's own-words answer) reading it from `typed` when pressed rather than when drawn.
-fn typed_row(app: AppState, buttons: &[Button], typed: Signal<String>, gap: f32) -> View {
-    let terminal = app.form == Form::Terminal;
-    let base = view().flex_row().flex_wrap().items_center();
-    let base = if terminal { base } else { base.gap(px(gap)) };
-    let mut parts = Vec::with_capacity(buttons.len() * 2);
-    for (at, button) in buttons.iter().enumerate() {
-        if at > 0 && terminal {
-            parts.push(term::space(2.0));
-        }
-        parts.push(match &button.action {
-            Action::SaveIdea { .. } | Action::MergeInto { .. } | Action::AnswerText { .. } => {
-                let action = button.action.clone();
-                button_with(
-                    app,
-                    button.label,
-                    if button.primary {
-                        ButtonKind::Primary
-                    } else {
-                        ButtonKind::Ghost
-                    },
-                    ButtonOptions {
-                        disabled: !button.enabled,
-                        ..ButtonOptions::default()
-                    },
-                    test_id(button),
-                    move || act(app, with_text(&action, typed.get_untracked())),
-                )
-            }
-            _ => model_button(app, button, ButtonKind::Ghost),
-        });
-    }
-    base.children(parts)
-}
-
-/// The command with the text its field holds now.
-fn with_text(action: &Action, text: String) -> Action {
-    match action {
-        Action::SaveIdea { task, .. } => Action::SaveIdea {
-            task: task.clone(),
-            title: text,
-        },
-        Action::MergeInto { task, .. } => Action::MergeInto {
-            task: task.clone(),
-            into: text,
-        },
-        Action::AnswerText { key, rev, .. } => Action::AnswerText {
-            key: key.clone(),
-            rev: *rev,
-            text,
-        },
-        other => other.clone(),
-    }
-}
-
-/// The merge destination (`.einput`) and Merge and Cancel; Merge sends the typed task id.
-fn merge_field(app: AppState, merge: &MergeInput, into: Signal<String>) -> AnyElement {
-    let form = app.form;
-    let entry = field(app, String::new(), "Merge into task id", into, None);
-    view()
-        .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
-        .child(label_value(app, "Merge into", entry))
-        .child(typed_row(app, &merge.buttons, into, 8.0))
-        .into_element()
-}
-
-/// An editable field of a card (`.einput`): words on the sunken ground in the focus line. It
-/// writes what is typed into `bound`, which the command reads when sent, and Enter sends
-/// `submit` with the typed words when one is given.
-fn field(
-    app: AppState,
-    value: String,
-    label: &'static str,
-    bound: Signal<String>,
-    submit: Option<Action>,
-) -> AnyElement {
-    let form = app.form;
-    // NSH's web host puts `label` on the field's wrapper, not on the input a screen reader
-    // reads; the placeholder is the name the input itself carries when it is empty or not.
-    let entry = input()
-        .default_value(value)
-        .label(label)
-        .placeholder(label)
-        .placeholder_color(move || for_appearance(color(Token::Ink4)))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(color(Token::Ink))
-        .caret_color(move || for_appearance(color(Token::Ink)))
-        .selection_color(move || for_appearance(color(Token::Sel)))
-        .on_change(move |text: &str| bound.set(text.to_owned()));
-    let entry = match submit {
-        Some(action) => {
-            entry.on_submit(move |typed: &str| act(app, with_text(&action, typed.to_owned())))
-        }
-        None => entry,
-    };
-    match form {
-        // A terminal draws a field without a fill of its own as a raised band.
-        Form::Terminal => entry.bg(AdaptiveColor::TRANSPARENT).into_element(),
-        Form::Desktop | Form::Phone => entry
-            .w_full()
-            .font_family(FONT_TEXT)
-            .text_size(px(if form == Form::Phone { 15.0 } else { 12.5 }))
-            .bg(color(Token::BgSunk))
-            .border_1()
-            .border_color(color(Token::Focus))
-            .rounded(px(4.0))
-            .px(px(6.0))
-            .py(px(3.0))
-            .into_element(),
-    }
-}
-
-/// The Idea filed as written (`.filed`): the saved chip and who filed it, the words quoted, the
-/// title from their first line and how it was made, what can be added later.
-pub fn saved(app: AppState, card: &SavedCard) -> AnyElement {
-    let form = app.form;
-    let size = meta_size(form);
-    let value_size = if form == Form::Phone { 15.0 } else { 12.5 };
-    let title = words(app, "", value_size, Token::Ink)
-        .child(strong_run(card.title.clone()).font_weight(FontWeight::BOLD))
-        .child(text(format!(" {}", card.title_note)).text_color(color(Token::Ink3)));
-    frame(
-        app,
-        Edge::Plain,
-        true,
-        vec![
-            row(
-                app,
-                vec![
-                    chip(app, card.chip.label.clone(), card.chip.hue),
-                    words(app, card.attribution, size, Token::Ink3)
-                        .flex_shrink(1.0)
-                        .min_w(px(0.0))
-                        .into_element(),
-                ],
-                8.0,
-            )
-            .into_element(),
-            quote(app, card.quote_label, &card.words),
-            label_value(app, FILED_LABELS.title, title.into_element()),
-            words(app, card.note, note_size(form), Token::Ink3).into_element(),
-        ],
-    )
 }
 
 /// The host starting (`.hoststate`): the running mark, the state in bold and what it means, on

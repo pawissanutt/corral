@@ -97,18 +97,9 @@ if (envelope.op === "todo" && existsSync(snapshot)) {
     }
   }
 }
-// Optional handoff fixture: read returns handoff.json; binding/choice echo the selected action.
-const handoffFile = join(dir, "handoff.json");
-let handoff;
-if (envelope.op === "assistant_handoff" && existsSync(handoffFile)) {
-  handoff = envelope.payload.action === "binding"
-    ? { option: envelope.payload.native.action === "save" ? "save_for_later" : "work_on_this_here", digest: "d".repeat(64) }
-    : JSON.parse(readFileSync(handoffFile, "utf8"));
-}
-if (envelope.op === "event" && envelope.payload.kind === "handoff_choice") handoff = { action: envelope.payload.native.action };
 process.stdout.write(JSON.stringify({ version: 1, request_id: envelope.request_id, op: envelope.op,
   payload_sha256: envelope.payload_sha256, identity: envelope.identity, state: "committed",
-  result: { op: envelope.op, ...ended, ...boundary, ...handoff, ...(progress ? { revision: progress.revision, progress } : {}),
+  result: { op: envelope.op, ...ended, ...boundary, ...(progress ? { revision: progress.revision, progress } : {}),
     ...(envelope.payload.kind === "budget" ? { admitted: true, exhausted: false } : {}),
     ...(envelope.payload.kind === "owner_input" ? { input: envelope.identity.assistant + "/g" + envelope.identity.generation
       + "/i" + envelope.request_id.split("-").at(-1) } : {}),

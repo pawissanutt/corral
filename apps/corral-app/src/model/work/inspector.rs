@@ -98,20 +98,13 @@ pub struct Stage {
     pub hue: crate::model::hue::Hue,
 }
 
-/// A dependency and the route to its task.
+/// A dependency, its status and the route to its task; an id corrald does not know has no mark
+/// and no route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dependency {
     pub id: String,
-    pub mark: crate::model::board::Mark,
-    pub show_mark: bool,
-    pub action: Press,
-}
-
-/// Recorded worker progress.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Progress {
-    pub label: &'static str,
-    pub done: usize,
-    pub total: usize,
-    pub figure: String,
+    pub mark: Option<crate::model::board::Mark>,
+    /// `done`, `dropped`, `running`… or `unknown task`.
+    pub status: &'static str,
+    pub action: Option<Press>,
 }

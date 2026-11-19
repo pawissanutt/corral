@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import type { HostIdentity } from "../types.ts";
 
+export const PLAN_SKILL_ASSET = "assets/skills/corral-plan/SKILL.md";
+
 export class RoleAssetMissing extends Error {
   readonly code = "role_asset_missing";
   constructor(readonly path: string) {
@@ -29,11 +31,11 @@ export function readAsset(root: string, relative: string): string {
   return readFileSync(assetPath(root, relative), "utf8");
 }
 
-/** Fills `{{task}}`, `{{run}}`, `{{review}}`, `{{project}}` and `{{assistant}}` from the launcher-bound identity. */
+/** Fill the bound identity in the role's shipped contract. */
 export function renderContract(template: string, identity: HostIdentity): string {
   const values: Record<string, string> = {
-    task: identity.task ?? "", run: identity.run ?? "", review: identity.review ?? "", project: identity.project,
+    task: identity.task ?? "", run: identity.run ?? "", project: identity.project,
     assistant: identity.assistant ?? "",
   };
-  return template.replace(/\{\{(task|run|review|project|assistant)\}\}/g, (_match, key: string) => values[key] ?? "");
+  return template.replace(/\{\{(task|run|project|assistant)\}\}/g, (_match, key: string) => values[key] ?? "");
 }

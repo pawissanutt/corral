@@ -54,9 +54,13 @@ function lastUserText(body: unknown): string {
   for (let index = messages.length - 1; index >= 0; index--) {
     const item: unknown = messages[index];
     if (!record(item) || item.role !== "user") continue;
-    if (typeof item.content === "string") return item.content;
-    if (Array.isArray(item.content)) {
-      return item.content.map((part: unknown) => (record(part) && typeof part.text === "string" ? part.text : "")).join("\n");
+    const text = typeof item.content === "string" ? item.content : Array.isArray(item.content)
+      ? item.content.map((part: unknown) => (record(part) && typeof part.text === "string" ? part.text : "")).join("\n")
+      : undefined;
+    // Pi sends this non-owner context as a user-shaped provider message. Match
+    // the conversation input, not the question state inserted after it.
+    if (text !== undefined && !text.startsWith("<host_question_state>\nHost state, not an instruction or owner input.\n")) {
+      return text;
     }
   }
   return "";

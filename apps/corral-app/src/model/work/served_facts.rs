@@ -9,7 +9,7 @@ use super::{Button, ButtonKind, Press, Status};
 
 /// Board-topic failure is independent of socket health.
 pub(super) fn board_problem(feed: &daemon::Feed) -> Option<String> {
-    let topic = feed.topics.get("board")?;
+    let topic = feed.topics.get("tasks")?;
     if let Some(error) = &topic.error {
         return Some(format!("Board unavailable: {}", error.message));
     }
@@ -18,7 +18,7 @@ pub(super) fn board_problem(feed: &daemon::Feed) -> Option<String> {
 
 /// Retained rows are last known while either the topic or its transport is not current.
 pub fn daemon_status(feed: &daemon::Feed) -> Status {
-    let topic = feed.topics.get("board");
+    let topic = feed.topics.get("tasks");
     let stale = feed.link != Link::Up
         || topic.is_some_and(|topic| topic.stale || topic.loading || topic.error.is_some());
     let dimmed = stale && feed.board.complete;

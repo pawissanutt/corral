@@ -67,7 +67,7 @@ test("a Code Mode cell shows the calls it made, live, and its final state", asyn
 
     // Collapsed, neither the script source nor the model-facing report is drawn.
     const screen = h.screen().text();
-    for (const raw of ["Promise.allSettled", "tools.read(", "Cell cell-1: ok", "Nested calls:", "kernel generation"]) {
+    for (const raw of ["Promise.allSettled", "tools.read(", "Cell cell-1: ok", "Nested calls:"]) {
       expect(screen).not.toContain(raw);
     }
   } finally {

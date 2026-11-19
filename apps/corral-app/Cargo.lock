@@ -752,7 +752,17 @@ name = "corral-protocol"
 version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
+ "corral-types",
  "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "corral-types"
+version = "0.4.0"
+dependencies = [
+ "jiff",
  "serde",
  "serde_json",
 ]
@@ -2952,6 +2962,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "corral-protocol",
+ "corral-types",
  "env_logger",
  "futures-channel",
  "futures-core",
@@ -2969,6 +2980,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "snow",
+ "toml_edit 0.25.19+spec-1.1.0",
  "unicode-width",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -5433,6 +5445,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.3+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.5",
 ]
 

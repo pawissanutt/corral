@@ -174,9 +174,9 @@ fn rc05_slow_reads_expire_as_correlated_replies_without_killing_the_session() {
         (wire::app::CHANGES_PAGE, json!({"limit":20}), 30_000),
         (wire::app::SEEN_ADVANCE, json!({"through":1}), 30_000),
         (
-            wire::app::ACT_RESULT,
-            json!({"cmd_id":"test","wait_ms":5_000}),
-            10_000,
+            wire::op::OP_SUBMIT,
+            json!({"op":"sync","force":false}),
+            30_000,
         ),
     ] {
         let mut core = Core::new();
@@ -250,7 +250,7 @@ mod tests {
                 ..
             })
         ));
-        core.open(Topic::Board, 12).unwrap();
+        core.open(Topic::Tasks, 12).unwrap();
         assert!(
             core.receive(
                 frame(json!({
@@ -283,45 +283,5 @@ mod tests {
         core.receive(frame(json!({"jsonrpc":"2.0", "id":1, "result":{}})), 102)
             .unwrap();
         assert_eq!(core.expired(5_100), None);
-    }
-
-    #[test]
-    fn live_frames_never_finish_or_replace_a_scoped_history_snapshot() {
-        let mut core = Core::new();
-        for (more, live) in [
-            (true, Value::Null),
-            (
-                false,
-                json!({
-                    "entry":"reply-1","turn":1,"offset":0,"text":"answer","done":false
-                }),
-            ),
-        ] {
-            core.receive(
-                frame(json!({"jsonrpc":"2.0","method":"sub.delta","params":{
-                    "topic":"thread","scope":"quick","epoch":1,"rows":[],"left":[],
-                    "cursor":{"rev":1,"after":null},"more":more,"live":live
-                }})),
-                0,
-            )
-            .unwrap();
-        }
-        assert!(matches!(core.next_event(), Some(Event::Live { scope, .. }) if scope == "quick"));
-        assert!(core.next_event().is_none());
-        core.receive(
-            frame(json!({"jsonrpc":"2.0","method":"sub.delta","params":{
-                "topic":"thread","scope":"quick","epoch":1,"rows":[],"left":[],
-                "cursor":{"rev":1,"after":null},"more":false,"live":null
-            }})),
-            1,
-        )
-        .unwrap();
-        assert!(matches!(
-            core.next_event(),
-            Some(Event::Rows {
-                replacement: true,
-                ..
-            })
-        ));
     }
 }

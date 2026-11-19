@@ -26,10 +26,10 @@ pub use crate::ui::kit::page_phone::{card, group_head, pushed_head, search, sect
 const ASK_CLEARANCE: f32 = 64.0;
 /// Desktop points per terminal Cell for a fixed column: a 400 pt list keeps 33 Cells.
 const POINTS_PER_COLUMN_CELL: f32 = 12.0;
-/// Stacked in a terminal, a list takes two parts of the height and the column it leads to three,
-/// so the detail keeps the most rows while the list still shows several.
-const STACKED_LIST_SHARE: f32 = 2.0;
-const STACKED_MAIN_SHARE: f32 = 3.0;
+/// Stacked in a terminal, a list takes the rows it has up to two fifths of the height and the
+/// column it leads to the rest, so the detail keeps the most rows while the list still shows
+/// several, and a short list leaves no empty rows.
+const STACKED_LIST_MOST: f32 = 0.4;
 /// A part that gives way in a head row is shrunk this many times faster than the title, so the
 /// title keeps its words until the part is gone.
 const GIVE_WAY_SHRINK: f32 = 1000.0;
@@ -276,8 +276,8 @@ pub fn columns(app: AppState, cols: Vec<(Width, AnyElement)>, main: usize) -> An
 /// its least width (`term::beside`): fixed columns get a Cell for every 12 points, a lone list
 /// growing with a wide page (`term::list_columns`), joined `│` lines between. Short of that they
 /// stack rather than leave the list out: the columns before `main` above it, a joined `─` line
-/// between, a list taking two parts of the height and `main` three; the columns after `main`
-/// step out until the page has room for them again.
+/// between, a list taking its own rows up to [`STACKED_LIST_MOST`] of the height and `main`
+/// the rest; the columns after `main` step out until the page has room for them again.
 fn terminal_columns(app: AppState, cols: Vec<(Width, AnyElement)>, main: usize) -> AnyElement {
     let fixed_count = cols
         .iter()
@@ -335,15 +335,14 @@ fn terminal_columns(app: AppState, cols: Vec<(Width, AnyElement)>, main: usize) 
         };
         let cell = if side {
             cell.style_when(stacked, |s| s.hidden())
-        } else {
-            let share = if at < main {
-                STACKED_LIST_SHARE
-            } else {
-                STACKED_MAIN_SHARE
-            };
-            cell.style_when(stacked, move |s| {
-                s.flex_1().flex_grow(share).w(relative(1.0))
+        } else if at < main {
+            cell.style_when(stacked, |s| {
+                s.flex_shrink(1.0)
+                    .max_h(relative(STACKED_LIST_MOST))
+                    .w(relative(1.0))
             })
+        } else {
+            cell.style_when(stacked, |s| s.flex_1().w(relative(1.0)))
         };
         parts.push(cell.child(col).into_element());
     }

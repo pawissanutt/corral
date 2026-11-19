@@ -16,8 +16,8 @@ import { BOLD, CARD_BODY, cardCell, cardInner, cardLine, cardWrap, conversationC
 const GAP = "  ", NAME = 11, STATE = 9;
 /** Below this many cells inside the card a flag or a finding keeps one row and ellipsizes instead of wrapping. */
 const WRAP_FLAGS = 60;
-/** Gate rows: attempt (4), tier (5), result (9), the failed command, the duration (7, right-aligned). */
-const ATTEMPT = 4, TIER = 5, RESULT = 9, TIME = 7;
+/** Gate rows: attempt (4), result (9), the failed command, the duration (7, right-aligned). */
+const ATTEMPT = 4, RESULT = 9, TIME = 7;
 /** Below this many cells the failed command leaves the gate row for a row of its own. */
 const COMMAND_MIN = 8;
 /** Findings and the resolved count sit this far in, under their round. */
@@ -88,14 +88,14 @@ function fold(text: string, inner: number, indent = 0): string[] {
 function verificationLines(verification: BuildRecord["verification"], inner: number): string[] {
   if (!verification.length) return [];
   const lines = [cardLine(PANEL_MUTED + "verification", inner)];
-  const command = inner - (ATTEMPT + TIER + RESULT + TIME + GAP.length * 4);
+  const command = inner - (ATTEMPT + RESULT + TIME + GAP.length * 3);
   for (const gate of verification) {
     const look = gate.result === "pass" ? { glyph: "✓", tone: PANEL_SUCCESS, word: "pass" }
       : gate.result === "fail" ? { glyph: "✗", tone: PANEL_ERROR, word: "fail" } : { glyph: "○", tone: PANEL_MUTED, word: "skipped" };
     const failed = gate.result === "fail" && gate.failed_command ? plainLabel(gate.failed_command) : "";
     const ms = Date.parse(gate.ended) - Date.parse(gate.started);
     const time = cardCell(PANEL_MUTED + (Number.isFinite(ms) ? duration(ms) : ""), TIME, true);
-    const head = cardCell(PANEL_TEXT + plainLabel(gate.attempt), ATTEMPT) + GAP + cardCell(PANEL_MUTED + plainLabel(gate.tier), TIER) + GAP
+    const head = cardCell(PANEL_TEXT + plainLabel(gate.attempt), ATTEMPT) + GAP
       + cardCell(look.tone + look.glyph + " " + look.word, RESULT) + GAP;
     if (command >= COMMAND_MIN) {
       lines.push(cardLine(head + cardCell(PANEL_TEXT + failed, command) + GAP + time, inner));

@@ -49,19 +49,13 @@ fn daemon_palette_lists_served_records_only() {
     feed.plans.insert(
         "T-31".into(),
         PlanRow {
-            id: "T-31".into(),
-            title: "Queue lifecycle".into(),
-            state: PlanState::Awaiting,
-            revision: Some("P1".into()),
-            delivery: None,
-            members_total: 2,
-            members_landed: 0,
-            blockers: Vec::new(),
-            accepted_at: None,
-            role: None,
-            linked: None,
-            projects: Vec::new(),
-            rev: 1,
+            parent: crate::model::daemon::bare_task(
+                "T-31",
+                "Queue lifecycle",
+                corral_types::Status::Backlog,
+                jiff::Timestamp::UNIX_EPOCH,
+            ),
+            child_counts: Vec::new(),
         },
     );
     let rows = filtered("", true, DataState::Daemon, &feed, None, Form::Desktop);
@@ -92,6 +86,27 @@ fn daemon_palette_lists_served_records_only() {
             .iter()
             .any(|row| matches!(row.action, Action::Ask(Some(_))))
     );
+}
+
+#[test]
+fn the_palette_lists_every_operation_of_the_selected_task() {
+    let feed = Feed::default();
+    let task = crate::model::work::Record::Task("T-12".into());
+    let rows = filtered(
+        "",
+        true,
+        DataState::Daemon,
+        &feed,
+        Some(&task),
+        Form::Desktop,
+    );
+    let actions: Vec<&str> = rows
+        .iter()
+        .filter(|row| row.group == "Actions")
+        .map(|row| row.label.as_str())
+        .collect();
+    assert_eq!(actions.len(), 15);
+    assert!(actions.contains(&"Dispatch… T-12"));
 }
 
 #[test]

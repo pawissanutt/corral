@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
-import auth, { fixtureTransport } from "./fixtures/auth/index.ts";
+import auth from "./fixtures/auth/index.ts";
+import { fakeCodexTransport } from "./fixtures/auth/fake-transport.ts";
 import { createModelCatalog } from "../src/host/catalog.ts";
 import { authContext, restrictProvider } from "../src/host/session.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
@@ -15,7 +16,7 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
   const cwd = mkdtempSync(join(tmpdir(), "corral-auxiliary-"));
   const originalFetch = globalThis.fetch;
   try {
-    const transport = fixtureTransport();
+    const transport = fakeCodexTransport();
     const network = guardedFetch(transport.send);
     globalThis.fetch = network.fetch;
     const models = await createModelCatalog(auth.credentials(authContext()), { providers: ["openai-codex"] });
@@ -23,10 +24,9 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     writeFileSync(join(cwd, "source.txt"), "fixture source");
     const settings = { explore: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 30 },
       oracle: { model: "openai-codex/gpt-6.1-sol", timeout_secs: 30 },
-      shadow: { model: "openai-codex/gpt-6-luna", timeout_secs: 60, max_per_hour: 30 },
       expert: { model: "openai-codex/gpt-6.1-sol", max_turns: 3, timeout_secs: 600, max_parallel: 1 } };
     const refs: Record<string, unknown>[] = [];
-    const runtime = new AuxiliaryRuntime({ settings, generation: 4, provider: "openai-codex", model: "gpt-6.1-sol",
+    const runtime = new AuxiliaryRuntime({ settings, provider: "openai-codex", model: "gpt-6.1-sol",
       sessionId: () => "parent",
       async record(payload) { refs.push(payload); return { session_id: payload.request, session_file: join(cwd, `${payload.request}.jsonl`) }; },
       execute: (invocation, signal) => runAuxiliarySession({ sdk, models, provider: "openai-codex", cwd,
@@ -35,7 +35,7 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     const fleet = new FleetRuntime({ sdk, models, approved: ["openai-codex"], parent: { provider: "openai-codex", model: "gpt-6.1-sol" },
       context: { dir: cwd, session: { worktree: cwd, name: "parent" }, settings: { maxParallel: 3, profiles: [] } },
       agentDir: join(cwd, "agent"), localTools: [], parentLoadout: ["read", "write", "bash", "explore", "oracle"],
-      allowedKinds: ["explore"], research: { settings: settings.explore, generation: 4, sessionId: () => "parent" },
+      allowedKinds: ["explore"], research: { settings: settings.explore },
       async record(payload) { refs.push(payload); return { session_id: payload.request, session_file: join(cwd, `${payload.request}.jsonl`) }; },
       changed() {}, deliverToParent() { throw new Error("Blocking research must not be redelivered"); },
     });
@@ -121,13 +121,6 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     const limited = await runtime.run("oracle", "limited", "consult once");
     expect(limited.outcome).toBe("uncertain");
     expect(transport.requests - before).toBe(1);
-    // The detached shadow uses the same isolated SDK path without inheriting tools/resources.
-    transport.script([{ text: '{"choice":"wait","reason":"unsure"}' }]);
-    const shadow = await runtime.run("shadow", "shadow", "Choose wait or escalate", undefined, undefined, ["wait"]);
-    expect(shadow.outcome).toBe("completed");
-    const shadowTranscript = readFileSync(join(cwd, `${shadow.request}.jsonl`), "utf8").split("\n").filter(Boolean).map(s => JSON.parse(s));
-    expect(shadowTranscript.flatMap(entry => entry.message?.toolsAdded ?? [])).toHaveLength(0);
-    expect(refs.filter(event => event.usage_kind === "shadow" && event.action === "finish").map(event => event.outcome)).toEqual(["completed"]);
     transport.script([
       { toolCalls: [
         { callId: "expert-read", name: "read", arguments: { path: "source.txt" } },

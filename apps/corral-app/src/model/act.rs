@@ -1,509 +1,407 @@
-//! Typed canonical commands the app asks corrald to run, the device authority they need, and
-//! their truthful status. The command identity is allocated once per intended command and kept
-//! through preview, confirmation, submission and recovery.
+//! Engine operations this device submits (`op.submit { op, force }`), the one local question a
+//! destructive or forced one asks first, and where each stands. The engine decides every
+//! precondition; a refusal comes back with typed next steps, and the app offers each one.
 
-use corral_protocol::app::ActClass;
-use corral_protocol::cmd::{self, Command};
-use corral_protocol::rpc::ErrorCode;
+use corral_types::{Next, Op, Refusal, Status};
 
-use crate::model::daemon::{CommandStatus, Feed};
+use crate::model::daemon::Feed;
 use crate::model::id::{Id, IdSupply};
 use crate::model::live::Live;
 
-/// A device authority a command or message needs (`AppSession.authority`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Authority {
-    /// Answer questions, follow up, reply to a session.
-    Reply,
-    /// Submit allowlisted owner commands.
-    Act,
-    /// Talk to the assistant.
-    Assistant,
-    /// Change daemon administration and automation settings.
-    Admin,
+/// What the one local confirm sheet asks about: an engine operation, a session control that
+/// cannot be taken back by pressing again (Terminate, a rewind), or leaving Configuration with
+/// unsaved edits, which drops them; `Leave` holds where the owner was going.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Confirming {
+    Op(Act),
+    Control(crate::model::agents::ControlAsk),
+    Leave(Box<crate::model::nav::NavState>),
 }
 
-impl Authority {
-    /// The refusal shown when the device lacks it; nothing is sent.
-    pub const fn refusal(self) -> &'static str {
+/// The leave question's title; its first word is what a terminal types to confirm.
+pub const LEAVE_TITLE: &str = "Discard unsaved changes to corral.toml";
+
+impl Confirming {
+    pub fn title(&self) -> &str {
         match self {
-            Authority::Reply => "Refused: this device may not answer or reply. Nothing was sent.",
-            Authority::Act => "Refused: this device may not run owner commands. Nothing was sent.",
-            Authority::Admin => {
-                "Refused: this device may not administer corrald. Nothing was sent."
-            }
-            Authority::Assistant => {
-                "Refused: this device may not message the assistant. Nothing was sent."
-            }
+            Self::Op(act) => &act.title,
+            Self::Control(ask) => &ask.title,
+            Self::Leave(_) => LEAVE_TITLE,
         }
+    }
+
+    /// The heading over the rows.
+    pub fn heading(&self) -> &'static str {
+        match self {
+            Self::Op(_) | Self::Control(_) => crate::model::commands::CONFIRM_EFFECT_HEADING,
+            Self::Leave(_) => "Draft",
+        }
+    }
+
+    /// The label-value rows the sheet lists.
+    pub fn rows(&self) -> Vec<(String, String)> {
+        match self {
+            Self::Op(act) => act.rows(),
+            Self::Control(ask) => ask.rows.clone(),
+            Self::Leave(_) => vec![(
+                "corral.toml".into(),
+                "Your edits are dropped; the file stays as it was last saved. Cancel keeps editing."
+                    .into(),
+            )],
+        }
+    }
+
+    /// Whether the sheet asks about something sent to corrald (or simulated by the preview).
+    pub fn sends(&self) -> bool {
+        !matches!(self, Self::Leave(_))
     }
 }
 
-/// One intended canonical command.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One intended engine operation.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Act {
-    /// The `cmd_id`, the same through preview, submit and recovery.
+    /// The request id of this submission.
     pub key: Id,
-    /// What the owner sees: "Accept plan T-885 P2".
+    /// What the owner sees: "Dispatch anyway T-42".
     pub title: String,
-    pub command: Command,
-    pub expect: Option<cmd::Expect>,
-    /// Confirm-class: preview, then a fresh confirmation on this device. Set from the
-    /// command's canonical class, so a caller cannot forget it; corrald still requires the
-    /// proof and refuses without one.
-    pub confirm: bool,
-    /// The record the command concerns.
+    pub op: Op,
+    pub force: bool,
+    /// The record the operation concerns.
     pub about: Option<Live>,
+    /// The press that made it already was its one local confirmation: a refusal sheet's forced
+    /// entry, which lists what it skips, or the confirm sheet itself.
+    pub confirmed: bool,
 }
 
 impl Act {
-    /// A new intended command, allocated from the reducer's injected identity state.
-    pub fn new(ids: &mut IdSupply, title: impl Into<String>, command: Command) -> Act {
-        Act::with_key(ids.next_id(), title, command)
+    pub fn new(ids: &mut IdSupply, op: Op, force: bool) -> Act {
+        Act::with_key(ids.next_id(), op, force)
     }
 
-    /// The command under an identity the caller already holds.
-    pub fn with_key(key: Id, title: impl Into<String>, command: Command) -> Act {
-        let confirm = matches!(command.app_class(), ActClass::Confirm | ActClass::Admin);
+    pub fn with_key(key: Id, op: Op, force: bool) -> Act {
+        let title = match target(&op) {
+            Some(id) => format!("{} {id}", label(&op, force)),
+            None => label(&op, force),
+        };
+        let about = target(&op).map(|id| Live::Task(Id::new(id)));
         Act {
             key,
-            title: title.into(),
-            command,
-            expect: None,
-            confirm,
-            about: None,
+            title,
+            op,
+            force,
+            about,
+            confirmed: false,
         }
     }
 
-    pub fn expect(mut self, expect: cmd::Expect) -> Act {
-        self.expect = Some(expect);
-        self
+    /// Destructive or forced operations ask once, locally, before they are sent: `drop`,
+    /// `stop`, `approve`, `retry` with `fresh`, `move` to Done or Dropped, and anything forced.
+    pub fn asks(&self) -> bool {
+        self.force
+            || matches!(
+                &self.op,
+                Op::Drop { .. }
+                    | Op::Stop { .. }
+                    | Op::Approve { .. }
+                    | Op::Retry { fresh: true, .. }
+                    | Op::Move {
+                        status: Status::Done | Status::Dropped,
+                        ..
+                    }
+            )
     }
 
-    pub fn confirmed(mut self) -> Act {
-        self.confirm = true;
-        self
+    /// What a forced operation skips, as the engine's force table names it.
+    pub fn skips(&self) -> Option<&'static str> {
+        self.force.then(|| skips(&self.op)).flatten()
     }
 
-    pub fn about(mut self, live: Live) -> Act {
-        self.about = Some(live);
-        self
-    }
-
-    /// Use the same command classification as corrald, including annotation replies.
-    pub fn authority(&self) -> Authority {
-        match self.command.app_class() {
-            ActClass::Reply => Authority::Reply,
-            ActClass::Admin => Authority::Admin,
-            _ => Authority::Act,
+    /// The operation and every argument it carries, as the confirm sheet lists them: the CLI
+    /// line first, then what it skips when forced.
+    pub fn rows(&self) -> Vec<(String, String)> {
+        let next = Next {
+            op: self.op.clone(),
+            force: self.force,
+        };
+        let mut rows = vec![("runs".to_owned(), next.command())];
+        if let Some(effect) = effect(&self.op) {
+            rows.push(("effect".to_owned(), effect.to_owned()));
         }
-    }
-
-    /// What this command sends, read from the frozen command and never looked up again: the
-    /// family and verb it runs, every argument it carries in full (a note as written), then the
-    /// precondition it is bound to. Absent optional arguments are left out.
-    pub fn command_rows(&self) -> Vec<(String, String)> {
-        let mut rows = vec![("runs".to_owned(), self.command.name().replace('.', " "))];
-        if let Command::Review(cmd::review::ReviewCommand::Discard { id }) = &self.command {
-            rows.push((
-                "effect".to_owned(),
-                format!(
-                    "Drops {id}, discards its current run and removes the run's worktree and branch. Artifacts are kept."
-                ),
-            ));
-        }
-        if let Ok(serde_json::Value::Object(mut fields)) = serde_json::to_value(&self.command)
-            && let Some(serde_json::Value::Object(args)) = fields.remove("args")
-        {
-            rows.extend(args.into_iter().filter_map(|(name, value)| {
-                let shown = match value {
-                    serde_json::Value::Null => return None,
-                    _ if name == "verb" => return None,
-                    serde_json::Value::String(text) => text,
-                    other => other.to_string(),
-                };
-                Some((name.replace('_', " "), shown))
-            }));
-        }
-        if let Some(cmd::Expect::TaskRevision { task, revision }) = &self.expect {
-            rows.push((
-                "only if".to_owned(),
-                format!("{task} is still at owner revision {revision}"),
-            ));
+        if let Some(skips) = self.skips() {
+            rows.push(("skips".to_owned(), skips.to_owned()));
         }
         rows
     }
 }
+/// The sheet a refused operation opens: why, and one button per next step, the first one
+/// recommended. A forced step reads "… anyway", lists what it skips and is the one confirm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RefusalSheet {
+    /// The refused operation, "Dispatch T-42".
+    pub title: String,
+    pub refusal: Refusal,
+}
 
-/// Where a command stands, as far as this device knows.
+/// One next step as its sheet button shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NextButton {
+    pub label: String,
+    /// The CLI line it runs, for the reader and the screen reader.
+    pub command: String,
+    /// For a forced step: what the engine will skip.
+    pub skips: Option<&'static str>,
+    pub primary: bool,
+}
+
+impl RefusalSheet {
+    pub fn buttons(&self) -> Vec<NextButton> {
+        self.refusal
+            .next
+            .iter()
+            .enumerate()
+            .map(|(index, next)| NextButton {
+                label: label(&next.op, next.force),
+                command: next.command(),
+                skips: next.force.then(|| skips(&next.op)).flatten(),
+                primary: index == 0,
+            })
+            .collect()
+    }
+}
+
+/// The task an operation concerns.
+pub fn target(op: &Op) -> Option<&str> {
+    match op {
+        Op::Edit { id, .. }
+        | Op::Comment { id, .. }
+        | Op::Move { id, .. }
+        | Op::Dispatch { id, .. }
+        | Op::Reply { id, .. }
+        | Op::Stop { id }
+        | Op::Retry { id, .. }
+        | Op::Done { id, .. }
+        | Op::Gate { id }
+        | Op::Review { id, .. }
+        | Op::Verdict { id, .. }
+        | Op::Changes { id, .. }
+        | Op::Approve { id, .. }
+        | Op::Drop { id }
+        | Op::Reopen { id }
+        | Op::ArtifactAdd { id, .. } => Some(id),
+        Op::New { .. } | Op::UsageAdd { .. } | Op::Sync => None,
+    }
+}
+
+/// The verb a forced form puts before "anyway": "Move anyway", "Dispatch anyway",
+/// "Land anyway".
+const fn forced_verb(op: &Op) -> &'static str {
+    match op {
+        Op::Move { .. } => "Move",
+        Op::Dispatch { .. } => "Dispatch",
+        Op::Approve { .. } => "Land",
+        _ => "Run",
+    }
+}
+
+/// A button's words for an operation: what the menu or a refusal's next step says. An approve
+/// naming its target says where it lands, so a refusal listing the existing branches reads as
+/// one button per branch.
+pub fn label(op: &Op, force: bool) -> String {
+    if let Op::Approve {
+        onto: Some(onto), ..
+    } = op
+    {
+        return if force {
+            format!("Land onto {onto} anyway")
+        } else {
+            format!("Approve onto {onto}")
+        };
+    }
+    if force {
+        return format!("{} anyway", forced_verb(op));
+    }
+    match op {
+        Op::New { .. } => "New task".into(),
+        Op::Edit { .. } => "Edit".into(),
+        Op::Comment { .. } => "Comment".into(),
+        Op::Move { status, .. } => format!("Move to {}", status.as_str()),
+        Op::Dispatch { .. } => "Dispatch".into(),
+        Op::Reply { .. } => "Reply".into(),
+        Op::Stop { .. } => "Stop".into(),
+        Op::Retry { fresh: true, .. } => "Retry from base".into(),
+        Op::Retry { .. } => "Retry".into(),
+        Op::Done { .. } => "Mark done".into(),
+        Op::Gate { .. } => "Run gate".into(),
+        Op::Review { .. } => "Start review".into(),
+        Op::Verdict { approve: true, .. } => "Record approve".into(),
+        Op::Verdict { .. } => "Record changes".into(),
+        Op::Changes { .. } => "Request changes".into(),
+        Op::Approve { .. } => "Approve and land".into(),
+        Op::Drop { .. } => "Drop".into(),
+        Op::Reopen { .. } => "Reopen".into(),
+        Op::ArtifactAdd { .. } => "Add artifact".into(),
+        Op::UsageAdd { .. } => "Add usage".into(),
+        Op::Sync => "Sync".into(),
+    }
+}
+
+/// What `force` skips for an operation, from the engine's force table.
+pub const fn skips(op: &Op) -> Option<&'static str> {
+    match op {
+        Op::Move { .. } => Some("every status rule: any status to any status"),
+        Op::Dispatch { .. } => Some("unfinished dependencies and the running-slot limit"),
+        Op::Approve { .. } => Some("the gate check and the Review status rule"),
+        _ => None,
+    }
+}
+
+/// The lasting effect a destructive operation has beyond its name.
+const fn effect(op: &Op) -> Option<&'static str> {
+    match op {
+        Op::Drop { .. } => Some("Moves the task to Dropped and stops its sessions."),
+        Op::Stop { .. } => Some("Kills the live session; the task becomes Blocked."),
+        Op::Approve { .. } => Some(
+            "Rebases onto the target (the run's base unless --onto names another), fast-forwards it, removes the worktree and branch.",
+        ),
+        Op::Retry { fresh: true, .. } => {
+            Some("Starts a new worker run from the base, not the task branch.")
+        }
+        Op::Move {
+            status: Status::Done | Status::Dropped,
+            ..
+        } => Some("Stops the task's live sessions; its worktree and branch are kept."),
+        _ => None,
+    }
+}
+
+/// Where a submitted operation stands, as far as this device knows.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ActStatus {
-    /// Waiting for corrald's exact preview.
-    Previewing,
-    /// The preview is on screen, waiting for this device's confirmation.
-    Confirming,
-    /// Held by the client until the session can send it.
-    Queued,
     /// Sent; no answer yet.
     Pending,
+    /// The daemon answered that it is still running; the outcome arrives as the task's status.
     Running,
     Done,
+    /// The engine refused it and named what gets past.
+    Refused(Refusal),
     Failed(String),
-    Refused(String),
-    /// A precondition moved; the detail shows the winner.
-    Conflict(String),
-    /// The result was lost and corrald could not say; never resent automatically.
-    Unknown,
-    /// corrald confirms it never ran.
-    Abandoned,
 }
 
 impl ActStatus {
-    /// One truthful line for a receipt, a row or a button.
+    /// One line for a receipt.
     pub fn line(&self) -> String {
         match self {
-            ActStatus::Previewing => "Preparing the exact preview…".into(),
-            ActStatus::Confirming => "Waiting for your confirmation".into(),
-            ActStatus::Queued => "Queued on this device".into(),
             ActStatus::Pending => "Sent · waiting for corrald".into(),
-            ActStatus::Running => "Running".into(),
+            ActStatus::Running => "Running · the task shows the outcome".into(),
             ActStatus::Done => "Done".into(),
-            ActStatus::Failed(why) => with_reason("Failed", why),
-            ActStatus::Refused(why) => with_reason("Refused", why),
-            ActStatus::Conflict(why) => with_reason("Changed meanwhile", why),
-            ActStatus::Unknown => "Result unknown · it may have run; check before repeating".into(),
-            ActStatus::Abandoned => "Not run · corrald never executed it".into(),
+            ActStatus::Refused(refusal) => format!("Refused: {}", refusal.reason),
+            ActStatus::Failed(why) if why.is_empty() => "Failed".into(),
+            ActStatus::Failed(why) => format!("Failed: {why}"),
         }
     }
 
-    /// A final outcome that will not change.
+    /// An outcome that will not change.
     pub fn settled(&self) -> bool {
-        matches!(
-            self,
-            ActStatus::Done
-                | ActStatus::Failed(_)
-                | ActStatus::Refused(_)
-                | ActStatus::Conflict(_)
-                | ActStatus::Abandoned
-        )
-    }
-
-    /// Sent without a known outcome: never repeat under a new identity.
-    pub fn uncertain(&self) -> bool {
-        matches!(
-            self,
-            ActStatus::Pending | ActStatus::Running | ActStatus::Unknown
-        )
+        !matches!(self, ActStatus::Pending)
     }
 }
 
-fn with_reason(head: &str, why: &str) -> String {
-    if why.is_empty() {
-        head.to_owned()
-    } else {
-        format!("{head}: {why}")
-    }
-}
-
-/// The command's status from the client's command journal, if it was ever sent.
+/// The operation's status from the client's reply table, if it was sent.
 pub fn status(feed: &Feed, key: &str) -> Option<ActStatus> {
-    let state = feed.commands.get(key)?;
-    let reason = || {
-        state
-            .result
-            .as_ref()
-            .and_then(|result| result.error.as_ref())
-            .map(|error| error.message.clone())
-            .or_else(|| state.error.as_ref().map(|error| error.message.clone()))
-            .unwrap_or_default()
-    };
-    Some(match state.status {
-        CommandStatus::Queued => ActStatus::Queued,
-        CommandStatus::Pending => ActStatus::Pending,
-        CommandStatus::Running => ActStatus::Running,
-        CommandStatus::Done => ActStatus::Done,
-        CommandStatus::Failed => ActStatus::Failed(reason()),
-        CommandStatus::Refused => ActStatus::Refused(reason()),
-        CommandStatus::Conflict => ActStatus::Conflict(reason()),
-        CommandStatus::Unknown => ActStatus::Unknown,
-        CommandStatus::Abandoned => ActStatus::Abandoned,
-    })
-}
-
-/// Whether corrald refused the command only because it lacked a fresh confirmation: its typed
-/// `confirm_required` error, read from the command's result first, as its status reason is.
-/// Nothing ran; the same identity may be sent again with a proof.
-pub fn needs_confirmation(feed: &Feed, key: &str) -> bool {
-    feed.commands.get(key).is_some_and(|state| {
-        let code = state
-            .result
-            .as_ref()
-            .and_then(|result| result.error.as_ref())
-            .map(|error| error.code.as_str())
-            .or_else(|| state.error.as_ref().map(|error| error.code.as_str()));
-        state.status == CommandStatus::Refused
-            && code.is_some_and(|code| {
-                serde_json::from_value::<ErrorCode>(code.into()).ok()
-                    == Some(ErrorCode::ConfirmRequired)
-            })
-    })
-}
-
-/// What waits for a fresh confirmation on this device.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Confirmable {
-    Act(Act),
-    /// An assistant permission prompt answered with presence.
-    Prompt {
-        answer: corral_protocol::assistant::PromptAnswer,
-        title: String,
-    },
-    DeviceAuthority {
-        key: Id,
-        title: String,
-        change: corral_protocol::app::DeviceSetAuthority,
-    },
-}
-
-impl Confirmable {
-    pub fn key(&self) -> Id {
-        match self {
-            Confirmable::Act(act) => act.key.clone(),
-            Confirmable::Prompt { answer, .. } => Id::from(&answer.cmd_id),
-            Confirmable::DeviceAuthority { key, .. } => key.clone(),
-        }
+    let operation = feed.operations.get(key)?;
+    if let Some(refusal) = &operation.refusal {
+        return Some(ActStatus::Refused(refusal.clone()));
     }
-
-    pub fn title(&self) -> &str {
-        match self {
-            Confirmable::Act(act) => &act.title,
-            Confirmable::Prompt { title, .. } | Confirmable::DeviceAuthority { title, .. } => title,
-        }
-    }
-}
-
-/// A live confirmation: the command, the correlation of corrald's preview of it, and that
-/// preview once it arrived.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Confirmation {
-    pub subject: Confirmable,
-    pub preview: Id,
-    /// Kept with the open sheet: the client's bounded operation table may drop the reply
-    /// while the owner is still reading it.
-    pub ready: Option<corral_protocol::app::ActPreview>,
-}
-
-impl Confirmation {
-    /// What the sheet can show and prove: the kept preview, else the operation's state.
-    pub fn state(&self, feed: &Feed) -> PreviewState {
-        match &self.ready {
-            Some(ready) => PreviewState::Ready(ready.clone()),
-            None => preview(feed, &self.preview),
-        }
-    }
-}
-
-/// What the confirmation sheet can show of corrald's preview so far.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PreviewState {
-    Loading,
-    Ready(corral_protocol::app::ActPreview),
-    Failed(String),
-}
-
-/// The preview's state from the client's operation table.
-pub fn preview(feed: &Feed, correlation: &str) -> PreviewState {
-    let Some(operation) = feed.operations.get(correlation) else {
-        return PreviewState::Loading;
-    };
     if let Some(error) = &operation.error {
-        return PreviewState::Failed(error.message.clone());
+        return Some(ActStatus::Failed(error.message.clone()));
     }
-    match operation.decode::<corral_protocol::app::ActPreview>() {
-        Some(preview) if preview.class == corral_protocol::app::ActClass::Refused => {
-            PreviewState::Failed("corrald refuses this command for this device".into())
-        }
-        Some(preview) => PreviewState::Ready(preview),
-        None if operation.loading || operation.value.is_none() => PreviewState::Loading,
-        None => PreviewState::Failed("corrald sent a preview this app cannot read".into()),
+    if operation.loading || operation.value.is_none() {
+        return Some(ActStatus::Pending);
+    }
+    Some(match operation.decode::<corral_protocol::op::OpReply>() {
+        Some(corral_protocol::op::OpReply::Running { .. }) => ActStatus::Running,
+        _ => ActStatus::Done,
+    })
+}
+
+/// The task a finished operation reports, as the engine's reply names it: the id a new task got.
+pub fn created(feed: &Feed, key: &str) -> Option<String> {
+    match feed
+        .operations
+        .get(key)?
+        .decode::<corral_protocol::op::OpReply>()?
+    {
+        corral_protocol::op::OpReply::Done { task, .. } => task,
+        corral_protocol::op::OpReply::Running { .. } => None,
+    }
+}
+
+/// The receipt a settled operation toasts. A new task has no id until the engine gives it one,
+/// so its receipt names the id from the reply: "New task T-21 · Done".
+pub fn receipt(feed: &Feed, act: &Act, status: &ActStatus) -> String {
+    let new = matches!(act.op, Op::New { .. }) && *status == ActStatus::Done;
+    match new.then(|| created(feed, &act.key)).flatten() {
+        Some(task) => format!("{} {task} · {}", act.title, status.line()),
+        None => format!("{} · {}", act.title, status.line()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::daemon::{ClientError, CommandState, Operation};
-    use corral_protocol::app::ActPreview;
-    use corral_protocol::cmd::plan::PlanCommand;
-    use corral_protocol::cmd::review::ReviewCommand;
-    use corral_protocol::cmd::task::TaskCommand;
 
-    #[test]
-    fn only_outcomes_settle_and_lost_results_stay_uncertain() {
-        assert!(ActStatus::Done.settled());
-        assert!(ActStatus::Abandoned.settled());
-        assert!(!ActStatus::Unknown.settled());
-        assert!(ActStatus::Unknown.uncertain());
-        assert!(ActStatus::Pending.uncertain());
-        assert!(!ActStatus::Refused(String::new()).uncertain());
-        assert_eq!(ActStatus::Refused(String::new()).line(), "Refused");
-    }
-
-    #[test]
-    fn confirm_class_commands_preview_before_they_are_sent() {
-        for command in [
-            Command::Review(ReviewCommand::Approve {
-                id: "T-2".into(),
-                sha: "abc1234".into(),
-            }),
-            Command::Plan(PlanCommand::Accept {
-                id: "T-2".into(),
-                revision: "P1".into(),
-                owner_ok: true,
-                notes: None,
-            }),
-            Command::Task(TaskCommand::Revert { id: "T-2".into() }),
-            Command::Task(TaskCommand::Move {
-                id: "T-2".into(),
-                status: "done".into(),
-                force: false,
-                owner_ok: true,
-                reason: None,
-            }),
-        ] {
-            assert_eq!(command.app_class(), ActClass::Confirm);
-            let act = Act::with_key(Id::new("app-1"), command.name(), command);
-            assert!(act.confirm, "{} must preview first", act.command.name());
+    fn dispatch() -> Op {
+        Op::Dispatch {
+            id: "T-42".into(),
+            profile: None,
+            base: None,
         }
     }
 
     #[test]
-    fn act_and_reply_class_commands_do_not_require_a_preview() {
-        for command in [
-            Command::Review(ReviewCommand::RequestChanges {
-                id: "T-2".into(),
-                text: "add a check".into(),
-                escalate: false,
-            }),
-            Command::Plan(PlanCommand::RequestChanges {
-                id: "T-2".into(),
-                revision: "P1".into(),
-                text: "add a check".into(),
-            }),
-            Command::Task(TaskCommand::Retry {
-                id: "T-2".into(),
-                run: None,
-                profile: None,
-            }),
-        ] {
-            assert_eq!(command.app_class(), ActClass::Act);
-            let act = Act::with_key(Id::new("app-2"), command.name(), command);
-            assert!(
-                !act.confirm,
-                "{} must not require a preview",
-                act.command.name()
-            );
-        }
-        let command = Command::Task(TaskCommand::Reply {
-            id: "T-2".into(),
-            text: "ok".into(),
-        });
-        assert_eq!(command.app_class(), ActClass::Reply);
-        assert!(!Act::with_key(Id::new("app-3"), "Reply to T-2", command).confirm);
-    }
-
-    fn refused(code: &str) -> CommandState {
-        CommandState {
-            device: None,
-            method: "act.submit".into(),
-            request: serde_json::Value::Null,
-            status: CommandStatus::Refused,
-            result: None,
-            error: Some(ClientError {
-                code: code.into(),
-                message: "confirmation_required".into(),
-            }),
-            entry: None,
-        }
-    }
-
-    #[test]
-    fn uncertain_reducer_retries_keep_the_injected_command_identity() {
-        use crate::model::assistant::{Action, State};
-        use crate::model::effect::Effect;
-
-        let mut state = State {
-            ids: IdSupply::new("launch-c"),
-            ..State::default()
-        };
-        let mut feed = Feed::default();
-        let action = Action::FileEntry("entry-1".into());
-        let effects = state.act_live(action.clone(), &feed);
-        let key = match effects.as_slice() {
-            [Effect::Act(act)] => act.key.clone(),
-            other => panic!("expected one command, got {other:?}"),
-        };
-        let mut command = refused("disconnected");
-        command.status = CommandStatus::Unknown;
-        feed.commands.insert(key.clone(), command);
-        let ids_after_intent = state.ids.clone();
-        let retry = state.act_live(action, &feed);
-        assert!(matches!(retry.as_slice(), [Effect::Recover(same)] if *same == key));
-        assert_eq!(state.ids, ids_after_intent);
-        assert_eq!(status(&feed, &key), Some(ActStatus::Unknown));
-    }
-
-    #[test]
-    fn only_the_typed_confirm_required_refusal_asks_for_a_confirmation() {
-        let mut feed = Feed::default();
-        feed.commands
-            .insert(Id::new("app-1"), refused("confirm_required"));
-        feed.commands.insert(Id::new("app-2"), refused("refused"));
-        let mut failed = refused("confirm_required");
-        failed.status = CommandStatus::Failed;
-        feed.commands.insert(Id::new("app-3"), failed);
-        assert!(needs_confirmation(&feed, "app-1"));
-        assert!(!needs_confirmation(&feed, "app-2"));
-        assert!(!needs_confirmation(&feed, "app-3"));
-        assert!(!needs_confirmation(&feed, "app-4"));
-    }
-
-    #[test]
-    fn an_open_sheet_keeps_its_preview_after_the_reply_cache_drops_it() {
-        let ready = ActPreview {
-            preview_id: "p-1".into(),
-            digest: "d-1".into(),
-            class: ActClass::Confirm,
-            effects: vec!["Execute plan.accept as owner".into()],
-            expires_at: "2026-11-14T16:20:53Z".into(),
-            operation_token: None,
-        };
-        let mut feed = Feed::default();
-        feed.operations.insert(
-            Id::new("op-1"),
-            Operation {
-                method: "act.preview".into(),
-                loading: false,
-                value: Some(serde_json::to_value(&ready).unwrap()),
-                error: None,
+    fn only_destructive_or_forced_operations_ask_first() {
+        let asks = |op: Op, force| Act::with_key(Id::new("k"), op, force).asks();
+        assert!(!asks(dispatch(), false));
+        assert!(asks(dispatch(), true));
+        assert!(asks(Op::Drop { id: "T-1".into() }, false));
+        assert!(asks(
+            Op::Move {
+                id: "T-1".into(),
+                status: Status::Done,
             },
+            false
+        ));
+        assert!(!asks(
+            Op::Move {
+                id: "T-1".into(),
+                status: Status::Ready,
+            },
+            false
+        ));
+        assert!(asks(
+            Op::Retry {
+                id: "T-1".into(),
+                profile: None,
+                fresh: true,
+                note: None,
+            },
+            false
+        ));
+    }
+
+    #[test]
+    fn a_forced_entry_reads_anyway_and_names_what_it_skips() {
+        let act = Act::with_key(Id::new("k"), dispatch(), true);
+        assert_eq!(act.title, "Dispatch anyway T-42");
+        assert!(act.rows().iter().any(|(label, _)| label == "skips"));
+        let land = Act::with_key(
+            Id::new("k"),
+            Op::Approve {
+                id: "T-1".into(),
+                onto: None,
+            },
+            true,
         );
-        let mut sheet = Confirmation {
-            subject: Confirmable::Act(Act::with_key(
-                Id::new("app-1"),
-                "Accept plan T-7 P3",
-                Command::Task(TaskCommand::Reply {
-                    id: "T-7".into(),
-                    text: "ok".into(),
-                }),
-            )),
-            preview: Id::new("op-1"),
-            ready: None,
-        };
-        assert_eq!(sheet.state(&feed), PreviewState::Ready(ready.clone()));
-        feed.operations.clear();
-        assert_eq!(sheet.state(&feed), PreviewState::Loading);
-        sheet.ready = Some(ready.clone());
-        assert_eq!(sheet.state(&feed), PreviewState::Ready(ready));
+        assert!(land.title.starts_with("Land anyway"));
     }
 }

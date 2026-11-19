@@ -1,6 +1,8 @@
-//! Changes in the Daemon state: corrald's durable change lines, newest first, split by this
-//! device's own seen cursor, filtered, paged backwards, with corrald's attribution and the
-//! device's Mark seen advancing its cursor through the newest line.
+//! Changes in the Daemon state: the engine's events, newest first, split by this device's own
+//! seen cursor, filtered, paged backwards, with who did each, and the device's Mark seen
+//! advancing its cursor through the newest event.
+
+use corral_types::Event;
 
 use crate::model::daemon::{Feed, Link};
 use crate::model::nav::Form;
@@ -8,14 +10,25 @@ use crate::model::projects::ProjectFilter;
 
 use super::{
     Button, ButtonKind, Changes, FeedRow, Press, State, change_row_filtered, changes_loading,
-    changes_notice, daemon_status, feed_filters, stamp,
+    changes_notice, daemon_status, event_project, feed_filters, stamp,
 };
 
-/// Whether an unseen count is canonical or only the rows this device has loaded.
+/// Whether an unseen count is canonical or only the events this device has loaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnseenCount {
     pub count: u64,
     pub total: bool,
+}
+
+/// The loaded events past this device's seen cursor.
+fn unseen_events(feed: &Feed) -> impl Iterator<Item = &Event> {
+    let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
+    feed.changes
+        .range((
+            std::ops::Bound::Excluded(through),
+            std::ops::Bound::Unbounded,
+        ))
+        .map(|(_, event)| event)
 }
 
 /// Event sequences are cursors, not counts. A server total belongs to its seen cursor.
@@ -27,14 +40,7 @@ pub fn unseen_count(feed: &Feed) -> UnseenCount {
         return UnseenCount { count, total: true };
     }
     UnseenCount {
-        count: feed
-            .changes
-            .range((
-                std::ops::Bound::Excluded(through),
-                std::ops::Bound::Unbounded,
-            ))
-            .filter(|(_, line)| super::live_context::owner_relevant(line))
-            .count() as u64,
+        count: u64::try_from(unseen_events(feed).count()).unwrap_or(u64::MAX),
         total: false,
     }
 }
@@ -45,15 +51,8 @@ pub fn unseen_count_filtered(feed: &Feed, filter: &ProjectFilter) -> UnseenCount
     if filter == ProjectFilter::All {
         return unseen_count(feed);
     }
-    let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
-    let count = feed
-        .changes
-        .range((
-            std::ops::Bound::Excluded(through),
-            std::ops::Bound::Unbounded,
-        ))
-        .filter(|(_, line)| super::live_context::owner_relevant(line))
-        .filter(|(_, line)| change_matches_project(line, feed, &filter))
+    let count = unseen_events(feed)
+        .filter(|event| change_matches_project(event, feed, &filter))
         .count();
     UnseenCount {
         count: u64::try_from(count).unwrap_or(u64::MAX),
@@ -72,8 +71,7 @@ fn last_visit(feed: &Feed) -> Option<String> {
 }
 
 /// Changes for the authenticated device's own cursor; the shell owns back navigation.
-/// Resolve attribution only from board tasks. Workspace events and events whose task has
-/// left the board remain visible: missing current metadata is not proof of another project.
+/// Projects come from the event itself, else from the open task's row.
 pub fn live_changes_filtered(
     state: &State,
     feed: &Feed,
@@ -87,18 +85,17 @@ pub fn live_changes_filtered(
     let visit = last_visit(feed);
     let mut recent: Vec<FeedRow> = Vec::new();
     let mut history: Vec<FeedRow> = Vec::new();
-    for line in feed
+    for event in feed
         .changes
         .values()
         .rev()
-        .filter(|line| super::live_context::owner_relevant(line))
-        .filter(|line| state.filter.admits_class(&line.class))
-        .filter(|line| change_matches_project(line, feed, &filter))
+        .filter(|event| state.filter.admits(event.kind))
+        .filter(|event| change_matches_project(event, feed, &filter))
     {
-        if line.seq > through {
-            recent.push(change_row_filtered(line, feed, true, &filter));
+        if event.seq > through {
+            recent.push(change_row_filtered(event, feed, true, &filter));
         } else {
-            history.push(change_row_filtered(line, feed, false, &filter));
+            history.push(change_row_filtered(event, feed, false, &filter));
         }
     }
     let unseen = unseen_count_filtered(feed, &filter);
@@ -110,17 +107,21 @@ pub fn live_changes_filtered(
         (None, false) => format!("nothing marked seen on {device_words} yet"),
     };
     let subtitle = (!phone).then(|| {
-        let qualifier = if unseen.total { "" } else { "loaded unseen " };
-        let events = format!("{} {qualifier}{}event{}", unseen.count,
-            if unseen.total { "new " } else { "" },
-            if unseen.count == 1 { "" } else { "s" });
+        let events = format!(
+            "{} {}event{}",
+            unseen.count,
+            if unseen.total {
+                "new "
+            } else {
+                "loaded unseen "
+            },
+            if unseen.count == 1 { "" } else { "s" }
+        );
+        let cursor =
+            "the seen-cursor is per device: marking seen here leaves your other devices' marks";
         match &visit {
-            Some(at) => format!(
-                "since this device's last visit {at} · {events} · the seen-cursor is per device: marking seen here leaves your other devices' marks"
-            ),
-            None => format!(
-                "{events} · the seen-cursor is per device: marking seen here leaves your other devices' marks"
-            ),
+            Some(at) => format!("since this device's last visit {at} · {events} · {cursor}"),
+            None => format!("{events} · {cursor}"),
         }
     });
     let up = feed.link == Link::Up;
@@ -141,7 +142,7 @@ pub fn live_changes_filtered(
     Changes {
         title: "Changes",
         subtitle,
-        filters: feed_filters(state, form),
+        filters: feed_filters(state),
         recent,
         seen_line,
         history,
@@ -171,48 +172,65 @@ pub fn live_changes_filtered(
     }
 }
 
-/// Historical and workspace-wide changes have no reliable current project without a board
-/// task, so preserve them rather than silently dropping events from the retained history.
-pub(crate) fn change_matches_project(
-    line: &corral_protocol::app::ChangeLine,
-    feed: &Feed,
-    filter: &ProjectFilter,
-) -> bool {
-    line.task
-        .as_deref()
-        .and_then(|id| feed.board.task(id))
-        .is_none_or(|task| filter.matches(task.project.as_deref()))
+/// The project an event is filed under (see [`event_project`]); an event with none known, a
+/// workspace event or one of a task nothing loaded names, stays in every scope rather than
+/// silently dropping from the retained history.
+pub(crate) fn change_matches_project(event: &Event, feed: &Feed, filter: &ProjectFilter) -> bool {
+    event_project(event, feed).is_none_or(|project| filter.matches(project))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Id;
+    use crate::model::board::{ChangeKind, Mark};
     use crate::model::work::ChangeFilter;
-    use corral_protocol::app::{CHANGES_V1, ChangeLine, SeenCursor};
+    use corral_protocol::app::{CHANGES_V1, SeenCursor};
+    use corral_types::{Actor, EventKind};
+    use serde_json::json;
 
-    fn line(seq: u64, class: &str) -> ChangeLine {
-        ChangeLine {
+    fn event(seq: u64, kind: EventKind, detail: serde_json::Value) -> Event {
+        Event {
             seq,
-            at: "2026-11-14T10:00:00Z".into(),
-            class: class.into(),
-            kind: corral_protocol::app::ChangeKind::Other,
-            from: None,
-            to: None,
-            failed: false,
+            ts: "2026-11-14T10:00:00Z".parse().unwrap(),
             task: Some(format!("T-{seq}")),
-            text: format!("T-{seq} · {class}"),
-            actor: "owner".into(),
-            via: "app:phone".into(),
+            run: None,
+            project: None,
+            kind,
+            actor: Actor::Owner,
+            detail,
         }
     }
 
+    /// The seen cursor splits new from seen; a forced line names every rule it skipped in plain
+    /// words, and Forced narrows the feed to the forced lines, each opening its task.
     #[test]
-    fn the_seen_cursor_splits_new_from_seen_and_filters_by_class() {
+    fn the_seen_cursor_splits_new_from_seen_and_a_forced_line_names_what_it_skipped() {
         let mut feed = Feed::default();
         feed.capabilities.insert(CHANGES_V1.into());
-        for (seq, class) in [(1, "gate"), (2, "question"), (3, "work"), (4, "review")] {
-            feed.changes.insert(seq, line(seq, class));
-        }
+        feed.changes.extend([
+            (1, event(1, EventKind::Gate, json!({"result": "fail"}))),
+            (
+                2,
+                event(2, EventKind::Blocked, json!({"reason": "gate failed"})),
+            ),
+            (
+                3,
+                event(
+                    3,
+                    EventKind::Forced,
+                    json!({"operation": "dispatch", "skipped": ["dependencies", "limits.running"]}),
+                ),
+            ),
+            (
+                4,
+                event(
+                    4,
+                    EventKind::Landed,
+                    json!({"sha": "abcdef123", "base": "main"}),
+                ),
+            ),
+        ]);
         feed.seen = Some(SeenCursor {
             through: 2,
             at: Some("2026-11-14T09:00:00Z".into()),
@@ -223,8 +241,15 @@ mod tests {
         let ids = |rows: &[FeedRow]| rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&changes.recent), ["T-4", "T-3"]);
         assert_eq!(ids(&changes.history), ["T-2", "T-1"]);
-        assert_eq!(changes.recent[0].text, "review");
-        assert_eq!(changes.recent[0].by.as_deref(), Some("owner via app:phone"));
+        assert!(
+            changes.recent[1]
+                .text
+                .ends_with("skipped unfinished dependencies and the running-slot limit"),
+            "{}",
+            changes.recent[1].text
+        );
+        assert_eq!(changes.history[1].kind, ChangeKind::Mark(Mark::Fail));
+        assert_eq!(changes.recent[0].at, "Nov 14");
         assert_eq!(
             changes.mark_seen.and_then(|button| button.action),
             Some(Press::Seen(4))
@@ -233,57 +258,63 @@ mod tests {
         let changes = live_changes_filtered(&state, &feed, None, Form::Desktop, &all);
         assert_eq!(ids(&changes.recent), ["T-4"]);
         assert_eq!(ids(&changes.history), ["T-1"]);
+        state.filter = ChangeFilter::Forced;
+        let changes = live_changes_filtered(&state, &feed, None, Form::Desktop, &all);
+        assert_eq!(ids(&changes.recent), ["T-3"]);
+        assert!(changes.history.is_empty());
+        assert_eq!(
+            changes.recent[0].action,
+            Some(Press::Open(crate::model::Live::Task("T-3".into())))
+        );
     }
 
+    /// A Done task has no board row, so its events once read no project: they lost their label
+    /// and stayed in every project's scope. The event's own project labels them and scopes them.
     #[test]
-    fn changes_show_typed_owner_moves_and_failures_not_system_bookkeeping() {
-        use crate::model::board::{ChangeKind as MarkKind, Mark};
-        use corral_protocol::app::ChangeKind;
+    fn a_closed_tasks_event_is_labelled_with_its_project_and_stays_under_that_projects_filter() {
         let mut feed = Feed::default();
         feed.capabilities.insert(CHANGES_V1.into());
-        let mut moved = line(101, "work");
-        moved.kind = ChangeKind::Moved;
-        moved.from = Some("backlog".into());
-        moved.to = Some("ready".into());
-        let mut failed = line(102, "gate");
-        failed.kind = ChangeKind::Gate;
-        failed.failed = true;
-        feed.changes
-            .extend([(101, moved), (102, failed), (103, line(103, "other"))]);
-        feed.changes_head = 100_000;
-        feed.seen = Some(SeenCursor {
-            through: 100,
-            at: None,
-        });
-        feed.changes_unseen = Some((100, 500));
-        let view = live_changes_filtered(
-            &State::default(),
-            &feed,
-            None,
-            Form::Terminal,
-            &ProjectFilter::All,
-        );
-        assert_eq!(view.recent.len(), 2);
-        assert_eq!(view.recent[0].kind, MarkKind::Mark(Mark::Fail));
-        assert!(view.recent[1].text.contains("backlog"));
-        assert!(view.recent[1].text.contains("ready"));
-        assert!(!view.recent[1].text.contains("T-101"));
+        feed.capabilities
+            .insert(corral_protocol::PROJECTS_V1.into());
+        for id in ["corral", "site"] {
+            feed.projects.insert(
+                Id::from(id),
+                corral_protocol::rows::ProjectRow {
+                    id: id.into(),
+                    config: Default::default(),
+                    open: 0,
+                    open_by_status: None,
+                    effective: None,
+                    local_branches: None,
+                },
+            );
+        }
+        for (seq, project) in [(1, "corral"), (2, "site")] {
+            let landed = Event {
+                project: Some(project.into()),
+                ..event(seq, EventKind::Landed, json!({}))
+            };
+            feed.changes.insert(seq, landed);
+        }
+        let state = State::default();
+        let rows = |filter: &ProjectFilter| {
+            let changes = live_changes_filtered(&state, &feed, None, Form::Desktop, filter);
+            changes
+                .recent
+                .into_iter()
+                .map(|row| (row.id, row.project_chip))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(
-            unseen_count(&feed),
-            UnseenCount {
-                count: 500,
-                total: true
-            }
+            rows(&ProjectFilter::All),
+            [
+                ("T-2".to_owned(), Some("site".to_owned())),
+                ("T-1".to_owned(), Some("corral".to_owned())),
+            ]
         );
-        feed.changes_unseen = None;
         assert_eq!(
-            unseen_count(&feed),
-            UnseenCount {
-                count: 2,
-                total: false
-            }
+            rows(&ProjectFilter::Project(Id::from("site"))),
+            [("T-2".to_owned(), None)]
         );
-        feed.changes_unseen = Some((99, 501));
-        assert!(!unseen_count(&feed).total);
     }
 }

@@ -18,19 +18,15 @@ use super::{
 };
 use crate::model::{Id, daemon::*, devices::Registry};
 use corral_protocol::attachment::*;
+use corral_protocol::config::{CONFIG_GET, CONFIG_PUT};
 use corral_protocol::device::{
-    DEVICE_AUTHORITY_PREVIEW, DEVICE_PAGE, DEVICE_PAGE_LIMIT_MAX, DEVICE_REVOKE, DeviceInfo,
-    DevicePage, DevicePageQuery, PUSH_STATUS, PUSH_SUBSCRIBE, PUSH_UNSUBSCRIBE, PUSH_V1,
-    SESSION_AUTHORITY_CHANGED,
+    DEVICE_PAGE, DEVICE_PAGE_LIMIT_MAX, DEVICE_REVOKE, DeviceInfo, DevicePage, DevicePageQuery,
+    PUSH_STATUS, PUSH_SUBSCRIBE, PUSH_UNSUBSCRIBE, PUSH_V1,
 };
-use corral_protocol::{
-    self as wire,
-    app::*,
-    assistant::*,
-    cmd::{CmdResult, CmdResultQuery, CmdState},
-    detail::*,
-    subscription::*,
-};
+use corral_protocol::op::OP_SUBMIT;
+use corral_protocol::pane::{PANE_FOCUS, PANE_KEYS};
+use corral_protocol::session as control;
+use corral_protocol::{self as wire, Refusal, app::*, assistant::*, detail::*, subscription::*};
 use nsh_core::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -38,47 +34,54 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) type Outgoing = (&'static str, Value, Option<String>);
 pub(super) const CAPS: &[&str] = &[
-    wire::BOARD_V1,
+    wire::TASKS_V1,
     corral_protocol::device::DEVICE_V1,
-    INBOX_V1,
     CHANGES_V1,
     PLANS_V1,
-    BUILDS_V1,
     PROJECTS_V1,
     AGENTS_V1,
-    corral_protocol::AGENTS_ACTIVITY_V1,
     REVIEW_V1,
     TIMELINE_V1,
     USAGE_V1,
     SETTINGS_V1,
     ASSISTANT_V1,
-    FILINGS_V1,
     CLOSED_V1,
-    ACT_V1,
     ASSISTANT_ATTACH_V1,
     SESSION_V1,
     SESSION_FLEET_V1,
-    corral_protocol::detail::STREAM_TERMINAL_V1,
+    STREAM_TERMINAL_V1,
     PUSH_V1,
 ];
 
 pub(super) fn handles(event: &Event) -> bool {
     matches!(
         event,
-        Event::Health(_)
-            | Event::Board { .. }
-            | Event::Rows { .. }
-            | Event::Reset { .. }
-            | Event::TopicError { .. }
-            | Event::Live { .. }
-    ) || matches!(event, Event::Notice { method, .. } if method == SESSION_AUTHORITY_CHANGED)
-        || matches!(event, Event::Reply { method, .. } if matches!(*method,
-            APP_SESSION | ACT_PREVIEW | ACT_SUBMIT | ACT_RESULT | DETAIL_GET | CHANGES_PAGE |
-            SEEN_ADVANCE | DEVICE_SET_AUTHORITY | DEVICE_AUTHORITY_PREVIEW | DEVICE_REVOKE |
+        Event::Health(_) | Event::Rows { .. } | Event::Reset { .. } | Event::TopicError { .. }
+    ) || matches!(event, Event::Reply { method, .. } if matches!(*method,
+            APP_SESSION | OP_SUBMIT | CONFIG_GET | CONFIG_PUT | PANE_FOCUS | PANE_KEYS |
+            DETAIL_GET | CHANGES_PAGE | SEEN_ADVANCE | DEVICE_REVOKE |
             wire::device::PAIR_BEGIN | wire::device::PAIR_STATUS | wire::device::PAIR_CONFIRM | wire::device::PAIR_CANCEL |
             PUSH_STATUS | PUSH_SUBSCRIBE | PUSH_UNSUBSCRIBE | ASSISTANT_SEND | ASSISTANT_WARM |
-            ASSISTANT_STOP | ASSISTANT_SESSION | PROMPT_ANSWER | PROMPT_PREVIEW | DEVICE_PAGE |
-            ASSISTANT_CANCEL | ATTACHMENT_BEGIN | ATTACHMENT_PUT | ATTACHMENT_DISCARD))
+            ASSISTANT_SESSION | PROMPT_ANSWER | DEVICE_PAGE |
+            ASSISTANT_CANCEL | ATTACHMENT_BEGIN | ATTACHMENT_PUT | ATTACHMENT_DISCARD |
+            control::SESSION_CANCEL | control::SESSION_PAUSE | control::SESSION_RESUME |
+            control::SESSION_TERMINATE | control::SESSION_RELAUNCH | control::SESSION_REWIND))
+}
+
+/// Whether a refusal of `method` carries a typed `Refusal` the app shows with its reason.
+fn refusable(method: &str) -> bool {
+    matches!(
+        method,
+        OP_SUBMIT
+            | CONFIG_PUT
+            | PROMPT_ANSWER
+            | control::SESSION_CANCEL
+            | control::SESSION_PAUSE
+            | control::SESSION_RESUME
+            | control::SESSION_TERMINATE
+            | control::SESSION_RELAUNCH
+            | control::SESSION_REWIND
+    )
 }
 
 pub(super) struct AppState {
@@ -129,9 +132,6 @@ impl AppState {
         feed.update(|feed| {
             feed.mark_stale();
             feed.link = Link::Connecting;
-            for thread in feed.threads.values_mut() {
-                thread.live = None;
-            }
             feed.capabilities = welcome.caps.iter().cloned().collect();
         });
     }
@@ -154,7 +154,7 @@ impl AppState {
         if feed.with_untracked(|feed| CAPS.iter().skip(2).any(|cap| feed.capable(cap))) {
             vec![out(APP_SESSION, json!({}), None), open(Topic::Health, None)]
         } else {
-            vec![open(Topic::Board, None), open(Topic::Health, None)]
+            vec![open(Topic::Tasks, None), open(Topic::Health, None)]
         }
     }
     async fn session(
@@ -162,13 +162,6 @@ impl AppState {
         feed: Signal<Feed>,
         session: AppSession,
     ) -> Result<Vec<Outgoing>, String> {
-        if self
-            .namespace
-            .as_ref()
-            .is_some_and(|namespace| namespace.1 != session.device.id)
-        {
-            feed.update(|feed| feed.authority_revision = 0);
-        }
         let store = feed.with_untracked(|feed| feed.store.clone().unwrap_or_default());
         let namespace = (store, session.device.id.clone());
         let same_namespace = self.namespace.as_ref() == Some(&namespace);
@@ -184,14 +177,12 @@ impl AppState {
             feed.update(|feed| {
                 feed.board = Board::default();
                 feed.synced = None;
-                feed.inbox.clear();
                 feed.plans.clear();
-                feed.builds.clear();
                 feed.projects.clear();
                 feed.agents.clear();
                 feed.assistants.clear();
-                feed.usage.clear();
-                feed.settings.clear();
+                feed.usage = None;
+                feed.settings = None;
                 feed.threads.clear();
                 feed.details.clear();
                 feed.items.clear();
@@ -242,11 +233,9 @@ impl AppState {
         if refresh_only {
             return Ok(vec![]);
         }
-        let mut outgoing = vec![open(Topic::Board, None)];
+        let mut outgoing = vec![open(Topic::Tasks, None)];
         for (topic, cap) in [
-            (Topic::Inbox, INBOX_V1),
             (Topic::Plans, PLANS_V1),
-            (Topic::Builds, BUILDS_V1),
             (Topic::Projects, PROJECTS_V1),
             (Topic::Agents, AGENTS_V1),
             (Topic::Assistant, ASSISTANT_V1),
@@ -309,16 +298,6 @@ impl AppState {
         outgoing.extend(self.resume_items());
         outgoing.extend(self.poll_changes(feed));
         if let Some(outbox) = &self.outbox {
-            for id in outbox.saved.commands.keys() {
-                if outbox
-                    .saved
-                    .commands
-                    .get(id)
-                    .is_some_and(|command| command.result.is_none() && command.error.is_none())
-                {
-                    outgoing.push(recover(id));
-                }
-            }
             // Message delivery is keyed by the original cmd_id, unlike command journal lookup.
             let messages: Vec<_> = outbox
                 .saved
@@ -380,20 +359,6 @@ impl AppState {
                                 .map(|error| (error.code.clone(), error.code.clone()));
                         }
                     }
-                    if let (Some(command), Some(state)) =
-                        (saved.commands.get_mut(id), state.as_ref())
-                    {
-                        command.result = state.result.clone().map(|mut result| {
-                            if let Some(error) = &mut result.error {
-                                error.message = error.code.clone();
-                            }
-                            result
-                        });
-                        command.error = state
-                            .error
-                            .as_ref()
-                            .map(|error| (error.code.clone(), error.code.clone()));
-                    }
                 })
                 .await
             {
@@ -403,13 +368,10 @@ impl AppState {
         self.trim_retained(feed);
     }
     /// Native drains multiple intents before registration; browser dispatch/flush is synchronous.
-    /// Drop prepared sends/uploads or filings reads retired by a later intent in the batch.
+    /// Drop prepared sends or uploads retired by a later intent in the batch.
     #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(super) fn filter_outgoing(&self, outgoing: &mut Vec<Outgoing>) {
         outgoing.retain(|(method, params, tag)| match *method {
-            DETAIL_GET if params["kind"].as_str() == Some("filings") => tag
-                .as_ref()
-                .is_some_and(|id| self.detail_inflight.values().any(|current| current == id)),
             ASSISTANT_SEND => params["cmd_id"].as_str().is_some_and(|id| {
                 self.outbox
                     .as_ref()
@@ -438,7 +400,6 @@ fn command_state(feed: &Feed, method: &str, request: Value, status: CommandStatu
         method: method.into(),
         request,
         status,
-        result: None,
         error: None,
         entry: None,
     }
@@ -489,51 +450,11 @@ fn open(topic: Topic, scope: Option<String>) -> Outgoing {
         None,
     )
 }
-fn recover(cmd_id: &str) -> Outgoing {
-    out(
-        ACT_RESULT,
-        value(CmdResultQuery {
-            cmd_id: cmd_id.into(),
-            wait_ms: 1_000,
-            abandon_if_absent: true,
-        }),
-        Some(cmd_id.into()),
-    )
-}
-
-fn result_status(result: &CmdResult) -> CommandStatus {
-    match result.state {
-        CmdState::Done => CommandStatus::Done,
-        CmdState::Failed => {
-            if result.error.as_ref().is_some_and(|error| {
-                error.code.starts_with("authority_")
-                    || matches!(
-                        error.code.as_str(),
-                        "refused" | "revoked" | "admin_only" | "not_app_safe"
-                    )
-            }) {
-                CommandStatus::Refused
-            } else {
-                CommandStatus::Failed
-            }
-        }
-        CmdState::Conflict => CommandStatus::Conflict,
-        CmdState::Running => CommandStatus::Running,
-        CmdState::Busy => CommandStatus::Failed,
-        CmdState::Abandoned => CommandStatus::Abandoned,
-        _ => CommandStatus::Unknown,
-    }
-}
+/// A chat send or prompt answer refused on the connection; anything else may have run.
 fn error_status(error: &ClientError) -> CommandStatus {
-    if error.code.starts_with("authority_")
-        || matches!(error.code.as_str(), "admin_only" | "not_app_safe")
-    {
-        return CommandStatus::Refused;
-    }
     match error.code.as_str() {
         "conflict" => CommandStatus::Conflict,
-        "refused" | "revoked" | "confirm_required" | "unauthenticated" => CommandStatus::Refused,
-        "busy" => CommandStatus::Failed,
+        "refused" | "revoked" | "unauthenticated" | "invalid_params" => CommandStatus::Refused,
         _ => CommandStatus::Failed,
     }
 }
@@ -549,46 +470,20 @@ pub(super) fn devices() -> Outgoing {
     )
 }
 
-fn request_digest(method: &str, params: &Value) -> String {
-    use sha2::{Digest, Sha256};
-    // Store/device are bound by the outbox namespace. Keep canonical command values intact:
-    // nested user data named `confirm` must not disappear with envelope proofs.
-    let semantic = if method == ACT_SUBMIT {
-        json!([method, params["command"], params["expect"]])
-    } else {
-        json!([method, params["key"], params["rev"], params["choice"]])
-    };
-    let encoded = serde_json::to_vec(&semantic).unwrap_or_default();
-    format!("{:x}", Sha256::digest(encoded))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn same_id_confirmation_retry_ignores_freshness_but_not_command_input() {
-        let mut request = json!({"cmd_id":"once","issued_at":"2026-11-14T10:00:00Z","expires_at":"2026-11-14T10:01:00Z","expect":{"revision":1},"command":{"family":"task","args":{"id":"T-1"}}});
-        let digest = request_digest(ACT_SUBMIT, &request);
-        request["confirm"] = json!({"preview_id":"temporary","digest":"proof"});
-        request["issued_at"] = json!("2026-11-14T10:00:10Z");
-        request["expires_at"] = json!("2026-11-14T10:01:10Z");
-        assert_eq!(request_digest(ACT_SUBMIT, &request), digest);
-        request["command"]["args"]["id"] = json!("T-2");
-        assert_ne!(request_digest(ACT_SUBMIT, &request), digest);
-    }
-
-    #[test]
     fn reconnect_and_unenrolled_welcome_never_render_healthy() {
         use crate::model::{Form, devices::DeviceLink, effect::Conn, health};
-        let health_reading = DaemonHealth {
-            level: DaemonLevel::Healthy,
-            reasons: vec![],
-            runtimes: vec![],
-            pm: PmLevel::Live,
-            pass_seq: 1,
-            last_pass: None,
-            last_pass_ms: None,
+        let health_reading = wire::Health {
+            daemon: wire::DaemonState::Healthy,
+            runner_reachable: true,
+            last_sync_at: None,
+            last_sync_error: None,
+            pid: 1,
             version: "1".into(),
+            slots: None,
         };
         let mut feed = Feed::default();
         feed.welcome_received("/readiness/.corral".into(), health_reading.clone());
@@ -612,7 +507,6 @@ mod tests {
         };
         feed.session = Some(serde_json::from_value(json!({
             "device":{"id":"dev-ready","name":"Ready","platform":"native","app_version":"0","enrolled_at":"2026-11-14T09:00:00Z","revoked_at":null},
-            "authority":{"reply":true,"act":true,"assistant":true,"assistant_act":true,"admin":true},
             "seen":{"through":0,"at":null},"server_time":"2026-11-14T09:00:00Z"
         })).unwrap());
         feed.board_received(1, vec![], &[], true);
@@ -652,33 +546,11 @@ mod tests {
         assert!(state.live.picks.is_empty());
         assert!(state.live.ends.is_empty());
     }
-
-    #[test]
-    fn failed_stop_releases_the_turn_for_retry_without_claiming_abort() {
-        let mut state = crate::model::assistant::State::default();
-        let key = Id::from("failed-stop");
-        state.live.stopping.insert("A-1".into(), 3);
-        state.live.stop_ops.insert(key.clone(), ("A-1".into(), 3));
-        let effects = state.settle_stop(
-            &key,
-            &Operation {
-                method: ASSISTANT_STOP.into(),
-                loading: false,
-                value: None,
-                error: Some(ClientError {
-                    code: "refused".into(),
-                    message: "Stop failed".into(),
-                }),
-            },
-        );
-        assert!(!state.live.stopping.contains_key("A-1"));
-        assert!(state.live.stop_ops.is_empty());
-        assert!(matches!(
-            effects.as_slice(),
-            [crate::model::Effect::Toast(_)]
-        ));
-    }
 }
+
+#[cfg(test)]
+#[path = "app/control_tests.rs"]
+mod control_tests;
 
 fn trim_commands(feed: Signal<Feed>) {
     feed.update(|feed| {

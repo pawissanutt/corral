@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::board::Mark;
+use crate::model::daemon::{bare_task, task_row};
 use crate::model::effect::Conn;
 
 /// The unscoped workspace: no project chosen, grouped by state.
@@ -10,59 +10,13 @@ const SCOPE: NowScope<'_> = NowScope {
     grouping: BY_STATE,
 };
 
-fn task(id: &str, group: daemon::Group) -> daemon::Task {
-    daemon::Task {
-        id: Id::from(id),
-        title: format!("task {id}"),
-        project: None,
-        plan: None,
-        goal: None,
-        group,
-        rail: std::array::from_fn(|_| daemon::Step {
-            mark: Mark::Next,
-            sha7: None,
-            at: None,
-        }),
-        now: String::new(),
-        now_code: String::new(),
-        since: None,
-        age_since: None,
-        held_reason: None,
-        questions: 0,
-        attention: Vec::new(),
-        agent: None,
-        cost: None,
-        cost_estimated: false,
-        rev: 1,
-    }
-}
-
-fn owner_move(task: &str) -> corral_protocol::rows::InboxRow {
-    use corral_protocol::rows::*;
-    InboxRow {
-        id: task.into(),
-        kind: InboxKind::OwnerDecision,
-        task: Some(task.into()),
-        plan: None,
-        project: None,
-        title: String::new(),
-        from: String::new(),
-        asked_at: None,
-        needed_by: None,
-        blocking: true,
-        state: InboxState::Open,
-        question_rev: None,
-        answerable: false,
-        unanswerable_reason: None,
-        rev: 1,
-        attention: Some(AttentionMove {
-            whose_move: AttentionActor::Owner,
-            reason: "decision".into(),
-            next_step: "decide".into(),
-            command: None,
-            destination: AttentionDestination::Now,
-        }),
-    }
+fn task(id: &str, status: Status) -> daemon::Task {
+    daemon::Task::new(task_row(bare_task(
+        id,
+        &format!("task {id}"),
+        status,
+        jiff::Timestamp::UNIX_EPOCH,
+    )))
 }
 
 fn ids(list: &GroupedList, key: GroupKey) -> Vec<String> {
@@ -72,7 +26,7 @@ fn ids(list: &GroupedList, key: GroupKey) -> Vec<String> {
         .flat_map(|group| group.rows.iter())
         .filter_map(|row| match row {
             Row::Task(task) => Some(task.line.id.clone()),
-            _ => None,
+            Row::More(_) => None,
         })
         .collect()
 }
@@ -93,10 +47,7 @@ fn unenrolled_or_revoked_device_hides_board_rows() {
     let mut feed = daemon::Feed::default();
     feed.board_received(
         1,
-        vec![
-            task("T-1", daemon::Group::Queued),
-            task("T-2", daemon::Group::NeedsYou),
-        ],
+        vec![task("T-1", Status::Ready), task("T-2", Status::Blocked)],
         &[],
         true,
     );
@@ -116,42 +67,56 @@ fn unenrolled_or_revoked_device_hides_board_rows() {
         assert_eq!(list.notice, Some(notice));
         assert!(list.groups.is_empty());
     }
-    feed.revoked("dev-1".into());
-    assert_eq!(feed.link, daemon::Link::Down);
-    assert!(!feed.board.complete);
-    assert!(feed.board.tasks().is_empty());
 }
 
 #[test]
-fn daemon_list_groups_rows_by_who_acts_next_and_puts_other_under_queued() {
+fn rows_group_by_who_moves_next_in_the_plans_order() {
+    let mut ready = task_row(bare_task(
+        "T-7",
+        "reviewed",
+        Status::Review,
+        jiff::Timestamp::UNIX_EPOCH,
+    ));
+    ready.ready = true;
     let tasks = [
-        task("T-1", daemon::Group::Other),
-        task("T-2", daemon::Group::Producing),
-        task("T-3", daemon::Group::NeedsYou),
-        task("T-4", daemon::Group::Queued),
+        task("T-1", Status::Idea),
+        task("T-2", Status::Running),
+        task("T-3", Status::Blocked),
+        task("T-4", Status::Ready),
+        task("T-5", Status::Backlog),
+        task("T-6", Status::Review),
+        daemon::Task::new(ready),
     ];
     let refs: Vec<&daemon::Task> = tasks.iter().collect();
-    let mut feed = daemon::Feed::default();
-    feed.inbox.insert("T-3".into(), owner_move("T-3"));
     let list = list(
         &State::default(),
         &refs,
         None,
-        &feed,
+        &daemon::Feed::default(),
         Form::Desktop,
         &ProjectFilter::All,
         NowGroup::State,
     );
     let keys: Vec<GroupKey> = list.groups.iter().map(|group| group.key).collect();
-    assert_eq!(keys, [GroupKey::You, GroupKey::Worker, GroupKey::Queued]);
-    assert_eq!(ids(&list, GroupKey::Queued), ["T-1", "T-4"]);
-    assert_eq!(ids(&list, GroupKey::You), ["T-3"]);
+    assert_eq!(
+        keys,
+        [
+            GroupKey::You,
+            GroupKey::Corral,
+            GroupKey::Worker,
+            GroupKey::Queued,
+            GroupKey::Backlog,
+            GroupKey::Ideas
+        ]
+    );
+    assert_eq!(ids(&list, GroupKey::You), ["T-3", "T-7"]);
+    assert_eq!(ids(&list, GroupKey::Corral), ["T-6"]);
 }
 
 #[test]
 fn collapsed_queued_rows_stay_out_of_keyboard_reach_until_expanded() {
     let tasks: Vec<daemon::Task> = (1..=COLLAPSED + 2)
-        .map(|n| task(&format!("T-{n}"), daemon::Group::Queued))
+        .map(|n| task(&format!("T-{n}"), Status::Ready))
         .collect();
     let refs: Vec<&daemon::Task> = tasks.iter().collect();
     let feed = daemon::Feed::default();
@@ -172,15 +137,11 @@ fn collapsed_queued_rows_stay_out_of_keyboard_reach_until_expanded() {
 
 #[test]
 fn an_off_board_selection_shows_its_own_detail_and_never_aliases_the_first_row() {
-    use corral_protocol::board::{RailGlyph, RailStep};
     use corral_protocol::detail::{DetailBody, TaskDetail};
     let mut feed = daemon::Feed::default();
     feed.board_received(
         1,
-        vec![
-            task("T-5", daemon::Group::Queued),
-            task("T-6", daemon::Group::Verifying),
-        ],
+        vec![task("T-5", Status::Ready), task("T-6", Status::Review)],
         &[],
         true,
     );
@@ -194,26 +155,11 @@ fn an_off_board_selection_shows_its_own_detail_and_never_aliases_the_first_row()
             stale: false,
             error: None,
             merged: Some(DetailBody::Task(TaskDetail {
-                id: "T-404".into(),
-                owner_revision: "r1".into(),
-                title: "landed".into(),
-                status: "done".into(),
-                body_excerpt: String::new(),
-                stages: std::array::from_fn(|_| RailStep {
-                    glyph: RailGlyph::Pass,
-                    sha7: None,
-                    at: None,
-                }),
-                dependencies: Vec::new(),
-                progress: None,
-                owner_next: None,
-                hold: None,
-                park: None,
-                park_revision: None,
+                task: bare_task("T-404", "landed", Status::Done, jiff::Timestamp::UNIX_EPOCH),
+                runs: Vec::new(),
+                checks: Vec::new(),
                 artifacts: Vec::new(),
-                run: None,
-                plan_context: None,
-                log_tail: Vec::new(),
+                events: Vec::new(),
             })),
         },
     );
@@ -241,7 +187,7 @@ fn an_off_board_selection_shows_its_own_detail_and_never_aliases_the_first_row()
     );
     assert!(matches!(
         &inspector,
-        super::super::Inspector::LiveStory(story) if story.id == "T-404"
+        super::super::Inspector::LiveStory(story) if story.id == "T-404" && story.who == "Done"
     ));
     // The list keys enter the list from its top.
     let mut current = Some(closed);
@@ -261,40 +207,21 @@ fn an_off_board_selection_shows_its_own_detail_and_never_aliases_the_first_row()
 }
 
 #[test]
-fn rows_past_the_seen_cursor_carry_the_changed_mark() {
-    use corral_protocol::app::{ChangeLine, SeenCursor};
+fn tasks_topic_failure_stops_loading_and_marks_retained_rows_last_known() {
+    use crate::model::daemon::{ClientError, TopicState};
     let mut feed = daemon::Feed::default();
-    feed.board_received(
-        1,
-        vec![
-            task("T-1", daemon::Group::Queued),
-            task("T-2", daemon::Group::Queued),
-        ],
-        &[],
-        true,
+    feed.link = daemon::Link::Up;
+    feed.topics.insert(
+        "tasks".into(),
+        TopicState {
+            loading: false,
+            stale: true,
+            error: Some(ClientError {
+                code: "internal".into(),
+                message: "projection failed".into(),
+            }),
+        },
     );
-    for (seq, id) in [(4, "T-1"), (9, "T-2")] {
-        feed.changes.insert(
-            seq,
-            ChangeLine {
-                seq,
-                at: "2026-11-14T10:00:00Z".into(),
-                class: "queue".into(),
-                task: Some(id.into()),
-                kind: corral_protocol::app::ChangeKind::Other,
-                from: None,
-                to: None,
-                failed: false,
-                text: format!("{id} · queued"),
-                actor: "corrald".into(),
-                via: "daemon".into(),
-            },
-        );
-    }
-    feed.seen = Some(SeenCursor {
-        through: 5,
-        at: None,
-    });
     let list = daemon_list_filtered(
         &State::default(),
         &feed,
@@ -303,229 +230,13 @@ fn rows_past_the_seen_cursor_carry_the_changed_mark() {
         &ALL,
         BY_STATE,
     );
-    let changed: Vec<String> = list
-        .groups
-        .iter()
-        .flat_map(|group| group.rows.iter())
-        .filter_map(|row| match row {
-            Row::Task(task) if task.line.changed => Some(task.line.id.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(changed, ["T-2"]);
-}
-
-#[test]
-fn task_attention_routes_inspector_and_enter_without_inventing_questions() {
-    use corral_protocol::rows::{InboxKind, InboxRow, InboxState};
-    let row_task = task("T-1", daemon::Group::NeedsYou);
-    let tasks = [&row_task];
-    let mut state = State::default();
-    for (kind, expected, question) in [
-        (InboxKind::Review, Live::Review(Id::new("T-1")), false),
-        (InboxKind::PlanAcceptance, Live::Plan(Id::new("T-9")), false),
-        (InboxKind::Stuck, Live::Task(Id::new("T-1")), false),
-        (
-            InboxKind::WorkerQuestion,
-            Live::Question(Id::new("item")),
-            true,
-        ),
-    ] {
-        let mut feed = daemon::Feed::default();
-        feed.inbox.insert(
-            Id::new("item"),
-            InboxRow {
-                id: "item".into(),
-                kind,
-                task: Some("T-1".into()),
-                plan: Some("T-9".into()),
-                project: None,
-                title: String::new(),
-                from: String::new(),
-                asked_at: None,
-                needed_by: None,
-                blocking: true,
-                state: InboxState::Open,
-                question_rev: question.then_some(1),
-                answerable: question,
-                unanswerable_reason: None,
-                attention: Some(corral_protocol::rows::AttentionMove {
-                    whose_move: corral_protocol::rows::AttentionActor::Owner,
-                    reason: "owner action".into(),
-                    next_step: "decide".into(),
-                    command: None,
-                    destination: match kind {
-                        InboxKind::Review => corral_protocol::rows::AttentionDestination::Review,
-                        InboxKind::PlanAcceptance => {
-                            corral_protocol::rows::AttentionDestination::Plans
-                        }
-                        InboxKind::Stuck => corral_protocol::rows::AttentionDestination::Now,
-                        _ => corral_protocol::rows::AttentionDestination::Inbox,
-                    },
-                }),
-                rev: 1,
-            },
-        );
-        assert_eq!(task_question(&feed, "T-1").is_some(), question);
-        let story = super::super::live_story(&state, &feed, &row_task, Form::Desktop);
-        let button = story
-            .facts
-            .iter()
-            .find_map(|(_, fact)| match fact {
-                super::super::Fact::Answer(button) => Some(button),
-                _ => None,
-            })
-            .unwrap();
-        assert_eq!(button.action, Some(Press::Open(expected.clone())));
-        let effects = state
-            .key_tasks("Enter", None, &tasks, &feed, Form::Desktop, SCOPE)
-            .unwrap();
-        assert_eq!(effects, [Effect::OpenLive(expected)]);
-    }
-}
-
-#[test]
-fn board_topic_failure_stops_loading_and_marks_retained_rows_last_known() {
-    use crate::model::daemon::{ClientError, TopicState};
-    let mut feed = daemon::Feed {
-        link: Link::Up,
-        ..daemon::Feed::default()
-    };
-    let mut state = State::default();
-    let selected = Selection::default();
-    feed.topics.insert(
-        "board".into(),
-        TopicState {
-            loading: false,
-            stale: true,
-            error: Some(ClientError {
-                code: "failed".into(),
-                message: "topic rejected".into(),
-            }),
-        },
-    );
-    let list = daemon_list_filtered(&state, &feed, &selected, Form::Desktop, &ALL, BY_STATE);
-    assert!(list.notice.is_some());
-    assert!(list.groups.is_empty());
+    assert_eq!(list.notice, Some(BOARD_UNAVAILABLE));
+    feed.board_received(1, vec![task("T-1", Status::Ready)], &[], true);
     let status = super::super::daemon_status(&feed);
-    let banner = status.banner.unwrap();
-    assert!(format!("{:?}", banner.text).contains("topic rejected"));
-    assert_eq!(banner.actions[0].action, Some(Press::RetryBoard));
-    assert_eq!(
-        state.press(
-            Press::RetryBoard,
-            &feed,
-            Env {
-                conn: Conn::Healthy,
-                form: Form::Desktop,
-            }
-        ),
-        [Effect::RetryTopic("board".into())]
-    );
-
-    feed.board_received(1, vec![task("T-1", daemon::Group::Queued)], &[], true);
-    assert!(
-        !daemon_list_filtered(&state, &feed, &selected, Form::Desktop, &ALL, BY_STATE)
-            .groups
-            .is_empty()
-    );
-    assert!(super::super::daemon_status(&feed).dimmed);
-    assert!(super::super::daemon_status(&feed).as_of.is_some());
-    feed.topics.insert(
-        "board".into(),
-        TopicState {
-            loading: true,
-            ..TopicState::default()
-        },
-    );
-    assert!(super::super::daemon_status(&feed).dimmed);
-    feed.topics.insert("board".into(), TopicState::default());
-    assert!(!super::super::daemon_status(&feed).dimmed);
-    assert!(super::super::daemon_status(&feed).banner.is_none());
-}
-
-#[test]
-fn next_tab_key_and_enter_keep_the_live_session_in_now() {
-    let mut state = State::default();
-    let mut row = task("T-1", daemon::Group::Producing);
-    row.agent = Some(daemon::Agent {
-        session: Some("worker-1".into()),
-        role: "worker".into(),
-        profile: None,
-        runtime: None,
-        machine: None,
-    });
-    let feed = daemon::Feed::default();
-    assert_eq!(
-        state.key_tasks("]", None, &[&row], &feed, Form::Desktop, SCOPE),
-        Some(vec![])
-    );
-    assert_eq!(state.now_tab, super::super::NowTab::Evidence);
-    assert!(
-        state
-            .key_tasks("Tab", None, &[&row], &feed, Form::Desktop, SCOPE)
-            .is_none()
-    );
-    let effects = state.key_tasks("Enter", None, &[&row], &feed, Form::Desktop, SCOPE);
-    assert_eq!(effects, Some(vec![]));
-    assert_eq!(state.now_tab, super::super::NowTab::Session);
-}
-
-#[test]
-fn closed_rows_join_the_list_keys_only_while_the_section_is_open() {
-    use corral_protocol::app::CLOSED_V1;
-    use corral_protocol::detail::{ClosedPage, ClosedTask, DetailBody, DetailRef};
-    let mut feed = daemon::Feed::default();
-    feed.capabilities.insert(CLOSED_V1.into());
-    feed.board_received(1, vec![task("T-1", daemon::Group::Queued)], &[], true);
-    let target = DetailRef::Closed { before: None };
-    feed.details.insert(
-        daemon::detail_key(&target),
-        daemon::DetailCache {
-            target,
-            pages: Vec::new(),
-            loading: false,
-            stale: false,
-            error: None,
-            merged: Some(DetailBody::Closed(ClosedPage {
-                total: Some(1),
-                rows: vec![ClosedTask {
-                    id: "T-9".into(),
-                    title: "landed".into(),
-                    status: "done".into(),
-                    updated: "2026-11-14T10:00:00Z".into(),
-                    project: None,
-                    plan: None,
-                    goal: None,
-                }],
-                older: None,
-            })),
-        },
-    );
-    let mut state = State::default();
-    let tasks = shown(&feed, &ProjectFilter::All);
-    let mut current = Some(Id::from("T-1"));
-    let effects = state.key_tasks("j", current.as_ref(), &tasks, &feed, Form::Desktop, SCOPE);
-    selected_after(effects, &mut current);
-    assert_eq!(current.as_deref(), Some("T-1"));
-
-    state.closed.press(super::super::ClosedPress::Toggle);
-    let effects = state.key_tasks("j", current.as_ref(), &tasks, &feed, Form::Desktop, SCOPE);
-    selected_after(effects, &mut current);
-    assert_eq!(current.as_deref(), Some("T-9"));
-    let effects = state.key_tasks(
-        "Enter",
-        current.as_ref(),
-        &tasks,
-        &feed,
-        Form::Desktop,
-        SCOPE,
-    );
-    assert_eq!(
-        effects,
-        Some(vec![Effect::OpenLive(Live::Task(Id::from("T-9")))])
-    );
-    let effects = state.key_tasks("k", current.as_ref(), &tasks, &feed, Form::Desktop, SCOPE);
-    selected_after(effects, &mut current);
-    assert_eq!(current.as_deref(), Some("T-1"));
+    assert!(status.dimmed);
+    let retry = status
+        .banner
+        .and_then(|banner| banner.actions.into_iter().next())
+        .and_then(|button| button.action);
+    assert_eq!(retry, Some(Press::RetryBoard));
 }

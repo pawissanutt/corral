@@ -35,7 +35,7 @@ export const DEFAULT_SERVERS: readonly LspServerSpec[] = [
   },
 ];
 
-/** Convert the generation's Rust-validated configuration into explicit argv server specs. */
+/** Convert the configured language servers into explicit argv server specs. */
 export function configuredServers(settings: Readonly<Record<string, unknown>> | undefined): readonly LspServerSpec[] {
   const raw = settings?.languages;
   if (raw === undefined) return DEFAULT_SERVERS;

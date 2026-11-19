@@ -1,5 +1,4 @@
-// Worker-only corral tools: wait, progress, checkpoint, gate and done (OD3). The run they act on
-// is the launcher-bound one; corral's Rust operation table stays the authority on what runs.
+// The worker's local resume note and engine completion tool.
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -7,105 +6,39 @@ import { Errors } from "typebox/value";
 import { Type } from "typebox";
 
 import type { CorralToolSpec } from "../types.ts";
-import { pick } from "../common/tools.ts";
-import { ProgressUpdate, CheckpointUpdate } from "../common/records.ts";
+import { sha256Hex } from "../../tools/corral.ts";
 import { LIVE_CHILD_STATES, type FleetSnapshot } from "../../build/types.ts";
 import { sessionRecord, type SessionRecordOptions } from "../../extensions/fleet/session-record.ts";
-import { toolRequestId } from "../../tools/corral.ts";
-import type { ToolHost } from "../../tools/define.ts";
-
-type Params = Record<string, unknown>;
-
-export const waitTool: CorralToolSpec = {
-  name: "corral_wait",
-  label: "Wait for an external event",
-  description: "For another task use task_id and task_status (done or dropped): corral resolves it automatically. "
-    + "For other events use channel_id; free-text channel waits resolve only by manual receipt or deadline. "
-    + "End your turn after declaring a wait. Gate results need no wait: corral_gate arms its own wake.",
-  op: "wait",
-  parameters: Type.Object({
-    id: Type.String({ pattern: "^[A-Za-z0-9._-]+$", description: "A wait ID unique within this run, [A-Za-z0-9._-]" }),
-    condition: Type.String({ description: "What must become true" }),
-    channel_id: Type.Optional(Type.String({ description: "Manual-only channel, for example a CI run; omit for a task status" })),
-    task_id: Type.Optional(Type.String({ description: "Task to watch automatically; use with task_status instead of channel_id" })),
-    task_status: Type.Optional(Type.Union([Type.Literal("done"), Type.Literal("dropped")], { description: "Terminal status to watch automatically" })),
-    deadline: Type.String({ format: "date-time", description: "RFC 3339 time after which the wait expires and wakes you" }),
-    owner: Type.Optional(Type.String({ description: "Who resolves the wait (default worker)" })),
-  }),
-  payload: (params: Params) => ({
-    ...pick(params, ["id", "condition", "owner", "deadline"]),
-    handle: params.task_id !== undefined || params.task_status !== undefined
-      ? { kind: "task_status", task: params.task_id, status: params.task_status }
-      : { kind: "channel", ...pick(params, ["channel_id"]) },
-  }),
-};
-
-export const progressTool: CorralToolSpec = {
-  name: "corral_progress",
-  label: "Write the run's progress ledger",
-  description: "Write the full phase and step ledger as one ProgressUpdate v1 (the JSON `corral run progress "
-    + "<task> --file` takes). Read the identity strings with `corral run progress <task> --json` first.",
-  op: "progress",
-  parameters: Type.Object({
-    update: ProgressUpdate,
-  }),
-  payload: (params: Params) => params.update as Params,
-};
 
 export const checkpointTool: CorralToolSpec = {
   name: "corral_checkpoint",
-  label: "Save a resume checkpoint",
-  description: "Save one CheckpointUpdate v1 (the JSON `corral run checkpoint <task> --file` takes), built from "
-    + "a fresh `corral run progress <task> --json` readback after you committed.",
+  label: "Save a resume note",
+  description: "Save a short note in this session's transcript for whoever resumes the work.",
   op: "checkpoint",
   parameters: Type.Object({
-    checkpoint: CheckpointUpdate,
-  }),
-  payload: (params: Params) => params.checkpoint as Params,
+    note: Type.String({ description: "Current state, remaining work and anything needed to resume safely" }),
+  }, { additionalProperties: false }),
+  payload: (params) => ({ note: params.note }),
 };
-
-export const gateTool: CorralToolSpec = {
-  name: "corral_gate",
-  label: "Start this run's gate",
-  description: "Start the run's one receipted gate on the committed, rebased tree, exactly once per round. "
-    + "started: a gate runs; end your turn and corral wakes you with its result and the gate_ref corral_done "
-    + "carries. uncertain: corral could not confirm the start; end your turn and corral wakes you with the "
-    + "result or gate_start_uncertain. queued: admission is pending; end your turn without sleeping or "
-    + "retrying. corral starts the gate when capacity permits and wakes you with its result or not_started. "
-    + "rejected: no gate started and no wake will come; read the code and "
-    + "reason, fix the cause (for example commit or rebase) and call corral_gate again, or ask with corral_ask.",
-  op: "gate",
-  parameters: Type.Object({}),
-  payload: () => ({}),
-};
-
-const GateRef = Type.Object({
-  attempt: Type.String(),
-  tier: Type.String(),
-  receipt_sha256: Type.String(),
-}, { description: "The gate_ref from the gate's wake message, exactly as corral show --json reports it" });
 
 export const doneTool: CorralToolSpec = {
   name: "corral_done",
   label: "Finish the run",
-  description: "Report the run complete and move the task to Review, exactly as `corral done` would. It refuses "
-    + "while any of your questions is pending (wait for the answer or withdraw it) and when the gate_ref is "
-    + "not the run's current gate receipt. Collect any live review child with agent_wait or cancel it first. "
-    + "Include the advisory review verdict and any deliberately unaddressed findings in your report.",
+  description: "Report the run complete and move the task to Review. Collect or cancel any live review child "
+    + "first. Include the advisory verdict and any deliberately unaddressed findings in the summary.",
   op: "done",
   parameters: Type.Object({
-    summary: Type.String({ description: "This run's activity, then a `Verified:` line and a `Not verified:` line" }),
-    result: Type.Optional(Type.String({ description: "The cumulative task outcome and remaining limitations" })),
-    gate_ref: Type.Optional(GateRef),
-    contract_sha256: Type.Optional(Type.String({ description: "The contract_sha256 of the gate section you followed" })),
-  }),
-  payload: (params: Params) => pick(params, ["summary", "result", "gate_ref", "contract_sha256"]),
+    summary: Type.String({ description: "The result, what was verified, and what was not verified" }),
+  }, { additionalProperties: false }),
+  payload: (params) => ({ summary: params.summary }),
 };
 
 /** Attach advisory fleet evidence without changing the done operation's authority or result. */
-export function workerDoneTool(tool: ToolDefinition, host: Pick<ToolHost, "client" | "sessionId" | "currentTurn"> & SessionRecordOptions & {
+export function workerDoneTool(tool: ToolDefinition, host: SessionRecordOptions & {
   readonly recordDir: string;
   fleet(): FleetSnapshot;
+  readonly usageArtifact?: () => string;
+  attachArtifact(payload: { path: string; kind: string; title: string }): Promise<void>;
 }): ToolDefinition {
   return { ...tool, async execute(id, params, signal, update, context) {
     // The underlying tool owns argument errors; invalid calls must not attach artifacts.
@@ -114,23 +47,26 @@ export function workerDoneTool(tool: ToolDefinition, host: Pick<ToolHost, "clien
     const live = fleet.children.filter(child => child.kind === "review" && LIVE_CHILD_STATES.includes(child.state));
     if (live.length) {
       const text = `Review child ${live.map(child => child.id).join(", ")} is still running. Collect it first with agent_wait or cancel it with agent_cancel before corral_done.`;
-      const value = { request_id: toolRequestId(host.sessionId(), id), op: "done",
-        error: { code: "review_running", category: "invalid_state", reason: text, effect: "not_started" } };
+      const value = { code: "review_running", reason: text };
       return { content: [{ type: "text", text }], details: value, structuredContent: value, isError: true };
     }
     let warning: string | undefined;
     if (fleet.children.length || fleet.mail.length) {
       try {
-        const requestId = toolRequestId(host.sessionId(), `session-record:${id}`);
-        const path = join(host.recordDir, `${requestId}.json`);
+        const path = join(host.recordDir, `${sha256Hex(id)}.json`);
         mkdirSync(host.recordDir, { recursive: true, mode: 0o700 });
-        // A retried call must keep the same artifact bytes as well as its request ID.
-        if (!existsSync(path)) writeFileSync(path, `${JSON.stringify(sessionRecord(fleet, { task: host.task, run: host.run }))}\n`, { flag: "wx", mode: 0o600 });
-        const receipt = await host.client.call("artifact", { requestId, turn: host.currentTurn(),
-          payload: { path, kind: "report", title: "Session record" } });
-        if (receipt.state !== "committed") warning = `Session record attachment failed (${receipt.state}): ${JSON.stringify(receipt.result)}`;
+        if (!existsSync(path)) {
+          writeFileSync(path, `${JSON.stringify(sessionRecord(fleet, { task: host.task, run: host.run }))}\n`, { flag: "wx", mode: 0o600 });
+        }
+        await host.attachArtifact({ path, kind: "report", title: "Session record" });
       } catch (error) {
         warning = `Session record attachment failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+    if (host.usageArtifact) {
+      try { await host.attachArtifact({ path: host.usageArtifact(), kind: "usage", title: "Model usage" }); }
+      catch (error) {
+        warning = [warning, `Usage attachment failed: ${error instanceof Error ? error.message : String(error)}`].filter(Boolean).join("\n");
       }
     }
     const result = await tool.execute(id, params, signal, update, context);

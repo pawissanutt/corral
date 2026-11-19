@@ -1,43 +1,24 @@
-import { memoryTools } from "../common/memory.ts";
-// Assistant authority lives in Rust: this role supplies the workspace-scoped loadout and contract.
-// Reads and filing go through the corral CLI from bash; external edit/write calls are brokered
-// through scoped owner permissions (paths.ts and permissions.ts). Owner-level
-// commands the owner asks for go through corral_owner_action (owner-action.ts).
+// The assistant works with ordinary file and shell tools and keeps a host-local request todo.
 import { closeSync, openSync, readSync } from "node:fs";
 import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
-import { receiptLookupTool } from "../common/tools.ts";
-import { gateTriageTool } from "../common/gate-triage.ts";
 import { requestContract, sessionTodoTool } from "../common/todo.ts";
 import { askUserContract } from "../common/ask-user.ts";
 import { calibrationReader } from "../common/family.ts";
-import type { CorralOp, RoleModule, UpstreamTool } from "../types.ts";
+import type { RoleModule, UpstreamTool } from "../types.ts";
 import { assistantShellRefusal } from "./guard.ts";
-import { ownerActionTool } from "./owner-action.ts";
-import { installWriteGuard } from "./paths.ts";
-import { assistantPlanReviewTool, assistantPlanTool } from "./planning.ts";
-
-import { ideaFileTool } from "./idea-file.ts";
 export const CONTRACT_ASSET = "assets/assistant-contract.md";
 export const UPSTREAM: readonly UpstreamTool[] = ["read", "edit", "write", "grep", "find", "ls", "bash"];
-const LOOKUP = receiptLookupTool();
-const OPS: readonly CorralOp[] = ["hello", "event", "receipt_lookup", "todo", "owner_action", "write_permission", "idea_file", "gate_triage",
-  ...memoryTools.map((tool) => tool.op), "assistant_plan", "assistant_plan_review"];
-// Local design and advisory review; publication and review grant no execution consent.
-const WORKFLOW = [assistantPlanTool, assistantPlanReviewTool];
 
 export function assistantRole(root: string): RoleModule {
   return {
     role: "assistant",
     upstreamTools: UPSTREAM,
-    corralOps: OPS,
-    tools: (context) => [LOOKUP, ownerActionTool, gateTriageTool, ...memoryTools, ...WORKFLOW,
-      ...(context.todo === true ? [sessionTodoTool] : []), ...(context.daemonHosted ? [ideaFileTool] : [])],
+    tools: (context) => context.todo === true ? [sessionTodoTool] : [],
     contract: (context) => {
       const contract = `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n`
         + requestContract(root, context.todo) + "\n\n" + askUserContract(context);
       if (!context.promptFile) return contract;
-      // The Rust launcher writes this read-only task brief, not a worker prompt. Bound the
-      // read again here so a replaced file cannot grow the model's system context.
+      // A task brief is read-only context, not a worker prompt. Bound its system-prompt size.
       const fd = openSync(context.promptFile, "r");
       try {
         const bytes = Buffer.alloc(24 * 1024 + 1);
@@ -50,7 +31,6 @@ export function assistantRole(root: string): RoleModule {
     },
     calibration: calibrationReader(root, "assistant"),
     shellRefusal: assistantShellRefusal,
-    extend: installWriteGuard,
   };
 }
 

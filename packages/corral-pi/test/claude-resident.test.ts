@@ -17,7 +17,6 @@ import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
 import { CorralClient } from "../src/tools/corral.ts";
 import { buildFixtureInstall } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { OAUTH, anthropic, fakeSdk, resetSdkFixture, textReply, user } from "./support/claude-sdk-fixture.ts";
 import type { BuildContext } from "../src/build/types.ts";
@@ -412,7 +411,7 @@ test("summary, untracked, no-cache and registry-less callers remain one-shot", a
 async function residentHost() {
   const assets = buildFixtureInstall();
   const work = mkdtempSync(join(tmpdir(), "corral-resident-host-"));
-  const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-961", run: "R1", generation: 1 };
+  const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-961", run: "R1" };
   let host: HostSession | undefined;
   const cleanup = async () => {
     try { await host?.close(); }
@@ -422,10 +421,9 @@ async function residentHost() {
     const modules = await loadModules(assets.dir, "worker");
     const transport = modules.auth.transport?.(authContext());
     if (!transport) throw new Error("fixture auth transport missing");
-    const corral = writeFakeCorral(work);
-    const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
+    const client = new CorralClient({ corral: "", root: work, cwd: work, identity });
     host = await HostSession.create({ sdk, identity, cwd: work, agentDir: join(work, "agent"), model: "gpt-6.1-sol", modules,
-      client, events: new EventLog(1), network: guardedFetch(transport, undefined, "openai-codex"), ui: "plain",
+      client, events: new EventLog(), network: guardedFetch(transport, undefined, "openai-codex"), ui: "plain",
       capabilities: { catalog: 7, digest: "a".repeat(64), preset: "full", enabled: ["subagents"] },
       guidance: { projectText: false, settings: { subagents: { max_parallel: 1, model: "gpt-6.1-sol", max_turns: 1, timeout_secs: 30 } } },
       sessionManager: sdk.SessionManager.create(work, join(work, "sessions")) });
@@ -541,7 +539,7 @@ for (const cause of ["finish", "model-change"] as const) {
       context, agentDir: root, localTools: [] });
     const handle = runner.run({ id: "fleet-report-id", title: "Child", brief: "Work", owns: [] },
       { profile: "fixture", provider: setup.model.provider, model: setup.model.id },
-      { onEvent() {}, onToolStart() {}, onTurn() {}, async ask() { return "answer"; }, openingPrompt: () => "", roster: async () => "",
+      { onEvent() {}, onToolStart() {}, onTurn() {}, async ask() { return "answer"; }, openingPrompt: () => "", roster: () => "",
         async message() { throw new Error("Unused fixture messaging"); }, reviewVerdict() {} }, new AbortController().signal);
     try {
       await started.promise;

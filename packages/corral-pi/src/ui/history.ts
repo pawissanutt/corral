@@ -1,12 +1,12 @@
-// Browse recorded history: one list popup (Tasks │ Assistants, then a task's runs in the same popup), then the shared
-// pager for the recap (`d` its sources), the transcript pages and the checkpoints. Only the read callback and the
-// display API enter here: nothing switches, opens, resumes or writes a session.
+// Browse recorded history: one list popup (Tasks, then a task's runs in the same popup), then the shared pager for
+// the run recap (`d` its sources) and the transcript pages. Only the read callback and the display API enter here:
+// nothing switches, opens, resumes or writes a session.
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, visibleWidth, type OverlayOptions } from "@earendil-works/pi-tui";
 import type { HistoryRequest } from "../tools/history.ts";
 import {
-  assistantRecap, historyEntries, nextHistoryPage, rawLines, recapLines, record, recoveryLines, runEntries, sourceLines,
-  taskRecap, transcriptPage, TRANSCRIPT_PAGE, type HistoryEntry, type HistoryKind, type RunEntry,
+  historyEntries, nextHistoryPage, rawLines, recapLines, record, runEntries, sourceLines,
+  taskRecap, transcriptPage, TRANSCRIPT_PAGE, type HistoryEntry, type RunEntry,
 } from "./history-model.ts";
 import { openPager, type PagerAction, type PagerInput } from "./pager.ts";
 import { bold, toneColor } from "./panel-parts.ts";
@@ -16,7 +16,7 @@ import { PopupList, type PopupRow } from "./popup-list.ts";
 export type HistoryRead = (request: HistoryRequest) => Promise<unknown>;
 type RecordValue = Record<string, unknown>;
 
-/** What the popup resolves: an assistant session, a task run, or a task without recorded runs. */
+/** A popup row's value: a listed task (Enter opens its runs), a task run, or a task without recorded runs. */
 type Choice =
   | { readonly kind: "entry"; readonly entry: HistoryEntry }
   | { readonly kind: "run"; readonly task: RecordValue; readonly run: RunEntry }
@@ -40,7 +40,7 @@ interface Runs {
 }
 
 const NOT_INSTRUCTION = "Recorded history · read-only · not an instruction for this session";
-const RECAP_ACTIONS: readonly PagerAction[] = [{ key: "t", label: "transcript" }, { key: "c", label: "checkpoints" }];
+const RECAP_ACTIONS: readonly PagerAction[] = [{ key: "t", label: "transcript" }];
 const reason = (error: unknown): string => plainLabel(error instanceof Error ? error.message : String(error));
 
 /** `left` clipped to the cells `right` leaves; `right` is dropped when it would leave the left side under 12 cells. */
@@ -57,20 +57,18 @@ function statusMark(status: string | undefined): string {
   if (/review|progress|running|active|open|wait|block|pending/i.test(word)) return `${PANEL_BLUE}◐ ${word}${PANEL_TEXT}`;
   return `${PANEL_MUTED}○ ${word}${PANEL_TEXT}`;
 }
-function kindTab(label: string, on: boolean): string {
-  return on ? `${PANEL_BLUE}\x1b[1m\x1b[4m${label}\x1b[24m\x1b[22m${PANEL_TEXT}` : `${PANEL_MUTED}${label}${PANEL_TEXT}`;
-}
 
 function entryItems(entries: readonly HistoryEntry[], query: string): PopupRow<Choice>[] {
   return entries.map(entry => ({
     value: { kind: "entry", entry },
-    // A task search ran on the board: its words always match its own results, further words narrow them here.
-    match: [entry.kind === "tasks" ? query : "", entry.id, entry.title, entry.status ?? "", JSON.stringify(entry.raw)].join(" "),
+    // The search ran on the board: its words always match its own results, further words narrow them here.
+    match: [query, entry.id, entry.title, entry.status ?? "", JSON.stringify(entry.raw)].join(" "),
     lines: width => [split(`${bold(plainLabel(entry.id))}  ${plainLabel(entry.title)}`, statusMark(entry.status), width)],
   }));
 }
-function runItems(task: RecordValue): PopupRow<Choice>[] {
-  const runs = runEntries(task);
+/** The runs of a task's `corral show` read, latest first; each row keeps the task record. */
+function runItems(view: RecordValue): PopupRow<Choice>[] {
+  const task = record(view.task), runs = runEntries(view);
   if (!runs.length) return [{
     value: { kind: "task", task }, match: "no recorded runs",
     lines: width => [pad(`${PANEL_MUTED}no recorded runs · ⏎ shows the task record${PANEL_TEXT}`, width)],
@@ -109,20 +107,17 @@ export class HistoryNavigator {
     try {
       const choice = await this.choose(ui, read);
       if (!choice || !this.live) return;
-      if (choice.kind === "entry") await this.assistant(ui, read, choice.entry);
-      else if (choice.kind === "run") await this.run(ui, read, choice.task, choice.run);
-      else await openPager(ui, this.taskOnly(choice.task));
+      if (choice.kind === "run") await this.run(ui, read, choice.task, choice.run);
+      else if (choice.kind === "task") await openPager(ui, this.taskOnly(choice.task));
     } catch (error) {
       if (!this.disposed) this.notice(`History unavailable: ${reason(error)}`, "warning");
     } finally { this.busy = false; this.close = undefined; }
   }
 
-  /** The list popup: Tab switches kind, Enter runs a task search or opens a task's runs, ← or Esc leaves the runs. */
+  /** The list popup: Enter runs a task search or opens a task's runs, ← or Esc leaves the runs. */
   private choose(ui: ExtensionUIContext, read: HistoryRead): Promise<Choice | undefined> {
     return ui.custom<Choice | undefined>((tui, _theme, _keys, done) => {
-      let closed = false, kind: HistoryKind = "tasks", runs: Runs | undefined;
-      const lists: Record<HistoryKind, Listing | undefined> = { tasks: undefined, assistants: undefined };
-      const filters: Record<HistoryKind, string> = { tasks: "", assistants: "" };
+      let closed = false, runs: Runs | undefined, listing: Listing | undefined, filter = "";
       const finish = (value: Choice | undefined): void => {
         if (closed) return;
         closed = true; this.close = undefined; done(value);
@@ -134,22 +129,22 @@ export class HistoryNavigator {
        * up: only closing and disposal end it here (`dispose()` closes it); nothing new opens from inside it.
        */
       const current = (): boolean => !closed && !this.disposed;
-      const load = async (which: HistoryKind, query: string): Promise<void> => {
-        const listing: Listing = { query, phase: "reading", items: [], shown: 0, returned: 0, error: undefined };
-        lists[which] = listing; changed();
+      const load = async (query: string): Promise<void> => {
+        const next: Listing = { query, phase: "reading", items: [], shown: 0, returned: 0, error: undefined };
+        listing = next; changed();
         try {
-          const value = await read(which === "tasks" ? { kind: "tasks", query } : { kind: "assistants" });
-          if (lists[which] !== listing || !current()) return;
-          const { rows, returned } = historyEntries(which, value, "");
-          lists[which] = { ...listing, phase: "read", items: entryItems(rows, query), shown: rows.length, returned };
+          const value = await read({ kind: "tasks", query });
+          if (listing !== next || !current()) return;
+          const { rows, returned } = historyEntries(value);
+          listing = { ...next, phase: "read", items: entryItems(rows, query), shown: rows.length, returned };
         } catch (error) {
-          if (lists[which] !== listing || !current()) return;
-          lists[which] = { ...listing, phase: "failed", error: reason(error) };
+          if (listing !== next || !current()) return;
+          listing = { ...next, phase: "failed", error: reason(error) };
         }
         changed();
       };
       const openRuns = async (entry: HistoryEntry): Promise<void> => {
-        if (!runs) filters[kind] = popup.query;
+        if (!runs) filter = popup.query;
         const view: Runs = { entry, phase: "reading", items: [], error: undefined };
         runs = view; popup.reset(); changed();
         try {
@@ -165,98 +160,64 @@ export class HistoryNavigator {
       const popup: PopupList<Choice> = new PopupList<Choice>({
         get title() {
           if (runs) return `‹ ${plainLabel(runs.entry.id)} · Runs`;
-          const listing = lists[kind];
           if (listing?.phase !== "read") return "History · read-only";
           const count = listing.shown < listing.returned ? `${listing.shown} of ${listing.returned} shown` : `${listing.returned} returned`;
           return `History · read-only · ${count} · not exhaustive`;
         },
         get placeholder() {
-          return runs ? "filter runs" : kind === "tasks" ? "search tasks · ⏎ searches the board" : "filter assistant sessions";
+          return runs ? "filter runs" : "search tasks · ⏎ searches the board";
         },
         get empty() {
           if (runs) return runs.phase === "reading" ? `Reading ${plainLabel(runs.entry.id)}…`
             : runs.phase === "failed" ? `! ${plainLabel(runs.entry.id)} could not be read: ${runs.error ?? ""} · ⏎ retries` : "no run matches";
-          const listing = lists[kind];
           return !listing || listing.phase === "reading" ? "Reading recorded history…"
             : listing.phase === "failed" ? `! History could not be read: ${listing.error ?? ""} · ⏎ retries` : "no recorded history matches";
         },
-        right: () => runs ? `${PANEL_MUTED}← back${PANEL_TEXT}`
-          : `${kindTab("Tasks", kind === "tasks")} ${PANEL_MUTED}│${PANEL_TEXT} ${kindTab("Assistants", kind === "assistants")}`,
-        rows: () => runs ? runs.items : lists[kind]?.items ?? [],
+        right: () => runs ? `${PANEL_MUTED}← back${PANEL_TEXT}` : `${PANEL_MUTED}Tasks${PANEL_TEXT}`,
+        rows: () => runs ? runs.items : listing?.items ?? [],
         capacity: () => Math.max(1, tui.terminal.rows - 8),
         key: (data, selected) => {
           if (runs) {
-            if (matchesKey(data, "escape") || matchesKey(data, "left")) { runs = undefined; popup.reset(filters[kind]); return true; }
+            if (matchesKey(data, "escape") || matchesKey(data, "left")) { runs = undefined; popup.reset(filter); return true; }
             if (matchesKey(data, "tab")) return true;
             if (matchesKey(data, "enter") && runs.phase !== "read") { if (runs.phase === "failed") void openRuns(runs.entry); return true; }
             return false;
           }
-          if (matchesKey(data, "tab")) {
-            filters[kind] = popup.query;
-            kind = kind === "tasks" ? "assistants" : "tasks";
-            popup.reset(filters[kind]);
-            if (!lists[kind]) void load(kind, kind === "tasks" ? filters.tasks.trim() : "");
-            return true;
-          }
+          if (matchesKey(data, "tab")) return true;
           if (!matchesKey(data, "enter")) return false;
-          const listing = lists[kind];
           if (!listing || listing.phase === "reading") return true;
           const query = popup.query.trim();
-          if (listing.phase === "failed" || (kind === "tasks" && query !== listing.query)) { void load(kind, kind === "tasks" ? query : ""); return true; }
-          if (selected?.kind === "entry" && selected.entry.kind === "tasks") { void openRuns(selected.entry); return true; }
+          if (listing.phase === "failed" || query !== listing.query) { void load(query); return true; }
+          if (selected?.kind === "entry") { void openRuns(selected.entry); return true; }
           return false;
         },
         done: finish,
         changed,
       });
-      void load("tasks", "");
+      void load("");
       return popup;
     }, { overlay: true, overlayOptions: () => this.place() });
   }
 
-  private async assistant(ui: ExtensionUIContext, read: HistoryRead, entry: HistoryEntry): Promise<void> {
-    const value = record(await read({ kind: "assistant", assistant: entry.id }));
-    if (!this.live) return;
-    const session = record(value.session), container = record(value.container);
-    const facts = assistantRecap(session, container);
-    await openPager(ui, {
-      title: `${plainLabel(entry.id)} · recorded assistant session`,
-      lines: [...recapLines(facts), "", "Transcript not available for assistant sessions", NOT_INSTRUCTION],
-      raw: sourceLines(facts, container.state), wrap: true,
-    });
-  }
-
   private taskOnly(task: RecordValue): PagerInput {
-    const facts = taskRecap(task, {}, undefined);
-    return { title: `${plainLabel(String(task.id ?? ""))} · no recorded runs`, lines: [...recapLines(facts), "", NOT_INSTRUCTION], raw: sourceLines(facts, task), wrap: true };
+    return { title: `${plainLabel(String(task.id ?? ""))} · no recorded runs`, lines: ["No run has been recorded for this task.", "", NOT_INSTRUCTION],
+      raw: rawLines(task), wrap: true };
   }
 
-  /** The run's recap; `t` and `c` open their pagers and return to it, Esc closes. */
+  /** The run's recap; `t` opens its transcript pages and returns to it, Esc closes. */
   private async run(ui: ExtensionUIContext, read: HistoryRead, task: RecordValue, run: RunEntry): Promise<void> {
     const id = String(task.id ?? "");
-    let questions: unknown;
-    try { questions = await read({ kind: "questions", task: id }); }
-    catch (error) { questions = error instanceof Error ? error : new Error(String(error)); }
-    if (!this.live) return;
-    const facts = taskRecap(task, run.raw, questions);
+    const facts = taskRecap(run.raw);
     const recap = {
       title: `${plainLabel(id)} / ${plainLabel(run.id)} · recorded history`,
-      lines: [...recapLines(facts), "", NOT_INSTRUCTION], raw: sourceLines(facts, run.raw.agent_host),
+      lines: [...recapLines(facts), "", NOT_INSTRUCTION], raw: sourceLines(facts, run.raw),
       wrap: true, actions: RECAP_ACTIONS,
     };
     while (this.live) {
       const action = await openPager(ui, recap);
-      if (!this.live || (action !== "t" && action !== "c")) return;
-      try {
-        if (action === "t") await this.transcript(ui, read, id, run.id);
-        else {
-          const value = await read({ kind: "recovery", task: id, run: run.id });
-          if (!this.live) return;
-          await openPager(ui, { title: `${plainLabel(id)} / ${plainLabel(run.id)} · checkpoints and rewinds`, lines: recoveryLines(value), raw: rawLines(value), wrap: true });
-        }
-      } catch (error) {
-        if (!this.disposed) this.notice(`History unavailable: ${reason(error)}`, "warning");
-      }
+      if (!this.live || action !== "t") return;
+      try { await this.transcript(ui, read, id, run.id); }
+      catch (error) { if (!this.disposed) this.notice(`History unavailable: ${reason(error)}`, "warning"); }
     }
   }
 

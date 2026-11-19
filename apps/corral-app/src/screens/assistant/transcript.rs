@@ -1,15 +1,12 @@
 //! The transcript: every `ThreadItem` of a thread in order, an assistant reply with its typed
-//! cards, the PM items with their folded outcome, the waiting and queued escape hatches. It is
-//! its own scroll view and opens at the newest message, or at the prompt opened from Inbox.
-
-use std::time::Duration;
+//! cards, the waiting and queued escape hatches. It is
+//! its own scroll view and opens at the newest message.
 
 use nsh_core::prelude::*;
 
-use crate::model::Authority;
 use crate::model::assistant::{
-    AssistantMessage, Body, LABELS, OwnerMessage, PmMessage, PmReply, QueueNote, RollDivider,
-    ThreadItem, ThreadRef, ToolRow, WaitingBlock, live_items,
+    AssistantMessage, Body, LABELS, OwnerMessage, QueueNote, RollDivider, ThreadItem, ThreadRef,
+    ToolRow, WaitingBlock, live_items,
 };
 use crate::model::board::Mark;
 use crate::model::{Form, Hue, Id, Rich};
@@ -35,18 +32,15 @@ const BLINK_MS: f32 = 1000.0;
 const MEASURE: f32 = 640.0;
 /// The avatar column and its gap, which the waiting and queued blocks line up under.
 const AVATAR_COLUMN: f32 = 36.0;
-/// How long the prompt opened from Inbox stays marked: held, then faded over its last third.
-const HIGHLIGHT: Duration = Duration::from_millis(2400);
 
 /// The transcript of `source`: a scroll view filling its container, rows `inset` points in on
 /// either side (desktop page 24, drawer 16; phone 14). It opens at its end and follows each new
-/// message and each streamed step; opened from an Inbox prompt, it opens at that prompt instead
-/// and marks it. It is the served thread, its streamed turn and this device's unsent messages.
+/// message and each streamed step. It is the served thread, its streamed turn, the agent's
+/// open questions and this device's unsent messages.
 pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
     let form = app.form;
     provide_styles(app);
     let scroller = element_ref();
-    let anchor = element_ref();
     let tools_open = signal(None::<String>);
     let ThreadRef::Live(scope) = source;
     let region = format!("thread-{}-items", scope.as_str());
@@ -55,21 +49,13 @@ pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
     // streamed step or a new message redraws only its own row: a field being typed in a card
     // keeps its text and focus.
     let items = computed(move || {
-        let can_send = app.can(Authority::Assistant);
         let items = app.feed.with(|feed| {
             app.assistant
-                .with(|state| live_items(state, feed, scope.as_str(), can_send))
+                .with(|state| live_items(state, feed, scope.as_str()))
         });
         items.into_iter().enumerate().collect::<Vec<_>>()
     });
-    let anchored = computed(move || {
-        items.with(|rows| {
-            rows.iter()
-                .any(|(_, item)| matches!(item, ThreadItem::Assistant(m) if m.anchored))
-        })
-    });
-    follow(app, followed, scroller, anchored);
-    reveal(app.scope(), anchor, anchored);
+    follow(app, followed, scroller);
     let content = each(
         move || items.get(),
         |(at, item): &(usize, ThreadItem)| (*at, std::mem::discriminant(item)),
@@ -77,12 +63,6 @@ pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
             dynamic(move || {
                 row.with(|(at, item)| {
                     let body = item_view(app, item, inset, tools_open);
-                    let body = match item {
-                        ThreadItem::Assistant(message) if message.anchored => {
-                            marked(app, anchor, body)
-                        }
-                        _ => body,
-                    };
                     if form == Form::Terminal && *at > 0 {
                         view().child(term::blank()).child(body).into_element()
                     } else {
@@ -109,88 +89,30 @@ pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
 }
 
 /// Scrolls to the end once mounted (after the commit that mounts it), then again, animated, when
-/// the thread gains a message or the streamed answer grows; not while a prompt opened from Inbox
-/// is marked, which `reveal` brings into view instead.
-fn follow(app: AppState, scope: Id, scroller: ElementRef, anchored: Memo<bool>) {
+/// the thread gains a message, the streamed answer grows or the agent asks.
+fn follow(app: AppState, scope: Id, scroller: ElementRef) {
     let seen = stored(None::<(usize, usize)>);
     effect(move || {
         let now = app.feed.with(|feed| {
-            let thread = feed.threads.get(scope.as_str());
-            let entries = thread.map_or(0, |thread| thread.entries.len());
-            let streamed = thread
-                .and_then(|thread| thread.live.as_ref())
-                .map_or(0, |live| live.text.len());
-            (entries + feed.commands.len(), streamed)
+            let entries = feed
+                .threads
+                .get(scope.as_str())
+                .map_or(0, |thread| thread.entries.len());
+            let streamed = feed.live.get(scope.as_str()).map_or(0, |live| {
+                live.messages
+                    .iter()
+                    .map(|message| message.text.len())
+                    .sum::<usize>()
+            });
+            let asks = usize::from(crate::model::agents::prompt(feed, scope.as_str()).is_some());
+            (entries + feed.commands.len() + asks, streamed)
         });
         let before = seen.replace(Some(now));
-        if before != Some(now) && !anchored.get_untracked() {
+        if before != Some(now) {
             let animated = before.is_some();
             after_answer(move || scroller.scroll_to_end(animated));
         }
     });
-}
-
-/// Brings the prompt the owner opened from Inbox to the top of the transcript once it is in the
-/// thread (a served thread may load after the page opens), then has the model drop the anchor
-/// once its mark has played, so the next visit opens at the newest message again. `scoped` is
-/// the mount-pinned app, so the delayed clear reaches the source whose anchor was shown.
-fn reveal(scoped: AppState, anchor: ElementRef, anchored: Memo<bool>) {
-    let shown = stored(false);
-    effect(move || {
-        if !anchored.get() {
-            shown.replace(false);
-            return;
-        }
-        if shown.replace(true) {
-            return;
-        }
-        after_answer(move || {
-            anchor.reveal(
-                RevealOptions::default()
-                    .vertical(ScrollAlignment::Start)
-                    .animated(false),
-            );
-        });
-        set_timeout(HIGHLIGHT, move || {
-            scoped.reduce(scoped.assistant, |state, _, _, _| {
-                state.clear_anchor();
-                Vec::new()
-            });
-        });
-    });
-}
-
-/// The opened prompt's reply on the needs-you tint: a band across the transcript that holds,
-/// then fades out; with less motion asked for, or in a terminal, it stays until the anchor goes.
-fn marked(app: AppState, anchor: ElementRef, body: AnyElement) -> AnyElement {
-    if app.form == Form::Terminal {
-        return view()
-            .element_ref(&anchor)
-            .bg(color(Token::YouBg))
-            .child(body)
-            .into_element();
-    }
-    let tint = view()
-        .absolute()
-        .inset(px(0.0))
-        .bg(color(Token::YouBg))
-        .pointer_events(PointerEvents::None)
-        .accessibility_elements_hidden(true);
-    let tint = if reduce_motion() {
-        tint
-    } else {
-        let fade = motion().entering(
-            MotionSpec::new(KeyframeTiming::new(HIGHLIGHT.as_secs_f32() * 1000.0))
-                .values(MotionChannel::Opacity, [1.0, 1.0, 1.0, 0.0]),
-        );
-        tint.bind_motion(&fade)
-    };
-    view()
-        .relative()
-        .element_ref(&anchor)
-        .child(tint)
-        .child(body)
-        .into_element()
 }
 
 fn item_view(
@@ -203,11 +125,8 @@ fn item_view(
         ThreadItem::Roll(roll) => roll_view(app, roll, inset),
         ThreadItem::Owner(owner) => owner_view(app, owner, inset),
         ThreadItem::Assistant(message) => assistant_view(app, message, inset, tools),
-        ThreadItem::Pm(pm) => pm_view(app, pm, inset),
-        ThreadItem::PmReply { id, reply } => under_avatar(app, inset, pm_reply(app, id, reply)),
         ThreadItem::Waiting(block) => under_avatar(app, inset, waiting(app, block)),
         ThreadItem::Queued(note) => under_avatar(app, inset, queued(app, note)),
-        ThreadItem::Saved(card) => under_avatar(app, inset, cards::saved(app, card)),
         ThreadItem::Note(note) => under_avatar(
             app,
             inset,
@@ -292,17 +211,10 @@ fn head(app: AppState, runs: Vec<Text>, tail: Vec<AnyElement>) -> AnyElement {
 
 const DOT: &str = " · ";
 
-/// `you · app:pawis-desktop · 21:31 · typed 21:20 offline`, with the PM target and item id
-/// between the author and the device when it is a PM item.
-fn owner_runs(app: AppState, owner: &OwnerMessage, pm: Option<&str>) -> Vec<Text> {
+/// `you · app:pawis-desktop · 21:31 · typed 21:20 offline`.
+fn owner_runs(app: AppState, owner: &OwnerMessage) -> Vec<Text> {
     let size = meta_size(app.form);
     let mut runs = vec![strong_run(owner.author)];
-    if let Some(id) = pm {
-        runs.push(text(" → "));
-        runs.push(strong_run(LABELS.pm));
-        runs.push(text(DOT));
-        runs.push(mono_run(app, id.to_owned(), size));
-    }
     runs.push(text(DOT));
     runs.push(mono_run(app, owner.provenance.clone(), size));
     runs.push(text(format!("{DOT}{}", owner.at)));
@@ -322,77 +234,40 @@ fn owner_tail(app: AppState, owner: &OwnerMessage) -> Vec<AnyElement> {
     tail
 }
 
+/// The owner's message, with its attachment readback when one is open, and File as idea under
+/// it (or how the filing went).
 fn owner_view(app: AppState, owner: &OwnerMessage, inset: f32) -> AnyElement {
     let mut body = vec![plain(app, owner.text.clone()).into_element()];
     if let Some(opened) = &owner.opened {
         body.push(attachments::readback(app, opened));
     }
-    message(
-        app,
-        inset,
-        avatar(app, LABELS.owner_avatar, Hue::You),
-        head(app, owner_runs(app, owner, None), owner_tail(app, owner)),
-        body,
-    )
-}
-
-/// The PM's outcome on the corral ground (`.pmreply`): who, when, which item, what it said.
-fn pm_reply(app: AppState, id: &str, reply: &PmReply) -> AnyElement {
-    let form = app.form;
-    let hd = words(app, "", meta_size(form), Token::Ink3)
-        .child(strong_run(LABELS.pm))
-        .child(text(format!(
-            "{DOT}{}{DOT}{} {id}",
-            reply.at, LABELS.outcome_of
-        )));
-    let said_size = if form == Form::Phone { 15.0 } else { 13.0 };
-    let said = words(app, reply.text.clone(), said_size, Token::Ink);
-    let reply_box = view()
-        .gap(px(2.0))
-        .bg(color(Token::CorralBg))
-        .child(hd)
-        .child(said);
-    if form == Form::Terminal {
-        reply_box.px(term::cells(1.0)).into_element()
-    } else {
-        reply_box
-            .px(px(12.0))
-            .py(px(8.0))
-            .rounded(px(8.0))
-            .mt(px(2.0))
-            .into_element()
-    }
-}
-
-/// A PM item: the owner's words to the PM, then the PM's outcome folded under them, or the note
-/// of a queued item, and Withdraw while the PM has not replied.
-fn pm_view(app: AppState, pm: &PmMessage, inset: f32) -> AnyElement {
-    let form = app.form;
-    let mut body = vec![plain(app, pm.owner.text.clone()).into_element()];
-    if let Some(reply) = &pm.reply {
-        body.push(pm_reply(app, &pm.id, reply));
-    }
-    if let Some(note) = pm.note {
-        body.push(words(app, note, note_size(form), Token::Ink3).into_element());
-    }
-    if !pm.buttons.is_empty() || pm.status.is_some() {
-        let mut row = button_row(app, &pm.buttons, ButtonKind::Quiet, 6.0);
-        if let Some(status) = &pm.status {
-            row = row
-                .when(form == Form::Terminal, |r| r.child(term::space(2.0)))
-                .child(chip(app, status.label.clone(), status.hue));
+    if owner.file.is_some() || owner.filed.is_some() {
+        let terminal = app.form == Form::Terminal;
+        let mut foot = Vec::new();
+        if let Some(filed) = &owner.filed {
+            foot.push(chip(app, filed.label.clone(), filed.hue));
         }
-        body.push(row.into_element());
+        if let Some(file) = &owner.file {
+            if terminal && !foot.is_empty() {
+                foot.push(term::space(2.0));
+            }
+            foot.push(model_button(app, file, ButtonKind::Quiet));
+        }
+        body.push(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(px(if terminal { 0.0 } else { 8.0 }))
+                .children(foot)
+                .into_element(),
+        );
     }
     message(
         app,
         inset,
         avatar(app, LABELS.owner_avatar, Hue::You),
-        head(
-            app,
-            owner_runs(app, &pm.owner, Some(pm.id.as_str())),
-            owner_tail(app, &pm.owner),
-        ),
+        head(app, owner_runs(app, owner), owner_tail(app, owner)),
         body,
     )
 }
@@ -445,10 +320,7 @@ fn body_view(app: AppState, block: &Body, streaming: bool) -> AnyElement {
     match block {
         Body::Markdown(words) => written(app, words, streaming),
         Body::Ordered(items) => ordered(app, items),
-        Body::Action(card) => cards::action(app, card),
         Body::AskUser(card) => cards::ask_user(app, card),
-        Body::Permission(card) => cards::permission(app, card),
-        Body::Filed(card) => cards::filed(app, card),
         Body::Starting { state, text: said } => cards::starting(app, state, said),
     }
 }
@@ -752,7 +624,7 @@ fn roll_view(app: AppState, roll: &RollDivider, inset: f32) -> AnyElement {
 }
 
 /// The waiting block (`.waitbox`): the stale mark, the reason in bold, why and what happens to
-/// the message, the escape hatches at the trailing edge; the lifetime line under it.
+/// the message; the lifetime line under it.
 fn waiting(app: AppState, block: &WaitingBlock) -> AnyElement {
     let form = app.form;
     let size = if form == Form::Phone { 15.0 } else { 13.0 };
@@ -767,13 +639,6 @@ fn waiting(app: AppState, block: &WaitingBlock) -> AnyElement {
         .flex_1()
         .min_w(px(160.0))
         .children(runs);
-    let buttons = view().flex_row().flex_wrap().items_center().children(
-        block.buttons.iter().enumerate().flat_map(|(at, button)| {
-            let gap = (form == Form::Terminal && at > 0).then(|| term::space(2.0));
-            gap.into_iter()
-                .chain([model_button(app, button, ButtonKind::Quiet)])
-        }),
-    );
     let lifetime = words(app, block.lifetime, meta_size(form), Token::Ink3);
     let box_row = view()
         .flex_row()
@@ -782,14 +647,7 @@ fn waiting(app: AppState, block: &WaitingBlock) -> AnyElement {
         .bg(color(Token::HeldBg))
         .child(mark(app, Mark::Stale, Hue::Held))
         .when(form == Form::Terminal, |row| row.child(term::space(1.0)))
-        .child(sentence)
-        .child(buttons.when(form != Form::Terminal, |b| b.gap(px(6.0))))
-        .children(
-            block
-                .status
-                .as_ref()
-                .map(|status| chip(app, status.label.clone(), status.hue)),
-        );
+        .child(sentence);
     let box_row = if form == Form::Terminal {
         box_row
     } else {

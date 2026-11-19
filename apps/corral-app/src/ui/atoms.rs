@@ -153,24 +153,39 @@ fn row(
             look.ink
         }
     };
+    let handle = element_ref();
     let leading = match form {
-        // A column of its own, so the labels line up whether a row is selected or not.
-        Form::Terminal => Some(
-            view()
-                .w(cells(1.0))
-                .flex_shrink_0()
-                .accessibility_elements_hidden(true)
-                .child(
-                    text(move || if selected.get() { "▌" } else { " " })
+        // A column of its own, so the labels line up whether a row is selected or not: the
+        // focus mark while the row has the keyboard focus, else the selection's bar.
+        Form::Terminal => {
+            let focused = crate::ui::term::focus_of(handle);
+            Some(
+                view()
+                    .w(cells(1.0))
+                    .flex_shrink_0()
+                    .accessibility_elements_hidden(true)
+                    .child(
+                        text(move || {
+                            if focused.get() {
+                                crate::ui::term::FOCUS_MARK
+                            } else if selected.get() {
+                                "▌"
+                            } else {
+                                " "
+                            }
+                        })
+                        .font_weight(FontWeight::BOLD)
                         .text_color(color(Token::Ink)),
-                )
-                .into_element(),
-        ),
+                    )
+                    .into_element(),
+            )
+        }
         Form::Desktop | Form::Phone => glyph
             .zip(look.icon)
             .map(|(glyph, size)| dynamic(move || icon(glyph, size, ink()))),
     };
     view()
+        .element_ref(&handle)
         .flex_row()
         .items_center()
         .flex_shrink_0()

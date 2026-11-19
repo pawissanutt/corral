@@ -12,7 +12,7 @@ const prompt = "Explain **this code**, then read `sample.ts`.";
 const response = "## Findings\n\n**Shared styling** and `inline code`.\n\n```ts\nconst answer = 42;\n```\n\n| Item | State |\n| --- | --- |\n| Native chat | ready |";
 const result = "const answer = 42;\nexport { answer };";
 function fixture(): HelperInspection {
-  return { request: "fixture", generation: 1, kind: "explore", model: "fixture/model", createdAt: 0, prompt, phase: "completed", truncated: false,
+  return { request: "fixture", kind: "explore", model: "fixture/model", createdAt: 0, prompt, phase: "completed", truncated: false,
     messages: [{ id: "assistant", kind: "assistant", text: response, stopReason: "toolUse", hasToolCalls: true },
       { id: "read", kind: "tool", tool: "read", arguments: JSON.stringify({ path: "sample.ts" }), text: result, phase: "completed" }] };
 }
@@ -68,7 +68,7 @@ test("a bubble sits one cell in on the bubble surface, at most 96 cells wide as 
 });
 
 test("native components update from streaming observations, hide reasoning and do not duplicate the final result", () => {
-  const history = new AuxiliaryHistory(); history.begin("stream", "explore", "fixture/model", 2, "Question");
+  const history = new AuxiliaryHistory(); history.begin("stream", "explore", "fixture/model", "Question");
   history.phase("stream", "running"); history.observe("stream", { type: "assistant_start" });
   history.observe("stream", { type: "assistant_delta", text: "First **chunk" });
   const chat = new HelperChat(() => undefined, "/tmp");

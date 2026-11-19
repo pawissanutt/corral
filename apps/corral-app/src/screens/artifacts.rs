@@ -1,0 +1,459 @@
+//! The artifact finder on every form: the filter, which keeps the keyboard focus (↑ ↓ and the
+//! page keys walk the results from it, Enter opens the selected one full size), the results
+//! newest first with each one's kind, title, task, project and date, and the selected
+//! artifact's preview beside them, under them where the page is narrow (always on a phone).
+//! A press on a result selects it; a press on the selected one opens it full size. Walking to
+//! the last result asks corrald for the next page; Load older artifacts does the same for the
+//! pointer. Every word, number and branch is `model::artifacts`'.
+//!
+//! test ids: "field-artifacts", "artifacts" (the results' scroll), "artifact-<reference>" (a
+//! result), "artifacts-count", "btn-load-more", "btn-retry-artifacts", and those of `shown`.
+
+mod shown;
+
+use nsh_core::element::{color as for_appearance, input};
+use nsh_core::keymap::When;
+use nsh_core::prelude::*;
+
+use crate::model::artifacts::{
+    self, Action, FIELD_LABEL, HINT, LOAD_MORE, LOADING, LOADING_MORE, More, PLACEHOLDER, Page,
+    Query, RETRY, Row, SUBTITLE, Status, TITLE, Walk,
+};
+use crate::model::{Effect, Form, Hue};
+use crate::screens::now::list::revealing;
+use crate::state::AppState;
+use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::button::{ButtonKind, button};
+use crate::ui::kit::notice::notice;
+use crate::ui::kit::page::{Width, columns, context, head, pane};
+use crate::ui::kit::rows::{list_row_tall, titled, walked_row};
+use crate::ui::kit::text::{dim, mono, plain};
+use crate::ui::term;
+use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
+
+/// The results column's width on desktop (and, a Cell for every 12 points, in a terminal).
+const LIST: f32 = 680.0;
+/// Terminal Cells of a result's kind, task, run, project and date columns.
+const KIND_CELLS: f32 = 10.0;
+const TASK_CELLS: f32 = 5.0;
+const RUN_CELLS: f32 = 3.0;
+const PROJECT_CELLS: f32 = 7.0;
+const DATE_CELLS: f32 = 6.0;
+
+/// The Artifacts destination.
+pub fn screen(app: AppState) -> AnyElement {
+    let page = computed(move || {
+        let state = app.artifacts.get();
+        app.feed
+            .with(|feed| artifacts::page(&state, feed, app.form))
+    });
+    keep_loaded(app, page);
+    let full = computed(move || page.with(|page| page.full.is_some()));
+    dynamic(move || {
+        if full.get() {
+            untracked(|| shown::full(app, page))
+        } else {
+            untracked(|| finder(app, page))
+        }
+    })
+    .into_element()
+}
+
+/// Keeps the filter's list, the shown artifact's content and, as the list is walked, its next
+/// page requested.
+fn keep_loaded(app: AppState, page: Memo<Page>) {
+    let list = computed(move || {
+        app.daemon().then(|| {
+            app.artifacts
+                .with(|state| Query::parse(&state.query).request())
+        })
+    });
+    effect(move || {
+        if let Some(list) = list.get() {
+            untracked(|| app.load(list));
+        }
+    });
+    let shown = computed(move || {
+        page.with(|page| {
+            page.full
+                .as_ref()
+                .or(page.preview.as_ref())
+                .map(|shown| shown.reference.clone())
+        })
+    });
+    effect(move || {
+        if let Some(reference) = shown.get() {
+            untracked(|| app.load(artifacts::content_target(&reference)));
+        }
+    });
+    let more = computed(move || {
+        let state = app.artifacts.get();
+        app.feed.with(|feed| artifacts::more(&state, feed))
+    });
+    effect(move || {
+        if let Some(next) = more.get() {
+            untracked(|| app.run(vec![Effect::Detail(next)]));
+        }
+    });
+}
+
+/// The finder: the head, the filter, then the results and the preview.
+fn finder(app: AppState, page: Memo<Page>) -> AnyElement {
+    let form = app.form;
+    if form == Form::Phone {
+        let content = view()
+            .child(field_bar(app, page))
+            .child(results(app, page))
+            .child(context(app, "artifact-side", shown::preview(app, page)))
+            .into_element();
+        return pane(app, "artifacts", content);
+    }
+    let cols = columns(
+        app,
+        vec![
+            (
+                Width::Fixed(LIST),
+                pane(app, "artifacts", results(app, page)),
+            ),
+            (
+                Width::Fill,
+                context(app, "artifact-side", shown::preview(app, page)),
+            ),
+        ],
+        1,
+    );
+    view()
+        .flex_1()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .child(head(app, TITLE, Some(SUBTITLE.to_owned()), Vec::new()))
+        .child(field_bar(app, page))
+        .when(form == Form::Terminal, |page| page.child(term::hrule()))
+        .child(cols)
+        .into_element()
+}
+
+/// The filter's row: the field, then how many results show; on desktop and phone the tokens'
+/// hint under it.
+fn field_bar(app: AppState, page: Memo<Page>) -> AnyElement {
+    let form = app.form;
+    let count = text(move || page.with(|page| page.results.count.clone()))
+        .test_id("artifacts-count")
+        .number_of_lines(1u32)
+        .flex_shrink(1.0)
+        .min_w(px(0.0))
+        .text_color(color(Token::Ink3));
+    match form {
+        Form::Terminal => view()
+            .flex_row()
+            .items_center()
+            .h(term::rows(1.0))
+            .px(term::cells(1.0))
+            .child(
+                view()
+                    .w(term::cells(2.0))
+                    .flex_shrink_0()
+                    .child(text("›").text_color(color(Token::Ink3))),
+            )
+            .child(field(app))
+            .child(term::space(2.0))
+            .child(count)
+            .into_element(),
+        Form::Desktop | Form::Phone => {
+            let small = if form == Form::Phone { 12.5 } else { 11.5 };
+            view()
+                .flex_none()
+                .gap(px(6.0))
+                .px(px(18.0))
+                .py(px(10.0))
+                .when(form == Form::Desktop, |bar| {
+                    bar.border_b(px(1.0)).border_color(color(Token::Rule))
+                })
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(10.0))
+                        .child(field(app))
+                        .child(count.font_family(FONT_TEXT).text_size(px(small))),
+                )
+                .child(
+                    text(HINT)
+                        .font_family(FONT_TEXT)
+                        .text_size(px(small))
+                        .text_color(color(Token::Ink3)),
+                )
+                .into_element()
+        }
+    }
+}
+
+/// The filter field. While it has the keyboard focus ↑ ↓ and Page Up/Down walk the results and
+/// Enter opens the selected one full size; it takes the focus back whenever the finder asks
+/// (a press on a result, the way back from full size, Find in all artifacts).
+fn field(app: AppState) -> AnyElement {
+    let form = app.form;
+    let handle = element_ref();
+    let focused = signal(false);
+    effect(move || {
+        if !focused.get() {
+            return;
+        }
+        let walking = KeyOptions {
+            when: When::Always,
+            repeat: true,
+            ..KeyOptions::default()
+        };
+        for (keys, walk) in [
+            ("up", Walk::Up),
+            ("down", Walk::Down),
+            ("pageup", Walk::PageUp),
+            ("pagedown", Walk::PageDown),
+        ] {
+            on_key_with(keys, walking, move |_| {
+                app.artifacts_act(Action::Walk(walk))
+            });
+        }
+        let once = KeyOptions {
+            when: When::Always,
+            ..KeyOptions::default()
+        };
+        on_key_with("enter", once, move |_| {
+            app.artifacts_act(Action::OpenSelected)
+        });
+    });
+    if form != Form::Phone {
+        let asked = computed(move || app.artifacts.with(|state| state.focus));
+        effect(move || {
+            let _ = asked.get();
+            after_answer(move || handle.focus());
+        });
+    }
+    let entry = input()
+        .element_ref(&handle)
+        .test_id("field-artifacts")
+        .label(FIELD_LABEL)
+        .placeholder(PLACEHOLDER)
+        .value(move || app.artifacts.with(|state| state.query.clone()))
+        .on_change(move |typed: &str| app.artifacts_act(Action::Query(typed.to_owned())))
+        .on_focus(move || {
+            focused.set(true);
+            app.artifacts.update(|state| state.typing = true);
+        })
+        .on_blur(move || {
+            focused.set(false);
+            app.artifacts.update(|state| state.typing = false);
+        })
+        .flex_1()
+        .min_w(px(0.0))
+        .text_color(color(Token::Ink))
+        .placeholder_color(move || {
+            for_appearance(color(if form == Form::Terminal {
+                Token::Ink3
+            } else {
+                Token::Ink4
+            }))
+        })
+        .caret_color(move || for_appearance(color(Token::Ink)))
+        .selection_color(move || for_appearance(color(Token::Sel)))
+        .bg(AdaptiveColor::TRANSPARENT);
+    match form {
+        Form::Terminal => entry.h(term::rows(1.0)).into_element(),
+        Form::Desktop | Form::Phone => {
+            let (height, size) = if form == Form::Phone {
+                (44.0, 16.0)
+            } else {
+                (32.0, text_size(form))
+            };
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .h(px(height))
+                .px(px(10.0))
+                .rounded(px(if form == Form::Phone { 10.0 } else { 6.0 }))
+                .border_1()
+                .border_color(color(Token::Rule2))
+                .bg(color(Token::Surface))
+                .focus_within(|s| s.border_color(color(Token::Focus)))
+                .child(icon(Icon::Search, 14.0, color(Token::Ink3)))
+                .child(
+                    entry
+                        .h(px(height))
+                        .font_family(FONT_TEXT)
+                        .text_size(px(size)),
+                )
+                .into_element()
+        }
+    }
+}
+
+/// The results, then the list's state under them: loading, why it failed with Retry, that
+/// nothing matches, or the next page.
+fn results(app: AppState, page: Memo<Page>) -> AnyElement {
+    let rows = computed(move || page.with(|page| page.results.rows.clone()));
+    let selected = computed(move || page.with(|page| page.results.selected.clone()));
+    let state = computed(move || {
+        page.with(|page| {
+            (
+                page.results.status.clone(),
+                page.results.empty.clone(),
+                page.results.more,
+            )
+        })
+    });
+    view()
+        .role(AccessibilityRole::List)
+        .label(TITLE)
+        .child(dynamic(move || {
+            let rows = rows.get();
+            untracked(|| {
+                view()
+                    .children(rows.iter().map(|row| result(app, row, selected)))
+                    .into_element()
+            })
+        }))
+        .child(dynamic(move || {
+            let (status, empty, more) = state.get();
+            untracked(|| below(app, status, empty, more))
+        }))
+        .into_element()
+}
+
+/// What stands under the results.
+fn below(app: AppState, status: Status, empty: Option<String>, more: More) -> AnyElement {
+    let pad = |part: AnyElement| match app.form {
+        Form::Terminal => view()
+            .flex_row()
+            .px(term::cells(1.0))
+            .child(part)
+            .into_element(),
+        Form::Desktop | Form::Phone => view()
+            .flex_row()
+            .px(px(16.0))
+            .py(px(10.0))
+            .child(part)
+            .into_element(),
+    };
+    let line = match status {
+        Status::Loading => Some(dim(app, LOADING).into_element()),
+        Status::Failed(why) => {
+            let retry = button(
+                app,
+                RETRY,
+                ButtonKind::Ghost,
+                "btn-retry-artifacts",
+                move || {
+                    let list = app
+                        .artifacts
+                        .with_untracked(|state| Query::parse(&state.query).request());
+                    app.refresh(list);
+                },
+            );
+            Some(notice(
+                app,
+                Hue::Fail,
+                &vec![crate::model::span(why)],
+                Some(retry),
+            ))
+        }
+        Status::Ready => empty.map(|empty| dim(app, empty).into_element()),
+    };
+    let more = match more {
+        More::Done => None,
+        More::Loading => Some(dim(app, LOADING_MORE).into_element()),
+        More::Offer => Some(button(
+            app,
+            LOAD_MORE,
+            ButtonKind::Quiet,
+            "btn-load-more",
+            move || app.artifacts_act(Action::LoadMore),
+        )),
+    };
+    view()
+        .children(line.into_iter().chain(more).map(pad))
+        .into_element()
+}
+
+/// One result: on desktop and in a terminal its kind, title (with the project's chip), task and
+/// date on one line; on a phone the title over the rest.
+fn result(app: AppState, row: &Row, selected: Memo<Option<String>>) -> AnyElement {
+    let form = app.form;
+    let me = row.reference.clone();
+    let is = computed(move || selected.with(|selected| selected.as_deref() == Some(me.as_str())));
+    let reference = row.reference.clone();
+    let press = move || app.artifacts_act(Action::Press(reference.clone()));
+    let test_id = format!("artifact-{}", row.reference);
+    if form == Form::Phone {
+        let facts = [
+            Some(row.kind.as_str()),
+            Some(row.task.as_str()),
+            row.run.as_deref(),
+            row.project.as_deref(),
+            Some(row.at.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ");
+        let content = vec![
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .gap(px(2.0))
+                .child(plain(app, row.title.clone()).truncate())
+                .child(dim(app, facts).truncate())
+                .into_element(),
+        ];
+        return list_row_tall(
+            app,
+            row.label.clone(),
+            test_id,
+            move || is.get(),
+            press,
+            content,
+        );
+    }
+    let terminal = form == Form::Terminal;
+    let fixed = |words: Text, cells: f32, points: f32| {
+        let words = words.number_of_lines(1u32).flex_shrink_0();
+        if terminal {
+            words.w(term::cells(cells)).into_element()
+        } else {
+            words.w(px(points)).into_element()
+        }
+    };
+    let content = vec![
+        fixed(dim(app, row.kind.clone()), KIND_CELLS, 74.0),
+        titled(app, plain(app, row.title.clone()).truncate(), None),
+        fixed(
+            mono(app, row.task.to_string()).text_color(color(Token::Ink2)),
+            TASK_CELLS,
+            44.0,
+        ),
+        fixed(
+            dim(app, row.run.clone().unwrap_or_default()),
+            RUN_CELLS,
+            28.0,
+        ),
+        fixed(
+            dim(app, row.project.clone().unwrap_or_default()).truncate(),
+            PROJECT_CELLS,
+            64.0,
+        ),
+        fixed(dim(app, row.at.clone()).text_right(), DATE_CELLS, 52.0),
+    ];
+    revealing(
+        is,
+        walked_row(
+            app,
+            row.label.clone(),
+            test_id,
+            move || is.get(),
+            press,
+            content,
+        ),
+    )
+}

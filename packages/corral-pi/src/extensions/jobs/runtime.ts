@@ -1,11 +1,5 @@
-// Background jobs of a corral-pi worker (T-565). A job is its whole process group, led by a
-// launcher whose pid and kernel start time are committed to corral before the command runs: the
-// launcher waits on its stdin for "run", so a host that dies first leaves no executable work. The
-// launcher then stays the group's leader while the command runs as its child, so the recorded
-// identity anchors ownership until the group is swept; it reports the command's status on its
-// own stdout and, if its host disappears, kills its own group. The command's output is its stderr. Output goes to a runtime
-// file capped at max_output_bytes plus an in-memory tail that survives the file's loss. Line
-// monitors match in this process; corral settles every monitor's wait and posts its one wake.
+// Background jobs are local process groups. The launcher waits on stdin until the host
+// has recorded the job, and kills its group if the host disappears. Output is bounded.
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, writeSync } from "node:fs";
 import { constants } from "node:os";
@@ -20,8 +14,6 @@ export const OUTPUT_READ_MAX = 64 * 1024;
 const TAIL_BYTES = 64 * 1024;
 const LINE_MATCH_MAX = 4096;
 const KILL_GRACE_MS = 2000;
-const REPORT_ATTEMPTS = 4;
-const REPORT_BACKOFF_MS = 250;
 /** How long the host waits for SIGKILLed group members to disappear before reporting. */
 const SWEEP_WAIT_MS = 5000;
 const SWEEP_STEP_MS = 20;
@@ -37,13 +29,6 @@ const LAUNCHER = [
   'printf "exit %s\\n" "$s"', "IFS= read -r _", "kill -KILL 0",
 ].join("\n");
 
-export interface JobReceipt {
-  readonly state: string;
-  readonly result: unknown;
-}
-
-/** One corral call: `key` is the stable request key the caller turns into a request ID. */
-export type JobCall = (op: "job" | "job_monitor", key: string, payload: Record<string, unknown>) => Promise<JobReceipt>;
 
 /** Schedules `run` after `ms` and returns its cancellation; tests drive the runtime limit with it. */
 export type Schedule = (run: () => void, ms: number) => () => void;
@@ -57,9 +42,7 @@ const realSchedule: Schedule = (run, ms) => {
 export interface JobRuntimeOptions {
   readonly cwd: string;
   readonly runtimeDir: string;
-  readonly generation: number;
   readonly settings: JobSettings;
-  readonly call: JobCall;
   readonly shell?: string;
   readonly environment?: () => NodeJS.ProcessEnv;
   /** Durable session fact before the launcher can execute anything. */
@@ -78,15 +61,6 @@ export interface JobInspection {
   /** Process-group leader, finished output lines and launch directory; absent from legacy observations. */
   readonly pid?: number; readonly lines?: number; readonly cwd?: string;
   readonly watches: readonly { wait: string; pattern: string; armed: boolean; matched: string | undefined; reportQueued: boolean; deadline: string }[];
-}
-interface Watcher {
-  readonly wait: string;
-  readonly regex: RegExp;
-  readonly afterLine: number;
-  readonly deadline: string;
-  armed: boolean;
-  matched?: string;
-  reported: boolean;
 }
 
 interface Job {
@@ -108,11 +82,7 @@ interface Job {
   tail: Buffer;
   partial: string;
   lines: number;
-  monitors: number;
-  inflight: number;
-  drained: (() => void)[];
-  reports: Promise<unknown>;
-  readonly watchers: Watcher[];
+
   readonly closed: Promise<void>;
   readonly exited: Promise<void>;
   cancelKill?: () => void;
@@ -178,7 +148,6 @@ export class JobError extends Error {}
 
 export class JobRuntime {
   private readonly jobs = new Map<string, Job>();
-  private seq = 0;
   private readonly lineListeners = new Set<(job: string, line: string) => void>();
   private shutdownEpoch = 0;
   private shutdownOperation?: Promise<void>;
@@ -196,38 +165,16 @@ export class JobRuntime {
   private job(id: string): Job {
     const job = this.jobs.get(id);
     if (!job) {
-      const prefix = `j${this.options.generation}-`;
-      if (id.startsWith(prefix) && /^\d+$/.test(id.slice(prefix.length)) && Number(id.slice(prefix.length)) <= this.seq) {
-        throw new JobError(`expired job ${id}; its terminal output is no longer retained`);
-      }
       throw new JobError(`unknown job ${id}; bash returns the job ID`);
     }
     return job;
   }
 
-  // The request key keeps a retried report idempotent; a report that never lands leaves the
-  // job for corral's reaper and the monitor for its deadline wake.
-  private async report(key: string, payload: Record<string, unknown>): Promise<void> {
-    for (let attempt = 0; attempt < REPORT_ATTEMPTS; attempt++) {
-      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, REPORT_BACKOFF_MS * 2 ** (attempt - 1)));
-      try {
-        await this.options.call("job", key, payload);
-        return;
-      } catch {
-        continue;
-      }
-    }
-  }
-
-  private enqueue(job: Job, key: string, payload: Record<string, unknown>): void {
-    job.reports = job.reports.then(() => this.report(key, payload));
-  }
-
-  async start(command: string, key: string, timeoutSecs?: number): Promise<Record<string, unknown>> {
+  async start(command: string, timeoutSecs?: number): Promise<Record<string, unknown>> {
     if (this.shutdownOperation) throw new JobError("job runtime is shutting down");
     if (this.live() + this.starting.size >= this.options.settings.max_jobs) throw new JobError("job_limit: wait for a job to finish");
     if (timeoutSecs !== undefined && (!Number.isFinite(timeoutSecs) || timeoutSecs <= 0)) throw new JobError("timeout must be positive seconds");
-    const starting = this.startJob(command, key, this.shutdownEpoch, timeoutSecs);
+    const starting = this.startJob(command, this.shutdownEpoch, timeoutSecs);
     this.starting.add(starting);
     try {
       return await starting;
@@ -236,14 +183,12 @@ export class JobRuntime {
     }
   }
 
-  private async startJob(command: string, key: string, epoch: number, timeoutSecs?: number): Promise<Record<string, unknown>> {
+  private async startJob(command: string, epoch: number, timeoutSecs?: number): Promise<Record<string, unknown>> {
     const { settings } = this.options;
     if (this.live() >= settings.max_jobs) {
       throw new JobError(`job_limit: ${settings.max_jobs} jobs are already running; wait for one or kill it`);
     }
-    const id = `j${this.options.generation}-${++this.seq}`;
-    const prepared = await this.options.call("job", `${key}/prepare`, { action: "prepare", job: id, command });
-    if (prepared.state !== "committed") return { job: id, state: "refused", result: prepared.result };
+    const id = `j${crypto.randomUUID()}`;
     if (epoch !== this.shutdownEpoch) return { job: id, state: "not_started", reason: "job runtime shut down" };
     this.options.onPrepared?.(id);
     const dir = join(this.options.runtimeDir, "jobs");
@@ -261,7 +206,7 @@ export class JobRuntime {
     });
     if (spawned || child.pid === undefined) {
       closeSync(fd);
-      await this.options.call("job", `${key}/exited`, { action: "exited", job: id, exit_code: 127, group_clear: true });
+      this.options.onEvent?.("job_exited", { job: id, exit_code: 127 });
       throw new JobError(`job ${id} did not start: ${spawned?.message ?? "no pid"}`);
     }
     try {
@@ -270,7 +215,7 @@ export class JobRuntime {
     } catch (error) {
       child.kill("SIGKILL");
       closeSync(fd);
-      await this.options.call("job", `${key}/exited`, { action: "exited", job: id, exit_code: 127, group_clear: true });
+      this.options.onEvent?.("job_exited", { job: id, exit_code: 127 });
       throw error;
     }
     let finish!: () => void;
@@ -278,7 +223,6 @@ export class JobRuntime {
     const job: Job = {
       id, startedAt: undefined, endedAt: undefined, command, file, child, pid: child.pid, start: startTimeOf(child.pid), state: "running", exitCode: null,
       signal: null, groupClear: false, status: "", bytes: 0, stored: 0, fd, tail: Buffer.alloc(0), partial: "", lines: 0,
-      monitors: 0, inflight: 0, drained: [], reports: Promise.resolve(), watchers: [],
       closed: new Promise((resolve) => { close = resolve; }),
       exited: new Promise((resolve) => { finish = resolve; }),
     };
@@ -299,40 +243,20 @@ export class JobRuntime {
       if (job.fd !== undefined) closeSync(job.fd);
       job.fd = undefined;
       void this.sweep(job).then(() => {
-        close();
-        return this.whenDrained(job);
-      }).then(() => {
-        const payload: Record<string, unknown> = { action: "exited", job: id };
-        if (job.exitCode !== null) payload.exit_code = job.exitCode;
-        if (job.signal !== null) payload.signal = job.signal;
-        if (job.groupClear) payload.group_clear = true;
-        this.enqueue(job, `job:${id}:exited`, payload);
-        return job.reports;
-      }).then(() => this.options.onEvent?.("job_exited", { job: id, exit_code: job.exitCode, signal: job.signal })).finally(finish);
+        this.options.onEvent?.("job_exited", { job: id, exit_code: job.exitCode, signal: job.signal, group_clear: job.groupClear });
+      }).finally(() => { close(); finish(); });
     });
-    // The launcher is blocked on stdin: the command runs only once corral holds its identity.
-    let recorded = false;
-    if (job.start !== undefined) {
-      try {
-        const receipt = await this.options.call("job", `${key}/started`, {
-          action: "started", job: id, pid: child.pid, start_time: job.start,
-        });
-        recorded = receipt.state === "committed";
-      } catch {
-        recorded = false;
-      }
-    }
-    // The open stdin is the launcher's lifeline: it is closed only when this host goes away.
+    // The open stdin is the launcher's lifeline.
     await new Promise<void>((resolve) => {
       if (!child.stdin) resolve();
-      else if (recorded && epoch === this.shutdownEpoch && job.state === "running") {
+      else if (job.start !== undefined && epoch === this.shutdownEpoch && job.state === "running") {
         job.startedAt = Date.now();
         cancelDeadline = this.schedule(() => void this.kill(id, "deadline"), Math.min(timeoutSecs ?? settings.max_runtime_secs, settings.max_runtime_secs) * 1000);
         child.stdin.write("run\n", () => resolve());
       }
       else child.stdin.end(() => resolve());
     });
-    if (job.startedAt === undefined || !recorded || epoch !== this.shutdownEpoch) return { job: id, state: "not_started", reason: "launch refused or owning host stopped" };
+    if (job.startedAt === undefined) return { job: id, state: "not_started", reason: "owning host stopped" };
     this.options.onEvent?.("job_started", { job: id, pid: child.pid });
     return { job: id, state: job.state, pid: child.pid, output_file: file };
   }
@@ -361,10 +285,6 @@ export class JobRuntime {
     job.cancelKill?.();
   }
 
-  private whenDrained(job: Job): Promise<void> {
-    return job.inflight === 0 ? Promise.resolve() : new Promise((resolve) => job.drained.push(resolve));
-  }
-
   private capture(job: Job, chunk: Buffer): void {
     job.bytes += chunk.length;
     const room = this.options.settings.max_output_bytes - job.stored;
@@ -390,60 +310,6 @@ export class JobRuntime {
     job.lines++;
     const candidate = text.slice(0, LINE_MATCH_MAX);
     for (const listener of this.lineListeners) listener(job.id, candidate);
-    for (const watcher of job.watchers) {
-      if (watcher.matched !== undefined || job.lines <= watcher.afterLine || !watcher.regex.test(candidate)) continue;
-      watcher.matched = candidate;
-      this.reportMatch(job, watcher);
-    }
-  }
-
-  private reportMatch(job: Job, watcher: Watcher): void {
-    if (!watcher.armed || watcher.matched === undefined || watcher.reported) return;
-    watcher.reported = true;
-    this.enqueue(job, `job:${job.id}:line:${watcher.wait}`, {
-      action: "line", job: job.id, wait: watcher.wait, line: watcher.matched.slice(0, 1024),
-    });
-  }
-
-  /**
-   * Registers a monitor through `corral_job_monitor`'s receipted wait. A line watcher arms
-   * before the call, so a line printed while corral commits still matches; its match is
-   * reported only after the commit, and the job's exit report waits for both.
-   */
-  async monitor(
-    id: string, on: "exit" | "line", pattern: string | undefined, timeoutSecs: number, key: string,
-  ): Promise<JobReceipt> {
-    const job = this.job(id);
-    const wait = `${id}.m${++job.monitors}`;
-    let watcher: Watcher | undefined;
-    const deadline = new Date(Date.now() + timeoutSecs * 1000).toISOString();
-    if (on === "line") {
-      if (!pattern) throw new JobError("a line monitor needs a pattern");
-      let regex: RegExp;
-      try {
-        regex = new RegExp(pattern);
-      } catch (error) {
-        throw new JobError(`invalid pattern: ${error instanceof Error ? error.message : error}`);
-      }
-      watcher = { wait, regex, deadline, afterLine: job.lines, armed: false, reported: false };
-      job.watchers.push(watcher);
-    }
-    job.inflight++;
-    try {
-      const receipt = await this.options.call("job_monitor", key, {
-        wait, job: id, on, ...(pattern !== undefined && on === "line" ? { pattern } : {}), deadline,
-      });
-      if (watcher && receipt.state === "committed") {
-        watcher.armed = true;
-        this.reportMatch(job, watcher);
-      } else if (watcher) {
-        job.watchers.splice(job.watchers.indexOf(watcher), 1);
-      }
-      return receipt;
-    } finally {
-      job.inflight--;
-      if (job.inflight === 0) for (const resolve of job.drained.splice(0)) resolve();
-    }
   }
 
   output(id: string, offset?: number, maxBytes = OUTPUT_READ_DEFAULT): Record<string, unknown> {
@@ -489,7 +355,7 @@ export class JobRuntime {
   forget(id: string): void {
     const job = this.jobs.get(id);
     if (!job) return;
-    if (job.state !== "exited" || !job.groupClear || job.inflight) throw new JobError(`cannot evict live or unsettled job ${id}`);
+    if (job.state !== "exited" || !job.groupClear) throw new JobError(`cannot evict live or unsettled job ${id}`);
     rmSync(job.file, { force: true });
     this.jobs.delete(id);
   }
@@ -522,15 +388,15 @@ export class JobRuntime {
     return [...this.jobs.values()].map(job => ({
       job: job.id, command: job.command, state: job.state, startedAt: job.startedAt, endedAt: job.endedAt,
       exitCode: job.exitCode, signal: job.signal, groupClear: job.groupClear,
-      bytes: job.bytes, truncated: job.bytes > job.stored, tail: job.tail.subarray(-8192).toString("utf8"), monitorAttempts: job.monitors,
+      bytes: job.bytes, truncated: job.bytes > job.stored, tail: job.tail.subarray(-8192).toString("utf8"), monitorAttempts: 0,
       pid: job.pid, lines: job.lines, cwd: this.options.cwd,
-      watches: job.watchers.map(w => ({ wait: w.wait, pattern: w.regex.source, armed: w.armed, matched: w.matched, reportQueued: w.reported, deadline: w.deadline })),
+      watches: [],
     }));
   }
   state(): Record<string, unknown>[] {
     return [...this.jobs.values()].map((job) => ({
       job: job.id, pid: job.pid, state: job.state, exit_code: job.exitCode, signal: job.signal,
-      group_clear: job.groupClear, bytes_total: job.bytes, monitors: job.monitors,
+      group_clear: job.groupClear, bytes_total: job.bytes,
     }));
   }
 

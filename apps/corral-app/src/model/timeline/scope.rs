@@ -49,8 +49,8 @@ pub fn scope_options(state: &State, feed: &Feed) -> Vec<ScopeOption> {
         feed.board
             .tasks()
             .iter()
-            .filter_map(|task| task.plan.clone())
-            .map(BurnupScope::Plan),
+            .filter_map(|task| task.parent())
+            .map(|parent| BurnupScope::Plan(parent.to_owned())),
     );
     scopes
         .into_iter()

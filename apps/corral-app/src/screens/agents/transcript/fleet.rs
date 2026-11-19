@@ -1,18 +1,18 @@
 //! A watched session's child agents and the messages between them (`model::agents::Fleet`),
-//! drawn as a published build's marked entries (`screens::builds::line_view`), read-only.
-//! Desktop and terminal: under the run's facts and stages in the run column, so the transcript
-//! keeps its place. Phone: one folded line over the transcript (`btn-fleet`) that opens both
-//! lists in a bounded scroll on the sunken ground. A session without a fleet draws nothing.
+//! each a marked line (`line_view`), read-only. Desktop and terminal: under the run's facts and
+//! stages in the run column, so the transcript keeps its place. Phone: one folded line over the
+//! transcript (`btn-fleet`) that opens both lists in a bounded scroll on the sunken ground. A
+//! session without a fleet draws nothing.
 
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::agents::{Fleet, FleetSection, Session};
-use crate::screens::builds::line_view;
+use crate::model::agents::{Fleet, FleetLine, FleetSection, Session};
 use crate::state::AppState;
+use crate::ui::kit::chip::chip;
 use crate::ui::kit::page::context;
 use crate::ui::kit::table::steps;
-use crate::ui::kit::text::{dim, h3};
+use crate::ui::kit::text::{dim, h3, rich, rich_small};
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
@@ -66,6 +66,41 @@ fn section(app: AppState, part: &FleetSection) -> AnyElement {
         .when(app.form == Form::Terminal, |part| part.child(term::blank()))
         .child(h3(app, part.heading, part.note.clone()))
         .child(steps(app, entries))
+        .into_element()
+}
+
+/// One marked entry: its chips and head on the first line, each body line under it.
+fn line_view(app: AppState, line: &FleetLine) -> AnyElement {
+    let terminal = app.form == Form::Terminal;
+    let first = view()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap(px(if terminal { 0.0 } else { 6.0 }))
+        .children(
+            line.chips
+                .iter()
+                .flat_map(|(label, hue)| {
+                    let mut parts = vec![chip(app, label.clone(), *hue)];
+                    if terminal {
+                        parts.push(term::space(1.0));
+                    }
+                    parts
+                })
+                .collect::<Vec<_>>(),
+        )
+        .child(view().flex_1().min_w(px(0.0)).child(rich(app, &line.head)));
+    view()
+        .min_w(px(0.0))
+        .gap(px(if terminal { 0.0 } else { 2.0 }))
+        .pb(px(if terminal { 0.0 } else { 6.0 }))
+        .child(first)
+        .children(
+            line.body
+                .iter()
+                .map(|words| rich_small(app, words))
+                .collect::<Vec<_>>(),
+        )
         .into_element()
 }
 
