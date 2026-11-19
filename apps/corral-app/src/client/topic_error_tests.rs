@@ -219,6 +219,27 @@ fn rc05_slow_reads_expire_as_correlated_replies_without_killing_the_session() {
     }
 }
 
+#[test]
+fn a_request_is_not_expired_while_corrald_may_still_answer_it() {
+    // corrald allows a host 30 s to start plus 10 s for its first call, and a running host 10 s.
+    for (method, daemon_limit) in [
+        (wire::build::BUILD_START, 40_000),
+        (wire::session::SESSION_RELAUNCH, 40_000),
+        (wire::session_host::SESSION_SEND, 40_000),
+        (wire::session_host::SESSION_MODEL, 10_000),
+        (wire::session::SESSION_CANCEL, 10_000),
+    ] {
+        let mut core = Core::new();
+        core.request(method, json!({}), 0).unwrap();
+        assert_eq!(core.expired(daemon_limit), None);
+        assert!(
+            core.next_event().is_none(),
+            "{method} expired before corrald's own limit"
+        );
+        assert!(core.has_pending());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

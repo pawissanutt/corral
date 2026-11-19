@@ -206,6 +206,10 @@ pub struct NewBuildForm {
 
 const NO_PROJECT: &str = "Builds need a project. Add one in Settings › Configuration.";
 
+/// What the sheet says when corrald gave no answer in time: the build may exist already, so
+/// the line points at Agents rather than reading as a failure to try again.
+const NO_ANSWER: &str = "corrald did not answer in time. The build may still have started; look for it in Agents before starting another one.";
+
 fn start(action: StartAction) -> Action {
     Action::Start(action)
 }
@@ -522,7 +526,11 @@ impl Start {
             })];
         }
         if let Some(error) = &operation.error {
-            self.failed = Some(format!("{} ({})", error.message, error.code));
+            self.failed = Some(if error.code == "deadline_expired" {
+                NO_ANSWER.to_owned()
+            } else {
+                format!("{} ({})", error.message, error.code)
+            });
             return Vec::new();
         }
         match operation.decode::<AssistantRow>() {
@@ -535,5 +543,51 @@ impl Start {
                 Vec::new()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::daemon::{ClientError, Operation};
+
+    /// A sheet whose start settled with `code`, the fields typed before it was sent.
+    fn settled_with(code: &str) -> Start {
+        let mut start = Start {
+            open: true,
+            name: "login-fix".into(),
+            model: ModelPick::Model("anthropic/opus".into()),
+            sending: Some(Id::from("op-1")),
+            ..Start::default()
+        };
+        let mut feed = Feed::default();
+        feed.operations.insert(
+            Id::from("op-1"),
+            Operation {
+                method: "build.start".into(),
+                loading: false,
+                value: None,
+                error: Some(ClientError {
+                    code: code.into(),
+                    message: "daemon request failed".into(),
+                }),
+                refusal: None,
+            },
+        );
+        assert!(start.settle(&feed).is_empty());
+        start
+    }
+
+    #[test]
+    fn a_start_that_got_no_answer_says_the_build_may_exist() {
+        let expired = settled_with("deadline_expired");
+        let refused = settled_with("unavailable");
+        assert!(expired.sending.is_none());
+        assert!(expired.open);
+        assert_eq!(expired.name, "login-fix");
+        assert_eq!(expired.model, ModelPick::Model("anthropic/opus".into()));
+        let line = expired.failed.expect("an expired start leaves a line");
+        assert!(!line.contains("deadline_expired"));
+        assert_ne!(Some(&line), refused.failed.as_ref());
     }
 }

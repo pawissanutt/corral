@@ -14,6 +14,9 @@
 //! the bottom edge over a dimmed page, its rows full touch targets; pressing the dimmed page or
 //! back closes it. Test ids `btn-session-actions`, `session-actions`, `act-<slug>`.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use nsh_core::prelude::*;
 
 use crate::model::Form;
@@ -24,6 +27,10 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::super::super::run;
+
+#[cfg(test)]
+#[path = "actions_menu_tests.rs"]
+mod tests;
 
 /// The phone's least touch target.
 const TARGET: f32 = 44.0;
@@ -39,7 +46,7 @@ pub(in crate::screens::agents::session) fn actions(
 ) -> AnyElement {
     let open = signal(false);
     let anchor = element_ref();
-    held_open(app, open);
+    held_open(app.menus, open);
     let panel = when(
         move || open.get(),
         move || untracked(|| panel(app, page, open, anchor)),
@@ -52,14 +59,20 @@ pub(in crate::screens::agents::session) fn actions(
         .into_element()
 }
 
-/// Counts the open menu in `app.menus`, as NSH's menus are counted: the key line gives the
-/// menu's keys and the page's bare keys hold back while it is open.
-fn held_open(app: AppState, open: Signal<bool>) {
-    let menus = app.menus;
-    let held = stored(false);
+/// Counts the open menu in `menus` (`AppState::menus`), as NSH's menus are counted: the key line
+/// gives the menu's keys and the page's bare keys hold back while it is open. The count goes
+/// back down when the menu closes, or once when its page goes while it is open.
+///
+/// Whether it is counted is a plain cell shared by the effect and the cleanup, not a `stored`
+/// of the owner: NSH frees what an owner made (its signals, stored values and effects) before it
+/// runs that owner's cleanups (`clean_node`), so a cleanup that reads a value of its own owner
+/// panics as the page goes.
+fn held_open(menus: Signal<u32>, open: Signal<bool>) {
+    let held = Rc::new(Cell::new(false));
+    let counted = held.clone();
     effect(move || {
         let now = open.get();
-        if held.replace(now) != now {
+        if counted.replace(now) != now {
             untracked(|| menus.update(|n| *n = if now { *n + 1 } else { n.saturating_sub(1) }));
         }
     });
