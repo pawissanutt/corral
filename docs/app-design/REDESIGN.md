@@ -47,20 +47,17 @@ Second round. The first reference applied "one column, details closed until open
 desktop as strictly as to the phone. The owner's verdict: it looks good on the phone, but it lost
 too many features; the user is technical and appreciates more information.
 
+The owner was then asked which losses matter on desktop and how the information should come
+back. Rows 15 to 19 are the options the owner chose, in the words they were offered in. How each
+is drawn is a design choice, listed under *What follows from them*.
+
 | # | Decision |
 |---|---|
-| 15 | **The desktop uses its width; the phone keeps the form of the first reference.** The four places, one page per thing and one next step all stand. |
-| 16 | **Inspect beside the list.** Selecting a row shows its decision, facts, pipeline, changes, runs and history in a panel next to the list, without opening the page. |
-| 17 | **More facts on every row,** as aligned columns: cost, profile or model, round, priority, and progress through run, gate, review and land. |
-| 18 | **The session workbench.** Changes, child agents, plan, context and cost are visible beside the conversation by default, with the queue and a status line. |
-| 19 | **Overview numbers.** Counts per status, slots in use, sessions by state, today's cost, what changed since the last visit, and the burn-up. |
-
-Decisions 16 to 19 amend three earlier ones on a wide screen only. Decision 9: the inspector is
-where things are decided, so a list row stays one line there; the phone still answers small
-things in the list. Decision 11: a session's Details panel is open by default; on the phone it
-stays closed until opened. Decision 13: the words are still the engine's, and a row also shows
-run, gate, review and land as four marks under a header that names them, each with its sentence
-as a hint and spelled out in the inspector.
+| 15 | **Desktop uses its width; phone stays.** Keep the four places, one page per thing and one next step. On a wide screen, rows gain columns, a detail panel sits beside every list, and a session's Details are open by default. The phone keeps the form the owner liked. |
+| 16 | **Inspect beside the list.** Select a row and see its story, checks, diff summary and session in a panel next to the list, without opening the page. |
+| 17 | **More facts on every row.** Cost, profile or model, round, priority, and progress through run, gate, review and land, as aligned columns. |
+| 18 | **The session workbench.** Changes, child agents, plan, context and cost visible beside the conversation by default, with the queue and a status line. |
+| 19 | **Overview numbers.** Counts per stage, slots in use, what changed since the last visit, and the burn-up. |
 
 ## Principles
 
@@ -93,6 +90,13 @@ one; the reference shows each so it can be accepted or changed there.
   place. Each child is also listed once in its own status group, with its parent's id.
 - **Home rows.** A task and a session share one row anatomy; the id prefix (`T-`, `B-`, `A-`)
   and the role word tell them apart.
+- **What the second round changes in the first, on a wide screen only.** These three are my
+  reading of decisions 15 to 19, not separate owner answers. Decision 9: the inspector is where
+  things are decided, so a list row stays one line there; the phone still answers small things
+  in the list. Decision 11: a session's Details panel is open by default; on the phone it stays
+  closed until opened. Decision 13: the words are still the engine's, and a Tasks row also shows
+  run, gate, review and land as four marks under a header that names them, each with its
+  sentence as a hint and spelled out in the inspector.
 - **Selecting and opening.** With the inspector shown, a click or `j`/`k` selects a row and
   `Enter` or a second click opens its page; the first row is selected on arrival, so Home opens
   on the first thing that needs you. `i` hides the inspector; a row then opens its page on one
@@ -101,7 +105,8 @@ one; the reference shows each so it can be accepted or changed there.
   the inspector. At 1440 pt with the inspector open a task row shows status, id, title, now, the
   four pipeline marks, cost, age and the next step; hiding the inspector or folding the sidebar
   (`Ctrl B`) brings project and profile back, and from about 1600 pt everything fits at once.
-- **Round and priority** are not columns. The round reads in the pipeline's Review line and in
+- **Round and priority** are not columns, though decision 17 names them as facts on a row: there
+  is no room for them beside the others at 1440 pt. The round reads in the pipeline's Review line and in
   the inspector's facts; a priority other than P2 is a tag on the title.
 - **The task inspector** leads with the same decision band as the task page (reason, log,
   reply box, the engine's next steps), then facts, pipeline, changes, description, runs and the
@@ -109,7 +114,9 @@ one; the reference shows each so it can be accepted or changed there.
   transcript rows and the Details sections.
 - **The session page on a wide screen:** Details open, a queue above the composer (a message to
   a working agent is Queued or Steers the turn), and one status line under it (role, cost,
-  context, model, quiet time).
+  context, model, quiet time). The phone form has none of the three, as in the first reference.
+- **Overview numbers** also count sessions by state and today's cost, which decision 19 does not
+  name.
 - **Overview numbers** sit in one band under Home's head, each linking to the page that holds
   the detail. The burn-up is at the foot of Activity › Timeline.
 - **The composer** is docked on Home. `/` from any other page opens the same composer over it.
@@ -145,5 +152,7 @@ one; the reference shows each so it can be accepted or changed there.
 - The terminal form.
 - Keyboard bindings beyond the place keys, `j` `k` `Enter` `i` on lists, `/`, `Ctrl K` and `Ctrl B`.
 - Whether the inspector can be resized, and whether Feed gets one.
+- Whether the phone gets the queue and the status line. Principle 10 says it should; decision 15
+  keeps the phone as it was, so the reference leaves them out there.
 - Whether the wire needs anything new. The reference reads only facts the daemon serves today
   (`tasks`, runs, checks, events, sessions, usage, artifacts, projects, settings).
