@@ -2,9 +2,63 @@
 use super::{BuildArgs, Overrides, refuse, require_provider};
 use anyhow::{Context, Result, ensure};
 use corral_core::{
-    Config, ProfileChoice, connection::ConnectionBinding, paid_episode::PaidApproval,
+    Config, ProfileChoice, config::BuildApiCfg, connection::ConnectionBinding,
+    paid_episode::PaidApproval,
 };
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+
+/// Approval recorded for a mixed Build whose mappings were derived instead of configured.
+pub(crate) const DEFAULT_MIXED_APPROVAL: &str = "default-mixed-build";
+/// The largest allowance `build.api.maximum_micros` accepts: the derived default sets no lower cap.
+const DEFAULT_MIXED_MAXIMUM_MICROS: u64 = 9_007_199_254_740;
+
+/// The owner's `[build.api]`, or by default every child preset mapped to the one API profile
+/// that is approved for assistant API start and runs the preset's exact vendor and model.
+/// Pure in `config`, so launch, resume and every budget request derive the same approval.
+pub(crate) fn mixed_api(config: &Config) -> Option<Cow<'_, BuildApiCfg>> {
+    if let Some(api) = &config.build.api {
+        return Some(Cow::Borrowed(api));
+    }
+    if config.build.profiles.is_empty() {
+        return None;
+    }
+    let mut approved: BTreeMap<(&str, String), Vec<&String>> = BTreeMap::new();
+    for name in config.profiles.keys() {
+        let Ok(route) = resolve(config, name, &BuildArgs::default(), false) else {
+            continue;
+        };
+        let Some(binding) = route.binding.as_ref().filter(|_| route.paid.is_some()) else {
+            continue;
+        };
+        approved
+            .entry((binding.connection.vendor(), route.model))
+            .or_default()
+            .push(name);
+    }
+    let profiles: BTreeMap<String, String> = config
+        .build
+        .profiles
+        .iter()
+        .filter(|(preset, _)| preset.as_str() != "default")
+        .filter_map(|(preset, profile)| {
+            let (provider, model) = profile.model.split_once('/')?;
+            let vendor = require_provider(provider).ok()?.vendor;
+            match approved.get(&(vendor, model.to_owned()))?.as_slice() {
+                [name] => Some((preset.clone(), (*name).clone())),
+                _ => None,
+            }
+        })
+        .collect();
+    (!profiles.is_empty()).then(|| {
+        Cow::Owned(BuildApiCfg {
+            approval: DEFAULT_MIXED_APPROVAL.into(),
+            maximum_micros: DEFAULT_MIXED_MAXIMUM_MICROS,
+            profiles,
+        })
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -92,11 +92,8 @@ pub fn open_mixed(
     session: Option<&str>,
 ) -> Result<PaidLaunch> {
     open_with(store, profile, session, |config| {
-        let api = config
-            .build
-            .api
-            .as_ref()
-            .context("mixed Build approval missing")?;
+        let api =
+            crate::agent::pi_build::mixed_api(config).context("mixed Build approval missing")?;
         ensure!(
             &api.profiles == presets,
             "mixed Build preset mappings changed during launch"

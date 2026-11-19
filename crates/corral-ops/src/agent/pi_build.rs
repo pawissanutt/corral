@@ -18,6 +18,7 @@ const MESSAGE_MAX_BYTES: usize = 32 * 1024;
 
 #[path = "pi_build_profiles.rs"]
 mod profiles;
+pub(crate) use profiles::mixed_api;
 #[cfg(unix)]
 #[path = "pi_build_supervisor.rs"]
 mod supervisor;
@@ -401,16 +402,49 @@ fn command(
             .is_some_and(|ledger| ledger.mixed.is_some()),
         _ => false,
     };
-    let mixed = config
-        .build
-        .api
-        .as_ref()
+    let api = mixed_api(&config);
+    let mut mixed = api
+        .as_deref()
         .filter(|_| workspace.is_some() && !bare && (args.resume.is_none() || retained_mixed));
     anyhow::ensure!(
         !recorded_mixed || retained_mixed,
         "mixed Build allowance is missing; resume cannot create a new balance"
     );
-    profiles::require_host(&assets, false, false, mixed.is_some())?;
+    let mut child_routes = std::collections::BTreeMap::new();
+    let mut paid_routes = std::collections::BTreeMap::new();
+    if let Some(api) = mixed {
+        let admitted = (|| -> Result<()> {
+            profiles::require_host(&assets, false, false, true)?;
+            for (preset, name) in &api.profiles {
+                let child = profiles::resolve(profile_config, name, &BuildArgs::default(), false)?;
+                let binding = child
+                    .binding
+                    .filter(|binding| binding.connection.api_key())
+                    .context(
+                        "mixed Build child profile must use an explicitly approved API route",
+                    )?;
+                super::connections::compatible(&assets, &binding)?;
+                super::hooks::preflight::connection_credential(data_root, binding.connection)?;
+                paid_routes.insert(name.clone(), binding.clone());
+                child_routes.insert(preset, binding);
+            }
+            Ok(())
+        })();
+        match admitted {
+            // A derived default must not stop a Build that would start without it. A resumed
+            // mixed Build has a ledger to honour, so it refuses like a configured approval.
+            Err(error) if config.build.api.is_none() && !retained_mixed => {
+                eprintln!(
+                    "corral build: default API child routes are unavailable, so children keep \
+                     their configured routes: {error:#}"
+                );
+                child_routes.clear();
+                paid_routes.clear();
+                mixed = None;
+            }
+            admitted => admitted?,
+        }
+    }
     anyhow::ensure!(
         !retained_mixed || mixed.is_some(),
         "mixed Build approval was revoked"
@@ -433,9 +467,8 @@ fn command(
             .binding
             .as_ref()
             .filter(|binding| binding.connection.api_key())
-        {
-            paid_routes.insert(route.name.clone(), binding.clone());
-        }
+    {
+        paid_routes.insert(route.name.clone(), binding.clone());
     }
     let profiles: Vec<_> = config
         .build

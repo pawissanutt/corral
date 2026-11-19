@@ -71,8 +71,8 @@ impl BuildCfg {
                 ));
             }
         }
-        if let Some(api) = &self.api {
-            if api.approval.trim().is_empty()
+        if let Some(api) = &self.api
+            && (api.approval.trim().is_empty()
                 || api.approval.len() > 256
                 || !(1..=9_007_199_254_740).contains(&api.maximum_micros)
                 || api.profiles.is_empty()
@@ -81,10 +81,9 @@ impl BuildCfg {
                     !self.profiles.contains_key(name)
                         || name == "default"
                         || profile.trim().is_empty()
-                })
-            {
-                out.push("build.api requires a named approval, finite positive USD maximum_micros, and mappings from existing non-default child presets to workspace API profiles".into());
-            }
+                }))
+        {
+            out.push("build.api requires a named approval, finite positive USD maximum_micros, and mappings from existing non-default child presets to workspace API profiles".into());
         }
         out
     }

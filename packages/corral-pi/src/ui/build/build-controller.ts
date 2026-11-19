@@ -48,6 +48,7 @@ const PLAN_DRAFT = "Split the remaining work into board tasks and propose them w
 const SETTLED: readonly ExitPhase[] = ["kept", "landed", "failed"];
 const DONE_REASON: Partial<Record<ExitPhase, string>> = {
   kept: "this session already kept the branch", rebasing: "this session is already landing", verifying: "this session is already landing",
+  repairing: "this session is already landing",
   landing: "this session is already landing", landed: "this session already landed",
 };
 /** The composer target while Enter gives the owner's reason to land. */
