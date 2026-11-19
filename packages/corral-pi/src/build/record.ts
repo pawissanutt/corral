@@ -27,6 +27,7 @@ interface JournalData {
 interface TranscriptUsage { readonly input?: number; readonly output?: number; readonly cost?: { readonly total?: number } }
 export interface BuildJournal {
   record(): BuildRecord;
+  liveRecord(): Promise<BuildRecord>;
   refresh(): Promise<void>;
   capture(): void;
   noteOwnerInput(text: string): void;
@@ -143,18 +144,15 @@ export function createJournal(options: {
       usage: { parent, children, reviewers, total: sum([parent, children, reviewers]) }, timeline: data.timeline,
       transcripts: { parent: current.sessionFile, children: Object.fromEntries(data.children.filter(child => child.sessionFile).map(child => [child.id, child.sessionFile!])) } };
   }
-  async function refresh() {
-    captureFleet();
-    const current = session();
-    if (current.bare && current.repository === false) { persist(); return; }
-    const summary = await summarize(options.git, current, options.fleet());
-    data.branch = summary.branch;
-    data.diff = { commits: summary.commits, files: summary.files, added: summary.added, removed: summary.removed };
-    const text = current.base ? await checked(options.git, ["log", "-200", "--format=%H%x00%s%x00%b%x00", `${current.base}..HEAD`], current.worktree) : "";
+  async function readGit(current: BuildSessionRecord, git: Run, limit: number) {
+    const summary = await summarize(git, current, options.fleet());
+    const diff = { commits: summary.commits, files: summary.files, added: summary.added, removed: summary.removed };
+    const text = current.base && summary.commits > 0
+      ? await checked(git, ["log", `-${limit}`, "--format=%H%x00%s%x00%b%x00", `${current.base}..${summary.head}`], current.worktree) : "";
     const fields = text.split("\0");
     const ids = new Set(data.children.map(child => child.id));
     const commits: BuildRecord["commits"][number][] = [];
-    for (let index = 0; index + 2 < fields.length && commits.length < 200; index += 3) {
+    for (let index = 0; index + 2 < fields.length && commits.length < limit; index += 3) {
       const sha = fields[index]!.trim(), subject = fields[index + 1]!;
       if (!sha) continue;
       const body = fields[index + 2]!;
@@ -163,11 +161,34 @@ export function createJournal(options: {
       const slice = explicit ?? prefix;
       commits.push({ sha, subject, ...(slice && ids.has(slice) ? { slice } : {}) });
     }
-    data.commits = commits;
+    return { branch: summary.branch, diff, commits };
+  }
+  async function refresh() {
+    captureFleet();
+    const current = session();
+    if (current.bare && current.repository === false) { persist(); return; }
+    Object.assign(data, await readGit(current, options.git, 200));
     persist();
   }
+  async function liveRecord(): Promise<BuildRecord> {
+    if (data.outcome.state !== "open") return record();
+    const current = session();
+    const deadline = performance.now() + 1500;
+    // The socket read must finish before the daemon's two-second deadline. Do not persist
+    // this snapshot or emit an event that would cause subscribers to reread it in a loop.
+    const git: Run = (argv, opts) => {
+      const timeoutMs = Math.floor(deadline - performance.now());
+      if (timeoutMs <= 0) throw new Error("Build record Git read timed out");
+      return options.git(argv, { ...opts, timeoutMs });
+    };
+    const snapshot = current.base && current.repository !== false
+      ? await readGit(current, git, 50).catch(() => undefined) : undefined;
+    const latest = record();
+    if (latest.outcome.state !== "open") return latest;
+    return snapshot ? { ...latest, ...snapshot } : { ...latest, diff: undefined, commits: [] };
+  }
   return {
-    record, refresh,
+    record, liveRecord, refresh,
     capture() { captureFleet(); persist(); },
     noteOwnerInput(text: string) { data.intent.push({ at: iso(now()), text }); persist(); },
     prompts: () => data.intent.map(prompt => ({ ...prompt })),

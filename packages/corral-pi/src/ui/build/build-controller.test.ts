@@ -56,12 +56,12 @@ function harness(options: { readonly remote?: boolean } = {}) {
     tasks: [] as BoardTaskStatus[], steer: true, answer: true, draft: "", focus: "composer", calls: [] as string[], options: OPTIONS,
     notices: [] as { text: string; tone: string }[], posts: [] as BuildEntry<unknown>[], marks: [] as TranscriptMark[],
     hostPosts: [] as BuildEntry<unknown>[],
+    summary: { branch: "build/x", base: "a", head: "b", commits: 2, files: 3, added: 10, removed: 1, dirty: false, slices: [], outside: [] } as BuildSummary,
     preview: Promise.withResolvers<BoardPreview>(),
     /** Called where the host notifies exit subscribers and where the panels post an entry. */
     changed: undefined as (() => void) | undefined, posted: undefined as (() => void) | undefined,
   };
   const live = (id: string) => s.children.some(entry => entry.id === id && ["queued", "running", "needs"].includes(entry.state));
-  const summary: BuildSummary = { branch: "build/x", base: "a", head: "b", commits: 2, files: 3, added: 10, removed: 1, dirty: false, slices: [], outside: [] };
   const exitListeners = new Set<() => void>();
   /** The exit's state changed: its subscribers hear it, as the host's exit control tells them. */
   const emit = () => {
@@ -70,7 +70,7 @@ function harness(options: { readonly remote?: boolean } = {}) {
   };
   const exit: BuildExitControl = {
     options: () => s.options,
-    summary: async () => summary,
+    summary: async () => s.summary,
     state: () => s.exit,
     choose: async (choice: ExitChoice, options?: { readonly overrideReason?: string }) => {
       s.calls.push(`choose ${choice}` + (options?.overrideReason === undefined ? "" : ` ${options.overrideReason}`));
@@ -83,7 +83,7 @@ function harness(options: { readonly remote?: boolean } = {}) {
     open: () => { s.exit = { phase: "pending" }; emit(); },
     close: () => {},
     busy: () => false,
-    summarySnapshot: () => summary,
+    summarySnapshot: () => s.summary,
   };
   const board: BoardControl & { propose(plan: BoardPlan): void; close(): void } = {
     tasks: () => s.tasks,
@@ -422,6 +422,26 @@ test("an answer from the app closes the docked card with one quiet notice, and a
   key("1");
   await settle();
   expect(s.calls).toEqual(["answer picker-ui Show both"]);
+});
+
+test("Finish opens the chooser again after Iterate", async () => {
+  const { s, controller, key } = harness({ remote: true });
+  // Nothing built yet: the summary each episode reads is an empty branch, and no agent ever ran.
+  s.summary = { ...s.summary, commits: 0, files: 0, added: 0, removed: 0 };
+  s.changed = () => controller.sync();
+  for (const episode of [1, 2, 3]) {
+    expect(controller.openFinish()).toBeTrue();
+    await settle();
+    expect(controller.dialog()?.key).toBe(`exit:${episode}`);
+    controller.dock.guard(0);
+    key("3");
+    await settle();
+    expect(s.exit.phase).toBe("none");
+    expect(controller.dialog()).toBeUndefined();
+  }
+  expect(s.calls).toEqual(["choose iterate", "choose iterate", "choose iterate"]);
+  expect(s.hostPosts.filter(entry => entry.customType === BUILD_EXIT_ENTRY)).toHaveLength(3);
+  expect(s.notices.filter(notice => notice.tone === "warning")).toEqual([]);
 });
 
 test("a child's question, each answer and a delivered steer leave one transcript mark each", async () => {

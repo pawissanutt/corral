@@ -40,7 +40,7 @@ export function recordPart(record: BuildRecord) {
   const commits = record.commits.slice(0, 50).map(({ sha, subject, slice }) => ({ sha, subject: clipText(subject, 384), slice }));
   return { title: clipText(title, 512), outcome: { ...outcome, override_reason: optionalText(outcome.override_reason, 512),
       base_branch: optionalText(outcome.base_branch, 256) }, diff, usage, commits_total: Math.max(record.commits.length, diff?.commits ?? 0),
-    commits: fitRows(commits, 0, 50, 8 * KiB).reverse(),
+    commits: commits.length ? fitRows(commits, 0, 50, 8 * KiB).reverse() : undefined,
     verification: fitRows(record.verification.slice(-100).reverse().map(({ attempt, head, result, failed_command, started, ended }) => ({
       attempt, tier: "full", head, result, failed_command: optionalText(failed_command, 512), started, ended,
     })), 0, 100, 5 * KiB).reverse(),
@@ -60,10 +60,10 @@ export function recordPart(record: BuildRecord) {
 }
 
 export function registerBoard(registry: RemoteRegistry, source: {
-  board?: BoardControl; unavailable?: string; record(): BuildRecord; ready(): boolean;
+  board?: BoardControl; unavailable?: string; record(): Promise<BuildRecord>; ready(): boolean;
 }): void {
   const { board, unavailable } = source;
-  registry.register({ name: "record", parse: () => undefined, run: () => recordPart(source.record()) });
+  registry.register({ name: "record", parse: () => undefined, run: async () => recordPart(await source.record()) });
   registry.register({ name: "board", parse: () => undefined, run: () => boardPart(board, unavailable) });
   if (board && !unavailable) registry.register({ name: "board_refresh", parse: () => undefined, run: async () => {
     if (!source.ready()) throw new BridgeRefusal("host_not_ready", "Session is not accepting board actions");

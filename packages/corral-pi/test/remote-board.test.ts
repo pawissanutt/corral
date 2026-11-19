@@ -1,8 +1,15 @@
 import { expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SESSION_PART_MAX } from "../src/bridge/protocol.ts";
+import { gitRun } from "../src/build/corral-cli.ts";
+import { createJournal } from "../src/build/record.ts";
 import type { BuildRecord } from "../src/build/record-types.ts";
-import type { BoardPlan } from "../src/build/types.ts";
-import { boardPart, recordPart } from "../src/host/remote/board.ts";
+import type { BoardPlan, BuildContext } from "../src/build/types.ts";
+import { boardPart, recordPart, registerBoard } from "../src/host/remote/board.ts";
+import { RemoteRegistry } from "../src/host/remote/registry.ts";
 
 const at = "2026-01-01T00:00:00Z";
 
@@ -34,4 +41,34 @@ test("a build record keeps failed verification, resolved findings, decisions, an
   expect(part.decisions).toEqual(record.decisions);
   expect(part.timeline).toEqual(record.timeline);
   expect(part.usage.total).toEqual({ input: 3, output: 6, cost_usd: 0.25 });
+});
+
+test("an open build record shows a commit made after the journal's initial zero-diff snapshot", async () => {
+  const root = mkdtempSync(join(tmpdir(), "corral-live-record-"));
+  const repo = join(root, "repo");
+  const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.com",
+    "-c", "commit.gpgsign=false", ...args], { cwd: repo, encoding: "utf8" }).trim();
+  try {
+    execFileSync("git", ["init", "-q", repo]);
+    const file = join(repo, "label");
+    writeFileSync(file, "old\n");
+    git("add", "label");
+    git("commit", "-qm", "Base");
+    const context: BuildContext = { dir: join(root, "build"), corral: "", settings: { maxParallel: 1, profiles: [], exitPolicy: "none" },
+      session: { version: 1, id: "B-fixture", name: "fixture", created: at, updated: at, repoRoot: repo, worktree: repo,
+        branch: git("symbolic-ref", "--short", "HEAD"), base: git("rev-parse", "HEAD"), here: true } };
+    const journal = createJournal({ context, git: gitRun(), fleet: () => ({ children: [], mail: [], maxParallel: 1 }) });
+    await journal.refresh();
+    expect(journal.record().diff?.commits).toBe(0);
+
+    writeFileSync(file, "new\n");
+    git("commit", "-qam", "Change label");
+    const registry = new RemoteRegistry();
+    registerBoard(registry, { record: journal.liveRecord, ready: () => true });
+    expect(await registry.get("record")!({})).toMatchObject({
+      outcome: { state: "open" }, diff: { files: 1, added: 1, removed: 1, commits: 1 }, commits_total: 1,
+      commits: [{ sha: git("rev-parse", "HEAD"), subject: "Change label" }],
+    });
+    expect(journal.record().diff?.commits).toBe(0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
