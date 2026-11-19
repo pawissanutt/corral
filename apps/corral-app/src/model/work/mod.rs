@@ -381,12 +381,7 @@ impl State {
                 self.digest_only = true;
                 Vec::new()
             }
-            Press::Open(live) => {
-                if matches!(&live, Live::Task(_)) {
-                    self.digest_only = false;
-                }
-                vec![Effect::OpenLive(live)]
-            }
+            Press::Open(live) => vec![Effect::OpenLive(live)],
             Press::Ask { about, rev } => vec![Effect::AskAbout {
                 context: Some(about.context(rev)),
                 text: None,

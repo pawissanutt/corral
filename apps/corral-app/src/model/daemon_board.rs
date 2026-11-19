@@ -138,16 +138,21 @@ fn step(mark: Mark, check: Option<&corral_types::Check>) -> Step {
 
 fn rail(row: &TaskRow) -> [Step; 4] {
     let status = row.task.status;
+    // Nothing is next on a closed task: a step with no record was never recorded.
+    let closed = matches!(status, Status::Done | Status::Dropped);
     let checked = |check: Option<&corral_types::Check>, waiting: bool| match check {
         Some(check) if check.result == CheckResult::Pass => Mark::Done,
         Some(_) => Mark::Fail,
         None if waiting => Mark::Active,
+        None if closed => Mark::Na,
         None => Mark::Next,
     };
     let run = match status {
         Status::Running => Mark::Active,
         Status::Blocked => Mark::Fail,
         Status::Review | Status::Done => Mark::Done,
+        Status::Dropped if row.run.is_some() => Mark::Done,
+        Status::Dropped => Mark::Na,
         _ => Mark::Next,
     };
     let in_review = status == Status::Review;
@@ -328,5 +333,19 @@ mod tests {
         assert_eq!(Task::new(row.clone()).group, Group::NeedsYou);
         row.task.status = Status::Blocked;
         assert_eq!(Task::new(row).rail[0].mark, Mark::Fail);
+    }
+
+    #[test]
+    fn a_closed_task_without_a_gate_or_review_record_has_no_next_step() {
+        let marks = |status| {
+            let row = task_row(bare_task("T-1", "t", status, jiff::Timestamp::UNIX_EPOCH));
+            Task::new(row).rail.map(|step| step.mark)
+        };
+        assert_eq!(
+            marks(Status::Done),
+            [Mark::Done, Mark::Na, Mark::Na, Mark::Done]
+        );
+        assert_eq!(marks(Status::Dropped), [Mark::Na; 4]);
+        assert_eq!(marks(Status::Ready), [Mark::Next; 4]);
     }
 }

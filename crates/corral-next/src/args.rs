@@ -31,6 +31,10 @@ pub(crate) enum Command {
         /// Include Done and Dropped tasks and retain dependencies on Done tasks.
         #[arg(long)]
         all: bool,
+        /// A legacy `corral export events --json` file: dates each landing, move to Done and
+        /// drop from the old event log instead of the task's last update.
+        #[arg(long, value_name = "FILE")]
+        events: Option<PathBuf>,
         /// Report what would be imported without changing tasks, events, or IDs.
         #[arg(long)]
         dry_run: bool,

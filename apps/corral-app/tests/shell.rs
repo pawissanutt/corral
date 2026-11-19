@@ -582,3 +582,15 @@ fn rewinding_a_session_reloads_its_transcript() {
     app.wait_for_gone("text:/A run that crossed midnight/", Duration::from_secs(5))
         .unwrap();
 }
+
+/// Opening a task from the palette shows it, also after Now's inspector was closed.
+#[test]
+fn opening_a_task_from_the_palette_reopens_a_closed_inspector() {
+    let mut app = preview(desktop(), &[("corral.destination", "now")]);
+    app.wait_for("id:now-task").unwrap();
+    app.press("id:btn-clear-selection").unwrap();
+    app.wait_for_gone("id:now-task", Duration::from_secs(5))
+        .unwrap();
+    select(&mut app, "T-12 Timeline zoom presets");
+    app.wait_for("id:now-task").unwrap();
+}

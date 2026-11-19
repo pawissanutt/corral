@@ -77,8 +77,14 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
         check_config(&root, out)?;
         return Ok(0);
     }
-    if let Command::Import { dir, all, dry_run } = command {
-        let report = import::run(&root, &dir, all, dry_run)?;
+    if let Command::Import {
+        dir,
+        all,
+        events,
+        dry_run,
+    } = command
+    {
+        let report = import::run(&root, &dir, events.as_deref(), all, dry_run)?;
         out.value(&report, |out, report| report.write(out))?;
         return Ok(0);
     }

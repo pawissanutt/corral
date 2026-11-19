@@ -231,3 +231,61 @@ fn keys_walk_moving_tasks_then_open_waiting_and_escape_restores_the_digest() {
         NowPanel::Digest(_)
     ));
 }
+
+/// The Closed heading's landed tick read 41 folded (landings since the last visit) and 6 open
+/// (done rows on the one loaded page): it is the landings count in both states.
+#[test]
+fn the_closed_headings_landed_count_is_the_same_folded_and_open() {
+    use crate::model::daemon::{DetailCache, detail_key};
+    use corral_protocol::detail::{ClosedPage, DetailBody, DetailRef};
+
+    let mut feed = feed(Vec::new());
+    feed.capabilities
+        .insert(corral_protocol::app::CLOSED_V1.into());
+    for (seq, id) in [(1, "T-1"), (2, "T-2")] {
+        feed.changes.insert(
+            seq,
+            corral_types::Event {
+                seq,
+                ts: jiff::Timestamp::UNIX_EPOCH,
+                task: Some(id.into()),
+                run: None,
+                project: None,
+                kind: corral_types::EventKind::Landed,
+                actor: corral_types::Actor::Auto,
+                detail: serde_json::json!({}),
+            },
+        );
+    }
+    let target = DetailRef::Closed { before: None };
+    feed.details.insert(
+        detail_key(&target),
+        DetailCache {
+            target,
+            pages: Vec::new(),
+            loading: false,
+            stale: false,
+            error: None,
+            merged: Some(DetailBody::Closed(ClosedPage {
+                total: Some(806),
+                rows: vec![bare_task(
+                    "T-9",
+                    "t",
+                    Status::Done,
+                    jiff::Timestamp::UNIX_EPOCH,
+                )],
+                older: None,
+            })),
+        },
+    );
+    let mut state = State::default();
+    let landed = |state: &State| {
+        page(state, &feed, &Selection::default(), &ProjectFilter::All)
+            .closed_landed
+            .map(|stat| stat.value)
+    };
+    let folded = landed(&state);
+    state.closed.expanded = true;
+    assert_eq!(landed(&state), folded);
+    assert_eq!(folded.as_deref(), Some("2"));
+}
