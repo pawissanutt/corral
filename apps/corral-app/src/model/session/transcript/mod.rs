@@ -8,6 +8,7 @@
 
 use corral_protocol::detail::{DetailBody, SessionPage};
 
+use crate::model::Id;
 use crate::model::daemon::DetailCache;
 use crate::model::hue::Hue;
 use crate::model::text::{Rich, span};
@@ -202,6 +203,9 @@ pub struct Message {
     /// The served message id (`<session>/input/<id>`, `<session>/entry/<id>`); empty from an
     /// older daemon.
     pub id: String,
+    /// What the reading position holds on to: the served id, else the recorded time and author;
+    /// stable across re-reads, new rows and widths.
+    pub anchor: String,
     pub kind: MessageKind,
     pub avatar: &'static str,
     pub hue: Hue,
@@ -252,9 +256,76 @@ pub struct Transcript {
     pub live: Vec<Message>,
     /// Quiet rows after the live turn: owner input the host holds, how the turn ended.
     pub after: Vec<MessageItem>,
+    /// The session scope this transcript is of (a child's conversation has its own).
+    pub scope: Id,
+    /// Where the reader was when they last left this transcript.
+    pub reading: Reading,
+}
+
+/// Where a reader is in a session's transcript, kept per scope across leaving and reopening
+/// it: following its end (the default for a transcript never read), or scrolled up to a row.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Reading {
+    #[default]
+    End,
+    At {
+        /// The anchor of the row at the top of the view.
+        key: String,
+        /// How far into that row, in points.
+        offset: i32,
+        /// The transcript's row count when the reader left the end: what arrived since is
+        /// counted from it.
+        rows: usize,
+    },
+}
+
+/// Where a view of the transcript starts when it opens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resume {
+    End,
+    /// At the row the reader left, while the transcript still shows it.
+    Row {
+        key: String,
+        offset: i32,
+        rows: usize,
+    },
+}
+
+/// What a view following the transcript reads of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Following {
+    pub scope: Id,
+    pub rows: usize,
+    pub resume: Resume,
 }
 
 impl Transcript {
+    /// What a view needs to follow this transcript and to open where its reader left it. A row
+    /// the shown page no longer holds (an earlier page, a rewind) opens at the end.
+    pub fn following(&self) -> Following {
+        let resume = match &self.reading {
+            Reading::At { key, offset, rows }
+                if self
+                    .messages
+                    .iter()
+                    .chain(&self.live)
+                    .any(|message| message.anchor == *key) =>
+            {
+                Resume::Row {
+                    key: key.clone(),
+                    offset: *offset,
+                    rows: *rows,
+                }
+            }
+            _ => Resume::End,
+        };
+        Following {
+            scope: self.scope.clone(),
+            rows: self.rows(),
+            resume,
+        }
+    }
+
     /// How many rows the transcript shows: the jump control counts what arrives while the
     /// reader is scrolled up by this.
     pub fn rows(&self) -> usize {

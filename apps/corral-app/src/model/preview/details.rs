@@ -9,8 +9,11 @@ use super::{put, record, records, stamp};
 use crate::model::daemon::{ClientError, Feed};
 
 /// Fetch `target` into `feed.details`, a walked list up to the page `page` asks for; Err for a
-/// record the sample does not hold.
+/// record the sample does not hold. A part a pi host serves is read from the host (`parts.rs`).
 pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result<(), String> {
+    if let Some(served) = super::parts::serve(feed, target, page) {
+        return served;
+    }
     match target {
         DetailRef::Artifacts { .. } => super::artifacts::list(feed, target, page),
         DetailRef::Task { id } => record(feed, id)
@@ -47,7 +50,6 @@ pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result
             put(feed, target.clone(), DetailBody::Session(page));
             Ok(())
         }
-        DetailRef::SessionCards { id } => super::build_ops::cards(feed, id),
         DetailRef::Terminal { id } => {
             if feed.detail(target).and_then(|cache| cache.body()).is_some() {
                 return Ok(());

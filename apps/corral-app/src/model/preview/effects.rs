@@ -30,6 +30,9 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
         | Effect::SessionCardAnswer { key, .. }
         | Effect::SessionQueue { key, .. }
         | Effect::SessionAction { key, .. }
+        | Effect::SessionModel { key, .. }
+        | Effect::SessionChild { key, .. }
+        | Effect::SessionJob { key, .. }
         | Effect::BuildRemove { key, .. } => operation(feed, key, effect),
         Effect::Warm(_) => execute_operation(feed, effect).map(|_| ()),
         Effect::Device(op) => match op {
@@ -114,6 +117,9 @@ pub fn operation(feed: &mut Feed, key: &Id, effect: &Effect) -> Result<(), Strin
         Effect::SessionCardAnswer { .. } => corral_protocol::session_host::SESSION_CARD_ANSWER,
         Effect::SessionQueue { request, .. } => request.method(),
         Effect::SessionAction { .. } => corral_protocol::session_host::SESSION_ACTION,
+        Effect::SessionModel { .. } => corral_protocol::session_host::SESSION_MODEL,
+        Effect::SessionChild { .. } => corral_protocol::session_host::SESSION_CHILD,
+        Effect::SessionJob { .. } => corral_protocol::session_host::SESSION_JOB,
         Effect::BuildRemove { .. } => corral_protocol::build::BUILD_REMOVE,
         Effect::Warm(_) => ASSISTANT_WARM,
         Effect::Device(DeviceOp::Revoke { .. }) => corral_protocol::device::DEVICE_REVOKE,
@@ -198,6 +204,9 @@ fn execute_operation(feed: &mut Feed, effect: &Effect) -> Result<Value, String> 
             QueueRequest::Move(step) => super::build_ops::move_item(feed, step),
         },
         Effect::SessionAction { request, .. } => super::build_ops::action(feed, request),
+        Effect::SessionModel { request, .. } => super::parts_ops::model(feed, request),
+        Effect::SessionChild { act, .. } => super::parts_ops::child(feed, act),
+        Effect::SessionJob { act, .. } => super::parts_ops::job(feed, act),
         Effect::BuildRemove { remove, .. } => super::build_ops::remove(feed, remove),
         Effect::Warm(request) => {
             let id = pi::resolve(feed, &request.thread)

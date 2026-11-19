@@ -343,6 +343,12 @@ fn message(
         message.at.as_deref().unwrap_or_default(),
         message.author
     );
+    // The reading position holds on to the served id, else to the recorded time and author.
+    let anchor = if message.id.is_empty() {
+        base.clone()
+    } else {
+        message.id.clone()
+    };
     let resolved = resolve(&message.items, cx.feed);
     let turn = Turn {
         partial: resolved
@@ -453,6 +459,7 @@ fn message(
         }
         return Message {
             id: message.id.clone(),
+            anchor,
             kind: MessageKind::Quiet,
             avatar: letter,
             hue,
@@ -479,7 +486,7 @@ fn message(
     if owner && !typed {
         if let Some(report) = said.and_then(bubbles::child_report) {
             let key = format!("{base}|report");
-            return bubbles::report_message(
+            let mut shown = bubbles::report_message(
                 message.id.clone(),
                 report,
                 at.as_deref(),
@@ -490,6 +497,8 @@ fn message(
                     fetch: None,
                 },
             );
+            shown.anchor = anchor;
+            return shown;
         }
         if let Some((from, body)) = said.and_then(bubbles::peer_message) {
             let lead = vec![span(from.to_owned()).bold(), span(" → parent").dim()];
@@ -503,6 +512,7 @@ fn message(
                 })],
             );
             shown.author = from.to_owned();
+            shown.anchor = anchor;
             return shown;
         }
     }
@@ -523,6 +533,7 @@ fn message(
             items,
         );
         shown.detail = at.unwrap_or_default();
+        shown.anchor = anchor;
         match forwarded {
             Some(id) => shown.tag = Some(id),
             None => {
@@ -562,6 +573,7 @@ fn message(
     }
     Message {
         id: message.id.clone(),
+        anchor,
         kind: MessageKind::Agent,
         avatar: letter,
         hue,
@@ -741,5 +753,7 @@ pub fn transcript(
         disclaimer: None,
         live,
         after,
+        scope: id.clone(),
+        reading: ui.reading.clone(),
     }
 }

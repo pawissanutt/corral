@@ -82,6 +82,7 @@ pub(super) fn overlay(
         );
         vec![Message {
             id: String::new(),
+            anchor: base.clone(),
             kind: MessageKind::Agent,
             avatar,
             hue,

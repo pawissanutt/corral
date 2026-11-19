@@ -1,6 +1,7 @@
-//! The sample fleet of one previewed assistant session: what corrald's live page carries for a
-//! watched session that runs child agents, held beside the host's live turn as the client holds
-//! a daemon page's fleet. Other previewed sessions have none, and show none.
+//! The sample fleet of one previewed chat: what corrald's live page carries for a watched chat
+//! that runs child agents, held beside the host's live turn as the client holds a daemon page's
+//! fleet. A build's fleet follows its parts (`parts.rs`); other previewed sessions have none,
+//! and show none.
 
 use corral_protocol::subscription::{
     SessionAgentMessage, SessionChild, SessionChildVerdict, SessionFleet,
@@ -8,12 +9,12 @@ use corral_protocol::subscription::{
 
 use crate::model::daemon::Feed;
 
-/// The previewed sessions that run children: a chat and the sample build.
-const SESSIONS: [&str; 2] = ["A-15", super::sessions::BUILD];
+/// The previewed chat that runs children.
+const CHAT: &str = "A-15";
 
-/// Watching `session` delivers its fleet, once the preview's clock has started.
+/// Watching the chat delivers its fleet, once the preview's clock has started.
 pub(super) fn watch(feed: &mut Feed, session: &str) {
-    if !SESSIONS.contains(&session) || feed.now == 0 {
+    if session != CHAT || feed.now == 0 {
         return;
     }
     let now = feed.now;

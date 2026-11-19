@@ -2,30 +2,28 @@
 //! cannot run now stays listed, muted with its reason, and does not run. Its rows are read when
 //! it opens.
 //!
-//! Desktop and terminal: an overlay the app anchors to the ⋯ control itself, its trailing edge
-//! on the control's, dropping below it (above when only that side has room), its body bounded by
-//! the room the core reports on that side and scrolling. Not NSH's `Menu`: that presents itself
-//! by the platform's idiom, not by the app's form, so in a browser whose idiom is not the
-//! desktop's (a tablet's, a touch screen's) while the app draws its desktop form, it became a
-//! bottom sheet: pinned to the window's left and bottom edges, nowhere near ⋯. ↑ ↓ Home End walk
-//! the rows, Return and Space press one, Esc or a press outside closes it and the focus returns
-//! to ⋯. Phone: NSH's menu as the sheet it is there. Test ids `btn-session-actions`,
-//! `session-actions`, `act-<slug>`.
+//! The app draws it on every form rather than through NSH's `Menu`, which presents itself by the
+//! platform's idiom, not the app's form: in a browser whose idiom is not the desktop's while the
+//! app draws its desktop form it became a bottom sheet pinned to the window's corner, and on the
+//! phone its sheet never showed its rows in the shell harness.
+//!
+//! Desktop and terminal: an overlay anchored to the ⋯ control, its trailing edge on the
+//! control's, dropping below it (above when only that side has room), its body bounded by the
+//! room the core reports on that side and scrolling. ↑ ↓ Home End walk the rows, Return and Space
+//! press one, Esc or a press outside closes it and the focus returns to ⋯. Phone: a sheet along
+//! the bottom edge over a dimmed page, its rows full touch targets; pressing the dimmed page or
+//! back closes it. Test ids `btn-session-actions`, `session-actions`, `act-<slug>`.
 
-use nsh_base::{menu, menu_item};
 use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::session::{ActionGroup, ActionRow, SessionPage};
-use crate::screens::plans::menu_trigger;
 use crate::state::AppState;
-use crate::ui::kit::overlay::counted;
 use crate::ui::kit::walk::walk;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::super::super::run;
-use super::popup;
 
 /// The phone's least touch target.
 const TARGET: f32 = 44.0;
@@ -39,9 +37,6 @@ pub(in crate::screens::agents::session) fn actions(
     app: AppState,
     page: Memo<SessionPage>,
 ) -> AnyElement {
-    if app.form == Form::Phone {
-        return sheet(app, page);
-    }
     let open = signal(false);
     let anchor = element_ref();
     held_open(app, open);
@@ -106,9 +101,11 @@ fn trigger(app: AppState, open: Signal<bool>, anchor: ElementRef) -> AnyElement 
             .child(term::quiet("▾"))
             .into_element(),
         Form::Desktop | Form::Phone => face
-            .h(px(30.0))
+            .h(px(if form == Form::Phone { TARGET } else { 30.0 }))
+            .min_w(px(if form == Form::Phone { TARGET } else { 0.0 }))
+            .justify_center()
             .px(px(12.0))
-            .rounded(px(6.0))
+            .rounded(px(if form == Form::Phone { 10.0 } else { 6.0 }))
             .border_1()
             .border_color(color(Token::Rule2))
             .bg(move || {
@@ -166,6 +163,9 @@ fn panel(
         open.set(false);
         after_answer(move || anchor.focus());
     };
+    if form == Form::Phone {
+        return phone_sheet(open, children, close);
+    }
     // The room the core leaves on the side it placed the menu; until it says, the window's
     // under the head.
     let room = signal(None::<Points>);
@@ -210,37 +210,40 @@ fn panel(
         .into_element()
 }
 
-/// The phone's: NSH's menu, a sheet over the page.
-fn sheet(app: AppState, page: Memo<SessionPage>) -> AnyElement {
-    let form = app.form;
-    menu()
-        .popup_style(popup(form))
-        .backdrop_style(|s| s.bg(color(Token::Shell).opacity(0.5)))
-        .on_open_change(counted(app))
-        .trigger(menu_trigger(
-            app,
-            "⋯",
-            "Session actions",
-            "btn-session-actions",
-        ))
-        .child(dynamic(move || {
-            untracked(|| {
-                let groups: Vec<ActionGroup> = page.with(|p| p.actions.groups.clone());
-                view()
-                    .children(
-                        groups
-                            .into_iter()
-                            .enumerate()
-                            .flat_map(|(at, group)| {
-                                std::iter::once(heading(form, group.title, at == 0))
-                                    .chain(group.rows.into_iter().map(|row| item(app, row)))
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                    .into_element()
-            })
-        }))
-        .into_element()
+/// The phone's: a sheet along the bottom edge over a dimmed page; pressing the dimmed page, back
+/// or Esc closes it.
+fn phone_sheet(
+    open: Signal<bool>,
+    children: Vec<AnyElement>,
+    close: impl Fn() + 'static,
+) -> AnyElement {
+    let tall = move || (window().height.0 * 0.85).max(240.0);
+    let backdrop = overlay()
+        .inset_0()
+        .focusable(false)
+        .bg(color(Token::Shell).opacity(0.5))
+        .on_press(move || open.set(false));
+    let sheet = overlay()
+        .left_0()
+        .right_0()
+        .bottom(px(0.0))
+        .max_h(move || px(tall()))
+        .test_id("session-actions")
+        .role(AccessibilityRole::Menu)
+        .label("Session actions")
+        .bg(color(Token::Surface))
+        .border_t(px(1.0))
+        .border_color(color(Token::Rule2))
+        .rounded_t(px(14.0))
+        .pt(px(8.0))
+        .pb(px(24.0))
+        .on_cancel(close)
+        .child(
+            scroll()
+                .max_h(move || px(tall() - 32.0))
+                .child(view().children(children)),
+        );
+    view().child(backdrop).child(sheet).into_element()
 }
 
 /// A group's heading: spaced faint capitals on desktop and phone (as the palette's), bold quiet
@@ -380,21 +383,5 @@ fn entry(
                 run(app, action.clone());
             })
         })
-        .into_element()
-}
-
-/// One row of the phone's sheet.
-fn item(app: AppState, row: ActionRow) -> AnyElement {
-    let (words, spoken) = content(app.form, &row);
-    let enabled = row.unavailable.is_none();
-    let action = row.action;
-    menu_item()
-        .accessibility_label(spoken)
-        .disabled(!enabled)
-        .on_select(move || run(app, action.clone()))
-        .cursor_pointer()
-        .hover(|s| s.bg(color(Token::Hover)))
-        .focus(|s| s.bg(color(Token::Hover)))
-        .child(words.test_id(&row.id))
         .into_element()
 }

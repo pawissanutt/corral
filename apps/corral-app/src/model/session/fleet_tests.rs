@@ -186,3 +186,83 @@ fn a_child_that_asks_is_counted_as_waiting_and_names_its_card() {
         })
     );
 }
+
+#[test]
+fn the_part_of_the_agents_tab_buttons_are_built_from_is_equal_across_a_clock_tick() {
+    use corral_protocol::detail::{DetailBody, DetailRef, SessionJob, SessionJobs};
+
+    use crate::model::daemon::{self, DetailCache};
+    use crate::model::session::{FleetUi, SubView};
+
+    let started: jiff::Timestamp = "2026-11-19T10:00:00Z".parse().expect("a test time parses");
+    let started_s = u64::try_from(started.as_second()).expect("after the epoch");
+    let running = SessionChild {
+        state: "running".into(),
+        started_at: Some(started_s * 1_000),
+        ended_at: None,
+        steerable: true,
+        activity: Some("running tests".into()),
+        ..child("a1", Some(0.21))
+    };
+    let fleet = SessionFleet {
+        children: vec![running, child("a0", Some(0.33))],
+        messages: vec![],
+        messages_total: 0,
+        max_parallel: 2,
+    };
+    let jobs = DetailRef::SessionJobs { id: ID.into() };
+    let at = |now: u64, ui: &Ui| {
+        let mut feed = feed(Some(fleet.clone()), None);
+        feed.now = now;
+        feed.details.insert(
+            daemon::detail_key(&jobs),
+            DetailCache {
+                target: jobs.clone(),
+                pages: Vec::new(),
+                loading: false,
+                stale: false,
+                error: None,
+                merged: Some(DetailBody::SessionJobs(SessionJobs {
+                    jobs: vec![SessionJob {
+                        id: "j1".into(),
+                        command: "cargo test".into(),
+                        dir: None,
+                        state: "running".into(),
+                        started_at: Some(started.to_string()),
+                        ended_at: None,
+                        exit_code: None,
+                        output_bytes: 2_048,
+                        tail: vec!["running 12 tests".into()],
+                        monitors: Vec::new(),
+                        actions: vec!["stop".into(), "background".into()],
+                    }],
+                    unavailable: None,
+                })),
+            },
+        );
+        with(&feed, ui, |cx| agents_tab(cx, &State::default()))
+    };
+    let list = Ui {
+        agent: Some("a1".into()),
+        ..Ui::default()
+    };
+    let conversation = Ui {
+        agent: Some("a1".into()),
+        sub: Some(SubView::Agent("a1".into())),
+        ..Ui::default()
+    };
+    let job = Ui {
+        fleet: FleetUi {
+            job: Some("j1".into()),
+            ..FleetUi::default()
+        },
+        sub: Some(SubView::Job("j1".into())),
+        ..Ui::default()
+    };
+    for (view, ui) in [("list", list), ("conversation", conversation), ("job", job)] {
+        let before = at(started_s + 30, &ui);
+        let after = at(started_s + 31, &ui);
+        assert_ne!(before.clock, after.clock, "{view}: the clock moved");
+        assert_eq!(before.steady(), after.steady(), "{view}");
+    }
+}

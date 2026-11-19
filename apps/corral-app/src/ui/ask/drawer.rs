@@ -14,8 +14,8 @@ use crate::model::assistant::{self, Action, EndState};
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::session::{SessionPage, StateWord};
-use crate::model::{DataState, Effect, Form, Id, Live};
-use crate::screens::agents::{Compact, ask_session, session_view};
+use crate::model::{Effect, Form, Id, Live};
+use crate::screens::agents::{Compact, ask_session, ask_view};
 use crate::state::AppState;
 use crate::ui::ask::{act, unconnected};
 use crate::ui::atoms::control_height;
@@ -52,6 +52,8 @@ struct Head {
     end: End,
     /// corrald refused the last End, with why.
     refused: Option<String>,
+    /// The thread has an id to open its page on: not a new thread, not without a connection.
+    open: bool,
 }
 
 /// The head of Ask on session `id`, tracked.
@@ -90,6 +92,7 @@ fn head(app: AppState, id: Id, page: Memo<SessionPage>) -> Memo<Head> {
             word: (!phone && !new_thread).then_some(word),
             end,
             refused,
+            open: !new_thread,
         }
     })
 }
@@ -118,7 +121,7 @@ fn keyed_session(
     dynamic(move || {
         let (id, _) = keyed.get();
         untracked(|| {
-            let page = session_view(app, id.clone());
+            let page = ask_view(app, id.clone());
             let warmed = id.clone();
             app.reduce(app.assistant, move |state, feed, _, _| {
                 state.warm(warmed.as_str(), feed)
@@ -149,7 +152,7 @@ pub(crate) fn composer_only(app: AppState) -> AnyElement {
     dynamic(move || {
         let (id, _) = keyed.get();
         untracked(|| {
-            let page = session_view(app, id.clone());
+            let page = ask_view(app, id.clone());
             ask_session(app, id, page, Compact::Composer)
         })
     })
@@ -313,6 +316,7 @@ fn body(
                     word: None,
                     end: End::None,
                     refused: None,
+                    open: false,
                 });
                 view()
                     .flex_1()
@@ -326,11 +330,6 @@ fn body(
     )
     .otherwise(move || untracked(|| keyed_session(app, form, head_of)))
     .into_element()
-}
-
-/// Whether Ask has a session to open: not without a connection.
-fn connected(app: AppState) -> bool {
-    untracked(|| app.data.get()) != DataState::Disconnected
 }
 
 /// `.dhead`: the title, the state word, End thread, Open session and the close control, 44 pt
@@ -360,7 +359,7 @@ fn desktop_head(app: AppState, head: Memo<Head>, id: Id) -> AnyElement {
         .children(h.word.as_ref().map(|word| state_word(app, word)))
         .child(view().flex_1())
         .children(end_button(app, &h.end, ButtonKind::Quiet))
-        .children(connected(app).then(|| open_session(app, id, ButtonKind::Quiet)))
+        .children(h.open.then(|| open_session(app, id, ButtonKind::Quiet)))
         .child(close_icon(app))
         .into_element()
 }
@@ -462,7 +461,7 @@ fn terminal_parts(app: AppState, head: &Head, id: Id, room: usize) -> Vec<AnyEle
         End::Pending => fits("Ending…".chars().count() + 2),
         End::None => false,
     };
-    let open = connected(app) && fits("Open session ↗".chars().count() + 2);
+    let open = head.open && fits("Open session ↗".chars().count() + 2);
     let mut parts = vec![
         text(head.title.clone())
             .role(AccessibilityRole::Header)
@@ -579,7 +578,7 @@ fn phone_head(app: AppState, head: Memo<Head>, id: Id) -> AnyElement {
                 .text_color(color(Token::Ink)),
         )
         .children(end_button(app, &h.end, ButtonKind::Quiet))
-        .children(connected(app).then(|| open_session(app, id, ButtonKind::Quiet)))
+        .children(h.open.then(|| open_session(app, id, ButtonKind::Quiet)))
         .child(button(
             app,
             "Close",
