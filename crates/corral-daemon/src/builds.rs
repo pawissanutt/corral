@@ -1,9 +1,10 @@
 //! A build's Pi directory is the durable record; the socket is proof of liveness.
 use std::{
     fs::{self, DirBuilder, File},
-    io::{ErrorKind, Read, Seek, SeekFrom},
+    io::{self, ErrorKind, Read, Seek, SeekFrom},
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
+    process::{Command, Output},
     thread,
     time::{Duration, Instant},
 };
@@ -14,7 +15,8 @@ use corral_engine::{
     runner::pi::{BuildLaunch, Client, Hello, PiRunner, build_session, build_socket},
 };
 use corral_protocol::{
-    build::{BuildDiff, BuildFacts, BuildStart},
+    app::SESSION_PART_MAX,
+    build::{BuildDiff, BuildFacts, BuildRemove, BuildRemoved, BuildStart},
     rows::{AssistantKind, AssistantLocation, AssistantRow, AssistantState, WaitReason},
     session::SessionRelaunched,
     session_state::{Counts, ExitBrief, ExitChoice, ExitPhase, SessionMode, SessionState},
@@ -26,7 +28,7 @@ use serde_json::{Value, json};
 use crate::{
     sessions::{Session, forward, is_build, read_json},
     state::Shared,
-    views::NotFound,
+    views::{NotFound, json_len},
 };
 
 const PROBE: Duration = Duration::from_millis(250);
@@ -369,7 +371,11 @@ pub(crate) fn disconnected(error: &anyhow::Error) -> bool {
 
 fn require(shared: &Shared, id: &str) -> Result<Build> {
     ensure!(is_build(id), "invalid: expected build id B-<base36>");
-    Build::read(shared.root(), &shared.build_data_root()?.join("build"), id)?
+    require_at(shared, &shared.build_data_root()?, id)
+}
+
+fn require_at(shared: &Shared, data_root: &Path, id: &str) -> Result<Build> {
+    Build::read(shared.root(), &data_root.join("build"), id)?
         .context(NotFound("build session not found"))
 }
 
@@ -574,6 +580,70 @@ pub(crate) fn terminate(shared: &Shared, id: &str) -> Result<()> {
     }
     shared.publish();
     Ok(())
+}
+
+pub(crate) fn remove(shared: &Shared, request: BuildRemove) -> Result<BuildRemoved> {
+    remove_with(shared, request, Command::output)
+}
+
+pub(crate) fn remove_with(
+    shared: &Shared,
+    request: BuildRemove,
+    run: impl FnOnce(&mut Command) -> io::Result<Output>,
+) -> Result<BuildRemoved> {
+    let _lock = shared
+        .build_ops
+        .lock()
+        .unwrap_or_else(|err| err.into_inner());
+    ensure!(
+        is_build(&request.id),
+        "invalid: expected build id B-<base36>"
+    );
+    let data_root = shared.build_data_root()?;
+    let build = require_at(shared, &data_root, &request.id)?;
+    if build.live(shared)?.is_some() {
+        return Err(refuse("stop the build session before removing it", vec![]));
+    }
+
+    let mut command = Command::new("corral-pi");
+    command
+        .args(["build", "--prune", "--session", &request.id, "--json"])
+        .current_dir(shared.root())
+        .env("CORRAL_NEXT_ROOT", shared.root());
+    if request.dry_run {
+        command.arg("--dry-run");
+    }
+    command.arg("--data-dir").arg(data_root);
+    let output = run(&mut command).context("run corral-pi build prune")?;
+    if !request.dry_run {
+        // Prune can change the record even if it cannot report complete success.
+        shared.publish();
+    }
+
+    let refusal = |message: String| {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        if stderr.is_empty() {
+            refuse(message, vec![])
+        } else {
+            let stderr = &stderr[..stderr.floor_char_boundary(2048)];
+            refuse(format!("{message}\n{stderr}"), vec![])
+        }
+    };
+    if !output.status.success() {
+        return Err(refusal(format!("Pi build prune failed: {}", output.status)));
+    }
+    let mut removed: BuildRemoved = serde_json::from_slice(&output.stdout)
+        .map_err(|error| refusal(format!("invalid Pi build prune result: {error}")))?;
+    removed.lines.truncate(16);
+    for line in &mut removed.lines {
+        line.truncate(line.floor_char_boundary(512));
+    }
+    ensure!(
+        json_len(&removed).context("sizing Pi build prune result")? <= SESSION_PART_MAX,
+        forward::PartTooLarge
+    );
+    Ok(removed)
 }
 
 fn reserve(root: &Path) -> Result<(String, PathBuf)> {

@@ -132,15 +132,16 @@ export function localQuestionAsk(pending: PendingQuestions): DeferredAsk {
       const normalized = normalize(q);
       return PendingChoice.parse({ ...q, options: normalized.options.map(option => option.label) });
     });
-    const ids = questions.map((question, index) => pending.ask(`${id}:${index}`, [question]).id);
-    return { content: [{ type: "text", text: `Waiting for the owner: ${ids.join(", ")}. Continue only independent work.` }],
-      details: { status: "pending", questions: ids, ...(ids.length === 1 ? { id: ids[0] } : {}) } };
+    const question = pending.ask(questions.length === 1 ? `${id}:0` : id, questions, "ask_user");
+    return { content: [{ type: "text", text: `Waiting for the owner: ${question.id}. Continue only independent work.` }],
+      details: { status: "pending", questions: [question.id], id: question.id } };
   };
 }
 
 /** Interactive panes keep synchronous dialogs; deferred and headless asks use the pending store. */
 export function askUserTool(record: (answer: string) => Promise<string>, pending?: Pick<PendingQuestions, "ask" | "withdraw">,
-  dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource, deferred?: DeferredAsk): ToolDefinition {
+  dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource, deferred?: DeferredAsk,
+  headless: () => boolean = () => false): ToolDefinition {
   return {
     name: "ask_user", label: "Ask the owner", exposure: "model-only", executionMode: "sequential",
     description: "Ask the owner 1-4 focused choice questions instead of asking only in chat. "
@@ -170,12 +171,12 @@ export function askUserTool(record: (answer: string) => Promise<string>, pending
         return { content: [{ type: "text", text: `${params.withdraw}: ${status}; no owner answer` }], details: { id: params.withdraw, status } };
       }
       if (signal?.aborted) return noAnswer();
-      if (deferred && (!ctx.hasUI || params.nonBlocking)) return deferred(id, params, signal);
-      if (!ctx.hasUI) return noAnswer();
+      if (deferred && (headless() || !ctx.hasUI || params.nonBlocking)) return deferred(id, params, signal);
+      if (headless() || !ctx.hasUI) return noAnswer();
       if (params.nonBlocking) {
         if (ctx.mode !== "tui" || !pending) return { ...noAnswer(), details: { status: "no answer", reason: "pending UI unavailable" } };
         validateDeferredQuestions(params.questions);
-        const q = pending.ask(id, params.questions);
+        const q = pending.ask(id, params.questions, "ask_user");
         return { content: [{ type: "text", text: `${q.id}: ${q.status}. Owner UI: /questions. Continue only independent work; no answer authorizes anything.` }],
           details: { id: q.id, status: q.status, expires: q.expires } };
       }

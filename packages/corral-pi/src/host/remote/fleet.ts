@@ -6,7 +6,7 @@ import type { HelperInspection } from "../../extensions/subagent/inspection.ts";
 import { utf8Prefix } from "../../roles/assistant/owner-action.ts";
 import { parseChildId } from "./input.ts";
 import type { RemoteRegistry } from "./registry.ts";
-import type { CardBrief, Counts } from "./state.ts";
+import type { Counts } from "./state.ts";
 
 export const LIVE_FLEET_BYTES = 32 * 1024;
 
@@ -44,18 +44,14 @@ function childRow(child: ChildSnapshot): SessionChild {
 const sizeOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 
 export function projectFleet(snapshot: FleetSnapshot | undefined, helpers: readonly HelperInspection[] = []): {
-  fleet: SessionFleet; counts: Counts; cards: CardBrief[];
+  fleet: SessionFleet; counts: Counts;
 } {
   const children: SessionChild[] = [];
-  const cards: CardBrief[] = [];
   let live = 0, waiting = 0;
   for (const child of snapshot?.children ?? []) {
     children.push(childRow(child));
     if (LIVE_CHILD_STATES.includes(child.state)) live++;
-    if (child.question) {
-      waiting++;
-      if (cards.length < 8) cards.push({ id: child.id, kind: "child_question", title: utf8Prefix(child.question.question, 160), child: child.id });
-    }
+    if (child.state === "needs" && child.question) waiting++;
   }
   for (const helper of helpers) {
     const state = helper.phase === "preparing" ? "queued" : helper.phase === "completed" ? "done"
@@ -75,7 +71,7 @@ export function projectFleet(snapshot: FleetSnapshot | undefined, helpers: reado
     text: Array.from(message.text).slice(0, 2048).join(""), delivery: message.delivery,
   }));
   const fleet = { children, messages, messages_total: snapshot?.mail.at(-1)?.seq ?? 0, max_parallel: snapshot?.maxParallel ?? 0 };
-  return { fleet, counts: { live, waiting, total: children.length }, cards };
+  return { fleet, counts: { live, waiting, total: children.length } };
 }
 
 export function boundFleet(fleet: SessionFleet, limit = LIVE_FLEET_BYTES): SessionFleet {

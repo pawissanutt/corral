@@ -9,6 +9,15 @@ import { LIVE_CHILD_STATES, type BuildContext, type BuildSummary, type ExitChoic
 export interface ExitProgressRecord extends ExitRecord {
   readonly progress?: { readonly phase: ExitState["phase"]; readonly detail?: string };
 }
+
+/** Host-only admission and state around the same single-flight operation the TUI chooses. */
+export interface BuildExitControl extends ExitControl {
+  open(): void;
+  close(): void;
+  busy(): boolean;
+  summarySnapshot(): BuildSummary | undefined;
+}
+
 /** How many times one Land choice hands a failing gate back to the session before it stops. */
 export const LAND_REPAIR_ROUNDS = 3;
 
@@ -36,7 +45,7 @@ export function createExit(options: {
   save: (record: ExitRecord) => void; changed: () => void; now?: () => number;
   /** Gives the parent a failed landing gate to fix; settles when the turn it starts ends. Absent: a failed gate ends Land. */
   repair?: (prompt: string) => Promise<{ readonly aborted: boolean }>;
-}): ExitControl & { open(): void; close(): void } {
+}): BuildExitControl {
   const { context, git, journal } = options;
   const session = context.session;
   const now = options.now ?? Date.now;
@@ -52,8 +61,8 @@ export function createExit(options: {
   function changed() {
     for (const listener of [options.changed, ...listeners]) { try { listener(); } catch { /* Observers do not own exit execution. */ } }
   }
-  function update(phase: ExitState["phase"], detail: string, record = state.record) {
-    state = { phase, detail, ...(record ? { record } : {}) };
+  function update(phase: ExitState["phase"], detail: string, record = state.record, repair?: ExitState["repair"]) {
+    state = { phase, detail, ...(record ? { record } : {}), ...(repair ? { repair } : {}) };
     if (record) options.save({ ...record, progress: { phase, detail } } as ExitProgressRecord);
     changed();
   }
@@ -166,7 +175,8 @@ export function createExit(options: {
   /** Hands a failed landing gate to the session; returns once Land may run again and throws when it may not. */
   async function repaired(failure: GateFailed, round: number, record: ExitRecord): Promise<void> {
     const stopped = (why: string) => new Error(`${failure.message}. Land did not resume after repair ${round}: ${why}`);
-    update("repairing", `${failure.message}. Repair ${round} of ${LAND_REPAIR_ROUNDS}: the session is fixing it and Land resumes when it finishes.`);
+    update("repairing", `${failure.message}. Repair ${round} of ${LAND_REPAIR_ROUNDS}: the session is fixing it and Land resumes when it finishes.`,
+      record, { round, of: LAND_REPAIR_ROUNDS });
     journal.timeline("land", `Repair ${round} of ${LAND_REPAIR_ROUNDS}: ${failure.message}`);
     let turn: { readonly aborted: boolean };
     try { turn = await options.repair!(repairPrompt(failure.gate, round, context.settings.exitPolicy === "review" && !record.overrideReason)); }
@@ -221,6 +231,7 @@ export function createExit(options: {
   }
   return {
     options: choices, summary: getSummary, state: () => state,
+    busy: () => inFlight !== undefined, summarySnapshot: () => summary,
     choose(choice, options) {
       if (closed) return Promise.resolve(state);
       if (state.phase === "landed" && choice !== "iterate") return Promise.resolve(state);
@@ -229,7 +240,15 @@ export function createExit(options: {
       return inFlight;
     },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    open() { if (closed || inFlight) return; update("pending", "Choose Keep, Land or Iterate."); void getSummary().catch(error => update("failed", String(error))); },
+    open() {
+      if (closed || inFlight) return;
+      summary = undefined;
+      update("pending", "Choose Keep, Land or Iterate.");
+      const opened = state;
+      void getSummary().catch(error => {
+        if (!closed && state === opened && !inFlight) update("failed", String(error));
+      });
+    },
     close() { closed = true; listeners.clear(); },
   };
 }

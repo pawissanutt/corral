@@ -5,7 +5,7 @@ import type { FleetSnapshot } from "../build/types.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
 import { boundFleet, projectFleet, type SessionFleet } from "./remote/fleet.ts";
 import type { LiveInput } from "./remote/input.ts";
-import { boundState, type Activity, type CardBrief, type Counts, type HostNotice, type SessionPart,
+import { boundState, type Activity, type Counts, type HostNotice, type SessionPart,
   type BoundedSessionState, type SessionState, type StateProjection } from "./remote/state.ts";
 import { utf8Prefix } from "../roles/assistant/owner-action.ts";
 
@@ -61,7 +61,6 @@ export class LiveEvents {
   private fleetBytes = 0;
   private childrenJson = "[]";
   childCounts: Counts = { live: 0, waiting: 0, total: 0 };
-  childCards: CardBrief[] = [];
   activity: Activity | undefined;
   private readState: (() => StateProjection) | undefined;
   private state: BoundedSessionState | undefined;
@@ -161,7 +160,6 @@ export class LiveEvents {
     if (!this.fleet && !snapshot?.children.length && !snapshot?.mail.length && !helpers?.length) return;
     const projection = projectFleet(snapshot, helpers);
     this.childCounts = projection.counts;
-    this.childCards = projection.cards;
     const fleet = boundFleet(projection.fleet);
     const json = JSON.stringify(fleet);
     if (json !== this.fleetJson) {
