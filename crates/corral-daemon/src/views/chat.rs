@@ -27,9 +27,10 @@ pub(super) fn detail(
     let (body, next) = match &query.target {
         DetailRef::Session { id, .. } => {
             let session = sessions::resolve(shared, id)?;
-            let (path, reply_refusal) = session.transcript_view();
+            let (path, host, reply_refusal) = session.transcript_view();
+            let scope = session.transcript_scope();
             let (messages, older) = if let Some(path) = path {
-                match transcript::page(id, &path, query.page.as_deref()) {
+                match transcript::page(&session.id, &path, scope, query.page.as_deref()) {
                     Err(error)
                         if query.page.is_none()
                             && error
@@ -54,6 +55,7 @@ pub(super) fn detail(
                     task: session.task,
                     run: session.run,
                     machine: None,
+                    host,
                     messages,
                     older: older.clone(),
                     replyable: reply_refusal.is_none(),
@@ -67,10 +69,16 @@ pub(super) fn detail(
                 query.page.is_none(),
                 "invalid: request the next session item fragment by token"
             );
-            let (path, _) = sessions::resolve(shared, id)?.transcript_view();
+            let session = sessions::resolve(shared, id)?;
+            let (path, _, _) = session.transcript_view();
             let path = path.context(NotFound("session has no retained transcript"))?;
             (
-                DetailBody::SessionItem(transcript::item(id, &path, token)?),
+                DetailBody::SessionItem(transcript::item(
+                    &session.id,
+                    &path,
+                    session.transcript_scope(),
+                    token,
+                )?),
                 None,
             )
         }
@@ -153,12 +161,8 @@ pub(crate) fn thread(
         return Ok(None);
     }
     if let (Some(session), Some(stamp)) = (session, &stamp) {
-        let mut seen = std::collections::BTreeMap::new();
-        for transcript::MessageWithInputId {
-            message,
-            request_id,
-        } in transcript::page_with_input_ids(&session.id, &stamp.path)?
-        {
+        let (messages, _) = transcript::page(&session.id, &stamp.path, None, None)?;
+        for message in messages {
             let owner = matches!(message.author.as_str(), "user" | "owner");
             let kind = if owner {
                 EntryKind::Message
@@ -179,32 +183,17 @@ pub(crate) fn thread(
             if text.is_empty() {
                 continue;
             }
-            let id = if let Some(request_id) = request_id.filter(|_| owner) {
-                assistant::input_entry_id(&session.id, &request_id)
-            } else {
-                // Unlike continuation tokens, the source text and timestamp make
-                // this identity stable across subscriptions and daemon restarts.
-                let hash = fingerprint(&(&message.author, &message.at, &text))?;
-                let occurrence = seen.entry(hash.clone()).or_insert(0_u32);
-                let id = format!("{}/replay/{hash}/{occurrence}", session.id);
-                *occurrence += 1;
-                id
-            };
-            let attachments = if owner {
-                assistant::attachments::facts(&text)
-            } else {
-                Vec::new()
-            };
+            let input = message.input;
             rows.push(ThreadEntry {
-                id,
+                id: message.id,
                 rev: 1,
                 at: message
                     .at
                     .unwrap_or_else(|| jiff::Timestamp::UNIX_EPOCH.to_string()),
                 kind,
-                device: None,
+                device: input.as_ref().and_then(|facts| facts.device.clone()),
                 via: None,
-                typed_at: None,
+                typed_at: input.and_then(|facts| facts.typed_at),
                 text: Some(text),
                 state: owner.then_some(MessageState::Delivered),
                 model: message.model,
@@ -223,7 +212,7 @@ pub(crate) fn thread(
                 cost_basis: None,
                 links: Vec::new(),
                 card: None,
-                attachments,
+                attachments: message.attachments,
             });
         }
     }

@@ -1,14 +1,13 @@
-//! What a daemon session page keeps going while it is open: one watcher of the session's live
-//! turn (released when the page closes or shows another session, as the thread scope is, through
-//! the source it was opened on), a re-read of the recorded transcript each time the host says it
-//! fell behind (not while the owner reads an earlier page), and the fetch of the complete words
-//! behind every preview on the shown page.
+//! What a view of a session's live stream keeps going while it is mounted: one watcher of the
+//! session's live topic (released when the view closes or shows another session, through the
+//! source it was opened on), and a re-read of the recorded transcript each time the host says it
+//! fell behind (not while the owner reads an earlier page).
 
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
 use crate::model::Id;
-use crate::model::agents::{self, Action};
+use crate::model::session::Action;
 use crate::state::AppState;
 
 use super::super::run;
@@ -36,41 +35,20 @@ pub fn watch(app: AppState, id: Id) {
         }
     });
     let seen = stored(None::<Option<u64>>);
-    {
-        let id = id.clone();
-        effect(move || {
-            let now = reread.get();
-            let Some(before) = seen.replace(Some(now)) else {
-                return;
-            };
-            if before == now || now.is_none() {
-                return;
-            }
-            untracked(|| {
-                let earlier = app.agents.with(|state| state.earlier.contains(id.as_str()));
-                if !earlier {
-                    run(
-                        app,
-                        Action::Refresh(DetailRef::Session { id: id.to_string() }),
-                    );
-                }
-            });
-        });
-    }
-    let wanted = computed({
-        let id = id.clone();
-        move || app.feed.with(|feed| agents::fetches(feed, &id))
-    });
     effect(move || {
-        let tokens = wanted.get();
+        let now = reread.get();
+        let Some(before) = seen.replace(Some(now)) else {
+            return;
+        };
+        if before == now || now.is_none() {
+            return;
+        }
         untracked(|| {
-            for token in tokens {
+            let earlier = app.session.with(|state| state.ui(id.as_str()).earlier);
+            if !earlier {
                 run(
                     app,
-                    Action::Fetch {
-                        session: id.clone(),
-                        token,
-                    },
+                    Action::Refresh(DetailRef::Session { id: id.to_string() }),
                 );
             }
         });

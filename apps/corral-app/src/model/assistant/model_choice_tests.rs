@@ -74,6 +74,11 @@ fn a_named_session_without_a_running_host_still_offers_its_model_pill() {
             wait: None,
             question_id: None,
             rev: 1,
+            model: None,
+            effort: None,
+            created: None,
+            updated: None,
+            build: None,
         },
     );
     let env = Env {

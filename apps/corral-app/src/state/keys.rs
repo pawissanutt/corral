@@ -38,6 +38,7 @@ fn stroke(key: &'static str) -> &'static str {
         "K" => "shift+k",
         "R" => "shift+r",
         "A" => "shift+a",
+        "N" => "shift+n",
         key => key,
     }
 }
@@ -65,7 +66,7 @@ impl AppState {
             ..KeyOptions::default()
         };
         self.watch_key_focus();
-        let mut keys: BTreeSet<&'static str> = ["/", "?", "`"].into_iter().collect();
+        let mut keys: BTreeSet<&'static str> = ["/", "?"].into_iter().collect();
         keys.extend(
             Destination::ALL
                 .into_iter()
@@ -171,13 +172,24 @@ impl AppState {
                     .get()
                     .anywhere
                     .then(|| self.focused_row.get());
-                self.nav.with(|nav| {
-                    commands::with_focus(
-                        keys,
-                        focus.as_ref().map(|row| row.as_deref()),
-                        nav.selection.task.as_deref(),
-                    )
-                })
+                // The selected row as the focused one is named: Now's task id, the roster's
+                // `agent-<session>`.
+                let selected = if destination == Destination::Agents {
+                    self.agents.with(|state| {
+                        state
+                            .roster_session
+                            .as_ref()
+                            .map(|session| format!("agent-{session}"))
+                    })
+                } else {
+                    self.nav
+                        .with(|nav| nav.selection.task.as_ref().map(ToString::to_string))
+                };
+                commands::with_focus(
+                    keys,
+                    focus.as_ref().map(|row| row.as_deref()),
+                    selected.as_deref(),
+                )
             }
             DataState::Disconnected => &[],
         }
@@ -198,10 +210,6 @@ impl AppState {
             }
             "?" => {
                 self.open_palette();
-                return;
-            }
-            "`" => {
-                self.toggle_session();
                 return;
             }
             _ => {}
@@ -273,7 +281,7 @@ impl AppState {
                 effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
             }),
             Destination::Agents => self.agents.update(|state| {
-                effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
+                effects = state.key(key, top, feed, &filter);
             }),
             Destination::Review => self.review.update(|state| {
                 effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
@@ -285,12 +293,14 @@ impl AppState {
 }
 
 impl AppState {
-    /// Tracked: the confirm sheet, the refusal sheet, the rewind sheet or the action composer
-    /// is up.
+    /// Tracked: the confirm sheet, the refusal sheet, the rewind sheet, the New build sheet or
+    /// the action composer is up.
     pub(super) fn sheet_open(&self) -> bool {
         self.confirm.with(Option::is_some)
             || self.refusal.with(Option::is_some)
-            || self.agents.with(|state| state.rewind.is_some())
+            || self
+                .agents
+                .with(|state| state.rewind.is_some() || state.start.open)
             || self.work.with(|state| state.composer.is_some())
     }
 }

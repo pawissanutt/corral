@@ -1,7 +1,9 @@
 //! Device-local scopes and project intents. Storage never contains preview facts or credentials.
 use super::AppState;
 use crate::model::{
-    DataState, Destination, Id, WorkspaceMode, assistant,
+    DataState, Destination, Id, WorkspaceMode,
+    agents::{self, Show},
+    assistant,
     projects::{FilterScreen, Filters, NowGroup, ProjectFilter},
 };
 use corral_protocol::assistant::ContextRef;
@@ -75,6 +77,38 @@ impl AppState {
             self.filters
                 .update(|filters| filters.set_now_group(&store, group));
         }
+    }
+
+    /// Shows the sessions whose host runs or waits, or every one the daemon lists, and keeps
+    /// the choice in `corral.filters` for this workspace.
+    pub fn set_agents_show(&self, show: Show) {
+        if let Some(store) = self.feed.with_untracked(|feed| feed.store.clone()) {
+            self.filters
+                .update(|filters| filters.set_agents_show(&store, show));
+        }
+        let filter = untracked(|| self.project_filter(FilterScreen::Agents));
+        self.reduce(self.agents, |state, feed, _, _| {
+            state.act(agents::Action::SetShow(show), feed, &filter)
+        });
+    }
+
+    /// Restores the Show choice saved for the workspace whenever the workspace or its saved
+    /// filters change.
+    pub(super) fn follow_agents_show(self) {
+        let saved = computed(move || {
+            self.feed.with(|feed| {
+                feed.store
+                    .as_deref()
+                    .map(|store| self.filters.with(|filters| filters.agents_show(store)))
+            })
+        });
+        effect(move || {
+            if let Some(show) = saved.get()
+                && untracked(|| self.agents.with(|state| state.show != show))
+            {
+                untracked(|| self.agents.update(|state| state.show = show));
+            }
+        });
     }
 
     pub fn open_project(&self, id: Id) {

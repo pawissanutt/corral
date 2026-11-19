@@ -1,9 +1,10 @@
 //! UI intents only; each transport accepts its own device-management subset.
 use corral_protocol::attachment::AttachmentKind;
+use corral_protocol::build::{BUILD_START, BuildStart};
 use corral_protocol::config::ConfigDocument;
 use corral_protocol::device::{DeviceRevoke, PushKind};
 use corral_protocol::op::OpSubmit;
-use corral_protocol::pane::{PaneFocus, PaneKeys};
+use corral_protocol::session_host::{SESSION_SEND, SessionSend};
 use corral_protocol::{app::*, assistant::*, detail::DetailGet};
 
 #[derive(Debug)]
@@ -71,14 +72,6 @@ pub enum ClientRequest {
         request_id: String,
         request: ConfigDocument,
     },
-    PaneFocus {
-        request_id: String,
-        request: PaneFocus,
-    },
-    PaneKeys {
-        request_id: String,
-        request: PaneKeys,
-    },
     AssistantSend(AssistantSend),
     AssistantCancel(String),
     Attach(AttachRequest),
@@ -105,8 +98,9 @@ pub enum ClientRequest {
         request_id: String,
         request: corral_protocol::session::SessionPromptAnswer,
     },
-    /// A session control (`session.cancel`, `.pause`, `.resume`, `.terminate`, `.relaunch`,
-    /// `.rewind`) addressed by the session's public id, read by `request_id`.
+    /// A session request addressed by the session's public id, read by `request_id`: a control
+    /// (`session.cancel`, `.pause`, `.resume`, `.terminate`, `.relaunch`, `.rewind`), owner
+    /// input (`session.send`) or a build start (`build.start`).
     Session {
         request_id: String,
         method: &'static str,
@@ -257,6 +251,24 @@ pub fn session_item(session: String, token: String) -> bool {
 }
 pub fn watch(session: String, on: bool) -> bool {
     send(ClientRequest::Watch { session, on })
+}
+/// Owner input to a session under `request_id`, which is also the send's command id and so the
+/// input id the host and the transcript keep.
+pub fn session_send(request_id: String, request: SessionSend) -> bool {
+    send(ClientRequest::Session {
+        request_id,
+        method: SESSION_SEND,
+        params: serde_json::to_value(request).unwrap_or(serde_json::Value::Null),
+    })
+}
+/// A build session's start under `request_id`; the started row or the host's refusal is read
+/// under it.
+pub fn build_start(request_id: String, request: BuildStart) -> bool {
+    send(ClientRequest::Session {
+        request_id,
+        method: BUILD_START,
+        params: serde_json::to_value(request).unwrap_or(serde_json::Value::Null),
+    })
 }
 pub fn save_draft(thread: String, text: String) -> bool {
     send(ClientRequest::SaveDraft { thread, text })

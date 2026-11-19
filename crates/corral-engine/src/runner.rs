@@ -30,6 +30,17 @@ pub struct LaunchSpec {
     pub tokens: Vec<(String, String)>,
 }
 
+/// A sender's stable identity and delivery options, separate from the Pi frame ID.
+#[derive(Clone, Copy, Debug)]
+pub struct InputTag<'a> {
+    pub input_id: &'a str,
+    pub to: Option<&'a str>,
+    pub typed_at: Option<&'a str>,
+    pub device: Option<&'a str>,
+    pub follow_up: bool,
+    pub attachments: &'a [serde_json::Value],
+}
+
 pub trait Runner: Send + Sync {
     fn start(&self, spec: &LaunchSpec) -> Result<SessionRef>;
     /// Start an engine-owned command directly rather than evaluating a harness shell line.
@@ -40,6 +51,18 @@ pub trait Runner: Send + Sync {
     /// Owner replies and automatic input share the transport. Runners that can
     /// pause a session may defer automatic input.
     fn send(&self, session: &SessionRef, text: &str, origin: Origin) -> Result<()>;
+    fn send_tagged(
+        &self,
+        _session: &SessionRef,
+        _text: &str,
+        _origin: Origin,
+        _tag: InputTag<'_>,
+    ) -> Result<pi::SubmitReply> {
+        Err(crate::refuse(
+            "tagged input requires a running Pi host",
+            Vec::new(),
+        ))
+    }
     fn stop(&self, session: &SessionRef) -> Result<()>;
     fn focus(&self, session: &SessionRef) -> Result<()>;
 }
@@ -47,6 +70,10 @@ pub trait Runner: Send + Sync {
 #[cfg(all(test, unix))]
 #[path = "runner/herdr_tests.rs"]
 mod herdr_tests;
+
+#[cfg(all(test, unix))]
+#[path = "runner/pi_tests.rs"]
+mod pi_tests;
 
 #[cfg(test)]
 #[path = "runner/runner_tests.rs"]

@@ -10,9 +10,8 @@ use nsh_core::prelude::*;
 
 use super::AppState;
 use crate::client::requests;
-use crate::model::agents::{Control, PaneAsk};
+use crate::model::agents::Control;
 use crate::model::daemon::{DetailCache, Feed, Operation};
-use crate::model::effect::PaneRequest;
 use crate::model::health::{self, Availability};
 use crate::model::{Destination, Effect, Env, Id, Live, Overlay, Selection};
 
@@ -32,7 +31,7 @@ impl AppState {
     /// Selects a live record and pushes its page where this form stacks it.
     pub fn open_live(&self, live: Live) {
         self.reveal_live(&live);
-        if matches!(live, Live::Thread(_)) {
+        if matches!(live, Live::Session(_)) {
             self.close(Overlay::Ask);
         }
         if matches!(live, Live::Task(_)) {
@@ -237,7 +236,6 @@ impl AppState {
                     | Effect::Act(_)
                     | Effect::Device(_)
                     | Effect::Send(_)
-                    | Effect::Pane { .. }
                     | Effect::Control { .. }
                     | Effect::Answer { .. }
                     | Effect::Config { .. }
@@ -330,42 +328,34 @@ impl AppState {
                     self.toast(why);
                 }
             }
-            Effect::Pane {
-                session,
-                key,
-                what,
-                request,
-            } => self.pane(session, key, what, request),
+            Effect::SessionSend { key, send } => {
+                let session = Id::from(send.id.as_str());
+                let unsent = match self.link_refusal() {
+                    Some(refusal) => Some(refusal.to_owned()),
+                    None => (!requests::session_send(key.to_string(), send))
+                        .then(|| "the app's connection task is not running".to_owned()),
+                };
+                if let Some(why) = unsent {
+                    self.session
+                        .update(|state| state.unsent(&session, &key, why));
+                }
+            }
+            Effect::BuildStart { key, start } => {
+                let unsent = match self.link_refusal() {
+                    Some(refusal) => Some(refusal.to_owned()),
+                    None => (!requests::build_start(key.to_string(), start))
+                        .then(|| "the app's connection task is not running".to_owned()),
+                };
+                if let Some(why) = unsent {
+                    self.agents.update(|state| {
+                        state.start.sending = None;
+                        state.start.failed = Some(why);
+                    });
+                }
+            }
             Effect::Config { key, put } => self.send_config(key, put),
             _ => {}
         }
-    }
-
-    /// Sends a pane request under its key and remembers it as the session's latest, so the
-    /// session shows how it ended; one that cannot leave says why there instead.
-    fn pane(&self, session: Id, key: Id, what: PaneAsk, request: PaneRequest) {
-        let unsent = if self.fixture() {
-            self.feed
-                .update(|feed| crate::model::preview::pane(feed, &key, &request));
-            None
-        } else if let Some(refusal) = self.link_refusal() {
-            Some(refusal.to_owned())
-        } else {
-            let request_id = key.to_string();
-            let sent = requests::send(match request {
-                PaneRequest::Focus(request) => requests::ClientRequest::PaneFocus {
-                    request_id,
-                    request,
-                },
-                PaneRequest::Keys(request) => requests::ClientRequest::PaneKeys {
-                    request_id,
-                    request,
-                },
-            });
-            (!sent).then(|| "the app's connection task is not running".to_owned())
-        };
-        self.agents
-            .update(|state| state.pane_sent(session, key, what, unsent));
     }
 
     /// Sends a session control under its key and remembers it as the session's latest, so the
@@ -411,32 +401,37 @@ impl AppState {
             .with_untracked(|feed| (!feed.ready()).then_some(NO_LINK))
     }
 
-    /// Tells each session control's outcome once its reply arrives.
-    pub(super) fn settle_controls(self) {
+    /// Follows the feed, through the selected source: retires each session's sends the
+    /// transcript now holds and tells each refused one once, tells each session control's
+    /// outcome once its reply arrives, and opens a started build's page. A state is written only
+    /// when it changed, so the pages reading it redraw only then.
+    pub(super) fn follow_sessions(self) {
         effect(move || {
-            let waiting = self.agents.with(|state| {
-                state
-                    .controls
-                    .values()
-                    .filter(|sent| !sent.told && sent.unsent.is_none())
-                    .map(|sent| sent.key.clone())
-                    .collect::<Vec<_>>()
-            });
-            if waiting.is_empty() {
-                return;
-            }
-            let settled = self.feed.with(|feed| {
-                waiting.iter().any(|key| {
-                    feed.operations
-                        .get(key.as_str())
-                        .is_some_and(|operation| !operation.loading)
-                })
-            });
-            if settled {
-                untracked(|| {
-                    self.reduce(self.agents, |state, feed, _, _| state.settle_controls(feed))
+            self.feed.with(|_| ());
+            untracked(|| {
+                let (sessions, agents, effects) = self.feed.with_untracked(|feed| {
+                    let mut sessions = self.session.with_untracked(Clone::clone);
+                    sessions.settle(feed);
+                    let sessions = self
+                        .session
+                        .with_untracked(|now| *now != sessions)
+                        .then_some(sessions);
+                    let mut agents = self.agents.with_untracked(Clone::clone);
+                    let effects = agents.settle(feed);
+                    let agents = self
+                        .agents
+                        .with_untracked(|now| *now != agents)
+                        .then_some(agents);
+                    (sessions, agents, effects)
                 });
-            }
+                if let Some(sessions) = sessions {
+                    self.session.update(|state| *state = sessions);
+                }
+                if let Some(agents) = agents {
+                    self.agents.update(|state| *state = agents);
+                }
+                self.run(effects);
+            });
         });
     }
 }

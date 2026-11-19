@@ -20,6 +20,8 @@ pub(crate) struct Subscriptions<'a> {
     terminals: app::TerminalTopics,
     sessions: app::SessionTopics,
     session_fleet: bool,
+    session_state: bool,
+    build_rows: bool,
 }
 
 impl<'a> Subscriptions<'a> {
@@ -30,11 +32,15 @@ impl<'a> Subscriptions<'a> {
             terminals: app::TerminalTopics::default(),
             sessions: app::SessionTopics::default(),
             session_fleet: false,
+            session_state: false,
+            build_rows: false,
         }
     }
 
-    pub(crate) fn set_session_fleet(&mut self, enabled: bool) {
-        self.session_fleet = enabled;
+    pub(crate) fn set_capabilities(&mut self, caps: &[String]) {
+        self.session_fleet = caps.iter().any(|cap| cap == wire::app::SESSION_FLEET_V1);
+        self.session_state = caps.iter().any(|cap| cap == wire::app::SESSION_STATE_V1);
+        self.build_rows = caps.iter().any(|cap| cap == wire::app::BUILD_V1);
     }
 
     pub fn open(&mut self, open: SubOpen) -> Result<()> {
@@ -112,7 +118,7 @@ impl<'a> Subscriptions<'a> {
         let mut i = 0;
         while i < self.rows.len() {
             let sub = &mut self.rows[i];
-            let result = sub.next(self.shared);
+            let result = sub.next(self.shared, self.build_rows);
             let close = match result {
                 Ok(Some((frame, close))) => {
                     conn.send_frame(&frame).context("pushing topic frame")?;
@@ -139,7 +145,8 @@ impl<'a> Subscriptions<'a> {
             }
         }
         self.terminals.flush(self.shared, conn)?;
-        self.sessions.flush(self.shared, conn, self.session_fleet)
+        self.sessions
+            .flush(self.shared, conn, self.session_fleet, self.session_state)
     }
 }
 

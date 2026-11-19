@@ -6,9 +6,10 @@
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::agents::{Action, More, Section};
 use crate::model::board::LineKind;
 use crate::model::review::NumberedLine;
+use crate::model::session::Action;
+use crate::model::session::transcript::{More, Section};
 use crate::screens::markdown::markdown;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};

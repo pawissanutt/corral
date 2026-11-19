@@ -19,12 +19,12 @@ use crate::ui::kit::text::{plain, rich};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, Token, color, text_size};
 
-use super::attachments;
 use super::cards;
 use super::parts::{
     act, avatar, button_row, link_words, meta_size, model_button, mono_run, note_size, spacer,
     strong_run, tag, words,
 };
+use crate::screens::agents::attachments;
 
 /// One blink of the streaming caret.
 const BLINK_MS: f32 = 1000.0;

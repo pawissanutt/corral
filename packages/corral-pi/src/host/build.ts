@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { realpathSync, statSync, writeSync } from "node:fs";
+import { existsSync, realpathSync, statSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { buildIsRunning, errorMessage, hasOwnerMessage, inspectBuildCleanup, pruneBuilds, removeBuild } from "../build/cleanup.ts";
 import { parseBuildFlags, parsePruneFlags, type LocalBuildOptions } from "../build/launch.ts";
@@ -153,7 +153,11 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
           `Start a new build with \`${startCommand}\`.`);
       }
     } else {
-      const draft = createSession(launch, { worktree: launch.repoRoot, branch: null, base: null });
+      const draft = createSession(launch, { worktree: launch.repoRoot, branch: null, base: null }, local.id);
+      if (existsSync(join(sessionDir(launch.dataRoot, draft.id), "session.json"))) {
+        throw new LaunchRefused("Build id already recorded", `Build ${draft.id} already has a session record.`,
+          `Run ${resumeCommand(draft.id)} to reopen it, or choose a new id.`);
+      }
       try {
         if (launch.bare) {
           const repository = spawnSync("git", ["-C", launch.repoRoot, "rev-parse", "--show-toplevel"], { encoding: "utf8" });

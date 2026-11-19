@@ -2,12 +2,15 @@ import { chmodSync, lstatSync, mkdirSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Socket } from "node:net";
 import { dirname } from "node:path";
 
-import type { EventLog } from "./events.ts";
+import type { RemoteHandler, RemoteRegistry } from "../host/remote/registry.ts";
+import { utf8Prefix } from "../roles/assistant/owner-action.ts";
+import type { BridgeEvent, EventLog, EventPage } from "./events.ts";
 import { FrameInvalid, FrameTooLarge, LineReader } from "./framing.ts";
 import {
-  BRIDGE_VERSION, BridgeRefusal, EVENT_PAGE_BYTES, FRAME_MAX_BYTES, INPUT_REPLY_MS, MAX_IN_FLIGHT,
-  type AnswerInput, type RequestFrame, type RewindInput, type SessionInput, type SubmitResult,
-  frameId, parseAnswer, parseFrame, parseQueueLimit, parseQueueWithdraw, parseRewind, parseSeq, parseSubmitInput, parseTurn,
+  BRIDGE_VERSION, BridgeRefusal, EVENT_PAGE_BYTES, FRAME_MAX_BYTES, INPUT_REPLY_MS, MAX_IN_FLIGHT, SESSION_PART_MAX,
+  type AnswerInput, type Command, type RequestFrame, type RewindInput, type SessionInput, type SubmitResult,
+  frameId, isBuiltinCommand, parseAnswer, parseFrame, parseQueueLimit, parseQueueWithdraw, parseRewind, parseSeq,
+  parseSubmitInput, parseTurn,
 } from "./protocol.ts";
 
 export interface BridgeHandlers {
@@ -41,13 +44,31 @@ export interface BridgeServerOptions {
 export interface BridgeServer {
   readonly path: string;
   /** Reserve the socket before opening the transcript, then answer requests once ready. */
-  attach(handlers: BridgeHandlers, liveEvents: EventRing): void;
+  attach(handlers: BridgeHandlers, liveEvents: EventRing | undefined, remote?: RemoteRegistry): void;
   close(): Promise<void>;
 }
 
 function refusal(error: unknown): BridgeRefusal {
   return error instanceof BridgeRefusal ? error
     : new BridgeRefusal("host_error", error instanceof Error ? error.message.slice(0, 512) : "failed");
+}
+
+function detailedEvents(log: EventLog, seq: number): EventPage {
+  const page = log.since(seq, SESSION_PART_MAX);
+  const events: BridgeEvent[] = [];
+  let bytes = Buffer.byteLength(JSON.stringify({ ...page, events, more: false }));
+  for (const event of page.events) {
+    const { seq, at, kind, ...payload } = event;
+    const row = { ...payload, seq, at, kind, text: utf8Prefix(JSON.stringify(payload), 512) };
+    const cost = Buffer.byteLength(JSON.stringify(row)) + Number(events.length > 0);
+    if (bytes + cost > SESSION_PART_MAX) {
+      if (!events.length) throw new BridgeRefusal("response_too_large", "one host event exceeds the detailed page bound");
+      break;
+    }
+    events.push(row);
+    bytes += cost;
+  }
+  return { ...page, events, next: events.at(-1)?.seq ?? seq, more: page.more || events.length < page.events.length };
 }
 
 function safeParse(line: string): unknown {
@@ -100,6 +121,9 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
   await prepareSocket(options.path, liveError);
   let handlers = options.handlers;
   let liveEvents = options.liveEvents;
+  let remote: RemoteRegistry | undefined;
+  const resolveCommand = (name: string): Command | RemoteHandler | undefined =>
+    isBuiltinCommand(name) ? name : remote?.get(name);
   const sockets = new Set<Socket>();
 
   const reply = (socket: Socket, id: string | null, body: Record<string, unknown>) => {
@@ -117,9 +141,10 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
     if (close) socket.end();
   };
 
-  const submit = async (host: BridgeHandlers, frame: RequestFrame): Promise<Record<string, unknown>> => {
+  const submit = async (host: BridgeHandlers, frame: Pick<RequestFrame, "id" | "args">): Promise<Record<string, unknown>> => {
     const input = parseSubmitInput(frame.args);
-    const request = { request_id: frame.id, origin: input.origin, busy_policy: input.busyPolicy };
+    const identity = { request_id: frame.id, input: input.inputId ?? frame.id };
+    const request = { ...identity, origin: input.origin, busy_policy: input.busyPolicy };
     const outcome = host.submit(input, frame.id);
     const pending = Symbol("pending");
     const deadline = Promise.withResolvers<typeof pending>();
@@ -134,13 +159,13 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
           options.events.emit("input_settled", { ...request, error: { code, reason } });
         },
       );
-      return { request_id: frame.id, disposition: "pending", reason: "preflight_pending" };
+      return { ...identity, disposition: "pending", reason: "preflight_pending" };
     }
     options.events.emit("input", { ...request, ...result });
-    return { request_id: frame.id, ...result };
+    return { ...identity, ...result };
   };
 
-  const run = async (frame: RequestFrame): Promise<Record<string, unknown>> => {
+  const run = async (frame: RequestFrame<Command | RemoteHandler>): Promise<object> => {
     const host = handlers;
     if (!host) throw new BridgeRefusal("starting", "the session is starting");
     switch (frame.command) {
@@ -155,7 +180,10 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
       case "queue_state": return host.queueState(parseQueueLimit(frame.args));
       case "queue_withdraw": return host.queueWithdraw(parseQueueWithdraw(frame.args));
       case "set_model": return host.setModel(frame.args);
-      case "events_since": return { ...options.events.since(parseSeq(frame.args), EVENT_PAGE_BYTES) };
+      case "events_since": {
+        const seq = parseSeq(frame.args);
+        return frame.args.detail === true ? detailedEvents(options.events, seq) : options.events.since(seq, EVENT_PAGE_BYTES);
+      }
       case "live_since": {
         const seq = parseSeq(frame.args);
         if (!liveEvents) throw new BridgeRefusal("live_unavailable", "the session has no live event stream");
@@ -164,16 +192,30 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
       case "shutdown":
         setImmediate(() => host.shutdown());
         return { shutting_down: true };
+      default: return frame.command(frame.args);
     }
   };
 
   const handle = async (socket: Socket, line: string) => {
     const value = safeParse(line);
-    let frame: RequestFrame;
-    try { frame = parseFrame(value); }
+    let frame: RequestFrame<Command | RemoteHandler>;
+    try { frame = parseFrame(value, resolveCommand); }
     catch (error) { refuse(socket, frameId(value), refusal(error), true); return; }
-    try { reply(socket, frame.id, { ok: true, result: await run(frame) }); }
-    catch (error) { refuse(socket, frame.id, refusal(error)); }
+    try {
+      const result = await run(frame);
+      if (typeof frame.command !== "function") {
+        reply(socket, frame.id, { ok: true, result });
+        return;
+      }
+      if (socket.destroyed) return;
+      const text = JSON.stringify(result);
+      if (text === undefined) throw new BridgeRefusal("host_error", "remote result is not JSON");
+      if (Buffer.byteLength(text) > SESSION_PART_MAX) {
+        throw new BridgeRefusal("response_too_large", `session parts are at most ${SESSION_PART_MAX} bytes`);
+      }
+      // The bounded result and the at-most-80-byte ID leave room for the envelope in a host frame.
+      socket.write(`{"version":${BRIDGE_VERSION},"id":${JSON.stringify(frame.id)},"ok":true,"result":${text}}\n`);
+    } catch (error) { refuse(socket, frame.id, refusal(error)); }
   };
 
   const server = createServer(socket => {
@@ -213,7 +255,7 @@ export async function startBridge(options: BridgeServerOptions): Promise<BridgeS
   let closed: Promise<void> | undefined;
   return {
     path: options.path,
-    attach(next, live) { handlers = next; liveEvents = live; },
+    attach(next, live, registry) { handlers = next; liveEvents = live; remote = registry; },
     close() {
       if (closed) return closed;
       const { promise, resolve } = Promise.withResolvers<void>();

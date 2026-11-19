@@ -18,12 +18,13 @@ use corral_protocol::{
     assistant::*,
     rows::*,
     session::{AssistantCancelRequest, SessionCancel, SessionCancelReply, SessionRelaunched},
+    session_host::{SessionSend, SessionSent},
 };
 use corral_types::{Origin, SessionRef};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{sessions, state::Shared, views::NotFound};
+use crate::{builds, sessions, state::Shared, views::NotFound};
 
 pub(crate) mod attachments;
 
@@ -85,7 +86,7 @@ fn socket_root(shared: &Shared) -> Option<PathBuf> {
     shared.private_chat_sockets()
 }
 
-fn number(id: &str) -> Option<u64> {
+pub(crate) fn number(id: &str) -> Option<u64> {
     let s = id.strip_prefix("A-")?;
     let number = s.parse().ok()?;
     (number != 0 && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit())).then_some(number)
@@ -119,10 +120,15 @@ fn records(shared: &Shared) -> Result<Vec<Chat>> {
 
 fn lookup(shared: &Shared, scope: &str) -> Result<Option<Chat>> {
     if scope == QUICK_THREAD {
-        return Ok(records(shared)?
+        let mut quicks = records(shared)?
             .into_iter()
             .rev()
-            .find(|chat| chat.meta.quick));
+            .filter(|chat| chat.meta.quick);
+        let latest = quicks.next();
+        if latest.as_ref().is_some_and(|chat| chat.meta.ended) {
+            return Ok(quicks.find(|chat| !chat.meta.ended).or(latest));
+        }
+        return Ok(latest);
     }
     let n = number(scope).context("invalid: expected chat id A-<number> or quick")?;
     let dir = root(shared).join(scope);
@@ -136,7 +142,9 @@ fn lookup(shared: &Shared, scope: &str) -> Result<Option<Chat>> {
 }
 
 fn require(shared: &Shared, scope: &str) -> Result<Chat> {
-    lookup(shared, scope)?.context(NotFound("chat session not found"))
+    lookup(shared, scope)?
+        .filter(|chat| scope != QUICK_THREAD || !chat.meta.ended)
+        .context(NotFound("chat session not found"))
 }
 
 impl Chat {
@@ -165,9 +173,11 @@ impl Chat {
             role: "assistant",
             task: self.meta.task.clone(),
             run: None,
+            dir: Some(self.dir.clone()),
             session: placement,
             transcript: host.map(|host| host.session_file),
             ended: self.meta.ended,
+            unreachable: false,
         })
     }
 
@@ -433,19 +443,49 @@ impl Chat {
             wait,
             question_id,
             rev: shared.revision(),
+            model: None,
+            effort: None,
+            created: None,
+            updated: None,
+            build: None,
         })
     }
 }
 
-pub(crate) fn rows(shared: &Shared) -> Result<Vec<AssistantRow>> {
-    records(shared)?
+pub(crate) fn rows(shared: &Shared, include_builds: bool) -> Result<Vec<AssistantRow>> {
+    let mut rows = records(shared)?
         .into_iter()
         .map(|chat| chat.row(shared))
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    if include_builds {
+        rows.extend(builds::rows(shared)?);
+    }
+    Ok(rows)
 }
 
 pub(crate) fn input_entry_id(session: &str, request_id: &str) -> String {
     format!("{session}/input/{request_id}")
+}
+
+fn start_on_send(shared: &Shared, scope: &str) -> Result<(Chat, SessionRef)> {
+    let config = config(shared)?;
+    let chat = current(shared, &config, scope)?;
+    let session = chat.start(shared, &config)?;
+    Ok((chat, session))
+}
+
+pub(crate) fn send_session(
+    shared: &Shared,
+    device: &str,
+    request: &SessionSend,
+) -> Result<SessionSent> {
+    let _lock = shared
+        .chat
+        .inputs
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let (chat, session) = start_on_send(shared, &request.id)?;
+    sessions::send_on(shared, device, &chat.id(), &session, None, request)
 }
 
 pub(crate) fn send(shared: &Shared, device: &str, request: AssistantSend) -> Result<SendAck> {
@@ -462,9 +502,7 @@ pub(crate) fn send(shared: &Shared, device: &str, request: AssistantSend) -> Res
         .inputs
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let config = config(shared)?;
-    let chat = current(shared, &config, &request.thread)?;
-    let session = chat.start(shared, &config)?;
+    let (chat, session) = start_on_send(shared, &request.thread)?;
     let client = Client::for_session(&session)?;
     let files = attachments::prepare(shared, device, &chat.dir, &request.attachments)?;
     let result: pi::SubmitReply = if files.is_empty() {
@@ -481,7 +519,10 @@ pub(crate) fn send(shared: &Shared, device: &str, request: AssistantSend) -> Res
             vec![],
         ));
     }
-    let entry = input_entry_id(&chat.id(), &result.request_id);
+    let entry = input_entry_id(
+        &chat.id(),
+        result.input.as_deref().unwrap_or(&result.request_id),
+    );
     // Only an active turn's transient handle; never an idempotency/replay journal.
     if let Some(turn) = result.turn {
         inputs.insert(

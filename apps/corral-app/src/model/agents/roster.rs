@@ -1,52 +1,91 @@
-//! One session per line: corrald's live runs, then the pinned quick assistant thread. Assistant
-//! rows supplement run rows, never duplicate them.
-use corral_protocol::rows::{AgentRow, AssistantRow};
+//! One roster of every session the daemon addresses, of every role: corrald's live runs, the
+//! assistant's chats and the build sessions, one row each. Live shows hosts that run or wait;
+//! All adds sessions whose host is not running (resumable builds and chats, ended ones). Needs
+//! you first, then working, idle, not running and ended; newest activity first within each, the
+//! pinned quick chat first among its equals. A row opens its session page.
+
+use corral_protocol::rows::{
+    AgentRow, AssistantKind, AssistantLocation, AssistantRow, AssistantState,
+};
 use corral_types::SessionStatus;
 
 use crate::model::board::Mark;
 use crate::model::daemon;
-use crate::model::effect::{Effect, Env};
+use crate::model::effect::Effect;
 use crate::model::glance::{Stat, StatIcon};
 use crate::model::projects::ProjectFilter;
+use crate::model::session::{Fill, cost_text, exit_status};
 use crate::model::work::{Record, session_task};
-use crate::model::{Hue, Id, Live, Selection, assistant};
+use crate::model::{Hue, Id, Live, assistant};
 
-use super::{Action, AgentStatus, State, live};
+use super::start::{NewMenu, new_menu};
+use super::{Action, State, live};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum RosterRole {
     #[default]
     All,
+    Build,
+    Assistant,
     Worker,
     Reviewer,
-    Assistant,
     Other(String),
 }
+
 impl RosterRole {
     pub fn of(role: &str) -> Self {
         match role {
+            "build" => Self::Build,
+            "assistant" => Self::Assistant,
             "worker" => Self::Worker,
             "reviewer" => Self::Reviewer,
-            "assistant" => Self::Assistant,
             other => Self::Other(other.into()),
         }
     }
     pub fn slug(&self) -> &str {
         match self {
             Self::All => "all",
+            Self::Build => "build",
+            Self::Assistant => "assistant",
             Self::Worker => "worker",
             Self::Reviewer => "reviewer",
-            Self::Assistant => "assistant",
             Self::Other(role) => role,
         }
     }
     fn label(&self) -> String {
         match self {
             Self::All => "All".into(),
+            Self::Build => "Build".into(),
+            Self::Assistant => "Assistant".into(),
             Self::Worker => "Workers".into(),
             Self::Reviewer => "Reviewers".into(),
-            Self::Assistant => "Assistant".into(),
             Self::Other(role) => live::role_label(role),
+        }
+    }
+}
+
+/// Which sessions the roster lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Show {
+    /// Hosts that run or wait, and the pinned quick chat.
+    #[default]
+    Live,
+    /// Also sessions whose host is not running, and ended ones the daemon lists.
+    All,
+}
+
+impl Show {
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::All => "all",
+        }
+    }
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Live => "Live",
+            Self::All => "All",
         }
     }
 }
@@ -60,27 +99,59 @@ pub struct RoleTab {
     pub action: Action,
 }
 
+/// `seg-show-<live|all>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShowTab {
+    pub id: String,
+    pub label: &'static str,
+    pub selected: bool,
+    pub action: Action,
+}
+
+/// A row's state glyph and word.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowState {
+    pub spinner: bool,
+    /// `▲ ! ○ ✓ ✗`, when not a spinner.
+    pub glyph: Option<&'static str>,
+    /// `Working`, `Needs you`, `Idle`, `Not running`, `Ended`, or a build's exit status.
+    pub word: String,
+    pub hue: Hue,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RosterRow {
+    /// `agent-<session>`.
     pub id: String,
     pub session: Id,
-    /// The run's task, whose Actions menu the row carries; none for an assistant.
+    /// The run's task, whose Actions menu the row carries; none for a chat or a build.
     pub task: Option<Id>,
-    pub chip: String,
-    pub hue: Hue,
+    pub state: RowState,
     pub role: String,
     pub shown_id: String,
-    pub project: String,
     pub name: String,
-    pub pinned: bool,
+    /// False when the host recorded no name: `untitled` is drawn muted.
+    pub named: bool,
+    /// `corral`, `corral · build/auth`, `workspace`, `–`.
+    pub project: String,
     pub doing: String,
     pub doing_hint: String,
-    /// The run's profile and model, as recorded when it started.
+    /// `▲ 2` when the session or its children wait on the owner.
+    pub needs: Option<String>,
+    /// `<provider>/<model> · effort`, `–`.
     pub agent: String,
-    /// How long the session has written nothing (`quiet 12m`), or a dash.
+    /// `$1.24`, `$–`.
+    pub cost: String,
+    /// `24%`, `–`.
+    pub ctx: String,
+    /// `quiet 12m`, `–`.
     pub quiet: String,
     pub since: String,
+    pub pinned: bool,
+    /// Its host is stopped and can be started again from its page.
+    pub resumable: bool,
     pub selected: bool,
+    /// Opens the session page.
     pub action: Action,
 }
 
@@ -89,64 +160,172 @@ pub struct Roster {
     pub title: &'static str,
     pub stats: Vec<Stat>,
     pub roles: Vec<RoleTab>,
+    pub show: Vec<ShowTab>,
+    pub new: NewMenu,
     pub rows: Vec<RosterRow>,
-    pub columns: [&'static str; 9],
-    pub fill: super::Fill,
+    pub columns: [&'static str; 11],
+    pub fill: Fill,
     pub stale: Option<String>,
 }
 
-/// A roster line's source: a live run (keyed `<task>_<run>`), an assistant session, or both.
+/// A roster line's source: a live run (keyed `<task>_<run>`), or a chat or build row.
 #[derive(Clone, Copy)]
 pub(super) struct Source<'a> {
     pub id: &'a str,
-    pub row: Option<&'a AgentRow>,
-    pub assistant: Option<&'a AssistantRow>,
+    pub run: Option<&'a AgentRow>,
+    pub chat: Option<&'a AssistantRow>,
 }
+
+/// Group order: needs you, working, idle, not running, ended.
+const NEEDS: u8 = 0;
+const WORKING: u8 = 1;
+const IDLE: u8 = 2;
+const STOPPED: u8 = 3;
+const ENDED: u8 = 4;
+
+fn state(
+    spinner: bool,
+    glyph: Option<&'static str>,
+    word: impl Into<String>,
+    hue: Hue,
+) -> RowState {
+    RowState {
+        spinner,
+        glyph,
+        word: word.into(),
+        hue,
+    }
+}
+
 impl<'a> Source<'a> {
     pub fn role(self) -> &'a str {
-        self.row.map_or("assistant", |row| row.run.role.as_str())
-    }
-    pub fn workspace(self) -> bool {
-        self.row.is_none()
+        match (self.run, self.chat) {
+            (Some(run), _) => run.run.role.as_str(),
+            (None, Some(chat)) if chat.kind == AssistantKind::Build => "build",
+            _ => "assistant",
+        }
     }
     fn task(self, feed: &'a daemon::Feed) -> Option<&'a daemon::Task> {
-        self.row.and_then(|row| feed.board.task(&row.run.task))
+        self.run.and_then(|row| feed.board.task(&row.run.task))
     }
+    /// The project the session works in: a run's task's, a build's own; none for a chat.
     pub fn project(self, feed: &'a daemon::Feed) -> Option<&'a str> {
-        self.task(feed).and_then(|task| task.project())
+        match (self.run, self.chat) {
+            (Some(_), _) => self.task(feed).and_then(|task| task.project()),
+            (None, Some(chat)) => chat
+                .build
+                .as_ref()
+                .and_then(|build| build.project.as_deref()),
+            (None, None) => None,
+        }
     }
     pub fn pinned(self, feed: &daemon::Feed) -> bool {
-        self.row.is_none() && assistant::quick_id(feed).as_deref() == Some(self.id)
+        self.chat
+            .is_some_and(|chat| chat.kind == AssistantKind::Quick)
+            && assistant::quick_id(feed).as_deref() == Some(self.id)
     }
-    fn status(self) -> Option<AgentStatus> {
-        self.row.map(|row| live::status(&row.status))
+    /// The build's record says its host runs in a terminal this daemon cannot reach.
+    fn elsewhere(self) -> bool {
+        self.chat.is_some_and(|chat| {
+            chat.state == AssistantState::Cold && chat.live_in == AssistantLocation::Pane
+        })
     }
-    pub fn chip(self, feed: &daemon::Feed) -> (String, Hue) {
-        match self.status() {
-            Some(status) => {
-                let (label, hue) = status.chip();
-                (label.into(), hue)
+    /// Stopped and startable again from its page.
+    pub fn resumable(self) -> bool {
+        match (self.run, self.chat) {
+            (Some(run), _) => matches!(run.status, SessionStatus::Gone),
+            (None, Some(chat)) => {
+                matches!(chat.state, AssistantState::Cold | AssistantState::Failed)
+                    && !self.elsewhere()
             }
-            None => {
-                let chip = assistant::live_chip(feed, self.id);
-                (chip.label, chip.hue)
+            (None, None) => false,
+        }
+    }
+    /// The row's state and its group.
+    pub fn state(self) -> (RowState, u8) {
+        if let Some(run) = self.run {
+            return match &run.status {
+                SessionStatus::Working => (state(true, None, "Working", Hue::Worker), WORKING),
+                SessionStatus::Blocked { .. } => {
+                    (state(false, Some("▲"), "Needs you", Hue::You), NEEDS)
+                }
+                SessionStatus::Idle if run.paused == Some(true) => {
+                    (state(false, Some("○"), "Paused", Hue::Held), IDLE)
+                }
+                SessionStatus::Idle => (state(false, None, "Idle", Hue::Neutral), IDLE),
+                SessionStatus::Gone => (
+                    state(false, Some("○"), "Not running", Hue::Neutral),
+                    STOPPED,
+                ),
+            };
+        }
+        let Some(chat) = self.chat else {
+            return (state(false, None, "state unknown", Hue::Neutral), IDLE);
+        };
+        let exit = chat
+            .build
+            .as_ref()
+            .and_then(|build| build.exit.as_ref())
+            .and_then(exit_status);
+        if let Some(exit) = exit.filter(|_| chat.state != AssistantState::Cold) {
+            let group = match exit.hue {
+                Hue::Held => NEEDS,
+                Hue::Corral => WORKING,
+                _ => IDLE,
+            };
+            let glyph = match exit.hue {
+                Hue::Corral => None,
+                Hue::Fail => Some("✗"),
+                Hue::Ok => Some("✓"),
+                _ => Some("●"),
+            };
+            return (
+                state(exit.hue == Hue::Corral, glyph, exit.short, exit.hue),
+                group,
+            );
+        }
+        match chat.state {
+            AssistantState::Working | AssistantState::Starting => {
+                (state(true, None, "Working", Hue::Worker), WORKING)
+            }
+            AssistantState::Waiting => (state(false, Some("▲"), "Needs you", Hue::You), NEEDS),
+            AssistantState::Stopping => (state(true, None, "Stopping", Hue::Neutral), WORKING),
+            AssistantState::Paused => (state(false, Some("○"), "Paused", Hue::Held), IDLE),
+            AssistantState::Failed => (state(false, Some("✗"), "Failed", Hue::Fail), IDLE),
+            AssistantState::Cold if self.elsewhere() => (
+                state(false, Some("○"), "Open in another terminal", Hue::Neutral),
+                STOPPED,
+            ),
+            AssistantState::Cold => (
+                state(false, Some("○"), "Not running", Hue::Neutral),
+                STOPPED,
+            ),
+            AssistantState::Ended => (state(false, None, "Ended", Hue::Neutral), ENDED),
+            AssistantState::Ready | AssistantState::Other => {
+                (state(false, None, "Idle", Hue::Neutral), IDLE)
             }
         }
     }
-    pub fn name(self, feed: &daemon::Feed) -> String {
-        if let Some(row) = self.assistant {
-            return row.title.clone();
-        }
-        self.task(feed)
-            .map(|task| task.title().to_owned())
-            .unwrap_or_default()
+    /// Whether the host runs or waits: what Live lists.
+    pub fn live(self) -> bool {
+        self.state().1 < STOPPED
+    }
+    pub fn name(self, feed: &daemon::Feed) -> Option<String> {
+        let named = match (self.run, self.chat) {
+            (Some(_), _) => self.task(feed).map(|task| task.title().to_owned()),
+            (None, Some(chat)) => Some(
+                chat.build
+                    .as_ref()
+                    .map_or_else(|| chat.title.clone(), |build| build.name.clone()),
+            ),
+            (None, None) => None,
+        };
+        named.filter(|name| !name.trim().is_empty())
     }
     /// What the session is doing: a blocked screen's prompt, the task's progress while the
-    /// session works, else what an idle or ended session says of itself. A turn that was
-    /// cancelled or a session that was terminated leaves the task Running, so the task's line
-    /// would still read "running".
-    pub fn doing(self, feed: &daemon::Feed) -> String {
-        if let Some(row) = self.row {
+    /// run works; a chat's or build's waiting question, or how many agents it runs.
+    pub fn doing(self, feed: &daemon::Feed) -> Option<String> {
+        if let Some(row) = self.run {
             let task = self.task(feed);
             let said = match &row.status {
                 SessionStatus::Blocked { .. } => live::excerpt(row)
@@ -156,46 +335,84 @@ impl<'a> Source<'a> {
                 SessionStatus::Idle if row.paused == Some(true) => {
                     Some("paused · its input waits for Resume".into())
                 }
-                SessionStatus::Idle => Some(
-                    task.and_then(daemon::Task::blocked)
-                        .map_or_else(|| "idle · no turn running".into(), |b| b.reason.clone()),
-                ),
-                SessionStatus::Gone => Some("session ended".into()),
+                SessionStatus::Idle => task
+                    .and_then(daemon::Task::blocked)
+                    .map(|b| b.reason.clone()),
+                SessionStatus::Gone => None,
             };
-            return said
-                .filter(|text| !text.trim().is_empty())
-                .unwrap_or_else(|| "Doing now unknown".into());
+            return said.filter(|text| !text.trim().is_empty());
         }
-        let scope = if self.pinned(feed) {
-            assistant::QUICK
-        } else {
-            self.id
-        };
-        feed.threads
-            .get(scope)
-            .and_then(|thread| {
-                thread
-                    .entries
-                    .values()
-                    .filter(|entry| entry.kind == corral_protocol::assistant::EntryKind::Answer)
-                    .max_by_key(|entry| live::unix(&entry.at))
-                    .and_then(|entry| entry.text.clone())
-            })
-            .filter(|text| !text.trim().is_empty())
-            .unwrap_or_else(|| "Doing now unknown".into())
+        let chat = self.chat?;
+        if let Some(wait) = chat
+            .wait
+            .as_ref()
+            .filter(|_| chat.state == AssistantState::Waiting)
+        {
+            return wait.text.lines().next().map(str::to_owned);
+        }
+        let live = chat.build.as_ref().map_or(0, |build| build.children.live);
+        (live > 0).then(|| {
+            format!(
+                "{live} {} running",
+                if live == 1 { "agent" } else { "agents" }
+            )
+        })
     }
-    /// The run's profile and model; an assistant's profile.
+    /// `▲ n`: the session and its children waiting on the owner.
+    pub fn needs(self) -> Option<String> {
+        let waiting = u32::from(
+            self.run
+                .is_some_and(|run| matches!(run.status, SessionStatus::Blocked { .. }))
+                || self
+                    .chat
+                    .is_some_and(|chat| chat.state == AssistantState::Waiting),
+        );
+        let children = self
+            .chat
+            .and_then(|chat| chat.build.as_ref())
+            .map_or(0, |build| build.children.waiting);
+        let count = waiting.max(children);
+        (count > 0).then(|| format!("▲ {count}"))
+    }
+    /// The model and effort: the row's model; a chat without one names its profile.
     pub fn agent(self) -> Option<String> {
-        if let Some(row) = self.row {
-            let model = row.run.model.as_deref().unwrap_or("model unknown");
-            return Some(format!("{} · {model}", row.run.profile));
+        let (model, effort) = match (self.run, self.chat) {
+            (Some(run), _) => (run.run.model.clone(), run.run.effort.clone()),
+            (None, Some(chat)) => (
+                chat.model.clone().or_else(|| chat.profile.clone()),
+                chat.effort.clone(),
+            ),
+            (None, None) => (None, None),
+        };
+        let model = model?;
+        Some(match effort {
+            Some(effort) => format!("{model} · {effort}"),
+            None => model,
+        })
+    }
+    /// Unix seconds of its newest activity, for the order within a group.
+    fn activity(self) -> u64 {
+        match (self.run, self.chat) {
+            (Some(run), _) => run
+                .run
+                .quiet_since
+                .unwrap_or(run.run.started)
+                .as_second()
+                .try_into()
+                .unwrap_or(0),
+            (None, Some(chat)) => chat
+                .updated
+                .as_deref()
+                .or(chat.created.as_deref())
+                .and_then(live::unix)
+                .unwrap_or(0),
+            (None, None) => 0,
         }
-        self.assistant.and_then(|row| row.profile.clone())
     }
     pub fn is_stale(self, feed: &daemon::Feed) -> bool {
         live::stale(
             feed,
-            if self.row.is_some() {
+            if self.run.is_some() {
                 "agents"
             } else {
                 "assistant"
@@ -207,73 +424,54 @@ impl<'a> Source<'a> {
 }
 
 fn in_scope(source: Source<'_>, feed: &daemon::Feed, filter: &ProjectFilter) -> bool {
-    match source.row {
-        None => true,
-        Some(row) => feed
+    match (source.run, source.chat) {
+        (Some(row), _) => feed
             .board
             .task(&row.run.task)
             .map_or(*filter == ProjectFilter::All, |task| {
                 filter.matches(task.project())
             }),
+        (None, Some(chat)) if chat.kind == AssistantKind::Build => {
+            *filter == ProjectFilter::All || filter.matches(source.project(feed))
+        }
+        // Chats belong to the workspace, not to a project.
+        _ => true,
     }
 }
 
-pub(super) fn selected<'a>(
-    feed: &'a daemon::Feed,
-    id: &str,
-    filter: &ProjectFilter,
-) -> Option<Source<'a>> {
-    let (key, row) = feed
-        .agents
-        .get_key_value(id)
-        .map_or((None, None), |(key, row)| (Some(key), Some(row)));
-    let assistant = feed.assistants.get_key_value(id);
-    let source = Source {
-        id: key.or(assistant.map(|(key, _)| key))?.as_str(),
-        row,
-        assistant: assistant.map(|(_, row)| row),
-    };
-    (in_scope(source, feed, &filter.resolved(feed))
-        && (source.row.is_some() || source.pinned(feed)))
-    .then_some(source)
-}
-
-pub(super) fn scoped<'a>(feed: &'a daemon::Feed, filter: &ProjectFilter) -> Vec<Source<'a>> {
-    let filter = filter.resolved(feed);
-    let quick = assistant::quick_id(feed);
-    let mut rows: Vec<_> = feed
-        .agents
+fn sources<'a>(feed: &'a daemon::Feed) -> impl Iterator<Item = Source<'a>> {
+    feed.agents
         .iter()
         .map(|(id, row)| Source {
             id: id.as_str(),
-            row: Some(row),
-            assistant: None,
+            run: Some(row),
+            chat: None,
         })
-        .chain(
-            feed.assistants
-                .iter()
-                .filter(|(id, _)| quick.as_deref() == Some(id.as_str()))
-                .map(|(id, row)| Source {
-                    id: id.as_str(),
-                    row: None,
-                    assistant: Some(row),
-                }),
-        )
+        .chain(feed.assistants.iter().map(|(id, row)| Source {
+            id: id.as_str(),
+            run: None,
+            chat: Some(row),
+        }))
+}
+
+/// The sessions the project scope and Show filter keep, in roster order.
+pub(super) fn scoped<'a>(
+    feed: &'a daemon::Feed,
+    filter: &ProjectFilter,
+    show: Show,
+) -> Vec<Source<'a>> {
+    let filter = filter.resolved(feed);
+    let mut rows: Vec<_> = sources(feed)
         .filter(|source| in_scope(*source, feed, &filter))
+        .filter(|source| show == Show::All || source.live() || source.pinned(feed))
         .collect();
     rows.sort_by(|a, b| {
-        let rank = |source: Source<'_>| {
-            if source.row.is_none() {
-                0
-            } else if source.status() == Some(AgentStatus::Blocked) {
-                1
-            } else if source.is_stale(feed) {
-                2
-            } else {
-                3
-            }
-        };
-        rank(*a).cmp(&rank(*b)).then_with(|| a.id.cmp(b.id))
+        a.state()
+            .1
+            .cmp(&b.state().1)
+            .then_with(|| b.pinned(feed).cmp(&a.pinned(feed)))
+            .then_with(|| b.activity().cmp(&a.activity()))
+            .then_with(|| a.id.cmp(b.id))
     });
     rows
 }
@@ -309,87 +507,112 @@ pub(super) fn short(text: &str, max: usize) -> String {
     result
 }
 
+/// The id a row shows: `T-12 R2` for a run, the chat's or build's own id.
+fn shown_id(source: Source<'_>) -> String {
+    match source.run {
+        Some(run) => format!("{} {}", run.run.task, run.run.id),
+        None => source.id.to_owned(),
+    }
+}
+
+fn project_words(source: Source<'_>, feed: &daemon::Feed) -> String {
+    match (source.run, source.chat) {
+        (Some(_), _) if source.task(feed).is_none() => "project unknown".into(),
+        (Some(_), _) => source.project(feed).unwrap_or("Unassigned").into(),
+        (None, Some(chat)) => match &chat.build {
+            Some(build) => {
+                let project = build.project.as_deref().unwrap_or("workspace");
+                match &build.branch {
+                    Some(branch) => format!("{project} · {branch}"),
+                    None => project.into(),
+                }
+            }
+            None => "workspace".into(),
+        },
+        (None, None) => "–".into(),
+    }
+}
+
 pub(super) fn row(source: Source<'_>, state: &State, feed: &daemon::Feed) -> RosterRow {
-    let (chip, hue) = source.chip(feed);
-    let full = source.doing(feed);
-    let quiet = source.row.and_then(|row| live::quiet(row, feed));
+    let (row_state, _) = source.state();
+    let doing = source.doing(feed);
+    let quiet = source.run.and_then(|row| live::quiet(row, feed));
     let agent = source.agent();
-    let mut hints = vec![
-        format!("{chip} · {}", live::role_label(source.role())),
-        full.clone(),
-    ];
+    let name = source.name(feed);
+    let mut hints = vec![format!(
+        "{} · {}",
+        row_state.word,
+        live::role_label(source.role())
+    )];
+    hints.extend(doing.clone());
     hints.extend(agent.clone());
     hints.extend(quiet.clone());
+    let since = match (source.run, source.chat) {
+        (Some(run), _) => live::clock_at(run.run.started, feed),
+        (None, Some(chat)) => live::clock(chat.created.as_deref(), feed),
+        (None, None) => None,
+    };
     RosterRow {
         id: format!("agent-{}", source.id),
         session: Id::from(source.id),
-        task: source.row.map(|row| Id::new(&row.run.task)),
-        chip,
-        hue,
+        task: source.run.map(|row| Id::new(&row.run.task)),
         role: live::role_label(source.role()),
-        shown_id: source
-            .row
-            .map(live::shown_id)
-            .unwrap_or_else(|| source.id.into()),
-        project: if source.workspace() {
-            "workspace".into()
-        } else if source.task(feed).is_none() {
-            "project unknown".into()
-        } else {
-            source.project(feed).unwrap_or("Unassigned").into()
-        },
-        name: source.name(feed),
-        pinned: source.pinned(feed),
-        doing: short(&full, 76),
+        shown_id: shown_id(source),
+        named: name.is_some(),
+        name: name.unwrap_or_else(|| "untitled".into()),
+        project: project_words(source, feed),
+        doing: doing
+            .as_deref()
+            .map_or_else(|| "–".into(), |text| short(text, 76)),
         doing_hint: hints.join(" · "),
-        agent: agent.unwrap_or_else(|| "—".into()),
-        quiet: quiet.unwrap_or_else(|| "—".into()),
-        since: source
-            .row
-            .and_then(|row| live::clock_at(row.run.started, feed))
-            .unwrap_or_else(|| "—".into()),
+        needs: source.needs(),
+        agent: agent.unwrap_or_else(|| "–".into()),
+        cost: source
+            .chat
+            .and_then(|chat| chat.cost_usd)
+            .map_or_else(|| "–".into(), |cost| cost_text(Some(cost), false)),
+        ctx: "–".into(),
+        quiet: quiet.unwrap_or_else(|| "–".into()),
+        since: since.unwrap_or_else(|| "–".into()),
+        pinned: source.pinned(feed),
+        resumable: source.resumable(),
         selected: state
             .roster_session
             .as_ref()
             .is_some_and(|id| id.as_str() == source.id),
-        action: Action::SelectRoster(Id::from(source.id)),
+        state: row_state,
+        action: Action::OpenSession(Id::from(source.id)),
     }
 }
 
-/// Counts describe the roster before its role tab: live runs and the pinned quick thread.
-/// Workspace sessions do not inflate a project's run count.
-pub fn roster(state: &State, feed: &daemon::Feed, _env: Env, filter: &ProjectFilter) -> Roster {
-    let sources = scoped(feed, filter);
-    let scoped_project = filter.resolved(feed) != ProjectFilter::All;
-    let (mut sessions, mut needs, mut stale_count) = (0, 0, 0);
-    for source in sources
-        .iter()
-        .filter(|source| !scoped_project || !source.workspace())
-    {
-        sessions += 1;
-        needs += usize::from(source.status() == Some(AgentStatus::Blocked));
+fn one(n: usize, single: &'static str, many: &'static str) -> &'static str {
+    if n == 1 { single } else { many }
+}
+
+/// Counts describe the roster before its role tab: working, waiting on the owner, idle, stale.
+pub fn roster(state: &State, feed: &daemon::Feed, filter: &ProjectFilter) -> Roster {
+    let sources = scoped(feed, filter, state.show);
+    let (mut working, mut needs, mut idle, mut stale_count) = (0, 0, 0, 0);
+    for source in &sources {
+        match source.state().1 {
+            NEEDS => needs += 1,
+            WORKING => working += 1,
+            IDLE => idle += 1,
+            _ => {}
+        }
         stale_count += usize::from(source.is_stale(feed));
     }
     let mut stats = Vec::new();
-    let one =
-        |n: usize, single: &'static str, many: &'static str| if n == 1 { single } else { many };
     for (key, icon, count, hue, hint) in [
         (
-            "sessions",
-            StatIcon::Sessions,
-            sessions,
-            Hue::Neutral,
-            if scoped_project {
-                format!(
-                    "{sessions} {} in this project scope. The pinned quick thread stays listed.",
-                    one(sessions, "live run works", "live runs work")
-                )
-            } else {
-                format!(
-                    "{sessions} {}: live runs and the pinned quick thread.",
-                    one(sessions, "session", "sessions")
-                )
-            },
+            "working",
+            StatIcon::Moving,
+            working,
+            Hue::Worker,
+            format!(
+                "{working} {} working",
+                one(working, "session is", "sessions are")
+            ),
         ),
         (
             "needs-you",
@@ -397,9 +620,16 @@ pub fn roster(state: &State, feed: &daemon::Feed, _env: Env, filter: &ProjectFil
             needs,
             Hue::You,
             format!(
-                "{needs} {} blocked at a prompt",
-                one(needs, "session is", "sessions are")
+                "{needs} {} on you",
+                one(needs, "session waits", "sessions wait")
             ),
+        ),
+        (
+            "idle",
+            StatIcon::Sessions,
+            idle,
+            Hue::Neutral,
+            format!("{idle} {} idle", one(idle, "session is", "sessions are")),
         ),
         (
             "stale",
@@ -418,9 +648,10 @@ pub fn roster(state: &State, feed: &daemon::Feed, _env: Env, filter: &ProjectFil
     }
     let mut roles = vec![
         RosterRole::All,
+        RosterRole::Build,
+        RosterRole::Assistant,
         RosterRole::Worker,
         RosterRole::Reviewer,
-        RosterRole::Assistant,
     ];
     for source in &sources {
         let role = RosterRole::of(source.role());
@@ -444,6 +675,15 @@ pub fn roster(state: &State, feed: &daemon::Feed, _env: Env, filter: &ProjectFil
             })
         })
         .collect();
+    let show = [Show::Live, Show::All]
+        .into_iter()
+        .map(|show| ShowTab {
+            id: format!("seg-show-{}", show.slug()),
+            label: show.label(),
+            selected: show == state.show,
+            action: Action::SetShow(show),
+        })
+        .collect();
     let rows: Vec<_> = sources
         .iter()
         .copied()
@@ -451,70 +691,75 @@ pub fn roster(state: &State, feed: &daemon::Feed, _env: Env, filter: &ProjectFil
         .map(|source| row(source, state, feed))
         .collect();
     let fill = if !rows.is_empty() {
-        super::Fill::Ready
-    } else if sources.is_empty() && feed.agents.is_empty() && feed.assistants.is_empty() {
+        Fill::Ready
+    } else if feed.agents.is_empty() && feed.assistants.is_empty() {
         let topics = [feed.topics.get("agents"), feed.topics.get("assistant")];
         if let Some(error) = topics
             .iter()
             .flatten()
             .find_map(|topic| topic.error.as_ref())
         {
-            super::Fill::Failed(format!(
+            Fill::Failed(format!(
                 "Sessions unavailable: {} ({})",
                 error.message, error.code
             ))
         } else if topics.iter().all(Option::is_none)
             || topics.iter().flatten().any(|topic| topic.loading)
         {
-            super::Fill::Loading("Loading sessions…")
+            Fill::Loading("Reading sessions…")
         } else {
-            super::Fill::Empty {
-                heading: "No live runs",
-                paragraph: "A run appears here when a task is dispatched or reviewed.".into(),
+            Fill::Empty {
+                heading: "No sessions yet.",
+                paragraph: "Start a build or an assistant session with New; runs appear here when a task is dispatched or reviewed.".into(),
             }
         }
     } else {
-        super::Fill::Empty {
-            heading: "No sessions in this scope or role",
-            paragraph: "Choose another project or role to see its sessions.".into(),
+        Fill::Empty {
+            heading: "No sessions in this scope",
+            paragraph:
+                "Choose another project or role, or Show All for sessions that are not running."
+                    .into(),
         }
     };
     Roster {
         title: "Agents",
         stats,
         roles,
+        show,
+        new: new_menu(),
         rows,
         columns: [
             "State",
-            "ID",
             "Role",
+            "ID",
+            "Name",
             "Project",
-            "Session",
             "Doing now",
-            "Agent",
+            "Model",
+            "$",
+            "Ctx",
             "Quiet",
             "Started",
         ],
         fill,
         stale: (live::stale(feed, "agents") || live::stale(feed, "assistant")).then(|| {
             format!(
-                "Last known sessions · {}",
-                feed.synced.as_deref().unwrap_or("time unknown")
+                "! Showing sessions from {} · corrald unreachable",
+                feed.synced.as_deref().unwrap_or("an unknown time")
             )
         }),
     }
 }
 
 impl State {
-    /// The roster's keys: j/k (and the arrows) move the selection, Escape clears it, and `.`
-    /// opens the Session menu of the selected run, or of the run whose page is open.
-    pub fn key_live_filtered(
+    /// The roster's keys: j/k (and the arrows) move the selection, Enter opens it, Escape clears
+    /// it, `N` opens the New build sheet, and `.` opens the Session menu of the selected run, or
+    /// of the run whose page is open.
+    pub fn key(
         &mut self,
         key: &str,
         top: Option<&Live>,
-        _selection: &Selection,
         feed: &daemon::Feed,
-        _env: Env,
         filter: &ProjectFilter,
     ) -> Option<Vec<Effect>> {
         if key == "." {
@@ -533,20 +778,31 @@ impl State {
         if top.is_some() {
             return None;
         }
-        if key == "escape" && self.roster_session.take().is_some() {
-            return Some(vec![]);
+        match key {
+            "escape" if self.roster_session.take().is_some() => return Some(Vec::new()),
+            "N" | "shift+n" => {
+                self.start.open = true;
+                return Some(Vec::new());
+            }
+            "enter" => {
+                return self
+                    .roster_session
+                    .clone()
+                    .map(|id| vec![Effect::OpenLive(Live::Session(id))]);
+            }
+            _ => {}
         }
         let direction = match key {
             "j" | "down" => 1,
             "k" | "up" => -1,
             _ => return None,
         };
-        let visible: Vec<_> = scoped(feed, filter)
+        let visible: Vec<_> = scoped(feed, filter, self.show)
             .into_iter()
             .filter(|source| visible(*source, &self.roster_role))
             .collect();
         if visible.is_empty() {
-            return Some(vec![]);
+            return Some(Vec::new());
         }
         let current = self
             .roster_session
@@ -558,18 +814,6 @@ impl State {
             (None, _) => 0,
         };
         self.roster_session = Some(Id::from(visible[at].id));
-        self.roster_tab = super::RosterPanelTab::Summary;
-        Some(vec![])
-    }
-}
-
-impl State {
-    /// Reply and panel presses target the roster's session without changing the route.
-    pub fn act_roster(&mut self, action: Action, feed: &daemon::Feed, env: Env) -> Vec<Effect> {
-        let selection = Selection {
-            session: self.roster_session.clone(),
-            ..Selection::default()
-        };
-        self.act_live(action, feed, &selection, env)
+        Some(Vec::new())
     }
 }

@@ -69,6 +69,7 @@ impl AppState {
     ) -> Result<Vec<Outgoing>, String> {
         let mut changed = BTreeSet::new();
         let mut scope_key = None;
+        let mut parts = BTreeSet::new();
         let topic = match delta {
             SubDelta::Tasks { delta } => {
                 return Ok(self.tasks(feed, delta.epoch, delta.rows, delta.left, replacement));
@@ -134,19 +135,41 @@ impl AppState {
                 events,
                 gap,
                 fleet,
+                state,
                 ..
             } => {
                 if !self.session_scopes.contains_key(&scope) {
                     return Ok(vec![]);
                 }
                 scope_key = Some(scope.clone());
-                // Without the capability nothing is said about children, whatever the page holds.
+                // Without the capability nothing is said about children or the host's state,
+                // whatever the page holds.
                 let fleet =
                     fleet.filter(|_| feed.with_untracked(|feed| feed.capable(SESSION_FLEET_V1)));
+                let state =
+                    state.filter(|_| feed.with_untracked(|feed| feed.capable(SESSION_STATE_V1)));
+                let reset = gap.is_some();
                 feed.update(|feed| {
                     let live = feed.live.entry(Id::from(&scope)).or_default();
-                    live.apply_page(generation, events, gap.is_some());
+                    let before = live.parts.clone();
+                    let generation_changed = live.generation != generation;
+                    live.apply_page(generation, events, reset);
                     live.replace_fleet(fleet);
+                    live.replace_state(state);
+                    // After a gap or a new generation no part event can be trusted to have
+                    // arrived, so every part is read again.
+                    parts = if reset || generation_changed {
+                        super::details::PART_NAMES
+                            .iter()
+                            .map(|part| (*part).to_owned())
+                            .collect()
+                    } else {
+                        live.parts
+                            .iter()
+                            .filter(|(part, count)| before.get(*part) != Some(*count))
+                            .map(|(part, _)| part.clone())
+                            .collect()
+                    };
                 });
                 self.touch_session(feed, &scope);
                 Topic::Session
@@ -175,7 +198,10 @@ impl AppState {
             );
             feed.synced = Some(feed.clock.clone());
         });
-        let outgoing = self.invalidate(feed, topic, &changed);
+        let mut outgoing = self.invalidate(feed, topic, &changed);
+        if let Some(scope) = scope_key.as_deref().filter(|_| !parts.is_empty()) {
+            outgoing.extend(self.session_parts(feed, scope, &parts));
+        }
         self.trim_retained(feed);
         Ok(outgoing)
     }
@@ -268,7 +294,7 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
             topic == Topic::Tasks && changed.contains(task)
         }
         DetailRef::Session { id } | DetailRef::Terminal { id } => {
-            topic == Topic::Agents && changed.contains(id)
+            matches!(topic, Topic::Agents | Topic::Assistant) && changed.contains(id)
         }
         DetailRef::Timeline { .. } | DetailRef::Burnup { .. } => {
             matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
@@ -286,7 +312,9 @@ pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
             topic == Topic::Tasks
         }
         DetailRef::Plan { .. } => matches!(topic, Topic::Plans | Topic::Tasks),
-        DetailRef::Session { .. } | DetailRef::Terminal { .. } => topic == Topic::Agents,
+        DetailRef::Session { .. } | DetailRef::Terminal { .. } => {
+            matches!(topic, Topic::Agents | Topic::Assistant)
+        }
         DetailRef::Timeline { .. } | DetailRef::Burnup { .. } => {
             matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
         }

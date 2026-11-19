@@ -28,6 +28,7 @@ pub(crate) struct Shared {
     pub(crate) terminal_cache: crate::topics::TerminalCache,
     pub(crate) session_live: crate::topics::SessionLive,
     pub(crate) chat: crate::assistant::Service,
+    pub(crate) build_ops: Mutex<()>,
     state: Mutex<State>,
     pub(crate) changed: Condvar,
 }
@@ -75,6 +76,7 @@ impl Shared {
             terminal_cache: Default::default(),
             session_live: Default::default(),
             chat: Default::default(),
+            build_ops: Mutex::default(),
             state: Mutex::new(State {
                 stop: false,
                 closed: false,
@@ -124,6 +126,14 @@ impl Shared {
 
     pub(crate) fn private_chat_sockets(&self) -> Option<PathBuf> {
         self.runner.as_ref().map(|_| self.root.join("sock"))
+    }
+
+    pub(crate) fn build_data_root(&self) -> Result<PathBuf> {
+        if self.runner.is_some() {
+            Ok(self.root.join("pi-data"))
+        } else {
+            corral_engine::runner::pi::pi_data_root()
+        }
     }
 
     pub(crate) fn runner_reachable(&self, engine: &Engine) -> bool {

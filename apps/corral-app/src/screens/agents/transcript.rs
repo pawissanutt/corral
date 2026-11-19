@@ -1,14 +1,15 @@
 //! A session's transcript (`.tx`, `.tm`, `.tool`, `.qcard`), replayed as the terminal UI shows
 //! it: every message with its words as rendered Markdown, thinking, tool rows, images,
-//! dividers, quiet marker rows, cards and the turn's footer, then the live turn while one runs.
-//! Desktop and phone share the layout at their sizes; a terminal shows each message as a block
-//! of rows. A daemon transcript is one bounded page, with the controls to page through it and
-//! the state of its source. The reply box under it is drawn by `super::reply`.
+//! dividers, quiet marker rows, cards and the turn's footer; this device's own sends the
+//! transcript does not hold yet (echoes, each with where it stands); then the live turn while
+//! one runs. The owner's messages sit on a raised block. Desktop and phone share the layout at
+//! their sizes; a terminal shows each message as a block of rows. A daemon transcript is one
+//! bounded page, with the controls to page through it and the state of its source.
 //!
 //! Every item carries the test id `item-<n>`, numbered across the page, and a row that opens
-//! carries `btn-expand-<n>`.
+//! carries `btn-expand-<n>`; an echo carries `echo-<command id>`.
 
-pub mod fleet;
+pub(crate) mod attachments;
 mod parts;
 mod prose;
 mod rows;
@@ -20,9 +21,12 @@ use nsh_core::prelude::*;
 pub use watch::watch;
 
 use crate::model::Form;
-use crate::model::agents::{Action, Fill, Message, MessageItem, Note, QuestionCard, Transcript};
 use crate::model::hue::Hue;
-use crate::model::text::{Rich, span};
+use crate::model::session::transcript::{
+    Fill, Line, LineClass, Message, MessageItem, Note, QuestionCard, Transcript,
+};
+use crate::model::session::{Action, Echo};
+use crate::model::text::{Rich, Span, span};
 use crate::screens::markdown::provide_styles;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -130,15 +134,21 @@ fn disclaimer(app: AppState, note: &Option<Note>) -> Option<AnyElement> {
 }
 
 /// The transcript: a stale notice when its source is unreachable, the control for earlier
-/// messages, every message of the page in order (or why there are none), the live turn and the
-/// quiet rows after it, the way back to the latest messages, then the note. Desktop centres it
-/// at the mockup's measure; the phone uses the full width with 16 pt sides.
+/// messages, every message of the page in order (or why there are none), this device's sends
+/// the page does not hold yet, the live turn and the quiet rows after it, the way back to the
+/// latest messages, then the note. Desktop centres it at the mockup's measure; the phone uses
+/// the full width with 16 pt sides.
 pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
     let form = app.form;
     provide_styles(app);
     let mut next = 0;
     let mut messages = Vec::new();
-    for message in transcript.messages.iter().chain(&transcript.live) {
+    for message in &transcript.messages {
+        messages.push(self::message(app, message, next));
+        next += message.items.len() + usize::from(message.footer.is_some());
+    }
+    messages.extend(transcript.echoes.iter().map(|sent| echo(app, sent)));
+    for message in &transcript.live {
         messages.push(self::message(app, message, next));
         next += message.items.len() + usize::from(message.footer.is_some());
     }
@@ -266,12 +276,14 @@ fn message(app: AppState, message: &Message, first: usize) -> AnyElement {
     if let Some(footer) = &message.footer {
         items.push(rows::footer(app, footer, first + message.items.len()));
     }
+    let owner = message.author == "you";
     let head = view()
         .flex_row()
         .items_center()
         .gap(px(6.0))
         .child(line(app, &message.head, 11.5, Token::Ink3))
-        .when(message.live, |head| head.child(prose::caret(app)));
+        .when(message.live, |head| head.child(prose::caret(app)))
+        .children(message.input.clone().map(|input| input_id(app, input)));
     if form == Form::Terminal {
         return view()
             .child(
@@ -290,6 +302,12 @@ fn message(app: AppState, message: &Message, first: usize) -> AnyElement {
             .into_element();
     }
     let sides = if form == Form::Phone { 16.0 } else { 24.0 };
+    if owner {
+        return bubble(
+            form,
+            view().child(view().mb(px(3.0)).child(head)).children(items),
+        );
+    }
     view()
         .flex_row()
         .items_start()
@@ -322,6 +340,185 @@ fn message(app: AppState, message: &Message, first: usize) -> AnyElement {
                 .children(items),
         )
         .into_element()
+}
+
+/// The owner input id the host tagged a message with, quiet at the end of its first row.
+fn input_id(app: AppState, input: String) -> AnyElement {
+    let words = text(input)
+        .number_of_lines(1u32)
+        .truncate()
+        .flex_shrink(1.0)
+        .min_w(px(0.0))
+        .text_color(color(Token::Ink4));
+    if app.form == Form::Terminal {
+        return words.text_color(color(Token::Ink3)).into_element();
+    }
+    words
+        .font_family(FONT_MONO)
+        .text_size(px(10.5))
+        .into_element()
+}
+
+/// The owner's block (desktop and phone): the raised surface the owner's words sit on, lined up
+/// with the other messages' bodies (the avatar's column and its gap).
+fn bubble(form: Form, content: View) -> AnyElement {
+    let sides = if form == Form::Phone { 16.0 } else { 24.0 };
+    view()
+        .pl(px(sides + 34.0))
+        .pr(px(sides))
+        .py(px(6.0))
+        .child(
+            content
+                .min_w(px(0.0))
+                .px(px(12.0))
+                .py(px(8.0))
+                .rounded(px(8.0))
+                .bg(color(Token::Surface2)),
+        )
+        .into_element()
+}
+
+/// This device's send the transcript does not hold yet: the owner's block with its words, then
+/// where it stands (`sending…`, `queued · 2 in line`, `refused: <reason>`) under it, nothing once
+/// it started. A child steer names its receiver in the lead.
+fn echo(app: AppState, sent: &Echo) -> AnyElement {
+    let form = app.form;
+    let lead = match &sent.to {
+        Some(child) => format!("you → {child}"),
+        None => "you".to_owned(),
+    };
+    let state = (!sent.words.is_empty()).then(|| {
+        let words = text(sent.words.clone()).text_color(if sent.hue == Hue::Neutral {
+            color(Token::Ink3)
+        } else {
+            hue_ink(sent.hue)
+        });
+        if form == Form::Terminal {
+            words.into_element()
+        } else {
+            words
+                .font_family(FONT_TEXT)
+                .text_size(px(11.5))
+                .into_element()
+        }
+    });
+    let words = plain(app, sent.text.clone());
+    if form == Form::Terminal {
+        return view()
+            .test_id(&sent.id)
+            .child(
+                view()
+                    .flex_row()
+                    .child(
+                        text(lead)
+                            .flex_shrink_0()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(hue_ink(Hue::You)),
+                    )
+                    .child(term::space(1.0))
+                    .child(input_id(app, sent.input.clone())),
+            )
+            .child(view().pl(term::cells(2.0)).child(words).children(state))
+            .into_element();
+    }
+    let head = view()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .mb(px(3.0))
+        .child(
+            text(lead)
+                .font_family(FONT_TEXT)
+                .text_size(px(11.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(color(Token::Ink3)),
+        )
+        .child(input_id(app, sent.input.clone()));
+    view()
+        .test_id(&sent.id)
+        .child(bubble(
+            form,
+            view()
+                .child(head)
+                .child(words)
+                .children(state.map(|state| view().mt(px(4.0)).child(state).into_element())),
+        ))
+        .into_element()
+}
+
+/// Output or log lines in a real terminal: one row each in its class's role, a span in its hue.
+pub(super) fn cell_lines(lines: &[Line]) -> AnyElement {
+    view()
+        .min_w(px(0.0))
+        .children(lines.iter().map(|line| {
+            if line.text.iter().all(|span| span.text.is_empty()) {
+                return term::blank();
+            }
+            let (ink, weight) = class_look(line.class);
+            text("")
+                .min_w(px(0.0))
+                .number_of_lines(1u32)
+                .font_weight(weight)
+                .text_color(ink)
+                .children(line.text.iter().map(|span| run_of(span, ink)))
+                .into_element()
+        }))
+        .into_element()
+}
+
+/// Lines of a log as the form sets them: mono rows on the page (wrapping on the phone), each
+/// in its class's role; one row each in a terminal.
+pub(super) fn log_lines(app: AppState, lines: &[Line]) -> AnyElement {
+    let form = app.form;
+    if form == Form::Terminal {
+        return cell_lines(lines);
+    }
+    let (size, leading) = if form == Form::Phone {
+        (11.5, 17.0)
+    } else {
+        (12.0, 18.0)
+    };
+    view()
+        .min_w(px(0.0))
+        .children(lines.iter().map(|line| {
+            let (ink, weight) = class_look(line.class);
+            text("")
+                .min_w(px(0.0))
+                .min_h(px(leading))
+                .font_family(FONT_MONO)
+                .text_size(px(size))
+                .line_height(px(leading))
+                .font_weight(weight)
+                .text_color(ink)
+                .children(line.text.iter().map(|span| run_of(span, ink)))
+                .into_element()
+        }))
+        .into_element()
+}
+
+/// A line class's colour and weight.
+fn class_look(class: LineClass) -> (AdaptiveColor, FontWeight) {
+    match class {
+        LineClass::Prompt => (color(Token::Worker), FontWeight::NORMAL),
+        LineClass::Ok => (color(Token::Ok), FontWeight::NORMAL),
+        LineClass::Dim => (color(Token::Ink3), FontWeight::NORMAL),
+        LineClass::Bold => (color(Token::Ink), FontWeight::BOLD),
+        LineClass::Plain => (color(Token::Ink), FontWeight::NORMAL),
+    }
+}
+
+/// One run of a line: its own hue over the class, dim or bold when the span says so.
+fn run_of(span: &Span, base: AdaptiveColor) -> Text {
+    let ink = if span.hue != Hue::Neutral {
+        hue_ink(span.hue)
+    } else if span.dim {
+        color(Token::Ink3)
+    } else {
+        base
+    };
+    text(span.text.clone())
+        .text_color(ink)
+        .when(span.bold, |t| t.font_weight(FontWeight::BOLD))
 }
 
 /// A paragraph of a message (`.tm p`): body text, 6 pt under it, at most ~70 characters wide.

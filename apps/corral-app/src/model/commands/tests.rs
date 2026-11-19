@@ -64,8 +64,9 @@ fn daemon_palette_lists_served_records_only() {
             && row.id == "live:plan:T-31"
     ));
     assert!(
-        !rows.iter().any(|row| row.group == "Demo"
-            || matches!(row.action, Action::Ask(_) | Action::ToggleSession))
+        !rows
+            .iter()
+            .any(|row| row.group == "Demo" || matches!(row.action, Action::Ask(_)))
     );
     assert_eq!(
         run(

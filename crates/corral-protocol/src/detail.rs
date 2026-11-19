@@ -8,6 +8,7 @@ pub mod plan;
 pub mod question;
 pub mod review;
 pub mod session;
+pub mod session_parts;
 pub mod task;
 pub mod timeline;
 pub mod usage;
@@ -17,6 +18,7 @@ pub use plan::*;
 pub use question::*;
 pub use review::*;
 pub use session::*;
+pub use session_parts::*;
 pub use task::*;
 pub use timeline::*;
 pub use usage::*;
@@ -43,6 +45,57 @@ pub enum DetailRef {
     SessionItem {
         id: String,
         token: String,
+    },
+    SessionCards {
+        id: String,
+    },
+    SessionModels {
+        id: String,
+    },
+    SessionChild {
+        id: String,
+        child: String,
+    },
+    SessionJobs {
+        id: String,
+    },
+    SessionJobOutput {
+        id: String,
+        job: String,
+    },
+    SessionChanges {
+        id: String,
+        comparison: ChangesComparison,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+    },
+    SessionChangeFile {
+        id: String,
+        comparison: ChangesComparison,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        path: String,
+    },
+    SessionUsage {
+        id: String,
+    },
+    SessionContext {
+        id: String,
+    },
+    SessionPlan {
+        id: String,
+    },
+    SessionEvents {
+        id: String,
+    },
+    SessionCommands {
+        id: String,
+    },
+    BuildBoard {
+        id: String,
+    },
+    BuildRecord {
+        id: String,
     },
     Terminal {
         id: String,
@@ -96,6 +149,7 @@ pub struct DetailGet {
     #[serde(flatten)]
     pub target: DetailRef,
     pub etag: Option<String>,
+    /// For session parts, an opaque `after` token of at most 128 bytes.
     pub page: Option<String>,
 }
 
@@ -119,6 +173,20 @@ pub enum DetailBody {
     ReviewFile(PatchPage),
     Session(SessionPage),
     SessionItem(SessionItemPage),
+    SessionCards(SessionCards),
+    SessionModels(SessionModels),
+    SessionChild(SessionChildDetail),
+    SessionJobs(SessionJobs),
+    SessionJobOutput(JobOutputPage),
+    SessionChanges(SessionChanges),
+    SessionChangeFile(PatchPage),
+    SessionUsage(SessionUsage),
+    SessionContext(SessionContext),
+    SessionPlan(SessionPlan),
+    SessionEvents(SessionEventsPage),
+    SessionCommands(SessionCommands),
+    BuildBoard(BuildBoard),
+    BuildRecord(BuildRecord),
     Terminal(TerminalSnapshot),
     Timeline(TimelinePage),
     Burnup(Burnup),

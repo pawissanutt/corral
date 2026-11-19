@@ -1,13 +1,21 @@
-//! Sample chat sessions: each is a row of the assistant topic, a thread and a pi host whose
-//! transcript the thread is projected from. Engine runs are not chats here: they are the live
-//! runs the agents topic serves.
+//! Sample chat and build sessions: each is a row of the assistant topic and a pi host whose
+//! transcript its page is read from; a chat also has its thread. Engine runs are not here: they
+//! are the live runs the agents topic serves.
 
+use corral_protocol::session_state::Counts;
 use corral_protocol::{assistant::*, rows::*};
 
 use super::pi::{Host, Role};
+use super::stamp;
 use crate::model::daemon::*;
 
 const PROFILE: &str = "omp-sol";
+
+/// The sample build session that runs, with a recorded turn and child agents.
+pub(super) const BUILD: &str = "B-k3x9";
+
+/// The sample build session whose host stopped: listed under Show All, resumable.
+pub(super) const STOPPED_BUILD: &str = "B-k2a1";
 
 /// The sample's chats: the quick thread, two named sessions and one ended.
 pub(super) fn populate(feed: &mut Feed) {
@@ -23,6 +31,19 @@ pub(super) fn populate(feed: &mut Feed) {
             row.live_in = AssistantLocation::None;
         }
     }
+    build(feed, BUILD, "auth-refactor", Some("corral"), false);
+    if let Some(host) = feed.hosts.get_mut(BUILD) {
+        let at = stamp(feed.now.saturating_sub(40 * 60));
+        host.record_turn(
+            &at,
+            &["Split the auth module into a token store and a session API."],
+            vec![corral_protocol::detail::SessionItem::Text {
+                text: "Preview · sample build. Two slices, one worktree: the token store and the session API. Starting both now."
+                    .into(),
+            }],
+        );
+    }
+    build(feed, STOPPED_BUILD, "docs-sweep", Some("site"), true);
 }
 
 pub(super) fn entry(id: &str, at: &str, kind: EntryKind, text: &str) -> ThreadEntry {
@@ -48,6 +69,37 @@ pub(super) fn entry(id: &str, at: &str, kind: EntryKind, text: &str) -> ThreadEn
     }
 }
 
+fn row(
+    feed: &Feed,
+    id: &str,
+    kind: AssistantKind,
+    title: &str,
+    profile: Option<String>,
+) -> AssistantRow {
+    AssistantRow {
+        id: id.into(),
+        kind,
+        title: format!("Preview · {title}"),
+        state: AssistantState::Ready,
+        live_in: AssistantLocation::Daemon,
+        profile,
+        connection: None,
+        focus: None,
+        pending: 0,
+        turn: None,
+        cost_usd: Some(1.12),
+        cost_basis: Some(CostBasis::Estimated),
+        wait: None,
+        question_id: None,
+        rev: 1,
+        model: Some("preview/sol".into()),
+        effort: Some("high".into()),
+        created: Some(stamp(feed.now.saturating_sub(3600))),
+        updated: Some(stamp(feed.now)),
+        build: None,
+    }
+}
+
 /// A chat `id`, quick or named, with an empty thread and a host that has said nothing yet.
 pub(super) fn assistant(
     feed: &mut Feed,
@@ -57,34 +109,51 @@ pub(super) fn assistant(
     profile: Option<String>,
     quick: bool,
 ) {
-    feed.assistants.insert(
-        id.into(),
-        AssistantRow {
-            id: id.into(),
-            kind: if quick {
-                AssistantKind::Quick
-            } else {
-                AssistantKind::Session
-            },
-            title: format!("Preview · {title}"),
-            state: AssistantState::Ready,
-            live_in: AssistantLocation::Daemon,
-            profile,
-            connection: None,
-            focus: focus.map(str::to_owned),
-            pending: 0,
-            turn: None,
-            cost_usd: Some(1.12),
-            cost_basis: Some(CostBasis::Estimated),
-            wait: None,
-            question_id: None,
-            rev: 1,
-        },
-    );
+    let kind = if quick {
+        AssistantKind::Quick
+    } else {
+        AssistantKind::Session
+    };
+    let mut chat = row(feed, id, kind, title, profile);
+    chat.focus = focus.map(str::to_owned);
+    feed.assistants.insert(id.into(), chat);
     feed.hosts.insert(id.into(), Host::new(Role::Chat));
     feed.threads.insert(id.into(), ThreadSnapshot::default());
     if quick {
         feed.threads
             .insert(QUICK_THREAD.into(), ThreadSnapshot::default());
     }
+}
+
+/// A build `id` named `name` in `project`, in a new worktree and branch `build/<name>`; a
+/// stopped one's host has gone and its row is cold.
+pub(super) fn build(feed: &mut Feed, id: &str, name: &str, project: Option<&str>, stopped: bool) {
+    let mut session = row(feed, id, AssistantKind::Build, name, None);
+    session.title = name.into();
+    session.cost_usd = None;
+    session.cost_basis = None;
+    let root = feed
+        .workspace
+        .clone()
+        .unwrap_or_else(|| "/preview/corral".into());
+    session.build = Some(BuildFacts {
+        name: name.into(),
+        project: project.map(str::to_owned),
+        worktree: format!("{root}/.worktrees/{name}"),
+        repo_root: root,
+        branch: Some(format!("build/{name}")),
+        base: Some("main".into()),
+        here: false,
+        exit: None,
+        children: Counts::default(),
+        diff: None,
+    });
+    if stopped {
+        session.state = AssistantState::Cold;
+        session.live_in = AssistantLocation::None;
+    }
+    feed.assistants.insert(id.into(), session);
+    let mut host = Host::new(Role::Build);
+    host.gone = stopped;
+    feed.hosts.insert(id.into(), host);
 }

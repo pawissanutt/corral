@@ -4,7 +4,7 @@
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::agents::{Prose, Thinking};
+use crate::model::session::transcript::{Prose, Thinking};
 use crate::screens::markdown::markdown;
 use crate::state::AppState;
 use crate::ui::tokens::{FONT_TEXT, Token, color};

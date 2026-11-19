@@ -8,8 +8,9 @@
 
 use std::collections::VecDeque;
 
-use corral_protocol::detail::{SessionItem, SessionMessage, SessionToolState};
+use corral_protocol::detail::{InputFacts, SessionItem, SessionMessage, SessionToolState};
 use corral_protocol::session::{RewindCheckpoint, Rewound};
+use corral_protocol::session_state::InputOrigin;
 use corral_protocol::subscription::{
     SessionLiveEvent, SessionLiveKind, SessionLiveToolState, SessionLiveTurnState,
 };
@@ -33,6 +34,7 @@ pub(super) enum Role {
     #[default]
     Worker,
     Chat,
+    Build,
 }
 
 /// One sample pi host.
@@ -156,37 +158,57 @@ impl Host {
     }
 }
 
-/// A recorded owner or automated input; corrald shows automated input as a host notice.
+/// A recorded owner or automated input; corrald shows automated input as a host notice. An
+/// input sent through the socket is served under its input id (`<session>/input/<id>`).
 fn input(at: &str, text: &str, entry: Option<String>) -> Recorded {
-    let item = match text.strip_prefix("[corral] ") {
-        Some(notice) => SessionItem::Card {
-            title: "Host notice".into(),
-            text: notice.into(),
-            data: None,
-        },
-        None => SessionItem::Text { text: text.into() },
+    let (item, origin) = match text.strip_prefix("[corral] ") {
+        Some(notice) => (
+            SessionItem::Card {
+                title: "Host notice".into(),
+                text: notice.into(),
+                data: None,
+            },
+            InputOrigin::Auto,
+        ),
+        None => (SessionItem::Text { text: text.into() }, InputOrigin::Owner),
     };
+    let input = entry
+        .as_deref()
+        .and_then(|entry| entry.split_once("/input/"))
+        .map(|(_, id)| id.to_owned());
     Recorded {
-        entry,
         message: SessionMessage {
+            id: entry.clone().unwrap_or_default(),
             author: "user".into(),
             at: Some(at.into()),
             items: vec![item],
             model: None,
             stop_reason: None,
             usage: None,
+            input: Some(InputFacts {
+                id: input,
+                origin,
+                typed_at: None,
+                device: None,
+                to: None,
+            }),
+            attachments: Vec::new(),
         },
+        entry,
     }
 }
 
 fn assistant(at: &str, items: Vec<SessionItem>, stop: Option<&str>) -> SessionMessage {
     SessionMessage {
+        id: String::new(),
         author: "assistant".into(),
         at: Some(at.into()),
         items,
         model: Some("preview · sol".into()),
         stop_reason: stop.map(str::to_owned),
         usage: None,
+        input: None,
+        attachments: Vec::new(),
     }
 }
 
@@ -211,6 +233,7 @@ pub(super) fn question_card(
     Recorded {
         entry: None,
         message: SessionMessage {
+            id: String::new(),
             author: "custom".into(),
             at: Some(at.into()),
             items: vec![SessionItem::Card {
@@ -221,6 +244,8 @@ pub(super) fn question_card(
             model: None,
             stop_reason: None,
             usage: None,
+            input: None,
+            attachments: Vec::new(),
         },
     }
 }
@@ -236,7 +261,7 @@ pub(super) fn resolve(feed: &Feed, scope: &str) -> Option<Id> {
 }
 
 /// The watched scopes that show host `id`.
-fn scopes(feed: &Feed, id: &str) -> Vec<Id> {
+pub(super) fn scopes(feed: &Feed, id: &str) -> Vec<Id> {
     feed.topics
         .keys()
         .filter_map(|topic| topic.strip_prefix("session:"))

@@ -47,7 +47,7 @@ fn branch_cursor_skips_abandoned_entries_without_losing_pre_compaction_history()
                         "summary": "kept summary", "tokensBefore": 20}),
     );
     let (_dir, path) = fixture(entries, r#"{"id":"unfinished","parentId":"abandoned-0"}"#)?;
-    let (latest, older) = page(ID, &path, None)?;
+    let (latest, older) = page(ID, &path, None, None)?;
     assert!(
         matches!(latest.as_slice(), [message] if matches!(message.items.as_slice(),
             [SessionItem::Compaction { summary, tokens_before: 20 }] if summary == "kept summary"))
@@ -55,6 +55,7 @@ fn branch_cursor_skips_abandoned_entries_without_losing_pre_compaction_history()
     let (earlier, end) = page(
         ID,
         &path,
+        None,
         Some(older.as_deref().context("expected older page")?),
     )?;
     assert!(end.is_none());
@@ -81,9 +82,9 @@ fn large_foreign_record_pages_all_items_in_order() -> Result<()> {
         "",
     )?;
     assert!(fs::metadata(&path)?.len() > WINDOW as u64);
-    let (latest, cursor) = page(ID, &path, None)?;
+    let (latest, cursor) = page(ID, &path, None, None)?;
     let cursor = cursor.context("a split record needs an older cursor")?;
-    let (earlier, end) = page(ID, &path, Some(&cursor))?;
+    let (earlier, end) = page(ID, &path, None, Some(&cursor))?;
     assert!(end.is_none());
     let mut items = earlier
         .iter()
@@ -120,7 +121,7 @@ fn paired_tool_continuation_preserves_result_and_authenticates_scope_and_content
         ],
         "",
     )?;
-    let (messages, older) = page(ID, &path, None)?;
+    let (messages, older) = page(ID, &path, None, None)?;
     assert!(older.is_none());
     let items: Vec<_> = messages.iter().flat_map(|message| &message.items).collect();
     let [
@@ -136,16 +137,16 @@ fn paired_tool_continuation_preserves_result_and_authenticates_scope_and_content
         SessionItem::ToolCall { paired: true, .. }
     ));
     assert!(json_len(preview)? <= ITEM_BYTES);
-    assert!(item("T-2/R001", &path, token).is_err());
+    assert!(item("T-2/R001", &path, None, token).is_err());
     let mut tampered = token.clone();
     let last = tampered.pop().context("empty item token")?;
     tampered.push(if last == '0' { '1' } else { '0' });
-    assert!(item(ID, &path, &tampered).is_err());
+    assert!(item(ID, &path, None, &tampered).is_err());
 
     let mut assembled = String::new();
     let mut next = Some(token.clone());
     while let Some(fragment) = next {
-        let response = item(ID, &path, &fragment)?;
+        let response = item(ID, &path, None, &fragment)?;
         assert_eq!(response.offset, assembled.len() as u64);
         assert_eq!(response.bytes, *bytes);
         assert!(response.json.len() <= 4096);
@@ -171,7 +172,7 @@ fn paired_tool_continuation_preserves_result_and_authenticates_scope_and_content
 
     // Keep record offsets intact, but change the content of the paired result.
     fs::write(&path, fs::read_to_string(&path)?.replacen('改', "界", 1))?;
-    assert!(item(ID, &path, token).is_err());
+    assert!(item(ID, &path, None, token).is_err());
     Ok(())
 }
 
@@ -187,7 +188,7 @@ fn result_without_call_and_aborted_call_keep_distinct_states() -> Result<()> {
         ],
         "",
     )?;
-    let (messages, _) = page(ID, &path, None)?;
+    let (messages, _) = page(ID, &path, None, None)?;
     assert!(matches!(&messages[0].items[0], SessionItem::ToolCall {
             state: SessionToolState::Failed, paired: false, call: None, name, arguments, ..
         } if name.is_empty() && arguments.is_empty()));
@@ -209,6 +210,6 @@ fn transcript_symlink_is_refused() -> Result<()> {
     let (dir, path) = fixture([json!({"type": "user", "content": "recorded"})], "")?;
     let link = dir.path().join("link.jsonl");
     std::os::unix::fs::symlink(path, &link)?;
-    assert!(page(ID, &link, None).is_err());
+    assert!(page(ID, &link, None, None).is_err());
     Ok(())
 }

@@ -11,7 +11,7 @@ use corral_protocol::{assistant::SendAttachment, attachment::*};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::{Shared, require, root};
+use super::{Shared, root};
 use crate::{sessions, views::NotFound};
 
 fn key(value: &str) -> bool {
@@ -216,7 +216,7 @@ pub(super) fn discard(shared: &Shared, device: &str, request: AttachmentDiscard)
     }
 }
 
-pub(super) fn prepare(
+pub(crate) fn prepare(
     shared: &Shared,
     device: &str,
     chat: &Path,
@@ -247,16 +247,32 @@ pub(super) fn prepare(
                 ensure!(size(&bytes)? == metadata.bytes, "invalid: attachment upload is incomplete");
                 let dest = chat.join("runtime/attachments");
                 fs::create_dir_all(&dest).context("create Pi attachment directory")?;
-                match fs::hard_link(&bytes, dest.join(&metadata.sha256)) {
-                    Ok(()) => (),
-                    Err(error) if error.kind() == ErrorKind::AlreadyExists => (),
-                    Err(error) => return Err(error).context("retain Pi attachment bytes"),
-                }
+                retain(&bytes, &dest, &metadata.sha256)?;
                 json!({"id": id, "kind": metadata.kind, "name": metadata.name, "media_type": metadata.media_type, "bytes": metadata.bytes, "sha256": metadata.sha256})
             }
             SendAttachment::Other => bail!("invalid: unsupported attachment"),
         })
     }).collect()
+}
+
+fn retain(bytes: &Path, dir: &Path, digest: &str) -> Result<()> {
+    let dest = dir.join(digest);
+    match fs::hard_link(bytes, &dest) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(()),
+        // The build store may be on a different filesystem from the workspace's uploads.
+        Err(error) if error.kind() == ErrorKind::CrossesDevices => {
+            let mut source = File::open(bytes).context("open uploaded attachment bytes")?;
+            let mut copy = tempfile::NamedTempFile::new_in(dir).context("stage Pi attachment")?;
+            std::io::copy(&mut source, &mut copy).context("copy Pi attachment bytes")?;
+            match copy.persist_noclobber(dest) {
+                Ok(_) => Ok(()),
+                Err(error) if error.error.kind() == ErrorKind::AlreadyExists => Ok(()),
+                Err(error) => Err(error).context("retain copied Pi attachment"),
+            }
+        }
+        Err(error) => Err(error).context("retain Pi attachment bytes"),
+    }
 }
 
 pub(super) fn detail_path(shared: &Shared, entry: &str, id: &str) -> Result<PathBuf> {
@@ -265,10 +281,10 @@ pub(super) fn detail_path(shared: &Shared, entry: &str, id: &str) -> Result<Path
         digest(id),
         "invalid: attachment id must be a SHA-256 digest"
     );
-    Ok(require(shared, scope)?
+    let dir = sessions::resolve(shared, scope)?
         .dir
-        .join("runtime/attachments")
-        .join(id))
+        .context(NotFound("session has no attachment directory"))?;
+    Ok(dir.join("runtime/attachments").join(id))
 }
 
 /// The host records attachment descriptions in the owner message. Use the digest as

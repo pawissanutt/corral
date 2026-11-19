@@ -3,6 +3,7 @@
 
 mod app;
 mod assistant;
+mod builds;
 mod config;
 mod conn;
 mod devices;

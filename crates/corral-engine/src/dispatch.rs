@@ -12,6 +12,10 @@ use crate::{
     events::EventKind,
     prompt::write_prompt,
     refuse,
+    runner::{
+        InputTag,
+        pi::{PiRunner, SubmitReply},
+    },
     tasks::{next_force_approve, next_retry, next_review, set_lifecycle},
 };
 
@@ -212,9 +216,38 @@ impl Engine {
     }
 
     pub fn reply(&self, id: &str, text: &str) -> Result<Run> {
+        self.reply_with(id, None, text, |runner, session, origin| {
+            runner.send(session, text, origin)
+        })
+        .map(|(run, ())| run)
+    }
+
+    pub fn reply_tagged(
+        &self,
+        id: &str,
+        run: &str,
+        text: &str,
+        tag: InputTag<'_>,
+    ) -> Result<SubmitReply> {
+        self.reply_with(id, Some(run), text, |runner, session, origin| {
+            runner.send_tagged(session, text, origin, tag)
+        })
+        .map(|(_, reply)| reply)
+    }
+
+    fn reply_with<T>(
+        &self,
+        id: &str,
+        expected_run: Option<&str>,
+        text: &str,
+        send: impl FnOnce(PiRunner<'_>, &SessionRef, Origin) -> Result<T>,
+    ) -> Result<(Run, T)> {
         self.store.transaction(|store| {
             let mut task = store.require_task(id)?;
             let mut run = self.last_worker(store, &task)?;
+            if expected_run.is_some_and(|expected| expected != run.id) {
+                return Err(refuse("reply requires the current worker run", vec![]));
+            }
             if matches!(task.status, Status::Done | Status::Dropped) {
                 return Err(refuse("reply requires a live worker", vec![next_retry(id)]));
             }
@@ -226,8 +259,7 @@ impl Engine {
             } else {
                 Origin::Owner
             };
-            self.session_runner()
-                .send(session, text, origin)
+            let delivered = send(self.session_runner(), session, origin)
                 .map_err(|error| {
                     if let Some(refusal) = as_refusal(&error) {
                         refuse(
@@ -270,7 +302,7 @@ impl Engine {
                     json!({}),
                 )?;
             }
-            Ok(run)
+            Ok((run, delivered))
         })
     }
 

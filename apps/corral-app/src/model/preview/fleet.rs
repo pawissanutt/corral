@@ -8,12 +8,12 @@ use corral_protocol::subscription::{
 
 use crate::model::daemon::Feed;
 
-/// The previewed session that runs children.
-const SESSION: &str = "A-15";
+/// The previewed sessions that run children: a chat and the sample build.
+const SESSIONS: [&str; 2] = ["A-15", super::sessions::BUILD];
 
 /// Watching `session` delivers its fleet, once the preview's clock has started.
 pub(super) fn watch(feed: &mut Feed, session: &str) {
-    if session != SESSION || feed.now == 0 {
+    if !SESSIONS.contains(&session) || feed.now == 0 {
         return;
     }
     let now = feed.now;
@@ -33,6 +33,17 @@ pub(super) fn watch(feed: &mut Feed, session: &str) {
                 cost_usd: None,
                 verdict: None,
                 question: None,
+                profile: (kind == "slice").then(|| "slice".into()),
+                effort: None,
+                pending_model: None,
+                turns: 0,
+                context_percent: None,
+                files: 0,
+                outside: 0,
+                owns: 0,
+                after: Vec::new(),
+                steerable: false,
+                error: None,
             }
         };
     let message = |seq: u64, ago: u64, (from, to): (&str, &str), text: &str, delivery: &str| {
@@ -109,7 +120,7 @@ pub(super) fn watch(feed: &mut Feed, session: &str) {
         max_parallel: 3,
     };
     feed.live
-        .entry(SESSION.into())
+        .entry(session.into())
         .or_default()
         .replace_fleet(Some(fleet));
 }

@@ -104,8 +104,10 @@ pub enum Action {
     Work(crate::model::work::Press),
     /// Open Ask, optionally with a free-text draft.
     Ask(Option<String>),
-    /// Switch the session between transcript and terminal.
-    ToggleSession,
+    /// Open the New build sheet over Agents.
+    NewBuild,
+    /// Start a new assistant session and open its page.
+    NewAssistant,
     /// Change the persisted appearance.
     Theme(ThemeChoice),
     /// Select live transport, explicit preview, or disconnected data.
@@ -209,13 +211,22 @@ pub fn commands(
         );
     }
     rows.push(pair_row(data));
-    if preview {
+    if live && (preview || feed.capable(corral_protocol::app::BUILD_V1)) {
         rows.push(row(
-            "toggle-term",
-            "View",
-            "Switch transcript / terminal",
-            Some("`"),
-            Action::ToggleSession,
+            "new-build",
+            "Agents",
+            "New build session…",
+            Some("N"),
+            Action::NewBuild,
+        ));
+    }
+    if ask {
+        rows.push(row(
+            "new-assistant",
+            "Agents",
+            "New assistant session",
+            None,
+            Action::NewAssistant,
         ));
     }
     rows.extend(SettingsSection::ALL.into_iter().map(|section| {
@@ -421,7 +432,7 @@ fn task_id(query: &str) -> Option<Id> {
         .then(|| Id::from(format!("T-{number}")))
 }
 
-/// Records the daemon served: board tasks, plans, builds, agent sessions, assistant threads. A
+/// Records the daemon served: board tasks, plans, runs, chats and build sessions. A
 /// whole task id the board does not list (a closed task) opens by id, from its detail.
 fn live_open(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
     if crate::model::WorkspaceMode::of(feed) == crate::model::WorkspaceMode::Managed {
@@ -478,10 +489,14 @@ fn live_open(rows: &mut Vec<Command>, feed: &Feed, query: &str) {
         rows,
         "Open",
         query,
-        feed.assistants.iter().map(|(id, thread)| {
+        feed.assistants.iter().map(|(id, session)| {
+            let role = match session.kind {
+                corral_protocol::rows::AssistantKind::Build => "build",
+                _ => "assistant",
+            };
             (
-                format!("{id} {} · thread", thread.title),
-                Live::Thread(id.clone()),
+                format!("{id} {} · {role} session", session.title),
+                Live::Session(id.clone()),
             )
         }),
     );
@@ -575,7 +590,7 @@ pub const fn destination_key(destination: Destination) -> Option<&'static str> {
 pub fn shortcut(id: &str) -> Option<&'static str> {
     match id {
         "ask" => Some("/"),
-        "toggle-term" => Some("`"),
+        "new-build" => Some("N"),
         _ => id
             .strip_prefix("go:")
             .and_then(Destination::from_slug)

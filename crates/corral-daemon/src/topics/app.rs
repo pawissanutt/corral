@@ -66,7 +66,11 @@ impl Subscriber {
         Ok(())
     }
 
-    pub(super) fn next(&mut self, shared: &Shared) -> Result<Option<(Frame, bool)>> {
+    pub(super) fn next(
+        &mut self,
+        shared: &Shared,
+        build_rows: bool,
+    ) -> Result<Option<(Frame, bool)>> {
         if self.pending.is_some() {
             return Ok(None);
         }
@@ -88,6 +92,8 @@ impl Subscriber {
                     return Ok(None);
                 }
                 Arc::new(rows)
+            } else if self.topic == Topic::Assistant && build_rows {
+                shared.row_cache.assistant_with_builds(shared)?
             } else {
                 shared.row_cache.get(shared, self.topic)?
             };

@@ -1,10 +1,14 @@
 //! Project durable Pi entries, not the compacted model context or transient terminal rows.
 
 use anyhow::Result;
-use corral_protocol::detail::{SessionItem, SessionMessage, SessionToolState};
+use corral_protocol::{
+    detail::{InputFacts, SessionItem, SessionMessage, SessionToolState},
+    session_state::InputOrigin,
+};
 use serde_json::{Value, json};
 
 use super::json_len;
+use crate::{assistant, sessions::valid_input_id, views::fingerprint};
 
 fn field<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or_default()
@@ -308,7 +312,38 @@ fn conversation(items: &mut Vec<SessionItem>, body: &Value, role: &str) {
     }
 }
 
-pub(super) fn message(mut value: Value) -> Result<Option<SessionMessage>> {
+fn input_facts(body: &Value) -> Option<InputFacts> {
+    let id = body["corralRequestId"]
+        .as_str()
+        .filter(|id| valid_input_id(id))
+        .map(str::to_owned);
+    let recorded = &body["corralInput"];
+    let origin = match recorded["origin"].as_str() {
+        Some("owner") => InputOrigin::Owner,
+        Some("auto") => InputOrigin::Auto,
+        Some("pane") => InputOrigin::Pane,
+        Some(_) => InputOrigin::Other,
+        None if id.is_some() => InputOrigin::Owner,
+        None => return None,
+    };
+    let bounded = |name: &str, limit| {
+        recorded[name]
+            .as_str()
+            .map(|value| value[..utf8_end(value, limit)].to_owned())
+    };
+    Some(InputFacts {
+        id,
+        origin,
+        typed_at: bounded("typed_at", 64),
+        device: bounded("device", 64),
+        to: bounded("to", 128),
+    })
+}
+
+pub(super) fn message(
+    mut value: Value,
+    identity: Option<(&str, u64)>,
+) -> Result<Option<SessionMessage>> {
     let entry = field(&value, "type");
     let nested = value.get("message").is_some();
     let body = value.get("message").unwrap_or(&value);
@@ -404,6 +439,42 @@ pub(super) fn message(mut value: Value) -> Result<Option<SessionMessage>> {
             body.keys()
                 .any(|key| !matches!(key.as_str(), "type" | "role" | "timestamp" | "content"))
         });
+    let input = if identity.is_some() && role == "user" {
+        input_facts(body)
+    } else {
+        None
+    };
+    let id = if let Some((session, start)) = identity {
+        if let Some(id) = input.as_ref().and_then(|input| input.id.as_deref()) {
+            assistant::input_entry_id(session, id)
+        } else if let Some(id) = value["id"].as_str().filter(|id| valid_input_id(id)) {
+            format!("{session}/entry/{id}")
+        } else {
+            // The offset distinguishes identical legacy entries without a history walk,
+            // and is constant across page splits and transcript appends.
+            let hash = fingerprint(&(entry, role, &at, &model, &stop_reason))?;
+            format!("{session}/replay/{hash}/{start}")
+        }
+    } else {
+        String::new()
+    };
+    let attachments = if identity.is_some()
+        && role == "user"
+        && input
+            .as_ref()
+            .is_none_or(|facts| facts.origin == InputOrigin::Owner)
+    {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                SessionItem::Text { text } => Some(assistant::attachments::facts(text)),
+                _ => None,
+            })
+            .find(|facts| !facts.is_empty())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let author = role.into();
     if footer {
         // Reuse the decoded entry: its content is already projected into items.
@@ -418,6 +489,9 @@ pub(super) fn message(mut value: Value) -> Result<Option<SessionMessage>> {
         items.push(card("Turn footer", body));
     }
     Ok((!items.is_empty()).then_some(SessionMessage {
+        id,
+        input,
+        attachments,
         author,
         at,
         items,
@@ -450,6 +524,18 @@ pub(super) fn bound_header(message: &mut SessionMessage) {
     ] {
         if let Some(text) = text {
             clip(text, limit);
+        }
+    }
+    for attachment in &mut message.attachments {
+        clip(
+            &mut attachment.name,
+            corral_protocol::attachment::ATTACHMENT_NAME_MAX,
+        );
+        if let Some(media_type) = &mut attachment.media_type {
+            clip(media_type, 128);
+        }
+        if let Some(url) = &mut attachment.url {
+            clip(url, corral_protocol::attachment::ATTACHMENT_URL_MAX);
         }
     }
 }
