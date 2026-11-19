@@ -214,12 +214,12 @@ pub fn web_guide(feed: &Feed, origin: Option<&str>) -> Guide {
             step(
                 progress[1],
                 "Get a pairing link",
-                "Run corrald-next pair on the daemon host. It prints a link to open here and the code in it. A device that is already paired can also make one: Settings › Devices › Pair a device. A code works once, for two minutes.",
+                "Run corrald-next pair on the daemon host. It prints a link to open here, then waits for this browser. A device that is already paired can also make one: Settings › Devices › Pair a device. A link works once, for two minutes.",
             ),
             step(
                 progress[2],
                 "Pair and compare codes",
-                "Press Pair here, and this browser shows a six-digit code. Confirm on a paired device only if it shows the same code. With no paired device yet, see the code with corrald-next pair status and confirm with corrald-next pair confirm, both on the daemon host.",
+                "Press Pair here, and this browser shows a six-digit code. The same command on the daemon host then shows this browser's name and code and asks. Answer y only if the codes match. A device that is already paired can confirm instead.",
             ),
         ],
         commands: vec![
@@ -231,14 +231,9 @@ pub fn web_guide(feed: &Feed, origin: Option<&str>) -> Guide {
                 "Or start corrald with",
                 format!("corrald-next run --listen <address:port> --web-origin {origin}"),
             ),
-            ("Pairing link", "corrald-next pair".into()),
             (
-                "Code to compare",
-                "corrald-next pair status <pair id>".into(),
-            ),
-            (
-                "Confirm the first device",
-                "corrald-next pair confirm <pair id>".into(),
+                "Print the pairing link, wait, and ask",
+                "corrald-next pair".into(),
             ),
         ],
         failures: vec![

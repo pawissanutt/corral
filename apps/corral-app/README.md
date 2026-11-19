@@ -86,14 +86,14 @@ listen = "127.0.0.1:7841"
 web_origin = ["http://127.0.0.1:8790"]
 ```
 
-Run `corrald-next pair`, or choose **Pair a device** in Settings › Devices on any
-paired device, browser or native. Open the offered pairing link or QR. It opens Settings › Connection
+Run `corrald-next pair` on the daemon host, or choose **Pair a device** in Settings › Devices on any
+paired device, browser or native. The command prints a pairing link, then waits for the device. Open the link or QR. It opens Settings › Connection
 with the code prefilled; press **Pair**. The short-lived code is in the URL fragment,
 not the query/path, and the app clears it from the address bar before pairing.
 It is never saved to NSH Storage. Raw-code entry remains available when no link is offered.
 
-Compare the six-digit codes on both devices, then confirm with `corrald-next pair confirm <id>` or on any
-attached device. A pairing code expires after two minutes; claiming it starts a separate
+Compare the six-digit codes on both devices. `corrald-next pair` shows the browser's name and code and asks; answer `y` only if they match,
+or confirm on any attached device. For scripts, `corrald-next pair --json` prints the offer and returns at once, and `corrald-next pair status|confirm|cancel <pair id>` remain. A pairing code expires after two minutes; claiming it starts a separate
 two-minute confirmation window. Opening a link does not claim, approve or replace a stored
 identity. The new device cannot confirm its own pending pairing.
 
