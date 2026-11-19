@@ -96,6 +96,7 @@ h1{font:800 var(--t-2xl)/1.04 var(--font-sans);letter-spacing:-.03em;max-width:1
 .status-label{font:700 var(--t-xs)/1.6 var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--gr)}
 .status-text{font-size:var(--t-lg);font-weight:600;line-height:1.45}
 .status-text code{font-size:.85em}
+.status-sub{display:block;margin-top:var(--s2);font-size:var(--t-md);font-weight:500;color:var(--ink-2)}
 
 /* Layout */
 .layout{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s5);padding-top:var(--s5);padding-bottom:var(--s7)}
@@ -155,6 +156,8 @@ main{min-width:0}
 .sec ol>li::marker{font:600 var(--t-sm) var(--font-mono);color:var(--accent);font-variant-numeric:tabular-nums}
 .sub{color:var(--ink-2);font-size:var(--t-md)}
 .lead{font-size:var(--t-lg);line-height:1.6}
+.sec>h4{font:700 var(--t-lg)/1.25 var(--font-sans);margin-top:var(--s6);scroll-margin-top:var(--s5)}
+.sec>h4+*{margin-top:var(--s3)}
 .note{font-size:var(--t-sm);color:var(--ink-2);padding-left:var(--s3);border-left:var(--line-w) solid var(--line-strong)}
 .note b{color:var(--ink)}
 
@@ -189,6 +192,12 @@ pre code{background:none;border:0;padding:0;font-size:inherit;overflow-wrap:norm
 .callout-label{display:inline-block;font:800 var(--t-xs)/1 var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--or);border:var(--line-w) solid var(--or);border-radius:var(--r1);padding:var(--s1) var(--s2);background:var(--surface);margin-bottom:var(--s3)}
 .callout p{max-width:var(--measure)}
 .callout p+p{margin-top:var(--s2)}
+.callout.todo{box-shadow:var(--shadow)}
+.callout.todo ol{margin-top:var(--s1)}
+.callout.todo ol>li{font-size:1.0625rem}
+.callout.todo ol>li+li{margin-top:var(--s3)}
+.callout.done{border-color:var(--gr);background:var(--surface)}
+.callout.done .callout-label{color:var(--gr);border-color:var(--gr)}
 .evidence{border:var(--line-w) solid var(--line-strong);border-radius:var(--r3);background:var(--surface);padding:var(--s5);box-shadow:var(--shadow)}
 .evidence>*+*{margin-top:var(--s4)}
 .evidence h3{font:700 var(--t-xl)/1.2 var(--font-sans);letter-spacing:-.01em;scroll-margin-top:var(--s5)}
@@ -316,7 +325,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
       <div><dt>Report date</dt><dd><time datetime="2026-11-18">18 November 2026</time></dd></div>
       <div><dt>Parts</dt><dd>Summary, overview, user guide, technical detail</dd></div>
     </dl>
-    <p class="status" role="note"><span class="status-label">Status</span><span class="status-text">Landed on <code>main</code> as <code>9e098a06a</code> on 18 November 2026, 22:13. Local commit, not pushed.</span></p>
+    <p class="status" role="note"><span class="status-label">Status</span><span class="status-text">Landed on <code>main</code> as <code>9e098a06a</code> on 18 November 2026, 22:13. Local commit, not pushed.<span class="status-sub">Set up on this machine on 18 November 2026: the new daemon, terminal app and web app run beside the old system.</span></span></p>
   </div>
 </header>
 
@@ -350,17 +359,18 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
           </li>
           <li><a class="toc-part" href="#part-3"><span>Part 3</span> User guide</a>
             <ol>
-              <li><a href="#s3-1"><span class="n">3.1</span>What you run now</a></li>
-              <li><a href="#s3-2"><span class="n">3.2</span>Set up a workspace</a></li>
-              <li><a href="#s3-3"><span class="n">3.3</span>A task from start to landed</a></li>
-              <li><a href="#s3-4"><span class="n">3.4</span>When a task stops</a></li>
-              <li><a href="#s3-5"><span class="n">3.5</span>Getting past a refusal</a></li>
-              <li><a href="#s3-6"><span class="n">3.6</span>Old habit, new command</a></li>
-              <li><a href="#s3-7"><span class="n">3.7</span>The app</a></li>
-              <li><a href="#s3-8"><span class="n">3.8</span>Pair a phone or a browser</a></li>
-              <li><a href="#s3-9"><span class="n">3.9</span>Agents with corral-pi</a></li>
-              <li><a href="#s3-10"><span class="n">3.10</span>Moving your open tasks over</a></li>
-              <li><a href="#s3-11"><span class="n">3.11</span>What is gone</a></li>
+              <li><a href="#s3-1"><span class="n">3.1</span>Your setup on this machine</a></li>
+              <li><a href="#s3-2"><span class="n">3.2</span>What you run now</a></li>
+              <li><a href="#s3-3"><span class="n">3.3</span>Set up a workspace</a></li>
+              <li><a href="#s3-4"><span class="n">3.4</span>A task from start to landed</a></li>
+              <li><a href="#s3-5"><span class="n">3.5</span>When a task stops</a></li>
+              <li><a href="#s3-6"><span class="n">3.6</span>Getting past a refusal</a></li>
+              <li><a href="#s3-7"><span class="n">3.7</span>Old habit, new command</a></li>
+              <li><a href="#s3-8"><span class="n">3.8</span>The app</a></li>
+              <li><a href="#s3-9"><span class="n">3.9</span>Pair a phone or a browser</a></li>
+              <li><a href="#s3-10"><span class="n">3.10</span>Agents with corral-pi</a></li>
+              <li><a href="#s3-11"><span class="n">3.11</span>Do you need to migrate your data?</a></li>
+              <li><a href="#s3-12"><span class="n">3.12</span>What is gone</a></li>
             </ol>
           </li>
           <li><a class="toc-part" href="#part-4"><span>Part 4</span> Technical detail</a>
@@ -483,6 +493,8 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
           <tr><th scope="row">The command walkthrough in <a href="#part-3">Part 3</a>, on a scratch workspace with a scripted agent</th><td>every command and output shown there was run</td></tr>
           <tr><th scope="row">App on a terminal, 140×44 and 80×24</th><td>walked every destination</td></tr>
           <tr><th scope="row">App in a browser, desktop and phone sizes</th><td>paired with a real daemon by six-digit code; stayed paired after reload; a forced move went through and was recorded</td></tr>
+          <tr><th scope="row">Setup on this machine</th><td><code>corrald-next</code> runs as a user service and reports healthy; the terminal app reaches it; the web app on port 8890 opens on its pairing page; <code>corral-next config check</code> passes on the translated configuration</td></tr>
+          <tr><th scope="row">Import dry run on the real workspace</th><td>171 open tasks would be imported; nothing was changed</td></tr>
         </tbody>
       </table>
     </div>
@@ -493,7 +505,8 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
     <ul class="open-items">
       <li><strong>The cutover.</strong> The new programs are still named <code>corral-next</code> and <code>corrald-next</code>, state lives in <code>.corral-next/</code>, the four old crates are still in the tree (out of the workspace, unbuilt), <code>scripts/gate.sh</code> still targets them, and the README and <code>docs/DESIGN.md</code> still describe the old engine.</li>
       <li><strong>Real use.</strong> The exit criteria have not been shown on a product repository.</li>
-      <li><strong>Old-system work on this repository is stranded</strong>, and the <code>corral-app-tui</code> launcher needs a one-line change. See <a href="#s4-11">Consequences of landing</a> in Part 4.</li>
+      <li><strong>Old-system work on this repository is stranded.</strong> See <a href="#s4-11">Consequences of landing</a> in Part 4.</li>
+      <li><strong>Three things only you can do:</strong> enrol the terminal app, pair your browser, and decide when to import your open tasks. See <a href="#s3-1">3.1</a>.</li>
     </ul>
   </section>
 
@@ -504,6 +517,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
       <li>What to do with the stranded old-system branches: land their still-relevant parts by hand, or drop them.</li>
       <li>Whether Artifacts stays its own destination in the app or becomes an overlay.</li>
       <li>Whether the two app features that have no successor yet are wanted: the welcome tour, and launching <code>corral-pi</code> from the app.</li>
+      <li>When to import the 171 open tasks and stop the old daemon.</li>
     </ol>
   </section>
 </section>
@@ -845,7 +859,73 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
   </div>
 
   <section class="sec" aria-labelledby="s3-1">
-    <h3 id="s3-1"><span class="sec-no">3.1</span> What you run now</h3>
+    <h3 id="s3-1"><span class="sec-no">3.1</span> Your setup on this machine</h3>
+    <p class="lead">Done on 18 November 2026. The old system was not changed and still runs.</p>
+    <aside class="callout todo" aria-labelledby="s3-1-left">
+      <h4 class="callout-label" id="s3-1-left">Three things left for you</h4>
+      <ol>
+        <li><strong>Enrol the terminal app, once.</strong> Run <code>corral-app-tui</code>. It opens with “This device is not enrolled”. Go to Settings › Connection, name the device and enrol it.</li>
+        <li><strong>Pair your browser, once.</strong> In the workspace directory run <code>corrald-next pair</code> and open the link it prints. Press <strong>Pair</strong>, compare the six-digit code with <code>corrald-next pair status &lt;pair id&gt;</code>, then run <code>corrald-next pair confirm &lt;pair id&gt;</code>. The link works for two minutes.</li>
+        <li><strong>Try one task.</strong> <code>corral-next new "&lt;title&gt;" -p &lt;project&gt; --ready</code>, then <code>corral-next dispatch &lt;id&gt;</code>. The agent opens in a herdr pane.</li>
+      </ol>
+    </aside>
+    <p><strong>You do not need to sign in again.</strong> <code>corral-pi</code> reads the logins the old host saved in <code>~/.local/share/corral/pi-native/auth</code>: two subscriptions and two API keys.</p>
+    <h4 id="s3-1-installed">What is installed</h4>
+    <div class="tw">
+      <table class="cmd-table c1">
+        <thead><tr><th scope="col">What</th><th scope="col">Where</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>corral-next</code>, <code>corrald-next</code></th><td><code>~/.cargo/bin</code></td></tr>
+          <tr><th scope="row"><code>corral-pi</code></th><td><code>~/.local/bin/corral-pi</code>, which runs an installed copy in <code>~/.local/share/corral-next/corral-pi</code></td></tr>
+          <tr><th scope="row">Workspace state</th><td><code>/home/pawis/miti-workspace/.corral-next/</code></td></tr>
+          <tr><th scope="row">Configuration</th><td><code>.corral-next/corral.toml</code> and <code>.corral-next/pi.toml</code>, translated from <code>.corral/corral.toml</code></td></tr>
+          <tr><th scope="row">Daemon</th><td>User service <code>corrald-next.service</code>, enabled. App listener on <code>127.0.0.1:7842</code>.</td></tr>
+          <tr><th scope="row">Web app</th><td>User service <code>corral-next-app-web.service</code>, enabled. <code>http://127.0.0.1:8890/</code></td></tr>
+          <tr><th scope="row">Terminal app</th><td><code>corral-app-tui</code>, now on the new daemon. The old launcher is kept as <code>corral-app-tui.bak-20261118</code>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h4 id="s3-1-side-by-side">Old and new, side by side</h4>
+    <div class="tw wide" tabindex="0" role="region" aria-label="Old and new systems table">
+      <table class="cmd-table">
+        <thead><tr><th scope="col"><span class="visually-hidden">Item</span></th><th scope="col">Old system</th><th scope="col">New system</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">State</th><td><code>.corral/</code></td><td><code>.corral-next/</code></td></tr>
+          <tr><th scope="row">Command line</th><td><code>corral</code></td><td><code>corral-next</code></td></tr>
+          <tr><th scope="row">Daemon</th><td><code>corrald@st-102a13cc075bda04.service</code>, port 7841</td><td><code>corrald-next.service</code>, port 7842</td></tr>
+          <tr><th scope="row">Web app</th><td><code>http://127.0.0.1:8790/</code></td><td><code>http://127.0.0.1:8890/</code></td></tr>
+          <tr><th scope="row">Terminal</th><td><code>corral</code> (classic board)</td><td><code>corral-app-tui</code></td></tr>
+          <tr><th scope="row">Task ids</th><td>up to T-977</td><td>start at T-2000</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h4 id="s3-1-config">How the configuration was translated</h4>
+    <div class="tw">
+      <table class="cmd-table c1">
+        <thead><tr><th scope="col">Old setting</th><th scope="col">New setting</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>limits.running = 8</code></th><td>The same</td></tr>
+          <tr><th scope="row"><code>defaults.profile = "pi-terra"</code></th><td>The same</td></tr>
+          <tr><th scope="row">Eleven projects</th><td>The same eleven. <code>corral-ext-mitigraph</code> and <code>mitimind-lite</code> keep their gate commands.</td></tr>
+          <tr><th scope="row">The <code>corral</code> project’s gate, <code>scripts/gate.sh</code></th><td><code>cargo clippy --workspace --all-targets -- -D warnings</code> and <code>cargo test --workspace</code>, because the old gate no longer passes on <code>main</code>. The pi host and app tests are not in the gate.</td></tr>
+          <tr><th scope="row">One reviewer for everything, <code>pi-sol</code></th><td><code>reviewer = "pi-sol"</code> on eight projects; none on <code>kg-memory</code>, <code>loom</code> and <code>multimind</code></td></tr>
+          <tr><th scope="row">Eight <code>pi-native</code> profiles</th><td>Eight <code>pi</code> profiles with the same names, models and efforts</td></tr>
+          <tr><th scope="row"><code>pi-opus-api</code>, used by routing but not defined in the file</th><td>Defined: Claude Opus on the Anthropic API key, effort medium assumed, no spending cap</td></tr>
+          <tr><th scope="row">Routing by kind, title and size</th><td>The same five rules in the same order</td></tr>
+          <tr><th scope="row">Routing by difficulty (“hard”)</th><td><strong>Not carried:</strong> tasks have no difficulty field</td></tr>
+          <tr><th scope="row">Reviewer chosen by size or by vendor; gate tiers</th><td><strong>Not carried:</strong> one reviewer and one gate per project</td></tr>
+          <tr><th scope="row">Autopilot: automatic dispatch and landing</th><td>Both switches are off. Turn on <code>auto_dispatch</code> and <code>auto_land</code> in Settings › Configuration when you want them.</td></tr>
+          <tr><th scope="row">Six build child profiles</th><td>The same six, in <code>.corral-next/pi.toml</code></td></tr>
+          <tr><th scope="row">OmO profiles <code>opus-med</code> and <code>opus-high</code></th><td><strong>Not carried</strong></td></tr>
+          <tr><th scope="row">Phone access through Cloudflare tunnels</th><td>Not set up for the new daemon</td></tr>
+          <tr><th scope="row">PM, assistant, lessons, search, load sandbox, storage and board settings</th><td>No counterpart</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="s3-2">
+    <h3 id="s3-2"><span class="sec-no">3.2</span> What you run now</h3>
     <div class="tw wide" tabindex="0" role="region" aria-label="Programs table">
       <table class="cmd-table">
         <thead><tr><th scope="col">Program</th><th scope="col">What it is</th><th scope="col">It replaces</th></tr></thead>
@@ -866,8 +946,8 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
     </ul>
   </section>
 
-  <section class="sec" aria-labelledby="s3-2">
-    <h3 id="s3-2"><span class="sec-no">3.2</span> Set up a workspace</h3>
+  <section class="sec" aria-labelledby="s3-3">
+    <h3 id="s3-3"><span class="sec-no">3.3</span> Set up a workspace</h3>
     <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next init</span>
 Initialized &lt;workspace&gt;/.corral-next</code></pre></div>
     <p><code>init</code> writes a <code>corral.toml</code> with every setting commented out. Add one table per Git repository, and a profile for the agent you use:</p>
@@ -901,8 +981,8 @@ Configuration is valid</code></pre></div>
     </div>
   </section>
 
-  <section class="sec" aria-labelledby="s3-3">
-    <h3 id="s3-3"><span class="sec-no">3.3</span> A task from start to landed</h3>
+  <section class="sec" aria-labelledby="s3-4">
+    <h3 id="s3-4"><span class="sec-no">3.4</span> A task from start to landed</h3>
     <p>Run with a scripted agent that writes one file and calls <code>done</code>:</p>
     <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next new "Add a note" -p app --ready</span>
 T-001: ready — Add a note
@@ -944,8 +1024,8 @@ ce0d694 T-001 Add a note
     <p>With <code>auto_land = true</code> step 5 happens by itself.</p>
   </section>
 
-  <section class="sec" aria-labelledby="s3-4">
-    <h3 id="s3-4"><span class="sec-no">3.4</span> When a task stops</h3>
+  <section class="sec" aria-labelledby="s3-5">
+    <h3 id="s3-5"><span class="sec-no">3.5</span> When a task stops</h3>
     <p>A Blocked task always says why and what clears it:</p>
     <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next show T-004</span>
 T-004: Needs a hand
@@ -971,8 +1051,8 @@ next: corral-next approve T-004 --force</code></pre></div>
     </div>
   </section>
 
-  <section class="sec" aria-labelledby="s3-5">
-    <h3 id="s3-5"><span class="sec-no">3.5</span> Getting past a refusal</h3>
+  <section class="sec" aria-labelledby="s3-6">
+    <h3 id="s3-6"><span class="sec-no">3.6</span> Getting past a refusal</h3>
     <p>A refusal exits with status 2 and prints the commands that get past it:</p>
     <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next dispatch T-003</span>
 refused: dispatch blocked by dependencies
@@ -993,8 +1073,8 @@ next: corral-next approve T-003 --onto main</code></pre></div>
     <p class="note">The real <code>next:</code> lines print the full path of the <code>corral-next</code> binary; it is shortened here. The log output is shown without its time column.</p>
   </section>
 
-  <section class="sec" aria-labelledby="s3-6">
-    <h3 id="s3-6"><span class="sec-no">3.6</span> Old habit, new command</h3>
+  <section class="sec" aria-labelledby="s3-7">
+    <h3 id="s3-7"><span class="sec-no">3.7</span> Old habit, new command</h3>
     <div class="tw">
       <table class="cmd-table c1">
         <thead><tr><th scope="col">You used to</th><th scope="col">Now</th></tr></thead>
@@ -1017,16 +1097,15 @@ next: corral-next approve T-003 --onto main</code></pre></div>
     </div>
   </section>
 
-  <section class="sec" aria-labelledby="s3-7">
-    <h3 id="s3-7"><span class="sec-no">3.7</span> The app</h3>
+  <section class="sec" aria-labelledby="s3-8">
+    <h3 id="s3-8"><span class="sec-no">3.8</span> The app</h3>
     <p>Start the daemon for the workspace, then the app against its socket:</p>
     <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl">corrald-next --root &lt;workspace&gt; run</span>
 <span class="cl">CORRAL_SOCKET=&lt;workspace&gt;/.corral-next/daemon.sock nsh run --target tui</span>     <span class="cm"># in apps/corral-app</span>
-<span class="cl">nsh run --target web</span>                                                      <span class="cm"># http://127.0.0.1:8790/</span></code></pre></div>
-    <aside class="callout" id="launcher-action" aria-labelledby="launcher-action-label">
-      <span class="callout-label" id="launcher-action-label">Action needed</span>
-      <p><strong>Your <code>corral-app-tui</code> launcher needs this change.</strong> It starts the app from this checkout against the old daemon’s socket. The app now sends every action as <code>op.submit</code>, which the installed old daemon does not have. Point its <code>CORRAL_SOCKET</code> at <code>&lt;workspace&gt;/.corral-next/daemon.sock</code>.</p>
-      <p>The web service on port 8790 serves a packaged build dated 16 November that the landing did not change.</p>
+<span class="cl">nsh run --target web</span>                                                      <span class="cm"># http://127.0.0.1:8790/ by default</span></code></pre></div>
+    <aside class="callout done" aria-labelledby="launcher-done-label">
+      <span class="callout-label" id="launcher-done-label">Done on 18 November</span>
+      <p><code>corral-app-tui</code> now starts the app on the new daemon. The old launcher is kept as <code>corral-app-tui.bak-20261118</code>. The new web app is at <code>http://127.0.0.1:8890/</code>. The old web app stays at <code>http://127.0.0.1:8790/</code> and still talks to the old daemon.</p>
     </aside>
     <p>Where things went:</p>
     <div class="tw">
@@ -1068,23 +1147,23 @@ next: corral-next approve T-003 --onto main</code></pre></div>
     </ul>
   </section>
 
-  <section class="sec" aria-labelledby="s3-8">
-    <h3 id="s3-8"><span class="sec-no">3.8</span> Pair a phone or a browser</h3>
+  <section class="sec" aria-labelledby="s3-9">
+    <h3 id="s3-9"><span class="sec-no">3.9</span> Pair a phone or a browser</h3>
     <ol class="steps">
-      <li>Turn on the listener in <code>.corral-next/corral.toml</code>, then restart <code>corrald-next</code>:
+      <li>The listener is already on for this workspace:
         <div class="code" style="margin-top:var(--s2)"><div class="code-h"><span>.corral-next/corral.toml</span></div><pre tabindex="0"><code>[daemon]
-listen = "127.0.0.1:7841"
-web_origin = ["http://127.0.0.1:8790"]</code></pre></div>
+listen = "127.0.0.1:7842"
+web_origin = ["http://127.0.0.1:8890", "http://localhost:8890"]</code></pre></div>
       </li>
       <li>Run <code>corrald-next pair</code>. It prints a link. Open it; the page has the code filled in. Press <strong>Pair</strong>.</li>
       <li>Both sides show the same six-digit code. <code>corrald-next pair status &lt;id&gt;</code> shows it; <code>corrald-next pair confirm &lt;id&gt;</code> enrols the device.</li>
       <li>The device stays paired after a reload and can do everything you can.</li>
     </ol>
-    <p>A pairing code expires after two minutes. For a device on another machine the app must be served over HTTPS, <code>web_origin</code> must name its exact origin, and the daemon needs <code>run --web-endpoint wss://host[:port]</code>; TLS comes from a reverse proxy or Tailscale Serve.</p>
+    <p>A pairing code expires after two minutes. For a device on another machine the app must be served over HTTPS, <code>web_origin</code> must name its exact origin, and the daemon needs <code>run --web-endpoint wss://host[:port]</code>; TLS comes from a reverse proxy or Tailscale Serve. Phone access from outside this machine is not set up for the new daemon.</p>
   </section>
 
-  <section class="sec" aria-labelledby="s3-9">
-    <h3 id="s3-9"><span class="sec-no">3.9</span> Agents with corral-pi</h3>
+  <section class="sec" aria-labelledby="s3-10">
+    <h3 id="s3-10"><span class="sec-no">3.10</span> Agents with corral-pi</h3>
     <ul>
       <li>Sign in once with <code>corral-pi login</code>. An API key is a separate connection: <code>corral-pi login --connection anthropic-api</code>.</li>
       <li>A task uses Pi when its profile has <code>harness = "pi"</code>.</li>
@@ -1107,17 +1186,36 @@ web_origin = ["http://127.0.0.1:8790"]</code></pre></div>
     </ul>
   </section>
 
-  <section class="sec" aria-labelledby="s3-10">
-    <h3 id="s3-10"><span class="sec-no">3.10</span> Moving your open tasks over</h3>
-    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl">corral export tasks &lt;dir&gt;</span>                 <span class="cm"># with the old corral</span>
-<span class="cl">corral-next init --first-id &lt;N&gt;</span>           <span class="cm"># so new ids do not collide with old ones</span>
-<span class="cl">corral-next import &lt;dir&gt; --dry-run</span>        <span class="cm"># report only</span>
-<span class="cl">corral-next import &lt;dir&gt;</span>                  <span class="cm"># open tasks; --all also takes Done and Dropped</span></code></pre></div>
-    <p>A dry run on this workspace on 18 November: 977 tasks exported, 171 would be imported, next id 978. <strong>The real import has not been run.</strong></p>
+  <section class="sec" aria-labelledby="s3-11">
+    <h3 id="s3-11"><span class="sec-no">3.11</span> Do you need to migrate your data?</h3>
+    <p class="lead"><strong>No, not to use the new app.</strong> The new system starts empty and the old one keeps all its data. The only thing worth moving is your open tasks, and only at the moment you stop working them in the old system.</p>
+    <div class="tw wide" tabindex="0" role="region" aria-label="Data migration table">
+      <table class="cmd-table">
+        <thead><tr><th scope="col">Data</th><th scope="col">Migrate?</th><th scope="col">What happens</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Configuration</th><td><strong>Done</strong></td><td>Translated on 18 November. See <a href="#s3-1">3.1</a>.</td></tr>
+          <tr><th scope="row">Agent logins</th><td><strong>No</strong></td><td>Read in place from the old host’s directory</td></tr>
+          <tr><th scope="row">Open tasks</th><td><strong>Your choice</strong></td><td><code>corral-next import</code> brings them over with their ids. Dry run on 18 November: 171 would be imported (42 ideas, 109 backlog, 20 ready), 806 closed tasks skipped, none unreadable, every project configured.</td></tr>
+          <tr><th scope="row">Tasks in flight: running, waiting on you, in review</th><td><strong>They arrive as Backlog</strong></td><td>Their runs, worktrees, sessions and review rounds stay with the old system</td></tr>
+          <tr><th scope="row">History: events, artifacts, usage, gate and review records</th><td><strong>No</strong></td><td>Stays in <code>.corral/</code>, readable with the old <code>corral</code></td></tr>
+          <tr><th scope="row">Done and Dropped tasks</th><td><strong>Optional</strong></td><td><code>corral-next import --all</code></td></tr>
+          <tr><th scope="row">Paired devices</th><td><strong>Pair again</strong></td><td>The new daemon has its own identity and device list</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p><strong>When to import.</strong> At the moment you stop the old daemon. Until then the same task would be open in both systems, and both could start an agent on it.</p>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl">corral export tasks /tmp/corral-export</span>          <span class="cm"># old corral; reads only</span>
+<span class="cl">corral-next import /tmp/corral-export --dry-run</span> <span class="cm"># report only</span>
+<span class="cl">corral-next import /tmp/corral-export</span></code></pre></div>
+    <p>Two things to know:</p>
+    <ul>
+      <li>New task ids start at T-2000 on this machine, so an import cannot collide with a task created here first.</li>
+      <li>An imported task that still has a worktree or branch from the old system, such as T-855, is refused at dispatch (“task worktree or branch already exists outside its run history”) until that worktree and branch are landed or removed.</li>
+    </ul>
   </section>
 
-  <section class="sec" aria-labelledby="s3-11">
-    <h3 id="s3-11"><span class="sec-no">3.11</span> What is gone, so you do not look for it</h3>
+  <section class="sec" aria-labelledby="s3-12">
+    <h3 id="s3-12"><span class="sec-no">3.12</span> What is gone, so you do not look for it</h3>
     <ul>
       <li>The classic terminal board, the PM role, queue commands and modes.</li>
       <li>Questions, plans and attention items as separate objects with their own review.</li>
@@ -1307,7 +1405,7 @@ pub struct Next    { pub op: Op, pub force: bool }</code></pre></div>
       <li><strong>The old <code>corral</code> no longer builds from <code>main</code>.</strong> The installed <code>corral</code> and <code>corral-pi-host</code> binaries keep running.</li>
       <li><strong><code>scripts/gate.sh</code> targets the old crates</strong>, which no longer compile. It was not rerun after landing.</li>
       <li><strong>Unlanded old-system branches on this repository are stranded:</strong> T-855 (11 commits), T-965 (4), T-977 (3), T-966 (2), T-973, T-974, T-869, A-78, A-92 (1 each), and the build sessions <code>mwl8ran8sv</code> (21) and <code>mwlv2x2nbv</code> (4).</li>
-      <li><strong>The <code>corral-app-tui</code> launcher</strong> starts the new app against the old daemon’s socket and needs <code>CORRAL_SOCKET</code> pointed at <code>.corral-next/daemon.sock</code> (see <a href="#launcher-action">3.7</a>).</li>
+      <li><strong>The <code>corral-app-tui</code> launcher</strong> was updated on 18 November to use the new daemon. See <a href="#s3-1">3.1</a>.</li>
       <li><strong>The README install line is stale:</strong> <code>cargo install --path crates/corral</code> now fails.</li>
       <li><strong>Undo:</strong> the landing is one local merge commit; <code>git revert -m 1 9e098a06a</code> reverses it.</li>
     </ul>
@@ -1324,6 +1422,7 @@ pub struct Next    { pub op: Op, pub force: bool }</code></pre></div>
       <li>On the web, a menu opened by pointer ignores the arrow keys; a menu opened by keyboard does not.</li>
       <li>The terminal form cannot preview images or open an artifact in an external program.</li>
       <li>Usage totals cover only runs whose harness reports usage; the report says how many runs it covers.</li>
+      <li>Fixed after the landing: a <code>corral-pi build</code> session created a directory that hid the old host’s saved logins from every later session. Commit <code>780c5154f</code>, with a regression test.</li>
     </ul>
   </section>
 
@@ -1331,7 +1430,7 @@ pub struct Next    { pub op: Op, pub force: bool }</code></pre></div>
     <h3 id="s4-13"><span class="sec-no">4.13</span> What comes next</h3>
     <ol>
       <li>Decide the cutover and do it: rename <code>corral-next</code> to <code>corral</code> and <code>.corral-next/</code> to <code>.corral/</code>, delete the four old crates, replace the gate scripts, rewrite the README and <code>docs/DESIGN.md</code>.</li>
-      <li>Import the open tasks (the dry run found 171 to import).</li>
+      <li>Import the open tasks when you stop the old daemon (171 in the dry run). See <a href="#s3-11">3.11</a>.</li>
       <li>Use it on a product repository and check the four exit criteria:
         <ul>
           <li>With no assistant running, <code>new</code>, <code>dispatch</code> and <code>approve</code> land a one-line change.</li>
