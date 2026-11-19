@@ -3,7 +3,10 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { SessionManager, type BeforeAgentStartEvent, type BeforeAgentStartEventResult, type ContextEvent, type ContextEventResult,
   type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildSystemPrompt, normalizeBuildSystemPromptOptions } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
+import { BridgeRefusal } from "../bridge/protocol.ts";
 import { PendingQuestions, QUESTION_ENTRY, type QuestionEntry } from "../host/pending-questions.ts";
+import { questionEntries, questionStatus } from "../host/remote/cards.ts";
+import { RemoteDialogs } from "../host/remote/dialogs.ts";
 import { OwnerQuestionUi, OWNER_QUESTION_STATE, QUESTIONS_KEY, QuestionDock, ownerQuestionLines, renderOwnerQuestionState, type QuestionSource } from "./owner-questions.ts";
 
 test("owner UI dismisses without consent, preserves permission dialogs and fences stale callbacks", async () => {
@@ -209,4 +212,57 @@ test("the docked card takes keys only while focused: a digit opens that question
   expect(dock.handleKey("x")).toBeFalse(); expect(dock.focused).toBeFalse();
   dock.focused = true;
   expect(dock.handleKey("\x1b")).toBeTrue(); expect(dock.focused).toBeFalse(); expect(composer).toBe(3);
+});
+
+test("a pending owner question answered from the app closes the terminal's dialog", async () => {
+  let deliveries = 0;
+  const q = new PendingQuestions({ session: () => "owned", entries: () => [], append() {}, changed() {},
+    deliver: async () => { deliveries++; return true; } });
+  // The host lists each pending question as a card under its own ID.
+  const dialogs = new RemoteDialogs(() => {}, { entries: () => questionEntries(q), absent: id => questionStatus(q.status(id)), shared: () => true });
+  const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
+  let command!: (args: string, ctx: ExtensionContext) => Promise<void>;
+  const api = {
+    on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => { handlers.set(name, handler); },
+    registerCommand: (_name: string, spec: { handler: typeof command }) => { command = spec.handler; },
+    registerShortcut() {},
+  } as unknown as ExtensionAPI;
+  const notices: string[] = [];
+  const opened = Promise.withResolvers<void>();
+  /** The terminal's select: open until the owner picks or the dialog is closed. */
+  let pick: (signal: AbortSignal) => Promise<string | undefined> = signal => {
+    opened.resolve();
+    const picked = Promise.withResolvers<string | undefined>();
+    signal.addEventListener("abort", () => picked.resolve(undefined), { once: true });
+    return picked.promise;
+  };
+  const ctx = { mode: "tui", hasUI: true, ui: { setWidget() {}, setStatus() {}, notify: (text: string) => { notices.push(text); },
+    select: (_title: string, _options: string[], opts: { signal: AbortSignal }) => pick(opts.signal),
+  } } as unknown as ExtensionContext;
+  const ui = new OwnerQuestionUi(q, () => true, () => {});
+  ui.dock().useDialogs?.(() => dialogs);
+  ui.install(api);
+  await handlers.get("session_start")?.({}, ctx);
+
+  // The app answers while the terminal's dialog is open: the dialog closes, and nothing says no answer was sent.
+  const first = q.ask("Q", [{ question: "Which release?", options: ["One", "Two"] }]).id;
+  const answering = command(first, ctx);
+  await opened.promise;
+  expect(["answered", "delivered"]).toContain(await dialogs.resolve(first, [{ options: ["Two"] }], false, { source: "remote", device: "phone" }));
+  await answering;
+  expect(q.get(first)?.answers).toEqual([{ option: "Two" }]);
+  expect(deliveries).toBe(1);
+  expect(notices).toEqual(["Answered from another device"]);
+
+  // The terminal answers through the same card: delivered once, and the app's late answer is refused.
+  const second = q.ask("R", [{ question: "Notify?", options: ["Yes", "No"] }]).id;
+  pick = async () => "Yes";
+  await command(second, ctx);
+  expect(q.get(second)?.answers).toEqual([{ option: "Yes" }]);
+  expect(deliveries).toBe(2);
+  let refusal = "";
+  try { await dialogs.resolve(second, [{ options: ["No"] }], false, { source: "remote" }); } catch (error) { refusal = error instanceof BridgeRefusal ? error.code : String(error); }
+  expect(refusal).toBe("invalid_card_answer");
+  expect(deliveries).toBe(2);
+  expect(notices.filter(text => text.includes("another device"))).toHaveLength(1);
 });

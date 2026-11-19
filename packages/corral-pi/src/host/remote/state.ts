@@ -127,6 +127,7 @@ export function boundState(state: SessionState): BoundedSessionState {
 const REMOTE_CAPABILITIES: Readonly<Record<string, string | undefined>> = {
   cards: "cards", child_file: "children", child_act: "child_control", jobs: "jobs", job_act: "job_control",
   changes: "changes", usage: "usage", plan: "plan", context: "context", commands: "commands", board: "board",
+  board_plan_task: "board_plan_task",
   record: "record", exit_open: "exit", compact: "compact", export: "export", owner_bash: "shell",
 };
 
@@ -136,7 +137,8 @@ export function capabilities(registry: RemoteRegistry, options: { open: boolean;
   if (options.rewind) can.push({ id: "rewind" });
   for (const name of registry.names()) {
     const id = REMOTE_CAPABILITIES[name];
-    if (typeof id === "string" && (id !== "board" || registry.get("board_refresh"))) can.push({ id });
+    if (typeof id !== "string" || ((id === "board" || id === "board_plan_task") && !registry.get("board_refresh"))) continue;
+    can.push({ id });
   }
   for (const capability of can) {
     if (options.closing) capability.unavailable = "Session is stopping";

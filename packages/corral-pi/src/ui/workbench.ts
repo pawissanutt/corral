@@ -39,7 +39,7 @@ import type { BuildController } from "./build/build-controller.ts";
 import { BoardView, boardDetailLines, type BoardAction } from "./build/board-view.ts";
 import { childIdOf, childKey } from "./build/contract.ts";
 import { childActions, childAuthors, fleetExtras, shownFleet, steerable } from "./build/fleet-rows.ts";
-import { childPrompts } from "./fleet-prompts.ts";
+import { childPrompts, type ChildCards } from "./fleet-prompts.ts";
 import type { SideSource } from "./sidebar.ts";
 import { plainLabel, PANEL_BG, PANEL_BLUE, PANEL_LINE, PANEL_TEXT, type PanelSnapshot } from "./panels-view.ts";
 import { rule, spinner, VIEW_INSET } from "./frame.ts";
@@ -188,6 +188,8 @@ export interface WorkbenchOptions {
   readonly buildController?: BuildController;
   /** The child runtime of a session that is not a build session, read when a child is acted on (the host builds it after the panels); absent: its children are read-only. */
   readonly fleet?: () => FleetControl | undefined;
+  /** The host's cards for the fleet's questions while a terminal is attached; an answer prompt answers through them. */
+  readonly childCards?: ChildCards;
   /** The sidebar as a rail beside the main view; without it the main view takes the full width. */
   readonly rail?: RailSource;
   /** While the agent works: the header state word's spinner and the turn's elapsed time (activity.ts). */
@@ -456,7 +458,9 @@ export class NativeWorkbench {
     if (!fleet) return undefined;
     if (this.fleetActs?.fleet === fleet) return this.fleetActs.acts;
     const dialogs = this.childDialogs();
-    const acts = childActions({ fleet, ...childPrompts({ fleet, input: title => this.ui ? this.ui.input(title) : Promise.resolve(undefined), ...dialogs }), ...dialogs });
+    const cards = this.options.childCards;
+    const acts = childActions({ fleet, ...childPrompts({ fleet, input: title => this.ui ? this.ui.input(title) : Promise.resolve(undefined), ...dialogs,
+      ...(cards ? { cards } : {}) }), ...dialogs });
     this.fleetActs = { fleet, acts };
     return acts;
   }
