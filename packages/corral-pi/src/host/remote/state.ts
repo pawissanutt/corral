@@ -175,7 +175,8 @@ function landBrief(land: NonNullable<ExitState["land"]>): LandBrief {
 export function exitBrief(exit: ExitState): ExitBrief {
   return { phase: exit.phase, detail: exit.detail === undefined ? undefined : utf8Prefix(exit.detail, 512),
     choice: exit.record?.choice, landed: exit.record?.landed,
-    base_branch: exit.record?.baseBranch === undefined ? undefined : utf8Prefix(exit.record.baseBranch, 256), repair: exit.repair,
+    // The record names the base once Land succeeded; a running or failed Land already knows it.
+    base_branch: optionalText(exit.record?.baseBranch ?? exit.land?.base, 256), repair: exit.repair,
     land: exit.land && landBrief(exit.land) };
 }
 

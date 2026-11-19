@@ -10,6 +10,7 @@ import { summarize } from "../src/build/git.ts";
 import type { BuildGateResult } from "../src/build/record-types.ts";
 import { verifyBuild } from "../src/build/gate.ts";
 import { prepareWorktree } from "../src/build/worktree.ts";
+import { exitBrief } from "../src/host/remote/state.ts";
 import type { BuildContext, ChildSnapshot, ExitPolicy, ExitRecord, FleetSnapshot } from "../src/build/types.ts";
 
 const head = "a".repeat(40), base = "b".repeat(40);
@@ -139,6 +140,8 @@ describe("build exits", () => {
       expect(readFileSync(f.journal.latestGate()!.log!, "utf8")).toContain("failing-check");
       expect(state.land?.steps.map(step => step.state)).toEqual(["done", "failed", "waiting"]);
       expect(state.land?.gate).toMatchObject({ attempt: "G1", log: f.journal.latestGate()!.log!, tail: ["$ echo failing-check; exit 1", "failing-check"] });
+      // The app reads the base and the steps of a Land that did not land from the same brief.
+      expect(exitBrief(state)).toMatchObject({ phase: "failed", base_branch: "main", land: { steps: [{ id: "rebase" }, { id: "gate", state: "failed" }, { id: "land" }], gate: { attempt: "G1" } } });
       expect(f.events).not.toContain("land");
       expect(f.journal.record().outcome.state).toBe("open");
       expect((await f.control.choose("iterate")).phase).toBe("none");
@@ -204,7 +207,8 @@ describe("build exits", () => {
   });
   test("a base move while the gate runs stops the gate and what it started at once", async () => {
     const pidFile = join(tmpdir(), `build-exit-gate-${process.pid}-${Date.now()}.pid`);
-    const f = fixture({ stale: true, watchMs: 5, gate: `sleep 30 & echo $! > ${pidFile}; wait` });
+    // What the gate started ignores SIGTERM, as a worker that traps it would.
+    const f = fixture({ stale: true, watchMs: 5, gate: `sh -c 'trap "" TERM; sleep 30' & echo $! > ${pidFile}; wait` });
     try {
       const started = Date.now();
       const state = await f.control.choose("land");
@@ -215,6 +219,7 @@ describe("build exits", () => {
       // A stopped gate has no result, and the process it left in the background went with it.
       expect(f.journal.latestGate()).toBeUndefined();
       const pid = Number(readFileSync(pidFile, "utf8"));
+      expect(Number.isInteger(pid) && pid > 0).toBe(true);
       for (let waited = 0; waited < 2_000 && existsSync(`/proc/${pid}`); waited += 20) await new Promise(resolve => setTimeout(resolve, 20));
       expect(() => process.kill(pid, 0)).toThrow();
     } finally { f.close(); rmSync(pidFile, { force: true }); }
