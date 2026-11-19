@@ -11,7 +11,7 @@ export interface TurnOutcome {
 }
 
 export function turnReason(input: TurnOutcome): TurnEndMark["reason"] {
-  if (input.stopCause === "budget" || input.stopCause === "host") return "error";
+  if (input.stopCause === "host") return "error";
   if (input.stopCause === "owner" || input.ownerStopped) return "stopped";
   if (input.error || input.stopReason === "error") return "error";
   if (input.stopReason === "aborted") return "stopped";
@@ -110,8 +110,7 @@ export class TurnFacts {
     const reason = turnReason({ stopReason: facts.stopReason, waits: end.waits, ...final });
     const notRun = reason === "stopped" || final.stopCause
       ? [...facts.calls].filter(id => !facts.started.has(id)).length : 0;
-    const note = final.stopCause === "budget" ? "the run budget was reached"
-      : final.stopCause === "host" ? "the host stopped the run" : final.continuationStopped;
+    const note = final.stopCause === "host" ? "the host stopped the run" : final.continuationStopped;
     return this.sink?.add({ kind: "turn_end", at: end.at, durationMs: Math.max(0, end.at - facts.startedAt),
       reason, toolCalls: facts.calls.size, waits: end.waits, cost: Math.max(0, end.cost - facts.startCost),
       ...(notRun ? { notRun } : {}), ...(facts.rebilledTokens ? { rebilledTokens: facts.rebilledTokens } : {}),

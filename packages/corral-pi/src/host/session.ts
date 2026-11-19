@@ -1570,7 +1570,6 @@ export class HostSession {
         },
         // Only effective SDK settings, never raw capability/MCP settings or credentials.
         settings: Object.entries(this.settings).map(([key, value]) => `${key}: ${JSON.stringify(value)}`),
-        budget: [],
         events: this.options.events.since(0, 512 * 8192, 512),
       },
       agents: [{ id: session.sessionId, session: session.sessionId, kind: this.options.identity.role,

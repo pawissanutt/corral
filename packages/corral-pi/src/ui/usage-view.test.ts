@@ -26,22 +26,8 @@ test("a single pane shows its tokens, estimate, context and model at every width
   }
 });
 
-test("spending shows spent of the limit, what is left and the paid route in use; without a limit there is no section", () => {
-  for (const width of WIDTHS) {
-    expect(lines(worker(), width).join("\n")).not.toContain("SPENDING");
-    const page = lines(worker(pane({ budget: { maxUsd: 5, spentUsd: 1.25, paidRoute: "openai-api/gpt-6.1-sol" } })), width, { legend: true });
-    bounded(page, width);
-    const text = page.join(" ").replace(/\s+/g, " ");
-    for (const fact of ["SPENDING", "$1.250000 of $5.000000", "25% of the limit", "$3.750000", "openai-api/gpt-6.1-sol", "spend.json"]) expect(text).toContain(fact);
-    const near = lines(worker(pane({ budget: { maxUsd: 5, spentUsd: 4.5 } })), width).join(" ").replace(/\s+/g, " ");
-    expect(near).toContain("! 90% of the limit"); expect(near).not.toContain("paid route");
-    const spent = lines(worker(pane({ budget: { maxUsd: 5, spentUsd: 5.01 } })), width).join(" ").replace(/\s+/g, " ");
-    expect(spent).toContain("✗ limit reached"); expect(spent).toMatch(/left\s+nothing/);
-  }
-});
-
 test("session: an unknown member stays unknown, and a build total keeps its + in the table, the narrow rows and the digest", () => {
-  const model: UsageModel = { identity: { role: "build", project: "demo", build: "slots" }, spending: undefined,
+  const model: UsageModel = { identity: { role: "build", project: "demo", build: "slots" },
     session: { model: "anthropic/claude-sonnet-4", effort: "high", context: undefined, total: { cost: 0.4333, partial: true }, rows: [
       { key: "pane", name: "Pane", hue: undefined, tokens: 1_204_331, cost: 0.412, contextPercent: 24 },
       { key: "child:e1", name: "explore-e1", hue: 1, tokens: 88_120, cost: 0.0213, contextPercent: undefined },

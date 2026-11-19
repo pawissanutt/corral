@@ -63,7 +63,7 @@ export type TranscriptMark = TurnEndMark | ModelMark | NoteMark | ChildMark;
 /** Appends marks to the session journal; false means the caller should retain its transient fallback. */
 export interface MarkSink { add(mark: TranscriptMark): boolean }
 
-export type TurnStopCause = "owner" | "budget" | "host";
+export type TurnStopCause = "owner" | "host";
 
 /** Startup/replay has no interactive attachment yet. Build sessions are live without a board binding. */
 export function recordTranscriptMark(sink: MarkSink | undefined, mark: TranscriptMark, state: {
