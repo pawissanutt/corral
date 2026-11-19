@@ -153,18 +153,35 @@ fn model(cx: &Cx<'_>) -> Option<ActionGroup> {
             delta,
         })
     };
+    // While an agent's conversation is open the composer shows that agent's model: Choose
+    // model opens its choices, and the session's own effort and model order stay listed, muted.
+    let agent = super::fleet::opened_agent(cx);
+    let (choose, choose_blocked) = match &agent {
+        Some(agent) => (
+            agent
+                .model
+                .opens
+                .clone()
+                .unwrap_or_else(|| open(PickerKind::Model)),
+            agent.model.unavailable.clone(),
+        ),
+        None => (open(PickerKind::Model), blocked.clone()),
+    };
+    let blocked = agent
+        .map(|agent| {
+            format!(
+                "agent {}'s conversation is open; its model changes from its choices",
+                agent.id
+            )
+        })
+        .or(blocked);
     Some(ActionGroup {
         title: "Model",
         rows: vec![
             with(
-                row(
-                    "model",
-                    "Choose model…",
-                    Some("Ctrl+Shift+M"),
-                    open(PickerKind::Model),
-                ),
+                row("model", "Choose model…", Some("Ctrl+Shift+M"), choose),
                 Some("/model"),
-                blocked.clone(),
+                choose_blocked,
             ),
             with(
                 row(
