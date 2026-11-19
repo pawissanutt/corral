@@ -5,20 +5,9 @@ import type { McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-
 import type { Tool } from "@earendil-works/pi-ai";
 import { z } from "zod";
 
+import { flatObjectSchema, type JsonSchema } from "../tools/schema.ts";
 import { loadSdk } from "./sdk.ts";
 import { CUSTOM_TOOLS_MCP_SERVER_NAME, TOOL_EXECUTION_DENIED_MESSAGE } from "./tools.ts";
-
-interface JsonSchema {
-  type?: string | string[];
-  const?: unknown;
-  enum?: unknown[];
-  anyOf?: JsonSchema[];
-  oneOf?: JsonSchema[];
-  items?: JsonSchema;
-  properties?: Record<string, JsonSchema>;
-  required?: string[];
-  description?: unknown;
-}
 
 type Literal = string | number | boolean;
 
@@ -59,32 +48,10 @@ function schemaToZod(schema: JsonSchema): z.ZodType {
 
 /**
  * An MCP input schema must be one object. A root union of objects (`corral_todo`'s per-op variants)
- * is merged: each key accepts any of its variants' schemas and is required only when every variant
- * requires it. Pi still validates the call against the exact union before executing it.
+ * is merged by `flatObjectSchema`; Pi still validates the call against the exact union before executing it.
  */
-function rootObject(schema: JsonSchema): JsonSchema {
-  const variants = schema.anyOf ?? schema.oneOf;
-  if (schema.properties || !variants || variants.length === 0) return schema;
-  const objects = variants.map(rootObject);
-  const byKey = new Map<string, Map<string, JsonSchema>>();
-  for (const variant of objects) {
-    for (const [key, value] of Object.entries(variant.properties ?? {})) {
-      const seen = byKey.get(key) ?? new Map<string, JsonSchema>();
-      seen.set(JSON.stringify(value), value);
-      byKey.set(key, seen);
-    }
-  }
-  const properties: Record<string, JsonSchema> = {};
-  for (const [key, seen] of byKey) {
-    const unique = [...seen.values()];
-    properties[key] = unique.length === 1 ? unique[0]! : { anyOf: unique };
-  }
-  const required = [...byKey.keys()].filter((key) => objects.every((variant) => variant.required?.includes(key)));
-  return { type: "object", properties, required };
-}
-
 export function jsonSchemaToZodShape(schema: unknown): Record<string, z.ZodType> {
-  const object = rootObject((schema ?? {}) as JsonSchema);
+  const object = flatObjectSchema((schema ?? {}) as JsonSchema);
   const required = new Set(object.required ?? []);
   const shape: Record<string, z.ZodType> = {};
   for (const [key, value] of Object.entries(object.properties ?? {})) {

@@ -1,8 +1,9 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { JsonValue } from "@earendil-works/pi-ai";
-import { Errors } from "typebox/value";
+import type { TSchema } from "typebox";
 import type { HostIdentity, CorralToolSpec } from "../roles/types.ts";
 import { CorralCommandError, type CorralClient } from "./corral.ts";
+import { argumentErrors, flatObjectSchema, parseStringifiedArguments, type JsonSchema } from "./schema.ts";
 
 export interface ToolHost {
   readonly client: CorralClient;
@@ -21,16 +22,19 @@ function option(name: string, value: string): string[] {
 }
 
 export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefinition {
+  // The model sees one root object; the exact schema still decides the call in execute.
+  const advertised = flatObjectSchema(spec.parameters as JsonSchema);
   return {
     name: spec.name,
     label: spec.label,
     description: spec.description,
     exposure: "direct",
-    parameters: spec.parameters,
+    parameters: advertised as TSchema,
+    prepareArguments: (args) => parseStringifiedArguments(advertised, args) as Record<string, unknown>,
     async execute(_id, params) {
       try {
-        const errors = Errors(spec.parameters, params);
-        if (errors.length) throw new Error(`Invalid arguments: ${errors.map(error => error.instancePath || "/").join(", ")}`);
+        const invalid = argumentErrors(spec.parameters, params);
+        if (invalid) throw new Error(`Invalid arguments: ${invalid}`);
         const payload = spec.payload(params as Record<string, unknown>);
         const { task } = host.identity;
         let result: unknown;

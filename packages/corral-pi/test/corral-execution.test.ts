@@ -9,6 +9,8 @@ import worker from "../src/roles/worker/index.ts";
 import { defineCorralTool } from "../src/tools/define.ts";
 import { CorralClient } from "../src/tools/corral.ts";
 import { verdictTool } from "../src/roles/reviewer/tools.ts";
+import { sessionTodoTool } from "../src/roles/common/todo.ts";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { writeFakeEngine } from "./support/fake-engine.ts";
 
 const roles = [worker, reviewer, assistant];
@@ -58,4 +60,29 @@ test("a terminal verdict flushes reported usage before an engine that can close 
     await verdict;
     expect(engine.calls()).toEqual([["--root", root, "--json", "verdict", "T-1", "approve", "--notes", "Looks good"]]);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("corral_todo reaches every provider as one root object that names its fields", async () => {
+  // Anthropic replaced the root union with an empty object, so models guessed every argument.
+  const identity = { store: "store", project: "project", role: "worker" as const, task: "T-1", run: "R1" };
+  const calls: Record<string, unknown>[] = [];
+  const tool = defineCorralTool(sessionTodoTool, {
+    identity, client: new CorralClient({ corral: "", root: ".", cwd: ".", identity }),
+    drained() { throw new Error("unexpected drain"); },
+    todo(payload) { calls.push(payload); return { plan: "P1" }; },
+    checkpoint() { throw new Error("unexpected checkpoint"); },
+  });
+  const schema = tool.parameters as unknown as { type: string; properties: Record<string, unknown>; required: string[] };
+  expect([schema.type, schema.required]).toEqual(["object", ["op"]]);
+  expect(["op", "phases", "step", "on"].filter((key) => !(key in schema.properties))).toEqual([]);
+  // A stringified array argument is parsed before Pi validates the call.
+  const phases = [{ id: "a", label: "A", steps: [{ id: "s", label: "S" }] }];
+  const args = validateToolArguments(tool as never, { type: "toolCall", id: "1", name: tool.name,
+    arguments: tool.prepareArguments!({ op: "init", phases: JSON.stringify(phases) }) as never });
+  await tool.execute("1", args, undefined, undefined, undefined as never);
+  expect(calls).toEqual([{ op: "init", phases }]);
+  // The exact union still decides, and names the fields of the op the call chose.
+  const refused = await tool.execute("2", { op: "init" }, undefined, undefined, undefined as never);
+  expect(refused.isError).toBe(true);
+  expect(JSON.stringify(refused.details)).toContain("init takes {op, phases}");
 });
