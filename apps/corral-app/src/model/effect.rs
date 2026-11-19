@@ -2,9 +2,10 @@
 
 use corral_protocol::app::{ChangesQuery, SeenAdvance};
 use corral_protocol::assistant::{AssistantSend, AssistantSessionOp, AssistantWarm, ContextRef};
+use corral_protocol::build::BuildStart;
 use corral_protocol::detail::DetailGet;
-use corral_protocol::pane::{PaneFocus, PaneKeys};
 use corral_protocol::session::SessionPromptAnswer;
+use corral_protocol::session_host::SessionSend;
 
 use crate::model::act::Act;
 use crate::model::id::Id;
@@ -34,13 +35,6 @@ impl Conn {
 pub struct Env {
     pub conn: Conn,
     pub form: Form,
-}
-
-/// What goes to a run's herdr pane: focus it, or type literal text and then named keys into it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PaneRequest {
-    Focus(PaneFocus),
-    Keys(PaneKeys),
 }
 
 /// What a reducer asks the app to do after it changed its own state.
@@ -127,13 +121,17 @@ pub enum Effect {
         key: Id,
         op: AssistantSessionOp,
     },
-    /// Send a pane request (`pane.focus`, `pane.keys`) for run session `session` under `key`,
-    /// the request id its reply is read by; `what` names it where the session shows its outcome.
-    Pane {
-        session: Id,
+    /// Send owner input to a session (`session.send`) under `key`, which is also the send's
+    /// command id and so its input id; the acknowledgement (`SessionSent`) is read under `key`.
+    SessionSend {
         key: Id,
-        what: crate::model::agents::PaneAsk,
-        request: PaneRequest,
+        send: SessionSend,
+    },
+    /// Start a build session (`build.start`) under `key`; the started row (`AssistantRow`) or
+    /// the host's refusal is read under `key`.
+    BuildStart {
+        key: Id,
+        start: BuildStart,
     },
     /// Read `corral.toml` (`config.get`), or replace it with `put` (`config.put`); the reply is
     /// read under `key`.

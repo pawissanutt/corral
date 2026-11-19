@@ -10,20 +10,24 @@ use crate::model::{Destination, Live};
 const MOVE_MENU: &[&str] = &["j", "k", "down", "up", "."];
 const LIVE_MOVE_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "."];
 const MENU: &[&str] = &["."];
+/// The Agents roster: move, Enter opens the selected session, N (Shift+N) the New build sheet.
+const AGENTS_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "N", "."];
+const AGENTS_MOVE: &[&str] = &["j", "k", "down", "up", "N", "."];
 
 /// The daemon's list keys on `destination` under the live page on top.
 pub fn list_keys_live(destination: Destination, top: Option<&Live>) -> &'static [&'static str] {
     match (destination, top) {
         (Destination::Now, None | Some(Live::Task(_))) => LIVE_MOVE_OPEN,
-        (Destination::Review | Destination::Agents, None) | (Destination::Plans, _) => MOVE_MENU,
+        (Destination::Agents, None) => AGENTS_OPEN,
+        (Destination::Review, None) | (Destination::Plans, _) => MOVE_MENU,
         (Destination::Review, Some(Live::Review(_)))
         | (Destination::Agents, Some(Live::Session(_))) => MENU,
         _ => &[],
     }
 }
 
-/// `keys` as the keyboard focus leaves them: Enter opens the selected task only while nothing
-/// has the focus or the selected task's row has it; on any other control of the list (a
+/// `keys` as the keyboard focus leaves them: Enter opens the selected task or session only
+/// while nothing has the focus or the selected row has it; on any other control of the list (a
 /// toggle, another row, a button beside it) Enter is that control's own press. `focus`: the
 /// focused control, `None` when nothing has it, `Some(None)` for one that is not a row.
 pub fn with_focus(
@@ -32,7 +36,15 @@ pub fn with_focus(
     selected: Option<&str>,
 ) -> &'static [&'static str] {
     match focus {
-        Some(row) if (row.is_none() || row != selected) && keys == LIVE_MOVE_OPEN => MOVE_MENU,
+        Some(row) if row.is_none() || row != selected => {
+            if keys == LIVE_MOVE_OPEN {
+                MOVE_MENU
+            } else if keys == AGENTS_OPEN {
+                AGENTS_MOVE
+            } else {
+                keys
+            }
+        }
         _ => keys,
     }
 }
@@ -47,7 +59,6 @@ pub fn key_legend_live(
 ) -> Vec<(&'static str, &'static str)> {
     match (destination, top) {
         (_, Some(Live::Session(_))) => vec![(".", "session menu")],
-        (_, Some(Live::Thread(_))) => Vec::new(),
         (Destination::Now, _) => {
             let mut legend = vec![("j k", "move")];
             if !off_board {
@@ -57,7 +68,12 @@ pub fn key_legend_live(
             legend
         }
         (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member"), (".", "actions")],
-        (Destination::Agents, _) => vec![("j k", "session"), (".", "session menu")],
+        (Destination::Agents, _) => vec![
+            ("j k", "move"),
+            ("Enter", "open"),
+            ("N", "build"),
+            (".", "menu"),
+        ],
         (Destination::Review, _) => vec![
             ("j k", "candidate"),
             ("A", "approve"),

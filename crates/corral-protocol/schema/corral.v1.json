@@ -1,6 +1,22 @@
 {
   "components": {
     "schemas": {
+      "Activity": {
+        "properties": {
+          "phase": {
+            "description": "At most 96 bytes.",
+            "type": "string"
+          },
+          "since": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "phase",
+          "since"
+        ],
+        "type": "object"
+      },
       "AgentRow": {
         "properties": {
           "paused": {
@@ -173,6 +189,7 @@
         "enum": [
           "quick",
           "session",
+          "build",
           "other"
         ],
         "type": "string"
@@ -188,6 +205,16 @@
       },
       "AssistantRow": {
         "properties": {
+          "build": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BuildFacts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "connection": {
             "description": "Frozen host billing/auth route, not inferred from mutable profile configuration.",
             "type": [
@@ -212,6 +239,18 @@
               "null"
             ]
           },
+          "created": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "focus": {
             "type": [
               "string",
@@ -226,6 +265,13 @@
           },
           "live_in": {
             "$ref": "#/components/schemas/AssistantLocation"
+          },
+          "model": {
+            "description": "`<provider>/<model>`.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "pending": {
             "format": "uint32",
@@ -261,6 +307,12 @@
             "minimum": 0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "updated": {
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -621,6 +673,35 @@
         ],
         "type": "object"
       },
+      "BoardBrief": {
+        "properties": {
+          "blocked": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "open": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "proposed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "open",
+          "blocked",
+          "failed",
+          "proposed"
+        ],
+        "type": "object"
+      },
       "BoardCursor": {
         "description": "`after = Some(id)` resumes within `rev`; None has consumed that whole revision.\nThe empty starting cursor is `{ rev: 0, after: None }`.",
         "properties": {
@@ -638,6 +719,720 @@
         },
         "required": [
           "rev"
+        ],
+        "type": "object"
+      },
+      "BoardPlan": {
+        "properties": {
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tasks": {
+            "description": "At most 20 proposed tasks.",
+            "items": {
+              "$ref": "#/components/schemas/BoardTaskPlan"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          },
+          "why": {
+            "description": "At most 8 KiB.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "why"
+        ],
+        "type": "object"
+      },
+      "BoardTask": {
+        "properties": {
+          "depends": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "phase",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "BoardTaskPlan": {
+        "properties": {
+          "body": {
+            "description": "At most 2 KiB. `body_bytes` counts the original body.",
+            "type": "string"
+          },
+          "body_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "depends": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "size": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "title",
+          "body",
+          "body_bytes"
+        ],
+        "type": "object"
+      },
+      "BuildBoard": {
+        "properties": {
+          "proposed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoardPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tasks": {
+            "description": "At most 100 tasks.",
+            "items": {
+              "$ref": "#/components/schemas/BoardTask"
+            },
+            "type": "array"
+          },
+          "unavailable": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "BuildCommit": {
+        "properties": {
+          "sha": {
+            "type": "string"
+          },
+          "slice": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sha",
+          "subject"
+        ],
+        "type": "object"
+      },
+      "BuildDecision": {
+        "properties": {
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BuildDiff": {
+        "properties": {
+          "added": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "commits": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "files": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "removed": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "commits",
+          "files",
+          "added",
+          "removed"
+        ],
+        "type": "object"
+      },
+      "BuildFacts": {
+        "properties": {
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "children": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BuildDiff"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "exit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "here": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo_root": {
+            "type": "string"
+          },
+          "worktree": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "worktree",
+          "repo_root",
+          "here",
+          "children"
+        ],
+        "type": "object"
+      },
+      "BuildFinding": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "line": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BuildResolution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "severity": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "text"
+        ],
+        "type": "object"
+      },
+      "BuildOutcome": {
+        "properties": {
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "base_branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "landed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "override_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "BuildRecord": {
+        "properties": {
+          "commits": {
+            "description": "The newest at most 50 commits, newest last.",
+            "items": {
+              "$ref": "#/components/schemas/BuildCommit"
+            },
+            "type": "array"
+          },
+          "commits_total": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/BuildDecision"
+            },
+            "type": "array"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BuildDiff"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/BuildOutcome"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/BuildReview"
+            },
+            "type": "array"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/BuildTimeline"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/BuildUsageTotals"
+          },
+          "verification": {
+            "items": {
+              "$ref": "#/components/schemas/BuildVerification"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "title",
+          "outcome",
+          "commits_total",
+          "usage"
+        ],
+        "type": "object"
+      },
+      "BuildRemove": {
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "dry_run"
+        ],
+        "type": "object"
+      },
+      "BuildRemoved": {
+        "properties": {
+          "branch": {
+            "type": "boolean"
+          },
+          "kept": {
+            "description": "Why some or all of the build was retained.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lines": {
+            "description": "At most 16 prune lines of at most 512 bytes each.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "record": {
+            "type": "boolean"
+          },
+          "worktree": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "worktree",
+          "branch",
+          "record"
+        ],
+        "type": "object"
+      },
+      "BuildResolution": {
+        "properties": {
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "BuildReview": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/BuildFinding"
+            },
+            "type": "array"
+          },
+          "head": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "round": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "round",
+          "reviewer",
+          "model",
+          "head",
+          "verdict",
+          "at"
+        ],
+        "type": "object"
+      },
+      "BuildStart": {
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fallback": {
+            "description": "Ordered list of `<provider>/<model>` routes.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "here": {
+            "description": "Use the existing checkout and its current branch instead of a new worktree.",
+            "type": "boolean"
+          },
+          "model": {
+            "description": "`<provider>/<model>`; absent means the configured build route.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "The host slugs the name or chooses one when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "description": "A `[build.profiles]` name. Explicit fields override the profile.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "A configured project; absent means the workspace root's repository.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "here"
+        ],
+        "type": "object"
+      },
+      "BuildTimeline": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "phase"
+        ],
+        "type": "object"
+      },
+      "BuildUsage": {
+        "properties": {
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "input": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input",
+          "output"
+        ],
+        "type": "object"
+      },
+      "BuildUsageTotals": {
+        "properties": {
+          "children": {
+            "$ref": "#/components/schemas/BuildUsage"
+          },
+          "parent": {
+            "$ref": "#/components/schemas/BuildUsage"
+          },
+          "reviewers": {
+            "$ref": "#/components/schemas/BuildUsage"
+          },
+          "total": {
+            "$ref": "#/components/schemas/BuildUsage"
+          }
+        },
+        "required": [
+          "parent",
+          "children",
+          "reviewers",
+          "total"
+        ],
+        "type": "object"
+      },
+      "BuildVerification": {
+        "properties": {
+          "attempt": {
+            "type": "string"
+          },
+          "ended": {
+            "type": "string"
+          },
+          "failed_command": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "started": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "attempt",
+          "tier",
+          "head",
+          "result",
+          "started",
+          "ended"
         ],
         "type": "object"
       },
@@ -697,6 +1492,237 @@
           "cancelled"
         ],
         "type": "object"
+      },
+      "Capability": {
+        "description": "An absent ID means unsupported for this role. A reason means supported but unavailable now.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "unavailable": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "CardAnswer": {
+        "properties": {
+          "options": {
+            "description": "Option IDs from the card question.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "CardBrief": {
+        "properties": {
+          "child": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CardKind"
+          },
+          "title": {
+            "description": "At most 160 bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title"
+        ],
+        "type": "object"
+      },
+      "CardKind": {
+        "enum": [
+          "question",
+          "select",
+          "confirm",
+          "input",
+          "exit",
+          "child_question",
+          "board_plan",
+          "other"
+        ],
+        "type": "string"
+      },
+      "CardOption": {
+        "properties": {
+          "destructive": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "description": "At most 300 bytes.",
+            "type": "string"
+          },
+          "needs_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "unavailable": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "destructive"
+        ],
+        "type": "object"
+      },
+      "CardQuestion": {
+        "properties": {
+          "free_text": {
+            "type": "boolean"
+          },
+          "header": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "initial": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "multi": {
+            "type": "boolean"
+          },
+          "options": {
+            "description": "At most 64 options.",
+            "items": {
+              "$ref": "#/components/schemas/CardOption"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "multi",
+          "free_text"
+        ],
+        "type": "object"
+      },
+      "ChangeScope": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "type": "object"
+      },
+      "ChangedFile": {
+        "properties": {
+          "added": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "authors": {
+            "description": "Child IDs.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "original_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outside": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "removed": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "status",
+          "outside"
+        ],
+        "type": "object"
+      },
+      "ChangesComparison": {
+        "enum": [
+          "session",
+          "candidate",
+          "all",
+          "unstaged",
+          "staged",
+          "other"
+        ],
+        "type": "string"
       },
       "ChangesPage": {
         "properties": {
@@ -783,6 +1809,148 @@
         "type": "object",
         "x-rust-type": "corral_types::Check"
       },
+      "ChildEdit": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "outside": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "outside",
+          "at"
+        ],
+        "type": "object"
+      },
+      "ChildProfile": {
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "model"
+        ],
+        "type": "object"
+      },
+      "ChildQuestion": {
+        "properties": {
+          "asked_at": {
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/ChildQuestionOption"
+            },
+            "type": "array"
+          },
+          "question": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "question",
+          "asked_at"
+        ],
+        "type": "object"
+      },
+      "ChildQuestionOption": {
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "type": "object"
+      },
+      "ChildSteer": {
+        "properties": {
+          "at": {
+            "description": "Absent for historical journal entries that did not record when the steer was sent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "At most 2 KiB.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "ChildUsage": {
+        "properties": {
+          "context_percent": {
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "input": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "turns": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "input",
+          "output",
+          "turns"
+        ],
+        "type": "object"
+      },
       "ClientInfo": {
         "properties": {
           "kind": {
@@ -826,6 +1994,37 @@
         },
         "required": [
           "rows"
+        ],
+        "type": "object"
+      },
+      "CommandSource": {
+        "enum": [
+          "host",
+          "extension",
+          "prompt",
+          "skill",
+          "other"
+        ],
+        "type": "string"
+      },
+      "ComparisonInfo": {
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ChangesComparison"
+          },
+          "label": {
+            "type": "string"
+          },
+          "unavailable": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label"
         ],
         "type": "object"
       },
@@ -878,6 +2077,34 @@
         ],
         "type": "object"
       },
+      "ContextUse": {
+        "properties": {
+          "context_window": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "percent": {
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "tokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "context_window"
+        ],
+        "type": "object"
+      },
       "CostBasis": {
         "enum": [
           "reported",
@@ -886,6 +2113,31 @@
           "other"
         ],
         "type": "string"
+      },
+      "Counts": {
+        "properties": {
+          "live": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "waiting": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "live",
+          "waiting",
+          "total"
+        ],
+        "type": "object"
       },
       "DaemonInfo": {
         "properties": {
@@ -1028,6 +2280,230 @@
               },
               "kind": {
                 "const": "session_item",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionCards"
+              },
+              "kind": {
+                "const": "session_cards",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionModels"
+              },
+              "kind": {
+                "const": "session_models",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionChildDetail"
+              },
+              "kind": {
+                "const": "session_child",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionJobs"
+              },
+              "kind": {
+                "const": "session_jobs",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/JobOutputPage"
+              },
+              "kind": {
+                "const": "session_job_output",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionChanges"
+              },
+              "kind": {
+                "const": "session_changes",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/PatchPage"
+              },
+              "kind": {
+                "const": "session_change_file",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionUsage"
+              },
+              "kind": {
+                "const": "session_usage",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionContext"
+              },
+              "kind": {
+                "const": "session_context",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionPlan"
+              },
+              "kind": {
+                "const": "session_plan",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionEventsPage"
+              },
+              "kind": {
+                "const": "session_events",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionCommands"
+              },
+              "kind": {
+                "const": "session_commands",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/BuildBoard"
+              },
+              "kind": {
+                "const": "build_board",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/BuildRecord"
+              },
+              "kind": {
+                "const": "build_record",
                 "type": "string"
               }
             },
@@ -1275,6 +2751,262 @@
                 "type": "string"
               },
               "kind": {
+                "const": "session_cards",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_models",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "child": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_child",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "child"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_jobs",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "job": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_job_output",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "job"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "comparison": {
+                "$ref": "#/components/schemas/ChangesComparison"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_changes",
+                "type": "string"
+              },
+              "scope": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "comparison"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "comparison": {
+                "$ref": "#/components/schemas/ChangesComparison"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_change_file",
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "scope": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "comparison",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_usage",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_context",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_plan",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_events",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_commands",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "build_board",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "build_record",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
                 "const": "terminal",
                 "type": "string"
               }
@@ -1478,6 +3210,7 @@
             ]
           },
           "page": {
+            "description": "For session parts, an opaque `after` token of at most 128 bytes.",
             "type": [
               "string",
               "null"
@@ -2044,6 +3777,80 @@
         "type": "object",
         "x-rust-type": "corral_types::Event"
       },
+      "ExitBrief": {
+        "properties": {
+          "base_branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "choice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitChoice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detail": {
+            "description": "At most 512 bytes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "landed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "phase": {
+            "$ref": "#/components/schemas/ExitPhase"
+          },
+          "repair": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Repair"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "type": "object"
+      },
+      "ExitChoice": {
+        "enum": [
+          "keep",
+          "land",
+          "iterate",
+          "other"
+        ],
+        "type": "string"
+      },
+      "ExitPhase": {
+        "enum": [
+          "none",
+          "pending",
+          "rebasing",
+          "verifying",
+          "repairing",
+          "landing",
+          "kept",
+          "landed",
+          "failed",
+          "other"
+        ],
+        "type": "string"
+      },
       "Frame": {
         "properties": {
           "kind": {
@@ -2153,6 +3960,157 @@
         ],
         "type": "object"
       },
+      "HostEvent": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "seq": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "description": "Compact JSON preview of at most 512 bytes.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "seq",
+          "at",
+          "kind",
+          "text"
+        ],
+        "type": "object"
+      },
+      "HostNotice": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "description": "At most 240 bytes.",
+            "type": "string"
+          },
+          "tone": {
+            "type": "string"
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "tone",
+          "text"
+        ],
+        "type": "object"
+      },
+      "HostPresence": {
+        "enum": [
+          "running",
+          "not_running",
+          "unreachable",
+          "other"
+        ],
+        "type": "string"
+      },
+      "InputDisposition": {
+        "enum": [
+          "started",
+          "queued",
+          "handled",
+          "pending",
+          "other"
+        ],
+        "type": "string"
+      },
+      "InputFacts": {
+        "properties": {
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "$ref": "#/components/schemas/InputOrigin"
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "typed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "origin"
+        ],
+        "type": "object"
+      },
+      "InputOrigin": {
+        "enum": [
+          "owner",
+          "auto",
+          "pane",
+          "other"
+        ],
+        "type": "string"
+      },
+      "JobAction": {
+        "enum": [
+          "stop",
+          "background",
+          "other"
+        ],
+        "type": "string"
+      },
+      "JobOutputPage": {
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "offset": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "text": {
+            "description": "At most 40 KiB; starts with the newest page, with `DetailReply.next` walking backward.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "offset",
+          "bytes",
+          "live"
+        ],
+        "type": "object"
+      },
       "ListenerInfo": {
         "properties": {
           "address": {
@@ -2211,6 +4169,21 @@
           "offset",
           "text",
           "done"
+        ],
+        "type": "object"
+      },
+      "McpServer": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "state"
         ],
         "type": "object"
       },
@@ -2345,6 +4318,52 @@
             "type": "object"
           }
         ]
+      },
+      "ModelChoice": {
+        "properties": {
+          "context_window": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "effort_levels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "description": "`<provider>/<model>`.",
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": "string"
+          },
+          "scoped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "scoped"
+        ],
+        "type": "object"
       },
       "Notification": {
         "properties": {
@@ -2778,6 +4797,80 @@
       "Ping": {
         "type": "object"
       },
+      "Plan": {
+        "properties": {
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "steps": {
+            "description": "At most 100 steps.",
+            "items": {
+              "$ref": "#/components/schemas/PlanStep"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "PlanBrief": {
+        "properties": {
+          "current": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "done": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "done",
+          "total",
+          "stale"
+        ],
+        "type": "object"
+      },
+      "PlanChange": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at",
+          "revision",
+          "summary"
+        ],
+        "type": "object"
+      },
       "PlanDetail": {
         "properties": {
           "child_rows": {
@@ -2823,6 +4916,39 @@
         "required": [
           "parent",
           "child_counts"
+        ],
+        "type": "object"
+      },
+      "PlanStep": {
+        "properties": {
+          "detail": {
+            "description": "At most 2 KiB.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "text": {
+            "description": "At most 500 bytes.",
+            "type": "string"
+          },
+          "wait": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "state"
         ],
         "type": "object"
       },
@@ -3125,6 +5251,85 @@
         ],
         "type": "object"
       },
+      "QueueMoved": {
+        "properties": {
+          "moved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "moved"
+        ],
+        "type": "object"
+      },
+      "QueueWithdrawn": {
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/WithdrawOutcome"
+          },
+          "text": {
+            "description": "Whole input, not the queue preview.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "turn": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "type": "object"
+      },
+      "QueuedInput": {
+        "properties": {
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/InputOrigin"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/SendPolicy"
+          },
+          "text": {
+            "description": "UTF-8 prefix of at most 200 bytes.",
+            "type": "string"
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "policy",
+          "origin",
+          "text",
+          "bytes"
+        ],
+        "type": "object"
+      },
       "ReachHint": {
         "properties": {
           "endpoint": {
@@ -3144,6 +5349,25 @@
       "Refusal": {
         "type": "object",
         "x-rust-type": "corral_types::Refusal"
+      },
+      "Repair": {
+        "properties": {
+          "of": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "round": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "round",
+          "of"
+        ],
+        "type": "object"
       },
       "Request": {
         "properties": {
@@ -3293,6 +5517,67 @@
           "path",
           "added",
           "deleted"
+        ],
+        "type": "object"
+      },
+      "ReviewFinding": {
+        "properties": {
+          "line": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "severity",
+          "text"
+        ],
+        "type": "object"
+      },
+      "ReviewVerdict": {
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "findings": {
+            "description": "At most 50 findings.",
+            "items": {
+              "$ref": "#/components/schemas/ReviewFinding"
+            },
+            "type": "array"
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "verdict",
+          "summary",
+          "at"
         ],
         "type": "object"
       },
@@ -3544,6 +5829,141 @@
           }
         ]
       },
+      "SendPolicy": {
+        "enum": [
+          "steer",
+          "follow_up",
+          "other"
+        ],
+        "type": "string"
+      },
+      "SessionActed": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "type": "object"
+      },
+      "SessionActionDone": {
+        "properties": {
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SessionActionRequest": {
+        "oneOf": [
+          {
+            "properties": {
+              "action": {
+                "const": "exit_open",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "board_refresh",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "compact",
+                "type": "string"
+              },
+              "instructions": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "export",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "shell",
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              },
+              "exclude_from_context": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "action",
+              "command",
+              "exclude_from_context"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
       "SessionAgentMessage": {
         "properties": {
           "at": {
@@ -3626,6 +6046,199 @@
         ],
         "type": "object"
       },
+      "SessionCard": {
+        "description": "A card is at most 12 KiB serialized; `body_more` signals a clipped body.",
+        "properties": {
+          "body": {
+            "description": "At most 8 KiB.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "body_more": {
+            "type": "boolean"
+          },
+          "child": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CardKind"
+          },
+          "meta": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "opened_at": {
+            "type": "string"
+          },
+          "questions": {
+            "description": "One to four questions.",
+            "items": {
+              "$ref": "#/components/schemas/CardQuestion"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          },
+          "tool": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "body_more",
+          "opened_at"
+        ],
+        "type": "object"
+      },
+      "SessionCardAnswer": {
+        "properties": {
+          "answers": {
+            "items": {
+              "$ref": "#/components/schemas/CardAnswer"
+            },
+            "type": "array"
+          },
+          "card": {
+            "type": "string"
+          },
+          "dismiss": {
+            "default": false,
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "card"
+        ],
+        "type": "object"
+      },
+      "SessionCardAnswered": {
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "SessionCards": {
+        "properties": {
+          "cards": {
+            "items": {
+              "$ref": "#/components/schemas/SessionCard"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SessionChanges": {
+        "properties": {
+          "added": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "comparison": {
+            "$ref": "#/components/schemas/ChangesComparison"
+          },
+          "comparisons": {
+            "items": {
+              "$ref": "#/components/schemas/ComparisonInfo"
+            },
+            "type": "array"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "description": "At most 200 per page and 500 across all pages.",
+            "items": {
+              "$ref": "#/components/schemas/ChangedFile"
+            },
+            "type": "array"
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "removed": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "root": {
+            "type": "string"
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scopes": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeScope"
+            },
+            "type": "array"
+          },
+          "total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "comparison",
+          "root",
+          "total",
+          "added",
+          "removed",
+          "truncated"
+        ],
+        "type": "object"
+      },
       "SessionChild": {
         "description": "Bounded app projection; no child instructions, transcripts, reports or paths.",
         "properties": {
@@ -3635,10 +6248,29 @@
               "null"
             ]
           },
+          "after": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "context_percent": {
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
           "cost_usd": {
             "format": "double",
             "type": [
               "number",
+              "null"
+            ]
+          },
+          "effort": {
+            "type": [
+              "string",
               "null"
             ]
           },
@@ -3650,14 +6282,50 @@
               "null"
             ]
           },
+          "error": {
+            "description": "At most 256 bytes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "description": "Counts of edited paths, of edits outside ownership, and of owned paths.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
           "id": {
             "type": "string"
           },
           "kind": {
+            "description": "Helper children use `helper:<kind>`.",
             "type": "string"
           },
           "model": {
             "type": "string"
+          },
+          "outside": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "owns": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending_model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "question": {
             "type": [
@@ -3676,10 +6344,18 @@
           "state": {
             "type": "string"
           },
+          "steerable": {
+            "type": "boolean"
+          },
           "title": {
             "type": "string"
           },
           "tokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "turns": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -3706,12 +6382,342 @@
         ],
         "type": "object"
       },
+      "SessionChildAct": {
+        "oneOf": [
+          {
+            "properties": {
+              "action": {
+                "const": "cancel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "set_model",
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "model"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "other",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "type": "object"
+          }
+        ],
+        "properties": {
+          "child": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "child"
+        ],
+        "type": "object"
+      },
+      "SessionChildDetail": {
+        "properties": {
+          "activity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "after": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "brief": {
+            "description": "At most 8 KiB.",
+            "type": "string"
+          },
+          "brief_more": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "description": "Epoch milliseconds, as in the fleet journal.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dropped": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "edits": {
+            "description": "At most the newest 200 edits.",
+            "items": {
+              "$ref": "#/components/schemas/ChildEdit"
+            },
+            "type": "array"
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "description": "Epoch milliseconds, as in the fleet journal.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "history": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "owns": {
+            "description": "At most 64 paths.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pending_model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile": {
+            "type": "string"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/ChildProfile"
+            },
+            "type": "array"
+          },
+          "pulse": {
+            "items": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChildQuestion"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report": {
+            "description": "At most 16 KiB.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "report_more": {
+            "type": "boolean"
+          },
+          "started_at": {
+            "description": "Epoch milliseconds, as in the fleet journal.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "steers": {
+            "description": "At most 32 owner or parent steers.",
+            "items": {
+              "$ref": "#/components/schemas/ChildSteer"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          },
+          "transcript": {
+            "type": "boolean"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/ChildUsage"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewVerdict"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "brief",
+          "brief_more",
+          "profile",
+          "model",
+          "state",
+          "created_at",
+          "usage",
+          "report_more",
+          "history",
+          "transcript"
+        ],
+        "type": "object"
+      },
       "SessionChildVerdict": {
         "enum": [
           "approve",
           "changes"
         ],
         "type": "string"
+      },
+      "SessionCommands": {
+        "properties": {
+          "commands": {
+            "description": "At most 200 commands.",
+            "items": {
+              "$ref": "#/components/schemas/SlashCommand"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SessionContext": {
+        "properties": {
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "context_files": {
+            "description": "At most 64 paths.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "mcp": {
+            "items": {
+              "$ref": "#/components/schemas/McpServer"
+            },
+            "type": "array"
+          },
+          "prompts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "worktree": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "cwd"
+        ],
+        "type": "object"
+      },
+      "SessionEventsPage": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/HostEvent"
+            },
+            "type": "array"
+          },
+          "last": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "last"
+        ],
+        "type": "object"
       },
       "SessionFleet": {
         "properties": {
@@ -4217,6 +7223,130 @@
         ],
         "type": "object"
       },
+      "SessionJob": {
+        "properties": {
+          "actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "command": {
+            "description": "At most 512 bytes.",
+            "type": "string"
+          },
+          "dir": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exit_code": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "monitors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "output_bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "tail": {
+            "description": "The last two lines.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "command",
+          "state",
+          "output_bytes"
+        ],
+        "type": "object"
+      },
+      "SessionJobAct": {
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/JobAction"
+          },
+          "id": {
+            "type": "string"
+          },
+          "job": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "job",
+          "action"
+        ],
+        "type": "object"
+      },
+      "SessionJobActed": {
+        "properties": {
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "SessionJobs": {
+        "properties": {
+          "jobs": {
+            "description": "At most 100 jobs.",
+            "items": {
+              "$ref": "#/components/schemas/SessionJob"
+            },
+            "type": "array"
+          },
+          "unavailable": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "SessionLiveEvent": {
         "description": "Text/thinking offsets are UTF-8 bytes, independent per (generation, turn, message,\nkind). Applying chunks at their offsets, rather than appending, is idempotent.",
         "oneOf": [
@@ -4498,6 +7628,159 @@
             "type": "object"
           },
           {
+            "description": "The replacement rides on the page.",
+            "properties": {
+              "kind": {
+                "const": "live_state",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The named part changed; reread its detail using the last etag.",
+            "properties": {
+              "kind": {
+                "const": "live_part",
+                "type": "string"
+              },
+              "part": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "part"
+            ],
+            "type": "object"
+          },
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "state": {
+                    "const": "accepted",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "policy": {
+                    "$ref": "#/components/schemas/SendPolicy"
+                  },
+                  "position": {
+                    "format": "uint32",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "state": {
+                    "const": "queued",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "policy",
+                  "position"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "state": {
+                    "const": "started",
+                    "type": "string"
+                  },
+                  "turn": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "state",
+                  "turn"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "state": {
+                    "const": "withdrawn",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "rejected",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "reason"
+                ],
+                "type": "object"
+              },
+              {
+                "properties": {
+                  "state": {
+                    "const": "other",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state"
+                ],
+                "type": "object"
+              }
+            ],
+            "properties": {
+              "input": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "live_input",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "input"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A non-streamed transcript entry was appended.",
+            "properties": {
+              "kind": {
+                "const": "live_entry",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
             "properties": {
               "kind": {
                 "const": "other",
@@ -4570,8 +7853,29 @@
               "null"
             ]
           },
+          "attachments": {
+            "description": "Attachment selectors use this message's ID as their `entry`.",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentFact"
+            },
+            "type": "array"
+          },
           "author": {
             "type": "string"
+          },
+          "id": {
+            "description": "Stable message ID within its concrete session; empty only on older pages.",
+            "type": "string"
+          },
+          "input": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InputFacts"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "items": {
             "items": {
@@ -4599,8 +7903,108 @@
         ],
         "type": "object"
       },
+      "SessionMode": {
+        "oneOf": [
+          {
+            "enum": [
+              "headless",
+              "other"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "interactive",
+            "description": "A terminal is attached.",
+            "type": "string"
+          }
+        ]
+      },
+      "SessionModel": {
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "description": "`<provider>/<model>`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "model"
+        ],
+        "type": "object"
+      },
+      "SessionModelSet": {
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SessionModels": {
+        "properties": {
+          "current": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "default": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelChoice"
+            },
+            "type": "array"
+          },
+          "refreshed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refreshing": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "refreshing"
+        ],
+        "type": "object"
+      },
       "SessionPage": {
         "properties": {
+          "host": {
+            "$ref": "#/components/schemas/HostPresence",
+            "default": "not_running"
+          },
           "id": {
             "type": "string"
           },
@@ -4632,6 +8036,7 @@
             "type": "boolean"
           },
           "role": {
+            "description": "Session role, including `build` and read-only `child` transcripts.",
             "type": "string"
           },
           "run": {
@@ -4684,6 +8089,40 @@
         ],
         "type": "object"
       },
+      "SessionPlan": {
+        "properties": {
+          "continued": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "history": {
+            "description": "At most 50 changes per page.",
+            "items": {
+              "$ref": "#/components/schemas/PlanChange"
+            },
+            "type": "array"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Plan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stale"
+        ],
+        "type": "object"
+      },
       "SessionPromptAnswer": {
         "description": "`prompt.answer` accepts a Pi question ID and a choice, free text, or both.",
         "properties": {
@@ -4720,6 +8159,44 @@
         },
         "required": [
           "status"
+        ],
+        "type": "object"
+      },
+      "SessionQueueKey": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key"
+        ],
+        "type": "object"
+      },
+      "SessionQueueMove": {
+        "properties": {
+          "delta": {
+            "description": "`-1` or `1`.",
+            "format": "int8",
+            "maximum": 127,
+            "minimum": -128,
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "delta"
         ],
         "type": "object"
       },
@@ -4788,6 +8265,230 @@
         ],
         "type": "object"
       },
+      "SessionSend": {
+        "properties": {
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/SendAttachment"
+            },
+            "type": "array"
+          },
+          "cmd_id": {
+            "description": "Sender-chosen input ID: `[A-Za-z0-9._:-]{1,80}`.",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/SendPolicy"
+          },
+          "text": {
+            "description": "At most `crate::assistant::MESSAGE_TEXT_MAX` bytes.",
+            "type": "string"
+          },
+          "to": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "typed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "cmd_id",
+          "text",
+          "policy"
+        ],
+        "type": "object"
+      },
+      "SessionSent": {
+        "properties": {
+          "disposition": {
+            "$ref": "#/components/schemas/InputDisposition"
+          },
+          "entry": {
+            "description": "`<session>/input/<cmd_id>`, matching the served message's ID.",
+            "type": "string"
+          },
+          "session": {
+            "description": "Concrete session ID, even when the request named `quick`.",
+            "type": "string"
+          },
+          "turn": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "session",
+          "entry",
+          "disposition"
+        ],
+        "type": "object"
+      },
+      "SessionState": {
+        "properties": {
+          "activity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Activity"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "board": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoardBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "can": {
+            "items": {
+              "$ref": "#/components/schemas/Capability"
+            },
+            "type": "array"
+          },
+          "cards": {
+            "description": "At most eight open cards.",
+            "items": {
+              "$ref": "#/components/schemas/CardBrief"
+            },
+            "type": "array"
+          },
+          "changes": {
+            "description": "Changed files in the default comparison; absent until read.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "children": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effort_levels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "exit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExitBrief"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Build only."
+          },
+          "jobs": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "last_error": {
+            "description": "At most 512 bytes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/components/schemas/SessionMode"
+          },
+          "model": {
+            "description": "`<provider>/<model>`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "notices": {
+            "description": "At most four notices.",
+            "items": {
+              "$ref": "#/components/schemas/HostNotice"
+            },
+            "type": "array"
+          },
+          "open": {
+            "type": "boolean"
+          },
+          "paused": {
+            "type": "boolean"
+          },
+          "pending_model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "queue": {
+            "description": "First 12 in host order. `queue_total` includes omitted items.",
+            "items": {
+              "$ref": "#/components/schemas/QueuedInput"
+            },
+            "type": "array"
+          },
+          "queue_total": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "turn": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/UsageBrief"
+          }
+        },
+        "required": [
+          "mode",
+          "turn",
+          "open",
+          "paused",
+          "usage",
+          "queue_total",
+          "children",
+          "jobs"
+        ],
+        "type": "object"
+      },
       "SessionStatus": {
         "type": [
           "string",
@@ -4814,6 +8515,49 @@
           "not_run"
         ],
         "type": "string"
+      },
+      "SessionUsage": {
+        "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ContextUse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/UsageRow"
+            },
+            "type": "array"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UsageTotalRow"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
       },
       "SettingsSnapshot": {
         "properties": {
@@ -4882,6 +8626,31 @@
         "required": [
           "config",
           "devices"
+        ],
+        "type": "object"
+      },
+      "SlashCommand": {
+        "properties": {
+          "args_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/CommandSource"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "source"
         ],
         "type": "object"
       },
@@ -5480,6 +9249,17 @@
               "scope": {
                 "type": "string"
               },
+              "state": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SessionState"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Replacement for capable clients on the first page, after discontinuity, or when\nchanged since the last page. Omission means unchanged."
+              },
               "topic": {
                 "const": "session",
                 "type": "string"
@@ -6059,21 +9839,29 @@
         "type": "object"
       },
       "Topic": {
-        "enum": [
-          "health",
-          "tasks",
-          "plans",
-          "projects",
-          "agents",
-          "assistant",
-          "usage",
-          "settings",
-          "thread",
-          "session",
-          "terminal",
-          "other"
-        ],
-        "type": "string"
+        "oneOf": [
+          {
+            "enum": [
+              "health",
+              "tasks",
+              "plans",
+              "projects",
+              "agents",
+              "usage",
+              "settings",
+              "thread",
+              "session",
+              "terminal",
+              "other"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "assistant",
+            "description": "Shared rows for clients granted `assistant.v1` or `build.v1`.",
+            "type": "string"
+          }
+        ]
       },
       "TurnCompletion": {
         "enum": [
@@ -6115,6 +9903,49 @@
         ],
         "type": "object"
       },
+      "UsageBrief": {
+        "properties": {
+          "context_percent": {
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "context_tokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "context_window": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cost_partial": {
+            "type": "boolean"
+          },
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "tokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tokens",
+          "cost_partial",
+          "context_tokens",
+          "context_window"
+        ],
+        "type": "object"
+      },
       "UsageBy": {
         "type": "string",
         "x-rust-type": "corral_types::UsageBy"
@@ -6131,6 +9962,64 @@
         "required": [
           "day",
           "summary"
+        ],
+        "type": "object"
+      },
+      "UsageRow": {
+        "properties": {
+          "context_percent": {
+            "format": "float",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "input": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "key": {
+            "description": "`pane` or `child:<id>`.",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "output": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "turns": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "key",
+          "name",
+          "kind",
+          "tokens",
+          "input",
+          "output",
+          "turns"
         ],
         "type": "object"
       },
@@ -6152,6 +10041,31 @@
       "UsageSummary": {
         "type": "object",
         "x-rust-type": "corral_types::UsageSummary"
+      },
+      "UsageTotalRow": {
+        "properties": {
+          "cost_usd": {
+            "format": "double",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "partial": {
+            "description": "Some usage was not priced.",
+            "type": "boolean"
+          },
+          "tokens": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tokens",
+          "partial"
+        ],
+        "type": "object"
       },
       "WaitReason": {
         "properties": {
@@ -6199,6 +10113,15 @@
           "health"
         ],
         "type": "object"
+      },
+      "WithdrawOutcome": {
+        "enum": [
+          "withdrawn",
+          "already_started",
+          "unknown_item",
+          "other"
+        ],
+        "type": "string"
       }
     }
   },
@@ -7003,6 +10926,21 @@
           }
         },
         {
+          "name": "state",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionState"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Replacement for capable clients on the first page, after discontinuity, or when\nchanged since the last page. Omission means unchanged."
+          }
+        },
+        {
           "name": "topic",
           "required": true,
           "schema": {
@@ -7713,7 +11651,28 @@
             ]
           },
           "x-required-in": [
-            7
+            21
+          ]
+        },
+        {
+          "name": "child",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            8
+          ]
+        },
+        {
+          "name": "comparison",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/ChangesComparison"
+          },
+          "x-required-in": [
+            11,
+            12
           ]
         },
         {
@@ -7723,7 +11682,7 @@
             "type": "string"
           },
           "x-required-in": [
-            12
+            26
           ]
         },
         {
@@ -7752,8 +11711,8 @@
             ]
           },
           "x-required-in": [
-            7,
-            9
+            21,
+            23
           ]
         },
         {
@@ -7768,7 +11727,31 @@
             4,
             5,
             6,
-            12
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            26
+          ]
+        },
+        {
+          "name": "job",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            10
           ]
         },
         {
@@ -7798,6 +11781,62 @@
               },
               {
                 "const": "session_item",
+                "type": "string"
+              },
+              {
+                "const": "session_cards",
+                "type": "string"
+              },
+              {
+                "const": "session_models",
+                "type": "string"
+              },
+              {
+                "const": "session_child",
+                "type": "string"
+              },
+              {
+                "const": "session_jobs",
+                "type": "string"
+              },
+              {
+                "const": "session_job_output",
+                "type": "string"
+              },
+              {
+                "const": "session_changes",
+                "type": "string"
+              },
+              {
+                "const": "session_change_file",
+                "type": "string"
+              },
+              {
+                "const": "session_usage",
+                "type": "string"
+              },
+              {
+                "const": "session_context",
+                "type": "string"
+              },
+              {
+                "const": "session_plan",
+                "type": "string"
+              },
+              {
+                "const": "session_events",
+                "type": "string"
+              },
+              {
+                "const": "session_commands",
+                "type": "string"
+              },
+              {
+                "const": "build_board",
+                "type": "string"
+              },
+              {
+                "const": "build_record",
                 "type": "string"
               },
               {
@@ -7860,7 +11899,8 @@
             "type": "string"
           },
           "x-required-in": [
-            3
+            3,
+            12
           ]
         },
         {
@@ -7870,17 +11910,27 @@
             "type": "string"
           },
           "x-required-in": [
-            10
+            24
           ]
         },
         {
           "name": "scope",
           "required": false,
           "schema": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "type": "string"
+              }
+            ]
           },
           "x-required-in": [
-            8
+            22
           ]
         },
         {
@@ -7920,8 +11970,8 @@
             ]
           },
           "x-required-in": [
-            7,
-            9
+            21,
+            23
           ]
         },
         {
@@ -7945,7 +11995,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            9
+            23
           ]
         }
       ],
@@ -7975,6 +12025,10 @@
         {
           "code": "expired",
           "message": "expired"
+        },
+        {
+          "code": "too_large",
+          "message": "too_large"
         },
         {
           "code": "unavailable",
@@ -9044,6 +13098,768 @@
       ]
     },
     {
+      "name": "session.send",
+      "params": [
+        {
+          "name": "attachments",
+          "required": false,
+          "schema": {
+            "items": {
+              "$ref": "#/components/schemas/SendAttachment"
+            },
+            "type": "array"
+          }
+        },
+        {
+          "name": "cmd_id",
+          "required": true,
+          "schema": {
+            "description": "Sender-chosen input ID: `[A-Za-z0-9._:-]{1,80}`.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "policy",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SendPolicy"
+          }
+        },
+        {
+          "name": "text",
+          "required": true,
+          "schema": {
+            "description": "At most `crate::assistant::MESSAGE_TEXT_MAX` bytes.",
+            "type": "string"
+          }
+        },
+        {
+          "name": "to",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "typed_at",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionSent"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionSend"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.queue.withdraw",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/QueueWithdrawn"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionQueueKey"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "too_large",
+          "message": "too_large"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.queue.move",
+      "params": [
+        {
+          "name": "delta",
+          "required": true,
+          "schema": {
+            "description": "`-1` or `1`.",
+            "format": "int8",
+            "maximum": 127,
+            "minimum": -128,
+            "type": "integer"
+          }
+        },
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "key",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/QueueMoved"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionQueueMove"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "too_large",
+          "message": "too_large"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.model",
+      "params": [
+        {
+          "name": "effort",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "model",
+          "required": true,
+          "schema": {
+            "description": "`<provider>/<model>`.",
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionModelSet"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionModel"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "too_large",
+          "message": "too_large"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.card.answer",
+      "params": [
+        {
+          "name": "answers",
+          "required": false,
+          "schema": {
+            "items": {
+              "$ref": "#/components/schemas/CardAnswer"
+            },
+            "type": "array"
+          }
+        },
+        {
+          "name": "card",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "dismiss",
+          "required": false,
+          "schema": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionCardAnswered"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionCardAnswer"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "too_large",
+          "message": "too_large"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.child",
+      "params": [
+        {
+          "name": "action",
+          "required": true,
+          "schema": {
+            "anyOf": [
+              {
+                "const": "cancel",
+                "type": "string"
+              },
+              {
+                "const": "set_model",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        {
+          "name": "model",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            1
+          ]
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionActed"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionChildAct"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "too_large",
+          "message": "too_large"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.job",
+      "params": [
+        {
+          "name": "action",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/JobAction"
+          }
+        },
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "job",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionJobActed"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionJobAct"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "too_large",
+          "message": "too_large"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "session.action",
+      "params": [
+        {
+          "name": "action",
+          "required": true,
+          "schema": {
+            "anyOf": [
+              {
+                "const": "exit_open",
+                "type": "string"
+              },
+              {
+                "const": "board_refresh",
+                "type": "string"
+              },
+              {
+                "const": "compact",
+                "type": "string"
+              },
+              {
+                "const": "export",
+                "type": "string"
+              },
+              {
+                "const": "shell",
+                "type": "string"
+              },
+              {
+                "const": "other",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        {
+          "name": "command",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            4
+          ]
+        },
+        {
+          "name": "exclude_from_context",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          },
+          "x-required-in": [
+            4
+          ]
+        },
+        {
+          "name": "instructions",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/SessionActionDone"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/SessionActionRequest"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "too_large",
+          "message": "too_large"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "build.start",
+      "params": [
+        {
+          "name": "effort",
+          "required": false,
+          "schema": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "fallback",
+          "required": false,
+          "schema": {
+            "description": "Ordered list of `<provider>/<model>` routes.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        {
+          "name": "here",
+          "required": true,
+          "schema": {
+            "description": "Use the existing checkout and its current branch instead of a new worktree.",
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "model",
+          "required": false,
+          "schema": {
+            "description": "`<provider>/<model>`; absent means the configured build route.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "name",
+          "required": false,
+          "schema": {
+            "description": "The host slugs the name or chooses one when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "profile",
+          "required": false,
+          "schema": {
+            "description": "A `[build.profiles]` name. Explicit fields override the profile.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        {
+          "name": "project",
+          "required": false,
+          "schema": {
+            "description": "A configured project; absent means the workspace root's repository.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/AssistantRow"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/BuildStart"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "busy",
+          "message": "busy"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "build.remove",
+      "params": [
+        {
+          "name": "dry_run",
+          "required": true,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/BuildRemoved"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/BuildRemove"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
       "name": "device.page",
       "params": [
         {
@@ -9106,6 +13922,9 @@
   "x-framing": {
     "app_control_max": 61440,
     "control_max": 61440,
-    "data_max": 32768
+    "data_max": 32768,
+    "live_fleet_bytes": 32768,
+    "live_state_bytes": 12288,
+    "session_part_max": 49152
   }
 }

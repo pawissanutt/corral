@@ -124,14 +124,6 @@ impl AppState {
                 request_id,
                 request,
             } => self.operation(feed, request_id, CONFIG_PUT, value(request)),
-            ClientRequest::PaneFocus {
-                request_id,
-                request,
-            } => self.operation(feed, request_id, PANE_FOCUS, value(request)),
-            ClientRequest::PaneKeys {
-                request_id,
-                request,
-            } => self.operation(feed, request_id, PANE_KEYS, value(request)),
             ClientRequest::Thread {
                 scope,
                 open: should_open,

@@ -28,9 +28,7 @@ use crate::{
         projects::{PROJECTS_HEADING, PROJECTS_MORE_SUBTITLE, Projects},
         work::{self, MoreRow},
     },
-    screens::{
-        self, PhoneBar, PhonePage, agents, assistant, now, plans, projects, review, settings,
-    },
+    screens::{self, PhoneBar, PhonePage, agents, now, plans, projects, review, settings},
     state::AppState,
     ui::{
         ask, atoms, composer,
@@ -103,6 +101,7 @@ pub fn shell(app: AppState) -> AnyElement {
         .child(ask::share(app))
         .child(palette::palette(app))
         .child(crate::screens::agents::rewind_sheet(app))
+        .child(crate::screens::agents::start_sheet(app))
         .child(confirmation(app))
         .child(refusal(app))
         .child(crate::screens::now::verb_composer(app))
@@ -223,7 +222,6 @@ fn live_page(app: AppState, live: Live) -> PhonePage {
         Live::Task(id) => now::live_task_phone(app, id),
         Live::Plan(id) => plans::live_plan_phone(app, id),
         Live::Session(id) => agents::live_session_phone(app, id),
-        Live::Thread(id) => assistant::live_thread_phone(app, id),
         Live::Review(task) => review::live_review_phone(app, task),
     }
 }
@@ -259,17 +257,7 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
     ) = page_of(app, entry.clone());
     nav.register(depth, &entry, &title, bar.as_ref().map(|bar| bar.shown));
     let position = depth + 1;
-    // A served assistant thread's subject moves while it stays pushed (the quick thread rolls
-    // to its next session): its head follows the thread; every other page keeps its title.
-    let title: Reactive<SharedString> = match &entry {
-        Entry::Page(Route::Live(Live::Thread(id)))
-            if untracked(|| app.data.get()) != DataState::Disconnected =>
-        {
-            let live = assistant::live_thread_title(app, id.clone());
-            (move || SharedString::from(live.get())).into_reactive()
-        }
-        _ => SharedString::from(title).into_reactive(),
-    };
+    let title: Reactive<SharedString> = SharedString::from(title).into_reactive();
     // Configuration with unsaved edits stays on a back press or swipe until the confirm sheet
     // has asked; every other page pops at once.
     let config = matches!(entry, Entry::Section(SettingsSection::Config));

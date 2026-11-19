@@ -6,8 +6,8 @@
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::agents::{Card, Divider, Footer, Marker, Picture};
 use crate::model::hue::Hue;
+use crate::model::session::transcript::{Card, Divider, Footer, Marker, Picture};
 use crate::screens::markdown::markdown;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};

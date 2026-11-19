@@ -1,0 +1,392 @@
+//! What the session page and its parts do, and the reducer over the per-session UI state: tabs,
+//! opened rows, transcript pages, the draft and sends, the receiver and run controls. Every
+//! host or engine operation goes out as an effect; nothing is simulated here.
+
+use corral_protocol::assistant::SendAttachment;
+use corral_protocol::detail::{DetailGet, DetailRef};
+use corral_protocol::session_host::SessionSend;
+use corral_protocol::session_state::SendPolicy;
+
+use crate::model::agents::Control;
+use crate::model::daemon::Feed;
+use crate::model::effect::Effect;
+use crate::model::hue::Hue;
+use crate::model::work::Record;
+use crate::model::{Id, Live};
+
+use super::{EMPTY_UI, EchoState, Focus, Sent, State, SubView, Tab, Ui, echo, tabs, transcript};
+
+/// What the session page and its parts do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    /// Show a tab; leaving or opening Chat marks the rows read so far.
+    Tab {
+        session: Id,
+        tab: Tab,
+    },
+    /// Show a view inside the current tab, or none.
+    Sub {
+        session: Id,
+        sub: Option<SubView>,
+    },
+    Focus {
+        session: Id,
+        focus: Focus,
+    },
+    /// Open or fold a transcript row by its stable key. Opening a row whose complete content is
+    /// not here yet also fetches it, by its continuation token.
+    Expand {
+        session: Id,
+        key: String,
+        fetch: Option<String>,
+    },
+    /// Fetch the complete item behind a transcript preview (again, after a failure).
+    Fetch {
+        session: Id,
+        token: String,
+    },
+    /// Show the page of messages before the shown ones.
+    Older(Id),
+    /// Return to the latest messages.
+    Newer(Id),
+    /// Revalidate a session page or a log capture.
+    Refresh(DetailRef),
+    /// Acquire or release one watcher of the session's live topic.
+    Watch {
+        session: Id,
+        on: bool,
+    },
+    /// The composer's text changed.
+    Draft {
+        session: Id,
+        text: String,
+    },
+    /// Send the text: steering the running turn, or as a follow-up after it.
+    Send {
+        session: Id,
+        text: String,
+        policy: SendPolicy,
+        attachments: Vec<SendAttachment>,
+    },
+    /// The next message goes to this child, or to the session's own agent.
+    Receiver {
+        session: Id,
+        to: Option<String>,
+    },
+    /// The next child that can take a message, then back to the session's own agent.
+    CycleReceiver(Id),
+    /// Show or hide every thinking block.
+    Thinking(Id),
+    /// A run control (the confirm sheet first for one that asks).
+    Control {
+        session: Id,
+        control: Control,
+    },
+    SelectAgent {
+        session: Id,
+        child: Option<String>,
+    },
+    OpenLive(Live),
+    /// Open the task's Actions menu.
+    TaskMenu(Id),
+    Back,
+}
+
+/// Whether a continuation should be fetched: it was never asked for, or its last read failed.
+fn wanted(feed: &Feed, token: &str) -> bool {
+    feed.items
+        .get(token)
+        .is_none_or(|fetch| matches!(fetch, transcript::ItemFetch::Failed(_)))
+}
+
+/// The page of messages before the shown ones, when the daemon offered one and none is loading.
+fn older(feed: &Feed, session: &Id) -> Option<Effect> {
+    let target = DetailRef::Session {
+        id: session.to_string(),
+    };
+    let cache = feed.detail(&target)?;
+    if cache.loading {
+        return None;
+    }
+    let token = transcript::older_token(cache)?;
+    Some(Effect::Detail(DetailGet {
+        target,
+        etag: None,
+        page: Some(token),
+    }))
+}
+
+/// Revalidate a detail with the etag of the page shown.
+fn reread(feed: &Feed, target: DetailRef) -> Effect {
+    Effect::Detail(DetailGet {
+        etag: feed
+            .detail(&target)
+            .and_then(|cache| cache.pages.first())
+            .map(|page| page.etag.clone()),
+        target,
+        page: None,
+    })
+}
+
+/// RFC 3339 of a unix second; none before the clock's first tick.
+fn stamp(now: u64) -> Option<String> {
+    let second = i64::try_from(now).ok().filter(|second| *second > 0)?;
+    jiff::Timestamp::from_second(second)
+        .ok()
+        .map(|at| at.to_string())
+}
+
+impl State {
+    /// The UI state of session `id`; an untouched session's is the default.
+    pub fn ui(&self, id: &str) -> &Ui {
+        self.sessions.get(id).unwrap_or(&EMPTY_UI)
+    }
+
+    fn ui_mut(&mut self, id: &Id) -> &mut Ui {
+        self.sessions.entry(id.clone()).or_default()
+    }
+
+    /// Handles a page action. Every engine or host operation goes out as an effect; nothing is
+    /// simulated here.
+    pub fn act(&mut self, action: Action, feed: &Feed) -> Vec<Effect> {
+        match action {
+            Action::Tab { session, tab } => {
+                let rows = tabs::rows(feed, session.as_str());
+                let ui = self.ui_mut(&session);
+                if ui.tab == Tab::Chat || tab == Tab::Chat {
+                    ui.seen = Some(rows);
+                }
+                ui.tab = tab;
+                ui.sub = None;
+                ui.focus = if tab == Tab::Chat {
+                    Focus::Composer
+                } else {
+                    Focus::Main
+                };
+                Vec::new()
+            }
+            Action::Sub { session, sub } => {
+                self.ui_mut(&session).sub = sub;
+                Vec::new()
+            }
+            Action::Focus { session, focus } => {
+                self.ui_mut(&session).focus = focus;
+                Vec::new()
+            }
+            Action::Expand {
+                session,
+                key,
+                fetch,
+            } => {
+                let ui = self.ui_mut(&session);
+                let opening = !ui.expanded.remove(&key);
+                if opening {
+                    ui.expanded.insert(key);
+                }
+                match fetch {
+                    Some(token) if opening && wanted(feed, &token) => {
+                        vec![Effect::SessionItem { session, token }]
+                    }
+                    _ => Vec::new(),
+                }
+            }
+            Action::Fetch { session, token } => {
+                if wanted(feed, &token) {
+                    vec![Effect::SessionItem { session, token }]
+                } else {
+                    Vec::new()
+                }
+            }
+            Action::Older(session) => match older(feed, &session) {
+                Some(effect) => {
+                    self.ui_mut(&session).earlier = true;
+                    vec![effect]
+                }
+                None => Vec::new(),
+            },
+            Action::Newer(session) => {
+                self.ui_mut(&session).earlier = false;
+                vec![Effect::Detail(DetailGet {
+                    target: DetailRef::Session {
+                        id: session.to_string(),
+                    },
+                    etag: None,
+                    page: None,
+                })]
+            }
+            Action::Refresh(target) => {
+                if let DetailRef::Session { id } = &target {
+                    self.ui_mut(&Id::from(id.as_str())).earlier = false;
+                }
+                vec![reread(feed, target)]
+            }
+            Action::Watch { session, on } => vec![Effect::Watch { session, on }],
+            Action::Draft { session, text } => {
+                self.ui_mut(&session).draft = text;
+                Vec::new()
+            }
+            Action::Send {
+                session,
+                text,
+                policy,
+                attachments,
+            } => self.send(session, text, policy, attachments, feed),
+            Action::Receiver { session, to } => {
+                self.receiver(&session, to, feed);
+                Vec::new()
+            }
+            Action::CycleReceiver(session) => {
+                let steerable: Vec<String> = feed
+                    .live
+                    .get(session.as_str())
+                    .and_then(|live| live.fleet.as_ref())
+                    .map(|fleet| {
+                        fleet
+                            .children
+                            .iter()
+                            .filter(|child| child.steerable)
+                            .map(|child| child.id.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let current = self.ui(session.as_str()).to.clone();
+                let next = match current {
+                    None => steerable.first().cloned(),
+                    Some(child) => steerable
+                        .iter()
+                        .position(|id| *id == child)
+                        .and_then(|at| steerable.get(at + 1))
+                        .cloned(),
+                };
+                self.receiver(&session, next, feed);
+                Vec::new()
+            }
+            Action::Thinking(session) => {
+                let ui = self.ui_mut(&session);
+                ui.hide_thinking = !ui.hide_thinking;
+                Vec::new()
+            }
+            Action::Control { session, control } => vec![Effect::Control {
+                session,
+                key: self.ids.next_id(),
+                control,
+                confirmed: false,
+            }],
+            Action::SelectAgent { session, child } => {
+                self.ui_mut(&session).agent = child;
+                Vec::new()
+            }
+            Action::OpenLive(live) => vec![Effect::OpenLive(live)],
+            Action::TaskMenu(task) => vec![Effect::VerbMenu(Record::Task(task))],
+            Action::Back => vec![Effect::Back],
+        }
+    }
+
+    fn receiver(&mut self, session: &Id, to: Option<String>, feed: &Feed) {
+        let now = feed.now;
+        let ui = self.ui_mut(session);
+        if ui.to == to {
+            return;
+        }
+        let words = match &to {
+            Some(child) => format!("Messages now go to {child}"),
+            None => "Messages go to the session's own agent again".into(),
+        };
+        ui.to = to;
+        ui.notices.push(Hue::Neutral, words, now);
+    }
+
+    /// Sends text under a new command id, which is also its input id; the echo shows it until
+    /// the transcript serves a message under that id.
+    fn send(
+        &mut self,
+        session: Id,
+        text: String,
+        policy: SendPolicy,
+        attachments: Vec<SendAttachment>,
+        feed: &Feed,
+    ) -> Vec<Effect> {
+        let text = text.trim().to_owned();
+        if text.is_empty() && attachments.is_empty() {
+            return Vec::new();
+        }
+        let key = self.ids.next_id();
+        let typed_at = stamp(feed.now);
+        let ui = self.ui_mut(&session);
+        let to = ui.to.clone();
+        // A child takes a steer only; follow-ups queue for the session's own agent.
+        let policy = if to.is_some() {
+            SendPolicy::Steer
+        } else {
+            policy
+        };
+        ui.echoes
+            .retain(|sent| !(sent.told && echo::state(sent, session.as_str(), feed).settled()));
+        ui.echoes.push(Sent {
+            key: key.clone(),
+            text: text.clone(),
+            policy,
+            to: to.clone(),
+            typed_at: typed_at.clone(),
+            attachments: attachments.clone(),
+            unsent: None,
+            told: false,
+        });
+        ui.draft.clear();
+        vec![Effect::SessionSend {
+            key: key.clone(),
+            send: SessionSend {
+                id: session.to_string(),
+                cmd_id: key.to_string(),
+                text,
+                policy,
+                to,
+                typed_at,
+                attachments,
+            },
+        }]
+    }
+
+    /// The send `key` to `session` never left this device, for this reason.
+    pub fn unsent(&mut self, session: &Id, key: &Id, why: String) {
+        if let Some(sent) = self
+            .ui_mut(session)
+            .echoes
+            .iter_mut()
+            .find(|sent| sent.key == *key)
+        {
+            sent.unsent = Some(why);
+        }
+    }
+
+    /// Follows the feed: retires echoes the transcript now serves or the host handled, and tells
+    /// each refusal once: its text goes back above the draft and a notice says why.
+    pub fn settle(&mut self, feed: &Feed) {
+        for (scope, ui) in &mut self.sessions {
+            let page = transcript::page(feed.detail(&DetailRef::Session {
+                id: scope.to_string(),
+            }));
+            ui.echoes.retain(|sent| !echo::retired(sent, page, feed));
+            let mut refused = Vec::new();
+            for sent in ui.echoes.iter_mut().filter(|sent| !sent.told) {
+                match echo::state(sent, scope.as_str(), feed) {
+                    EchoState::Refused(why) => {
+                        sent.told = true;
+                        refused.push((sent.text.clone(), why));
+                    }
+                    EchoState::Withdrawn => sent.told = true,
+                    _ => {}
+                }
+            }
+            for (text, why) in refused {
+                ui.draft = if ui.draft.is_empty() {
+                    text
+                } else {
+                    format!("{text}\n\n{}", ui.draft)
+                };
+                ui.notices
+                    .push(Hue::Fail, format!("Not sent: {why}"), feed.now);
+            }
+        }
+    }
+}

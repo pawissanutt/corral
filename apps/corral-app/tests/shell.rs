@@ -452,15 +452,20 @@ fn approving_onto_a_missing_branch_offers_each_existing_branch() {
         .unwrap();
 }
 
-/// Escape closes the roster's panel first: the page stays Agents rather than navigating back.
+/// Escape steps back before it leaves: on a session page it returns a view (the Agents tab) to
+/// Chat, and the page and the Agents destination stay. The sample's build serves its children,
+/// so its page has the Agents tab.
 #[test]
-fn escape_clears_the_roster_selection_before_leaving_agents() {
+fn escape_returns_a_session_view_to_chat_before_leaving_the_page() {
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.press("id:agent-T-14_R1").unwrap();
-    app.wait_for("id:seg-agent-panel-summary").unwrap();
+    app.press("id:agent-B-k3x9").unwrap();
+    app.wait_for("id:tab-agents").unwrap();
+    app.press("id:tab-agents").unwrap();
+    app.wait_for("id:session-agents").unwrap();
     app.press_key("escape").unwrap();
-    app.wait_for_gone("id:seg-agent-panel-summary", Duration::from_secs(5))
+    app.wait_for_gone("id:session-agents", Duration::from_secs(5))
         .unwrap();
+    app.wait_for("id:session-transcript").unwrap();
     assert!(
         app.screen()
             .accessibility_state("id:nav-agents")
@@ -486,15 +491,15 @@ fn terminate_from_a_session_row_asks_once_and_ends_the_run() {
 }
 
 /// A menu the pointer opened lost the arrows to the roster under it, which moved its selection:
-/// they go into the menu (End to its last item, Task ›, then Up past Focus pane and Reply…), and
-/// Enter runs the item reached, Terminate.
+/// they go into the menu (End to its last item, Task ›, then Up past Reply…), and Enter runs the
+/// item reached, Terminate.
 #[test]
 fn arrow_keys_walk_a_menu_the_pointer_opened() {
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
     app.wait_for("id:agent-T-14_R1").unwrap();
     app.right_click("id:agent-T-14_R1").unwrap();
     app.wait_for("id:btn-terminate").unwrap();
-    for key in ["end", "up", "up", "up"] {
+    for key in ["end", "up", "up"] {
         app.press_key(key).unwrap();
     }
     app.press_key("enter").unwrap();
@@ -513,48 +518,47 @@ fn pause_on_a_session_without_a_pi_host_shows_the_refusal_reason() {
     app.wait_for("text:/no Pi socket/").unwrap();
 }
 
-/// In a terminal, a control chosen in the selected run's Session menu changes the run's state
-/// under the menu; the closing menu puts the keyboard back on its trigger, which must still be
-/// there: Return opens the menu again, and after it Ctrl+K opens the palette and Escape closes
-/// it with the sample preview still shown.
+/// In a terminal, a control chosen in the session page's ⋯ menu changes the run's state under
+/// the menu, and the menu's trigger must still be there and open the menu again (the page opens
+/// with the keyboard in its composer, so the closing menu hands the keys back there rather than
+/// to the trigger); then Ctrl+K opens the palette and Escape closes it with the sample preview
+/// still shown.
 #[test]
 fn the_keyboard_stays_with_the_app_after_a_session_menu_control_in_a_terminal() {
     let mut app = preview(terminal_80(), &[("corral.destination", "agents")]);
     app.press("id:agent-T-14_R1").unwrap();
-    app.press("id:btn-session-menu").unwrap();
-    app.wait_for("id:btn-cancel-turn").unwrap();
-    app.press_key("down").unwrap();
-    app.press_key("enter").unwrap();
-    app.wait_for_gone("id:btn-cancel-turn", Duration::from_secs(5))
+    app.press("id:btn-session-actions").unwrap();
+    app.wait_for("id:act-cancel-turn").unwrap();
+    app.press("id:act-cancel-turn").unwrap();
+    app.wait_for_gone("id:act-cancel-turn", Duration::from_secs(5))
         .unwrap();
-    app.press_key("enter").unwrap();
-    app.wait_for("id:btn-terminate").unwrap();
+    app.press("id:btn-session-actions").unwrap();
+    app.wait_for("id:act-terminate").unwrap();
     app.press_key("escape").unwrap();
-    app.wait_for_gone("id:btn-terminate", Duration::from_secs(5))
+    app.wait_for_gone("id:act-terminate", Duration::from_secs(5))
         .unwrap();
     app.press_key("ctrl+k").unwrap();
     app.wait_for("id:palette-input").unwrap();
     app.press_key("escape").unwrap();
     app.wait_for_gone("id:palette-input", Duration::from_secs(5))
         .unwrap();
-    app.wait_for("id:btn-session-menu").unwrap();
+    app.wait_for("id:btn-session-actions").unwrap();
     assert_eq!(app.screen().count("text:/not reachable/").unwrap(), 0);
 }
 
-/// Review's live reviewer opens its session page: the reviewer run's terminal.
+/// Review's live reviewer opens its session page, named as the reviewer of T-13.
 #[test]
 fn the_reviewer_session_opens_from_review() {
     let mut app = preview(desktop(), &[("corral.destination", "review")]);
     app.press("id:task-T-13").unwrap();
     app.press("id:btn-open-reviewer").unwrap();
-    app.wait_for("id:session-terminal").unwrap();
-    app.wait_for("id:btn-session-menu").unwrap();
-    app.wait_for("text:/T-13-R2/").unwrap();
+    app.wait_for("id:btn-session-actions").unwrap();
+    app.wait_for("text:/^T-13 review/").unwrap();
 }
 
 /// The grouping switch asks the feed for the other grouping and redraws the lanes from its
 /// answer: By run draws one lane per run, which By task does not have, and a live run's lane
-/// opens its session terminal (T-15's headless run, which has no pi transcript to open on).
+/// opens its session page: T-15's headless run has no Pi host, so the page is its read-only log.
 #[test]
 fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     let mut app = preview(terminal_80(), &[("corral.destination", "timeline")]);
@@ -563,7 +567,7 @@ fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     app.press("id:seg-group-1").unwrap();
     app.wait_for("id:lane-T-15/R1").unwrap();
     app.press("id:lane-T-15/R1").unwrap();
-    app.wait_for("id:session-terminal").unwrap();
+    app.wait_for("id:session-log").unwrap();
 }
 
 /// A rewind leaves a gap in the live stream, so the session page reads the transcript again:
@@ -572,15 +576,31 @@ fn timeline_grouping_redraws_the_lanes_from_the_feed() {
 fn rewinding_a_session_reloads_its_transcript() {
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
     app.press("id:agent-T-14_R1").unwrap();
-    app.press("id:btn-open-session").unwrap();
     app.wait_for("text:/A run that crossed midnight/").unwrap();
-    app.press("id:btn-session-menu").unwrap();
-    app.press("id:btn-rewind").unwrap();
+    app.press("id:btn-session-actions").unwrap();
+    app.press("id:act-rewind").unwrap();
     app.press("id:btn-rewind-turn-3").unwrap();
     app.wait_for("id:confirm").unwrap();
     app.press("id:confirm-confirm").unwrap();
     app.wait_for_gone("text:/A run that crossed midnight/", Duration::from_secs(5))
         .unwrap();
+}
+
+/// Agents › New › New build session: the sheet starts the build in the chosen project under the
+/// typed name, closes, and the new build's session page opens.
+#[test]
+fn starting_a_build_opens_its_session_page() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.press("id:btn-new").unwrap();
+    app.press("id:btn-new-build").unwrap();
+    app.wait_for("id:field-build-name").unwrap();
+    app.press("id:seg-build-project-corral").unwrap();
+    app.type_text("id:field-build-name", "walk").unwrap();
+    app.press("id:btn-start-build").unwrap();
+    app.wait_for_gone("id:field-build-name", Duration::from_secs(5))
+        .unwrap();
+    app.wait_for("id:btn-session-actions").unwrap();
+    app.wait_for("text:build · walk").unwrap();
 }
 
 /// Opening a task from the palette shows it, also after Now's inspector was closed.

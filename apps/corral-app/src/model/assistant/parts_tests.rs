@@ -140,6 +140,11 @@ fn cold_sessions_with_recorded_history_are_not_presented_as_never_started() {
             wait: None,
             question_id: None,
             rev: 1,
+            model: None,
+            effort: None,
+            created: None,
+            updated: None,
+            build: None,
         },
     );
     let fresh = live_chip(&feed, "A-1");
@@ -176,6 +181,11 @@ fn quick_thread_end_closes_its_current_generation_and_frees_the_next_one() {
         wait: None,
         question_id: None,
         rev: 1,
+        model: None,
+        effort: None,
+        created: None,
+        updated: None,
+        build: None,
     };
     let mut feed = Feed {
         transport_ready: true,

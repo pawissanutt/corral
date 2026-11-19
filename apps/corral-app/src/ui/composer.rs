@@ -1,10 +1,10 @@
-//! The Ask composer and the surface it opens in. One field and one Send: the model pill and
-//! its list, the "answered by" line after a switch, the removable context chip and the staged
-//! attachments, the offline or waiting line, the Screenshot, Link and File controls. Enter
-//! sends and Shift+Enter breaks the line; Send hands the draft and attachment refs to the
-//! assistant model, which stores the message with its state at once; the draft and the
-//! attachments clear once the device outbox accepted it. A phone folds all of it into one row
-//! and one chip above it (`phone`).
+//! The composers: Ask's and the session page's (`session`), and the surface Ask opens in.
+//! Ask's is one field and one Send: the model pill and its list, the "answered by" line after a
+//! switch, the removable context chip and the staged attachments, the offline or waiting line,
+//! the Screenshot, Link and File controls. Enter sends and Shift+Enter breaks the line; Send
+//! hands the draft and attachment refs to the assistant model, which stores the message with its
+//! state at once; the draft and the attachments clear once the device outbox accepted it. A
+//! phone folds all of it into one row and one chip above it (`phone`).
 
 use nsh_base::{SheetEvent, sheet};
 use nsh_core::element::{Input, color as for_appearance, input};
@@ -28,9 +28,12 @@ mod draft;
 mod pending;
 mod phone;
 mod send;
+mod session;
 
 use draft::keep_draft;
 use send::send;
+
+pub(crate) use session::session_composer;
 
 /// Where a composer's model list opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,5 +1,5 @@
-//! The Ask surfaces beside the composer: the composer docked under a thread, the global hotkey
-//! window and the phone share sheet, with the model pill and list they share.
+//! The Ask surfaces beside the composer: the global hotkey window and the phone share sheet,
+//! with the model pill and list they share.
 
 mod attach;
 pub(crate) mod drawer;
@@ -12,10 +12,8 @@ pub(crate) use attach::{chip_row, field_row, foot_controls, plus, tray};
 
 use nsh_core::prelude::*;
 
-use crate::model::Form;
-use crate::model::assistant::{self, ThreadRef};
+use crate::model::assistant;
 use crate::state::AppState;
-use crate::ui::composer::{Host, ListAt, field};
 
 /// Runs one of the assistant model's typed actions through the feed-backed reducer, which
 /// returns the canonical effects (Remove context clears Ask's real context). Attaching runs at
@@ -43,25 +41,6 @@ pub(crate) fn act(app: AppState, action: assistant::Action) {
     app.reduce(app.assistant, move |state, feed, _, _| {
         state.act_live(action, feed)
     });
-}
-
-/// The composer docked under a thread page. The quick thread and a daemon session keep the
-/// model pill; a pane session has no pill (Pi's own picker). Its model list opens above the
-/// field on desktop and in a terminal, inline under the pill on a phone.
-pub fn docked(app: AppState, thread: ThreadRef) -> AnyElement {
-    let list = if app.form == Form::Phone {
-        ListAt::Inline
-    } else {
-        ListAt::Above
-    };
-    field(
-        app,
-        Host {
-            thread,
-            list,
-            docked: true,
-        },
-    )
 }
 
 /// The labelled preview's small Ask window, shown while `app.hotkey` holds: on desktop a window

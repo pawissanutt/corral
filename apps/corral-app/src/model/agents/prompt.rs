@@ -157,7 +157,7 @@ pub fn answer(
 #[cfg(test)]
 mod tests {
     use corral_protocol::detail::{
-        DetailBody, DetailRef, SessionItem, SessionMessage, SessionPage,
+        DetailBody, DetailRef, HostPresence, SessionItem, SessionMessage, SessionPage,
     };
     use corral_protocol::rows::{
         AssistantKind, AssistantLocation, AssistantRow, AssistantState, WaitReason,
@@ -201,6 +201,11 @@ mod tests {
                 }),
                 question_id: question.map(str::to_owned),
                 rev: 1,
+                model: None,
+                effort: None,
+                created: None,
+                updated: None,
+                build: None,
             },
         );
         feed.details.insert(
@@ -218,16 +223,20 @@ mod tests {
                     run: None,
                     machine: None,
                     messages: vec![SessionMessage {
+                        id: String::new(),
                         author: "custom".into(),
                         at: None,
                         items,
                         model: None,
                         stop_reason: None,
                         usage: None,
+                        input: None,
+                        attachments: Vec::new(),
                     }],
                     older: None,
                     replyable: true,
                     reply_refusal: None,
+                    host: HostPresence::Running,
                 })),
             },
         );

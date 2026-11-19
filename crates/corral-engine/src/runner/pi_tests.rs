@@ -1,11 +1,19 @@
 use std::{
+    fs,
     io::{BufRead, BufReader, Write},
-    os::unix::{fs::PermissionsExt, net::UnixListener},
+    os::unix::{ffi::OsStrExt, fs::PermissionsExt, net::UnixListener},
+    path::{Path, PathBuf},
+    process::Command,
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
 };
 
-use super::*;
+use anyhow::Result;
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+use super::pi::{Answer, BuildLaunch, Client, Disposition, FRAME_MAX, PiRunner, quoted_path};
+use super::{InputTag, LaunchSpec, Origin, Runner, SessionRef, SessionStatus};
 use crate::runner::{FakeRunner, tests::spec};
 
 type Handler = Box<dyn FnOnce(Value) -> Value + Send>;
@@ -96,10 +104,7 @@ impl Fixture {
     }
 
     fn runner(&self) -> PiRunner<'_> {
-        PiRunner {
-            inner: &self.placement,
-            socket_dir: Some(self.temp.path()),
-        }
+        PiRunner::new(&self.placement).in_test_socket_dir(self.temp.path())
     }
 
     fn launch(&self, run: &str, role: &str) -> LaunchSpec {
@@ -162,7 +167,7 @@ fn pi_worker_lifecycle_and_controls_use_the_socket() {
             hello(2, "T-042/R7"),
             state(false, true, None, None),
             state(false, true, Some("Which target?"), None),
-            state(false, false, None, Some("spending cap reached")),
+            state(false, false, None, Some("provider unavailable")),
             expect("pause", json!({}), json!({"paused": true})),
             state(true, false, None, None),
             submit("gate failure", "auto", "queued"),
@@ -201,7 +206,7 @@ fn pi_worker_lifecycle_and_controls_use_the_socket() {
     assert_eq!(
         runner.status(&session).unwrap(),
         SessionStatus::Blocked {
-            excerpt: "spending cap reached".into()
+            excerpt: "provider unavailable".into()
         }
     );
     let client = Client::for_session(&session).unwrap();
@@ -305,4 +310,157 @@ fn pi_spills_text_that_exceeds_the_serialized_frame_limit() {
     let session = runner.start(&launch).unwrap();
     runner.send(&session, &text, Origin::Owner).unwrap();
     host.join();
+}
+
+#[test]
+fn a_tagged_reply_keeps_the_owners_input_id() {
+    let fixture = Fixture::new();
+    let launch = fixture.launch("R1", "agent");
+    let runner = fixture.runner();
+    let host = fixture.host(
+        &launch,
+        &launch.dir,
+        vec![
+            hello(2, "T-042/R1"),
+            Box::new(|request| {
+                assert_eq!(request["command"], "submit_input");
+                assert_ne!(request["id"], "app-test:1");
+                assert_eq!(
+                    request["args"],
+                    json!({
+                        "input_id": "app-test:1", "origin": "owner", "text": "continue",
+                        "busy_policy": "follow_up", "device": "phone",
+                        "typed_at": "2026-11-18T12:00:00Z",
+                    })
+                );
+                json!({"request_id": request["id"], "input": "app-test:1", "disposition": "queued"})
+            }),
+        ],
+    );
+    let session = runner.start(&launch).unwrap();
+    let reply = runner
+        .send_tagged(
+            &session,
+            "continue",
+            Origin::Owner,
+            InputTag {
+                input_id: "app-test:1",
+                to: None,
+                typed_at: Some("2026-11-18T12:00:00Z"),
+                device: Some("phone"),
+                follow_up: true,
+                attachments: &[],
+            },
+        )
+        .unwrap();
+    assert_eq!(reply.input.as_deref(), Some("app-test:1"));
+    assert_eq!(reply.disposition, Disposition::Queued);
+    host.join();
+}
+
+#[derive(Default)]
+struct BuildPlacement {
+    started: Mutex<Option<(Command, JoinHandle<()>)>>,
+    tasks: FakeRunner,
+}
+
+impl Runner for BuildPlacement {
+    fn start(&self, spec: &LaunchSpec) -> Result<SessionRef> {
+        self.tasks.start(spec)
+    }
+
+    fn start_process(&self, command: Command, dir: PathBuf) -> Result<SessionRef> {
+        let mut args = command.get_args();
+        let socket = args
+            .find(|arg| *arg == "--socket")
+            .and_then(|_| args.next())
+            .unwrap();
+        let host = serve(
+            Path::new(socket),
+            vec![expect(
+                "hello",
+                json!({}),
+                json!({"protocol": 2, "role": "build", "session_id": "B-012",
+                "session_file": "transcript.jsonl", "pid": 1234}),
+            )],
+        );
+        *self.started.lock().unwrap() = Some((command, host));
+        Ok(SessionRef::Process { pid: 1234, dir })
+    }
+
+    fn status(&self, session: &SessionRef) -> Result<SessionStatus> {
+        self.tasks.status(session)
+    }
+
+    fn send(&self, session: &SessionRef, text: &str, origin: Origin) -> Result<()> {
+        self.tasks.send(session, text, origin)
+    }
+
+    fn stop(&self, session: &SessionRef) -> Result<()> {
+        self.tasks.stop(session)
+    }
+
+    fn focus(&self, session: &SessionRef) -> Result<()> {
+        self.tasks.focus(session)
+    }
+}
+
+#[test]
+fn build_launch_passes_id_socket_data_dir_and_model() {
+    let fixture = Fixture::new();
+    let workspace = fixture.temp.path();
+    let data_root = workspace.join("pi-data");
+    let cwd = workspace.join("project");
+    fs::create_dir_all(data_root.join("build")).unwrap();
+    fs::create_dir(&cwd).unwrap();
+    let placement = BuildPlacement::default();
+    let (session, hello) = PiRunner::new(&placement)
+        .start_build(BuildLaunch {
+            workspace,
+            cwd: &cwd,
+            data_root: &data_root,
+            socket_root: Some(workspace),
+            id: "B-012",
+            resume: false,
+            project: Some("demo"),
+            name: Some("walk"),
+            here: true,
+            profile: Some("api"),
+            model: Some("anthropic-api/claude-opus-5-5"),
+            effort: Some("high"),
+            fallback: &["openai/gpt-5.4".into()],
+        })
+        .unwrap();
+    assert_eq!(hello.session_id, "B-012");
+    let SessionRef::Pi { socket, dir, .. } = session else {
+        panic!("expected Pi placement")
+    };
+    assert_eq!(dir, data_root.join("build/B-012"));
+    let (command, host) = placement.started.lock().unwrap().take().unwrap();
+    host.join().unwrap();
+    assert_eq!(command.get_program(), "corral-pi");
+    assert_eq!(command.get_current_dir(), Some(cwd.as_path()));
+    assert!(
+        command.get_envs().any(|(key, value)| {
+            key == "CORRAL_NEXT_ROOT" && value == Some(workspace.as_os_str())
+        })
+    );
+    let args: Vec<_> = command.get_args().collect();
+    assert_eq!(args[0], "build");
+    assert!(args.contains(&std::ffi::OsStr::new("--headless")));
+    for (flag, value) in [
+        ("--id", std::ffi::OsStr::new("B-012")),
+        ("--socket", socket.as_os_str()),
+        ("--data-dir", data_root.as_os_str()),
+        (
+            "--model",
+            std::ffi::OsStr::new("anthropic-api/claude-opus-5-5"),
+        ),
+        ("--fallback", std::ffi::OsStr::new("openai/gpt-5.4")),
+    ] {
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == flag && pair[1] == value)
+        );
+    }
 }

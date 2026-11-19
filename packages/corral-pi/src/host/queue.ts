@@ -4,25 +4,45 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { QueuedItem } from "./queue-control.ts";
 import type { BusyPolicy, SessionInput } from "../bridge/protocol.ts";
 import { sha256Hex } from "../tools/corral.ts";
+import { utf8Prefix } from "../roles/assistant/owner-action.ts";
+import { transcriptInput, type LiveInput, type TranscriptInput } from "./remote/input.ts";
+import type { HeldInput } from "./session-record.ts";
 
-const SNAPSHOT_BYTES = 48 * 1024;
+const SNAPSHOT_BYTES = 48 * 1024 - 256;
 const RECENT_STARTS = 64;
-type Origin = "pane" | "extension" | SessionInput["origin"];
+type Origin = TranscriptInput["origin"] | "extension";
 type Observer = NonNullable<Parameters<AgentSession["setQueueObserver"]>[0]>;
 interface Input {
   key: string;
   text: string;
   origin: Origin;
   mode: BusyPolicy;
+  readonly socketId?: string;
+  readonly facts: TranscriptInput;
+  readonly transcriptId?: string;
 }
 interface Queued extends Input { mode: "steer" | "follow_up"; message: AgentMessage }
-type Withdrawal = { outcome: "withdrawn" | "already_started" | "unknown_item"; item?: string; turn?: number };
+export type Withdrawal = { outcome: "withdrawn" | "already_started" | "unknown_item"; item?: string; turn?: number; text?: string };
+export interface QueuedInput {
+  key: string; policy: BusyPolicy; origin: TranscriptInput["origin"]; text: string; bytes: number; to?: string; actions: string[];
+}
+
+function queuedInput(key: string, text: string, policy: BusyPolicy, origin: QueuedInput["origin"], to?: string): QueuedInput {
+  return { key, policy, origin, text: utf8Prefix(text, 200), bytes: Buffer.byteLength(text),
+    ...(to === undefined ? {} : { to }), actions: ["withdraw"] };
+}
+
+function heldView(item: HeldInput): QueuedInput {
+  return queuedInput(item.queueKey, item.text, item.busyPolicy, item.origin, item.to);
+}
+
 export interface HostQueueOptions {
   readonly session: () => AgentSession;
   readonly enabled: () => boolean;
   readonly interactive: () => boolean;
   readonly turn: (nextRun: boolean) => number;
   readonly emit: (kind: string, data: Record<string, unknown>) => void;
+  readonly liveInput?: (event: LiveInput) => void;
 }
 
 export class HostQueue {
@@ -30,6 +50,7 @@ export class HostQueue {
   private readonly objects = new WeakMap<AgentMessage, Queued>();
   private readonly started = new Map<string, number>();
   private reordering = false;
+  private readonly counts = { prompt: 0, steer: 0, follow_up: 0 };
   constructor(private readonly options: HostQueueOptions) {}
 
   readonly observer: Observer = {
@@ -46,17 +67,22 @@ export class HostQueue {
         if (change.action === "enqueue") {
           const input = this.tag(entry.tag) ?? this.input(messageText(entry.message), change.mode, "extension");
           const item = { ...input, mode: change.mode, message: entry.message };
+          this.started.delete(item.key);
+          const position = ++this.counts[item.mode];
           this.queued.set(item.key, item);
           this.objects.set(entry.message, item);
-          this.emit(item, "queued");
+          this.emit(item, "queued", undefined, item.socketId === undefined ? undefined :
+            { input: item.socketId, state: "queued", policy: item.mode, position });
           continue;
         }
         const item = this.objects.get(entry.message);
         if (!item) continue;
         this.queued.delete(item.key);
         this.objects.delete(entry.message);
+        this.counts[item.mode]--;
         if (change.action === "drain") this.start(item, change.nextRun);
-        else this.emit(item, "withdrawn");
+        else this.emit(item, "withdrawn", undefined,
+          item.socketId === undefined ? undefined : { input: item.socketId, state: "withdrawn" });
       }
     },
     restoreInput: tag => {
@@ -66,18 +92,34 @@ export class HostQueue {
   };
 
   private input(text: string, mode: BusyPolicy, origin: Origin): Input {
-    return { key: `q-${crypto.randomUUID()}`, text, mode, origin };
+    return { key: `q-${crypto.randomUUID()}`, text, mode, origin, facts: { origin: origin === "extension" ? "auto" : origin } };
   }
 
-  bridgeInput(input: SessionInput): unknown { return this.input(input.text, input.busyPolicy, input.origin); }
+  bridgeInput(input: SessionInput, source: { socketId?: string; transcriptId?: string; text?: string; pane?: boolean; queueKey?: string }): unknown {
+    const { socketId, transcriptId, pane } = source;
+    const origin = pane ? "pane" : input.origin;
+    return { key: source.queueKey ?? socketId ?? `q-${crypto.randomUUID()}`, text: source.text ?? input.text,
+      mode: input.busyPolicy, origin, socketId, transcriptId,
+      facts: transcriptInput(input, !pane && socketId === undefined ? "auto" : origin) } satisfies Input;
+  }
+
+  inputFacts(tag: unknown): Pick<Input, "facts" | "transcriptId"> | undefined {
+    return this.tag(tag);
+  }
+
+  has(key: string): boolean { return this.queued.has(key); }
+  count(mode: BusyPolicy): number { return this.counts[mode]; }
 
   private tag(value: unknown): Input | undefined {
-    if (!value || typeof value !== "object" || !("key" in value) || !("text" in value)) return undefined;
+    if (!value || typeof value !== "object" || !("key" in value) || !("text" in value) || !("facts" in value)) return undefined;
     return value as Input;
   }
 
-  private emit(item: Input, event: string, extra?: Record<string, unknown>): void {
-    queueMicrotask(() => this.options.emit("queue_item", { item: item.key, mode: item.mode, origin: item.origin, event, ...extra }));
+  private emit(item: Input, event: string, extra?: Record<string, unknown>, live?: LiveInput): void {
+    queueMicrotask(() => {
+      this.options.emit("queue_item", { item: item.key, mode: item.mode, origin: item.origin, event, ...extra });
+      if (live) this.options.liveInput?.(live);
+    });
   }
 
   private start(item: Input, nextRun: boolean): void {
@@ -87,25 +129,41 @@ export class HostQueue {
       const first = this.started.keys().next().value;
       if (first) this.started.delete(first);
     }
-    this.emit(item, "started", { turn });
+    this.emit(item, "started", { turn },
+      item.socketId === undefined ? undefined : { input: item.socketId, state: "started", turn });
   }
 
   private ordered(): Queued[] {
     return this.options.session().agent.getQueuedMessages().flatMap(message => this.objects.get(message) ?? []);
   }
 
-  snapshot(limit = 64): Record<string, unknown> {
+  snapshot(limit = 64, held: readonly HeldInput[] = []): Record<string, unknown> {
     const items: Record<string, unknown>[] = [];
-    const positions = { steer: 0, follow_up: 0 };
+    const positions = { prompt: 0, steer: 0, follow_up: 0 };
+    const ordered = this.ordered();
     let bytes = 0;
-    for (const item of this.ordered()) {
-      const entry = { item: item.key, origin: item.origin, mode: item.mode, state: "queued",
-        position: ++positions[item.mode], bytes: Buffer.byteLength(item.text), text_sha256: sha256Hex(item.text), actions: ["withdraw"] };
-      bytes += Buffer.byteLength(JSON.stringify(entry));
-      if (items.length === limit || bytes > SNAPSHOT_BYTES) return { available: true, items, more: true };
-      items.push(entry);
+    for (let i = 0; i < ordered.length + held.length; i++) {
+      if (items.length === limit) return { available: true, items, more: true };
+      const item = ordered[i], saved = held[i - ordered.length];
+      const { key, policy, ...view } = item ? this.view(item) : heldView(saved!);
+      const row = { ...view, item: key, origin: item?.origin ?? view.origin, mode: policy, state: "queued",
+        position: ++positions[policy], text_sha256: sha256Hex(item?.text ?? saved!.text) };
+      bytes += Buffer.byteLength(JSON.stringify(row)) + 1;
+      if (bytes > SNAPSHOT_BYTES) return { available: true, items, more: true };
+      items.push(row);
     }
     return { available: true, items, more: false };
+  }
+
+  private view(item: Queued): QueuedInput {
+    return queuedInput(item.key, item.text, item.mode, item.origin === "extension" ? "auto" : item.origin, item.facts.to);
+  }
+
+  brief(held: readonly HeldInput[] = []): { queue: QueuedInput[]; queue_total: number } {
+    const ordered = this.ordered();
+    const queue = ordered.slice(0, 12).map(item => this.view(item));
+    for (let i = 0; i < held.length && queue.length < 12; i++) queue.push(heldView(held[i]!));
+    return { queue, queue_total: ordered.length + held.length };
   }
 
   items(): QueuedItem[] {
@@ -115,9 +173,11 @@ export class HostQueue {
 
   get controlEnabled(): boolean { return this.options.interactive() && this.options.enabled(); }
 
-  withdrawInput(key: string): Withdrawal {
+  withdrawInput(key: string, includeText = false): Withdrawal {
     const item = this.queued.get(key);
-    if (item && this.options.session().removeQueuedMessage(item.message, "corral")) return { outcome: "withdrawn", item: key };
+    if (item && this.options.session().removeQueuedMessage(item.message, "corral")) {
+      return { outcome: "withdrawn", item: key, ...(includeText ? { text: item.text } : {}) };
+    }
     const turn = this.started.get(key);
     return turn === undefined ? { outcome: "unknown_item" } : { outcome: "already_started", item: key, turn };
   }

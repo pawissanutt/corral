@@ -1,9 +1,9 @@
 //! Explicit, ephemeral sample preview over the same `Feed` corrald fills. The sample keeps one
 //! `TaskDetail` per task as its store, plus the event log in `Feed.changes`; the open board,
 //! plans, projects, live runs, closed page and usage totals are projected from those after every
-//! change, as the daemon projects its own store. Its pi sessions (two workers and the chats) are
-//! hosts in `Feed.hosts` that stream on the clock's ticks. The caller supplies the clock; nothing
-//! here contacts a daemon or persists anything.
+//! change, as the daemon projects its own store. Its pi sessions (two workers, the chats and the
+//! build sessions) are hosts in `Feed.hosts` that stream on the clock's ticks. The caller
+//! supplies the clock; nothing here contacts a daemon or persists anything.
 mod artifacts;
 mod config;
 mod controls;
@@ -11,13 +11,13 @@ mod details;
 mod effects;
 mod engine;
 mod fleet;
-mod pane;
 mod pi;
 mod pi_control;
 mod pi_rows;
 mod pi_script;
 mod rollup;
 mod sample;
+mod session_ops;
 mod sessions;
 mod workspace;
 
@@ -38,7 +38,6 @@ pub use controls::{answer, control};
 pub use details::{detail, failure};
 pub use effects::{effect, operation};
 pub use engine::act;
-pub use pane::pane;
 pub use pi::{Host, tick};
 
 pub fn feed(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZone>) -> Feed {
@@ -124,6 +123,8 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         AGENTS_V1,
         SESSION_V1,
         SESSION_FLEET_V1,
+        SESSION_STATE_V1,
+        BUILD_V1,
         REVIEW_V1,
         TIMELINE_V1,
         USAGE_V1,

@@ -1,5 +1,5 @@
 // One upstream AgentSessionRuntime, with local session state and engine CLI board access.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -27,6 +27,12 @@ import { PROVIDERS, type ProviderId, billingKind, hostDestinations, isApiProvide
 import type { AuthContext, Fetch } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
 import { LiveEvents } from "./live-events.ts";
+import { RemoteRegistry } from "./remote/registry.ts";
+import type { TranscriptInput } from "./remote/input.ts";
+import { boardBrief, capabilities, exitBrief, jobCounts, planBrief, type CardBrief, type SessionState,
+  type StateProjection, type UsageBrief } from "./remote/state.ts";
+import { utf8Prefix } from "../roles/assistant/owner-action.ts";
+import type { RemoteOwner } from "./remote-owner.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
 import { closeResidentSession, residentLifecycle } from "../claude/resident.ts";
 import { BridgeRefusal, type AnswerInput, type RewindInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
@@ -92,7 +98,8 @@ import { failureClass, messageFailure, withProviderFailures } from "./provider-f
 import { assertApiEffort, installApiProvider } from "./api-providers.ts";
 import { withSubscriptionFallback } from "./continuation.ts";
 import { HostQueue } from "./queue.ts";
-import { recordTranscriptMark, type MarkSink, type ModelMark, type TranscriptMark, type TurnStopCause, type TurnWait } from "./transcript-marks.ts";
+import { MARK_ENTRY, observeTranscriptEntries, recordTranscriptMark, type MarkSink, type ModelMark, type TranscriptMark,
+  type TurnStopCause, type TurnWait } from "./transcript-marks.ts";
 import { TurnFacts, turnWaits } from "./turn-facts.ts";
 import { RemotePrompts } from "./remote-prompts.ts";
 import { createSummaryRequest, summarizeQuick, type SummaryOptions, type SummaryRequest } from "./summary.ts";
@@ -294,9 +301,13 @@ export class HostSession {
   runtime!: AgentSessionRuntime;
   /** Interactive host API only; deliberately absent from extension/model registries. */
   readonly queue: HostQueue;
-  private readonly inputRequestIds = new WeakMap<object, string>();
-  private startedInputRequestId: string | undefined;
+  private readonly queuedInputFacts = new WeakMap<object, { facts: TranscriptInput; transcriptId?: string }>();
+  private startedInputFacts: { facts: TranscriptInput; transcriptId?: string } | undefined;
+  private unobserveTranscript: (() => void) | undefined;
+  private remoteUsage: { leaf: string | null; model: AgentSession["model"]; usage: UsageBrief } | undefined;
+  private remoteFleetDirty = true;
   readonly liveEvents: LiveEvents;
+  readonly remoteRegistry = new RemoteRegistry();
   readonly panels: NativePanels | undefined;
   private readonly unsubscribePanels: (() => void) | undefined;
   private terminalInput: InputObservation | undefined;
@@ -359,7 +370,11 @@ export class HostSession {
   private closing = false;
   private closeResult: Promise<void> | undefined;
   private readonly managedEffects = new ManagedEffects();
-  private readonly marks: MarkSink | undefined;
+  private readonly marks: MarkSink;
+  private readonly headlessMarkRows: MarkSink = { add: mark => {
+    this.session.sessionManager.appendCustomEntry(MARK_ENTRY, mark, { immediate: true });
+    return true;
+  } };
   /** The transcript's own sink, once the rich UI registered its mark rows; `options.marks` replaces it. */
   private markRows: MarkSink | undefined;
   private readonly turnFacts: TurnFacts;
@@ -374,7 +389,7 @@ export class HostSession {
     this.provider = options.provider ?? "openai-codex";
     this.local = new LocalControlPlane(options.build?.dir ?? options.runtimeDir ?? options.agentDir, options.identity);
     this.remotePrompts = new RemotePrompts(this.liveEvents.events);
-    this.marks = options.ui === "plain" ? undefined : { add: mark => this.addMark(mark) };
+    this.marks = { add: mark => this.addMark(mark) };
     this.turnFacts = new TurnFacts(this.marks);
     this.queue = new HostQueue({
       session: () => this.session,
@@ -382,6 +397,7 @@ export class HostSession {
       interactive: () => this.attached === "interactive",
       turn: next => next || !this.open ? this.turn + 1 : this.turn,
       emit: (kind, data) => options.events.emit(kind, data),
+      liveInput: event => this.liveEvents.input(event),
     });
     this.buildControls = options.build ? createBuildControls({
       sdk: options.sdk, context: options.build,
@@ -405,15 +421,12 @@ export class HostSession {
         if (from === undefined) throw new Error(`Land repair reached no turn: ${result.reason ?? result.disposition}`);
         return new Promise(resolve => { this.turnWaiters.push({ from, settle: aborted => resolve({ aborted }) }); });
       },
-      shellRefusal: options.modules.role.shellRefusal, changed: () => {
-        this.liveEvents.observeFleet(this.buildControls?.fleet.snapshot());
-        this.panels?.refresh();
-      },
+      shellRefusal: options.modules.role.shellRefusal, changed: () => this.fleetChanged(),
     }) : undefined;
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
       sidebarKey: sidebarToggleKey(process.env),
-      ...(this.marks ? { marks: this.marks } : {}),
+      marks: this.marks,
       ...(this.buildControls ? { build: this.buildControls.ui, deliverBuildInput: (text: string) => this.deliverBuildInput(text) } : {}),
       get fleetControl() { return options.build ? undefined : host.fleet; },
       queueControl: {
@@ -491,7 +504,7 @@ export class HostSession {
         else this.monitorFacts.delete(fact.key);
         options.sessionManager.appendCustomEntry(MONITOR_ENTRY, fact);
       },
-      changed: () => this.panels?.refresh(),
+      changed: () => { this.liveEvents.stateChanged(); this.panels?.refresh(); },
       settled: result => options.events.emit("command_settled", result),
       canNotify: () => !this.open,
       noticeSeen: key => this.commandNoticeSeen(key),
@@ -534,10 +547,7 @@ export class HostSession {
         get parentLoadout() { return host.loadout; },
         get localTools() { return host.localTools; },
         shellRefusal: options.modules.role.shellRefusal,
-        changed: () => {
-          this.liveEvents.observeFleet(this.fleet?.snapshot());
-          this.panels?.refresh();
-        }, record,
+        changed: () => this.fleetChanged(), record,
         deliverToParent: async text => {
           const result = await this.submitAutomated(text);
           if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
@@ -547,7 +557,7 @@ export class HostSession {
     if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search || auxiliary.expert) {
       this.auxiliary = new AuxiliaryRuntime({
         settings: auxiliary, provider: this.provider, model: options.model,
-        changed: () => this.panels?.refresh(),
+        changed: () => this.fleetChanged(),
         sessionId: () => this.sessionId(),
         searchModel: () => {
           const model = this.runtime?.session.model;
@@ -580,6 +590,7 @@ export class HostSession {
           options.herdr?.questionChanged(question.id, question.status === "pending");
         }
         this.questionUi?.changed(question);
+        this.liveEvents.stateChanged();
       },
       deliver: async text => {
         const result = await this.submitLocal({ text, origin: "owner", busyPolicy: "steer" });
@@ -682,7 +693,7 @@ export class HostSession {
       onPrepared: job => options.sessionManager.appendCustomEntry(COMMAND_ENTRY, {
         job, consumed: false,
       } satisfies CommandFact),
-      onEvent: (kind, data) => options.events.emit(kind, data),
+      onEvent: (kind, data) => { options.events.emit(kind, data); this.liveEvents.stateChanged(); },
     });
   }
 
@@ -919,6 +930,7 @@ export class HostSession {
     });
     pi.on("session_start", () => {
       if (this.bound) this.commands?.bound();
+      this.liveEvents.stateChanged();
     });
     const code = this.code;
     if (code) {
@@ -1000,7 +1012,7 @@ export class HostSession {
         job: id => this.commands?.inspection().find(job => job.job === id),
         code: () => this.code, ledger: () => this.ledger, ...(openView ? { openView } : {}),
       });
-      const unsubscribe = this.ledger?.onChange(() => this.panels?.refresh());
+      const unsubscribe = this.ledger?.onChange(() => { this.liveEvents.stateChanged(); this.panels?.refresh(); });
       pi.on("session_shutdown", (event) => {
         unsubscribe?.();
         if (event.reason !== "reload") { this.unsubscribePanels?.(); this.panels?.dispose(); }
@@ -1113,9 +1125,11 @@ export class HostSession {
    * Presentation cannot affect prompts, session state, or tool results.
    */
   private addMark(mark: TranscriptMark): boolean {
+    if (mark.kind === "note" && this.attached) this.liveEvents.note(mark.tone, mark.text, mark.at);
     return recordTranscriptMark(this.options.marks ?? this.markRows, mark, {
       attached: this.attached, plain: this.options.ui === "plain", bound: this.bound,
       build: this.options.build !== undefined || this.options.identity.role === "build",
+      headless: this.options.marks ?? this.headlessMarkRows,
     });
   }
 
@@ -1127,8 +1141,8 @@ export class HostSession {
   private modelChanged(model: string, effort: string, record = true): void {
     const was = this.selection;
     this.selection = { model, effort };
+    this.liveEvents.stateChanged();
     if (!record || !was || was.model === model && was.effort === effort) return;
-    if (!this.marks || this.attached === "headless") return;
     // Rebuilding a session does not emit marks. Initial model/effort setup is not a change after a reply.
     if (!this.session.sessionManager.getEntries().some(entry => entry.type === "message" && entry.message.role === "assistant")) return;
     this.addMark({ kind: "model", at: Date.now(), model, effort, was });
@@ -1159,27 +1173,29 @@ export class HostSession {
 
   private watch(session: AgentSession): void {
     this.unsubscribe?.();
-    this.startedInputRequestId = undefined;
+    this.unobserveTranscript?.();
+    this.unobserveTranscript = observeTranscriptEntries(session.sessionManager,
+      () => this.liveEvents.entry(), () => this.liveEvents.stateChanged());
+    this.startedInputFacts = undefined;
+    this.remoteUsage = undefined;
     session.setQueueObserver({
       ...this.queue.observer,
       lifecycle: event => {
         this.queue.observer.lifecycle(event);
-        const { tag } = event;
-        const requestId = typeof tag === "object" && tag !== null ? this.inputRequestIds.get(tag) : undefined;
+        const facts = this.queue.inputFacts(event.tag);
         // Pi reports "started" just before prompting with the prepared user message,
         // which it emits before draining any queued inputs.
-        if (event.event === "started") this.startedInputRequestId = requestId;
-        else if (event.event === "rejected" && this.startedInputRequestId === requestId) {
-          this.startedInputRequestId = undefined;
+        if (event.event === "started") this.startedInputFacts = facts;
+        else if (event.event === "rejected" && this.startedInputFacts === facts) {
+          this.startedInputFacts = undefined;
         }
       },
       queue: change => {
         this.queue.observer.queue(change);
         if (change.action === "enqueue") {
           for (const { message, tag } of change.entries) {
-            if (typeof tag !== "object" || tag === null) continue;
-            const requestId = this.inputRequestIds.get(tag);
-            if (requestId !== undefined) this.inputRequestIds.set(message, requestId);
+            const facts = this.queue.inputFacts(tag);
+            if (facts !== undefined) this.queuedInputFacts.set(message, facts);
           }
           // Wake waits only after the synchronous queue mutation has returned.
           if (change.mode === "steer") queueMicrotask(() => this.inputWake.notify());
@@ -1201,12 +1217,12 @@ export class HostSession {
       if (event.type === "message_end") {
         this.panelStats = undefined;
         if (event.message.role === "assistant" && event.message.stopReason !== "aborted") {
-          this.turnError = event.message.stopReason === "error" ? (event.message.errorMessage || "provider_error").slice(0, 512) : null;
+          this.turnError = event.message.stopReason === "error" ? utf8Prefix(event.message.errorMessage || "provider_error", 512) : null;
         }
         if (event.message.role === "assistant" && event.message.stopReason === "aborted") {
           this.stopCause ??= this.closing ? "host" : "owner";
         }
-        if (event.message.role === "assistant" && this.marks && this.attached !== "headless" && this.open) {
+        if (event.message.role === "assistant" && this.recordsTurnMarks && this.open) {
           const message = event.message;
           const miss = message.stopReason === "error" || message.stopReason === "aborted" ? undefined
             : this.options.sdk.detectCacheMiss(session.sessionManager.getEntries(), message, session.modelRuntime);
@@ -1216,9 +1232,11 @@ export class HostSession {
         }
         if (event.message.role === "user") {
           // Pi persists this exact message immediately after notifying its listeners.
-          const requestId = this.inputRequestIds.get(event.message) ?? this.startedInputRequestId;
-          this.startedInputRequestId = undefined;
-          if (requestId !== undefined) Object.assign(event.message, { corralRequestId: requestId });
+          const queued = this.queuedInputFacts.get(event.message);
+          const tagged = queued ?? this.startedInputFacts;
+          if (!queued) this.startedInputFacts = undefined;
+          Object.assign(event.message, { corralInput: tagged?.facts ?? { origin: "auto" },
+            ...(tagged?.transcriptId === undefined ? {} : { corralRequestId: tagged.transcriptId }) });
           const content = event.message.content;
           this.ownerQuestions?.observeUser(typeof content === "string" ? content
             : content.map(p => p.type === "text" ? p.text : "").join(""));
@@ -1228,7 +1246,7 @@ export class HostSession {
         // A retry or a pre-settlement continuation can start another run before agent_settled.
         if (this.open) this.turnFacts.finish(this.turn);
         this.turnStarted();
-      } else if (event.type === "agent_end" && this.marks && this.attached !== "headless") {
+      } else if (event.type === "agent_end" && this.recordsTurnMarks) {
         this.turnFacts.end(this.turn, Date.now(), session.getSessionStats().cost, this.currentWaits(),
           { stopCause: this.stopCause, error: !!this.turnError });
       } else if (event.type === "tool_execution_start") {
@@ -1255,7 +1273,7 @@ export class HostSession {
     this.open = true;
     this.turnError = null;
     this.stopCause = undefined;
-    if (this.marks && this.attached !== "headless") this.turnFacts.start(this.turn, Date.now(), this.session.getSessionStats().cost);
+    if (this.recordsTurnMarks) this.turnFacts.start(this.turn, Date.now(), this.session.getSessionStats().cost);
     const origin: TurnOrigin = this.nextTurnOrigin
       ?? (this.lastInputSource === "interactive" ? { kind: "owner_terminal" } : { kind: "unknown" });
     this.nextTurnOrigin = undefined;
@@ -1277,7 +1295,7 @@ export class HostSession {
     this.ownerInput = false;
     if (this.bound) this.checkpoint("end");
     // agent_end normally captured the run already. A startup abort can settle without it.
-    if (this.marks && this.attached !== "headless") this.turnFacts.end(this.turn, Date.now(), this.session.getSessionStats().cost, this.currentWaits(),
+    if (this.recordsTurnMarks) this.turnFacts.end(this.turn, Date.now(), this.session.getSessionStats().cost, this.currentWaits(),
       { stopCause: this.stopCause, error: !!this.turnError });
     this.report("turn_ended", { aborted, cancelled, owner_input: ownerInput });
     this.options.herdr?.turnEnded();
@@ -1309,8 +1327,30 @@ export class HostSession {
     return controls.fleet.steer(target, text);
   }
 
+  async deliverRemoteChildInput(child: string, text: string): Promise<boolean> {
+    const fleet = this.buildControls?.fleet ?? this.fleet;
+    if (!fleet || this.closing || this.rewinding || !this.bound || !(await fleet.steer(child, text))) return false;
+    this.addMark({ kind: "child", at: Date.now(), act: "steered", child, text });
+    return true;
+  }
+
+  get servesChildren(): boolean { return this.buildControls !== undefined || this.fleet !== undefined || this.auxiliary !== undefined; }
+
+  childTranscript(child: string): string | undefined {
+    const fleet = this.buildControls?.fleet ?? this.fleet;
+    const current = fleet?.snapshot().children.find(entry => entry.id === child)?.sessionFile;
+    if (current) return current;
+    const helper = this.auxiliary?.inspection().find(entry => entry.request === child && entry.parent === this.boundSessionId);
+    if (helper?.sessionFile) return helper.sessionFile;
+    // A stopped build's fleet is not restarted, but its child files remain session-owned.
+    return this.options.build ? join(this.options.build.dir, "children", `${child}.jsonl`) : undefined;
+  }
+
+  private get recordsTurnMarks(): boolean { return this.attached === "headless" || this.options.ui !== "plain"; }
+
   markAttached(mode: "interactive" | "headless"): void {
     this.attached = mode;
+    this.liveEvents.stateChanged();
     this.options.events.emit(mode);
   }
 
@@ -1349,10 +1389,15 @@ export class HostSession {
     closeResidentSession(this.sessionId());
     if (this.open) this.stopCause ??= "host";
     this.closing = true;
+    this.liveEvents.stateChanged();
     // Close both resource admission barriers synchronously, even if another cleanup fails.
     const resources = this.stopManagedResources();
     void resources.catch(() => {}); // observed below, without an early unhandled rejection
-    return this.closeResult ??= this.closeOwned(resources);
+    return this.closeResult ??= this.closeOwned(resources).finally(() => {
+      this.unsubscribe?.();
+      this.unobserveTranscript?.();
+      this.liveEvents.close();
+    });
   }
 
   private async closeOwned(resources: Promise<void>): Promise<void> {
@@ -1418,12 +1463,15 @@ export class HostSession {
     return this.options.automatedInput?.(input) ?? this.submitLocal(input);
   }
 
-  submitLocal(input: SessionInput, images?: ImageContent[], requestId?: string): Promise<SubmitResult> {
+  submitLocal(input: SessionInput, images?: ImageContent[], source?: {
+    requestId?: string; queueKey?: string; text?: string; pane?: boolean;
+  }): Promise<SubmitResult> {
     if (!this.bound || this.closing) return Promise.resolve({ disposition: "rejected", reason: "host_not_ready" });
     if (this.rewinding) return Promise.resolve({ disposition: "rejected", reason: "rewind_in_progress" });
-    if (input.origin === "owner") this.buildControls?.noteOwnerInput(input.text);
-    const tag = this.queue.bridgeInput(input);
-    if (requestId !== undefined && typeof tag === "object" && tag !== null) this.inputRequestIds.set(tag, requestId);
+    if (input.origin === "owner") this.buildControls?.noteOwnerInput(source?.text ?? input.text);
+    const socketId = input.inputId ?? source?.requestId;
+    const transcriptId = input.inputId ?? (input.origin === "owner" ? source?.requestId : undefined);
+    const tag = this.queue.bridgeInput(input, { ...source, socketId, transcriptId });
     return this.promptInput(input, tag, images);
   }
 
@@ -1510,6 +1558,7 @@ export class HostSession {
     if (isProviderId(provider) && isApiProvider(provider)) assertApiEffort(model, effort);
     await this.session.setModel(model, { persist: false });
     if (effort !== undefined) this.session.setThinkingLevel(effort as ThinkingLevel, { persist: false });
+    this.liveEvents.stateChanged();
   }
 
   /** Cause of the latest run's stop, cleared when the next run starts. */
@@ -1565,6 +1614,79 @@ export class HostSession {
     } finally {
       this.rewinding = false;
     }
+  }
+
+  private fleetChanged(): void {
+    this.remoteFleetDirty = true;
+    this.liveEvents.stateChanged();
+    this.panels?.refresh();
+  }
+
+  remoteState(owner: RemoteOwner): StateProjection {
+    const session = this.session;
+    const build = this.buildControls;
+    if (this.remoteFleetDirty) {
+      this.remoteFleetDirty = false;
+      this.liveEvents.observeFleet((build?.fleet ?? this.fleet)?.snapshot(), this.auxiliary?.inspections());
+    }
+    const effort_levels = session.supportsThinking() ? session.getAvailableThinkingLevels() : [];
+    const model = session.model ? utf8Prefix(`${session.model.provider}/${session.model.id}`, 512) : undefined;
+    const { queue, queue_total } = owner.queueBrief();
+    const questions = this.ownerQuestions?.pending() ?? [];
+    const cards: CardBrief[] = questions.slice(0, 8).map(question => ({
+      id: utf8Prefix(question.id, 160), kind: "question", title: utf8Prefix(question.questions[0]?.question ?? "", 160),
+      expires_at: new Date(question.expires).toISOString(),
+    }));
+    for (const card of this.liveEvents.childCards) if (cards.length < 8) cards.push(card);
+    const exit = build ? exitBrief(build.exit.state()) : undefined;
+    if (exit?.phase === "pending" && cards.length < 8) cards.push({ id: "exit", kind: "exit", title: "Build exit" });
+    const board = build?.board ? boardBrief(build.board) : undefined;
+    if (board?.proposed && cards.length < 8) cards.push({ id: "board_plan", kind: "board_plan",
+      title: utf8Prefix(build?.board?.proposed()?.title ?? "", 160) });
+    const plan = this.ledger ? planBrief(this.ledger) : undefined;
+    const jobs = this.commands?.inspection() ?? [];
+    const recovered = this.commands?.recovered() ?? [];
+    const usage = this.remoteUsageBrief();
+    const state: SessionState = {
+      mode: this.attached ?? "headless", turn: this.turn, open: this.open, paused: owner.paused,
+      activity: this.liveEvents.activity, last_error: this.turnError ?? undefined, model,
+      effort: effort_levels.length ? session.thinkingLevel : undefined, effort_levels, usage,
+      queue, queue_total, cards, exit, children: this.liveEvents.childCounts, jobs: jobCounts(jobs, recovered.length),
+      board, plan, notices: this.liveEvents.notices, can: capabilities(this.remoteRegistry, {
+        open: this.open, closing: this.closing, rewind: this.checkpoints !== undefined,
+      }),
+    };
+    const journal = this.options.build ? statSync(join(this.options.build.dir, "journal.json"), { throwIfNoEntry: false }) : undefined;
+    return { state, parts: {
+      cards: [cards, questions], jobs: [jobs, recovered], usage,
+      context: [model, usage.context_tokens, usage.context_window, usage.context_percent],
+      plan: [plan, this.ledger?.current?.revision], board: [board, build?.board?.tasks(), build?.board?.proposed()],
+      record: journal ? [journal.ino, journal.mtimeMs, journal.size] : undefined,
+      models: [model, state.effort, effort_levels],
+      commands: [
+        session.extensionRunner.getRegisteredCommands().map(command => [command.invocationName, command.description]),
+        session.promptTemplates.map(prompt => prompt.name),
+        this.runtime.services.resourceLoader.getSkills().skills.map(skill => skill.name),
+      ],
+    } };
+  }
+
+  private remoteUsageBrief(): UsageBrief {
+    const session = this.session, model = session.model;
+    const leaf = session.sessionManager.getLeafId();
+    if (this.remoteUsage?.leaf === leaf && this.remoteUsage.model === model) return this.remoteUsage.usage;
+    const stats = session.getSessionStats();
+    const cost_partial = stats.tokens.total > 0 && session.sessionManager.getEntries().some(entry => {
+      if (entry.type !== "message" || entry.message.role !== "assistant") return false;
+      const { usage } = entry.message;
+      return usage.totalTokens > 0 && (!Number.isFinite(usage.cost.total) || usage.cost.total === 0);
+    });
+    const usage: UsageBrief = { tokens: stats.tokens.total, cost_partial,
+      cost_usd: Number.isFinite(stats.cost) && (stats.cost > 0 || !cost_partial) ? stats.cost : undefined,
+      context_tokens: stats.contextUsage?.tokens ?? 0, context_window: stats.contextUsage?.contextWindow ?? 0,
+      context_percent: stats.contextUsage?.percent ?? undefined };
+    this.remoteUsage = { leaf, model, usage };
+    return usage;
   }
 
   private panelSnapshot(): PanelSnapshot | null {

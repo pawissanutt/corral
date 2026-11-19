@@ -1,23 +1,19 @@
-//! The Agents page around its roster (`pgAgents`): the page head with the counts and the role
-//! tabs; the project scope; the stale notice; the roster (`roster_rows`) of live runs and the
-//! pinned quick thread with the selected session's panel (`panel`); then the assistant sessions
-//! (`assistant::agents_tail`).
-//!
-//! Desktop: the panel sits beside the roster while the content is at least [`BESIDE`] wide,
-//! overlays the roster's right side below that, and takes the whole content below [`STACK`] (the
-//! mock's 1180 and 900 rules); the roster drops its project, quiet and started columns while a
-//! panel is open or its room runs short. Phone: the head's counts, the role tabs and the scope
-//! chips each on a sideways scrolling line, then two-line rows that push the session page; no
-//! panel. Terminal: the same table in Cells, the panel beside it on a grid wide enough and in
-//! its place otherwise (Esc closes it).
+//! The Agents page around its roster (`pgAgents`): the page head with the counts, the role tabs
+//! (each with its count) and New; the project scope with Show (Live | All) beside it; the stale
+//! notice; then the roster (`roster_rows`), one line per session of every role, which opens the
+//! session page. Desktop: the column heads over 40 pt lines, the optional columns giving way as
+//! the room runs short; phone: the role tabs and the scope each on a sideways scrolling line over
+//! two-line rows; terminal: the same table in Cells. The selection moves with j/k, Enter opens it
+//! and `N` opens the New build sheet.
 
 use nsh_core::prelude::*;
 
-use crate::model::agents::{Fill, Roster};
+use crate::model::agents::{Roster, Show};
 use crate::model::assistant::QUICK;
 use crate::model::glance::Stat;
 use crate::model::hue::Hue;
 use crate::model::projects::FilterScreen;
+use crate::model::session::Fill;
 use crate::model::text::span;
 use crate::model::{Form, Id};
 use crate::screens::assistant;
@@ -27,24 +23,17 @@ use crate::ui::kit::notice::{empty, error, loading, notice};
 use crate::ui::kit::page::{pane, search};
 use crate::ui::kit::project_filter::project_filter;
 use crate::ui::term;
-use crate::ui::tokens::{Token, color};
+use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-use super::panel::{self, Place};
 use super::roster_rows::{self, Columns};
-use super::{panel_view, roster_view, run_roster, segs};
+use super::{roster_view, run_agents, segs, start};
 
-/// Content width (pt) from which the panel sits beside the roster.
-const BESIDE: f32 = 1180.0;
-/// Content width (pt) under which the panel takes the whole content.
-const STACK: f32 = 900.0;
-/// Roster width (pt) that holds all eight columns: the mock's grid, its gaps and sides.
+/// Roster width (pt) that holds every column.
 const WIDE: f32 = 1040.0;
-/// Terminal: the roster's least Cells beside the panel.
-const TERM_ROSTER: f32 = 56.0;
 
-/// The page for the form. With the daemon, the page holds the quick thread's subscription (the
-/// pinned row says what it last answered) and settles the assistant blocks' session operations,
-/// both for as long as it stays open.
+/// The page for the form. With the daemon, the page holds the quick chat's subscription (the
+/// pinned row says what it last answered) and settles new assistant sessions, which open their
+/// page, for as long as it stays open.
 pub(super) fn screen(app: AppState) -> AnyElement {
     if untracked(|| app.daemon()) {
         assistant::open_scope(app, Id::from(QUICK), false);
@@ -59,29 +48,18 @@ pub(super) fn screen(app: AppState) -> AnyElement {
 }
 
 fn desktop(app: AppState, roster: Memo<Roster>) -> AnyElement {
-    let panel = computed(move || panel_view(app));
     let room = signal(None::<f32>);
-    let place = computed(move || match room.get() {
-        Some(width) if width < STACK => Place::Full,
-        Some(width) if width < BESIDE => Place::Over,
-        _ => Place::Beside,
-    });
-    let columns = computed(move || {
-        let open = panel.with(Option::is_some);
-        Columns::points(!open && room.get().is_none_or(|width| width >= WIDE), open)
-    });
+    let columns = computed(move || Columns::points(room.get().is_none_or(|width| width >= WIDE)));
     view()
         .size_full()
         .flex_col()
         .bg(color(Token::Bg))
         .child(head(app, roster))
-        .child(project_filter(app, FilterScreen::Agents))
+        .child(scope_row(app, roster))
         .child(stale(app, roster))
         .child(
             view()
-                .relative()
                 .flex_1()
-                .flex_row()
                 .min_w(px(0.0))
                 .min_h(px(0.0))
                 .on_layout(move |frame: &Bounds<Points>| {
@@ -90,8 +68,7 @@ fn desktop(app: AppState, roster: Memo<Roster>) -> AnyElement {
                         room.set(width);
                     }
                 })
-                .child(list(app, roster, columns))
-                .child(panel::panel(app, panel, place)),
+                .child(list(app, roster, columns)),
         )
         .into_element()
 }
@@ -99,9 +76,12 @@ fn desktop(app: AppState, roster: Memo<Roster>) -> AnyElement {
 fn phone(app: AppState, roster: Memo<Roster>) -> AnyElement {
     let content = view()
         .child(stale(app, roster))
-        .child(roster_rows::lines(app, roster, fixed_columns()))
+        .child(roster_rows::lines(
+            app,
+            roster,
+            computed(|| Columns::points(true)),
+        ))
         .child(fill(app, roster))
-        .child(untracked(|| assistant::agents_tail(app)))
         .into_element();
     view()
         .flex_1()
@@ -114,9 +94,11 @@ fn phone(app: AppState, roster: Memo<Roster>) -> AnyElement {
                 view()
                     .flex_row()
                     .flex_shrink_0()
+                    .gap(px(10.0))
                     .px(px(18.0))
                     .pb(px(8.0))
-                    .child(role_tabs(app, roster)),
+                    .child(role_tabs(app, roster))
+                    .child(show(app, roster)),
             ),
         )
         .child(project_filter(app, FilterScreen::Agents))
@@ -124,70 +106,51 @@ fn phone(app: AppState, roster: Memo<Roster>) -> AnyElement {
         .into_element()
 }
 
-/// Whether the selected session's panel takes the roster's place (tracked): a terminal page
-/// too narrow for both side by side.
-pub(super) fn panel_covers(app: AppState) -> bool {
-    app.form == Form::Terminal && term::page_columns(app) < TERM_ROSTER + 1.0 + panel::TERM_PANEL
-}
-
 fn terminal(app: AppState, roster: Memo<Roster>) -> AnyElement {
-    let panel = computed(move || panel_view(app));
-    let open = computed(move || panel.with(Option::is_some));
-    let beside = computed(move || !panel_covers(app));
-    let place = computed(move || {
-        if beside.get() {
-            Place::Beside
-        } else {
-            Place::Full
-        }
-    });
-    let columns = computed(move || {
-        let page = term::page_columns(app);
-        let open = open.get();
-        let room = if open {
-            page - 1.0 - panel::TERM_PANEL
-        } else {
-            page
-        };
-        Columns::cells(room, state_cells(roster), open)
-    });
+    let columns = computed(move || Columns::cells(term::page_columns(app), state_cells(roster)));
     view()
         .size_full()
         .flex_col()
         .child(head(app, roster))
-        .child(project_filter(app, FilterScreen::Agents))
+        .child(scope_row(app, roster))
         .child(stale(app, roster))
+        .child(list(app, roster, columns))
+        .into_element()
+}
+
+/// Desktop and terminal: the project scope with Show at its trailing edge.
+fn scope_row(app: AppState, roster: Memo<Roster>) -> AnyElement {
+    view()
+        .flex_row()
+        .flex_none()
+        .items_center()
+        .gap(px(if app.form == Form::Terminal {
+            16.0
+        } else {
+            12.0
+        }))
         .child(
             view()
                 .flex_1()
-                .flex_row()
                 .min_w(px(0.0))
-                .min_h(px(0.0))
-                .child(
-                    view()
-                        .flex_1()
-                        .flex_col()
-                        .min_w(px(0.0))
-                        .min_h(px(0.0))
-                        // The panel takes the roster's place on a narrow grid; Esc gives it back.
-                        .style_when(move || open.get() && !beside.get(), |s| s.hidden())
-                        .child(list(app, roster, columns)),
-                )
-                .child(panel::panel(app, panel, place)),
+                .child(project_filter(app, FilterScreen::Agents)),
+        )
+        .child(
+            view()
+                .flex_none()
+                .when(app.form == Form::Desktop, |row| row.pr(px(18.0)))
+                .when(app.form == Form::Terminal, |row| row.pr(term::cells(1.0)))
+                .child(show(app, roster)),
         )
         .into_element()
 }
 
 /// Desktop and terminal: the column heads over the scrolling lines, the empty, loading or
-/// failed state in their place, then the assistant blocks.
+/// failed state in their place.
 fn list(app: AppState, roster: Memo<Roster>, columns: Memo<Columns>) -> AnyElement {
     let content = view()
         .child(roster_rows::lines(app, roster, columns))
         .child(fill(app, roster))
-        .when(app.form == Form::Terminal, |content| {
-            content.child(term::hrule())
-        })
-        .child(untracked(|| assistant::agents_tail(app)))
         .into_element();
     view()
         .flex_1()
@@ -199,20 +162,14 @@ fn list(app: AppState, roster: Memo<Roster>, columns: Memo<Columns>) -> AnyEleme
         .into_element()
 }
 
-/// The phone's rows draw every fact they have room for.
-fn fixed_columns() -> Memo<Columns> {
-    computed(|| Columns::points(false, false))
-}
-
-/// The terminal's State column: the longest chip shown (or its head) and the Cell either side
-/// that a terminal chip keeps (tracked).
+/// The terminal's State column: the longest state shown (or its head) and the Cell either side.
 fn state_cells(roster: Memo<Roster>) -> u16 {
     roster.with(|r| {
         let head = r.columns[0].chars().count();
         let widest = r
             .rows
             .iter()
-            .map(|row| row.chip.chars().count() + 2)
+            .map(|row| roster_rows::state_words(row).chars().count() + 2)
             .max()
             .unwrap_or(0);
         u16::try_from(widest.max(head)).unwrap_or(u16::MAX)
@@ -226,8 +183,8 @@ struct Head {
     stats: Vec<Stat>,
 }
 
-/// The page head (`.phead`): the title, its counts, and the role tabs at the trailing edge. The
-/// phone's head keeps search at its trailing edge; its role tabs sit under it.
+/// The page head (`.phead`): the title and its counts; at the trailing edge the role tabs and
+/// New, the phone's search and New.
 fn head(app: AppState, roster: Memo<Roster>) -> AnyElement {
     let shown = computed(move || {
         roster.with(|r| Head {
@@ -239,8 +196,10 @@ fn head(app: AppState, roster: Memo<Roster>) -> AnyElement {
         shown.with(|head| {
             untracked(|| {
                 let actions = match app.form {
-                    Form::Phone => vec![search(app)],
-                    Form::Desktop | Form::Terminal => vec![role_tabs(app, roster)],
+                    Form::Phone => vec![search(app), start::new_menu(app)],
+                    Form::Desktop | Form::Terminal => {
+                        vec![role_tabs(app, roster), start::new_menu(app)]
+                    }
                 };
                 page_head(app, head.title, &head.stats, actions)
             })
@@ -248,8 +207,7 @@ fn head(app: AppState, roster: Memo<Roster>) -> AnyElement {
     })
 }
 
-/// The role tabs (`seg-agents-<role>`): each role with its count, the chosen one pressed. They
-/// are rebuilt when a role or count comes or goes; choosing one restyles them in place.
+/// The role tabs (`seg-agents-<role>`): each role with its count, the chosen one pressed.
 fn role_tabs(app: AppState, roster: Memo<Roster>) -> AnyElement {
     let shape = computed(move || {
         roster.with(|r| {
@@ -291,7 +249,7 @@ fn role_tabs(app: AppState, roster: Memo<Roster>) -> AnyElement {
                             label.clone(),
                             Some(count.to_string()),
                             on,
-                            move || run_roster(app, action.clone()),
+                            move || run_agents(app, action.clone()),
                         )
                     })
                     .collect();
@@ -299,6 +257,49 @@ fn role_tabs(app: AppState, roster: Memo<Roster>) -> AnyElement {
             })
         })
     })
+}
+
+/// Show (`seg-show-<live|all>`): the sessions whose host runs or waits, or every one the daemon
+/// lists. The choice is kept per workspace on this device.
+fn show(app: AppState, roster: Memo<Roster>) -> AnyElement {
+    let form = app.form;
+    let options = untracked(|| {
+        roster.with(|r| {
+            r.show
+                .iter()
+                .map(|tab| (tab.id.clone(), tab.label, tab.action.clone()))
+                .collect::<Vec<_>>()
+        })
+    });
+    let caption = text("Show")
+        .number_of_lines(1u32)
+        .text_color(color(Token::Ink3))
+        .when(form != Form::Terminal, |t| {
+            t.font_family(FONT_TEXT).text_size(px(12.0))
+        });
+    let options = options
+        .into_iter()
+        .map(|(id, label, action)| {
+            let mine = id.clone();
+            let on = computed(move || {
+                roster.with(|r| r.show.iter().any(|tab| tab.selected && tab.id == mine))
+            });
+            let choice = match action {
+                crate::model::agents::Action::SetShow(choice) => choice,
+                _ => Show::Live,
+            };
+            segs::option(app, &id, label.to_owned(), None, on, move || {
+                app.set_agents_show(choice)
+            })
+        })
+        .collect();
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(8.0))
+        .child(caption)
+        .child(segs::track(app, options))
+        .into_element()
 }
 
 /// The notice over sessions shown from the last update while their source is stale.

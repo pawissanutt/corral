@@ -118,7 +118,7 @@ impl State {
                 }
                 OpOutcome::Row(row) => {
                     self.live.new_session = None;
-                    vec![Effect::OpenLive(Live::Thread(Id::from(row.id)))]
+                    vec![Effect::OpenLive(Live::Session(Id::from(row.id)))]
                 }
             };
         }
@@ -213,7 +213,7 @@ impl State {
         let mut after = Vec::new();
         if env.form == Form::Phone && !docked {
             after.push(Effect::CloseAsk);
-            after.push(Effect::OpenLive(Live::Thread(Id::from(QUICK))));
+            after.push(Effect::OpenLive(Live::Session(Id::from(QUICK))));
         }
         Ok((message, after))
     }
@@ -246,7 +246,9 @@ impl State {
         _env: Env,
     ) -> Vec<Effect> {
         let scope = match top {
-            Some(Live::Thread(id)) if !ask_open => id.to_string(),
+            Some(Live::Session(id)) if !ask_open && (*id == QUICK || id.starts_with("A-")) => {
+                id.to_string()
+            }
             _ => QUICK.to_owned(),
         };
         let models = live::models(feed);
@@ -294,9 +296,9 @@ impl State {
             }
             Action::OpenQuickThread => vec![
                 Effect::CloseAsk,
-                Effect::OpenLive(Live::Thread(Id::from(QUICK))),
+                Effect::OpenLive(Live::Session(Id::from(QUICK))),
             ],
-            Action::OpenLive(live @ Live::Thread(_)) => {
+            Action::OpenLive(live @ Live::Session(_)) => {
                 vec![Effect::CloseAsk, Effect::OpenLive(live)]
             }
             Action::OpenLive(live) => vec![Effect::OpenLive(live)],

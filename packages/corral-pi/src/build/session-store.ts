@@ -4,16 +4,22 @@ import { isAbsolute, join } from "node:path";
 import type { BuildLaunch, BuildSessionRecord } from "./types.ts";
 import { isProviderId } from "../auth/providers.ts";
 
+export function validateBuildId(id: string): void {
+  if (!/^B-[a-z0-9]{1,32}$/.test(id)) throw new Error("Invalid build session id");
+}
+
 export function sessionDir(dataRoot: string, id: string): string {
-  if (!/^B-[a-z0-9]+$/.test(id)) throw new Error("Invalid build session id");
+  validateBuildId(id);
   return join(dataRoot, "build", id);
 }
 
-export function createSession(launch: BuildLaunch, worktree: Pick<BuildSessionRecord, "worktree" | "branch" | "base">): BuildSessionRecord {
+export function createSession(launch: BuildLaunch, worktree: Pick<BuildSessionRecord, "worktree" | "branch" | "base">,
+  id?: string): BuildSessionRecord {
   const now = new Date();
-  const suffix = now.getTime().toString(36) + randomInt(36 * 36).toString(36).padStart(2, "0");
-  const name = launch.name?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || suffix;
-  return { version: 1, id: `B-${suffix}`, name, created: now.toISOString(), updated: now.toISOString(),
+  id ??= `B-${now.getTime().toString(36)}${randomInt(36 * 36).toString(36).padStart(2, "0")}`;
+  validateBuildId(id);
+  const name = launch.name?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || id.slice(2);
+  return { version: 1, id, name, created: now.toISOString(), updated: now.toISOString(),
     repoRoot: launch.repoRoot, ...worktree, here: launch.here, ...(launch.bare ? { bare: true } : {}),
     route: { provider: launch.provider, model: launch.model, effort: launch.effort, aws: launch.aws, fallback: launch.fallback },
     ...(launch.project ? { project: launch.project } : {}), ...(launch.workspaceRoot ? { workspaceRoot: launch.workspaceRoot } : {}) };
@@ -71,8 +77,8 @@ export function saveSession(dataRoot: string, record: BuildSessionRecord): void 
   const path = join(dir, "session.json");
   let socketState = {};
   try {
-    const { role, pid, paused, held_input } = JSON.parse(readFileSync(path, "utf8"));
-    if (role === "build") socketState = { role, pid: record.pid ?? pid, paused, held_input };
+    const { role, pid, paused, held_input, socket } = JSON.parse(readFileSync(path, "utf8"));
+    if (role === "build") socketState = { role, pid: record.pid ?? pid, paused, held_input, socket: record.socket ?? socket };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }

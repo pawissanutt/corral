@@ -3,7 +3,7 @@
 //! The 128-entry/16-MiB budget counts pages, merged bodies, reply copies and assemblies
 //! together. Pins may exceed it; in that case no inactive entry is retained.
 use super::*;
-use crate::model::session_feed::ItemFetch;
+use crate::model::session::transcript::ItemFetch;
 
 const MAX_ENTRIES: usize = 128;
 const MAX_BYTES: usize = 16 * 1024 * 1024;

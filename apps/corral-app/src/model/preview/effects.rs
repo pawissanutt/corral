@@ -27,7 +27,9 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
             Ok(())
         }
         Effect::Send(request) => send(feed, request),
-        Effect::Session { key, .. } => operation(feed, key, effect),
+        Effect::Session { key, .. }
+        | Effect::SessionSend { key, .. }
+        | Effect::BuildStart { key, .. } => operation(feed, key, effect),
         Effect::Warm(_) => execute_operation(feed, effect).map(|_| ()),
         Effect::Device(op) => match op {
             DeviceOp::Revoke { key, .. } => operation(feed, key, effect),
@@ -52,6 +54,9 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
                     .insert(format!("session:{session}"), TopicState::default());
                 pi::watch(feed, session.as_str());
                 fleet::watch(feed, session.as_str());
+                if let Some(host) = pi::resolve(feed, session) {
+                    super::pi_rows::settle(feed, &host);
+                }
             }
             Ok(())
         }
@@ -127,6 +132,8 @@ pub fn operation(feed: &mut Feed, key: &Id, effect: &Effect) -> Result<(), Strin
     }
     let method = match effect {
         Effect::Session { .. } => ASSISTANT_SESSION,
+        Effect::SessionSend { .. } => corral_protocol::session_host::SESSION_SEND,
+        Effect::BuildStart { .. } => corral_protocol::build::BUILD_START,
         Effect::Warm(_) => ASSISTANT_WARM,
         Effect::Device(DeviceOp::Revoke { .. }) => corral_protocol::device::DEVICE_REVOKE,
         _ => "preview.local",
@@ -205,7 +212,7 @@ fn send_inner(feed: &mut Feed, request: &AssistantSend) -> Result<(), String> {
 
 /// The chat a message to `thread` reaches: a named session, or the quick thread's current one;
 /// once the quick thread has ended, the next message starts a new session.
-fn chat_for(feed: &mut Feed, thread: &str) -> Result<String, String> {
+pub(super) fn chat_for(feed: &mut Feed, thread: &str) -> Result<String, String> {
     if thread != QUICK_THREAD {
         return match feed.assistants.get(thread) {
             Some(row) if row.state == AssistantState::Ended => {
@@ -248,6 +255,8 @@ fn next_chat(feed: &Feed) -> String {
 fn execute_operation(feed: &mut Feed, effect: &Effect) -> Result<Value, String> {
     match effect {
         Effect::Session { op, .. } => assistant_session(feed, op),
+        Effect::SessionSend { send, .. } => super::session_ops::send(feed, send),
+        Effect::BuildStart { start, .. } => super::session_ops::start(feed, start),
         Effect::Warm(request) => {
             require_thread(feed, &request.thread)?;
             let id = pi::resolve(feed, &request.thread)

@@ -18,14 +18,15 @@ use super::{
 };
 use crate::model::{Id, daemon::*, devices::Registry};
 use corral_protocol::attachment::*;
+use corral_protocol::build::BUILD_START;
 use corral_protocol::config::{CONFIG_GET, CONFIG_PUT};
 use corral_protocol::device::{
     DEVICE_PAGE, DEVICE_PAGE_LIMIT_MAX, DEVICE_REVOKE, DeviceInfo, DevicePage, DevicePageQuery,
     PUSH_STATUS, PUSH_SUBSCRIBE, PUSH_UNSUBSCRIBE, PUSH_V1,
 };
 use corral_protocol::op::OP_SUBMIT;
-use corral_protocol::pane::{PANE_FOCUS, PANE_KEYS};
 use corral_protocol::session as control;
+use corral_protocol::session_host::SESSION_SEND;
 use corral_protocol::{self as wire, Refusal, app::*, assistant::*, detail::*, subscription::*};
 use nsh_core::prelude::*;
 use serde::Serialize;
@@ -51,6 +52,8 @@ pub(super) const CAPS: &[&str] = &[
     SESSION_FLEET_V1,
     STREAM_TERMINAL_V1,
     PUSH_V1,
+    SESSION_STATE_V1,
+    BUILD_V1,
 ];
 
 pub(super) fn handles(event: &Event) -> bool {
@@ -58,7 +61,7 @@ pub(super) fn handles(event: &Event) -> bool {
         event,
         Event::Health(_) | Event::Rows { .. } | Event::Reset { .. } | Event::TopicError { .. }
     ) || matches!(event, Event::Reply { method, .. } if matches!(*method,
-            APP_SESSION | OP_SUBMIT | CONFIG_GET | CONFIG_PUT | PANE_FOCUS | PANE_KEYS |
+            APP_SESSION | OP_SUBMIT | CONFIG_GET | CONFIG_PUT | SESSION_SEND | BUILD_START |
             DETAIL_GET | CHANGES_PAGE | SEEN_ADVANCE | DEVICE_REVOKE |
             wire::device::PAIR_BEGIN | wire::device::PAIR_STATUS | wire::device::PAIR_CONFIRM | wire::device::PAIR_CANCEL |
             PUSH_STATUS | PUSH_SUBSCRIBE | PUSH_UNSUBSCRIBE | ASSISTANT_SEND | ASSISTANT_WARM |
@@ -81,6 +84,8 @@ fn refusable(method: &str) -> bool {
             | control::SESSION_TERMINATE
             | control::SESSION_RELAUNCH
             | control::SESSION_REWIND
+            | SESSION_SEND
+            | BUILD_START
     )
 }
 
@@ -242,7 +247,11 @@ impl AppState {
             (Topic::Usage, USAGE_V1),
             (Topic::Settings, SETTINGS_V1),
         ] {
-            if feed.with_untracked(|feed| feed.capable(cap)) {
+            // Build sessions are rows of the assistant topic: it opens for either grant.
+            let granted = feed.with_untracked(|feed| {
+                feed.capable(cap) || (topic == Topic::Assistant && feed.capable(BUILD_V1))
+            });
+            if granted {
                 feed.update(|feed| {
                     feed.topics.insert(
                         topic_key(topic, None),

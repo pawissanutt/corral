@@ -163,9 +163,10 @@ pub struct Feed {
     pub topics: BTreeMap<String, TopicState>,
     pub details: BTreeMap<String, DetailCache>,
     /// Transcript item continuations, by continuation token.
-    pub items: BTreeMap<String, crate::model::session_feed::ItemFetch>,
-    /// The open turn of each watched session, by session id.
-    pub live: BTreeMap<Id, crate::model::session_feed::LiveSession>,
+    pub items: BTreeMap<String, crate::model::session::transcript::ItemFetch>,
+    /// What each watched session streams (its open turn, fleet, host state and input
+    /// admissions), by session scope.
+    pub live: BTreeMap<Id, crate::model::session::transcript::LiveSession>,
     pub commands: BTreeMap<Id, CommandState>,
     pub send_acceptance: BTreeMap<Id, SendAcceptance>,
     pub operations: BTreeMap<Id, Operation>,

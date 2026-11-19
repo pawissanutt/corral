@@ -17,7 +17,10 @@ use crate::model::daemon::{ClientError, Feed, Operation};
 
 /// Records the outcome of `control` of `session` under `key`.
 pub fn control(feed: &mut Feed, key: &Id, session: &str, control: Control) {
-    let outcome = if session == crate::model::assistant::QUICK || session.starts_with("A-") {
+    let hosted = session == crate::model::assistant::QUICK
+        || session.starts_with("A-")
+        || session.starts_with("B-");
+    let outcome = if hosted {
         chat(feed, session, control)
     } else {
         run(feed, key, session, control)

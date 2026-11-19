@@ -12,7 +12,6 @@ pub enum LiveKind {
     Task,
     Plan,
     Session,
-    Thread,
     Review,
 }
 
@@ -23,20 +22,18 @@ impl LiveKind {
             LiveKind::Task => "task",
             LiveKind::Plan => "plan",
             LiveKind::Session => "session",
-            LiveKind::Thread => "thread",
             LiveKind::Review => "review",
         }
     }
 }
 
-/// A daemon record to open: a task, a plan (a parent task), an agent session (`T-1_R1` for a
-/// run), an assistant thread ("quick" or A-n), or the candidate of a task under review.
+/// A daemon record to open: a task, a plan (a parent task), a session of any role (a run
+/// `T-1_R1`, a chat `quick` or `A-n`, a build `B-…`), or the candidate of a task under review.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Live {
     Task(Id),
     Plan(Id),
     Session(Id),
-    Thread(Id),
     Review(Id),
 }
 
@@ -46,18 +43,13 @@ impl Live {
             Live::Task(_) => LiveKind::Task,
             Live::Plan(_) => LiveKind::Plan,
             Live::Session(_) => LiveKind::Session,
-            Live::Thread(_) => LiveKind::Thread,
             Live::Review(_) => LiveKind::Review,
         }
     }
 
     pub fn id(&self) -> &Id {
         match self {
-            Live::Task(id)
-            | Live::Plan(id)
-            | Live::Session(id)
-            | Live::Thread(id)
-            | Live::Review(id) => id,
+            Live::Task(id) | Live::Plan(id) | Live::Session(id) | Live::Review(id) => id,
         }
     }
 
@@ -66,14 +58,14 @@ impl Live {
         match self {
             Live::Task(_) => Destination::Now,
             Live::Plan(_) => Destination::Plans,
-            Live::Session(_) | Live::Thread(_) => Destination::Agents,
+            Live::Session(_) => Destination::Agents,
             Live::Review(_) => Destination::Review,
         }
     }
 
     /// Whether opening it pushes a page on this form; otherwise it is selected in place.
     pub fn pushes(&self, form: Form) -> bool {
-        form == Form::Phone || matches!(self, Live::Session(_) | Live::Thread(_))
+        form == Form::Phone || matches!(self, Live::Session(_))
     }
 
     /// The bounded reference Ask attaches for "Ask about this".
@@ -85,16 +77,15 @@ impl Live {
         }
     }
 
-    /// The detail that shows the record; threads are scoped subscriptions instead.
-    pub fn detail(&self) -> Option<DetailRef> {
+    /// The detail that shows the record.
+    pub fn detail(&self) -> DetailRef {
         let id = self.id().to_string();
-        Some(match self {
+        match self {
             Live::Task(_) => DetailRef::Task { id },
             Live::Plan(_) => DetailRef::Plan { id },
             Live::Session(_) => DetailRef::Session { id },
             Live::Review(_) => DetailRef::Review { task: id },
-            Live::Thread(_) => return None,
-        })
+        }
     }
 }
 
@@ -104,7 +95,6 @@ pub struct Selection {
     pub task: Option<Id>,
     pub plan: Option<Id>,
     pub session: Option<Id>,
-    pub thread: Option<Id>,
     pub review: Option<Id>,
 }
 
@@ -114,7 +104,6 @@ impl Selection {
             LiveKind::Task => self.task.as_ref(),
             LiveKind::Plan => self.plan.as_ref(),
             LiveKind::Session => self.session.as_ref(),
-            LiveKind::Thread => self.thread.as_ref(),
             LiveKind::Review => self.review.as_ref(),
         }
     }
@@ -126,7 +115,6 @@ impl Selection {
             LiveKind::Task => self.task = id,
             LiveKind::Plan => self.plan = id,
             LiveKind::Session => self.session = id,
-            LiveKind::Thread => self.thread = id,
             LiveKind::Review => self.review = id,
         }
     }
@@ -165,13 +153,15 @@ mod tests {
     fn live_records_name_their_owner_detail_and_context() {
         let plan = Live::Plan(Id::from("T-885"));
         assert_eq!(plan.owner(), Destination::Plans);
-        assert_eq!(plan.detail(), Some(DetailRef::Plan { id: "T-885".into() }));
+        assert_eq!(plan.detail(), DetailRef::Plan { id: "T-885".into() });
         let context = plan.context(Some(3));
         assert_eq!(
             (context.kind.as_str(), context.id.as_str()),
             ("plan", "T-885")
         );
-        assert_eq!(Live::Thread(Id::from("quick")).detail(), None);
+        let chat = Live::Session(Id::from("quick"));
+        assert_eq!(chat.owner(), Destination::Agents);
+        assert_eq!(chat.detail(), DetailRef::Session { id: "quick".into() });
         assert!(!plan.pushes(Form::Desktop));
         assert!(plan.pushes(Form::Phone));
         assert!(Live::Session(Id::from("T-1_R1")).pushes(Form::Terminal));

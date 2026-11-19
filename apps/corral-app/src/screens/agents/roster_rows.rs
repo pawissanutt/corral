@@ -1,16 +1,17 @@
-//! The roster's lines. Desktop (`.rh`, `.ar`): the column heads, then one 40 pt line per
-//! session: state chip, task id, role (worker, reviewer or assistant), project, name, what it
-//! does, its profile and model, how long it has been quiet and when it started, the last two and
-//! the project only while the roster has the room and no panel is open. Phone (the mock's `.ar`
-//! at 640 pt and under): chip, name and id; what it does; role, profile, model and quiet time.
-//! Terminal: the desktop's columns as Cells, one row each, giving way one at a time as the grid
-//! narrows; words too long for their column are cut at the character. A run's line carries its
-//! Session menu (secondary press, Shift+F10 or the Menu key; a held finger on the phone; `.`
-//! while the roster has the focus).
+//! The roster's lines, one per session of every role. Desktop (`.rh`, `.ar`): the column heads,
+//! then one 40 pt line per session: the state's mark and word (a build's exit status in its
+//! place) with the needs-you count, role, id, name (`untitled` muted when the host recorded
+//! none), project, what it does, model and effort, cost, context share, quiet time and start;
+//! the project, quiet time and start give way while the room runs short. Phone: the mark, name
+//! and id; what it does on up to two lines; role, model, cost and quiet time. Terminal: the
+//! desktop's columns as Cells, one row each, giving way one at a time as the grid narrows; words
+//! too long for their column are cut at the character. Pressing a line opens its session page;
+//! a run's line carries its Session menu (secondary press, Shift+F10 or the Menu key; a held
+//! finger on the phone; `.` while the roster has the focus).
 //!
 //! Rows are kept by session while the roster changes, each part following its own fact, so a
 //! row the keyboard is on keeps the focus as its times and counts tick. Every word and number is
-//! the model's; the row's hint (`doing_hint`) is its tooltip, status line and description.
+//! the model's; the row's hint (`doing_hint`) is its tooltip and description.
 
 use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
@@ -18,16 +19,18 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::model::Form;
 use crate::model::agents::{Action, Roster, RosterRow};
+use crate::model::hue::Hue;
 use crate::model::work::Record;
 use crate::screens::now::with_menu;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::kit::chip::chip;
 use crate::ui::kit::hint::hint_on_live;
+use crate::ui::kit::marks::hue_ink;
 use crate::ui::term::{self, cells};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, row_height};
 
-use super::{run, run_roster};
+use super::run_agents;
+use super::session::{hue_words, state_mark};
 
 /// A desktop line (`.ar` height) and the column heads' (`.rh`).
 const LINE: f32 = 40.0;
@@ -37,15 +40,16 @@ const SIDE: f32 = 18.0;
 const GAP: f32 = 12.0;
 const RING: f32 = 2.0;
 /// Terminal column widths in Cells; the name and doing columns' least widths.
-const ID_CELLS: f32 = 8.0;
-/// "reviewer", "assistant" and a Cell after.
 const ROLE_CELLS: f32 = 10.0;
-const PROJECT_CELLS: f32 = 11.0;
-const AGENT_CELLS: f32 = 18.0;
-const QUIET_CELLS: f32 = 11.0;
-const SINCE_CELLS: f32 = 7.0;
-const NAME_CELLS: (f32, f32) = (16.0, 20.0);
+const ID_CELLS: f32 = 9.0;
+const NAME_CELLS: f32 = 16.0;
+const PROJECT_CELLS: f32 = 14.0;
 const DOING_CELLS: f32 = 16.0;
+const AGENT_CELLS: f32 = 14.0;
+const COST_CELLS: f32 = 7.0;
+const CTX_CELLS: f32 = 4.0;
+const QUIET_CELLS: f32 = 10.0;
+const SINCE_CELLS: f32 = 6.0;
 /// A terminal line's selection bar, and the Cell between columns.
 const BAR_CELLS: f32 = 1.0;
 const GAP_CELLS: f32 = 1.0;
@@ -53,41 +57,40 @@ const GAP_CELLS: f32 = 1.0;
 /// Which optional columns show (tracked by the page from its measured room).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Columns {
-    /// Worker, reviewer or assistant.
-    pub(super) role: bool,
-    pub(super) project: bool,
-    pub(super) doing: bool,
-    pub(super) agent: bool,
-    pub(super) quiet: bool,
-    pub(super) since: bool,
-    /// A panel is open: the name and doing columns narrow (`.s-agents.has-sel`).
-    pub(super) open: bool,
-    /// The State column's Cells in a terminal: the longest chip shown and its Cell either side.
-    pub(super) state: u16,
+    role: bool,
+    project: bool,
+    doing: bool,
+    agent: bool,
+    cost: bool,
+    ctx: bool,
+    quiet: bool,
+    since: bool,
+    /// The State column's Cells in a terminal: the longest state shown and a Cell either side.
+    state: u16,
 }
 
 impl Columns {
-    /// Desktop and phone: the role, what the session does and its agent always; the project,
-    /// quiet time and start together while `wide`.
-    pub(super) fn points(wide: bool, open: bool) -> Self {
+    /// Desktop and phone: every column while `wide`, else without the project, quiet time and
+    /// start.
+    pub(super) fn points(wide: bool) -> Self {
         Self {
             role: true,
             project: wide,
             doing: true,
             agent: true,
+            cost: true,
+            ctx: true,
             quiet: wide,
             since: wide,
-            open,
             state: 0,
         }
     }
 
     /// Terminal: the columns `room` Cells hold. State, id and name always; then, as long as
-    /// they fit, the role, what the session does, its agent, the project, quiet time and start,
-    /// so a narrowing grid gives up the start first and the role last.
-    pub(super) fn cells(room: f32, state: u16, open: bool) -> Self {
-        let name = if open { NAME_CELLS.0 } else { NAME_CELLS.1 };
-        let mut used = BAR_CELLS + f32::from(state) + ID_CELLS + name + 3.0 * GAP_CELLS;
+    /// they fit, the role, what the session does, its model, cost, context, project, quiet time
+    /// and start, so a narrowing grid gives up the start first and the role last.
+    pub(super) fn cells(room: f32, state: u16) -> Self {
+        let mut used = BAR_CELLS + f32::from(state) + ID_CELLS + NAME_CELLS + 3.0 * GAP_CELLS;
         let mut fits = |cells_wide: f32| {
             let fits = used + GAP_CELLS + cells_wide <= room;
             if fits {
@@ -98,7 +101,9 @@ impl Columns {
         let role = fits(ROLE_CELLS);
         let doing = role && fits(DOING_CELLS);
         let agent = doing && fits(AGENT_CELLS);
-        let project = agent && fits(PROJECT_CELLS);
+        let cost = agent && fits(COST_CELLS);
+        let ctx = cost && fits(CTX_CELLS);
+        let project = ctx && fits(PROJECT_CELLS);
         let quiet = project && fits(QUIET_CELLS);
         let since = quiet && fits(SINCE_CELLS);
         Self {
@@ -106,9 +111,10 @@ impl Columns {
             project,
             doing,
             agent,
+            cost,
+            ctx,
             quiet,
             since,
-            open,
             state,
         }
     }
@@ -118,27 +124,39 @@ impl Columns {
 #[derive(Clone, Copy)]
 enum Column {
     State,
-    Id,
     Role,
-    Project,
+    Id,
     Name,
+    Project,
     Doing,
     Agent,
+    Cost,
+    Ctx,
     Quiet,
     Since,
 }
 
-const ORDER: [Column; 9] = [
+const ORDER: [Column; 11] = [
     Column::State,
-    Column::Id,
     Column::Role,
-    Column::Project,
+    Column::Id,
     Column::Name,
+    Column::Project,
     Column::Doing,
     Column::Agent,
+    Column::Cost,
+    Column::Ctx,
     Column::Quiet,
     Column::Since,
 ];
+
+/// The state's words as the row shows them, with the needs-you count: `Needs you ▲ 2`.
+pub(super) fn state_words(row: &RosterRow) -> String {
+    match &row.needs {
+        Some(needs) => format!("{} {needs}", row.state.word),
+        None => row.state.word.clone(),
+    }
+}
 
 /// The box of `column` in a line or the heads: its width (desktop points as the mock's grid,
 /// terminal Cells), and hidden whole while `columns` leaves it out. In a terminal the name takes
@@ -162,37 +180,36 @@ fn slot(form: Form, column: Column, columns: Memo<Columns>) -> View {
         slot.style_when(move || !show(columns.get()), |s| s.hidden())
             .accessibility_elements_hidden(move || !show(columns.get()))
     };
-    let growing = |(points_grow, cells_grow): (f32, f32), open: (f32, f32), shut: (f32, f32)| {
+    let growing = |grow: f32, points: f32, cells_wide: f32| {
         view()
             .flex_row()
             .items_center()
             .flex_1()
-            .flex_grow(if terminal { cells_grow } else { points_grow })
+            .flex_grow(grow)
             .overflow_hidden()
-            .min_w(move || {
-                let (points, cells_wide) = if columns.get().open { open } else { shut };
-                if terminal {
-                    cells(cells_wide)
-                } else {
-                    px(points)
-                }
+            .min_w(if terminal {
+                cells(cells_wide)
+            } else {
+                px(points)
             })
     };
     match column {
         Column::State if terminal => {
             fixed(0.0, 0.0).w(move || cells(f32::from(columns.get().state)))
         }
-        Column::State => fixed(92.0, 0.0),
-        Column::Id => fixed(52.0, ID_CELLS),
+        Column::State => fixed(128.0, 0.0),
         Column::Role => optional(fixed(68.0, ROLE_CELLS), |c| c.role),
-        Column::Project => optional(fixed(64.0, PROJECT_CELLS), |c| c.project),
-        Column::Name => growing((1.0, 2.0), (110.0, NAME_CELLS.0), (150.0, NAME_CELLS.1)),
+        Column::Id => fixed(60.0, ID_CELLS),
+        Column::Name => growing(if terminal { 2.0 } else { 1.0 }, 140.0, NAME_CELLS),
+        Column::Project => optional(fixed(120.0, PROJECT_CELLS), |c| c.project),
         Column::Doing => optional(
-            growing((1.6, 1.0), (150.0, DOING_CELLS), (220.0, DOING_CELLS)),
+            growing(if terminal { 1.0 } else { 1.6 }, 160.0, DOING_CELLS),
             |c| c.doing,
         ),
-        Column::Agent => optional(fixed(140.0, AGENT_CELLS), |c| c.agent),
-        Column::Quiet => optional(fixed(100.0, QUIET_CELLS), |c| c.quiet),
+        Column::Agent => optional(fixed(120.0, AGENT_CELLS), |c| c.agent),
+        Column::Cost => optional(fixed(52.0, COST_CELLS).justify_end(), |c| c.cost),
+        Column::Ctx => optional(fixed(36.0, CTX_CELLS).justify_end(), |c| c.ctx),
+        Column::Quiet => optional(fixed(84.0, QUIET_CELLS), |c| c.quiet),
         Column::Since => optional(fixed(44.0, SINCE_CELLS).justify_end(), |c| c.since),
     }
 }
@@ -247,8 +264,7 @@ pub(super) fn heads(app: AppState, roster: Memo<Roster>, columns: Memo<Columns>)
 
 /// One line per session, kept by session id, in the destination's keyboard list
 /// (`AppState::list_keys`), so j, k and the arrows move the selection while a line has the
-/// focus. Desktop and terminal lines select (the panel opens for them); a phone row opens the
-/// session page. A run's line carries its Session menu.
+/// focus. A run's line carries its Session menu.
 pub(super) fn lines(app: AppState, roster: Memo<Roster>, columns: Memo<Columns>) -> AnyElement {
     let rows = each(
         move || roster.with(|r| r.rows.clone()),
@@ -277,10 +293,16 @@ fn fact(row: ReadSignal<RosterRow>, pick: fn(&RosterRow) -> &str) -> impl Fn() -
     move || row.with(|r| pick(r).to_owned())
 }
 
-/// What a screen reader names a row by: its state, id and name; its hint follows as the
+/// What a screen reader names a row by: its state, role, id and name; its hint follows as the
 /// description.
 fn spoken(row: &RosterRow) -> String {
-    [row.chip.as_str(), row.shown_id.as_str(), row.name.as_str()].join(", ")
+    [
+        state_words(row).as_str(),
+        row.role.as_str(),
+        row.shown_id.as_str(),
+        row.name.as_str(),
+    ]
+    .join(", ")
 }
 
 /// Quiet one-line words in a cell: 12 pt ink-3, mono for ids, times and money; in a terminal
@@ -356,23 +378,49 @@ fn fit(words: &str, room: usize) -> String {
     kept
 }
 
-/// The state chip, redrawn only when the state changes.
-fn state_chip(app: AppState, row: ReadSignal<RosterRow>) -> AnyElement {
-    let face = computed(move || row.with(|r| (r.chip.clone(), r.hue)));
-    dynamic(move || face.with(|(label, hue)| untracked(|| chip(app, label.clone(), *hue))))
+/// The state's mark and word in its hue, then the needs-you count in the owner's colour;
+/// redrawn only when they change.
+fn state_cell(app: AppState, row: ReadSignal<RosterRow>) -> AnyElement {
+    let form = app.form;
+    let face = computed(move || row.with(|r| (r.state.clone(), r.needs.clone())));
+    dynamic(move || {
+        face.with(|(state, needs)| {
+            untracked(|| {
+                let size = |t: Text| {
+                    if form == Form::Terminal {
+                        t
+                    } else {
+                        t.font_family(FONT_TEXT).text_size(px(12.5))
+                    }
+                };
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(if form == Form::Terminal { 8.0 } else { 5.0 }))
+                    .min_w(px(0.0))
+                    .children(state_mark(app, state.spinner, state.glyph, state.hue))
+                    .child(
+                        size(text(state.word.clone()))
+                            .number_of_lines(1u32)
+                            .truncate()
+                            .min_w(px(0.0))
+                            .text_color(hue_words(form, state.hue)),
+                    )
+                    .children(needs.clone().map(|needs| {
+                        size(text(needs))
+                            .number_of_lines(1u32)
+                            .flex_shrink_0()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(hue_ink(Hue::You))
+                    }))
+                    .into_element()
+            })
+        })
+    })
 }
 
-/// The run's role, profile and model, then how long it has been quiet: the phone's third line.
-fn agent_line(row: &RosterRow) -> String {
-    if row.quiet == "—" {
-        format!("{} · {}", row.role, row.agent)
-    } else {
-        format!("{} · {} · {}", row.role, row.agent, row.quiet)
-    }
-}
-
-/// The pin before the quick thread's name (desktop and phone; a terminal shows no images and
-/// keeps the quick thread first instead).
+/// The pin before the quick chat's name (desktop and phone; a terminal shows no images and
+/// keeps the quick chat first instead).
 fn pin(app: AppState, row: ReadSignal<RosterRow>, size: f32) -> AnyElement {
     let pinned = computed(move || row.with(|r| r.pinned));
     if app.form == Form::Terminal {
@@ -385,24 +433,40 @@ fn pin(app: AppState, row: ReadSignal<RosterRow>, size: f32) -> AnyElement {
     })
 }
 
-/// A desktop or terminal line: the nine columns, those `columns` leaves out hidden.
+/// The session's name, `untitled` muted when the host recorded none.
+fn name(form: Form, row: ReadSignal<RosterRow>, size: f32) -> AnyElement {
+    let named = computed(move || row.with(|r| r.named));
+    if form == Form::Terminal {
+        return dynamic(move || {
+            let ink = if named.get() { Token::Ink } else { Token::Ink3 };
+            untracked(|| cut(fact(row, |r| r.name.as_str()), ink))
+        });
+    }
+    text(fact(row, |r| r.name.as_str()))
+        .number_of_lines(1u32)
+        .truncate()
+        .flex_shrink(1.0)
+        .min_w(px(0.0))
+        .text_color(move || color(if named.get() { Token::Ink } else { Token::Ink3 }))
+        .font_family(FONT_TEXT)
+        .text_size(px(size))
+        .font_weight(FontWeight::SEMIBOLD)
+        .into_element()
+}
+
+/// Opens the row's session page, keeping the selection on it for the keyboard.
+fn open(app: AppState, row: ReadSignal<RosterRow>) -> impl Fn() + 'static {
+    let (session, action) = untracked(|| row.with(|r| (r.session.clone(), r.action.clone())));
+    move || {
+        run_agents(app, Action::SelectRoster(session.clone()));
+        run_agents(app, action.clone());
+    }
+}
+
+/// A desktop or terminal line: the columns, those `columns` leaves out hidden.
 fn line(app: AppState, row: ReadSignal<RosterRow>, columns: Memo<Columns>) -> AnyElement {
     let form = app.form;
     let terminal = form == Form::Terminal;
-    let action = untracked(|| row.with(|r| r.action.clone()));
-    let name = if terminal {
-        cut(fact(row, |r| r.name.as_str()), Token::Ink)
-    } else {
-        text(fact(row, |r| r.name.as_str()))
-            .truncate()
-            .flex_shrink(1.0)
-            .min_w(px(0.0))
-            .text_color(color(Token::Ink))
-            .font_family(FONT_TEXT)
-            .text_size(px(13.0))
-            .font_weight(FontWeight::SEMIBOLD)
-            .into_element()
-    };
     let doing = if terminal {
         cut(fact(row, |r| r.doing.as_str()), Token::Ink2)
     } else {
@@ -417,24 +481,30 @@ fn line(app: AppState, row: ReadSignal<RosterRow>, columns: Memo<Columns>) -> An
     };
     let at = |column| slot(form, column, columns);
     let cells = vec![
-        at(Column::State).child(state_chip(app, row)).into_element(),
-        at(Column::Id)
-            .child(quiet(form, fact(row, |r| r.shown_id.as_str()), true))
-            .into_element(),
+        at(Column::State).child(state_cell(app, row)).into_element(),
         at(Column::Role)
             .child(quiet(form, fact(row, |r| r.role.as_str()), false))
             .into_element(),
-        at(Column::Project)
-            .child(quiet(form, fact(row, |r| r.project.as_str()), false))
+        at(Column::Id)
+            .child(quiet(form, fact(row, |r| r.shown_id.as_str()), true))
             .into_element(),
         at(Column::Name)
             .gap(px(4.0))
             .child(pin(app, row, 12.0))
-            .child(name)
+            .child(name(form, row, 13.0))
+            .into_element(),
+        at(Column::Project)
+            .child(quiet(form, fact(row, |r| r.project.as_str()), false))
             .into_element(),
         at(Column::Doing).child(doing).into_element(),
         at(Column::Agent)
             .child(quiet(form, fact(row, |r| r.agent.as_str()), true))
+            .into_element(),
+        at(Column::Cost)
+            .child(quiet(form, fact(row, |r| r.cost.as_str()), true))
+            .into_element(),
+        at(Column::Ctx)
+            .child(quiet(form, fact(row, |r| r.ctx.as_str()), true))
             .into_element(),
         at(Column::Quiet)
             .child(quiet(form, fact(row, |r| r.quiet.as_str()), false))
@@ -443,29 +513,28 @@ fn line(app: AppState, row: ReadSignal<RosterRow>, columns: Memo<Columns>) -> An
             .child(quiet(form, fact(row, |r| r.since.as_str()), true))
             .into_element(),
     ];
-    // Where the panel takes the roster's place the pressed row goes out of sight: the focus
-    // moves on to the panel it opened rather than being lost with the row.
-    let press = move || {
-        run_roster(app, action.clone());
-        if untracked(|| super::roster::panel_covers(app)) {
-            app.run(vec![crate::model::Effect::Focus(
-                super::panel::OPEN_SESSION,
-            )]);
-        }
-    };
-    shell(app, row, press, cells)
+    shell(app, row, open(app, row), cells)
 }
 
-/// A phone row (`.ar` at 640 pt and under): the chip, the pinned mark and the name in semibold,
-/// the id at the trailing edge; what the session does, its one explanatory line, on up to two
-/// lines; then its profile, model and quiet time. Pressing it opens the session page.
+/// The phone's third line: role, model, cost and quiet time, the absent ones left out.
+fn agent_line(row: &RosterRow) -> String {
+    [&row.role, &row.agent, &row.cost, &row.quiet]
+        .into_iter()
+        .filter(|words| words.as_str() != "–")
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// A phone row (`.ar` at 640 pt and under): the state, the pinned mark and the name in
+/// semibold, the id at the trailing edge; what the session does on up to two lines; then its
+/// role, model, cost and quiet time.
 fn phone_line(app: AppState, row: ReadSignal<RosterRow>) -> AnyElement {
-    let session = untracked(|| row.with(|r| r.session.clone()));
     let first = view()
         .flex_row()
         .items_center()
         .gap(px(10.0))
-        .child(state_chip(app, row))
+        .child(state_cell(app, row))
         .child(
             view()
                 .flex_1()
@@ -474,17 +543,7 @@ fn phone_line(app: AppState, row: ReadSignal<RosterRow>) -> AnyElement {
                 .items_center()
                 .gap(px(5.0))
                 .child(pin(app, row, 14.0))
-                .child(
-                    text(fact(row, |r| r.name.as_str()))
-                        .number_of_lines(1u32)
-                        .truncate()
-                        .flex_shrink(1.0)
-                        .min_w(px(0.0))
-                        .font_family(FONT_TEXT)
-                        .text_size(px(15.5))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(color(Token::Ink)),
-                ),
+                .child(name(app.form, row, 15.5)),
         )
         .child(
             text(fact(row, |r| r.shown_id.as_str()))
@@ -508,12 +567,7 @@ fn phone_line(app: AppState, row: ReadSignal<RosterRow>) -> AnyElement {
         .child(doing)
         .child(quiet(app.form, move || row.with(agent_line), true))
         .into_element();
-    shell(
-        app,
-        row,
-        move || run(app, Action::OpenSession(session.clone())),
-        vec![body],
-    )
+    shell(app, row, open(app, row), vec![body])
 }
 
 /// The pressable line around `content`: a button named by [`spoken`] with the row's hint as its
@@ -556,6 +610,18 @@ fn shell(
         })
         .test_id(&test_id)
         .on_press(move || on_press());
+    // The list's Enter opens the selected session only while its own row has the focus.
+    let (focused, blurred) = (test_id.clone(), test_id.clone());
+    let focused_row = app.focused_row;
+    let line = line
+        .on_focus(move || focused_row.set(Some(focused.clone())))
+        .on_blur(move || {
+            focused_row.update(|row| {
+                if row.as_deref() == Some(blurred.as_str()) {
+                    *row = None;
+                }
+            })
+        });
     let ring = |s: nsh_core::element::StyleRefinement| {
         s.outline(px(RING))
             .outline_color(color(Token::Focus))

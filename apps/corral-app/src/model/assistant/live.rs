@@ -632,7 +632,7 @@ pub fn live_agents(state: &State, feed: &Feed) -> Agents {
                 phone_facts: format!("{} · {}", state.label, location(Some(row))),
                 state,
                 cost,
-                action: Action::OpenLive(Live::Thread(Id::from(row.id.as_str()))),
+                action: Action::OpenLive(Live::Session(Id::from(row.id.as_str()))),
             }
         })
         .collect();
@@ -683,8 +683,7 @@ pub fn record_link(context: &ContextRef) -> Option<(String, Live)> {
     let live = match context.kind.as_str() {
         "task" => Live::Task(id),
         "plan" => Live::Plan(id),
-        "session" => Live::Session(id),
-        "thread" => Live::Thread(id),
+        "session" | "thread" => Live::Session(id),
         "review" => Live::Review(id),
         _ => return None,
     };

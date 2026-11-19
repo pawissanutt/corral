@@ -203,12 +203,7 @@ pub(super) fn serve(mut stream: UnixStream, shared: Arc<Shared>) -> Result<()> {
         match request.method.as_str() {
             wire::HELLO => match serde_json::from_value::<wire::Hello>(request.params) {
                 Ok(hello) if hello.proto.major == wire::PROTO_MAJOR => {
-                    topics.set_session_fleet(
-                        hello
-                            .caps
-                            .iter()
-                            .any(|cap| cap == wire::app::SESSION_FLEET_V1),
-                    );
+                    topics.set_capabilities(&hello.caps);
                     reply(&mut stream, request.id, dispatch::welcome(&shared, hello))?;
                     welcomed = true;
                 }

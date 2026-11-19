@@ -151,6 +151,7 @@ fn content(app: AppState, focus: Focus) -> AnyElement {
             )
             .child(palette::palette(app))
             .child(screens::agents::rewind_sheet(app))
+            .child(screens::agents::start_sheet(app))
             .child(confirmation(app))
             .child(refusal(app))
             .child(screens::now::verb_composer(app)),

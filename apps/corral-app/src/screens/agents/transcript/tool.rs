@@ -6,14 +6,14 @@
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::agents::Tool;
 use crate::model::hue::Hue;
+use crate::model::session::transcript::Tool;
 use crate::state::AppState;
 use crate::ui::kit::marks::mark;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, Token, color};
 
-use super::super::console;
+use super::cell_lines;
 use super::parts::{hidden, pressable, sections, state};
 
 /// What a screen reader hears for the row.
@@ -111,11 +111,7 @@ pub(super) fn tool(app: AppState, tool: &Tool, n: usize) -> AnyElement {
                 n,
             ))
             .when(!tool.tail.is_empty(), |block| {
-                block.child(
-                    view()
-                        .pl(term::cells(2.0))
-                        .child(console::cell_lines(app, &tool.tail)),
-                )
+                block.child(view().pl(term::cells(2.0)).child(cell_lines(&tool.tail)))
             })
             .when(tool.open, |block| {
                 block.child(

@@ -7,6 +7,11 @@ use corral_types::UsageSummary;
 
 use crate::assistant::ThreadEntry;
 use crate::rows::{AgentRow, AssistantRow, PlanRow, ProjectRow, SettingsSnapshot, TaskRow};
+use crate::session_state::{SendPolicy, SessionState};
+
+/// Serialized fleet and state budgets within a bounded live page.
+pub const LIVE_FLEET_BYTES: usize = 32 * 1024;
+pub const LIVE_STATE_BYTES: usize = 12 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -16,6 +21,7 @@ pub enum Topic {
     Plans,
     Projects,
     Agents,
+    /// Shared rows for clients granted `assistant.v1` or `build.v1`.
     Assistant,
     Usage,
     Settings,
@@ -105,6 +111,11 @@ pub enum SubDelta {
         /// Current fleet replacement for capable clients; omission means no current fleet.
         #[serde(default, skip_serializing_if = "fleet_is_empty")]
         fleet: Option<SessionFleet>,
+        /// Replacement for capable clients on the first page, after discontinuity, or when
+        /// changed since the last page. Omission means unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Option<SessionState>")]
+        state: Option<Box<SessionState>>,
     },
     Terminal {
         scope: String,
@@ -168,6 +179,7 @@ pub struct LiveText {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionChild {
     pub id: String,
+    /// Helper children use `helper:<kind>`.
     pub kind: String,
     pub title: String,
     pub state: String,
@@ -186,6 +198,34 @@ pub struct SessionChild {
     pub verdict: Option<SessionChildVerdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_model: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub turns: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_percent: Option<f32>,
+    /// Counts of edited paths, of edits outside ownership, and of owned paths.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub files: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub outside: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub owns: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub after: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub steerable: bool,
+    /// At most 256 bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+fn is_zero<T: Default + PartialEq>(value: &T) -> bool {
+    value == &T::default()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -267,6 +307,38 @@ pub enum SessionLiveKind {
     },
     /// The optional page-level fleet is a current replacement, not a turn delta.
     LiveFleet {},
+    /// The replacement rides on the page.
+    LiveState {},
+    /// The named part changed; reread its detail using the last etag.
+    LivePart {
+        part: String,
+    },
+    LiveInput {
+        input: String,
+        #[serde(flatten)]
+        state: SessionLiveInputState,
+    },
+    /// A non-streamed transcript entry was appended.
+    LiveEntry {},
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum SessionLiveInputState {
+    Accepted,
+    Queued {
+        policy: SendPolicy,
+        position: u32,
+    },
+    Started {
+        turn: u64,
+    },
+    Withdrawn,
+    Rejected {
+        reason: String,
+    },
     #[serde(other)]
     Other,
 }

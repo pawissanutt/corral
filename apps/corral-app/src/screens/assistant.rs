@@ -1,15 +1,11 @@
-//! Assistant threads, which live inside Agents: the thread page with its composer docked, the
-//! transcript the Ask drawer also shows and the session block Agents places under its roster.
-//! Everything renders the served threads of the selected feed through `model::assistant`;
-//! every button runs its reducer, whose canonical sends, session controls, engine operations
-//! and answers the app performs.
+//! The Ask drawer's transcript of the one chat agent until it reads the session transcript
+//! (slice S4), and the chat subscriptions it holds. Everything renders the served threads of the
+//! selected feed through `model::assistant`; every button runs its reducer, whose canonical
+//! sends, session controls, engine operations and answers the app performs. Chats open on the
+//! session page (`screens::agents`).
 
-mod agents;
-mod attachments;
 mod cards;
-mod page;
 mod parts;
-mod side_facts;
 mod transcript;
 
 use corral_protocol::app::SESSION_V1;
@@ -20,10 +16,6 @@ use nsh_core::prelude::*;
 use crate::model::assistant::{OpOutcome, ThreadRef};
 use crate::model::{Form, Id};
 use crate::state::AppState;
-
-pub use agents::agents_tail;
-pub use page::{live_thread, live_thread_phone, live_thread_title};
-pub use side_facts::{identified, stacked};
 
 /// The transcript rows' inset in the Ask drawer (`.drawer .tm` padding 7 16) and on the phone.
 const DRAWER_INSET: f32 = 16.0;

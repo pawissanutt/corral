@@ -45,6 +45,7 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
         older: None,
         replyable: false,
         reply_refusal: None,
+        host: Default::default(),
     });
     app.detail_reply(
         feed,

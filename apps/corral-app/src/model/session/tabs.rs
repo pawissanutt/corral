@@ -1,0 +1,169 @@
+//! The tab strip: which tabs a session has, from its role and what its host declares it serves
+//! (`SessionState.can`), each with its count and the Chat tab's unread mark. Inbox is not a tab:
+//! the header's decisions chip opens Now instead.
+
+use corral_protocol::detail::SessionItem;
+
+use crate::model::daemon::Feed;
+use crate::model::hue::Hue;
+
+use super::{Action, Can, Cx, SessionRole, SubView, Tab};
+
+/// A tab's count or mark.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Badge {
+    /// `3`, `12`, `2 !`, `◆`, `git?`.
+    pub text: String,
+    pub hue: Hue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TabItem {
+    pub tab: Tab,
+    /// `tab-<slug>`.
+    pub id: String,
+    /// `Chat`, or a sub-view's `Chat › Usage`, `Agents › a2`.
+    pub label: String,
+    /// The terminal UI's key, drawn before the label where keys show (`F9`).
+    pub key: Option<&'static str>,
+    pub badge: Option<Badge>,
+    /// A new transcript row arrived while another tab was open.
+    pub unread: bool,
+    pub selected: bool,
+    /// Shown muted with this reason: the host declared the part but cannot serve it now.
+    pub unavailable: Option<String>,
+    pub action: Action,
+}
+
+/// The tabs a role has, in order. A task-bound role leads with Task and ends with Proof; a build
+/// ends with Board unless it is bare (no board connection).
+pub fn tabs_for(role: &SessionRole, task_bound: bool, bare: bool) -> Vec<Tab> {
+    match role {
+        SessionRole::Child => vec![Tab::Chat],
+        SessionRole::Build => {
+            let mut tabs = vec![Tab::Chat, Tab::Agents, Tab::Changes];
+            if !bare {
+                tabs.push(Tab::Board);
+            }
+            tabs
+        }
+        _ if task_bound => vec![Tab::Task, Tab::Chat, Tab::Agents, Tab::Changes, Tab::Proof],
+        _ => vec![Tab::Chat, Tab::Agents, Tab::Changes],
+    }
+}
+
+/// The host capability a tab's body is served by; Chat, Task and Proof read what every session
+/// has (its transcript, its task's engine records).
+fn capability(tab: Tab) -> Option<&'static str> {
+    match tab {
+        Tab::Agents => Some("children"),
+        Tab::Changes => Some("changes"),
+        Tab::Board => Some("board"),
+        Tab::Chat | Tab::Task | Tab::Proof => None,
+    }
+}
+
+/// The rows a reader would count as new: served messages and the live turn's messages and tool
+/// calls. Streaming into a row does not change it.
+pub fn rows(feed: &Feed, scope: &str) -> usize {
+    let served =
+        super::transcript::page(feed.detail(&corral_protocol::detail::DetailRef::Session {
+            id: scope.to_owned(),
+        }))
+        .map_or(0, |page| {
+            page.messages
+                .iter()
+                .filter(|message| {
+                    message
+                        .items
+                        .iter()
+                        .any(|item| !matches!(item, SessionItem::Continuation { .. }))
+                })
+                .count()
+        });
+    let live = feed
+        .live
+        .get(scope)
+        .map_or(0, |live| live.messages.len() + live.tools.len());
+    served + live
+}
+
+fn count(n: u32) -> Option<Badge> {
+    (n > 0).then(|| Badge {
+        text: n.to_string(),
+        hue: Hue::Neutral,
+    })
+}
+
+fn badge(tab: Tab, cx: &Cx<'_>) -> Option<Badge> {
+    let state = cx.state?;
+    match tab {
+        Tab::Agents => count(
+            state
+                .children
+                .live
+                .saturating_add(state.children.waiting)
+                .saturating_add(state.jobs.live),
+        ),
+        Tab::Changes => state.changes.and_then(count),
+        Tab::Board => {
+            let board = state.board?;
+            if board.blocked + board.failed > 0 {
+                Some(Badge {
+                    text: format!("{} !", board.open),
+                    hue: Hue::Held,
+                })
+            } else if board.proposed && board.open == 0 {
+                Some(Badge {
+                    text: "◆".into(),
+                    hue: Hue::Held,
+                })
+            } else {
+                count(board.open)
+            }
+        }
+        Tab::Chat | Tab::Task | Tab::Proof => None,
+    }
+}
+
+fn label(tab: Tab, sub: Option<&SubView>) -> String {
+    match (tab, sub) {
+        (Tab::Chat, Some(SubView::Usage)) => "Chat › Usage".into(),
+        (Tab::Agents, Some(SubView::Agent(child))) => format!("Agents › {child}"),
+        _ => tab.label().into(),
+    }
+}
+
+/// The tabs the page shows: the role's set, without a tab whose part the host does not serve
+/// (when it reported what it serves), and only those whose bodies exist (`built`).
+pub fn items(cx: &Cx<'_>, built: &[Tab]) -> Vec<TabItem> {
+    let bare = !matches!(cx.can("board"), Can::Yes | Can::Unavailable(_));
+    let mut tabs = tabs_for(&cx.role, cx.role.task_bound() && cx.task.is_some(), bare);
+    tabs.retain(|tab| built.contains(tab));
+    let rows = rows(cx.feed, cx.id.as_str());
+    tabs.into_iter()
+        .filter_map(|tab| {
+            let unavailable = match capability(tab).map(|id| cx.can(id)) {
+                Some(Can::Absent) => return None,
+                Some(Can::Unknown) if tab != Tab::Agents => return None,
+                Some(Can::Unavailable(why)) => Some(why),
+                _ => None,
+            };
+            let selected = cx.ui.tab == tab;
+            Some(TabItem {
+                tab,
+                id: format!("tab-{}", tab.slug()),
+                label: label(tab, cx.ui.sub.as_ref().filter(|_| selected)),
+                key: Some(tab.key(&cx.role)),
+                badge: badge(tab, cx),
+                unread: tab == Tab::Chat && !selected && cx.ui.seen.is_some_and(|seen| rows > seen),
+                selected,
+                unavailable,
+                action: Action::Tab {
+                    session: cx.id.clone(),
+                    tab,
+                },
+            })
+        })
+        .collect()
+}

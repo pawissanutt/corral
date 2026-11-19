@@ -21,7 +21,7 @@ use crate::model::daemon::{CommandStatus, Feed, Link};
 use crate::model::hue::Hue;
 use crate::model::id::Id;
 use crate::model::live::Live;
-use crate::model::session_feed::LiveSession;
+use crate::model::session::transcript::LiveSession;
 /// An owner message's outlined tag from its served state.
 fn tag(state: Option<&WireState>) -> Chip {
     let (label, hue) = match state {
@@ -378,7 +378,7 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
                     .map(|link| {
                         button(
                             "Earlier transcript",
-                            Action::OpenLive(Live::Thread(Id::from(link.id.as_str()))),
+                            Action::OpenLive(Live::Session(Id::from(link.id.as_str()))),
                         )
                     }),
             })),

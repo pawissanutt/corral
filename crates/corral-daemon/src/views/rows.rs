@@ -147,7 +147,7 @@ const EXTERNAL_POLL: Duration = Duration::from_secs(2);
 /// so probing agents never holds the cache lock for health or SQLite-only reads.
 #[derive(Default)]
 pub(crate) struct RowCache {
-    entries: [Mutex<Option<Observation>>; 8],
+    entries: [Mutex<Option<Observation>>; 9],
 }
 
 struct Observation {
@@ -169,6 +169,20 @@ impl RowCache {
             Topic::Assistant => 7,
             _ => bail!("unsupported row topic"),
         };
+        self.get_at(shared, topic, index, false)
+    }
+
+    pub(crate) fn assistant_with_builds(&self, shared: &Shared) -> Result<Arc<Rows>> {
+        self.get_at(shared, Topic::Assistant, 8, true)
+    }
+
+    fn get_at(
+        &self,
+        shared: &Shared,
+        topic: Topic,
+        index: usize,
+        builds: bool,
+    ) -> Result<Arc<Rows>> {
         let mut slot = self.entries[index]
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -183,7 +197,7 @@ impl RowCache {
         if refresh {
             // Stamp the generation from before reading. A publish during the
             // read stays visible on the next access; never mark its data as read.
-            let result = read(shared, topic)
+            let result = read(shared, topic, builds)
                 .map(|new| {
                     if let Some(Ok(old)) = slot.as_ref().map(|old| &old.result)
                         && **old == new
@@ -207,12 +221,12 @@ impl RowCache {
     }
 }
 
-fn read(shared: &Shared, topic: Topic) -> Result<Rows> {
+fn read(shared: &Shared, topic: Topic, builds: bool) -> Result<Rows> {
     if topic == Topic::Health {
         return Ok(Rows::Health(vec![shared.health()]));
     }
     if topic == Topic::Assistant {
-        return Ok(Rows::Assistant(crate::assistant::rows(shared)?));
+        return Ok(Rows::Assistant(crate::assistant::rows(shared, builds)?));
     }
     if topic == Topic::Settings {
         return settings(shared);
