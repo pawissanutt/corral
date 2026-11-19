@@ -21,7 +21,7 @@ pub(super) struct Route {
     pub paid: Option<PaidApproval>,
 }
 
-pub(super) fn resolve(config: &Config, name: &str, args: &BuildArgs, bare: bool) -> Result<Route> {
+pub(super) fn resolve(config: &Config, name: &str, args: &BuildArgs) -> Result<Route> {
     let mut resolved = config.resolve_profile(
         &ProfileChoice {
             profile: Some(name.into()),
@@ -48,12 +48,6 @@ pub(super) fn resolve(config: &Config, name: &str, args: &BuildArgs, bare: bool)
         .connection_binding()?
         .context("profile has no native connection")?;
     let paid = if binding.connection.api_key() {
-        if bare {
-            return Err(refuse(
-                "paid_admission_required",
-                "Bare API profiles require durable Build accounting; use --build --profile instead",
-            ));
-        }
         Some(
             approval(config, name, &binding)
                 .map_err(|error| refuse("paid_admission_required", format!("{error:#}")))?,
@@ -125,7 +119,7 @@ pub(super) fn recorded(data_root: &std::path::Path, id: &str) -> Result<(Option<
     Ok((route, mixed))
 }
 
-pub(super) fn validate_recorded(config: &Config, route: &Route, bare: bool) -> Result<()> {
+pub(super) fn validate_recorded(config: &Config, route: &Route) -> Result<()> {
     require_provider(&route.provider)?;
     if let Some(binding) = &route.binding {
         binding.validate()?;
@@ -136,11 +130,11 @@ pub(super) fn validate_recorded(config: &Config, route: &Route, bare: bool) -> R
             "recorded build route differs from binding"
         );
         if binding.connection.api_key() {
-            ensure!(!bare, "Bare sessions cannot resume API routes");
-            let current = resolve(config, &route.name, &BuildArgs::default(), false)?;
+            let current = resolve(config, &route.name, &BuildArgs::default())?;
+            // Spending caps are disabled: only the exact API route must remain approved.
             ensure!(
-                current.binding == route.binding && current.paid == route.paid,
-                "paid_admission_required: recorded API route or approval changed; its allowance cannot be refreshed"
+                current.binding == route.binding,
+                "paid_admission_required: recorded API route changed; select its profile again"
             );
         } else {
             ensure!(

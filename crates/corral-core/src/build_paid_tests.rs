@@ -41,23 +41,24 @@ fn request(id: &str, nanos: u64) -> BudgetRequest {
     }
 }
 #[test]
-fn build_uncertain_physical_retry_cannot_overspend_or_recover_a_fresh_allowance() {
+fn build_uncertain_retries_stay_reserved_without_a_spending_cap() {
     let mut paid = ledger();
     assert!(paid.reserve(request("uncertain", 60)).unwrap());
     assert!(paid.reserve(request("uncertain", 60)).unwrap()); // transport replay, not a second POST
-    assert!(!paid.reserve(request("physical-retry", 60)).unwrap());
+    // Spending caps are disabled: requests past the recorded allowance are still admitted.
+    assert!(paid.reserve(request("physical-retry", 60)).unwrap());
     assert!(paid.reserve(request("child", 40)).unwrap());
-    assert!(!paid.reserve(request("extra", 1)).unwrap());
+    assert!(paid.reserve(request("extra", 1)).unwrap());
     assert!(paid.settle("child", "response".into(), 11, 1).is_err());
     paid.settle("child", "response".into(), 2, 5).unwrap();
     paid.settle("child", "response".into(), 2, 5).unwrap();
-    assert_eq!(paid.ledger.totals(), (12, 65));
+    assert_eq!(paid.ledger.totals(), (32, 126));
     assert!(paid.reserve(request("child", 40)).unwrap()); // original bound survives settlement
     let before = paid.clone();
     paid.generation += 1;
     paid.cap_sha256 = "33".repeat(32);
     paid.follows(&before).unwrap();
-    assert_eq!(paid.ledger.totals().1, 65);
+    assert_eq!(paid.ledger.totals().1, 126);
     assert!(paid.reserve(request("stale-parent", 1)).is_err());
     paid.ledger.requests.remove(0);
     assert!(paid.follows(&before).is_err());
@@ -67,7 +68,7 @@ fn build_uncertain_physical_retry_cannot_overspend_or_recover_a_fresh_allowance(
 }
 
 #[test]
-fn mixed_routes_share_cap_and_settle_only_their_own_reservation() {
+fn mixed_routes_share_one_ledger_and_settle_only_their_own_reservation() {
     let mut paid = ledger();
     let first = paid.route().unwrap().digest.clone();
     let mut second_approval = paid.approval.clone();
@@ -91,11 +92,6 @@ fn mixed_routes_share_cap_and_settle_only_their_own_reservation() {
     });
     assert!(
         paid.reserve_for(request("pending", 50), Some(&first))
-            .unwrap()
-    );
-    assert!(
-        !paid
-            .reserve_for(request("second", 31), Some(&second))
             .unwrap()
     );
     assert!(

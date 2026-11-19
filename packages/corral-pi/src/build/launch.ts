@@ -121,7 +121,8 @@ export function readBuildLaunch(fd: number): BuildLaunch {
     if (resume && resume !== session) throw new LaunchMessageInvalid("paid lineage differs from resumed session");
   }
   const apiParent = Boolean(binding && isApiConnection(binding.connection));
-  if (apiParent !== Boolean(route?.paid) || (apiParent && !paid) || (paid && (bare || wire.workspace_root == null))) {
+  // Bare API sessions have no durable ledger (spending caps are disabled); bound Builds still need one.
+  if (apiParent !== Boolean(route?.paid) || (apiParent && !paid && !bare) || (paid && (bare || wire.workspace_root == null))) {
     throw new LaunchMessageInvalid("API Build requires an exact binding and durable workspace admission");
   }
   if (paid?.mixed) {

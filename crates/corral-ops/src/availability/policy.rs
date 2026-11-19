@@ -301,14 +301,15 @@ pub(crate) fn ensure_root(
                 }
             }
         };
+        // Spending caps are disabled: an approval/allowance edit or prior spending does not
+        // block the root; only the exact approved routes must still match.
         ensure!(
-            episode.approval == approval,
-            "PolicyNotApproved: paid root approval is frozen; policy changed"
+            episode.approval.candidates == approval.candidates,
+            "PolicyNotApproved: paid root route changed"
         );
         ensure!(
-            !matches!(episode.phase, PaidPhase::Closed)
-                && episode.ledger.totals().1 < episode.approval.allowance_nanos,
-            "paid root is closed or exhausted; cannot initialize a new allowance"
+            !matches!(episode.phase, PaidPhase::Closed),
+            "paid root is closed; cannot initialize a new episode"
         );
         let link = PaidLink {
             episode: episode.id.clone(),

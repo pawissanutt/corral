@@ -97,7 +97,7 @@ fn model(
             .as_ref()
             .or(config.assistant.agent.as_ref())
             .unwrap_or(&config.pm.agent);
-        let route = profiles::resolve(config, name, args, false)?;
+        let route = profiles::resolve(config, name, args)?;
         return Ok((route.provider, route.model, route.effort));
     }
     let provider = args.provider.as_deref().unwrap_or(DEFAULT_PROVIDER);
@@ -334,13 +334,13 @@ fn command(
         .unwrap_or_default();
     let recorded_paid = recorded.as_ref().is_some_and(|route| route.paid.is_some());
     let route = if let Some(name) = &args.profile {
-        profiles::resolve(profile_config, name, args, bare)?
+        profiles::resolve(profile_config, name, args)?
     } else if let Some(route) = recorded {
-        profiles::validate_recorded(profile_config, &route, bare)?;
+        profiles::validate_recorded(profile_config, &route)?;
         profiles::override_recorded(route, args)?
     } else if workspace.is_some() && !bare {
         let name = config.assistant.agent.as_ref().unwrap_or(&config.pm.agent);
-        profiles::resolve(&config, name, args, false)?
+        profiles::resolve(&config, name, args)?
     } else {
         let (provider, model, effort) = if bare {
             bare_model(args)?
@@ -362,7 +362,8 @@ fn command(
     let provider = route.provider.clone();
     let model = route.model.clone();
     let effort = route.effort.clone();
-    if route.paid.is_some() && workspace.is_none() {
+    // Bare API sessions run without a ledger; spending caps are disabled.
+    if route.paid.is_some() && workspace.is_none() && !bare {
         return Err(refuse(
             "paid_admission_required",
             "metered Build profiles require a corral workspace for durable spending accounting",
@@ -418,7 +419,7 @@ fn command(
     let mut paid_routes = std::collections::BTreeMap::new();
     if let Some(api) = mixed {
         for (preset, name) in &api.profiles {
-            let child = profiles::resolve(profile_config, name, &BuildArgs::default(), false)?;
+            let child = profiles::resolve(profile_config, name, &BuildArgs::default())?;
             let binding = child
                 .binding
                 .filter(|binding| binding.connection.api_key())
@@ -475,7 +476,7 @@ fn command(
         .profiles
         .keys()
         .filter_map(|name| {
-            profiles::resolve(profile_config, name, &BuildArgs::default(), bare)
+            profiles::resolve(profile_config, name, &BuildArgs::default())
                 .ok()
                 .map(|route| json!(route))
         })
@@ -538,7 +539,7 @@ fn command(
         {
             return Err(refuse(
                 "paid_admission_required",
-                "paid Build route is sticky; selecting another profile cannot refresh its allowance",
+                "paid Build route is sticky; resume it with its original profile",
             ));
         }
         let paid = if let Some(api) = mixed {
