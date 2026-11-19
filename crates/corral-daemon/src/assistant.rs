@@ -444,6 +444,10 @@ pub(crate) fn rows(shared: &Shared) -> Result<Vec<AssistantRow>> {
         .collect()
 }
 
+pub(crate) fn input_entry_id(session: &str, request_id: &str) -> String {
+    format!("{session}/input/{request_id}")
+}
+
 pub(crate) fn send(shared: &Shared, device: &str, request: AssistantSend) -> Result<SendAck> {
     ensure!(
         !request.text.trim().is_empty() && request.text.len() <= MESSAGE_TEXT_MAX,
@@ -477,7 +481,7 @@ pub(crate) fn send(shared: &Shared, device: &str, request: AssistantSend) -> Res
             vec![],
         ));
     }
-    let entry = format!("{}/input/{}", chat.id(), result.request_id);
+    let entry = input_entry_id(&chat.id(), &result.request_id);
     // Only an active turn's transient handle; never an idempotency/replay journal.
     if let Some(turn) = result.turn {
         inputs.insert(

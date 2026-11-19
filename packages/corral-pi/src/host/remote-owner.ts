@@ -20,7 +20,7 @@ export class RemoteOwner {
 
   get paused(): boolean { return this.record.paused; }
 
-  submit(input: SessionInput, images?: ImageContent[]): Promise<SubmitResult> {
+  submit(input: SessionInput, images?: ImageContent[], requestId?: string): Promise<SubmitResult> {
     return this.order(async () => {
       const loaded = loadOwnerAttachments(this.runtimeDir, input.attachments, this.host.session.model);
       if (input.origin === "auto" && this.paused) {
@@ -33,6 +33,7 @@ export class RemoteOwner {
       return this.host.submitLocal(
         { ...input, text: input.text + loaded.text, busyPolicy: resumed ? "steer" : input.busyPolicy },
         images ?? (loaded.images.length ? loaded.images : undefined),
+        input.origin === "owner" ? requestId : undefined,
       );
     });
   }

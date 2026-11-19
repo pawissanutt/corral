@@ -187,7 +187,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
         const { identity: _identity, ...state } = session.state();
         return { ...state, paused: owner.paused, owner_questions: session.pendingOwnerQuestions() };
       },
-      submit: input => owner.submit(input),
+      submit: (input, requestId) => owner.submit(input, undefined, requestId),
       answer: input => owner.answer(input),
       pause: () => owner.pause(),
       resume: () => owner.resume(),
