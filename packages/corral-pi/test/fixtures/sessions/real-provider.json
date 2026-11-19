@@ -1,0 +1,40 @@
+[
+  { "match": "list the files", "toolCalls": [
+    { "callId": "list-files", "name": "bash", "arguments": { "command": "ls -1; sleep 6" } }
+  ] },
+  { "match": "list the files", "text": "The project contains line.txt." },
+  { "match": "parity scenario", "toolCalls": [
+    { "callId": "read-line", "name": "read", "arguments": { "path": "line.txt" } }
+  ] },
+  { "match": "parity scenario", "toolCalls": [
+    { "callId": "ask-label", "name": "ask_user", "arguments": { "nonBlocking": true, "questions": [
+      { "question": "Which label should the parity recording use?", "options": ["Parity (recommended)", "Keep original"], "freeText": false }
+    ] } }
+  ] },
+  { "match": "parity scenario", "toolCalls": [
+    { "callId": "background-job", "name": "bash", "arguments": { "command": "printf 'Parity background job is running\\n'; exec sleep 300", "wait_ms": 0 } }
+  ] },
+  { "match": "parity scenario", "toolCalls": [
+    { "callId": "two-children", "name": "task", "arguments": { "agents": [
+      { "id": "fixture-reader", "kind": "slice", "title": "Read the starting line", "brief": "PARITY_CHILD_READER: Read line.txt and report the starting label without editing.", "owns": [] },
+      { "id": "fixture-checker", "kind": "slice", "title": "Check the project inputs", "brief": "PARITY_CHILD_CHECKER: Read line.txt and report whether the gate has a nonempty input without editing.", "owns": [] }
+    ] } }
+  ] },
+  { "match": "parity scenario", "text": "Independent inspection is underway. The label change waits for your answer." },
+  { "match": "PARITY_CHILD_READER", "toolCalls": [
+    { "callId": "reader-line", "name": "read", "arguments": { "path": "line.txt" } }
+  ] },
+  { "match": "PARITY_CHILD_READER", "text": "The starting label is original." },
+  { "match": "PARITY_CHILD_CHECKER", "toolCalls": [
+    { "callId": "checker-line", "name": "read", "arguments": { "path": "line.txt" } }
+  ] },
+  { "match": "PARITY_CHILD_CHECKER", "text": "line.txt is not empty; it supplies input to the gate." },
+  { "match": "Which label should the parity recording use?: Parity (recommended)", "toolCalls": [
+    { "callId": "edit-label", "name": "edit", "arguments": { "path": "line.txt", "edits": [{ "oldText": "original", "newText": "parity" }] } }
+  ] },
+  { "match": "Which label should the parity recording use?: Parity (recommended)", "toolCalls": [
+    { "callId": "commit-label", "name": "bash", "arguments": { "command": "git add -- line.txt && git commit -m 'Record the parity label'" } }
+  ] },
+  { "match": "Which label should the parity recording use?: Parity (recommended)", "text": "The parity label is committed." },
+  { "match": "Which label should the parity recording use?: Keep original", "text": "The original label is unchanged." }
+]

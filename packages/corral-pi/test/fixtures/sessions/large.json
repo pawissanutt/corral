@@ -1,0 +1,5 @@
+{
+  "children_count": 40,
+  "queue_count": 300,
+  "state": { "turn": 1, "open": true, "can": [{ "id": "children" }, { "id": "queue" }] }
+}
