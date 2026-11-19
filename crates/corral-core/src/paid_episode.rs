@@ -175,10 +175,6 @@ impl PaidEpisode {
             self.owners.len() == self.ledger.requests.len(),
             "paid reservation owner missing"
         );
-        ensure!(
-            self.ledger.totals().1 <= self.approval.allowance_nanos,
-            "paid ledger exceeds its finite allowance"
-        );
         let owners: std::collections::BTreeMap<_, _> = self
             .owners
             .iter()
@@ -262,13 +258,8 @@ impl PaidEpisode {
         }
         let id = request.request.clone();
         let reservation = request.clone();
-        let admitted = self.ledger.reserve(
-            request,
-            BudgetLimits {
-                max_tokens: None,
-                max_usd_nanos: Some(self.approval.allowance_nanos),
-            },
-        );
+        // Spending caps are disabled: reservations are recorded for usage reporting only.
+        let admitted = self.ledger.reserve(request, BudgetLimits::default());
         if admitted {
             self.owners.push(PaidRequestOwner {
                 request: id,

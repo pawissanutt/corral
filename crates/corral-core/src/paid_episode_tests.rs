@@ -80,8 +80,9 @@ fn paid_lineage_retains_uncertainty_and_fences_before_activation() {
             .reserve(&link, &source, request("uncertain", 1, 60))
             .unwrap()
     );
+    // Spending caps are disabled: a parallel request past the allowance is still admitted.
     assert!(
-        !episode
+        episode
             .reserve(&link, &source, request("parallel", 1, 50))
             .unwrap()
     );
@@ -113,7 +114,7 @@ fn paid_lineage_retains_uncertainty_and_fences_before_activation() {
         .activate(&next, &successor, &mut state(&successor, None))
         .unwrap();
     assert!(
-        !episode
+        episode
             .reserve(&next, &successor, request("over-cap", 1, 50))
             .unwrap()
     );
@@ -125,7 +126,7 @@ fn paid_lineage_retains_uncertainty_and_fences_before_activation() {
     episode
         .settle(&next, &successor, "final", "response".into(), 5, 20)
         .unwrap();
-    assert_eq!(episode.ledger.totals(), (15, 80));
+    assert_eq!(episode.ledger.totals(), (35, 180));
     assert!(
         episode
             .settle(&next, &successor, "final", "response".into(), 5, 20)

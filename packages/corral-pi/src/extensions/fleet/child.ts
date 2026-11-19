@@ -311,7 +311,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
       try {
         signal.throwIfAborted();
         const models = initialModel.connection ? await options.apiModels?.(initialModel) : options.models;
-        if (!models) throw new Error("API children require a Build with --max-usd");
+        if (!models) throw new Error("API children are unavailable outside a build session");
         const model = models.getModel(initialModel.provider, initialModel.model);
         if (!model) throw new Error(`model_unavailable: ${initialModel.provider}/${initialModel.model}`);
         if (execution?.serviceTier && (!research || initialModel.provider !== "openai-codex")) {

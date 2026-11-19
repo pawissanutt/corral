@@ -16,8 +16,9 @@ branch or belongs to another repository.
 
 The local record lives in `build/<id>/` under `--data-dir` (default
 `$XDG_DATA_HOME/corral/corral-pi`, or `~/.local/share/corral/corral-pi`).
-Use `--profile <name>` to select a workspace Pi profile. API spending uses the
-same host cap as other Pi sessions; see [corral-pi](corral-pi.md#api-spending-and-paid-continuation).
+Use `--profile <name>` to select a workspace Pi profile. An API model needs no
+spending cap; `--max-usd` sets an optional one, as in other Pi sessions. See
+[corral-pi](corral-pi.md#api-spending-and-paid-continuation).
 
 ## Verify and land
 
@@ -36,6 +37,17 @@ Open the exit choices with `/finish`, or ask the agent to offer them with
 
 Land needs a clean worktree with committed changes and no live child agents.
 With the review policy, it also needs an approving review of the change or an
-override reason you supply. If the rebase conflicts, verification fails or the
-base moves during verification, the session stays open. A stand-alone Git build
-can land onto its starting branch in a clean primary checkout without a Corral gate.
+override reason you supply. If the rebase conflicts or the base moves during
+verification, the session stays open. A stand-alone Git build can land onto its
+starting branch in a clean primary checkout without a Corral gate.
+
+When the gate fails during Land, the host hands the failed command and log to the
+session and waits for that turn to end; you do not have to steer it. Land then runs
+again by itself with a fresh rebase and gate, at most three times per Land choice.
+It resumes only if the session committed a fix, the worktree is clean and no child
+is live. Under the review policy the repaired commit also needs an approving review
+with every finding resolved, unless you gave an override reason when choosing Land;
+that reason then covers the repair commits too, and the build record says so.
+Stopping the repair turn, a turn that ends without a new commit, or a gate that
+still fails after the third repair ends Land as a failed exit with the session open.
+Rebase conflicts are not repaired automatically.

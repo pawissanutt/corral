@@ -318,6 +318,8 @@ export class HostSession {
   private readonly code: CodeRuntime | undefined;
   private turn = 0;
   private open = false;
+  /** Each is settled once, by the first turn numbered `from` or later that ends. */
+  private turnWaiters: { readonly from: number; settle(aborted: boolean): void }[] = [];
   private cancelRequested: number | undefined;
   private stopCause: TurnStopCause | undefined;
   private turnError: string | null = null;
@@ -399,6 +401,13 @@ export class HostSession {
       deliverToParent: async text => {
         const result = await this.submitAutomated(text);
         if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
+      },
+      repairLand: async text => {
+        const result = await this.submitLocal({ text, busyPolicy: "steer", origin: "auto" });
+        // A started prompt owns its turn; a steer queued into the open turn is answered there.
+        const from = result.disposition === "started" ? result.turn : result.disposition === "queued" && this.open ? this.turn : undefined;
+        if (from === undefined) throw new Error(`Land repair reached no turn: ${result.reason ?? result.disposition}`);
+        return new Promise(resolve => { this.turnWaiters.push({ from, settle: aborted => resolve({ aborted }) }); });
       },
       shellRefusal: options.modules.role.shellRefusal, changed: () => {
         this.liveEvents.observeFleet(this.buildControls?.fleet.snapshot());
@@ -724,7 +733,6 @@ export class HostSession {
 
   private apiCatalog(connection: ApiConnectionId, model: string, effort?: string): Promise<ApiCatalog> {
     const { modules, spending, apiFetch } = this.options;
-    if (!spending) throw new Error("API models require --max-usd");
     const provider = CONNECTIONS[connection].provider;
     const key = JSON.stringify([connection, model, effort]);
     let catalog = this.apiCatalogs.get(key);
@@ -756,9 +764,6 @@ export class HostSession {
     const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
     const api = isApiConnection(connection);
     if (options.spending && !api && route.lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
-    if (options.build?.settings.profiles.some(profile => profile.connection) && !options.spending) {
-      throw new Error("API children require a Build with --max-usd");
-    }
     const direct = api ? await host.apiCatalog(connection, options.model, options.effort) : undefined;
     const subscriptions = direct ? undefined : options.build?.session.bare
       ? await bareProviders(options.modules.auth, route.id)
@@ -1264,6 +1269,9 @@ export class HostSession {
     this.options.herdr?.turnEnded();
     this.commands?.flush();
     this.turnFacts.finish(this.turn);
+    const due = this.turnWaiters.filter(waiter => waiter.from <= this.turn);
+    this.turnWaiters = this.turnWaiters.filter(waiter => waiter.from > this.turn);
+    for (const waiter of due) waiter.settle(aborted);
   }
 
   private checkpoint(phase: "start" | "end"): void {

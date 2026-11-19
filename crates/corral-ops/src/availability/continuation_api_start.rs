@@ -63,8 +63,9 @@ pub(super) fn approved(
 ) -> Result<()> {
     let config = store.config_layers()?.config()?;
     for profile in config.profiles.keys() {
+        // Spending caps are disabled: an approval/allowance edit keeps the episode resumable.
         if let Ok(approval) = approval(&config, profile, episode.root.role)
-            && approval == episode.approval
+            && approval.candidates == episode.approval.candidates
             && approval.candidates.as_slice() == std::slice::from_ref(binding)
         {
             return Ok(());
@@ -159,9 +160,9 @@ pub(crate) fn prepare_launch(
         let successor = PaidBinding { container: container.clone(), generation, binding: binding.clone() };
         let link = match ctx.store.paid_episode_for_root(&root)? {
             Some(episode) => {
-                ensure!(episode.approval == approval && matches!(&episode.phase,
+                ensure!(episode.approval.candidates == approval.candidates && matches!(&episode.phase,
                     PaidPhase::Prepared { successor: pending, carry: None } if pending == &successor),
-                    "paid episode already exists, closed or exhausted; cannot refresh allowance");
+                    "paid episode already exists or is closed; resume it through its continuation");
                 PaidLink { episode: episode.id, epoch: episode.epoch }
             }
             None => ctx.store.create_paid_episode(root.clone(), approval.clone(), successor.clone())?,

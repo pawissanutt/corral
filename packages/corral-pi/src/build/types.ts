@@ -342,9 +342,10 @@ export interface ExitRecord {
 
 /**
  * `pending`: the owner is choosing. `rebasing`, `verifying` and `landing` are the steps of `land`:
- * rebase onto the base branch, the full gate on that head, then the fast-forward.
+ * rebase onto the base branch, the full gate on that head, then the fast-forward. `repairing`: that
+ * gate failed and the session is fixing it; `land` runs again when its turn ends.
  */
-export type ExitPhase = "none" | "pending" | "rebasing" | "verifying" | "landing" | "kept" | "landed" | "failed";
+export type ExitPhase = "none" | "pending" | "rebasing" | "verifying" | "repairing" | "landing" | "kept" | "landed" | "failed";
 
 export interface ExitState {
   readonly phase: ExitPhase;

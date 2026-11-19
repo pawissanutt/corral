@@ -18,6 +18,7 @@ const MESSAGE_MAX_BYTES: usize = 32 * 1024;
 
 #[path = "pi_build_profiles.rs"]
 mod profiles;
+pub(crate) use profiles::mixed_api;
 #[cfg(unix)]
 #[path = "pi_build_supervisor.rs"]
 mod supervisor;
@@ -97,7 +98,7 @@ fn model(
             .as_ref()
             .or(config.assistant.agent.as_ref())
             .unwrap_or(&config.pm.agent);
-        let route = profiles::resolve(config, name, args, false)?;
+        let route = profiles::resolve(config, name, args)?;
         return Ok((route.provider, route.model, route.effort));
     }
     let provider = args.provider.as_deref().unwrap_or(DEFAULT_PROVIDER);
@@ -334,13 +335,13 @@ fn command(
         .unwrap_or_default();
     let recorded_paid = recorded.as_ref().is_some_and(|route| route.paid.is_some());
     let route = if let Some(name) = &args.profile {
-        profiles::resolve(profile_config, name, args, bare)?
+        profiles::resolve(profile_config, name, args)?
     } else if let Some(route) = recorded {
-        profiles::validate_recorded(profile_config, &route, bare)?;
+        profiles::validate_recorded(profile_config, &route)?;
         profiles::override_recorded(route, args)?
     } else if workspace.is_some() && !bare {
         let name = config.assistant.agent.as_ref().unwrap_or(&config.pm.agent);
-        profiles::resolve(&config, name, args, false)?
+        profiles::resolve(&config, name, args)?
     } else {
         let (provider, model, effort) = if bare {
             bare_model(args)?
@@ -362,7 +363,8 @@ fn command(
     let provider = route.provider.clone();
     let model = route.model.clone();
     let effort = route.effort.clone();
-    if route.paid.is_some() && workspace.is_none() {
+    // Bare API sessions run without a ledger; spending caps are disabled.
+    if route.paid.is_some() && workspace.is_none() && !bare {
         return Err(refuse(
             "paid_admission_required",
             "metered Build profiles require a corral workspace for durable spending accounting",
@@ -400,41 +402,60 @@ fn command(
             .is_some_and(|ledger| ledger.mixed.is_some()),
         _ => false,
     };
-    let mixed = config
-        .build
-        .api
-        .as_ref()
-        .filter(|_| workspace.is_some() && !bare && (args.resume.is_none() || retained_mixed));
+    let api = (workspace.is_some() && !bare && (args.resume.is_none() || retained_mixed))
+        .then(|| mixed_api(&config))
+        .flatten();
+    let mut mixed = api.as_deref();
     anyhow::ensure!(
         !recorded_mixed || retained_mixed,
         "mixed Build allowance is missing; resume cannot create a new balance"
     );
-    profiles::require_host(&assets, false, false, mixed.is_some())?;
+    let mut child_routes = std::collections::BTreeMap::new();
+    let mut paid_routes = std::collections::BTreeMap::new();
+    if let Some(api) = mixed {
+        let admitted = (|| -> Result<()> {
+            profiles::require_host(&assets, false, false, true)?;
+            for (preset, name) in &api.profiles {
+                let child = profiles::resolve(profile_config, name, &BuildArgs::default())?;
+                let binding = child
+                    .binding
+                    .filter(|binding| binding.connection.api_key())
+                    .context(
+                        "mixed Build child profile must use an explicitly approved API route",
+                    )?;
+                super::connections::compatible(&assets, &binding)?;
+                super::hooks::preflight::connection_credential(data_root, binding.connection)?;
+                paid_routes.insert(name.clone(), binding.clone());
+                child_routes.insert(preset, binding);
+            }
+            Ok(())
+        })();
+        match admitted {
+            // A derived default must not stop a Build that would start without it. A resumed
+            // mixed Build has a ledger to honour, so it refuses like a configured approval.
+            Err(error) if config.build.api.is_none() && !retained_mixed => {
+                eprintln!(
+                    "corral build: default API child routes are unavailable, so children keep \
+                     their configured routes: {error:#}"
+                );
+                child_routes.clear();
+                paid_routes.clear();
+                mixed = None;
+            }
+            admitted => admitted?,
+        }
+    }
     anyhow::ensure!(
         !retained_mixed || mixed.is_some(),
         "mixed Build approval was revoked"
     );
-    let mut child_routes = std::collections::BTreeMap::new();
-    let mut paid_routes = std::collections::BTreeMap::new();
-    if let Some(api) = mixed {
-        for (preset, name) in &api.profiles {
-            let child = profiles::resolve(profile_config, name, &BuildArgs::default(), false)?;
-            let binding = child
-                .binding
-                .filter(|binding| binding.connection.api_key())
-                .context("mixed Build child profile must use an explicitly approved API route")?;
-            super::connections::compatible(&assets, &binding)?;
-            super::hooks::preflight::connection_credential(data_root, binding.connection)?;
-            paid_routes.insert(name.clone(), binding.clone());
-            child_routes.insert(preset, binding);
-        }
-        if let Some(binding) = route
+    if mixed.is_some()
+        && let Some(binding) = route
             .binding
             .as_ref()
             .filter(|binding| binding.connection.api_key())
-        {
-            paid_routes.insert(route.name.clone(), binding.clone());
-        }
+    {
+        paid_routes.insert(route.name.clone(), binding.clone());
     }
     let profiles: Vec<_> = config
         .build
@@ -475,7 +496,7 @@ fn command(
         .profiles
         .keys()
         .filter_map(|name| {
-            profiles::resolve(profile_config, name, &BuildArgs::default(), bare)
+            profiles::resolve(profile_config, name, &BuildArgs::default())
                 .ok()
                 .map(|route| json!(route))
         })
@@ -538,7 +559,7 @@ fn command(
         {
             return Err(refuse(
                 "paid_admission_required",
-                "paid Build route is sticky; selecting another profile cannot refresh its allowance",
+                "paid Build route is sticky; resume it with its original profile",
             ));
         }
         let paid = if let Some(api) = mixed {

@@ -60,10 +60,11 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   const provider = config.provider ?? "openai-codex";
   const connection = resolveConnection(provider, config.connection ?? config.binding?.connection);
   const api = isApiConnection(connection);
+  // A bare API session uses its exact API connection, not the bare subscription providers.
   if (overrides.build?.session.bare && !api) requireBareProvider(provider);
   if (config.maxUsd !== undefined && !api && PROVIDERS[provider].lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
+  // A spending cap is optional: without --max-usd an API session records its usage and nothing stops it.
   const spending = Spending.open(config.local.dir, config);
-  if (api && !spending) throw new Error("API models require --max-usd");
   if (spending && !api && PROVIDERS[provider].lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
   restrictEnvironment(process.env, provider);
   if (config.summary?.provider === "amazon-bedrock") restrictEnvironment(process.env, "amazon-bedrock");

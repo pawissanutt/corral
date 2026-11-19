@@ -15,7 +15,7 @@ pub mod agent_capabilities;
 pub use agent_capabilities::{AgentCfg, AgentUi};
 mod attention;
 mod build;
-pub use build::{BuildCfg, BuildExit, BuildProfileCfg};
+pub use build::{BuildApiCfg, BuildCfg, BuildExit, BuildProfileCfg};
 mod pm;
 pub use pm::{PmCfg, PmGuardCfg};
 mod search;

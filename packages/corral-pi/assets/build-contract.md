@@ -108,6 +108,14 @@ The owner alone chooses Keep, Iterate or Land. Keep records the result and retai
 branch; Iterate returns to this session; Land rebases, runs the project's configured
 gate on the rebased worktree, and locally fast-forwards the base branch. Follow the
 in-session review policy for the candidate.
+
+When the gate fails during the owner's Land, the host sends a `[corral build] Land
+stopped` message naming the failed command and log. It is a host message for the Land the
+owner already chose, not a new owner instruction. Fix the cause, commit, and under review
+policy without an override get an approving build_review with resolved findings for the
+new head. Do not call build_finish: when that turn ends with a new commit and a clean
+worktree the host runs Land again, for a bounded number of repairs. If you cannot fix it,
+say why and end the turn without committing, and Land stops for the owner.
 <!-- /corral-only -->
 <!-- bare-only -->
 The owner alone chooses the exit: Keep retains this directory and any branch, and Iterate

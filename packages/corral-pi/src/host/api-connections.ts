@@ -12,7 +12,7 @@ import { observeUsage } from "./model-usage.ts";
 import { guardedFetch } from "./restrict.ts";
 import { normalizeFailure, withProviderFailures } from "./provider-failure.ts";
 
-/** A named API route has its own credentials and transport but shares the host's spending limit. */
+/** A named API route has its own credentials and transport and shares the host's spending cap, when it has one. */
 export interface ApiCatalog {
   readonly models: ModelRuntime;
   readonly model: Model<Api>;
@@ -20,7 +20,7 @@ export interface ApiCatalog {
 
 export async function createApiCatalog(route: {
   connection: ApiConnectionId; model: string; effort?: string; credentials: CredentialStore; send: Fetch;
-  spending: Spending; report(usage: ModelUsage): void;
+  spending: Spending | undefined; report(usage: ModelUsage): void;
 }): Promise<ApiCatalog> {
   const { connection, credentials, spending } = route;
   const providerId = CONNECTIONS[connection].provider;
@@ -46,7 +46,7 @@ export async function createApiCatalog(route: {
     const apiKey = await key();
     let refusal: string | undefined;
     const fetch: Fetch = async (input, init) => {
-      try { spending.beforeRequest(model); }
+      try { spending?.beforeRequest(model); }
       catch (error) {
         // Preserve a local refusal even if the SDK replaces the fetch error with connection prose.
         refusal = error instanceof Error ? error.message : SPENDING_CAP_REACHED;

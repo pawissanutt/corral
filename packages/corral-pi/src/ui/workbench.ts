@@ -140,6 +140,7 @@ function exitStatus(phase: BuildPanelState["exit"]["phase"], docked: boolean): H
     case "pending": return docked ? undefined : { long: "exit choice pending", short: "choose exit", tone: "warning", clickable: true };
     case "rebasing": return quiet("Working · rebase", "rebase");
     case "verifying": return quiet("Working · full gate", "gate");
+    case "repairing": return quiet("Working · gate repair", "repair");
     case "landing": return quiet("Working · land", "land");
     case "kept": return quiet("Idle · kept on branch", "kept");
     case "landed": return quiet("Idle · landed", "landed");

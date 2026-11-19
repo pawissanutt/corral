@@ -138,16 +138,20 @@ fn paid_budget_native_lineage_preserves_sdk_estimates_and_crash_reservations() {
                 fx.ctx.store.save_paid_episode(&episode)
             })
             .unwrap();
-        let (request, nanos, expected) = if index == 1 {
-            ("paid-uncertain", 60, true)
+        // Spending caps are disabled: a request past the allowance is still admitted.
+        let (request, nanos, reserved) = if index == 1 {
+            ("paid-uncertain", 60, 60)
         } else {
-            ("too-expensive", 50, false)
+            ("over-allowance", 50, 110)
         };
         let input = event(&host, 1, "reserve", request, nanos, false);
         let answer = committed(&send(&fx, &input, "event"));
-        assert_eq!(answer.result["admitted"], expected);
+        assert_eq!(answer.result["admitted"], true);
         assert_eq!(answer.result["subscription_estimate_nanos"], 999);
-        assert_eq!(answer.result["paid"]["consumed_or_reserved_nanos"], 60);
+        assert_eq!(
+            answer.result["paid"]["consumed_or_reserved_nanos"],
+            reserved
+        );
         assert!(matches!(
             send(&fx, &input, "event"),
             CallResponse::Receipt { replayed: true, .. }
@@ -171,8 +175,8 @@ fn paid_budget_native_lineage_preserves_sdk_estimates_and_crash_reservations() {
         "event",
     ));
     let canonical = fx.ctx.store.paid_episode(&active_link.episode).unwrap();
-    assert_eq!(canonical.ledger.totals(), (20, 80));
-    assert_eq!(canonical.ledger.requests.len(), 2);
+    assert_eq!(canonical.ledger.totals().1, 130);
+    assert_eq!(canonical.ledger.requests.len(), 3);
     assert_eq!(canonical.ledger.requests[0].response, None);
     assert_eq!(canonical.switches, 1);
     assert_eq!(
@@ -214,7 +218,7 @@ fn paid_budget_native_lineage_preserves_sdk_estimates_and_crash_reservations() {
         .budget
         .requests
         .len(),
-        3
+        4
     );
 }
 
