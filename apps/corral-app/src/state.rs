@@ -113,6 +113,9 @@ pub struct AppState {
     /// it to: the list's Enter opens the selected task only while the focus is on its row (or
     /// nowhere), so Enter on a focused Waiting toggle or another row presses that control.
     pub focused_row: Signal<Option<String>>,
+    /// The Settings section open on the phone's stack, which its shell keeps; the address
+    /// names it.
+    pub phone_section: Signal<Option<SettingsSection>>,
     /// Press-opened menus open now: the terminal's key line gives a menu's keys while any is.
     pub menus: Signal<u32>,
     key_focus: Signal<keys::KeyFocus>,
@@ -265,6 +268,7 @@ impl AppState {
             focus_root: element_ref(),
             list_keys: element_ref(),
             focused_row: signal(None),
+            phone_section: signal(None),
             menus: signal(0),
             key_focus: signal(keys::KeyFocus::default()),
         };

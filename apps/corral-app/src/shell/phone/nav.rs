@@ -90,7 +90,21 @@ impl Nav {
         };
         nav.follow();
         nav.track_drawn();
+        nav.tell_section();
         nav
+    }
+
+    /// Tells the app which Settings section the stack has open, for the address to name.
+    fn tell_section(self) {
+        effect(move || {
+            let section = self.stack.with(|s| {
+                s.iter().rev().find_map(|entry| match entry {
+                    Entry::Section(section) => Some(*section),
+                    Entry::Page(_) | Entry::Destination(_) | Entry::Projects => None,
+                })
+            });
+            self.app.phone_section.set(section);
+        });
     }
 
     /// Follows the model's navigation. The palette's closing marks the push right after it as

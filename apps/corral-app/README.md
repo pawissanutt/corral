@@ -122,8 +122,9 @@ In a browser the address names the place shown, so a reload or a link opens ther
 
 On the desktop every destination or page visited is an entry of the browser's history, so Back
 and Forward step through them; walking a list only rewrites the current entry. The phone's
-pushed pages are history entries already, so there the address only follows, and its More and
-Settings lists are not named: a reload inside a Settings section returns to the Settings list.
+pushed pages are history entries already, so there the address only follows; its Settings list
+is `/settings`, and its More and Projects lists are not named (the address keeps the last
+destination).
 A page's own tabs, filters and scroll position are not in the address. The site's root opens
 the last destination, and an unpaired browser opens Settings › Connection whatever the path.
 The sample preview is not restored, so a reload at one of its records shows what corrald has
