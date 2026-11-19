@@ -33,7 +33,7 @@ use crate::ui::kit::overlay::counted;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-use super::Ask;
+use super::{Ask, PHONE_CHIP, chip_slop};
 
 /// The field's test id.
 const SESSION_FIELD: &str = "field-message";
@@ -352,7 +352,9 @@ fn stop_button(app: AppState, stop: StopButton) -> AnyElement {
 }
 
 /// The bar under the field: the model and effort as the picker's pill, the receiver, then
-/// (except on the phone, whose one button sits beside the field) Queue and Send or Steer.
+/// (except on the phone, whose one button sits beside the field) Queue and Send or Steer. On a
+/// phone the model, the effort and the receiver are compact chips on one row, which scrolls
+/// sideways rather than wrapping when it does not fit.
 fn bar(
     app: AppState,
     id: Id,
@@ -369,9 +371,8 @@ fn bar(
         ask.is_none() || composer.with(|c| c.as_ref().is_some_and(|c| c.model.is_some()))
     });
     let picks = id.clone();
-    view()
+    let chips = view()
         .flex_row()
-        .flex_wrap()
         .items_center()
         .gap(px(if form == Form::Terminal { 16.0 } else { 8.0 }))
         .child(dynamic(move || {
@@ -384,7 +385,16 @@ fn bar(
             receiver.get().map(|pill| {
                 untracked(|| receiver_menu(app, pill.label, pill.choices, pill.unavailable))
             })
-        }))
+        }));
+    if form == Form::Phone {
+        return scroll()
+            .horizontal()
+            .flex_shrink_0()
+            .child(chips.flex_shrink_0().py(px(7.0)))
+            .into_element();
+    }
+    chips
+        .flex_wrap()
         .child(view().flex_1().min_w(px(0.0)))
         .child(dynamic(move || {
             buttons
@@ -467,22 +477,38 @@ fn receiver_menu(
         .min_w(px(0.0))
         .into_element();
     }
+    // On a phone the chip drops the disclosure mark and keeps a full touch target by hit area.
+    let shown = if form == Form::Phone {
+        label
+            .trim_end_matches(" ▾")
+            .trim_end_matches('▾')
+            .trim_end()
+            .to_owned()
+    } else {
+        label.clone()
+    };
     let trigger = view()
         .test_id("btn-receiver")
         .role(AccessibilityRole::Button)
         .label(format!("Receiver {label}"))
         .flex_row()
         .items_center()
+        .flex_shrink_0()
         .cursor_pointer()
         .when(form != Form::Terminal, |t| {
             t.px(px(8.0))
-                .h(px(24.0))
+                .h(px(if form == Form::Phone {
+                    PHONE_CHIP
+                } else {
+                    24.0
+                }))
                 .rounded(px(6.0))
                 .border_1()
                 .border_color(color(Token::Rule2))
                 .hover(|s| s.bg(color(Token::Hover)))
         })
-        .child(small(form, label, color(Token::Ink)));
+        .when(form == Form::Phone, |t| t.hit_slop(chip_slop()))
+        .child(small(form, shown, color(Token::Ink)));
     menu()
         .popup_style(move |s| {
             let s = s

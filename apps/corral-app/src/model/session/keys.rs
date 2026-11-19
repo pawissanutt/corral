@@ -390,10 +390,13 @@ pub fn legend(focus: Focus, tab: Tab, working: bool) -> Vec<(&'static str, &'sta
     legend
 }
 
-/// The bindings of the part whose view has the keys on `tab`, or of the sidebar.
+/// The bindings of the part whose view has the keys on `tab`, or of the sidebar, in the part's
+/// order and one per action: a second key for the same action (↓ beside `j`) only takes the
+/// line's room from the next action.
 fn part_legend(focus: Focus, tab: Tab) -> Vec<(&'static str, &'static str)> {
     let sidebar = focus == Focus::Sidebar;
-    PARTS
+    let mut legend: Vec<(&'static str, &'static str)> = Vec::new();
+    for binding in PARTS
         .iter()
         .filter(|part| {
             if sidebar {
@@ -403,8 +406,12 @@ fn part_legend(focus: Focus, tab: Tab) -> Vec<(&'static str, &'static str)> {
             }
         })
         .flat_map(|part| (part.keys)())
-        .map(|binding| (binding.cap, binding.label))
-        .collect()
+    {
+        if !binding.label.is_empty() && !legend.iter().any(|(_, label)| *label == binding.label) {
+            legend.push((binding.cap, binding.label));
+        }
+    }
+    legend
 }
 
 /// The legend for what has the keys on the page `cx` reads, showing `tab`: an open picker, the

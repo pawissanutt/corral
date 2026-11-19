@@ -22,6 +22,7 @@ use crate::model::session::{
 use crate::model::{Form, Id};
 use crate::state::AppState;
 use crate::ui::atoms::control_height;
+use crate::ui::composer::{PHONE_CHIP, chip_slop};
 use crate::ui::kit::button::seg;
 use crate::ui::kit::marks::{hue_ink, mark};
 use crate::ui::term;
@@ -41,20 +42,21 @@ fn small(form: Form, words: Text, mono: bool) -> Text {
         Form::Terminal => words,
         Form::Phone => words
             .font_family(if mono { FONT_MONO } else { FONT_TEXT })
-            .text_size(px(14.0)),
+            .text_size(px(13.0)),
         Form::Desktop => words
             .font_family(if mono { FONT_MONO } else { FONT_TEXT })
             .text_size(px(if mono { 11.5 } else { 12.0 })),
     }
 }
 
-/// A pill's face: a terminal's band, a phone's full touch target, the desktop's quiet outline.
+/// A pill's face: a terminal's band, the desktop's quiet outline, and on a phone a compact chip
+/// whose touch target stays full height by its hit area.
 fn face(form: Form, face: View) -> View {
     match form {
         Form::Terminal => face.px(term::cells(1.0)).bg(color(Token::Surface)),
         Form::Desktop | Form::Phone => {
             let (height, pad, radius) = if form == Form::Phone {
-                (44.0, 12.0, 10.0)
+                (PHONE_CHIP, 10.0, 8.0)
             } else {
                 (control_height(24.0), 8.0, 6.0)
             };
@@ -69,8 +71,19 @@ fn face(form: Form, face: View) -> View {
                         .outline_color(color(Token::Focus))
                         .outline_offset(px(2.0))
                 })
+                .when(form == Form::Phone, |face| face.hit_slop(chip_slop()))
         }
     }
+}
+
+/// The model's words without its provider (`claude-sonnet-4-6`, not
+/// `anthropic/claude-sonnet-4-6`), for the phone's chip; the full id stays in its label.
+fn without_provider(words: &str) -> String {
+    words
+        .split(" → ")
+        .map(|part| part.rsplit_once('/').map_or(part, |(_, model)| model))
+        .collect::<Vec<_>>()
+        .join(" → ")
 }
 
 /// The model pill and the effort control of the session `id`'s composer: the model the host
@@ -97,6 +110,14 @@ pub(crate) fn session_pill(
             },
             None => format!("model not reported{DISCLOSURE}"),
         })
+    });
+    let shown = computed(move || {
+        let words = words.get();
+        if form == Form::Phone {
+            without_provider(&words)
+        } else {
+            words
+        }
     });
     let muted =
         computed(move || model.with(|m| m.as_ref().is_none_or(|m| m.unavailable.is_some())));
@@ -139,7 +160,7 @@ pub(crate) fn session_pill(
         .child(
             small(
                 form,
-                text(move || words.get())
+                text(move || shown.get())
                     .number_of_lines(1u32)
                     .truncate()
                     .text_color(move || {
@@ -214,13 +235,17 @@ fn effort_button(app: AppState, id: Id, level: String) -> AnyElement {
         .on_context_menu(move |_: &ContextMenuEvent| list_too())
         .child(small(
             form,
-            text(format!("effort {level} ↻"))
-                .number_of_lines(1u32)
-                .text_color(color(if form == Form::Terminal {
-                    Token::Ink
-                } else {
-                    Token::Ink2
-                })),
+            text(if form == Form::Phone {
+                level.clone()
+            } else {
+                format!("effort {level} ↻")
+            })
+            .number_of_lines(1u32)
+            .text_color(color(if form == Form::Terminal {
+                Token::Ink
+            } else {
+                Token::Ink2
+            })),
             false,
         ));
     face(form, face_view).into_element()
