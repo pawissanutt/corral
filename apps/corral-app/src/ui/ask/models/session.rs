@@ -89,7 +89,8 @@ fn without_provider(words: &str) -> String {
 /// The model pill and the effort control of the session `id`'s composer: the model the host
 /// reports (`→ next` until it takes a pending one), pressing it opens the model list; the
 /// effort, pressing it cycles the levels, holding it (or the secondary press) opens their list.
-/// Nothing for the effort when the model has no levels.
+/// Nothing for the effort when the model has no levels. While an agent's conversation is open
+/// both are that agent's: the pill opens its model choices and the effort is words only.
 pub(crate) fn session_pill(
     app: AppState,
     id: Id,
