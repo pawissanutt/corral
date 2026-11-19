@@ -3,7 +3,7 @@
 //! agent works Enter steers the running turn and Queue holds the text for after it. The send's
 //! command id is the input id the host and the transcript keep (`echo`). A capability the host
 //! declares unavailable shows its control muted with the host's reason; one it does not declare
-//! is not drawn.
+//! is not drawn. While the dock asks for the owner's reason or answer, Enter gives it instead.
 
 use corral_protocol::session_state::SendPolicy;
 
@@ -12,6 +12,7 @@ use crate::model::daemon::Link;
 use crate::model::hue::Hue;
 
 use super::activity::{self, ActivityLine};
+use super::dock::Compose;
 use super::echo::{self, EchoState};
 use super::{Action, Can, Cx, Host, SessionRole};
 
@@ -35,21 +36,28 @@ pub struct SessionComposer {
     pub keys: Vec<(&'static str, &'static str)>,
 }
 
-/// `Message → parent · last input queued`.
+/// `Message → parent · last input queued`; `Message → land on main · your reason` (Held) while
+/// the composer gives a reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComposerTitle {
     pub lead: &'static str,
-    /// `→ parent`, `→ a2`, `→ assistant`.
+    /// `→ parent`, `→ a2`, `→ assistant`, `→ a2 · answer`.
     pub to: String,
+    /// The receiver's tone: Held in reason mode, You in answer mode.
+    pub hue: Hue,
     /// The newest send's standing, while it is current: `last input queued`.
     pub last: Option<(Hue, String)>,
 }
 
-/// Whether Enter sends a new message or steers a running turn.
+/// What Enter does: send a new message, steer the running turn, or give what the dock asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendMode {
     Idle,
     Working,
+    /// Enter chooses the docked option with the text as the owner's reason.
+    Reason,
+    /// Enter answers a child's question with the text.
+    Answer,
 }
 
 /// `<provider>/<model> ▾`, as the host reports it; the picker that changes it is its own.
@@ -74,6 +82,8 @@ pub struct EffortControl {
 pub struct ReceiverPill {
     pub label: String,
     pub choices: Vec<ReceiverChoice>,
+    /// The host serves its children but cannot take a message for them now: muted, this reason.
+    pub unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -222,9 +232,16 @@ fn receiver(cx: &Cx<'_>) -> Option<ReceiverPill> {
             to: Some(child.id.clone()),
         },
     }));
+    let label = match &cx.ui.dock.compose {
+        Some(Compose::Answer { child, .. }) => {
+            format!("→ {} · answer ▾", child.as_deref().unwrap_or(parent))
+        }
+        _ => format!("→ {} ▾", to.unwrap_or(parent)),
+    };
     Some(ReceiverPill {
-        label: format!("→ {} ▾", to.unwrap_or(parent)),
+        label,
         choices,
+        unavailable: unavailable(cx.can("children")),
     })
 }
 
@@ -272,31 +289,47 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
     let working = working(cx);
     let refused = refusal(cx);
     let child = cx.ui.to.is_some();
-    let (send, queue) = if working {
-        let steer = SendButton {
-            id: "btn-steer",
-            label: "Steer",
-            policy: SendPolicy::Steer,
-            unavailable: refused.clone().or_else(|| unavailable(cx.can("steer"))),
-        };
-        let queue = (!matches!(cx.can("follow_up"), Can::Absent)).then(|| SendButton {
-            id: "btn-queue",
-            label: "Queue",
-            policy: SendPolicy::FollowUp,
-            unavailable: refused
-                .clone()
-                .or_else(|| child.then(|| "Only the parent takes queued follow-ups".into()))
-                .or_else(|| unavailable(cx.can("follow_up"))),
-        });
-        (steer, queue)
-    } else {
-        let send = SendButton {
-            id: "btn-send",
-            label: "Send",
-            policy: SendPolicy::Steer,
-            unavailable: refused,
-        };
-        (send, None)
+    let compose = cx.ui.dock.compose.as_ref();
+    let (send, queue) = match compose {
+        Some(mode) => {
+            let send = SendButton {
+                id: "btn-send",
+                label: match mode {
+                    Compose::Reason { .. } => "Send reason",
+                    Compose::Answer { .. } => "Send answer",
+                },
+                policy: SendPolicy::Steer,
+                unavailable: refused,
+            };
+            (send, None)
+        }
+        None if working => {
+            let steer = SendButton {
+                id: "btn-steer",
+                label: "Steer",
+                policy: SendPolicy::Steer,
+                unavailable: refused.clone().or_else(|| unavailable(cx.can("steer"))),
+            };
+            let queue = (!matches!(cx.can("follow_up"), Can::Absent)).then(|| SendButton {
+                id: "btn-queue",
+                label: "Queue",
+                policy: SendPolicy::FollowUp,
+                unavailable: refused
+                    .clone()
+                    .or_else(|| child.then(|| "Only the parent takes queued follow-ups".into()))
+                    .or_else(|| unavailable(cx.can("follow_up"))),
+            });
+            (steer, queue)
+        }
+        None => {
+            let send = SendButton {
+                id: "btn-send",
+                label: "Send",
+                policy: SendPolicy::Steer,
+                unavailable: refused,
+            };
+            (send, None)
+        }
     };
     let stop = (working && cx.controls().contains(&Control::Cancel)).then(|| StopButton {
         label: "Stop",
@@ -322,24 +355,48 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
         Can::Unavailable(why) => Some(Some(why)),
         Can::Absent | Can::Unknown => None,
     };
+    let (to, hue, mode, keys) = match compose {
+        Some(Compose::Reason { label, .. }) => (
+            format!("→ {} · your reason", label.to_lowercase()),
+            Hue::Held,
+            SendMode::Reason,
+            vec![("⏎", "send reason"), ("esc", "leave")],
+        ),
+        Some(Compose::Answer { child, .. }) => (
+            format!(
+                "→ {} · answer",
+                child.clone().unwrap_or_else(|| receiver_word(cx))
+            ),
+            Hue::You,
+            SendMode::Answer,
+            vec![("⏎", "send answer"), ("esc", "leave")],
+        ),
+        None => (
+            format!("→ {}", receiver_word(cx)),
+            Hue::Neutral,
+            if working {
+                SendMode::Working
+            } else {
+                SendMode::Idle
+            },
+            super::keys::legend(super::Focus::Composer, super::Tab::Chat, working),
+        ),
+    };
     Some(SessionComposer {
         title: ComposerTitle {
             lead: "Message",
-            to: format!("→ {}", receiver_word(cx)),
+            to,
+            hue,
             last: last(cx),
         },
         activity: activity::line(cx.state, cx.live, cx.feed),
         draft: cx.ui.draft.clone(),
-        mode: if working {
-            SendMode::Working
-        } else {
-            SendMode::Idle
-        },
+        mode,
         model,
         effort,
         receiver: receiver(cx),
         attachments,
-        keys: super::keys::legend(super::Focus::Composer, super::Tab::Chat, working),
+        keys,
         send,
         queue,
         stop,

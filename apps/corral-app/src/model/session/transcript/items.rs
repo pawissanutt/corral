@@ -1,6 +1,7 @@
 //! The transcript's item view-models beside [`super::Tool`]: rendered words, thinking, images,
-//! dividers, quiet marker rows, cards and the turn footer, and how much of a continued item the
-//! app holds. Every item the daemon's replay serializes maps to one of these; nothing is dropped.
+//! dividers, quiet marker rows, an `ask_user` answer, cards and the turn footer, and how much of
+//! a continued item the app holds. Every item the daemon's replay serializes maps to one of
+//! these or settles another (a job's journal settles its command's row).
 
 use crate::model::hue::Hue;
 use crate::model::review::ParsedHunk;
@@ -47,13 +48,16 @@ pub struct Prose {
 }
 
 /// The model's reasoning: muted under a `thinking` lead, so it never reads as the answer.
-/// Shown by default, as the terminal shows it; the owner can fold it to one row.
+/// Shown by default, as the terminal shows it; the owner can fold one block to a row, or hide
+/// every thinking block of the session (`hidden_all`), when the row shows them all again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Thinking {
     pub text: String,
     pub open: bool,
-    /// What the folded row says it hides (`12 lines`).
+    /// What the folded row says (`hidden · 12 lines`, `thinking hidden · Alt+H shows it`).
     pub hidden: String,
+    /// Every thinking block of the session is hidden: the row is the session-wide switch.
+    pub hidden_all: bool,
     pub more: More,
     pub streaming: bool,
     pub action: Action,
@@ -101,7 +105,8 @@ pub struct Divider {
 }
 
 /// A quiet row the host or the session adds beside the words: a glyph, then muted words
-/// (`○ model → opus`, `✗ provider error`). Opening it shows its full text and facts.
+/// (`○ model → opus`, `✗ provider error`), the time of day at the right. Opening it shows its
+/// full text and facts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Marker {
     /// `✓ ✗ ! ○ → ▲`: the shape says the state without its colour.
@@ -109,6 +114,12 @@ pub struct Marker {
     /// Neutral for a quiet row; error only for a failure, warning for a cut or a stall.
     pub hue: Hue,
     pub words: String,
+    /// The next step under a failure, muted (`Send a message to retry.`).
+    pub step: Option<String>,
+    /// Words kept as written (an error text nothing recognised): at most two rows folded.
+    pub verbatim: bool,
+    /// The time of day the row was recorded (`14:35`).
+    pub time: Option<String>,
     pub open: bool,
     pub body: Vec<Section>,
     pub more: More,
@@ -116,8 +127,44 @@ pub struct Marker {
     pub action: Option<Action>,
 }
 
-/// A titled card a presenter recorded (a Code Mode cell, a job, an owner question snapshot, a
-/// custom message): its text, and its complete data when opened.
+impl Marker {
+    /// A quiet row with nothing more to open.
+    pub(crate) fn quiet(glyph: &'static str, hue: Hue, words: String) -> Marker {
+        Marker {
+            glyph,
+            hue,
+            words,
+            step: None,
+            verbatim: false,
+            time: None,
+            open: false,
+            body: Vec::new(),
+            more: More::Whole,
+            action: None,
+        }
+    }
+}
+
+/// An `ask_user` answer on the owner's bubble: under `you answered`, each question muted on
+/// one row (the whole question once opened), then the chosen option bold and any further text.
+/// No request id shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answered {
+    pub answers: Vec<AnsweredQuestion>,
+    pub open: bool,
+    pub action: Action,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnsweredQuestion {
+    /// The whole question while open, else the sentence it asks; empty when none was recorded.
+    pub question: String,
+    pub choice: String,
+    pub more: Vec<String>,
+}
+
+/// A titled card a presenter recorded (a custom message, an extension's entry): its text, and
+/// its complete data when opened.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Card {
     pub title: String,

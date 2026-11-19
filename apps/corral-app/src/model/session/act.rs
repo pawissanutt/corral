@@ -1,5 +1,6 @@
 //! What the session page and its parts do, and the reducer over the per-session UI state: tabs,
-//! opened rows, transcript pages, the draft and sends, the receiver and run controls. Every
+//! opened rows, transcript pages, the draft and sends, the receiver and run controls; the dock's
+//! cards and queue, the sidebar and each tab's part, each handled by its own module. Every
 //! host or engine operation goes out as an effect; nothing is simulated here.
 
 use corral_protocol::assistant::SendAttachment;
@@ -14,7 +15,17 @@ use crate::model::hue::Hue;
 use crate::model::work::Record;
 use crate::model::{Id, Live};
 
-use super::{EMPTY_UI, EchoState, Focus, Sent, State, SubView, Tab, Ui, echo, tabs, transcript};
+use super::board::BoardAction;
+use super::changes::ChangesAction;
+use super::dock::DockAction;
+use super::proof::ProofAction;
+use super::sidebar::SidebarAction;
+use super::task::TaskAction;
+use super::usage::UsageAction;
+use super::{
+    EMPTY_UI, EchoState, Focus, Sent, State, SubView, Tab, Ui, board, changes, dock, echo, proof,
+    sidebar, tabs, task, transcript, usage,
+};
 
 /// What the session page and its parts do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,7 +35,7 @@ pub enum Action {
         session: Id,
         tab: Tab,
     },
-    /// Show a view inside the current tab, or none.
+    /// Show a view inside a tab (Usage under Chat, a child under Agents), or none.
     Sub {
         session: Id,
         sub: Option<SubView>,
@@ -90,6 +101,14 @@ pub enum Action {
     /// Open the task's Actions menu.
     TaskMenu(Id),
     Back,
+    /// The dock: its cards, the queue, the exit.
+    Dock(DockAction),
+    Sidebar(SidebarAction),
+    Changes(ChangesAction),
+    Board(BoardAction),
+    Usage(UsageAction),
+    Task(TaskAction),
+    Proof(ProofAction),
 }
 
 /// Whether a continuation should be fetched: it was never asked for, or its last read failed.
@@ -142,7 +161,7 @@ impl State {
         self.sessions.get(id).unwrap_or(&EMPTY_UI)
     }
 
-    fn ui_mut(&mut self, id: &Id) -> &mut Ui {
+    pub(super) fn ui_mut(&mut self, id: &Id) -> &mut Ui {
         self.sessions.entry(id.clone()).or_default()
     }
 
@@ -153,6 +172,9 @@ impl State {
             Action::Tab { session, tab } => {
                 let rows = tabs::rows(feed, session.as_str());
                 let ui = self.ui_mut(&session);
+                if tab == Tab::Chat {
+                    dock::leave(ui, feed.now);
+                }
                 if ui.tab == Tab::Chat || tab == Tab::Chat {
                     ui.seen = Some(rows);
                 }
@@ -166,7 +188,13 @@ impl State {
                 Vec::new()
             }
             Action::Sub { session, sub } => {
-                self.ui_mut(&session).sub = sub;
+                let ui = self.ui_mut(&session);
+                match &sub {
+                    Some(SubView::Usage) => ui.tab = Tab::Chat,
+                    Some(SubView::Agent(_)) => ui.tab = Tab::Agents,
+                    None => {}
+                }
+                ui.sub = sub;
                 Vec::new()
             }
             Action::Focus { session, focus } => {
@@ -279,12 +307,20 @@ impl State {
             Action::OpenLive(live) => vec![Effect::OpenLive(live)],
             Action::TaskMenu(task) => vec![Effect::VerbMenu(Record::Task(task))],
             Action::Back => vec![Effect::Back],
+            Action::Dock(action) => dock::act(self, action, feed),
+            Action::Sidebar(action) => sidebar::act(self, action, feed),
+            Action::Changes(action) => changes::act(self, action, feed),
+            Action::Board(action) => board::act(self, action, feed),
+            Action::Usage(action) => usage::act(self, action, feed),
+            Action::Task(action) => task::act(self, action, feed),
+            Action::Proof(action) => proof::act(self, action, feed),
         }
     }
 
     fn receiver(&mut self, session: &Id, to: Option<String>, feed: &Feed) {
         let now = feed.now;
         let ui = self.ui_mut(session);
+        dock::leave(ui, now);
         if ui.to == to {
             return;
         }
@@ -306,6 +342,9 @@ impl State {
         attachments: Vec<SendAttachment>,
         feed: &Feed,
     ) -> Vec<Effect> {
+        if let Some(effects) = dock::compose_send(self, &session, &text, feed) {
+            return effects;
+        }
         let text = text.trim().to_owned();
         if text.is_empty() && attachments.is_empty() {
             return Vec::new();
@@ -367,6 +406,7 @@ impl State {
                 id: scope.to_string(),
             }));
             ui.echoes.retain(|sent| !echo::retired(sent, page, feed));
+            dock::settle(ui, scope.as_str(), feed);
             let mut refused = Vec::new();
             for sent in ui.echoes.iter_mut().filter(|sent| !sent.told) {
                 match echo::state(sent, scope.as_str(), feed) {

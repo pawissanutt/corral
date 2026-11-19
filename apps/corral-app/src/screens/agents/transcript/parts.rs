@@ -1,19 +1,21 @@
-//! What every transcript row shares: the pressable head that opens a row (`btn-expand-<n>`),
-//! the state of a continued item (its complete content loading, or failed with a retry), and an
-//! opened row's sections: recorded text in a sunk well, diffs with the review's row anatomy,
-//! Markdown summaries.
+//! What every transcript row shares: the pressable head that opens a row (`btn-expand-<id>`),
+//! the state glyph (a spinner while it runs), the state of a continued item (its complete
+//! content loading, or failed with a retry), and an opened row's sections: recorded text in a
+//! sunk well, diffs with the review's row anatomy, Markdown summaries.
 
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::board::LineKind;
+use crate::model::board::{LineKind, Mark};
+use crate::model::hue::Hue;
 use crate::model::review::NumberedLine;
 use crate::model::session::Action;
-use crate::model::session::transcript::{More, Section};
+use crate::model::session::transcript::{More, Section, ToolState};
 use crate::screens::markdown::markdown;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
+use crate::ui::kit::marks::{hue_ink, mark};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
@@ -27,14 +29,14 @@ const GUTTER: f32 = 34.0;
 const SIGN: f32 = 14.0;
 
 /// `row` made pressable when there is something to open: a button that says what it opens and
-/// whether it shows, `btn-expand-<n>`, with the hover and focus of a row.
+/// whether it shows, `btn-expand-<id>`, with the hover and focus of a row.
 pub(super) fn pressable(
     app: AppState,
     row: View,
     action: Option<&Action>,
     label: String,
     open: bool,
-    n: usize,
+    id: &str,
 ) -> View {
     let Some(action) = action.cloned() else {
         return row;
@@ -46,7 +48,7 @@ pub(super) fn pressable(
             "{label}, {}",
             if open { "shown" } else { "hidden" }
         ))
-        .test_id(&format!("btn-expand-{n}"))
+        .test_id(&format!("btn-expand-{id}"))
         .on_press(move || run(app, action.clone()));
     if app.form == Form::Terminal {
         return row;
@@ -86,10 +88,46 @@ pub(super) fn small(app: AppState, words: impl Into<SharedString>, ink: Token) -
     }
 }
 
+/// Small words in a state's colour, muted when it has none.
+pub(super) fn tinted(app: AppState, words: impl Into<SharedString>, hue: Hue) -> Text {
+    let words = small(app, words, Token::Ink3);
+    if hue == Hue::Neutral {
+        words
+    } else {
+        words.text_color(hue_ink(hue))
+    }
+}
+
+/// A row's state: the running mark (a spinner in the terminal) while it is written or runs,
+/// else its glyph in its state's colour, so the shape says the state without the colour.
+pub(super) fn glyph(app: AppState, state: ToolState) -> AnyElement {
+    let Some(shape) = state.glyph() else {
+        return mark(app, Mark::Active, Hue::Neutral);
+    };
+    let ink = if state == ToolState::Waiting {
+        color(Token::Ink3)
+    } else {
+        hue_ink(state.hue())
+    };
+    let shown = text(shape)
+        .flex_shrink_0()
+        .text_color(ink)
+        .role(AccessibilityRole::Image)
+        .label(state.label());
+    if app.form == Form::Terminal {
+        return shown.into_element();
+    }
+    shown
+        .font_family(FONT_MONO)
+        .text_size(px(12.0))
+        .line_height(px(17.0))
+        .into_element()
+}
+
 /// Where a continued item's complete content stands, under its preview: on its way, or failed
-/// with why and a retry (`btn-retry-<n>`). `waiting` says a preview not yet asked for is about
+/// with why and a retry (`btn-retry-<id>`). `waiting` says a preview not yet asked for is about
 /// to be fetched on its own (words), rather than when the row opens.
-pub(super) fn state(app: AppState, more: &More, n: usize, waiting: bool) -> Option<AnyElement> {
+pub(super) fn state(app: AppState, more: &More, id: &str, waiting: bool) -> Option<AnyElement> {
     let words = match more {
         More::Whole => return None,
         More::Preview { size } if waiting => format!("Loading the rest · {size}…"),
@@ -121,7 +159,7 @@ pub(super) fn state(app: AppState, more: &More, n: usize, waiting: bool) -> Opti
                         app,
                         "Retry",
                         ButtonKind::Quiet,
-                        format!("btn-retry-{n}"),
+                        format!("btn-retry-{id}"),
                         move || run(app, retry.clone()),
                     ))
                     .into_element(),
@@ -135,6 +173,21 @@ pub(super) fn state(app: AppState, more: &More, n: usize, waiting: bool) -> Opti
 pub(super) fn hidden(count: Option<&str>, more: &More) -> Option<String> {
     let parts: Vec<&str> = count.into_iter().chain(more.size()).collect();
     (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+/// Where an opened row's or a nested block's content sits: two Cells in, or under the row's
+/// words on the page.
+pub(super) fn indented(app: AppState, body: impl IntoElement) -> AnyElement {
+    if app.form == Form::Terminal {
+        view().pl(term::cells(2.0)).child(body).into_element()
+    } else {
+        view()
+            .pl(px(18.0))
+            .pt(px(4.0))
+            .pb(px(6.0))
+            .child(body)
+            .into_element()
+    }
 }
 
 /// An opened row's sections, in order.
@@ -193,7 +246,7 @@ fn section(app: AppState, part: &Section) -> AnyElement {
 
 /// Recorded text as written, in the mono font: on the desktop a sunk well that scrolls sideways
 /// so columns stay aligned; on the phone it wraps; a terminal indents it two Cells.
-fn well(app: AppState, body: &str) -> AnyElement {
+pub(super) fn well(app: AppState, body: &str) -> AnyElement {
     match app.form {
         Form::Terminal => view()
             .pl(term::cells(2.0))
@@ -224,7 +277,7 @@ fn well(app: AppState, body: &str) -> AnyElement {
 }
 
 /// Code text: mono at the code size and line.
-fn code(content: impl Into<SharedString>) -> Text {
+pub(super) fn code(content: impl Into<SharedString>) -> Text {
     text(content.into())
         .font_family(FONT_MONO)
         .text_size(px(CODE))

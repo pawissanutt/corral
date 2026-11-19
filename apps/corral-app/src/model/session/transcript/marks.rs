@@ -1,14 +1,16 @@
 //! Everything in a replay that is not words or a tool row: images, the compaction and branch
-//! dividers, quiet marker rows (model and effort changes, bookmarks, stopped turns, provider
-//! errors, run marks, host notices), presenter cards and the assistant turn's footer. Quiet
-//! rows follow the terminal's rule: a glyph that says the state without its colour, muted
-//! words, and on opening the full text and the recorded facts.
+//! dividers, quiet rows (model and effort changes, bookmarks, stopped and failed turns, run
+//! marks, owner questions), presenter cards and the assistant turn's footer. Quiet rows follow
+//! the terminal's rule: a glyph that says the state without its colour, muted words, and on
+//! opening the full text and the recorded facts. A failed turn says what happened, what is
+//! lost and the next step, as `error-copy.ts` words it from the typed provider failure.
 
 use corral_protocol::detail::{SessionItem, SessionMessage};
 use serde_json::Value;
 
 use crate::model::hue::Hue;
 
+use super::journal::FACT_ENTRIES;
 use super::replay::{Cx, Rest, first_line, lines, size};
 use super::tool::{elapsed, pretty};
 use super::{Card, Divider, Footer, Marker, MessageItem, More, Picture, Section};
@@ -21,6 +23,23 @@ const IMAGE_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/w
 
 /// Stop reasons of a turn that ended as turns normally do; any other is said in the footer.
 const NORMAL_STOPS: [&str; 4] = ["stop", "toolUse", "tool_use", "end_turn"];
+
+/// The texts Pi and its providers give a turn the owner stopped.
+const STOP_TEXTS: [&str; 4] = [
+    "Operation aborted",
+    "Request was aborted",
+    "The operation was aborted.",
+    "Retry cancelled",
+];
+
+/// What a failed or stopped turn's row needs from the rest of its message.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Turn {
+    /// The reply had words before it stopped.
+    pub partial: bool,
+    /// Tool calls of the turn that did not run.
+    pub not_run: usize,
+}
 
 /// Recorded text under a label, unless there is none.
 fn text(label: &str, body: &str) -> Option<Section> {
@@ -150,12 +169,7 @@ fn decoded(data: &str) -> Option<u64> {
 
 /// An image the session recorded: drawn once its complete bytes are here and match the size
 /// the record states; until then named, with its size, and fetched when asked for.
-pub(super) fn picture(
-    item: &SessionItem,
-    _key: &str,
-    rest: Rest<'_>,
-    cx: Cx<'_>,
-) -> Option<Picture> {
+pub(super) fn picture(item: &SessionItem, rest: Rest<'_>, cx: Cx<'_>) -> Option<Picture> {
     let SessionItem::Image {
         media_type,
         size: bytes,
@@ -259,13 +273,11 @@ fn quiet(
     let open = cx.open(key);
     let opens = !body.is_empty() || !matches!(rest, Rest::Whole);
     Marker {
-        glyph,
-        hue,
-        words,
         open: open && opens,
         body: if open { body } else { Vec::new() },
         more: rest.more(cx),
         action: opens.then(|| rest.toggle(key, cx)),
+        ..Marker::quiet(glyph, hue, words)
     }
 }
 
@@ -277,22 +289,168 @@ fn headline(message: &str) -> String {
     }
 }
 
-/// A sentence with more lines than its row shows, and the recorded facts.
+/// The raw text and the recorded facts, shown opened, never cut.
 fn told(message: &str, facts: Option<&str>) -> Vec<Section> {
-    let multi = first_line(message).1 > 0;
     [
-        multi.then(|| text("message", message)).flatten(),
-        facts.and_then(|facts| text("facts", &pretty(facts))),
+        text("message", message),
+        facts.and_then(|facts| text("failure facts", &pretty(facts))),
     ]
     .into_iter()
     .flatten()
     .collect()
 }
 
-/// Model and effort changes, bookmarks, stopped turns and provider errors as quiet rows. Only
-/// a provider error takes the error colour; a stopped turn is never one.
-pub(super) fn marker(item: &SessionItem, key: &str, rest: Rest<'_>, cx: Cx<'_>) -> Option<Marker> {
+/// The connection's name as the owner knows it.
+fn connection(name: &str) -> String {
+    match name {
+        "openai-subscription" => "OpenAI subscription",
+        "openai-api" => "OpenAI API",
+        "anthropic-subscription" => "Claude subscription",
+        "anthropic-api" => "Anthropic API",
+        "amazon-bedrock" => "Amazon Bedrock",
+        other => other,
+    }
+    .to_owned()
+}
+
+/// A failed turn's sentence and next step, from the typed provider failure when the turn
+/// recorded one; an unknown text keeps its own words.
+fn failure(message: &str, facts: Option<&str>, turn: Turn) -> (String, Option<String>, bool) {
+    let lost = if turn.partial {
+        "The reply above stopped early."
+    } else {
+        "Nothing was lost."
+    };
+    let typed = facts.and_then(|facts| serde_json::from_str::<Value>(facts).ok());
+    let category = typed
+        .as_ref()
+        .and_then(|failure| failure.get("category").and_then(Value::as_str));
+    let Some(category) = category else {
+        let words = message.trim();
+        return if words.is_empty() {
+            (
+                format!("The turn failed and gave no reason. {lost}"),
+                Some("Send a message to retry.".to_owned()),
+                false,
+            )
+        } else {
+            (words.to_owned(), None, true)
+        };
+    };
+    let failure = typed.as_ref().unwrap_or(&Value::Null);
+    let name = connection(
+        failure
+            .get("connection")
+            .and_then(Value::as_str)
+            .unwrap_or("provider"),
+    );
+    let reference = failure
+        .get("request_ref")
+        .and_then(Value::as_str)
+        .map(|reference| format!(" (ref {})", reference.chars().take(8).collect::<String>()))
+        .unwrap_or_default();
+    let until = failure
+        .get("reset_at")
+        .and_then(Value::as_str)
+        .and_then(|at| at.parse::<jiff::Timestamp>().ok())
+        .map(|at| {
+            let local = at.to_zoned(jiff::tz::TimeZone::system());
+            format!("{:02}:{:02}", local.hour(), local.minute())
+        });
+    let model_scope = failure.get("scope").and_then(Value::as_str) == Some("model");
+    let not_sent = if turn.partial {
+        "The reply above stopped early."
+    } else {
+        "Nothing was sent to the model."
+    };
+    let (sentence, step) = match category {
+        "transient" => (
+            format!("{name} is overloaded or limiting requests{reference}. {lost}"),
+            match &until {
+                Some(until) => format!(
+                    "Wait until {until}, then send a message to retry, or choose another model."
+                ),
+                None => "Send a message to retry in a moment, or choose another model.".into(),
+            },
+        ),
+        "subscription_quota" => (
+            format!(
+                "The {name} usage limit{} is reached. {lost}",
+                if model_scope { " for this model" } else { "" }
+            ),
+            match &until {
+                Some(until) => {
+                    format!("It resets at {until}: wait until then, or choose another model.")
+                }
+                None => "Wait for the limit to reset, or choose another model.".into(),
+            },
+        ),
+        "auth" => (
+            format!("{name} refused the sign-in for this account. {lost}"),
+            "Sign in again, or choose another model.".into(),
+        ),
+        "billing" => (
+            format!(
+                "{name} refused the request: the account has no credit or plan for it. {lost}"
+            ),
+            "Check the account's billing, or choose another model.".into(),
+        ),
+        "invalid_request" => (
+            format!("{name} rejected the request as invalid{reference}. {lost}"),
+            "Sending it again fails the same way: compact the conversation, rephrase, or choose another model.".into(),
+        ),
+        "unavailable" => (
+            format!("This model is not available on the {name}. {lost}"),
+            "Choose another model.".into(),
+        ),
+        "local_budget" => (
+            format!("The request stopped because a budget limit was reached. {not_sent}"),
+            "Choose another model.".into(),
+        ),
+        "network_policy" => (
+            format!("This session's network policy blocked the request. {not_sent}"),
+            "The destination is not allowed here; retrying is blocked the same way.".into(),
+        ),
+        _ => (
+            format!("The {name} request failed and gave no reason{reference}. {lost}"),
+            "Send a message to retry, or choose another model.".into(),
+        ),
+    };
+    (sentence, Some(step), false)
+}
+
+/// A stopped turn: `stopped` (who stopped it is not recorded), `stopped: a budget limit was
+/// reached`, with the calls that did not run.
+fn stopped(message: &str, turn: Turn) -> String {
+    let mut words = if message.trim_start().starts_with("budget_exhausted") {
+        "stopped: a budget limit was reached".to_owned()
+    } else {
+        "stopped".to_owned()
+    };
+    match turn.not_run {
+        0 => {}
+        1 => words.push_str(" · 1 tool call did not run"),
+        n => words.push_str(&format!(" · {n} tool calls did not run")),
+    }
+    words
+}
+
+/// Model and effort changes, bookmarks, stopped turns and failed turns as quiet rows. Only a
+/// failure takes the error colour; a stopped turn is never one. Pi's own model and effort
+/// entries are not drawn where the host recorded its own model marks, which say both.
+pub(super) fn marker(
+    item: &SessionItem,
+    key: &str,
+    rest: Rest<'_>,
+    cx: Cx<'_>,
+    turn: Turn,
+) -> Option<Marker> {
     let (glyph, hue, words, body) = match item {
+        SessionItem::ModelChange { .. } | SessionItem::ThinkingLevelChange { .. }
+            if cx.journal.model_marks =>
+        {
+            return None;
+        }
         SessionItem::ModelChange { provider, model } => (
             "○",
             Hue::Neutral,
@@ -311,25 +469,69 @@ pub(super) fn marker(item: &SessionItem, key: &str, rest: Rest<'_>, cx: Cx<'_>) 
             },
             Vec::new(),
         ),
-        SessionItem::Aborted { message, facts } => (
-            "○",
-            Hue::Neutral,
-            headline(message),
-            told(message, facts.as_deref()),
-        ),
-        SessionItem::ProviderError { message, facts } => (
-            "✗",
-            Hue::Fail,
-            headline(message),
-            told(message, facts.as_deref()),
-        ),
+        SessionItem::Aborted { message, facts } => {
+            let known = message.trim().is_empty()
+                || STOP_TEXTS.contains(&message.trim())
+                || message.starts_with("Aborted after ");
+            (
+                "○",
+                Hue::Neutral,
+                stopped(message, turn),
+                if known {
+                    told("", facts.as_deref())
+                } else {
+                    told(message, facts.as_deref())
+                },
+            )
+        }
+        SessionItem::ProviderError { message, facts } => {
+            let (sentence, step, verbatim) = failure(message, facts.as_deref(), turn);
+            let mut row = quiet(
+                "✗",
+                Hue::Fail,
+                sentence,
+                told(message, facts.as_deref()),
+                key,
+                rest,
+                cx,
+            );
+            row.step = step;
+            row.verbatim = verbatim;
+            return Some(row);
+        }
         _ => return None,
     };
     Some(quiet(glyph, hue, words, body, key, rest, cx))
 }
 
-/// A presenter's card. Run marks, host notices, a cut reply and billing notices are quiet rows,
-/// as the terminal draws them; every other card is a titled card with its text and its data.
+/// An owner question the host recorded: `▲ asked you: …` while it waits, then how it ended.
+fn owner_question(data: &Value) -> Option<(&'static str, Hue, String)> {
+    let questions = data.get("questions").and_then(Value::as_array)?;
+    let first = questions
+        .first()
+        .and_then(|question| question.get("question"))
+        .and_then(Value::as_str)
+        .map(|question| first_line(question).0)?;
+    let more = match questions.len() {
+        0 | 1 => String::new(),
+        n => format!(" + {} more", n - 1),
+    };
+    Some(match data.get("status").and_then(Value::as_str) {
+        Some("pending") => ("▲", Hue::You, format!("asked you: {first}{more}")),
+        Some("answered") => ("○", Hue::Neutral, format!("you answered: {first}{more}")),
+        Some(status) => (
+            "○",
+            Hue::Neutral,
+            format!("question {status}: {first}{more}"),
+        ),
+        None => ("○", Hue::Neutral, format!("question: {first}{more}")),
+    })
+}
+
+/// A presenter's card. Run marks, a cut reply, owner questions, billing notices and a cell
+/// settled in the background are quiet rows, as the terminal draws them; the host's fact
+/// entries settle other rows and are not rows themselves; any other card is a titled card with
+/// its text and its data.
 pub(super) fn card(
     item: &SessionItem,
     key: &str,
@@ -344,6 +546,9 @@ pub(super) fn card(
     else {
         return None;
     };
+    if FACT_ENTRIES.contains(&title.as_str()) {
+        return None;
+    }
     let data = data.as_deref();
     let detail = || -> Vec<Section> {
         [
@@ -369,7 +574,41 @@ pub(super) fn card(
             ));
             row(glyph, hue, words)
         }
-        "Host notice" => row("○", Hue::Neutral, headline(said)),
+        "corral_code_cell" => {
+            let settled = parsed()?;
+            let call = settled.get("tool_call_id").and_then(Value::as_str);
+            // The cell's own row shows its settlement when it is on this page.
+            if call.is_some_and(|call| cx.journal.codemode.contains(call)) {
+                return None;
+            }
+            let cell = settled
+                .get("cell")
+                .and_then(Value::as_str)
+                .unwrap_or("cell");
+            let cell = cell.strip_prefix("cell-").unwrap_or(cell);
+            let status = settled
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("settled");
+            let (glyph, hue) = if status == "ok" {
+                ("✓", Hue::Ok)
+            } else {
+                ("✗", Hue::Fail)
+            };
+            row(
+                glyph,
+                hue,
+                format!("code cell {cell} settled in background: {status}"),
+            )
+        }
+        "corral_owner_question" => {
+            let (glyph, hue, words) = parsed().and_then(|data| owner_question(&data)).unwrap_or((
+                "○",
+                Hue::Neutral,
+                "owner question".to_owned(),
+            ));
+            row(glyph, hue, words)
+        }
         "Reply cut" => row(
             "!",
             Hue::Held,
@@ -403,22 +642,20 @@ pub(super) fn card(
     })
 }
 
-/// A run mark's row, as the terminal words it (`✓ done · 3m 12s · 14 tool calls · $0.42`).
+/// A run mark's row, as `mark-rows.ts` words it (`✓ done · 3m 12s · 14 tool calls · $0.42`).
 fn run_mark(mark: &Value) -> Option<(&'static str, Hue, String)> {
     let field = |name: &str| mark.get(name).and_then(Value::as_str);
     match field("kind")? {
         "turn_end" => {
+            let duration = mark.get("durationMs").and_then(Value::as_u64).unwrap_or(0);
+            let calls = mark.get("toolCalls").and_then(Value::as_u64).unwrap_or(0);
+            let reason = field("reason")?;
             let mut facts = Vec::new();
-            facts.extend(
-                mark.get("durationMs")
-                    .and_then(Value::as_u64)
-                    .and_then(elapsed),
-            );
-            if let Some(calls) = mark
-                .get("toolCalls")
-                .and_then(Value::as_u64)
-                .filter(|n| *n > 0)
-            {
+            // A run under 2 s without tool calls reads `✓ done` alone.
+            if !(reason == "done" && duration < 2000 && calls == 0) {
+                facts.extend(elapsed(duration));
+            }
+            if calls > 0 {
                 facts.push(if calls == 1 {
                     "1 tool call".to_owned()
                 } else {
@@ -448,17 +685,19 @@ fn run_mark(mark: &Value) -> Option<(&'static str, Hue, String)> {
                         .collect()
                 })
                 .unwrap_or_default();
-            let (glyph, hue, lead) = match field("reason")? {
-                "done" => ("✓", Hue::Ok, "done".to_owned()),
+            let (glyph, hue, lead, tail) = match reason {
+                "done" => ("✓", Hue::Ok, "done".to_owned(), None),
                 "waiting" => (
                     "○",
                     Hue::Neutral,
                     format!("waiting for {}", waits.join(", ")),
+                    Some("the agent resumes when it finishes"),
                 ),
                 "length" => (
                     "!",
                     Hue::Held,
                     "the reply was cut at the output limit".to_owned(),
+                    None,
                 ),
                 "continue_stopped" => (
                     "!",
@@ -467,14 +706,17 @@ fn run_mark(mark: &Value) -> Option<(&'static str, Hue, String)> {
                         "auto-continue stopped: {}",
                         field("note").unwrap_or("no reason recorded")
                     ),
+                    Some("send a message to go on"),
                 ),
-                _ => ("○", Hue::Neutral, "run ended".to_owned()),
+                // A stopped or failed run names its cause on the row above it.
+                _ => ("○", Hue::Neutral, "run ended".to_owned(), None),
             };
             Some((
                 glyph,
                 hue,
                 std::iter::once(lead)
                     .chain(facts)
+                    .chain(tail.map(str::to_owned))
                     .collect::<Vec<_>>()
                     .join(" · "),
             ))

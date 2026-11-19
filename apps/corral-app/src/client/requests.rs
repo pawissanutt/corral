@@ -93,14 +93,11 @@ pub enum ClientRequest {
         request_id: String,
         request: AssistantSessionOp,
     },
-    /// `prompt.answer`: an agent's question answered in place, read by `request_id`.
-    PromptAnswer {
-        request_id: String,
-        request: corral_protocol::session::SessionPromptAnswer,
-    },
     /// A session request addressed by the session's public id, read by `request_id`: a control
     /// (`session.cancel`, `.pause`, `.resume`, `.terminate`, `.relaunch`, `.rewind`), owner
-    /// input (`session.send`) or a build start (`build.start`).
+    /// input (`session.send`), a card's answer (`session.card.answer`), a queue change
+    /// (`session.queue.withdraw`, `.move`), a host action (`session.action`) or a build's start
+    /// or removal (`build.start`, `build.remove`).
     Session {
         request_id: String,
         method: &'static str,
@@ -267,6 +264,19 @@ pub fn build_start(request_id: String, request: BuildStart) -> bool {
     send(ClientRequest::Session {
         request_id,
         method: BUILD_START,
+        params: serde_json::to_value(request).unwrap_or(serde_json::Value::Null),
+    })
+}
+/// Any other session or build request (`session.card.answer`, `session.queue.*`,
+/// `session.action`, `build.remove`) under `request_id`, whose reply is read under it.
+pub fn session_request(
+    request_id: String,
+    method: &'static str,
+    request: impl serde::Serialize,
+) -> bool {
+    send(ClientRequest::Session {
+        request_id,
+        method,
         params: serde_json::to_value(request).unwrap_or(serde_json::Value::Null),
     })
 }

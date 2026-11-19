@@ -614,3 +614,72 @@ fn opening_a_task_from_the_palette_reopens_a_closed_inspector() {
     select(&mut app, "T-12 Timeline zoom presets");
     app.wait_for("id:now-task").unwrap();
 }
+
+/// The sample build waits on a two-question card: its answer card takes one answer per
+/// question and sends them once both are answered. Two follow-ups queued while it works are
+/// reordered and one is taken back into the draft. `/fin` runs Finish…, which docks the exit
+/// choice; Land asks once on this device, then for the reason, and the exit walks rebase, gate
+/// and land to its outcome.
+#[test]
+fn a_build_session_is_answered_and_landed() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.press("id:agent-B-k3x9").unwrap();
+
+    app.wait_for("id:dock-q-b1").unwrap();
+    app.press("id:dock-q-b1").unwrap();
+    app.wait_for("id:opt-q-b1-0").unwrap();
+    app.press("id:opt-q-b1-0").unwrap();
+    app.wait_for("id:question-1").unwrap();
+    app.press("id:opt-q-b1-1").unwrap();
+    app.wait_for("id:review-1").unwrap();
+    app.press("id:btn-send-answers").unwrap();
+    app.wait_for_gone("id:btn-send-answers", Duration::from_secs(5))
+        .unwrap();
+
+    app.wait_for("id:btn-queue").unwrap();
+    for text in ["first follow-up", "second follow-up"] {
+        app.clear("id:field-message").unwrap();
+        app.type_text("id:field-message", text).unwrap();
+        app.press("id:btn-queue").unwrap();
+    }
+    app.wait_for("id:queue-1").unwrap();
+    app.press("id:btn-queue-down-0").unwrap();
+    app.wait_for("id:btn-queue-edit-0").unwrap();
+    app.press("id:btn-queue-edit-0").unwrap();
+    app.wait_for_gone("id:queue-1", Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(
+        app.screen().input_text("id:field-message").unwrap(),
+        Some("second follow-up")
+    );
+
+    app.clear("id:field-message").unwrap();
+    app.type_text("id:field-message", "/fin").unwrap();
+    app.wait_for("id:cmd-finish").unwrap();
+    app.submit("id:field-message").unwrap();
+    app.wait_for("id:opt-exit-B-k3x9-1").unwrap();
+    app.press("id:opt-exit-B-k3x9-1").unwrap();
+    app.wait_for("id:btn-card-confirm").unwrap();
+    app.press("id:btn-card-confirm").unwrap();
+    app.wait_for("id:field-message").unwrap();
+    app.type_text("id:field-message", "The open finding is accepted for now.")
+        .unwrap();
+    app.submit("id:field-message").unwrap();
+    app.wait_for_within("text:/^✓ Landed/", Duration::from_secs(30))
+        .unwrap();
+}
+
+/// A stopped build's row offers Remove…; its sheet shows prune's dry run before anything goes,
+/// and confirming removes the build from the roster.
+#[test]
+fn a_stopped_build_is_removed_after_its_dry_run() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.press("id:seg-show-all").unwrap();
+    app.wait_for("id:btn-remove-B-k2a1").unwrap();
+    app.press("id:btn-remove-B-k2a1").unwrap();
+    app.wait_for("id:remove-lines").unwrap();
+    app.wait_for("text:/would remove worktree/").unwrap();
+    app.press("id:btn-remove-confirm").unwrap();
+    app.wait_for_gone("id:agent-B-k2a1", Duration::from_secs(5))
+        .unwrap();
+}

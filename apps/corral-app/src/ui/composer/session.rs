@@ -2,9 +2,13 @@
 //! (`Message → parent · last input queued`), the working indicator with Stop while the agent
 //! works, the draft, the model and effort the host reports, the receiver for a build with
 //! children that take a message, and the send controls. Enter sends; while the agent works Enter
-//! steers the running turn and Queue (Alt+Enter) keeps the text for after it. A control the host
-//! cannot run now is dimmed with its reason under the field. The draft lives in the session's
-//! UI state, so it survives tab switches and leaving the page. Desktop: a rounded box over the
+//! steers the running turn and Queue (Alt+Enter) keeps the text for after it. While the dock asks
+//! for the owner's reason (`→ land on main · your reason`, Held) or answer (`→ a2 · answer`), Enter
+//! gives the text instead, and an empty one is the model's to refuse with what is missing. While
+//! the draft is a `/` command the page's command menu matches, Enter runs that command instead.
+//! A control the host cannot run now is dimmed with its reason under the field. The draft lives
+//! in the session's UI state, so it survives tab switches and leaving the page; the field takes
+//! the keys back whenever the page gives them to the composer. Desktop: a rounded box over the
 //! page's foot with the keys under it; terminal: the same rows between rules; phone: Steer now |
 //! After this turn over one row of field and button, the button stopping the turn while the
 //! agent works and the draft is empty.
@@ -41,7 +45,8 @@ fn act(app: AppState, action: Action) {
     });
 }
 
-/// Sends the draft with `policy`, unless the button that sends it is unavailable now.
+/// Sends the draft with `policy`, unless the button that sends it is unavailable now. An empty
+/// draft goes out only as a reason or an answer, whose emptiness the model answers.
 fn send(app: AppState, id: &Id, composer: Memo<Option<SessionComposer>>, policy: SendPolicy) {
     let ready = composer.with_untracked(|composer| {
         let composer = composer.as_ref()?;
@@ -49,9 +54,13 @@ fn send(app: AppState, id: &Id, composer: Memo<Option<SessionComposer>>, policy:
             .into_iter()
             .flatten()
             .find(|button| button.policy == policy)?;
-        button.unavailable.is_none().then(|| composer.draft.clone())
+        let giving = matches!(composer.mode, SendMode::Reason | SendMode::Answer);
+        button
+            .unavailable
+            .is_none()
+            .then(|| (composer.draft.clone(), giving))
     });
-    if let Some(text) = ready.filter(|text| !text.trim().is_empty()) {
+    if let Some((text, _)) = ready.filter(|(text, giving)| *giving || !text.trim().is_empty()) {
         act(
             app,
             Action::Send {
@@ -64,15 +73,23 @@ fn send(app: AppState, id: &Id, composer: Memo<Option<SessionComposer>>, policy:
     }
 }
 
+/// The session's composer. `command` is what Enter runs instead of sending while the draft is a
+/// `/` command the page's menu matches; `focused` says the page gives the composer the keys.
 pub(crate) fn session_composer(
     app: AppState,
     id: Id,
     composer: Memo<Option<SessionComposer>>,
+    command: Memo<Option<Vec<Action>>>,
+    focused: Memo<bool>,
 ) -> AnyElement {
     let form = app.form;
     let entry = element_ref();
     if form != Form::Phone {
-        after_answer(move || entry.focus());
+        effect(move || {
+            if focused.get() {
+                after_answer(move || entry.focus());
+            }
+        });
         let id = id.clone();
         on_key_with(
             "alt+enter",
@@ -83,19 +100,20 @@ pub(crate) fn session_composer(
             move |_| send(app, &id, composer, SendPolicy::FollowUp),
         );
     }
-    let field = field(app, id.clone(), composer, entry);
+    let field = field(app, id.clone(), composer, command, entry);
     match form {
         Form::Phone => phone(app, id, composer, field),
         Form::Desktop | Form::Terminal => frame(app, id, composer, field),
     }
 }
 
-/// The draft field: multiline, Enter sends with the send button's policy, Shift+Enter breaks
-/// the line.
+/// The draft field: multiline, Enter sends with the send button's policy (or runs the matched
+/// `/` command), Shift+Enter breaks the line.
 fn field(
     app: AppState,
     id: Id,
     composer: Memo<Option<SessionComposer>>,
+    command: Memo<Option<Vec<Action>>>,
     entry: ElementRef,
 ) -> AnyElement {
     let form = app.form;
@@ -117,6 +135,12 @@ fn field(
         .submit_behavior(SubmitBehavior::Submit)
         .return_key_type(ReturnKeyType::Send)
         .on_submit(move |_: &str| {
+            if let Some(actions) = command.get_untracked() {
+                for action in actions {
+                    act(app, action);
+                }
+                return;
+            }
             let policy = composer.with_untracked(|c| c.as_ref().map(|c| c.send.policy));
             if let Some(policy) = policy {
                 send(app, &id, composer, policy);
@@ -202,7 +226,8 @@ fn title(app: AppState, composer: Memo<Option<SessionComposer>>) -> AnyElement {
             let (title, activity, stop) = shown.as_ref()?.clone();
             Some(untracked(|| {
                 let lead = small(form, title.lead, color(Token::Ink3));
-                let to = small(form, title.to, color(Token::Ink)).font_weight(FontWeight::SEMIBOLD);
+                let to =
+                    small(form, title.to, tint_or_ink(title.hue)).font_weight(FontWeight::SEMIBOLD);
                 let last = title.last.map(|(hue, words)| {
                     small(form, format!("· {words}"), tint(hue))
                         .truncate()
@@ -248,6 +273,15 @@ fn title(app: AppState, composer: Memo<Option<SessionComposer>>) -> AnyElement {
 fn tint(hue: Hue) -> AdaptiveColor {
     if hue == Hue::Neutral {
         color(Token::Ink3)
+    } else {
+        hue_ink(hue)
+    }
+}
+
+/// The receiver's words: ink when neutral, else its tone (Held for a reason, You for an answer).
+fn tint_or_ink(hue: Hue) -> AdaptiveColor {
+    if hue == Hue::Neutral {
+        color(Token::Ink)
     } else {
         hue_ink(hue)
     }
@@ -312,9 +346,9 @@ fn bar(app: AppState, id: Id, composer: Memo<Option<SessionComposer>>) -> AnyEle
                 }),
         )
         .child(dynamic(move || {
-            receiver
-                .get()
-                .map(|pill| untracked(|| receiver_menu(app, pill.label, pill.choices)))
+            receiver.get().map(|pill| {
+                untracked(|| receiver_menu(app, pill.label, pill.choices, pill.unavailable))
+            })
         }))
         .child(view().flex_1().min_w(px(0.0)))
         .child(dynamic(move || {
@@ -361,9 +395,28 @@ fn send_button(
     )
 }
 
-/// `→ parent ▾`: the parent and every child that takes a message, the current one marked.
-fn receiver_menu(app: AppState, label: String, choices: Vec<ReceiverChoice>) -> AnyElement {
+/// `→ parent ▾`: the parent and every child that takes a message, the current one marked. While
+/// the host cannot take a message for its children it is muted with the reason and does not
+/// open.
+fn receiver_menu(
+    app: AppState,
+    label: String,
+    choices: Vec<ReceiverChoice>,
+    unavailable: Option<String>,
+) -> AnyElement {
     let form = app.form;
+    if let Some(why) = unavailable {
+        return small(
+            form,
+            format!("{label} · unavailable: {why}"),
+            color(Token::Ink3),
+        )
+        .test_id("btn-receiver")
+        .truncate()
+        .flex_shrink(1.0)
+        .min_w(px(0.0))
+        .into_element();
+    }
     let trigger = view()
         .test_id("btn-receiver")
         .role(AccessibilityRole::Button)

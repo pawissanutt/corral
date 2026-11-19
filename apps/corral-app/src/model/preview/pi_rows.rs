@@ -4,9 +4,7 @@
 //! the host's state on the live session stream of every scope that watches it.
 
 use corral_protocol::assistant::{EntryKind, MessageState, TurnCompletion};
-use corral_protocol::detail::{
-    CardKind, DetailBody, DetailRef, HostPresence, SessionItem, SessionPage,
-};
+use corral_protocol::detail::{DetailBody, DetailRef, HostPresence, SessionItem, SessionPage};
 use corral_protocol::rows::{AssistantLocation, AssistantState, WaitReason};
 use corral_protocol::session_state::{
     Activity, Capability, CardBrief, InputOrigin, QueuedInput, SendPolicy, SessionMode,
@@ -135,18 +133,19 @@ pub(super) fn thread(feed: &mut Feed, id: &str) {
     feed.retire_echoed_sends();
 }
 
-/// What the rows report follows the hosts: a chat's or a build's state, turn and pending
-/// question, a worker's pause and whether it is quiet; and every watcher gets the host's state.
+/// What the rows report follows the hosts: a chat's or a build's state, turn, first waiting card
+/// and exit, a worker's pause and whether it is quiet; and every watcher gets the host's state.
 pub(super) fn settle(feed: &mut Feed, id: &str) {
     let Some(host) = feed.hosts.get(id) else {
         return;
     };
     let (paused, open, gone, turn) = (host.paused, host.busy(), host.gone, host.turn);
-    let question = host.pending.first();
-    let question_id = question.map(|question| question.id.clone());
-    let wait = question.map(|question| WaitReason {
+    let exit = host.exit.clone();
+    let card = host.pending.first();
+    let question_id = card.map(|card| card.id.clone());
+    let wait = card.map(|card| WaitReason {
         code: "owner_question".into(),
-        text: question.text.clone(),
+        text: card.title.clone(),
         retry_at: None,
     });
     match host.role {
@@ -175,6 +174,9 @@ pub(super) fn settle(feed: &mut Feed, id: &str) {
             row.turn = (turn > 0).then_some(turn);
             row.wait = wait;
             row.question_id = question_id;
+            if let Some(build) = row.build.as_mut() {
+                build.exit = exit;
+            }
             row.updated = Some(stamp(feed.now));
             row.rev += 1;
         }
@@ -199,17 +201,35 @@ fn prefix(text: &str) -> String {
     text[..end].to_owned()
 }
 
+/// What the owner may do with queued item `n`: withdraw an owner item, and move it among the
+/// owner's items.
+fn queue_actions(host: &Host, n: usize) -> Vec<String> {
+    let owner = |input: &super::pi::Input| input.origin == Origin::Owner;
+    if !host.queued.get(n).is_some_and(owner) {
+        return Vec::new();
+    }
+    let mut actions = vec!["withdraw".to_owned()];
+    if host.queued[..n].iter().any(owner) {
+        actions.push("move_up".into());
+    }
+    if host.queued[n + 1..].iter().any(owner) {
+        actions.push("move_down".into());
+    }
+    actions
+}
+
 /// The state host `id` reports: what it runs, holds and asks, and what it serves. The sample
-/// serves sending, steering and follow-ups, a worker's rewinds and a build's child agents.
+/// serves sending, steering, follow-ups, its queue and its cards, a worker's rewinds and a
+/// build's child agents and exit.
 fn state(feed: &Feed, id: &str, host: &Host) -> SessionState {
     let row = feed.assistants.get(id);
     let model = row
         .and_then(|row| row.model.clone())
         .or_else(|| feed.agents.get(id).and_then(|row| row.run.model.clone()));
-    let mut can = vec!["send", "steer", "follow_up"];
+    let mut can = vec!["send", "steer", "follow_up", "queue", "cards"];
     match host.role {
         Role::Worker => can.push("rewind"),
-        Role::Build => can.push("children"),
+        Role::Build => can.extend(["children", "exit"]),
         Role::Chat => {}
     }
     SessionState {
@@ -233,10 +253,8 @@ fn state(feed: &Feed, id: &str, host: &Host) -> SessionState {
             .enumerate()
             .map(|(n, input)| QueuedInput {
                 key: input
-                    .entry
-                    .as_deref()
-                    .and_then(|entry| entry.split_once("/input/"))
-                    .map_or_else(|| format!("{id}/queued/{n}"), |(_, key)| key.to_owned()),
+                    .key()
+                    .map_or_else(|| format!("{id}/queued/{n}"), str::to_owned),
                 policy: SendPolicy::FollowUp,
                 origin: match input.origin {
                     Origin::Owner => InputOrigin::Owner,
@@ -245,21 +263,22 @@ fn state(feed: &Feed, id: &str, host: &Host) -> SessionState {
                 text: prefix(&input.text),
                 bytes: u64::try_from(input.text.len()).unwrap_or(u64::MAX),
                 to: None,
-                actions: Vec::new(),
+                actions: queue_actions(host, n),
             })
             .collect(),
         queue_total: u32::try_from(host.queued.len()).unwrap_or(u32::MAX),
         cards: host
             .pending
             .iter()
-            .map(|question| CardBrief {
-                id: question.id.clone(),
-                kind: CardKind::Question,
-                title: question.text.clone(),
-                child: None,
-                expires_at: None,
+            .map(|card| CardBrief {
+                id: card.id.clone(),
+                kind: card.kind,
+                title: card.title.clone(),
+                child: card.child.clone(),
+                expires_at: card.expires_at.clone(),
             })
             .collect(),
+        exit: host.exit.clone(),
         can: can
             .into_iter()
             .map(|id| Capability {
@@ -273,7 +292,8 @@ fn state(feed: &Feed, id: &str, host: &Host) -> SessionState {
     }
 }
 
-/// Every scope that watches host `id` gets its current state, as corrald's next page carries it.
+/// Every scope that watches host `id` gets its current state, as corrald's next page carries it,
+/// and a read of its cards follows them, as the app's re-read on the cards part would.
 fn publish_state(feed: &mut Feed, id: &str) {
     let Some(host) = feed.hosts.get(id) else {
         return;
@@ -285,6 +305,7 @@ fn publish_state(feed: &mut Feed, id: &str) {
             .or_default()
             .replace_state(Some(Box::new(current.clone())));
     }
+    super::build_ops::reread_cards(feed, id);
 }
 
 /// Every host's rows, as corrald reports them once it polled each host.

@@ -293,14 +293,14 @@ impl AppState {
 }
 
 impl AppState {
-    /// Tracked: the confirm sheet, the refusal sheet, the rewind sheet, the New build sheet or
-    /// the action composer is up.
+    /// Tracked: the confirm sheet, the refusal sheet, the rewind sheet, the New build sheet, the
+    /// Remove sheet or the action composer is up.
     pub(super) fn sheet_open(&self) -> bool {
         self.confirm.with(Option::is_some)
             || self.refusal.with(Option::is_some)
-            || self
-                .agents
-                .with(|state| state.rewind.is_some() || state.start.open)
+            || self.agents.with(|state| {
+                state.rewind.is_some() || state.start.open || state.removing.is_some()
+            })
             || self.work.with(|state| state.composer.is_some())
     }
 }

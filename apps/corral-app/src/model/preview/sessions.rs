@@ -42,6 +42,8 @@ pub(super) fn populate(feed: &mut Feed) {
                     .into(),
             }],
         );
+        // It asks the owner two things at once before the slices start.
+        host.pending.push(super::build_ops::api_question(&at));
     }
     build(feed, STOPPED_BUILD, "docs-sweep", Some("site"), true);
 }

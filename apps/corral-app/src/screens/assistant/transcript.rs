@@ -89,7 +89,7 @@ pub fn list(app: AppState, source: ThreadRef, inset: f32) -> AnyElement {
 }
 
 /// Scrolls to the end once mounted (after the commit that mounts it), then again, animated, when
-/// the thread gains a message, the streamed answer grows or the agent asks.
+/// the thread gains a message or the streamed answer grows.
 fn follow(app: AppState, scope: Id, scroller: ElementRef) {
     let seen = stored(None::<(usize, usize)>);
     effect(move || {
@@ -104,8 +104,7 @@ fn follow(app: AppState, scope: Id, scroller: ElementRef) {
                     .map(|message| message.text.len())
                     .sum::<usize>()
             });
-            let asks = usize::from(crate::model::agents::prompt(feed, scope.as_str()).is_some());
-            (entries + feed.commands.len() + asks, streamed)
+            (entries + feed.commands.len(), streamed)
         });
         let before = seen.replace(Some(now));
         if before != Some(now) {
@@ -320,7 +319,6 @@ fn body_view(app: AppState, block: &Body, streaming: bool) -> AnyElement {
     match block {
         Body::Markdown(words) => written(app, words, streaming),
         Body::Ordered(items) => ordered(app, items),
-        Body::AskUser(card) => cards::ask_user(app, card),
         Body::Starting { state, text: said } => cards::starting(app, state, said),
     }
 }

@@ -1,13 +1,16 @@
 //! The tab strip: which tabs a session has, from its role and what its host declares it serves
-//! (`SessionState.can`), each with its count and the Chat tab's unread mark. Inbox is not a tab:
-//! the header's decisions chip opens Now instead.
+//! (`SessionState.can`), each with its count and the Chat tab's unread mark; and the frame every
+//! tab and panel body shares before its content is drawn (`PartBody`: its summary line, why the
+//! host cannot serve it now, and where its read stands). Inbox is not a tab: the header's
+//! decisions chip opens Now instead.
 
-use corral_protocol::detail::SessionItem;
+use corral_protocol::detail::{DetailRef, SessionItem};
 
 use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 
-use super::{Action, Can, Cx, SessionRole, SubView, Tab};
+use super::read_state::ReadState;
+use super::{Action, Can, Cx, Host, SessionRole, SubView, Tab, board, changes, proof};
 
 /// A tab's count or mark.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +36,82 @@ pub struct TabItem {
     /// Shown muted with this reason: the host declared the part but cannot serve it now.
     pub unavailable: Option<String>,
     pub action: Action,
+}
+
+/// What a tab's or panel's body shows before (and around) its content: its summary line, why
+/// the host cannot serve it now, and where its read stands, in the one read-state vocabulary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartBody {
+    /// `12 files changed`, `Plan 3/7`, `No usage recorded yet.`
+    pub summary: String,
+    pub hue: Hue,
+    /// The host declared the part but cannot serve it now, or the host is not running.
+    pub unavailable: Option<String>,
+    pub read: ReadState,
+    /// `r reread`; after a failed read, Retry.
+    pub reread: Option<Action>,
+}
+
+/// Why a part the host serves cannot be read from it now.
+fn host_down(cx: &Cx<'_>) -> Option<String> {
+    match cx.host {
+        Host::NotRunning | Host::Ended => Some("the host is not running".into()),
+        Host::Unreachable => Some("corrald cannot reach the host".into()),
+        Host::Running | Host::Unknown => None,
+    }
+}
+
+/// The body of a part read from `target`; `Err` says why the part does not apply. A part the
+/// host serves names its `capability`; one read from the engine's records names none.
+pub(super) fn part(
+    cx: &Cx<'_>,
+    target: Result<DetailRef, String>,
+    capability: Option<&str>,
+    summary: String,
+    hue: Hue,
+) -> PartBody {
+    let target = match target {
+        Ok(target) => target,
+        Err(why) => {
+            return PartBody {
+                summary,
+                hue,
+                unavailable: None,
+                read: ReadState::DoesNotApply(why),
+                reread: None,
+            };
+        }
+    };
+    let unavailable = capability.and_then(|id| match cx.can(id) {
+        Can::Unavailable(why) => Some(why),
+        _ => host_down(cx),
+    });
+    let cache = cx.feed.detail(&target);
+    let read = ReadState::of(cache, cx.feed);
+    let reread = cache
+        .filter(|cache| !cache.loading && unavailable.is_none())
+        .map(|_| Action::Refresh(target));
+    PartBody {
+        summary,
+        hue,
+        unavailable,
+        read,
+        reread,
+    }
+}
+
+/// The read a part's body needs now: once, while nothing was read and the part can be served.
+pub(super) fn load(
+    cx: &Cx<'_>,
+    target: Result<DetailRef, String>,
+    capability: Option<&str>,
+) -> Option<Action> {
+    let target = target.ok()?;
+    let servable = match capability {
+        None => true,
+        Some(id) => matches!(cx.can(id), Can::Yes | Can::Unknown) && cx.host == Host::Running,
+    };
+    (servable && cx.feed.detail(&target).is_none()).then_some(Action::Refresh(target))
 }
 
 /// The tabs a role has, in order. A task-bound role leads with Task and ends with Proof; a build
@@ -66,21 +145,20 @@ fn capability(tab: Tab) -> Option<&'static str> {
 /// The rows a reader would count as new: served messages and the live turn's messages and tool
 /// calls. Streaming into a row does not change it.
 pub fn rows(feed: &Feed, scope: &str) -> usize {
-    let served =
-        super::transcript::page(feed.detail(&corral_protocol::detail::DetailRef::Session {
-            id: scope.to_owned(),
-        }))
-        .map_or(0, |page| {
-            page.messages
-                .iter()
-                .filter(|message| {
-                    message
-                        .items
-                        .iter()
-                        .any(|item| !matches!(item, SessionItem::Continuation { .. }))
-                })
-                .count()
-        });
+    let served = super::transcript::page(feed.detail(&DetailRef::Session {
+        id: scope.to_owned(),
+    }))
+    .map_or(0, |page| {
+        page.messages
+            .iter()
+            .filter(|message| {
+                message
+                    .items
+                    .iter()
+                    .any(|item| !matches!(item, SessionItem::Continuation { .. }))
+            })
+            .count()
+    });
     let live = feed
         .live
         .get(scope)
@@ -88,7 +166,8 @@ pub fn rows(feed: &Feed, scope: &str) -> usize {
     served + live
 }
 
-fn count(n: u32) -> Option<Badge> {
+/// A plain count, none at zero.
+pub(super) fn count(n: u32) -> Option<Badge> {
     (n > 0).then(|| Badge {
         text: n.to_string(),
         hue: Hue::Neutral,
@@ -96,33 +175,21 @@ fn count(n: u32) -> Option<Badge> {
 }
 
 fn badge(tab: Tab, cx: &Cx<'_>) -> Option<Badge> {
-    let state = cx.state?;
     match tab {
-        Tab::Agents => count(
-            state
-                .children
-                .live
-                .saturating_add(state.children.waiting)
-                .saturating_add(state.jobs.live),
-        ),
-        Tab::Changes => state.changes.and_then(count),
-        Tab::Board => {
-            let board = state.board?;
-            if board.blocked + board.failed > 0 {
-                Some(Badge {
-                    text: format!("{} !", board.open),
-                    hue: Hue::Held,
-                })
-            } else if board.proposed && board.open == 0 {
-                Some(Badge {
-                    text: "◆".into(),
-                    hue: Hue::Held,
-                })
-            } else {
-                count(board.open)
-            }
+        Tab::Agents => {
+            let state = cx.state?;
+            count(
+                state
+                    .children
+                    .live
+                    .saturating_add(state.children.waiting)
+                    .saturating_add(state.jobs.live),
+            )
         }
-        Tab::Chat | Tab::Task | Tab::Proof => None,
+        Tab::Changes => changes::badge(cx),
+        Tab::Board => board::badge(cx),
+        Tab::Proof => proof::badge(cx),
+        Tab::Chat | Tab::Task => None,
     }
 }
 
@@ -135,11 +202,10 @@ fn label(tab: Tab, sub: Option<&SubView>) -> String {
 }
 
 /// The tabs the page shows: the role's set, without a tab whose part the host does not serve
-/// (when it reported what it serves), and only those whose bodies exist (`built`).
-pub fn items(cx: &Cx<'_>, built: &[Tab]) -> Vec<TabItem> {
+/// (when it reported what it serves).
+pub fn items(cx: &Cx<'_>) -> Vec<TabItem> {
     let bare = !matches!(cx.can("board"), Can::Yes | Can::Unavailable(_));
-    let mut tabs = tabs_for(&cx.role, cx.role.task_bound() && cx.task.is_some(), bare);
-    tabs.retain(|tab| built.contains(tab));
+    let tabs = tabs_for(cx.role, cx.role.task_bound() && cx.task.is_some(), bare);
     let rows = rows(cx.feed, cx.id.as_str());
     tabs.into_iter()
         .filter_map(|tab| {
@@ -154,7 +220,7 @@ pub fn items(cx: &Cx<'_>, built: &[Tab]) -> Vec<TabItem> {
                 tab,
                 id: format!("tab-{}", tab.slug()),
                 label: label(tab, cx.ui.sub.as_ref().filter(|_| selected)),
-                key: Some(tab.key(&cx.role)),
+                key: Some(tab.key(cx.role)),
                 badge: badge(tab, cx),
                 unread: tab == Tab::Chat && !selected && cx.ui.seen.is_some_and(|seen| rows > seen),
                 selected,

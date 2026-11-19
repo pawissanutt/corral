@@ -7,7 +7,7 @@ use crate::model::{
     Id,
     daemon::*,
     devices::{DeviceOp, Pairing},
-    effect::Effect,
+    effect::{Effect, QueueRequest},
 };
 use corral_protocol::{app::*, assistant::*, rows::*};
 use corral_types::Origin;
@@ -29,7 +29,11 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
         Effect::Send(request) => send(feed, request),
         Effect::Session { key, .. }
         | Effect::SessionSend { key, .. }
-        | Effect::BuildStart { key, .. } => operation(feed, key, effect),
+        | Effect::BuildStart { key, .. }
+        | Effect::SessionCardAnswer { key, .. }
+        | Effect::SessionQueue { key, .. }
+        | Effect::SessionAction { key, .. }
+        | Effect::BuildRemove { key, .. } => operation(feed, key, effect),
         Effect::Warm(_) => execute_operation(feed, effect).map(|_| ()),
         Effect::Device(op) => match op {
             DeviceOp::Revoke { key, .. } => operation(feed, key, effect),
@@ -134,6 +138,10 @@ pub fn operation(feed: &mut Feed, key: &Id, effect: &Effect) -> Result<(), Strin
         Effect::Session { .. } => ASSISTANT_SESSION,
         Effect::SessionSend { .. } => corral_protocol::session_host::SESSION_SEND,
         Effect::BuildStart { .. } => corral_protocol::build::BUILD_START,
+        Effect::SessionCardAnswer { .. } => corral_protocol::session_host::SESSION_CARD_ANSWER,
+        Effect::SessionQueue { request, .. } => request.method(),
+        Effect::SessionAction { .. } => corral_protocol::session_host::SESSION_ACTION,
+        Effect::BuildRemove { .. } => corral_protocol::build::BUILD_REMOVE,
         Effect::Warm(_) => ASSISTANT_WARM,
         Effect::Device(DeviceOp::Revoke { .. }) => corral_protocol::device::DEVICE_REVOKE,
         _ => "preview.local",
@@ -257,6 +265,13 @@ fn execute_operation(feed: &mut Feed, effect: &Effect) -> Result<Value, String> 
         Effect::Session { op, .. } => assistant_session(feed, op),
         Effect::SessionSend { send, .. } => super::session_ops::send(feed, send),
         Effect::BuildStart { start, .. } => super::session_ops::start(feed, start),
+        Effect::SessionCardAnswer { answer, .. } => super::build_ops::answer(feed, answer),
+        Effect::SessionQueue { request, .. } => match request {
+            QueueRequest::Withdraw(key) => super::build_ops::withdraw(feed, key),
+            QueueRequest::Move(step) => super::build_ops::move_item(feed, step),
+        },
+        Effect::SessionAction { request, .. } => super::build_ops::action(feed, request),
+        Effect::BuildRemove { remove, .. } => super::build_ops::remove(feed, remove),
         Effect::Warm(request) => {
             require_thread(feed, &request.thread)?;
             let id = pi::resolve(feed, &request.thread)

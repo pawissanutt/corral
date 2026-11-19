@@ -1,5 +1,6 @@
 //! Messages' words and thinking in a watched session's transcript: rendered Markdown at the
-//! desktop's measure, and thinking muted under its lead, folded to one row.
+//! desktop's measure, and thinking muted under its bold lead, folded to one row; while every
+//! thinking block of the session is hidden, one row says so and shows them again.
 
 use nsh_core::prelude::*;
 
@@ -38,7 +39,7 @@ pub(super) fn caret(app: AppState) -> AnyElement {
 
 /// Words of a message: rendered Markdown at most ~70 characters wide on the desktop, then
 /// where the rest of a continued item stands.
-pub(super) fn prose(app: AppState, words: &Prose, n: usize) -> AnyElement {
+pub(super) fn prose(app: AppState, words: &Prose, id: &str) -> AnyElement {
     view()
         .min_w(px(0.0))
         .when(app.form == Form::Desktop, |block| {
@@ -46,42 +47,57 @@ pub(super) fn prose(app: AppState, words: &Prose, n: usize) -> AnyElement {
         })
         .when(app.form != Form::Terminal, |block| block.mb(px(6.0)))
         .child(markdown(app, &words.markdown, words.streaming))
-        .children(state(app, &words.more, n, true))
+        .children(state(app, &words.more, id, true))
         .into_element()
 }
 
-/// Thinking: a `thinking` lead, then the reasoning muted so it never reads as the answer;
-/// folded, one row says what it hides. Pressing the lead folds or shows it.
-pub(super) fn thinking(app: AppState, thought: &Thinking, n: usize) -> AnyElement {
+/// Thinking: a bold `thinking` lead, then the reasoning muted so it never reads as the answer;
+/// folded, one row says what it hides. Pressing the lead folds or shows it; while the session
+/// hides all thinking, the row is `thinking hidden · Alt+H shows it` and pressing it shows all.
+pub(super) fn thinking(app: AppState, thought: &Thinking, id: &str) -> AnyElement {
     let form = app.form;
-    let lead = view()
-        .flex_row()
-        .items_center()
-        .gap(px(6.0))
-        .when(form != Form::Terminal, |row| {
-            row.py(px(2.0)).rounded(px(4.0))
-        })
-        .child(
-            small(app, "thinking", Token::Ink3).font_weight(if form == Form::Terminal {
-                FontWeight::BOLD
-            } else {
-                FontWeight::SEMIBOLD
-            }),
-        )
-        .child(disclosure(app, thought.open))
-        .when(!thought.open, |row| {
-            row.child(small(app, thought.hidden.clone(), Token::Ink3))
-        })
-        .when(thought.streaming && !thought.open, |row| {
-            row.child(caret(app))
-        });
+    let bold = if form == Form::Terminal {
+        FontWeight::BOLD
+    } else {
+        FontWeight::SEMIBOLD
+    };
+    let lead = if thought.hidden_all {
+        view()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .when(form != Form::Terminal, |row| {
+                row.py(px(2.0)).rounded(px(4.0))
+            })
+            .child(small(app, thought.hidden.clone(), Token::Ink3))
+    } else {
+        view()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .when(form != Form::Terminal, |row| {
+                row.py(px(2.0)).rounded(px(4.0))
+            })
+            .child(small(app, "thinking", Token::Ink3).font_weight(bold))
+            .child(disclosure(app, thought.open))
+            .when(!thought.open, |row| {
+                row.child(small(app, thought.hidden.clone(), Token::Ink3))
+            })
+            .when(thought.streaming && !thought.open, |row| {
+                row.child(caret(app))
+            })
+    };
     let lead = pressable(
         app,
         lead,
         Some(&thought.action),
-        "Thinking".into(),
+        if thought.hidden_all {
+            "Thinking of this session".into()
+        } else {
+            "Thinking".into()
+        },
         thought.open,
-        n,
+        id,
     );
     let reasoning = thought.open.then(|| {
         let words = text(thought.text.clone()).text_color(color(Token::Ink3));
@@ -104,6 +120,6 @@ pub(super) fn thinking(app: AppState, thought: &Thinking, n: usize) -> AnyElemen
         .when(form != Form::Terminal, |block| block.mb(px(6.0)))
         .child(lead)
         .children(reasoning)
-        .children(state(app, &thought.more, n, true))
+        .children(state(app, &thought.more, id, true))
         .into_element()
 }

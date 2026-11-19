@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use corral_protocol::detail::SessionItem;
+use corral_protocol::detail::{CardKind, CardOption, CardQuestion, SessionCard, SessionItem};
 use corral_types::{Origin, SessionRef};
 
 use super::pi::{self, Host, Input, Role, tool_item};
@@ -34,6 +34,44 @@ pub(super) struct Question {
     pub(super) id: String,
     pub(super) text: String,
     pub(super) options: Vec<String>,
+}
+
+impl Question {
+    /// The owner question card the host serves for it, opened at `at`.
+    pub(super) fn card(&self, at: &str) -> SessionCard {
+        SessionCard {
+            id: self.id.clone(),
+            kind: CardKind::Question,
+            title: self.text.clone(),
+            meta: None,
+            body: None,
+            body_more: false,
+            questions: vec![CardQuestion {
+                header: None,
+                text: self.text.clone(),
+                options: self
+                    .options
+                    .iter()
+                    .enumerate()
+                    .map(|(n, label)| CardOption {
+                        id: format!("o{}", n + 1),
+                        label: label.clone(),
+                        detail: None,
+                        unavailable: None,
+                        needs_text: None,
+                        destructive: false,
+                    })
+                    .collect(),
+                initial: None,
+                multi: false,
+                free_text: true,
+            }],
+            child: None,
+            tool: Some("ask_user".into()),
+            opened_at: at.into(),
+            expires_at: None,
+        }
+    }
 }
 
 /// The pi worker that is streaming when the preview opens, with checkpoints to rewind to.
@@ -330,14 +368,10 @@ pub(super) fn populate(feed: &mut Feed) {
         "Preview · sample answer. Mostly: the axes draw from each run's timestamp. One choice is yours before I file the follow-up.",
     );
     if let Some(host) = feed.hosts.get_mut("A-15") {
-        let asked = pi::question_card(
-            &at(11 * MINUTE),
-            &first_question(),
-            "pending",
-            serde_json::Value::Null,
-        );
+        let card = first_question().card(&at(11 * MINUTE));
+        let asked = pi::question_card(&at(11 * MINUTE), &card, "pending", serde_json::Value::Null);
         host.transcript.push(asked);
-        host.pending.push(first_question());
+        host.pending.push(card);
     }
     chat(
         feed,

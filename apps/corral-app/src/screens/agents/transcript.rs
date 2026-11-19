@@ -1,15 +1,24 @@
 //! A session's transcript (`.tx`, `.tm`, `.tool`, `.qcard`), replayed as the terminal UI shows
-//! it: every message with its words as rendered Markdown, thinking, tool rows, images,
-//! dividers, quiet marker rows, cards and the turn's footer; this device's own sends the
-//! transcript does not hold yet (echoes, each with where it stands); then the live turn while
-//! one runs. The owner's messages sit on a raised block. Desktop and phone share the layout at
-//! their sizes; a terminal shows each message as a block of rows. A daemon transcript is one
-//! bounded page, with the controls to page through it and the state of its source.
+//! it: the agent's messages with their words as rendered Markdown, thinking, tool rows (folded
+//! runs, Code Mode cells, build cards), images and cards under its avatar; the owner's words
+//! and the other bubbles on the raised block; what the host made as quiet rows with no avatar;
+//! this device's own sends the transcript does not hold yet (echoes, each with where it
+//! stands); then the live turn while one runs. Desktop and phone share the layout at their
+//! sizes; a terminal shows each message as a block of rows. A daemon transcript is one bounded
+//! page, with the controls to page through it and the state of its source. `jump::follow`
+//! keeps the transcript's scroll at its newest rows and offers the way back to them.
 //!
-//! Every item carries the test id `item-<n>`, numbered across the page, and a row that opens
-//! carries `btn-expand-<n>`; an echo carries `echo-<command id>`.
+//! Every item carries the test id `item-<n>`, numbered across the page (a folded run's or a
+//! cell's rows `item-<n>-<k>`), and a row that opens carries `btn-expand-<n>`; an echo carries
+//! `echo-<command id>`.
 
 pub(crate) mod attachments;
+mod bubbles;
+mod build_cards;
+mod code_cell;
+mod group;
+mod image;
+mod jump;
 mod parts;
 mod prose;
 mod rows;
@@ -18,14 +27,15 @@ mod watch;
 
 use nsh_core::prelude::*;
 
+pub use jump::follow;
 pub use watch::watch;
 
 use crate::model::Form;
 use crate::model::hue::Hue;
+use crate::model::session::Action;
 use crate::model::session::transcript::{
-    Fill, Line, LineClass, Message, MessageItem, Note, QuestionCard, Transcript,
+    Fill, Line, LineClass, Message, MessageItem, MessageKind, Note, QuestionCard, Transcript,
 };
-use crate::model::session::{Action, Echo};
 use crate::model::text::{Rich, Span, span};
 use crate::screens::markdown::provide_styles;
 use crate::state::AppState;
@@ -133,6 +143,21 @@ fn disclaimer(app: AppState, note: &Option<Note>) -> Option<AnyElement> {
     Some(dim(app, words.clone()).into_element())
 }
 
+/// Rows lined up under the messages' bodies: two Cells in, or the avatar's column and its gap.
+fn body_column(app: AppState, rows: impl IntoIterator<Item = AnyElement>) -> AnyElement {
+    let form = app.form;
+    if form == Form::Terminal {
+        return view().pl(term::cells(2.0)).children(rows).into_element();
+    }
+    let sides = if form == Form::Phone { 16.0 } else { 24.0 };
+    view()
+        .pl(px(sides + 34.0))
+        .pr(px(sides))
+        .py(px(4.0))
+        .children(rows)
+        .into_element()
+}
+
 /// The transcript: a stale notice when its source is unreachable, the control for earlier
 /// messages, every message of the page in order (or why there are none), this device's sends
 /// the page does not hold yet, the live turn and the quiet rows after it, the way back to the
@@ -147,29 +172,25 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
         messages.push(self::message(app, message, next));
         next += message.items.len() + usize::from(message.footer.is_some());
     }
-    messages.extend(transcript.echoes.iter().map(|sent| echo(app, sent)));
+    messages.extend(
+        transcript
+            .echoes
+            .iter()
+            .map(|sent| bubbles::echo(app, sent)),
+    );
     for message in &transcript.live {
         messages.push(self::message(app, message, next));
         next += message.items.len() + usize::from(message.footer.is_some());
     }
     let after = (!transcript.after.is_empty()).then(|| {
-        let rows = transcript
-            .after
-            .iter()
-            .enumerate()
-            .map(|(n, entry)| item(app, entry, next + n));
-        if form == Form::Terminal {
-            view().pl(term::cells(2.0)).children(rows).into_element()
-        } else {
-            let sides = if form == Form::Phone { 16.0 } else { 24.0 };
-            // Lined up under the messages' bodies: the avatar's column and its gap.
-            view()
-                .pl(px(sides + 34.0))
-                .pr(px(sides))
-                .py(px(4.0))
-                .children(rows)
-                .into_element()
-        }
+        body_column(
+            app,
+            transcript
+                .after
+                .iter()
+                .enumerate()
+                .map(|(n, entry)| item(app, entry, next + n)),
+        )
     });
     let stale = transcript
         .stale
@@ -245,15 +266,20 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
 
 /// One item of a message, numbered `n` across the page.
 fn item(app: AppState, entry: &MessageItem, n: usize) -> AnyElement {
+    let id = n.to_string();
     let body = match entry {
         MessageItem::Paragraph(words) => paragraph(app, words),
-        MessageItem::Prose(words) => prose::prose(app, words, n),
-        MessageItem::Thinking(thought) => prose::thinking(app, thought, n),
-        MessageItem::Tool(call) => tool::tool(app, call, n),
-        MessageItem::Picture(picture) => rows::picture(app, picture, n),
-        MessageItem::Divider(divider) => rows::divider(app, divider, n),
-        MessageItem::Marker(marker) => rows::marker(app, marker, n),
-        MessageItem::Card(card) => rows::card(app, card, n),
+        MessageItem::Prose(words) => prose::prose(app, words, &id),
+        MessageItem::Thinking(thought) => prose::thinking(app, thought, &id),
+        MessageItem::Tool(call) => tool::tool(app, call, &id),
+        MessageItem::Group(folded) => group::group(app, folded, &id),
+        MessageItem::Cell(cell) => code_cell::cell(app, cell, &id),
+        MessageItem::Build(card) => build_cards::card(app, card, &id),
+        MessageItem::Answered(answer) => bubbles::answered(app, answer, &id),
+        MessageItem::Picture(picture) => image::picture(app, picture, &id),
+        MessageItem::Divider(divider) => rows::divider(app, divider, &id),
+        MessageItem::Marker(marker) => rows::marker(app, marker, &id),
+        MessageItem::Card(card) => rows::card(app, card, &id),
         MessageItem::Question(card) => question(app, card),
     };
     view()
@@ -263,8 +289,10 @@ fn item(app: AppState, entry: &MessageItem, n: usize) -> AnyElement {
         .into_element()
 }
 
-/// One message (`.tm`): the avatar in its hue, the header line, then its items in recorded
-/// order and the turn's footer; a live message carries the streaming mark in its header.
+/// One message, drawn as its kind says: the host's quiet rows with no avatar or header; a
+/// bubble with its lead; an agent's message (`.tm`) with its avatar in its hue, the header line,
+/// then its items in recorded order and the turn's footer. A live message carries the streaming
+/// mark in its header.
 fn message(app: AppState, message: &Message, first: usize) -> AnyElement {
     let form = app.form;
     let mut items = message
@@ -274,16 +302,23 @@ fn message(app: AppState, message: &Message, first: usize) -> AnyElement {
         .map(|(n, entry)| item(app, entry, first + n))
         .collect::<Vec<_>>();
     if let Some(footer) = &message.footer {
-        items.push(rows::footer(app, footer, first + message.items.len()));
+        items.push(rows::footer(
+            app,
+            footer,
+            &(first + message.items.len()).to_string(),
+        ));
     }
-    let owner = message.author == "you";
+    match message.kind {
+        MessageKind::Quiet => return body_column(app, items),
+        MessageKind::Bubble => return bubbles::bubble(app, message, items),
+        MessageKind::Agent => {}
+    }
     let head = view()
         .flex_row()
         .items_center()
         .gap(px(6.0))
         .child(line(app, &message.head, 11.5, Token::Ink3))
-        .when(message.live, |head| head.child(prose::caret(app)))
-        .children(message.input.clone().map(|input| input_id(app, input)));
+        .when(message.live, |head| head.child(prose::caret(app)));
     if form == Form::Terminal {
         return view()
             .child(
@@ -302,12 +337,6 @@ fn message(app: AppState, message: &Message, first: usize) -> AnyElement {
             .into_element();
     }
     let sides = if form == Form::Phone { 16.0 } else { 24.0 };
-    if owner {
-        return bubble(
-            form,
-            view().child(view().mb(px(3.0)).child(head)).children(items),
-        );
-    }
     view()
         .flex_row()
         .items_start()
@@ -339,110 +368,6 @@ fn message(app: AppState, message: &Message, first: usize) -> AnyElement {
                 .child(view().mb(px(3.0)).child(head))
                 .children(items),
         )
-        .into_element()
-}
-
-/// The owner input id the host tagged a message with, quiet at the end of its first row.
-fn input_id(app: AppState, input: String) -> AnyElement {
-    let words = text(input)
-        .number_of_lines(1u32)
-        .truncate()
-        .flex_shrink(1.0)
-        .min_w(px(0.0))
-        .text_color(color(Token::Ink4));
-    if app.form == Form::Terminal {
-        return words.text_color(color(Token::Ink3)).into_element();
-    }
-    words
-        .font_family(FONT_MONO)
-        .text_size(px(10.5))
-        .into_element()
-}
-
-/// The owner's block (desktop and phone): the raised surface the owner's words sit on, lined up
-/// with the other messages' bodies (the avatar's column and its gap).
-fn bubble(form: Form, content: View) -> AnyElement {
-    let sides = if form == Form::Phone { 16.0 } else { 24.0 };
-    view()
-        .pl(px(sides + 34.0))
-        .pr(px(sides))
-        .py(px(6.0))
-        .child(
-            content
-                .min_w(px(0.0))
-                .px(px(12.0))
-                .py(px(8.0))
-                .rounded(px(8.0))
-                .bg(color(Token::Surface2)),
-        )
-        .into_element()
-}
-
-/// This device's send the transcript does not hold yet: the owner's block with its words, then
-/// where it stands (`sending…`, `queued · 2 in line`, `refused: <reason>`) under it, nothing once
-/// it started. A child steer names its receiver in the lead.
-fn echo(app: AppState, sent: &Echo) -> AnyElement {
-    let form = app.form;
-    let lead = match &sent.to {
-        Some(child) => format!("you → {child}"),
-        None => "you".to_owned(),
-    };
-    let state = (!sent.words.is_empty()).then(|| {
-        let words = text(sent.words.clone()).text_color(if sent.hue == Hue::Neutral {
-            color(Token::Ink3)
-        } else {
-            hue_ink(sent.hue)
-        });
-        if form == Form::Terminal {
-            words.into_element()
-        } else {
-            words
-                .font_family(FONT_TEXT)
-                .text_size(px(11.5))
-                .into_element()
-        }
-    });
-    let words = plain(app, sent.text.clone());
-    if form == Form::Terminal {
-        return view()
-            .test_id(&sent.id)
-            .child(
-                view()
-                    .flex_row()
-                    .child(
-                        text(lead)
-                            .flex_shrink_0()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(hue_ink(Hue::You)),
-                    )
-                    .child(term::space(1.0))
-                    .child(input_id(app, sent.input.clone())),
-            )
-            .child(view().pl(term::cells(2.0)).child(words).children(state))
-            .into_element();
-    }
-    let head = view()
-        .flex_row()
-        .items_center()
-        .gap(px(6.0))
-        .mb(px(3.0))
-        .child(
-            text(lead)
-                .font_family(FONT_TEXT)
-                .text_size(px(11.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(color(Token::Ink3)),
-        )
-        .child(input_id(app, sent.input.clone()));
-    view()
-        .test_id(&sent.id)
-        .child(bubble(
-            form,
-            view()
-                .child(head)
-                .child(words)
-                .children(state.map(|state| view().mt(px(4.0)).child(state).into_element())),
-        ))
         .into_element()
 }
 

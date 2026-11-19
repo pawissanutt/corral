@@ -101,6 +101,7 @@ pub fn shell(app: AppState) -> AnyElement {
         .child(ask::share(app))
         .child(palette::palette(app))
         .child(crate::screens::agents::rewind_sheet(app))
+        .child(crate::screens::agents::remove_sheet(app))
         .child(crate::screens::agents::start_sheet(app))
         .child(confirmation(app))
         .child(refusal(app))

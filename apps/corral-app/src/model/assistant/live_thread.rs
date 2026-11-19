@@ -10,11 +10,12 @@ use corral_protocol::assistant::{
 };
 
 use super::cards::{WAIT_LIFETIME, WAIT_NOTE};
+use super::thread::Body;
 use super::views::button;
 use super::{
-    Action, AssistantMessage, Body, Chip, OwnerMessage, QUICK, QueueNote, RollDivider, SourceLink,
-    State, ThreadItem, ToolRow, WaitingBlock, clock, entry_session, fact_chips, question_card,
-    quick_id, record_link, row, send_chips, wait_explanation, wait_label,
+    Action, AssistantMessage, Chip, OwnerMessage, QUICK, QueueNote, RollDivider, SourceLink, State,
+    ThreadItem, ToolRow, WaitingBlock, clock, entry_session, fact_chips, quick_id, record_link,
+    row, send_chips, wait_explanation, wait_label,
 };
 use crate::model::act::{self, ActStatus};
 use crate::model::daemon::{CommandStatus, Feed, Link};
@@ -402,18 +403,8 @@ pub fn live_items(state: &State, feed: &Feed, scope: &str) -> Vec<ThreadItem> {
             )),
         }
     }
-    // The running turn's answer as it streams in, then what the agent asks the owner.
+    // The running turn's answer as it streams in; what the agent asks waits in the session's dock.
     if let Some(message) = feed.live.get(scope).and_then(|live| thread.streaming(live)) {
-        items.push(ThreadItem::Assistant(message));
-    }
-    if let Some(prompt) = crate::model::agents::prompt(feed, scope) {
-        let mut message = thread.message(
-            &thread.placeholder(format!("{scope}/ask/{}", prompt.question)),
-            vec![Body::AskUser(question_card(&prompt))],
-        );
-        message.at = "now".into();
-        message.cost = None;
-        message.state = Some(Chip::new("waiting on you", Hue::You));
         items.push(ThreadItem::Assistant(message));
     }
     outbox(&mut items, feed, scope, &snapshot.entries);

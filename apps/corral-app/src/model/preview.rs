@@ -5,6 +5,7 @@
 //! build sessions) are hosts in `Feed.hosts` that stream on the clock's ticks. The caller
 //! supplies the clock; nothing here contacts a daemon or persists anything.
 mod artifacts;
+mod build_ops;
 mod config;
 mod controls;
 mod details;
@@ -34,7 +35,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 pub use config::config;
-pub use controls::{answer, control};
+pub use controls::control;
 pub use details::{detail, failure};
 pub use effects::{effect, operation};
 pub use engine::act;

@@ -3,7 +3,9 @@
 //! what the host declares it serves (`SessionState.can`) decide the tabs, the dock and the
 //! actions; every fact comes from the host's state, the served page or the session's row, and a
 //! fact none of them reports is shown as absent. The per-session UI state (tab, draft, opened
-//! rows, this device's sends) lives here, keyed by session id, for the app's lifetime.
+//! rows, this device's sends and answers, each part's own state) lives here, keyed by session
+//! id, for the app's lifetime. Every tab and panel of the page is registered here; each fills
+//! its body in its own module.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,33 +26,58 @@ use crate::model::work::session_task;
 mod act;
 mod actions;
 mod activity;
+mod board;
+mod changes;
+mod choice;
 mod composer;
+mod dialog;
 mod dock;
 mod echo;
+mod exit;
 mod fleet;
 mod header;
 mod keys;
 mod log;
 mod notices;
+mod proof;
+mod questions;
+mod queue;
 mod read_state;
+mod sidebar;
 mod status;
 mod tabs;
+mod task;
 pub mod transcript;
+mod usage;
 
 #[cfg(test)]
 mod echo_tests;
+#[cfg(test)]
+mod exit_tests;
+#[cfg(test)]
+mod questions_tests;
+#[cfg(test)]
+mod queue_tests;
 #[cfg(test)]
 mod tabs_tests;
 
 pub use act::Action;
 pub use actions::{ActionGroup, ActionRow, SessionActions, actions};
 pub use activity::{ActivityLine, duration};
+pub use board::{BoardAction, BoardTab, BoardUi, board_tab};
+pub use changes::{ChangesAction, ChangesTab, ChangesUi, changes_tab};
+pub use choice::{ChoiceCard, ChoiceOption};
 pub use composer::{
     ComposerTitle, EffortControl, HostBar, ModelPill, ReceiverChoice, ReceiverPill, SendButton,
     SendMode, SessionComposer, StopButton, composer, host_bar,
 };
-pub use dock::{Dock, DockCard, QueueLine, QueueSummary, dock};
+pub use dialog::{DecisionCard, DecisionKind, OPEN_GUARD_MS};
+pub use dock::{
+    AsideLine, CardConfirm, CardDraft, CardsRead, Compose, Confirming, Dock, DockAction, DockUi,
+    Pending, dock,
+};
 pub use echo::{Echo, EchoState, Sent};
+pub use exit::{ExitOutcome, ExitProgress, ExitStep, ExitSummary, StepState, progress};
 pub use fleet::{
     AgentDetail, AgentRowView, AgentsTab, MessageLine, MessageList, Timeline, TimelineRow,
     agents_tab,
@@ -59,13 +86,22 @@ pub use header::{DecisionsChip, ExitStatus, Header, NeedsChip, StateWord, exit_s
 pub use keys::{KeyAction, KeyBinding, bound, keys, legend, press};
 pub use log::{SessionLog, ended_run, log};
 pub use notices::{Notice, RecentNotices, Ring, recent};
+pub use proof::{ProofAction, ProofTab, ProofUi, proof_tab};
+pub use questions::{
+    AnswerCard, AnswerTab, QuestionDock, QuestionLine, QuestionView, Review, ReviewRow,
+    SendAnswers, TextRow,
+};
+pub use queue::{QueueControl, QueueDock, QueueItem};
 pub use read_state::ReadState;
+pub use sidebar::{
+    SideTab, SideTabItem, Sidebar, SidebarAction, SidebarSummary, SidebarUi, SummarySegment,
+    sidebar,
+};
 pub use status::{Alert, ContextMeter, Cost, RolePill, StatusBar, cost_text, status};
-pub use tabs::{Badge, TabItem, tabs_for};
+pub use tabs::{Badge, PartBody, TabItem, tabs_for};
+pub use task::{TaskAction, TaskTab, TaskUi, task_tab};
 pub use transcript::{Fill, Transcript};
-
-/// The tabs whose bodies this build of the page draws.
-pub const BUILT: &[Tab] = &[Tab::Chat, Tab::Agents];
+pub use usage::{UsageAction, UsageUi, UsageView, usage_view};
 
 /// A session's role, as its page or row says it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +244,15 @@ pub struct Ui {
     pub notices: Ring,
     /// The transcript's row count when Chat was last left or opened; none before.
     pub seen: Option<usize>,
+    /// The dock: card answers being given, choices put aside, reason and answer modes, and the
+    /// requests whose replies are read back.
+    pub dock: DockUi,
+    pub sidebar: SidebarUi,
+    pub changes: ChangesUi,
+    pub board: BoardUi,
+    pub usage: UsageUi,
+    pub task: TaskUi,
+    pub proof: ProofUi,
 }
 
 impl Ui {
@@ -224,6 +269,13 @@ impl Ui {
         echoes: Vec::new(),
         notices: Ring::EMPTY,
         seen: None,
+        dock: DockUi::EMPTY,
+        sidebar: SidebarUi::EMPTY,
+        changes: ChangesUi::EMPTY,
+        board: BoardUi::EMPTY,
+        usage: UsageUi::EMPTY,
+        task: TaskUi::EMPTY,
+        proof: ProofUi::EMPTY,
     };
 }
 
@@ -519,17 +571,20 @@ pub fn shown_tabs(cx: &Cx<'_>) -> Vec<Tab> {
     if cx.log_only() {
         return Vec::new();
     }
-    tabs::items(cx, BUILT)
-        .into_iter()
-        .map(|item| item.tab)
-        .collect()
+    tabs::items(cx).into_iter().map(|item| item.tab).collect()
 }
 
 /// What the main view shows.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Body {
     Chat(Chat),
+    /// `Chat › Usage`.
+    Usage(UsageView),
     Agents(AgentsTab),
+    Changes(ChangesTab),
+    Board(BoardTab),
+    Task(TaskTab),
+    Proof(ProofTab),
     /// A session without a Pi host: its read-only log.
     Log(SessionLog),
 }
@@ -564,10 +619,14 @@ pub struct SessionPage {
     pub focus: Focus,
     pub body: Body,
     pub dock: Dock,
+    /// The build's exit after the owner chose it: the step rail, a repair round, the outcome.
+    pub exit: Option<ExitProgress>,
     pub composer: Option<SessionComposer>,
     /// In the composer's place when the session takes no message now.
     pub bar: Option<HostBar>,
     pub status: StatusBar,
+    /// The rail beside the main view, or its summary row; none for a child or a log.
+    pub sidebar: Option<Sidebar>,
     pub actions: SessionActions,
     /// The terminal key line for the focused surface.
     pub legend: Vec<(&'static str, &'static str)>,
@@ -576,7 +635,7 @@ pub struct SessionPage {
     /// Dispatched when the page mounts (and with `on: false` when it leaves): the live topic.
     /// None for a child transcript or a log, which have no live stream.
     pub watch: Option<Action>,
-    /// Continuations of shown words to fetch now.
+    /// Reads to make now: continuations of shown words, the waiting cards, the shown parts.
     pub fetches: Vec<Action>,
 }
 
@@ -633,18 +692,44 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
     let tabs = if cx.log_only() {
         Vec::new()
     } else {
-        tabs::items(&cx, BUILT)
+        tabs::items(&cx)
     };
     let tab = if tabs.iter().any(|item| item.tab == ui.tab) {
         ui.tab
     } else {
         Tab::Chat
     };
+    let sub = ui.sub.clone().filter(|_| tab == ui.tab);
     let body = match (cx.log_only().then(|| log(id, feed)).flatten(), tab) {
         (Some(log), _) => Body::Log(log),
+        (None, Tab::Chat) if sub == Some(SubView::Usage) => Body::Usage(usage_view(&cx)),
         (None, Tab::Agents) => Body::Agents(agents_tab(&cx)),
-        (None, _) => Body::Chat(chat(&cx)),
+        (None, Tab::Changes) => Body::Changes(changes_tab(&cx)),
+        (None, Tab::Board) => Body::Board(board_tab(&cx)),
+        (None, Tab::Task) => Body::Task(task_tab(&cx)),
+        (None, Tab::Proof) => Body::Proof(proof_tab(&cx)),
+        (None, Tab::Chat) => Body::Chat(chat(&cx)),
     };
+    let sidebar = sidebar(&cx);
+    let mut fetches: Vec<Action> = transcript::fetches(feed, id)
+        .into_iter()
+        .map(|token| Action::Fetch {
+            session: id.clone(),
+            token,
+        })
+        .collect();
+    fetches.extend(dock::fetch(&cx));
+    fetches.extend(match &body {
+        Body::Usage(_) => usage::fetches(&cx),
+        Body::Changes(_) => changes::fetches(&cx),
+        Body::Board(_) => board::fetches(&cx),
+        Body::Task(_) => task::fetches(&cx),
+        Body::Proof(_) => proof::fetches(&cx),
+        Body::Chat(_) | Body::Agents(_) | Body::Log(_) => Vec::new(),
+    });
+    if sidebar.as_ref().is_some_and(|sidebar| !sidebar.hidden) {
+        fetches.extend(sidebar::fetches(&cx));
+    }
     let streams = *cx.role != SessionRole::Child && !cx.log_only() && feed.capable(SESSION_V1);
     let concrete = cx
         .page
@@ -657,13 +742,15 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         role: facts.role.clone(),
         host: cx.host,
         header: header(&cx),
-        sub: ui.sub.clone().filter(|_| tab == ui.tab),
+        sub,
         focus: ui.focus,
         legend: legend(ui.focus, tab, working),
         dock: dock(&cx),
+        exit: progress(&cx),
         composer: composer(&cx),
         bar: host_bar(&cx),
         status: status(&cx),
+        sidebar,
         actions: actions(&cx),
         banner: (feed.link != Link::Up).then(|| {
             (
@@ -678,13 +765,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
             session: id.clone(),
             on: true,
         }),
-        fetches: transcript::fetches(feed, id)
-            .into_iter()
-            .map(|token| Action::Fetch {
-                session: id.clone(),
-                token,
-            })
-            .collect(),
+        fetches,
         tabs,
         tab,
         body,

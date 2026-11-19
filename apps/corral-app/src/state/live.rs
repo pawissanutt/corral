@@ -11,7 +11,8 @@ use nsh_core::prelude::*;
 use super::AppState;
 use crate::client::requests;
 use crate::model::agents::Control;
-use crate::model::daemon::{DetailCache, Feed, Operation};
+use crate::model::daemon::{ClientError, DetailCache, Feed, Operation};
+use crate::model::effect::QueueRequest;
 use crate::model::health::{self, Availability};
 use crate::model::{Destination, Effect, Env, Id, Live, Overlay, Selection};
 
@@ -237,7 +238,6 @@ impl AppState {
                     | Effect::Device(_)
                     | Effect::Send(_)
                     | Effect::Control { .. }
-                    | Effect::Answer { .. }
                     | Effect::Config { .. }
                     | Effect::Refused(_)
             )
@@ -281,7 +281,6 @@ impl AppState {
                     self.toast("Not withdrawn: the app's connection to corrald is not running. Nothing changed.");
                 }
             }
-            Effect::Answer { key, answer } => self.answer(key, answer),
             Effect::Thread { scope, open } => _ = requests::thread(scope, open),
             Effect::Control {
                 session,
@@ -353,6 +352,26 @@ impl AppState {
                     });
                 }
             }
+            Effect::SessionCardAnswer { key, answer } => {
+                self.session_request(
+                    key,
+                    corral_protocol::session_host::SESSION_CARD_ANSWER,
+                    answer,
+                );
+            }
+            Effect::SessionQueue { key, request } => {
+                let method = request.method();
+                match request {
+                    QueueRequest::Withdraw(withdraw) => self.session_request(key, method, withdraw),
+                    QueueRequest::Move(step) => self.session_request(key, method, step),
+                }
+            }
+            Effect::SessionAction { key, request } => {
+                self.session_request(key, corral_protocol::session_host::SESSION_ACTION, request);
+            }
+            Effect::BuildRemove { key, remove } => {
+                self.session_request(key, corral_protocol::build::BUILD_REMOVE, remove);
+            }
             Effect::Config { key, put } => self.send_config(key, put),
             _ => {}
         }
@@ -380,18 +399,31 @@ impl AppState {
             .update(|state| state.control_sent(session, key, control, unsent));
     }
 
-    /// Sends an answer to an agent's question under its key; the card shows how it ended.
-    fn answer(&self, key: Id, answer: corral_protocol::session::SessionPromptAnswer) {
-        if self.fixture() {
-            self.feed
-                .update(|feed| crate::model::preview::answer(feed, &key, &answer));
-        } else if let Some(refusal) = self.link_refusal() {
-            self.toast(refusal);
-        } else if !requests::send(requests::ClientRequest::PromptAnswer {
-            request_id: key.to_string(),
-            request: answer,
-        }) {
-            self.toast("Not sent: the app's connection task is not running.");
+    /// Sends a session or build request under `key`, whose reply the page reads from
+    /// `feed.operations`. One that cannot leave this device is written there as failed with why,
+    /// so the page says it rather than waiting on it.
+    fn session_request(&self, key: Id, method: &'static str, request: impl serde::Serialize) {
+        let unsent = match self.link_refusal() {
+            Some(refusal) => Some(refusal.to_owned()),
+            None => (!requests::session_request(key.to_string(), method, request))
+                .then(|| "Not sent: the app's connection task is not running.".to_owned()),
+        };
+        if let Some(message) = unsent {
+            self.feed.update(|feed| {
+                feed.operations.insert(
+                    key,
+                    Operation {
+                        method: method.into(),
+                        loading: false,
+                        value: None,
+                        error: Some(ClientError {
+                            code: "unsent".into(),
+                            message,
+                        }),
+                        refusal: None,
+                    },
+                );
+            });
         }
     }
 

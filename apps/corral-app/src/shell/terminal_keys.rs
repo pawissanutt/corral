@@ -247,15 +247,16 @@ impl Line {
 }
 
 /// Tracked: the surface standing over the page and taking its keys, the newest first: the
-/// palette, the confirmation, the refusal sheet, the rewind sheet, an operation's form, the
-/// keyboard's menu or one a press opened; on Artifacts the full-size view, or the filter while it
-/// has the keys.
+/// palette, the confirmation, the refusal sheet, the Remove sheet, the rewind sheet, an
+/// operation's form, the keyboard's menu or one a press opened; on Artifacts the full-size view,
+/// or the filter while it has the keys.
 fn open_surface(app: AppState) -> Option<Surface> {
     if app.is_open(Overlay::Palette) {
         Some(Surface::Palette)
     } else if app.confirm.with(Option::is_some) {
         Some(Surface::Confirm)
-    } else if app.refusal.with(Option::is_some) {
+    } else if app.refusal.with(Option::is_some) || app.agents.with(|state| state.removing.is_some())
+    {
         Some(Surface::Sheet)
     } else if app.agents.with(|state| state.rewind.is_some()) {
         Some(Surface::Menu)

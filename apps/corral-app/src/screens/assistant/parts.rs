@@ -1,6 +1,6 @@
 //! What every part of the assistant screens shares: the transcript's small type, the outlined
-//! message state, the card frame, the avatar, link words, and the model's
-//! button descriptors wired to `State::act`.
+//! message state, the avatar, link words, and the model's button descriptors wired to
+//! `State::act`.
 
 use nsh_base::button as press_target;
 use nsh_core::element::StyleRefinement;
@@ -110,26 +110,6 @@ pub fn tag(app: AppState, label: impl Into<String>, hue: Hue) -> AnyElement {
                 .text_size(px(if form == Form::Phone { 12.0 } else { 11.0 }))
                 .text_color(ink),
         )
-        .into_element()
-}
-
-/// A needs-you card on the surface (`.askuser`, `.permcard`): radius 8, the needs-you line at
-/// 55 % and 1.5 pt, its children 6 pt apart inside a 10 by 12 pt inset. A terminal draws a
-/// framed region a Cell in from its line.
-pub fn frame(app: AppState, children: Vec<AnyElement>) -> AnyElement {
-    if app.form == Form::Terminal {
-        return term::framed(view().px(term::cells(1.0)).children(children)).into_element();
-    }
-    view()
-        .bg(color(Token::Surface))
-        .rounded(px(8.0))
-        .border(px(1.5))
-        .border_color(color(Token::You).opacity(0.55))
-        .overflow_hidden()
-        .gap(px(6.0))
-        .px(px(12.0))
-        .py(px(10.0))
-        .children(children)
         .into_element()
 }
 

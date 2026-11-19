@@ -4,6 +4,7 @@
 //! `model::agents` and `model::session`; this module lays it out per form and sends every press
 //! to the model's reducers.
 
+mod remove;
 mod rewind;
 mod roster;
 mod roster_rows;
@@ -12,6 +13,7 @@ mod session;
 mod start;
 mod transcript;
 
+pub(crate) use remove::sheet as remove_sheet;
 pub(crate) use rewind::sheet as rewind_sheet;
 pub use session::{page as live_session, phone as live_session_phone};
 pub(crate) use start::sheet as start_sheet;
@@ -37,8 +39,8 @@ fn run(app: AppState, action: crate::model::session::Action) {
     });
 }
 
-/// Runs one of the roster's, the rewind sheet's or the New build sheet's actions against the
-/// Agents project scope.
+/// Runs one of the roster's, the rewind sheet's, the New build sheet's or the Remove sheet's
+/// actions against the Agents project scope.
 fn run_agents(app: AppState, action: agents::Action) {
     let filter = untracked(|| app.project_filter(FilterScreen::Agents));
     app.reduce(app.agents, move |state, feed, _, _| {
