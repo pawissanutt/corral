@@ -2,14 +2,19 @@
 //! end while the reader is there; scrolling up pauses that without moving the reading position
 //! as rows arrive. While paused, a control floats at the bottom right of the transcript and
 //! counts what arrived: `↓ 37 new rows · End` (`↓ Jump to latest` when nothing arrived; the
-//! phone's `↓ 37 new · Latest`). Pressing it returns to the end and following resumes.
+//! phone's `↓ 37 new · Latest`). Pressing it returns to the end and following resumes. Where
+//! the reader is (the end, or a row and how far into it) is kept per session scope when the
+//! view closes, and every view of that scope opens there again.
 
 use nsh_core::prelude::*;
 
-use crate::model::Form;
+use crate::model::session::transcript::{Following, Reading, Resume};
+use crate::model::{Form, Id};
 use crate::state::AppState;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
+
+use super::anchors;
 
 /// How close to the end still counts as at the end.
 const END_SLACK: f32 = 24.0;
@@ -24,15 +29,28 @@ fn words(form: Form, arrived: usize) -> String {
     }
 }
 
+/// Keeps `reading` as where the reader is in `scope`'s transcript.
+fn save(app: AppState, scope: Id, reading: Reading) {
+    let known = app
+        .session
+        .with_untracked(|state| state.ui(scope.as_str()).reading == reading);
+    if !known {
+        app.session.update(|state| {
+            state.sessions.entry(scope).or_default().reading = reading;
+        });
+    }
+}
+
 /// `surface` (the transcript's scroll) kept at its newest rows while the reader is at the end,
-/// with the jump control over it while they are not. `rows` counts the transcript's rows
-/// (`Transcript::rows`), tracked: each change scrolls to the end while following. `jump` is the
-/// page's jump request (End, Ctrl+End, the catalog's Jump to latest), tracked: each change does
-/// what pressing the control does.
+/// with the jump control over it while they are not. `following` is what the shown transcript
+/// says (`Transcript::following`: its scope, its row count, where its reader left it), tracked:
+/// a new scope opens where its reader left it, each new row scrolls to the end while
+/// following. `jump` is the page's jump request (End, Ctrl+End, the catalog's Jump to latest),
+/// tracked: each change does what pressing the control does.
 pub fn follow(
     app: AppState,
     surface: Scroll,
-    rows: impl Fn() -> usize + 'static,
+    following: impl Fn() -> Option<Following> + 'static,
     jump: impl Fn() -> u32 + 'static,
 ) -> AnyElement {
     let form = app.form;
@@ -40,9 +58,68 @@ pub fn follow(
     let at_end = signal(true);
     // The row count when the reader left the end.
     let left_at = stored(None::<usize>);
-    let count = computed(rows);
+    // The scope shown, and the row the reader is at in it.
+    let scope = stored(None::<Id>);
+    let top = stored(None::<(String, f32)>);
+    let shown = computed(following);
+    let count = computed(move || shown.with(|now| now.as_ref().map_or(0, |now| now.rows)));
+    let rows_seen = stored(0usize);
+    // Where the reader is now, as kept when the view closes or shows another scope.
+    let reading = move || -> Reading {
+        if at_end.try_get().unwrap_or(true) {
+            return Reading::End;
+        }
+        match top.try_with(|top| top.clone()).flatten() {
+            Some((key, offset)) => Reading::At {
+                key,
+                offset: offset.round() as i32,
+                rows: left_at
+                    .try_with(|left| *left)
+                    .flatten()
+                    .or_else(|| rows_seen.try_with(|rows| *rows))
+                    .unwrap_or(0),
+            },
+            None => Reading::End,
+        }
+    };
+    let scope_of = computed(move || shown.with(|now| now.as_ref().map(|now| now.scope.clone())));
+    effect(move || {
+        let Some(id) = scope_of.get() else {
+            return;
+        };
+        if scope.with(|known| known.as_ref() == Some(&id)) {
+            return;
+        }
+        let left = untracked(reading);
+        if let Some(old) = scope.replace(Some(id.clone())) {
+            untracked(|| save(app, old, left));
+        }
+        top.replace(None);
+        let resume = shown.with_untracked(|now| now.as_ref().map(|now| now.resume.clone()));
+        match resume {
+            Some(Resume::Row { key, offset, rows }) => {
+                at_end.set(false);
+                left_at.replace(Some(rows));
+                top.replace(Some((key.clone(), offset as f32)));
+                anchors::restore(id.as_str(), key, offset as f32, scroller);
+            }
+            _ => {
+                anchors::cancel(id.as_str());
+                at_end.set(true);
+                left_at.replace(None);
+                after_answer(move || scroller.scroll_to_end(false));
+            }
+        }
+    });
+    cleanup(move || {
+        let left = reading();
+        if let Some(Some(id)) = scope.try_with(Option::take) {
+            save(app, id, left);
+        }
+    });
     effect(move || {
         let now = count.get();
+        rows_seen.replace(now);
         if at_end.get_untracked() {
             left_at.replace(None);
             after_answer(move || scroller.scroll_to_end(false));
@@ -63,8 +140,14 @@ pub fn follow(
     let surface = surface
         .element_ref(&scroller)
         .on_scroll(move |event: &ScrollEvent| {
-            let below = event.content_size.height.0 - event.offset.y.0 - event.size.height.0;
+            let offset = event.offset.y.0;
+            let below = event.content_size.height.0 - offset - event.size.height.0;
             let end = below <= END_SLACK;
+            if let Some(at) =
+                scope.with(|known| known.as_ref().map(|id| anchors::at(id.as_str(), offset)))
+            {
+                top.replace(at);
+            }
             if end != at_end.get_untracked() {
                 if !end {
                     left_at.replace(Some(count.get_untracked()));

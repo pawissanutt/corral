@@ -399,6 +399,30 @@ fn plan_task(app: AppState, task: &PlanTask) -> AnyElement {
         )
     });
     let body = task.body.as_ref().map(|body| markdown(app, body, false));
+    // Where the read of the rest stands: a spinner while pages arrive, else why it failed with
+    // a Retry; the clipped text stays above either.
+    let read = task.read.clone().map(|read| {
+        let reading = read.retry.is_none() && read.hue == Hue::Neutral;
+        let retry = read.retry.map(|action| {
+            button_with(
+                app,
+                "Retry",
+                ButtonKind::Quiet,
+                ButtonOptions::default(),
+                format!("btn-plan-brief-retry-{}", task.key),
+                move || run(app, action.clone()),
+            )
+        });
+        view()
+            .test_id(&format!("plan-brief-read-{}", task.key))
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(8.0))
+            .children(state_mark(app, reading, None, Hue::Corral))
+            .child(words(form, read.words, tint(read.hue)).min_w(px(0.0)))
+            .children(retry)
+    });
     view()
         .test_id(&task.id)
         .gap(px(if form == Form::Terminal { 0.0 } else { 3.0 }))
@@ -411,6 +435,7 @@ fn plan_task(app: AppState, task: &PlanTask) -> AnyElement {
                 .min_w(px(0.0))
         }))
         .children(body)
+        .children(read)
         .children(
             task.more
                 .clone()

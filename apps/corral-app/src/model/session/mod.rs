@@ -301,6 +301,8 @@ pub struct Ui {
     pub picker: PickerUi,
     /// Bumped each time the transcript is asked back to its newest rows (End, Ctrl+End).
     pub jump: u32,
+    /// Where the reader was in this scope's transcript when its last view closed.
+    pub reading: transcript::Reading,
 }
 
 impl Ui {
@@ -327,6 +329,7 @@ impl Ui {
         fleet: FleetUi::EMPTY,
         picker: PickerUi::EMPTY,
         jump: 0,
+        reading: transcript::Reading::End,
     };
 }
 

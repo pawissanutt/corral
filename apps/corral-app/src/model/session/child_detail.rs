@@ -20,7 +20,7 @@ use super::super::status::cost_text;
 use super::super::{Action, Cx, DockAction};
 use super::{
     CHILD_CONTROL, FleetAction, FleetButton, asks, card_of, child_detail, child_target, control,
-    ctx, helper, live, ops, profile_model, shown_state, time, turns,
+    ctx, helper, live, ops, profile_model, shown_state, turns,
 };
 
 /// A long text clipped to its first lines until the owner opens it.
@@ -37,8 +37,9 @@ pub struct AgentDetail {
     pub mark: Mark,
     pub hue: Hue,
     pub state: &'static str,
-    /// `slice · gpt-6 · high effort · 1m 02s · $0.21 · ctx 18% · 4 turns`.
-    pub facts: String,
+    /// `slice · gpt-6 · high effort` and `$0.21 · ctx 18% · 4 turns`: the facts before and
+    /// after its running time, which is the clock's (`AgentsClock::time`).
+    pub facts: (String, String),
     pub brief: Option<Clipped>,
     /// `Owns: src/auth/token.rs · starts after a0`.
     pub owns: Option<String>,
@@ -165,19 +166,21 @@ fn at(stamp: &str, cx: &Cx<'_>) -> Option<String> {
     clock(Some(stamp), cx.feed)
 }
 
-fn facts(child: &SessionChild, served: Option<&SessionChildDetail>, now: u64) -> String {
-    let mut facts = vec![profile_model(child)];
+/// The facts before and after the agent's running time.
+fn facts(child: &SessionChild, served: Option<&SessionChildDetail>) -> (String, String) {
+    let mut lead = vec![profile_model(child)];
     if let Some(effort) = served
         .and_then(|detail| detail.effort.clone())
         .or_else(|| child.effort.clone())
     {
-        facts.push(format!("{effort} effort"));
+        lead.push(format!("{effort} effort"));
     }
-    facts.push(time(child, now));
-    facts.push(cost_text(child.cost_usd, false));
-    facts.push(format!("ctx {}", ctx(child)));
-    facts.push(turns(child.turns));
-    facts.join(" · ")
+    let tail = [
+        cost_text(child.cost_usd, false),
+        format!("ctx {}", ctx(child)),
+        turns(child.turns),
+    ];
+    (lead.join(" · "), tail.join(" · "))
 }
 
 fn owns(child: &SessionChild, served: Option<&SessionChildDetail>) -> Option<String> {
@@ -434,7 +437,7 @@ pub(super) fn detail(cx: &Cx<'_>, child: &SessionChild) -> AgentDetail {
         mark,
         hue,
         state,
-        facts: facts(child, served, cx.feed.now),
+        facts: facts(child, served),
         brief: served
             .filter(|detail| !detail.brief.trim().is_empty())
             .map(|detail| {

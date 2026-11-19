@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nsh_core::{
     Points, Size,
@@ -616,10 +616,11 @@ fn opening_a_task_from_the_palette_reopens_a_closed_inspector() {
 }
 
 /// The sample build waits on a two-question card: its answer card takes one answer per
-/// question and sends them once both are answered. Two follow-ups queued while it works are
-/// reordered and one is taken back into the draft. `/fin` runs Finish…, which docks the exit
-/// choice; Land asks once on this device, then for the reason, and the exit walks rebase, gate
-/// and land to its outcome.
+/// question and sends them once both are answered. Two follow-ups queued while it works join
+/// the two the sample queued; they are reordered and one is taken back into the draft (the
+/// queue folds while cards wait, so it is unfolded first). `/fin` runs Finish…, which docks the
+/// exit choice; Land asks once on this device, then for the reason, and the exit walks rebase,
+/// gate and land to its outcome.
 #[test]
 fn a_build_session_is_answered_and_landed() {
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
@@ -642,11 +643,15 @@ fn a_build_session_is_answered_and_landed() {
         app.type_text("id:field-message", text).unwrap();
         app.press("id:btn-queue").unwrap();
     }
-    app.wait_for("id:queue-1").unwrap();
-    app.press("id:btn-queue-down-0").unwrap();
-    app.wait_for("id:btn-queue-edit-0").unwrap();
-    app.press("id:btn-queue-edit-0").unwrap();
-    app.wait_for_gone("id:queue-1", Duration::from_secs(5))
+    if !in_tree(&app, "queue-0") {
+        app.press("id:btn-queue-toggle").unwrap();
+        wait_in_tree(&mut app, "queue-0");
+    }
+    wait_in_tree(&mut app, "queue-3");
+    app.press("id:btn-queue-down-2").unwrap();
+    app.wait_for("id:btn-queue-edit-2").unwrap();
+    app.press("id:btn-queue-edit-2").unwrap();
+    app.wait_for_gone("id:queue-3", Duration::from_secs(5))
         .unwrap();
     assert_eq!(
         app.screen().input_text("id:field-message").unwrap(),
@@ -682,4 +687,120 @@ fn a_stopped_build_is_removed_after_its_dry_run() {
     app.press("id:btn-remove-confirm").unwrap();
     app.wait_for_gone("id:agent-B-k2a1", Duration::from_secs(5))
         .unwrap();
+}
+
+/// Whether a view with test id `id` is in the tree and not hidden, scrolled or clipped into
+/// sight or not. `wait_for` and `count` take only views on screen: not hidden, with non-empty
+/// bounds inside the window and every clipping view around them (a scroll view's content counts
+/// along its axis), so a row of a list squeezed or folded out of the window is never "showing".
+fn in_tree(app: &Headless, id: &str) -> bool {
+    app.screen()
+        .layout_nodes()
+        .iter()
+        .any(|node| node.test_id.as_deref() == Some(id) && !node.hidden)
+}
+
+/// Waits, as long as `wait_for` does, for [`in_tree`].
+fn wait_in_tree(app: &mut Headless, id: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !in_tree(app, id) {
+        assert!(Instant::now() < deadline, "id:{id} never joined the tree");
+        app.next_change(Duration::from_millis(100)).unwrap();
+    }
+}
+
+/// The sample build serves every part a host serves, so each of its tabs opens on what the
+/// sample holds on every form; a part the preview did not answer would leave its tab reading
+/// forever. Chat shows the transcript; Agents lists the three children and both jobs, a child
+/// opens on its detail and its conversation, a job on its output (older output is offered only
+/// once the newest page was read); Changes lists the three files and the first opens on its two
+/// hunks; Board lists its tasks and proposal and opens the build record's sections; the ⋯ menu
+/// lists the host's actions and opens Usage on one row per agent and the total; the sidebar's
+/// Plan lists the plan's steps. Every press is followed by what proves it took effect before the
+/// next step, and list rows are looked for in the tree, not on screen.
+#[test]
+fn every_session_tab_opens_in_the_sample_preview_on_phone_desktop_and_terminal() {
+    for (config, rail) in [(phone(), false), (desktop(), true), (terminal_80(), false)] {
+        let mut app = preview(config, &[("corral.destination", "agents")]);
+        app.press("id:agent-B-k3x9").unwrap();
+        app.wait_for("id:session-transcript").unwrap();
+        wait_in_tree(&mut app, "item-0");
+
+        app.press("id:tab-agents").unwrap();
+        app.wait_for("id:session-agents").unwrap();
+        for child in ["migration", "docs", "review"] {
+            wait_in_tree(&mut app, &format!("agent-B-k3x9-child-{child}"));
+        }
+        for job in ["j1-1", "j1-2"] {
+            wait_in_tree(&mut app, &format!("job-{job}"));
+        }
+        app.press("id:agent-B-k3x9-child-migration").unwrap();
+        app.wait_for("id:session-agent-detail").unwrap();
+        app.press("id:btn-child-open").unwrap();
+        app.wait_for("id:session-conversation").unwrap();
+        wait_in_tree(&mut app, "item-0");
+        app.press("id:btn-agents-back").unwrap();
+        app.wait_for_gone("id:session-conversation", Duration::from_secs(5))
+            .unwrap();
+        app.wait_for("id:session-agents").unwrap();
+        app.press("id:job-j1-1").unwrap();
+        app.wait_for("id:session-job-detail").unwrap();
+        app.press("id:btn-job-open").unwrap();
+        app.wait_for("id:session-job-output").unwrap();
+        wait_in_tree(&mut app, "btn-job-older");
+        app.press("id:btn-agents-back").unwrap();
+        app.wait_for_gone("id:session-job-output", Duration::from_secs(5))
+            .unwrap();
+        app.wait_for("id:session-agents").unwrap();
+
+        app.press("id:tab-changes").unwrap();
+        app.wait_for("id:session-changes").unwrap();
+        for file in 0..3 {
+            wait_in_tree(&mut app, &format!("change-file-{file}"));
+        }
+        app.press("id:change-file-0").unwrap();
+        app.wait_for("id:changes-file").unwrap();
+        wait_in_tree(&mut app, "hunk-1");
+
+        app.press("id:tab-board").unwrap();
+        app.wait_for("id:session-board").unwrap();
+        wait_in_tree(&mut app, "task-T-004");
+        wait_in_tree(&mut app, "board-plan");
+        app.press("id:btn-board-record").unwrap();
+        app.wait_for("id:session-record").unwrap();
+        for section in ["gate", "reviews", "decisions", "timeline"] {
+            wait_in_tree(&mut app, &format!("record-{section}"));
+        }
+
+        app.press("id:btn-session-actions").unwrap();
+        app.wait_for("id:session-actions").unwrap();
+        for row in [
+            "model",
+            "compact",
+            "export",
+            "board-refresh",
+            "build-record",
+            "plan-ledger",
+        ] {
+            wait_in_tree(&mut app, &format!("act-{row}"));
+        }
+        app.press("id:act-view-usage").unwrap();
+        app.wait_for_gone("id:session-actions", Duration::from_secs(5))
+            .unwrap();
+        app.wait_for("id:session-usage").unwrap();
+        for row in ["pane", "migration", "docs", "review"] {
+            wait_in_tree(&mut app, &format!("usage-row-{row}"));
+        }
+        wait_in_tree(&mut app, "usage-total");
+
+        app.press(if rail {
+            "id:side-plan"
+        } else {
+            "id:side-row-plan"
+        })
+        .unwrap();
+        for step in 0..5 {
+            wait_in_tree(&mut app, &format!("side-step-{step}"));
+        }
+    }
 }
