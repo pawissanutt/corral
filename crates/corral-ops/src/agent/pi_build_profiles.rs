@@ -2,9 +2,63 @@
 use super::{BuildArgs, Overrides, refuse, require_provider};
 use anyhow::{Context, Result, ensure};
 use corral_core::{
-    Config, ProfileChoice, connection::ConnectionBinding, paid_episode::PaidApproval,
+    Config, ProfileChoice, config::BuildApiCfg, connection::ConnectionBinding,
+    paid_episode::PaidApproval,
 };
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+
+/// Approval recorded for a mixed Build whose mappings were derived instead of configured.
+pub(crate) const DEFAULT_MIXED_APPROVAL: &str = "default-mixed-build";
+/// The largest allowance `build.api.maximum_micros` accepts; recorded but not enforced.
+const DEFAULT_MIXED_MAXIMUM_MICROS: u64 = 9_007_199_254_740;
+
+/// The owner's `[build.api]`, or by default every child preset mapped to the one API profile
+/// that is approved for assistant API start and runs the preset's exact vendor and model.
+/// Launch and ledger opening derive the same mappings from configuration.
+pub(crate) fn mixed_api(config: &Config) -> Option<Cow<'_, BuildApiCfg>> {
+    if let Some(api) = &config.build.api {
+        return Some(Cow::Borrowed(api));
+    }
+    if config.build.profiles.is_empty() {
+        return None;
+    }
+    let mut approved: BTreeMap<(&str, String), Vec<&String>> = BTreeMap::new();
+    for name in config.profiles.keys() {
+        let Ok(route) = resolve(config, name, &BuildArgs::default()) else {
+            continue;
+        };
+        let Some(binding) = route.binding.as_ref().filter(|_| route.paid.is_some()) else {
+            continue;
+        };
+        approved
+            .entry((binding.connection.vendor(), route.model))
+            .or_default()
+            .push(name);
+    }
+    let profiles: BTreeMap<String, String> = config
+        .build
+        .profiles
+        .iter()
+        .filter(|(preset, _)| preset.as_str() != "default")
+        .filter_map(|(preset, profile)| {
+            let (provider, model) = profile.model.split_once('/')?;
+            let vendor = require_provider(provider).ok()?.vendor;
+            match approved.get(&(vendor, model.to_owned()))?.as_slice() {
+                [name] => Some((preset.clone(), (*name).clone())),
+                _ => None,
+            }
+        })
+        .collect();
+    (!profiles.is_empty()).then(|| {
+        Cow::Owned(BuildApiCfg {
+            approval: DEFAULT_MIXED_APPROVAL.into(),
+            maximum_micros: DEFAULT_MIXED_MAXIMUM_MICROS,
+            profiles,
+        })
+    })
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,7 +75,7 @@ pub(super) struct Route {
     pub paid: Option<PaidApproval>,
 }
 
-pub(super) fn resolve(config: &Config, name: &str, args: &BuildArgs, bare: bool) -> Result<Route> {
+pub(super) fn resolve(config: &Config, name: &str, args: &BuildArgs) -> Result<Route> {
     let mut resolved = config.resolve_profile(
         &ProfileChoice {
             profile: Some(name.into()),
@@ -48,12 +102,6 @@ pub(super) fn resolve(config: &Config, name: &str, args: &BuildArgs, bare: bool)
         .connection_binding()?
         .context("profile has no native connection")?;
     let paid = if binding.connection.api_key() {
-        if bare {
-            return Err(refuse(
-                "paid_admission_required",
-                "Bare API profiles require durable Build accounting; use --build --profile instead",
-            ));
-        }
         Some(
             approval(config, name, &binding)
                 .map_err(|error| refuse("paid_admission_required", format!("{error:#}")))?,
@@ -63,7 +111,11 @@ pub(super) fn resolve(config: &Config, name: &str, args: &BuildArgs, bare: bool)
     };
     let model = resolved.model.context("profile names no model")?;
     let provider = binding.connection.provider().to_owned();
-    require_provider(&provider)?;
+    // API bindings already identify the connection. Their runtime provider may differ
+    // from the login ID (`openai` vs. `openai-api`).
+    if !binding.connection.api_key() {
+        require_provider(&provider)?;
+    }
     let label = config
         .profiles
         .get(name)
@@ -125,8 +177,7 @@ pub(super) fn recorded(data_root: &std::path::Path, id: &str) -> Result<(Option<
     Ok((route, mixed))
 }
 
-pub(super) fn validate_recorded(config: &Config, route: &Route, bare: bool) -> Result<()> {
-    require_provider(&route.provider)?;
+pub(super) fn validate_recorded(config: &Config, route: &Route) -> Result<()> {
     if let Some(binding) = &route.binding {
         binding.validate()?;
         ensure!(
@@ -136,19 +187,21 @@ pub(super) fn validate_recorded(config: &Config, route: &Route, bare: bool) -> R
             "recorded build route differs from binding"
         );
         if binding.connection.api_key() {
-            ensure!(!bare, "Bare sessions cannot resume API routes");
-            let current = resolve(config, &route.name, &BuildArgs::default(), false)?;
+            let current = resolve(config, &route.name, &BuildArgs::default())?;
+            // Spending caps are disabled: only the exact API route must remain approved.
             ensure!(
-                current.binding == route.binding && current.paid == route.paid,
-                "paid_admission_required: recorded API route or approval changed; its allowance cannot be refreshed"
+                current.binding == route.binding,
+                "paid_admission_required: recorded API route changed; select its profile again"
             );
         } else {
+            require_provider(&route.provider)?;
             ensure!(
                 route.paid.is_none(),
                 "subscription route carries paid approval"
             );
         }
     } else {
+        require_provider(&route.provider)?;
         ensure!(route.paid.is_none(), "paid route has no binding");
     }
     Ok(())

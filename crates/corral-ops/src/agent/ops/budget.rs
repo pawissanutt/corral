@@ -255,8 +255,7 @@ pub(super) fn budget(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> {
                 })
                 .fold(0u64, |n, r| n.saturating_add(r.usd_nanos));
             Ok(Commit {
-                result: json!({"admitted":admitted, "exhausted":state.budget.exhausted(limits)
-                    || paid.as_ref().is_some_and(|p| p.episode.ledger.totals().1 >= p.episode.approval.allowance_nanos),
+                result: json!({"admitted":admitted, "exhausted":state.budget.exhausted(limits),
             "paid":paid_state, "subscription_estimate_nanos":subscription_estimate_nanos,
             "guard_paused":guard_paused,
             "connection":connection, "billing":connection.map(|c| c.billing()),

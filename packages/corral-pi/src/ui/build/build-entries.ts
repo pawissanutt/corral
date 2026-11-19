@@ -88,7 +88,7 @@ function outcome(details: Pick<ExitEntryDetails, "choice" | "phase" | "detail">)
     case "kept": return "The branch stays in its worktree; nothing was merged.";
     case "landed": return "The branch landed.";
     case "failed": return "The exit failed.";
-    case "rebasing": case "verifying": case "landing": return "The exit is still running.";
+    case "rebasing": case "verifying": case "repairing": case "landing": return "The exit is still running.";
     default: return details.choice === "iterate" ? "The build session continues; nothing was landed." : "No exit ran.";
   }
 }

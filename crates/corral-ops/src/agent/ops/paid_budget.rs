@@ -1,6 +1,6 @@
 //! Financial adapter used only inside the ordinary authenticated native receipt commit.
 //! A host cannot name an episode, allowance, connection, epoch or replacement identity.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use corral_core::{
     Store,
     agent::{AgentRunState, ContainerRef},
@@ -33,12 +33,8 @@ impl PaidBudget {
             generation: state.binding.generation,
             binding: binding.clone(),
         };
+        // Spending caps are disabled: config or approval edits do not fence paid requests.
         episode.owner(&link, &owner)?;
-        ensure!(
-            episode.approval.policy_digest
-                == store.config_layers()?.config()?.profile_setup_revision()?,
-            "paid policy changed; explicit approval is required"
-        );
         Ok(Some(Self {
             episode,
             owner,

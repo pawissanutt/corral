@@ -10,7 +10,7 @@ const usage = `Usage:
   corral-pi login [--provider <id> | --connection <id>] [--auth-dir <path>]
   corral-pi models [--provider <id>]
 Model flags: --model [<provider>/]<id>, --provider <id>, --connection <id>, --effort <level>, --aws-profile <name>, --aws-region <region>.
-Spending flags: --max-usd <amount>, --paid-route <provider/model> (requires --max-usd).
+Spending flags: --max-usd <amount> (optional cap on API spending), --paid-route <provider/model> (requires --max-usd).
 Sessions can also take --project <name> and --headless; non-interactive launches are headless by default.
 `;
 

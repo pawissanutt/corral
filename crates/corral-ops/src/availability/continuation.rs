@@ -179,10 +179,6 @@ fn save(store: &Store, intent: &ContinuationIntent) -> Result<()> {
 }
 fn approved(store: &Store, episode: &PaidEpisode, source: &ConnectionBinding) -> Result<()> {
     let config = store.config_layers()?.config()?;
-    ensure!(
-        episode.approval.policy_digest == config.profile_setup_revision()?,
-        "PolicyNotApproved"
-    );
     if source.connection.api_key() && api_start::approved(store, episode, source).is_ok() {
         return Ok(());
     }
@@ -198,10 +194,6 @@ fn approved(store: &Store, episode: &PaidEpisode, source: &ConnectionBinding) ->
         if !policy.automatic
             || !policy.paid_roles.contains(&episode.root.role)
             || policy.approval != episode.approval.approval
-            || !policy.spending.as_ref().is_some_and(|s| {
-                s.currency == "USD"
-                    && s.maximum_micros.checked_mul(1000) == Some(episode.approval.allowance_nanos)
-            })
         {
             continue;
         }
@@ -390,10 +382,6 @@ pub(crate) fn prepare(ctx: &Ctx, mut transfer: Transfer) -> Result<ContinuationI
             );
         }
         approved(&ctx.store, &episode, &source.binding)?;
-        ensure!(
-            episode.ledger.totals().1 < episode.approval.allowance_nanos,
-            "paid allowance exhausted; restart cannot refresh allowance"
-        );
         ensure!(!state.binding.closing, "TerminalResult");
         subject_current(&ctx.store, &source.container, &transfer.subject)?;
         if matches!(transfer.context, ContextSource::ResumedSession) {
@@ -552,10 +540,6 @@ pub(crate) fn require_launch(
     );
     let episode = store.paid_episode(&intent.link.episode)?;
     approved(store, &episode, &intent.source.binding)?;
-    ensure!(
-        episode.ledger.totals().1 < episode.approval.allowance_nanos,
-        "paid allowance exhausted; cannot refresh allowance by restarting"
-    );
     ensure!(
         episode.epoch == intent.link.epoch
             && matches!(&episode.phase,

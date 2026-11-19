@@ -149,7 +149,7 @@ fn api_start_approval_is_role_and_selected_profile_scoped_not_fallback_or_select
 }
 
 #[test]
-fn api_first_hello_activates_one_sticky_episode_and_resume_cannot_refresh_exhausted_allowance() {
+fn api_first_hello_activates_one_sticky_episode_and_resume_retains_spent_allowance() {
     let (fx, binding) = configured();
     let session = fx
         .ctx
@@ -254,7 +254,8 @@ fn api_first_hello_activates_one_sticky_episode_and_resume_cannot_refresh_exhaus
         Ok(())
     })
     .unwrap();
-    assert!(prepare_launch(&fx.ctx, &container, &binding, Some("pi")).is_err());
+    // Spending caps are disabled: resuming after the allowance is spent keeps the same episode.
+    prepare_launch(&fx.ctx, &container, &binding, Some("pi")).unwrap();
     let after = fx.ctx.store.paid_episode(&prepared.link.episode).unwrap();
     assert_eq!(after.approval.allowance_nanos, 1000);
     assert_eq!(after.ledger.totals().1, 1000);

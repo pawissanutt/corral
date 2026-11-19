@@ -86,12 +86,12 @@ the approval identifier must be nonempty. Role names are `assistant`, `pm`, `wor
 `api_start` is independent of `metadata.fallback`: do not enable automatic fallback merely
 to use an API-first profile.
 
-The canonical paid episode owns the allowance. Each physical paid request reserves a
-conservative priced bound **before** sending; the request is refused if it will not fit.
-Uncertain requests remain reserved. Recovering a host or resuming the same paid lineage does
-not reset the allowance or silently switch to subscription. Changing policy requires renewed
-approval and does not replenish an existing episode. Remove `api_start` to withdraw future
-API-first permission; in-flight requests cannot be recalled.
+**Spending caps are currently disabled.** `metadata.api_start` still names the approved roles,
+route and approval identifier, but its `spending` allowance is not enforced: requests are never
+refused for exceeding it, sessions never stop as exhausted, and editing the approval or
+allowance does not block resuming an existing paid session. Consumed and reserved usage is
+still recorded for usage reporting. Remove `api_start` to withdraw future API-first permission;
+in-flight requests cannot be recalled.
 
 ## 4. Select the profile
 For a terminal session, select the profile for one launch without changing defaults:
@@ -132,9 +132,12 @@ binding prevents a switch. A refused selection leaves the existing route unchang
 
 API-first admission applies to canonically bound native roles, including daemon assistants,
 and workspace Build sessions. Build keeps its ordinary worktree, off-board tools and exit
-workflow; its finite paid ledger lives in the workspace store. Parent, child and compaction
-requests share that allowance. Resume fences the previous host and retains consumed and
-uncertain reservations. Bare and non-workspace builds still refuse API profiles.
+workflow; its workspace ledger tracks metered parent, child and compaction requests without
+enforcing an allowance. Resume fences the previous host and retains consumed and
+uncertain reservations. See [Build sessions](build-sessions.md#named-profiles-and-metered-apis)
+for preset routing. Bare sessions (`corral pi --bare --profile <api-profile>`) also accept
+API profiles; they have no corral ledger, so their API usage is not recorded. Non-workspace
+`--build` sessions still refuse API profiles.
 Paid summary profiles remain separately restricted.
 
 ## Refusals and recovery
@@ -146,11 +149,8 @@ Paid summary profiles remain separately restricted.
 - **Spending approval required:** explicitly configure `metadata.api_start` with the role,
   approval identifier and finite USD allowance. Saving a credential or selecting the model
   cannot fix this refusal by itself.
-- **Allowance exhausted or insufficient:** no paid request is sent. Review consumed and
-  reserved usage; do not retry to bypass the cap. A fresh independently approved session is
-  a new allowance, not a refund of uncertain requests.
-- **Frozen binding/policy changed:** retain the exact approved route or start a new explicitly
-  approved session. Corral does not silently reinterpret a paid session as a subscription.
+- **Frozen route changed:** a paid session resumes only on its original profile and exact
+  API route (connection, model, effort). Approval or allowance edits do not block resume.
 
 Existing subscription profiles and [quota-triggered paid continuation](corral-pi.md#paid-continuation-after-subscription-quota)
 keep their existing configuration and behavior. This guide does not authorize any live

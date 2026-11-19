@@ -73,12 +73,13 @@ available.
 
 ## API spending and paid continuation
 
-An API model needs `--max-usd <amount>`. You can put it in a profile's `args`. The
-host adds up priced API responses in `spend.json` and refuses the next API request
-once the total reaches the cap. Requests already in progress can put the total over
-the cap; restarting the same session does not replenish it.
+An API model runs without a spending cap: the host reports its usage and nothing
+stops it. `--max-usd <amount>` sets a cap; you can put it in a profile's `args`.
+With a cap the host adds up priced API responses in `spend.json` and refuses the
+next API request once the total reaches it. Requests already in progress can put
+the total over the cap; restarting the same session does not replenish it.
 
-To continue on an API key after a subscription quota error, explicitly opt in:
+To continue on an API key after a subscription quota error, explicitly opt in, with a cap:
 
 ```toml
 args = ["--max-usd", "5", "--paid-route", "openai/gpt-5.4"]

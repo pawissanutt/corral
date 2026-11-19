@@ -93,10 +93,9 @@ export async function createSummaryRequest(options: {
   const api = isApiConnection(connection);
   const local = provider === "llama.cpp" && options.capabilities?.llama_cpp
     ? await createLocalModels(options.capabilities.llama_cpp, summary.model, summary.network.fetch) : undefined;
-  if (api && !spending) throw new Error("API summary models require --max-usd");
   if (spending && !api && PROVIDERS[provider].lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
   const direct = api ? await createApiCatalog({ connection, credentials, model: summary.model, effort: summary.effort,
-    send: summary.network.fetch, spending: spending!, report }) : undefined;
+    send: summary.network.fetch, spending, report }) : undefined;
   const models = direct?.models ?? local?.models ?? await createModelCatalog(credentials, { providers: [provider] });
   const id = summary.model.startsWith(`${provider}/`) ? summary.model.slice(provider.length + 1) : summary.model;
   const model = direct?.model ?? local?.model ?? models.getModel(provider, id);

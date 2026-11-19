@@ -55,9 +55,6 @@ fn secret() -> Result<String> {
         .map_err(|e| anyhow::anyhow!("generating Build financial capability: {e}"))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
-fn approved(store: &Store, profile: &str, binding: &ConnectionBinding) -> Result<PaidApproval> {
-    approved_config(&store.config_layers()?.config()?, profile, binding)
-}
 fn approved_config(
     config: &corral_core::Config,
     profile: &str,
@@ -95,11 +92,8 @@ pub fn open_mixed(
     session: Option<&str>,
 ) -> Result<PaidLaunch> {
     open_with(store, profile, session, |config| {
-        let api = config
-            .build
-            .api
-            .as_ref()
-            .context("mixed Build approval missing")?;
+        let api =
+            crate::agent::pi_build::mixed_api(config).context("mixed Build approval missing")?;
         ensure!(
             &api.profiles == presets,
             "mixed Build preset mappings changed during launch"
@@ -119,7 +113,7 @@ pub fn open_mixed(
                 let approval = approved_config(config, profile, binding)?;
                 ensure!(
                     approved_routes.get(profile) == Some(&approval),
-                    "paid Build parent not admitted to shared cap"
+                    "paid Build parent missing from mixed routes"
                 );
                 approval
             }
@@ -164,11 +158,13 @@ fn open_with(
         let (approval, mixed) = policy(&store.config_layers()?.config()?)?;
         let ledger = match store.build_paid_ledger(&session)? {
             Some(mut ledger) => {
+                // Approval and allowance edits keep recorded usage. The exact routes and
+                // their preset mappings must still match.
                 ensure!(
                     ledger.profile == profile
-                        && ledger.approval == approval
-                        && ledger.mixed == mixed,
-                    "paid route is sticky; approval changes cannot refresh its allowance"
+                        && ledger.approval.candidates == approval.candidates
+                        && same_mixed_routes(ledger.mixed.as_ref(), mixed.as_ref()),
+                    "paid Build route is sticky; another profile or route cannot resume it"
                 );
                 ledger.generation = ledger
                     .generation
@@ -203,6 +199,24 @@ fn open_with(
             mixed: ledger.mixed.is_some(),
         })
     })
+}
+fn same_mixed_routes(
+    before: Option<&MixedBuildApproval>,
+    after: Option<&MixedBuildApproval>,
+) -> bool {
+    match (before, after) {
+        (None, None) => true,
+        (Some(before), Some(after)) => {
+            before.presets == after.presets
+                && before.routes.len() == after.routes.len()
+                && before.routes.iter().zip(&after.routes).all(
+                    |((name, route), (next_name, next_route))| {
+                        name == next_name && route.candidates == next_route.candidates
+                    },
+                )
+        }
+        _ => false,
+    }
 }
 pub fn sticky(store: &Store, session: &str) -> Result<Option<String>> {
     super::validate_session_id(session)?;
@@ -265,18 +279,7 @@ pub fn budget(store: &Store, call: Value) -> Result<Value> {
     store.records_transaction(|| {
         let mut ledger = store.build_paid_ledger(&p.session)?.context("Build allowance missing; refusing to initialize from a host request")?;
         ensure!(ledger.generation == p.generation && ledger.cap_sha256 == paths::sha256_hex(p.cap.as_bytes()), "fenced Build financial capability");
-        if let Some(mixed) = &ledger.mixed {
-            let config = store.config_layers()?.config()?;
-            let api = config.build.api.as_ref().context("mixed Build approval revoked")?;
-            ensure!(api.approval == mixed.approval && api.profiles == mixed.presets
-                && api.maximum_micros.checked_mul(1000) == Some(mixed.allowance_nanos), "mixed Build approval changed");
-            for (name, before) in &mixed.routes {
-                let binding = before.candidates.first().context("mixed Build route missing")?;
-                ensure!(&approved_config(&config, name, binding)? == before, "mixed Build route approval changed");
-            }
-        } else {
-            ensure!(approved(store, &ledger.profile, ledger.route()?)? == ledger.approval, "paid policy changed; explicit approval is required");
-        }
+        // Spending caps are disabled: approval or allowance changes do not fence requests.
         let digest = p.binding_digest.as_deref();
         let binding = if p.action == "state" && ledger.mixed.is_some() { None } else { Some(ledger.request_route(digest)?.clone()) };
         let admitted = match p.action.as_str() {
@@ -298,9 +301,9 @@ pub fn budget(store: &Store, call: Value) -> Result<Value> {
         let allowance = ledger.allowance_nanos();
         let uncertain = ledger.ledger.requests.iter().filter(|r| r.response.is_none()).count();
         store.save_build_paid_ledger(&ledger)?;
-        Ok(json!({"admitted":admitted,"exhausted":usd_nanos >= allowance,"guard_paused":false,
+        Ok(json!({"admitted":admitted,"exhausted":false,"guard_paused":false,
             "paid":{"episode":ledger.session,"epoch":ledger.generation,"allowance_nanos":allowance,"consumed_or_reserved_nanos":usd_nanos,"uncertain_requests":uncertain},
-            "connection":binding.as_ref().map(|b| b.connection),"binding_digest":binding.as_ref().map(|b| &b.digest),"limits":{"max_tokens":null,"max_usd_nanos":allowance},"tokens":tokens,"usd_nanos":usd_nanos}))
+            "connection":binding.as_ref().map(|b| b.connection),"binding_digest":binding.as_ref().map(|b| &b.digest),"limits":{"max_tokens":null,"max_usd_nanos":null},"tokens":tokens,"usd_nanos":usd_nanos}))
     })
 }
 
