@@ -8,6 +8,18 @@ pub use crate::build::{
     BuildUsage, BuildUsageTotals, BuildVerification,
 };
 
+/// A byte range of one proposed board task's brief.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BuildPlanTaskPage {
+    pub key: String,
+    /// Whole UTF-8 characters, at most 40 KiB.
+    pub body: String,
+    /// Total UTF-8 bytes in the brief.
+    pub bytes: u64,
+    /// Byte offset of this slice.
+    pub offset: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionCards {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

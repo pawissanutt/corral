@@ -7,11 +7,12 @@ use serde_json::Map;
 
 use super::{details, fingerprint};
 use crate::{
-    sessions::forward::{HostCall, host_call},
+    sessions::forward::{HostCall, PartTooLarge, host_call},
     state::Shared,
 };
 
 const PAGE_TOKEN_BYTES: usize = 128;
+const BRIEF_PAGE_BYTES: usize = 40 * 1024;
 
 #[derive(Default, Serialize)]
 struct Args<'a> {
@@ -164,6 +165,18 @@ pub(super) fn read(
             unpaged!(id, "commands", Map::new(), DetailBody::SessionCommands)
         }
         DetailRef::BuildBoard { id } => unpaged!(id, "board", Map::new(), DetailBody::BuildBoard),
+        DetailRef::BuildPlanTask { id, key } => {
+            check_after()?;
+            let (page, next, etag) = board_plan_task(shared, &query.target, id, key, after)?;
+            return details::reply(
+                query,
+                engine.store.latest_seq()?,
+                etag,
+                DetailBody::BuildPlanTask(page),
+                next,
+            )
+            .map(Some);
+        }
         DetailRef::BuildRecord { id } => {
             unpaged!(id, "record", Map::new(), DetailBody::BuildRecord)
         }
@@ -176,6 +189,77 @@ pub(super) fn read(
     );
     let etag = fingerprint(&(&query.target, after, &body, &next))?;
     details::reply(query, engine.store.latest_seq()?, etag, body, next).map(Some)
+}
+
+fn board_plan_task(
+    shared: &Shared,
+    target: &DetailRef,
+    id: &str,
+    key: &str,
+    after: Option<&str>,
+) -> Result<(BuildPlanTaskPage, Option<String>, String)> {
+    #[derive(Serialize)]
+    struct Task<'a> {
+        key: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        after: Option<&'a str>,
+    }
+    let previous = after
+        .map(|token| brief_cursor(token).context("invalid: malformed board task brief cursor"))
+        .transpose()?;
+    let Page { body, next }: Page<BuildPlanTaskPage> = host_call(
+        shared,
+        id,
+        "board_plan_task",
+        Task { key, after },
+        HostCall::Read,
+    )?;
+    ensure!(body.body.len() <= BRIEF_PAGE_BYTES, PartTooLarge);
+    let end = body.offset.checked_add(body.body.len() as u64);
+    ensure!(
+        body.key == key
+            && body.offset == previous.map_or(0, |(_, offset)| offset)
+            && end.is_some_and(|end| end <= body.bytes)
+            && (body.offset < body.bytes || body.bytes == 0),
+        "invalid Pi board task brief range"
+    );
+    let following = next
+        .as_deref()
+        .map(|token| brief_cursor(token).context("invalid Pi board task brief continuation"))
+        .transpose()?;
+    if let Some((stamp, offset)) = following {
+        ensure!(
+            Some(offset) == end
+                && offset > body.offset
+                && offset < body.bytes
+                && previous.is_none_or(|(prior, _)| prior == stamp),
+            "invalid Pi board task brief continuation"
+        );
+    } else {
+        ensure!(end == Some(body.bytes), "incomplete Pi board task brief");
+    }
+    // A cursor binds to the host's fingerprint of the whole brief. Only a complete
+    // one-page brief has no cursor on either side, and can be fingerprinted directly.
+    let etag = if let Some((stamp, _)) = previous.or(following) {
+        fingerprint(&(target, body.bytes, stamp))?
+    } else {
+        fingerprint(&(target, &body.body))?
+    };
+    Ok((body, next, etag))
+}
+
+fn brief_cursor(token: &str) -> Option<(&str, u64)> {
+    let (stamp, offset) = token.split_once('.')?;
+    if stamp.len() != 22
+        || !stamp
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        || offset.starts_with('0')
+        || !offset.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    Some((stamp, offset.parse().ok()?))
 }
 
 fn events(shared: &Shared, id: &str, after: Option<&str>) -> Result<(DetailBody, Option<String>)> {
