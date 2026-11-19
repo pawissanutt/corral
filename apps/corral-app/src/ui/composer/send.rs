@@ -5,7 +5,7 @@ use super::{To, pending};
 use crate::model::assistant::{self, ThreadRef};
 use crate::state::AppState;
 
-/// Sends the draft to the composer's session or Ask's target as one `assistant.send` under an
+/// Sends the draft to the composer's session as one `assistant.send` under an
 /// identity allocated here once (the client keeps it in this device's outbox while offline),
 /// with Ask's real context and the refs of every staged attachment, all of them ready. The
 /// words and the attachments stay in the composer while the outbox decides: its acceptance
@@ -13,7 +13,6 @@ use crate::state::AppState;
 /// keeps them as typed.
 pub(super) fn send(app: AppState, to: &To) {
     let text = to.draft.get_untracked();
-    let target = app.ask_target.get_untracked();
     let ThreadRef::Live(scope) = &to.thread;
     if text.trim().is_empty() {
         return;
@@ -45,16 +44,7 @@ pub(super) fn send(app: AppState, to: &To) {
     let docked = to.docked;
     let mut ready = None;
     app.reduce(app.assistant, |state, _, _, env| {
-        match state.send_live(
-            scope.as_str(),
-            target,
-            &text,
-            context,
-            refs,
-            stamp,
-            docked,
-            env,
-        ) {
+        match state.send_live(scope.as_str(), &text, context, refs, stamp, docked, env) {
             Ok(message) => {
                 ready = Some(message);
                 Vec::new()

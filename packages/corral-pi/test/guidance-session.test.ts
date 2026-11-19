@@ -1,11 +1,11 @@
 // guidance-and-session (T-564): every role loads the selected home skills, trust-gated project
 // text and templates with directory opt-outs and no ambient `.pi` configuration; compaction
-// settings reach upstream and summaries record usage; `/corral-export` attaches one offline HTML
-// artifact per session snapshot.
+// settings reach upstream and summaries record usage; `/corral-export` attaches offline HTML
+// with stable paths for matching branch snapshots.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import { EventLog } from "../src/bridge/events.ts";
@@ -13,12 +13,12 @@ import type { CapabilityGuidance } from "../src/capabilities/guidance.ts";
 import { selectGuidance } from "../src/capabilities/guidance.ts";
 import { type LoadedModules, loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
-import { HostSession, authContext } from "../src/host/session.ts";
+import { HostSession } from "../src/host/session.ts";
 import type { CapabilitySet, HostIdentity, Role } from "../src/roles/types.ts";
 import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
-import { fixtureTransport } from "./fixtures/auth/index.ts";
+import { fakeCodexTransport, type FakeTransport } from "./fixtures/auth/fake-transport.ts";
 import { type FixtureInstall, buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
-import { type FakeCorral, writeFakeCorral } from "./support/fake-corral.ts";
+import { type FakeEngine, writeFakeEngine } from "./support/fake-engine.ts";
 import { nextEvent } from "./support/wait.ts";
 
 const STANDARD = ["context_files", "skills", "prompt_templates", "compaction", "session_export"];
@@ -76,9 +76,8 @@ afterAll(() => {
 });
 
 function identity(role: Role): HostIdentity {
-  const base = { store: "st-demo", project: "app", role, generation: 1 };
-  if (role === "pm") return base;
-  if (role === "reviewer") return { ...base, task: "T-564", run: "R1", review: "R1-review1", callback: "g1:c1" };
+  const base = { store: "st-demo", project: "app", role };
+  if (role === "assistant") return { ...base, assistant: "A-1" };
   return { ...base, task: "T-564", run: "R1" };
 }
 
@@ -88,8 +87,9 @@ function snapshot(enabled: readonly string[]): CapabilitySet {
 
 interface Started {
   readonly host: HostSession;
-  readonly corral: FakeCorral;
+  readonly corral: FakeEngine;
   readonly events: EventLog;
+  readonly transport: FakeTransport;
 }
 
 interface Layout {
@@ -101,24 +101,22 @@ interface Layout {
 async function start(role: Role, enabled: readonly string[], guidance?: CapabilityGuidance, layout: Layout = {}): Promise<Started> {
   const dir = mkdtempSync(join(work, `${role}-`));
   const modules: LoadedModules = await loadModules(assets.dir, role);
-  const transport = modules.auth.transport?.(authContext());
-  if (!transport) throw new Error("fixture transport missing");
-  const network = guardedFetch(transport);
+  const transport = fakeCodexTransport();
+  const network = guardedFetch(transport.send);
   globalThis.fetch = network.fetch;
   const sdk = await import("@earendil-works/pi-coding-agent");
-  const events = new EventLog(1);
-  const corral = writeFakeCorral(dir);
-  let host: HostSession | undefined;
-  const client = new CorralClient({
-    corral: corral.path, root, identity: identity(role), hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "",
-  });
-  host = await HostSession.create({
-    sdk, identity: identity(role), cwd: layout.cwd ?? cwd, agentDir: join(dir, "agent"), model: "gpt-6.1-sol",
+  const events = new EventLog();
+  const corral = writeFakeEngine(dir);
+  const cwdForSession = layout.cwd ?? cwd;
+  const roleIdentity = identity(role);
+  const client = new CorralClient({ corral: corral.path, root, cwd: cwdForSession, identity: roleIdentity });
+  const host = await HostSession.create({
+    sdk, identity: roleIdentity, cwd: cwdForSession, agentDir: join(dir, "agent"), model: "gpt-6.1-sol",
     capabilities: { ...snapshot(enabled), catalog: layout.catalog ?? 1 }, ...(guidance ? { guidance } : {}), root, home: layout.home ?? home,
     exportDir: join(dir, "sessions", "exports"),
-    modules, client, events, network, sessionManager: sdk.SessionManager.create(layout.cwd ?? cwd, join(dir, "sessions")),
+    modules, client, events, network, sessionManager: sdk.SessionManager.create(cwdForSession, join(dir, "sessions")),
   });
-  return { host, corral, events };
+  return { host, corral, events, transport };
 }
 
 function loaded(host: HostSession) {
@@ -133,13 +131,13 @@ function loaded(host: HostSession) {
 
 async function bind(started: Started): Promise<void> {
   await started.host.session.bindExtensions({});
-  await started.host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+  await started.host.startLocal();
 }
 
-async function turn(started: Started, text: string, key: string): Promise<void> {
-  fixtureTransport().script([{ text: "Done" }]);
+async function turn(started: Started, text: string): Promise<void> {
+  started.transport.script([{ text: "Done" }]);
   const ended = nextEvent(started.events, (event) => event.kind === "turn_ended");
-  const result = await started.host.submit({ text, busyPolicy: "prompt", idempotencyKey: key, origin: "test" }, `rq-${key}`);
+  const result = await started.host.submitLocal({ text, busyPolicy: "prompt", origin: "owner" });
   expect(result.disposition).toBe("started");
   await ended;
   await started.host.drained();
@@ -155,12 +153,12 @@ function userTexts(host: HostSession): string[] {
 
 test("every role loads home skills, trusted project text and templates, never ambient .pi resources", async () => {
   // Given standard guidance with project-text trust for the worker and reviewer in the project
-  // worktree, and the PM at the workspace root with its selected project's checkout:
+  // worktree, and the assistant at the workspace root with its selected project's checkout:
   const trusted: CapabilityGuidance = { settings: HOME_DIRS, projectText: true };
-  for (const role of ["worker", "reviewer", "pm"] as const) {
-    const pm = role === "pm";
+  for (const role of ["worker", "reviewer", "assistant"] as const) {
+    const chat = role === "assistant";
     const started = await start(role, role === "reviewer" ? STANDARD : [...STANDARD, "todo"],
-      pm ? { ...trusted, projectDir: cwd } : trusted, pm ? { cwd: root } : {});
+      chat ? { ...trusted, projectDir: cwd } : trusted, chat ? { cwd: root } : {});
     try {
       // When the host binds its extensions and builds its resources:
       await started.host.session.bindExtensions({});
@@ -168,13 +166,13 @@ test("every role loads home skills, trusted project text and templates, never am
       // Then home and repository Agent Skills, both template sets and the workspace and project
       // context files load in ancestor order; the worker keeps its packaged role skill; and no
       // ~/.pi, project .pi or out-of-workspace resource is loaded.
-      const roleSkills = role === "worker" ? ["corral-worker"] : role === "pm" ? ["corral-pm"] : [];
+      const roleSkills = role === "worker" ? ["corral-plan", "corral-worker"] : role === "reviewer" ? ["corral-plan"] : [];
       expect(found.skills).toEqual([...roleSkills, "home-skill", "repo-skill"].sort());
       expect(found.prompts).toEqual(["home-review", "repo-prompt"]);
       expect(found.context).toEqual([join(root, "AGENTS.md"), join(cwd, "AGENTS.md")]);
       expect(found.extensions.some((path) => path.includes(".pi"))).toBeFalse();
       const state = started.host.state().guidance as { project_text: boolean; export: boolean };
-      expect([state.project_text, state.export]).toEqual([true, role !== "pm"]);
+      expect([state.project_text, state.export]).toEqual([true, role !== "assistant"]);
     } finally {
       started.host.session.dispose();
     }
@@ -187,10 +185,10 @@ test("every role loads home skills, trusted project text and templates, never am
   try {
     for (const { host } of [untrusted, strict, older]) await host.session.bindExtensions({});
     const text = loaded(untrusted.host);
-    expect([text.skills, text.prompts, text.context]).toEqual([["corral-worker", "home-skill"], ["home-review"], []]);
+    expect([text.skills, text.prompts, text.context]).toEqual([["corral-plan", "corral-worker", "home-skill"], ["home-review"], []]);
     for (const host of [strict.host, older.host]) {
       const found = loaded(host);
-      expect([found.skills, found.prompts, found.context]).toEqual([["corral-worker"], [], []]);
+      expect([found.skills, found.prompts, found.context]).toEqual([["corral-plan", "corral-worker"], [], []]);
       expect((host.state().guidance as { export: boolean }).export).toBeFalse();
     }
   } finally {
@@ -211,7 +209,7 @@ test("Pi pack lists and loads all six skills in a standard worker without OmO ro
     await bind(started);
     const resources = started.host.runtime.services.resourceLoader.getSkills();
     expect(resources.diagnostics).toEqual([]);
-    expect(loaded(started.host).skills).toEqual(["corral-worker", ...names].sort());
+    expect(loaded(started.host).skills).toEqual(["corral-plan", "corral-worker", ...names].sort());
     const tools = new Set(started.host.session.getActiveToolNames());
     for (const name of names) {
       const found = resources.skills.find((item) => item.name === name);
@@ -219,7 +217,7 @@ test("Pi pack lists and loads all six skills in a standard worker without OmO ro
       if (!found) throw new Error(`missing skill ${name}`);
       expect(found.filePath).toBe(join(pack, name, "SKILL.md"));
       // Load through the same explicit skill command a new session offers the owner.
-      await turn(started, `/skill:${name}`, `pack-${name}`);
+      await turn(started, `/skill:${name}`);
       expect(userTexts(started.host).some((text) => text.includes(`<skill name="${name}"`))).toBeTrue();
       const text = readFileSync(found.filePath, "utf8");
       // Pack convention: allowed-tools declares every tool, and bare inline identifiers or
@@ -306,8 +304,8 @@ test("template and skill slash commands expand into the delivered prompt", async
   try {
     await bind(started);
     // When the turn input names a project template and a home skill:
-    await turn(started, "/repo-prompt caching", "template");
-    await turn(started, "/skill:home-skill now", "skill");
+    await turn(started, "/repo-prompt caching");
+    await turn(started, "/skill:home-skill now");
     // Then the agent received the expanded template text and the skill's instructions.
     const texts = userTexts(started.host);
     expect(texts.some((text) => text.includes("Repo prompt about caching."))).toBeTrue();
@@ -336,43 +334,45 @@ test("compaction and branch-summary settings reach upstream and a summary record
     });
     // When the configured worker compacts after a turn:
     await bind(configured);
-    await turn(configured, "Remember the deployment checklist.", "before-compaction");
-    await turn(configured, "And the rollback plan.", "second");
-    fixtureTransport().script([{ text: "SUMMARY of the checklist" }]);
+    await turn(configured, "Remember the deployment checklist.");
+    await turn(configured, "And the rollback plan.");
+    const beforeCompaction = configured.corral.calls().length;
+    configured.transport.script([{ text: "SUMMARY of the checklist", usage: { input: 77, output: 9 } }]);
     await configured.host.session.compact();
-    // Then the session file records the compaction with its own request usage, which corral's
-    // collector adds to the run (crates/corral-ops/src/agent/usage_tests.rs).
+    // The summary records its actual usage in the transcript and sends it through the engine.
     const file = configured.host.session.sessionFile;
     if (!file) throw new Error("no session file");
     const entries = readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
     const compaction = entries.find((entry) => entry.type === "compaction") as { summary?: string; usage?: { input: number; output: number } };
     expect(compaction?.summary).toContain("SUMMARY");
-    expect(compaction?.usage?.input).toBeGreaterThan(0);
-    expect(compaction?.usage?.output).toBeGreaterThan(0);
-    const budget = configured.corral.calls().filter((c) => c.envelope.payload.kind === "budget");
-    // Compaction may make separate summary/preparation requests: every actual request reserves.
-    const reserved = budget.filter((c) => c.envelope.payload.action === "reserve");
-    const settled = budget.filter((c) => c.envelope.payload.action === "settle");
-    expect(reserved.length).toBeGreaterThanOrEqual(3);
-    expect(settled.length).toBe(reserved.length);
+    await configured.host.drained();
+    const usage = configured.corral.calls().slice(beforeCompaction).filter(argv => argv[3] === "usage" && argv[4] === "add");
+    expect(usage.some(argv => JSON.stringify(argv) === JSON.stringify([
+      "--root", root, "--json", "usage", "add",
+      "--model", "openai-codex/gpt-6.1-sol", "--task", "T-564", "--run", "R1",
+      "--input", "77", "--output", "9", "--cache-read", "0", "--cache-write", "0", "--billing", "subscription",
+    ]))).toBeTrue();
+    expect(compaction?.usage).toMatchObject({
+      input: usage.reduce((sum, argv) => sum + Number(argv[argv.indexOf("--input") + 1]), 0),
+      output: usage.reduce((sum, argv) => sum + Number(argv[argv.indexOf("--output") + 1]), 0),
+    });
   } finally {
     for (const { host } of [configured, disabled, older]) host.session.dispose();
   }
 }, 120_000);
 
-test("exporting the same snapshot twice attaches one private offline HTML artifact", async () => {
+test("session exports reuse the same private HTML file until the branch advances", async () => {
   // Given a bound worker with session export and one finished turn:
   const started = await start("worker", STANDARD, { settings: {}, projectText: false });
   try {
     await bind(started);
-    await turn(started, "Export me please.", "export-1");
+    await turn(started, "Export me please.");
     // When the owner exports the same snapshot twice, then again after another turn:
     const first = await started.host.exportSession();
     const second = await started.host.exportSession();
-    await turn(started, "One more turn.", "export-2");
+    await turn(started, "One more turn.");
     const third = await started.host.exportSession();
-    // Then the snapshot has one file in the private export directory, both attach requests share
-    // one request ID and payload (corral replays the first receipt), and a new snapshot is new.
+    // Unchanged content reuses the private file and attaches it by the same CLI arguments.
     expect(second.path).toBe(first.path);
     expect(third.path).not.toBe(first.path);
     expect(statSync(dirname(first.path)).mode & 0o077).toBe(0);
@@ -380,12 +380,13 @@ test("exporting the same snapshot twice attaches one private offline HTML artifa
     const embedded = (html.match(/[A-Za-z0-9+/]{200,}={0,2}/g) ?? []).map((run) => Buffer.from(run, "base64").toString("utf8"));
     expect(embedded.some((data) => data.includes("Export me please."))).toBeTrue();
     expect(html).not.toMatch(/<(script|link|img)[^>]+(src|href)=["']https?:/i);
-    const artifacts = started.corral.calls().map(({ envelope }) => envelope).filter(({ op }) => op === "artifact");
-    expect(artifacts).toHaveLength(3);
-    expect(artifacts[1]?.request_id).toBe(artifacts[0]?.request_id ?? "");
-    expect(artifacts[1]?.payload_sha256).toBe(artifacts[0]?.payload_sha256 ?? "");
-    expect(artifacts[2]?.request_id).not.toBe(artifacts[0]?.request_id);
-    expect([artifacts[0]?.payload.path, artifacts[0]?.payload.kind]).toEqual([first.path, "log"]);
+    const artifacts = started.corral.calls().filter(argv => argv[3] === "artifact" && argv[4] === "add");
+    expect(artifacts.map(argv => argv.slice(5, 9))).toEqual([
+      ["T-564", first.path, "--kind", "log"],
+      ["T-564", second.path, "--kind", "log"],
+      ["T-564", third.path, "--kind", "log"],
+    ]);
+    expect(artifacts[1]).toEqual(artifacts[0]);
     expect(existsSync(`${first.path}.${process.pid}.partial`)).toBeFalse();
   } finally {
     started.host.session.dispose();

@@ -1,28 +1,27 @@
 //! Plans: the plan list beside the selected plan, whose brief answers what holds it up, what is
 //! moving and what is next (desktop and terminal), the Plans tab and the pushed plan page
-//! (phone), and the dependency graph Now's panel and Inbox show too.
+//! (phone), and the dependency graph Now's panel shows too. A plan is a parent task with
+//! children: its document is the parent's body, its members the children.
 //!
 //! Everything shown comes from the served feed (corrald's, or the explicitly chosen synthetic
 //! preview) through `model::plans`: `plan_outline` in the screen's own project scope for the
-//! head's counts and the rows, `live_detail` for the selected plan (its executing brief with
-//! the graph and path to done, its document awaiting acceptance with what accepting publishes
-//! and the decide bar, or its planning, approved, document or diff state), `live_phone_page`
-//! for the pushed page and `layout` for the graph. Presses run `plans::State::reduce_live`
-//! through `AppState::reduce`, whose effects the root executes. `live.rs` keeps the shown
-//! plan's detail loaded and current.
+//! head's counts and the rows, `live_detail` for the selected plan (its brief with the graph
+//! and path to done, and its document), `live_phone_page` for the pushed page and `layout` for
+//! the graph. Presses run `plans::State::reduce_live` through `AppState::reduce`, whose effects
+//! the root executes; the plan head, list rows and member cards carry the shared Actions menu.
+//! `live.rs` keeps the shown plan's detail loaded and current.
 //!
 //! Desktop follows the window: from `THREE_COLUMNS` of content width the list, the plan and its
-//! side column (path to done, or what accepting publishes) stand side by side; narrower, the
-//! side column moves under the plan; under `TWO_COLUMNS` the list is the page and a chosen plan
+//! side column (path to done and the member story) stand side by side; narrower, the side
+//! column moves under the plan; under `TWO_COLUMNS` the list is the page and a chosen plan
 //! replaces it, with a way back.
 
-mod decide;
 mod detail;
 mod doc;
-mod executing;
 mod graph;
 mod list;
 mod live;
+mod overview;
 mod path;
 mod story;
 mod verbs;
@@ -32,7 +31,7 @@ use nsh_core::prelude::*;
 use crate::model::plans::{self, Action, ButtonKind as Weight, LiveAction, PlanOutline};
 use crate::model::projects::FilterScreen;
 use crate::model::{Form, Id, Live};
-use crate::screens::{PhoneBar, PhonePage};
+use crate::screens::PhonePage;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -42,9 +41,6 @@ use crate::ui::kit::page::{Width, columns, pane, search};
 use crate::ui::kit::project_filter::project_filter;
 use crate::ui::tokens::{Token, color};
 
-/// The plan graph renderer, for other destinations that draw a plan's members (Inbox's question
-/// sheet); presses go through the Plans actions.
-pub(crate) use graph::drawing as plan_graph;
 pub use live::{live_graph, live_plan_phone};
 pub(crate) use verbs::menu_trigger;
 
@@ -53,7 +49,7 @@ const RING: f32 = 2.0;
 /// plan (`max-width: 1180px`).
 const LIST: f32 = 280.0;
 const LIST_NARROW: f32 = 260.0;
-/// The plan's side column: path to done, or what accepting publishes and what reviewers said.
+/// The plan's side column: path to done and the selected member's story.
 const SIDE: f32 = 300.0;
 /// The terminal's list, in desktop points (a Cell for every 12).
 const TERM_LIST: f32 = 380.0;
@@ -76,11 +72,8 @@ enum Room {
 /// and the selected plan. Phone: the large title over the scrolling list; a row pushes its plan.
 /// Terminal: the list and the plan side by side, stacked on a narrow grid.
 pub fn screen(app: AppState) -> AnyElement {
-    if untracked(|| app.daemon()) {
-        live::keep_rows_loaded(app);
-        if app.form != Form::Phone {
-            live::keep_selected_loaded(app);
-        }
+    if untracked(|| app.daemon()) && app.form != Form::Phone {
+        live::keep_selected_loaded(app);
     }
     let outline = computed(move || content(app));
     let face = computed(move || outline.with(|outline| (outline.title, outline.stats.clone())));
@@ -126,7 +119,7 @@ fn desktop(app: AppState, page: View, outline: Memo<PlanOutline>) -> AnyElement 
     let width = signal(None::<f32>);
     let opened = signal(false);
     // Below `TWO_COLUMNS` the list comes first after a plain `go`; a plan opened by name (from
-    // Now, Inbox, the palette, a link) shows at once, and again on each further open. A row
+    // Now, the palette, a link) shows at once, and again on each further open. A row
     // pressed here opens it too.
     let named = computed(move || {
         app.nav
@@ -210,44 +203,15 @@ fn back(app: AppState, outline: Memo<PlanOutline>, opened: Signal<bool>) -> AnyE
 }
 
 /// A plan's pushed phone page from the model's page: its title, Ask in the navigation bar
-/// (which then stands for the floating Ask), the detail as the body, and the decide bar
-/// whenever the detail shown awaits acceptance, so a plan opened while its detail was loading
-/// gains Accept and Request changes once it arrives.
+/// (which then stands for the floating Ask) and the detail as the body.
 fn phone_page(app: AppState, page: plans::PhonePage, plan: Id) -> PhonePage {
-    let trailing = page
-        .right
-        .zip(page.right_label)
-        .map(|(button, label)| icon_command(app, &button, label));
-    let shown = {
-        let plan = plan.clone();
-        computed(move || {
-            let env = app.env();
-            app.plans.with(|state| {
-                app.feed
-                    .with(|feed| decides(&plans::live_detail(state, Some(&plan), feed, env)))
-            })
-        })
-    };
     PhonePage {
         title: page.title,
-        body: detail::phone_body(app, Some(plan.clone())),
-        ask: trailing.is_none(),
-        trailing,
-        bar: Some(PhoneBar {
-            shown,
-            view: detail::phone_bar(app, Some(plan)),
-        }),
+        body: detail::phone_body(app, Some(plan)),
+        ask: false,
+        trailing: Some(icon_command(app, &page.right, page.right_label)),
+        bar: None,
         scroll: true,
-    }
-}
-
-/// Whether a plan's detail offers Accept and Request changes: a revision awaiting acceptance,
-/// or its diff while it still does.
-fn decides(detail: &plans::Detail) -> bool {
-    match detail {
-        plans::Detail::Awaiting(_) => true,
-        plans::Detail::Diff(diff) => diff.decide.is_some(),
-        _ => false,
     }
 }
 
@@ -273,34 +237,18 @@ fn target_id(action: &Action) -> String {
     match live {
         LiveAction::Plan(id) => format!("plan-{id}"),
         LiveAction::Member { member: id, .. } | LiveAction::Task(id) => format!("task-{id}"),
-        LiveAction::Question(key) => format!("btn-answer-{key}"),
         LiveAction::Session(id) => format!("btn-open-session-{id}"),
         LiveAction::Review(_) => "btn-review-candidate".into(),
-        LiveAction::Ask {
-            record,
-            to: Some(to),
-            ..
-        } => format!("btn-ask-{}-{}", to.label().to_lowercase(), record.id()),
-        LiveAction::Ask { record, .. } => format!("btn-ask-{}", record.id()),
-        LiveAction::Accept(_) => "btn-accept".into(),
-        LiveAction::Changes(_) => "btn-request-changes".into(),
-        LiveAction::Draft(..) => "plan-changes-input".into(),
-        LiveAction::SendChanges(_) => "btn-send-changes".into(),
-        LiveAction::CancelChanges(_) => "btn-cancel-changes".into(),
-        LiveAction::Diff(_) => "btn-diff".into(),
-        LiveAction::DiffFrom { from, .. } => format!("btn-diff-from-{from}"),
-        LiveAction::Resolve { .. } => "plan-decision-input".into(),
-        LiveAction::Document(_) => "btn-open-document".into(),
-        LiveAction::Overview(_) => "btn-close-document".into(),
+        LiveAction::Ask { record } => format!("btn-ask-{}", record.id()),
+        LiveAction::Next { task, index } => format!("btn-next-{task}-{index}"),
         LiveAction::Retry(_) => "btn-retry".into(),
-        LiveAction::Recover(_) => "btn-check-result".into(),
+        LiveAction::Document(_) => "btn-plan-document".into(),
     }
 }
 
 /// A model button as a kit button: standard is the filled main action, ghost outlined, quiet
-/// bare; a refused command is disabled and stays in place. Ask and session commands lead with
-/// the chat icon. The button's hint (what it does, or why it is refused) is its tooltip on
-/// desktop and its status line in a terminal.
+/// bare. Ask and session commands lead with the chat icon. The button's hint (what it does) is
+/// its tooltip on desktop and its status line in a terminal.
 fn command(app: AppState, button: &plans::Button, wide: bool) -> AnyElement {
     let action = button.action.clone();
     let kind = match button.kind {
@@ -318,7 +266,6 @@ fn command(app: AppState, button: &plans::Button, wide: bool) -> AnyElement {
         kind,
         ButtonOptions {
             icon: chat.then_some(Icon::Ask),
-            disabled: !button.enabled,
             wide,
             ..ButtonOptions::default()
         },

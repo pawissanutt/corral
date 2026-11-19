@@ -1,6 +1,7 @@
-//! A bounded, task-grouped view of the same owner-relevant changes as the Since feed.
-use corral_protocol::app::{ChangeKind, ChangeLine};
+//! A bounded, task-grouped view of the same engine events as the Changes feed, since this
+//! device's last visit.
 use corral_protocol::detail::DetailBody;
+use corral_types::{Event, EventKind};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{Action, Button, ButtonKind, Notice, Press, UnseenCount};
@@ -47,11 +48,11 @@ pub(super) fn digest(feed: &Feed, filter: &ProjectFilter) -> NowDigest {
             |at| format!("Since {at}"),
         );
     let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
-    let mut grouped: BTreeMap<Option<&str>, (&ChangeLine, usize)> = BTreeMap::new();
-    let mut stale = BTreeSet::new();
+    let mut grouped: BTreeMap<Option<&str>, (&Event, usize)> = BTreeMap::new();
+    let mut failed = BTreeSet::new();
     let mut landed = BTreeSet::new();
     let mut loaded = 0_u64;
-    for (_, line) in feed
+    for (_, event) in feed
         .changes
         .range((
             std::ops::Bound::Excluded(through),
@@ -59,25 +60,23 @@ pub(super) fn digest(feed: &Feed, filter: &ProjectFilter) -> NowDigest {
         ))
         .rev()
     {
-        if !super::live_context::owner_relevant(line) || !matches_scope(line, feed, filter) {
+        if !matches_scope(event, feed, filter) {
             continue;
         }
         loaded += 1;
-        if line.to.as_deref() == Some("stale") {
-            if let Some(task) = line.task.as_deref() {
-                stale.insert(task);
+        if let Some(task) = event.task.as_deref() {
+            if super::live_context::failed(event) {
+                failed.insert(task);
             }
-        }
-        if line.to.as_deref() == Some("done") && !line.failed {
-            if let Some(task) = line.task.as_deref() {
+            if event.kind == EventKind::Landed {
                 landed.insert(task);
             }
         }
-        let entry = grouped.entry(line.task.as_deref()).or_insert((line, 0));
+        let entry = grouped.entry(event.task.as_deref()).or_insert((event, 0));
         entry.1 += 1;
-        // A failure or explicit stale transition must survive a later routine update.
-        if priority(line) < priority(entry.0) {
-            entry.0 = line;
+        // A failure must survive a later routine update.
+        if priority(event) < priority(entry.0) {
+            entry.0 = event;
         }
     }
     let mut groups: Vec<_> = grouped.into_values().collect();
@@ -89,21 +88,22 @@ pub(super) fn digest(feed: &Feed, filter: &ProjectFilter) -> NowDigest {
     let rows: Vec<NowDigestRow> = groups
         .into_iter()
         .take(7)
-        .map(|(line, events)| {
-            let (phrase, mark, hue) = summary(line);
+        .map(|(event, events)| {
+            let (phrase, mark, hue) = summary(event);
+            let text = super::event_text(event);
             NowDigestRow {
                 mark,
                 hue,
                 phrase,
                 events,
-                task: line.task.as_deref().map(Id::from),
-                time: super::stamp(&line.at, feed),
+                task: event.task.as_deref().map(Id::new),
+                time: super::stamp_at(event.ts, feed),
                 hint: if events == 1 {
-                    line.text.clone()
+                    text
                 } else {
-                    format!("{} ({events} events)", line.text)
+                    format!("{text} ({events} events)")
                 },
-                action: line
+                action: event
                     .task
                     .as_deref()
                     .map(|id| Press::Open(Live::Task(id.into()))),
@@ -118,8 +118,8 @@ pub(super) fn digest(feed: &Feed, filter: &ProjectFilter) -> NowDigest {
             total: false,
         }
     };
-    // Keys carry the digest's prefix: the page head and the Closed heading count stale and
-    // landed tasks on the same page, and each `stat-<key>` test id must name one count.
+    // Keys carry the digest's prefix: the page head and the Closed heading count landed tasks on
+    // the same page, and each `stat-<key>` test id must name one count.
     let landed = (!landed.is_empty()).then(|| {
         Stat::new(
             "since-landed",
@@ -127,22 +127,22 @@ pub(super) fn digest(feed: &Feed, filter: &ProjectFilter) -> NowDigest {
             landed.len().to_string(),
             Hue::Ok,
             format!(
-                "{} tasks are recorded as landed since your last visit in loaded history",
+                "{} tasks landed since your last visit in loaded history",
                 landed.len()
             ),
         )
     });
     let mut stats = Vec::new();
     stats.extend(landed.clone());
-    if !stale.is_empty() {
+    if !failed.is_empty() {
         stats.push(Stat::new(
-            "since-stale",
-            StatIcon::Stale,
-            stale.len().to_string(),
-            Hue::Held,
+            "since-failed",
+            StatIcon::Failed,
+            failed.len().to_string(),
+            Hue::Fail,
             format!(
-                "{} tasks have recorded stale transitions since your last visit in loaded history",
-                stale.len()
+                "{} tasks recorded a failure since your last visit in loaded history",
+                failed.len()
             ),
         ));
     }
@@ -165,33 +165,53 @@ pub(super) fn digest(feed: &Feed, filter: &ProjectFilter) -> NowDigest {
         ))
     });
     NowDigest {
-        since, stats, rows, events, landed,
-        coverage: "Task outcomes cover explicit transitions in loaded changes only. Change kinds do not distinguish a stale gate or a worker reply; project scopes omit events without a known project.".into(),
-        more: Button::new(if events.total { format!("All {} events", events.count) }
-            else { format!("{} loaded events", events.count) }, Action::Go(Destination::Changes), ButtonKind::Quiet),
+        since,
+        stats,
+        rows,
+        events,
+        landed,
+        coverage: "Task outcomes cover the events loaded on this device only; project scopes omit events without a known project.".into(),
+        more: Button::new(
+            if events.total {
+                format!("All {} events", events.count)
+            } else {
+                format!("{} loaded events", events.count)
+            },
+            Action::Go(Destination::Changes),
+            ButtonKind::Quiet,
+        ),
         notice,
     }
 }
 
-fn priority(line: &ChangeLine) -> u8 {
-    if line.failed {
+/// Lower comes first. A failure must survive a later routine update, but a landing or a drop ends
+/// the task: a task's earlier "ready to land" or failure must not stand for it once it is closed.
+fn priority(event: &Event) -> u8 {
+    if super::live_context::failed(event)
+        || matches!(event.kind, EventKind::Landed | EventKind::Dropped)
+    {
         0
-    } else if line.to.as_deref() == Some("stale") {
+    } else if matches!(event.kind, EventKind::Blocked | EventKind::Ready) {
         1
     } else {
         2
     }
 }
 
-fn matches_scope(line: &ChangeLine, feed: &Feed, filter: &ProjectFilter) -> bool {
+/// An event with a task in scope: the project the event names, else the open task's, or a
+/// loaded closed page's.
+fn matches_scope(event: &Event, feed: &Feed, filter: &ProjectFilter) -> bool {
     if *filter == ProjectFilter::All {
         return true;
     }
-    let Some(id) = line.task.as_deref() else {
+    if let Some(project) = event.project.as_deref() {
+        return filter.matches(Some(project));
+    }
+    let Some(id) = event.task.as_deref() else {
         return false;
     };
     if let Some(task) = feed.board.task(id) {
-        return filter.matches(task.project.as_deref());
+        return filter.matches(task.project());
     }
     for cache in feed.details.values() {
         if let Some(DetailBody::Closed(page)) = cache.body()
@@ -203,94 +223,70 @@ fn matches_scope(line: &ChangeLine, feed: &Feed, filter: &ProjectFilter) -> bool
     false
 }
 
-fn summary(line: &ChangeLine) -> (&'static str, Mark, Hue) {
-    let kind = if line.kind == ChangeKind::Other {
-        line.class.as_str()
-    } else {
-        match line.kind {
-            ChangeKind::Gate => "gate",
-            ChangeKind::Review => "review",
-            ChangeKind::Land => "land",
-            ChangeKind::Work => "work",
-            ChangeKind::Attention => "attention",
-            ChangeKind::Question => "question",
-            ChangeKind::Queue => "queue",
-            ChangeKind::Plan => "plan",
-            ChangeKind::Comment => "comment",
-            ChangeKind::Annotation => "annotation",
-            ChangeKind::Automation => "automation",
-            ChangeKind::Policy => "policy",
-            ChangeKind::Created => "created",
-            ChangeKind::Moved => "moved",
-            ChangeKind::Other => "other",
-        }
-    };
-    if line.failed {
+fn summary(event: &Event) -> (&'static str, Mark, Hue) {
+    if super::live_context::failed(event) {
         return (
-            match kind {
-                "gate" => "gate failed",
-                "review" => "review failed",
-                "work" => "run failed",
-                "land" => "landing failed",
-                "queue" => "dispatch failed",
-                "plan" => "plan failed",
+            match event.kind {
+                EventKind::Gate => "gate failed",
+                EventKind::Verdict => "changes requested",
                 _ => "failed",
             },
             Mark::Fail,
             Hue::Fail,
         );
     }
-    if line.to.as_deref() == Some("stale") {
-        return (
-            match kind {
-                "gate" => "gate stale",
-                "review" => "review stale",
-                _ => "stale",
-            },
-            Mark::Stale,
-            Hue::Held,
-        );
+    match event.kind {
+        EventKind::Landed => ("landed", Mark::Done, Hue::Ok),
+        EventKind::Blocked => ("blocked", Mark::Active, Hue::You),
+        EventKind::Ready => ("ready to land", Mark::Active, Hue::You),
+        EventKind::Gate => ("gate passed", Mark::Done, Hue::Corral),
+        EventKind::ReviewStarted => ("review started", Mark::Active, Hue::Corral),
+        EventKind::Verdict => ("approved", Mark::Done, Hue::Corral),
+        EventKind::SentBack => ("sent back", Mark::Active, Hue::Worker),
+        EventKind::Dispatched | EventKind::Resumed => ("worker running", Mark::Active, Hue::Worker),
+        EventKind::Done => ("worker done", Mark::Done, Hue::Worker),
+        EventKind::Stopped => ("stopped", Mark::Na, Hue::Held),
+        EventKind::Forced => ("forced", Mark::Na, Hue::Held),
+        EventKind::Dropped => ("dropped", Mark::Na, Hue::Neutral),
+        EventKind::Reopened => ("reopened", Mark::Next, Hue::Neutral),
+        EventKind::Created => ("created", Mark::Next, Hue::Neutral),
+        EventKind::Moved => ("moved", Mark::Next, Hue::Neutral),
+        EventKind::Commented | EventKind::Replied => ("comment added", Mark::Na, Hue::Neutral),
+        EventKind::Artifact => ("artifact added", Mark::Na, Hue::Neutral),
+        EventKind::Edited => ("edited", Mark::Na, Hue::Neutral),
+        EventKind::Error => ("failed", Mark::Fail, Hue::Fail),
     }
-    if line.to.as_deref() == Some("done") {
-        return ("landed", Mark::Done, Hue::Ok);
-    }
-    match (kind, line.to.as_deref()) {
-        ("gate", Some("running")) => return ("gate started", Mark::Active, Hue::Corral),
-        ("moved" | "work", Some("running")) => {
-            return ("worker running", Mark::Active, Hue::Worker);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use corral_types::Actor;
+
+    /// A landed task kept reading "ready to land" (and a forced landing "gate failed"): an
+    /// earlier prompt outranked the landing that closed it.
+    #[test]
+    fn a_landed_task_reads_landed_not_its_earlier_prompt_or_failure() {
+        let event = |seq: u64, kind: EventKind, detail: serde_json::Value| Event {
+            seq,
+            ts: jiff::Timestamp::UNIX_EPOCH,
+            task: Some("T-1".into()),
+            run: None,
+            project: None,
+            kind,
+            actor: Actor::Auto,
+            detail,
+        };
+        let mut feed = Feed::default();
+        for (seq, kind, detail) in [
+            (1, EventKind::Gate, serde_json::json!({"result": "fail"})),
+            (2, EventKind::Ready, serde_json::json!({})),
+            (3, EventKind::Landed, serde_json::json!({})),
+        ] {
+            feed.changes.insert(seq, event(seq, kind, detail));
         }
-        ("moved" | "queue", Some("ready")) => return ("queued", Mark::Next, Hue::Neutral),
-        ("moved" | "review", Some("review")) => {
-            return ("ready for review", Mark::Next, Hue::Corral);
-        }
-        ("attention", Some("needs_me")) => return ("blocked", Mark::Active, Hue::You),
-        ("moved", Some("needs_me")) => return ("blocked", Mark::Na, Hue::Held),
-        ("moved", Some("dropped")) => return ("dropped", Mark::Na, Hue::Neutral),
-        ("moved", Some("backlog" | "idea")) => return ("upcoming", Mark::Next, Hue::Neutral),
-        _ => {}
+        let rows = digest(&feed, &ProjectFilter::All).rows;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].phrase, "landed");
     }
-    let phrase = match kind {
-        "gate" => "gate updated",
-        "review" => "review updated",
-        "land" => "landing updated",
-        "work" => "worker updated",
-        "attention" => "attention changed",
-        "question" => "question updated",
-        "queue" => "queue updated",
-        "plan" => "plan updated",
-        "comment" => "comment added",
-        "annotation" => "annotation updated",
-        "automation" => "automation updated",
-        "policy" => "policy updated",
-        "created" => "created",
-        "moved" => "moved",
-        _ => "updated",
-    };
-    let (mark, hue) = match kind {
-        "gate" | "review" => (Mark::Active, Hue::Corral),
-        "work" => (Mark::Active, Hue::Worker),
-        "question" | "attention" => (Mark::Active, Hue::You),
-        _ => (Mark::Na, Hue::Neutral),
-    };
-    (phrase, mark, hue)
 }

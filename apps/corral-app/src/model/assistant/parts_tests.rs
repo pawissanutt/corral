@@ -1,6 +1,5 @@
 use corral_protocol::assistant::{EntryKind, EntryPart, MessageState, ThreadEntry};
 use corral_protocol::rows::{AssistantKind, AssistantLocation, AssistantRow, AssistantState};
-use corral_protocol::subscription::LiveText;
 
 use super::{Body, State, ThreadItem, live_chip, live_items};
 use crate::model::daemon::{Feed, Link, ThreadSnapshot};
@@ -29,7 +28,7 @@ fn entry(id: String, kind: EntryKind, text: String) -> ThreadEntry {
 }
 
 fn answer(feed: &Feed) -> super::AssistantMessage {
-    let messages: Vec<_> = live_items(&State::default(), feed, "A-1", true)
+    let messages: Vec<_> = live_items(&State::default(), feed, "A-1")
         .into_iter()
         .filter_map(|item| match item {
             ThreadItem::Assistant(message) => Some(message),
@@ -57,7 +56,7 @@ fn text(message: &super::AssistantMessage) -> String {
 }
 
 #[test]
-fn long_answer_parts_render_once_in_numeric_order_and_retire_the_live_override() {
+fn long_answer_parts_render_once_in_numeric_order() {
     // Twelve small suffixes exercise /10 before /2 lexical ordering without a large fixture.
     let parts: Vec<_> = std::iter::once("a".repeat(7 * 1024))
         .chain((1..12).map(|index| format!("[{index}]")))
@@ -96,17 +95,10 @@ fn long_answer_parts_render_once_in_numeric_order_and_retire_the_live_override()
         owner.id = "A-1/M1/text/1".into();
         owner.text = Some("continuation".into());
         thread.entries.insert(owner.id.as_str().into(), owner);
-        thread.live = Some(LiveText {
-            entry: "A-1/M1/answer/0".into(),
-            turn: 1,
-            offset: 0,
-            text: format!("{canonical} streamed"),
-            done: false,
-        });
         let mut feed = Feed::default();
         feed.threads.insert("A-1".into(), thread);
-        assert_eq!(text(&answer(&feed)), format!("{canonical} streamed"));
-        let rows = live_items(&State::default(), &feed, "A-1", true);
+        assert_eq!(text(&answer(&feed)), canonical);
+        let rows = live_items(&State::default(), &feed, "A-1");
         assert_eq!(
             rows.iter()
                 .filter(|item| matches!(item, ThreadItem::Waiting(_)))
@@ -121,29 +113,6 @@ fn long_answer_parts_render_once_in_numeric_order_and_retire_the_live_override()
             })
             .collect();
         assert_eq!(owners, ["owner continuation"]);
-        if metadata {
-            for row in feed.threads.get_mut("A-1").unwrap().entries.values_mut() {
-                if let Some(part) = &mut row.part {
-                    part.complete = true;
-                }
-            }
-        }
-        feed.threads
-            .get_mut("A-1")
-            .unwrap()
-            .live
-            .as_mut()
-            .unwrap()
-            .text = canonical.clone();
-        let settled = answer(&feed);
-        assert_eq!(text(&settled), canonical);
-        assert!(
-            !settled.streaming,
-            "canonical coverage retires even a late done flag"
-        );
-        assert!(settled.stop.is_none());
-        feed.threads.get_mut("A-1").unwrap().live = None;
-        assert_eq!(text(&answer(&feed)), canonical);
     }
 }
 
@@ -169,6 +138,7 @@ fn cold_sessions_with_recorded_history_are_not_presented_as_never_started() {
             cost_usd: None,
             cost_basis: None,
             wait: None,
+            question_id: None,
             rev: 1,
         },
     );
@@ -204,6 +174,7 @@ fn quick_thread_end_closes_its_current_generation_and_frees_the_next_one() {
         cost_usd: None,
         cost_basis: None,
         wait: None,
+        question_id: None,
         rev: 1,
     };
     let mut feed = Feed {
@@ -242,5 +213,31 @@ fn quick_thread_end_closes_its_current_generation_and_frees_the_next_one() {
     assert!(
         end.enabled,
         "an earlier generation's End must not hold the new one"
+    );
+}
+
+/// "+ New session" stayed pressable on a corrald that serves no assistant sessions, and
+/// pressing it could only fail.
+#[test]
+fn new_session_is_disabled_with_its_reason_when_corrald_serves_no_assistant() {
+    let mut feed = Feed {
+        link: Link::Up,
+        ..Feed::default()
+    };
+    feed.capabilities
+        .insert(corral_protocol::app::PLANS_V1.into());
+    let agents = super::live_agents(&State::default(), &feed);
+    assert!(!agents.new_session.enabled);
+    assert!(
+        agents
+            .sessions_note
+            .is_some_and(|note| note.contains("serves no assistant sessions"))
+    );
+    feed.capabilities
+        .insert(corral_protocol::app::ASSISTANT_V1.into());
+    assert!(
+        super::live_agents(&State::default(), &feed)
+            .new_session
+            .enabled
     );
 }

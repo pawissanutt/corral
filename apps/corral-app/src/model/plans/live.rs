@@ -1,54 +1,31 @@
-//! corrald's plans in the shared descriptors: the list's sections from the plan rows, the
-//! selected plan's brief, document or approved state from its detail, the member graph from the
-//! detail and the board, and the phone page. Absent facts stay absent; nothing here falls back
-//! to fixtures.
+//! corrald's plans in the shared descriptors. A plan is a parent task with children: the list
+//! reads the plan rows (`feed.plans`, the parent with per-status child counts), the detail
+//! reads `PlanDetail` (the parent, whose body is the document, and its children), and the
+//! member graph lays the children out by their `depends_on` edges. Absent facts stay absent;
+//! nothing here falls back to fixtures.
 
 use std::cmp::Ordering;
 
-use corral_protocol::board::RailGlyph;
-use corral_protocol::detail::{DetailBody, DetailRef, PlanDetail, PlanMember};
-use corral_protocol::rows::{PlanRole, PlanRow as WirePlan, PlanState as WireState};
+use corral_protocol::detail::{DetailBody, DetailRef, PlanDetail};
+use corral_protocol::rows::PlanRow;
+use corral_types::Status;
 
-use super::live_role::{linked, linked_id, linked_label, role_line};
-use super::member_brief::member_brief;
+use super::member::Member;
 use super::{
-    Action, Button, Chip, Detail, ExecutingView, GraphInput, GraphMember, Header, Lens, ListNotice,
-    LiveAction, NoticeView, PhonePage, State, live_doc, live_role, live_story, plan_brief,
+    Action, Button, Chip, Detail, DocumentFold, GraphInput, GraphMember, Header, LiveAction,
+    NoticeView, PhonePage, PlanView, State, live_story, plan_brief,
 };
-use crate::model::board::{Mark, Rail};
 use crate::model::daemon::{DetailCache, Feed, Group, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
-use crate::model::inbox::{is_open, owner_moves};
 use crate::model::nav::Form;
 use crate::model::projects::{ProjectFilter, project_chip};
 use crate::model::text::span;
 use crate::model::work::when;
 use crate::model::{Id, Live, Selection};
 
-/// The list's sections, in display order, with their heading hue.
-const SECTIONS: [(&str, WireState, Hue); 9] = [
-    ("Awaiting your acceptance", WireState::Awaiting, Hue::You),
-    ("Planning failed", WireState::PlanFailed, Hue::Fail),
-    ("Drafting", WireState::Drafting, Hue::Neutral),
-    ("In plan review", WireState::Reviewing, Hue::Corral),
-    ("Executing", WireState::Executing, Hue::Corral),
-    // An approved design may already have published its tracker, so not "not started".
-    ("Approved", WireState::Approved, Hue::Neutral),
-    ("Complete", WireState::Complete, Hue::Ok),
-    ("Cancelled", WireState::Cancelled, Hue::Neutral),
-    ("Other", WireState::Other, Hue::Neutral),
-];
-
-fn section_of(state: WireState) -> usize {
-    SECTIONS
-        .iter()
-        .position(|(_, kind, _)| *kind == state)
-        .unwrap_or(SECTIONS.len() - 1)
-}
-
 /// `T-9` before `T-10`; ids without a number after those with one.
-fn by_id(a: &str, b: &str) -> Ordering {
+pub(super) fn by_id(a: &str, b: &str) -> Ordering {
     fn number(id: &str) -> Option<u64> {
         id.rsplit_once('-')?.1.parse().ok()
     }
@@ -60,7 +37,7 @@ fn by_id(a: &str, b: &str) -> Ordering {
     }
 }
 
-fn plan_filter(feed: &Feed, filter: &ProjectFilter) -> ProjectFilter {
+pub(super) fn plan_filter(feed: &Feed, filter: &ProjectFilter) -> ProjectFilter {
     if feed.capable(corral_protocol::PROJECTS_V1) {
         filter.resolved(feed)
     } else {
@@ -68,20 +45,8 @@ fn plan_filter(feed: &Feed, filter: &ProjectFilter) -> ProjectFilter {
     }
 }
 
-/// Served plans in list order: by section, then by id.
-fn sorted<'a>(feed: &'a Feed, filter: &ProjectFilter) -> Vec<&'a WirePlan> {
-    let filter = plan_filter(feed, filter);
-    let mut rows: Vec<&WirePlan> = feed
-        .plans
-        .values()
-        .filter(|row| matches_project(row, &filter))
-        .collect();
-    rows.sort_by(|a, b| {
-        section_of(a.state)
-            .cmp(&section_of(b.state))
-            .then_with(|| by_id(&a.id, &b.id))
-    });
-    rows
+pub(super) fn matches_project(row: &PlanRow, filter: &ProjectFilter) -> bool {
+    filter.matches(row.parent.project.as_deref())
 }
 
 /// The plan the desktop and terminal detail shows: the root selection while corrald still lists
@@ -107,16 +72,8 @@ pub fn current_plan_filtered(
         })
 }
 
-fn matches_project(row: &WirePlan, filter: &ProjectFilter) -> bool {
-    match filter {
-        ProjectFilter::All => true,
-        ProjectFilter::Project(project) => row.projects.iter().any(|name| name == project.as_str()),
-        ProjectFilter::Unassigned => row.projects.is_empty(),
-    }
-}
-
-/// The cached detail of a plan, whatever its state.
-pub(super) fn plan_cache<'a>(feed: &'a Feed, id: &str) -> Option<&'a DetailCache> {
+/// The cached detail of a plan.
+fn plan_cache<'a>(feed: &'a Feed, id: &str) -> Option<&'a DetailCache> {
     feed.detail(&DetailRef::Plan { id: id.to_owned() })
 }
 
@@ -128,149 +85,41 @@ pub fn plan_detail<'a>(feed: &'a Feed, id: &str) -> Option<&'a PlanDetail> {
     }
 }
 
-fn topic_loading(feed: &Feed) -> bool {
+pub(super) fn topic_loading(feed: &Feed) -> bool {
     feed.topics.get("plans").is_none_or(|topic| topic.loading)
 }
 
-/// Served plans in the Plans scope by list section, in display order, empty sections left out,
-/// with what the list says instead of, or above, them.
-pub(super) fn list_sections<'a>(
-    feed: &'a Feed,
-    filter: &ProjectFilter,
-) -> (
-    Option<ListNotice>,
-    Vec<(&'static str, Hue, Vec<&'a WirePlan>)>,
-) {
-    let filter = plan_filter(feed, filter);
-    let topic = feed.topics.get("plans");
-    let rows = sorted(feed, &filter);
-    let notice = if rows.is_empty() {
-        Some(
-            if let Some(error) = topic.and_then(|topic| topic.error.as_ref()) {
-                ListNotice::Error(format!("corrald could not send plans: {}", error.message))
-            } else if feed.link == Link::Down {
-                ListNotice::Error(
-                    "No plans received from corrald yet; the connection is down.".into(),
-                )
-            } else if topic_loading(feed) && feed.plans.is_empty() {
-                ListNotice::Loading
-            } else {
-                ListNotice::Empty {
-                    heading: if filter == ProjectFilter::All {
-                        "No plans"
-                    } else {
-                        "No matching plans"
-                    },
-                    body: if filter == ProjectFilter::All {
-                        "corrald has no plan awaiting acceptance, executing or approved."
-                    } else {
-                        "No served plan matches this project filter."
-                    },
-                }
-            },
-        )
-    } else if let Some(error) = topic.and_then(|topic| topic.error.as_ref()) {
-        Some(ListNotice::Stale(format!(
-            "Showing the last plans received · {}",
-            error.message
-        )))
-    } else if feed.link == Link::Down || topic.is_some_and(|topic| topic.stale) {
-        Some(ListNotice::Stale(
-            "Showing the last plans received; corrald is not current.".into(),
-        ))
-    } else {
-        None
-    };
-    let sections = SECTIONS
-        .iter()
-        .map(|(label, kind, hue)| {
-            let rows: Vec<&WirePlan> = rows
-                .iter()
-                .copied()
-                .filter(|row| section_of(row.state) == section_of(*kind))
-                .collect();
-            (*label, *hue, rows)
-        })
-        .filter(|(_, _, rows)| !rows.is_empty())
-        .collect();
-    (notice, sections)
-}
-
-/// A list row's projects: the plan's projects while the scope spans several of them, or
-/// "Unassigned"; none from a daemon that serves no projects.
-pub(super) fn row_projects(feed: &Feed, row: &WirePlan, filter: &ProjectFilter) -> Vec<String> {
+/// A list row's project chip, while the scope spans several projects.
+pub(super) fn row_project(feed: &Feed, row: &PlanRow, filter: &ProjectFilter) -> Option<String> {
     if !feed.capable(corral_protocol::PROJECTS_V1) {
-        return Vec::new();
+        return None;
     }
-    let filter = plan_filter(feed, filter);
-    if row.projects.is_empty() {
-        return project_chip(feed, &filter, None).into_iter().collect();
-    }
-    row.projects
-        .iter()
-        .filter_map(|project| project_chip(feed, &filter, Some(project.as_str())))
-        .collect()
-}
-
-/// The projects a plan is filed under, as its head names them.
-pub(super) fn project_of(row: Option<&WirePlan>) -> Option<String> {
-    row.filter(|row| !row.projects.is_empty())
-        .map(|row| row.projects.join(", "))
-}
-
-/// A served rail as the app's marks.
-pub(super) fn rail(member: &PlanMember) -> Rail {
-    member.rail.each_ref().map(|step| match step.glyph {
-        RailGlyph::Pass => Mark::Done,
-        RailGlyph::Active => Mark::Active,
-        RailGlyph::Fail => Mark::Fail,
-        RailGlyph::Stale => Mark::Stale,
-        RailGlyph::Pending => Mark::Next,
-        RailGlyph::Unavailable | RailGlyph::Other => Mark::Na,
-    })
-}
-
-/// The open canonical question a member waits on, by key.
-pub(super) fn open_question(feed: &Feed, task: &str) -> Option<Id> {
-    owner_moves(feed)
-        .find(|row| row.task.as_deref() == Some(task) && row.question_rev.is_some() && is_open(row))
-        .map(|row| Id::from(&row.id))
-}
-
-/// corrald's layer numbers (counted from 1) as the graph's display layers from 0, by rank of
-/// the distinct numbers, so the first served layer is the one that can start now and no layer
-/// the plan does not have is drawn empty. None when any member has no layer (a cycle).
-fn served_layers(given: &[Option<u32>]) -> Option<Vec<usize>> {
-    let given: Vec<u32> = given.iter().copied().collect::<Option<_>>()?;
-    let mut distinct = given.clone();
-    distinct.sort_unstable();
-    distinct.dedup();
-    Some(
-        given
-            .iter()
-            .map(|layer| distinct.partition_point(|known| known < layer))
-            .collect(),
+    project_chip(
+        feed,
+        &plan_filter(feed, filter),
+        row.parent.project.as_deref(),
     )
 }
 
-/// Each member's dependency layer: corrald's when it gives every one, otherwise the longest
-/// prerequisite chain within the plan from 0 (bounded, so a cycle cannot loop).
-fn layers(detail: &PlanDetail) -> Vec<usize> {
-    let given: Vec<Option<u32>> = detail.members.iter().map(|member| member.layer).collect();
-    if let Some(given) = served_layers(&given) {
-        return given;
-    }
-    let index = |id: &str| detail.members.iter().position(|member| member.id == id);
-    let edges: Vec<(usize, usize)> = detail
-        .edges
+/// Each member's dependency layer: the longest chain of prerequisites within the plan, from 0
+/// (bounded, so a cycle cannot loop).
+fn layers(children: &[corral_types::Task]) -> Vec<usize> {
+    let index = |id: &str| children.iter().position(|child| child.id == id);
+    let edges: Vec<(usize, usize)> = children
         .iter()
-        .filter_map(|edge| Some((index(&edge.from)?, index(&edge.to)?)))
+        .enumerate()
+        .flat_map(|(to, child)| {
+            child
+                .depends_on
+                .iter()
+                .filter_map(move |dep| Some((index(dep)?, to)))
+        })
         .collect();
-    let mut depth = vec![0; detail.members.len()];
-    for _ in 0..detail.members.len() {
+    let mut depth = vec![0; children.len()];
+    for _ in 0..children.len() {
         let mut changed = false;
         for &(from, to) in &edges {
-            let deeper = (depth[from] + 1).min(detail.members.len());
+            let deeper = (depth[from] + 1).min(children.len());
             if depth[to] < deeper {
                 depth[to] = deeper;
                 changed = true;
@@ -283,61 +132,53 @@ fn layers(detail: &PlanDetail) -> Vec<usize> {
     depth
 }
 
-/// The plan's members and edges as the graph draws them, each with its named rail, with live
-/// presses: a member with an open question opens it; otherwise placed cards select the member
-/// and stacked ones open its task.
+/// The plan's children and their dependency edges as the graph draws them, each with its named
+/// rail: placed cards select the member, stacked ones open its task.
 pub fn graph_input(feed: &Feed, plan: &Id, detail: &PlanDetail) -> GraphInput {
-    let layers = layers(detail);
     let members = detail
-        .members
+        .children
         .iter()
-        .zip(layers)
-        .map(|(member, layer)| {
-            let id = Id::from(&member.id);
-            let brief = member_brief(feed, member);
-            let hue = match feed.board.task(&member.id).map(|task| task.group) {
-                Some(Group::NeedsYou) => Hue::You,
-                Some(Group::Verifying) => Hue::Corral,
-                Some(Group::Producing) => Hue::Worker,
-                Some(Group::Held) => Hue::Held,
-                _ if brief.needs_you => Hue::You,
-                _ => Hue::Neutral,
-            };
-            let (select, open) = match open_question(feed, &member.id) {
-                Some(key) => (
-                    Action::Live(LiveAction::Question(key.clone())),
-                    Action::Live(LiveAction::Question(key)),
-                ),
-                None => (
-                    Action::Live(LiveAction::Member {
-                        plan: plan.clone(),
-                        member: id.clone(),
-                    }),
-                    Action::Live(LiveAction::Task(id.clone())),
-                ),
-            };
+        .zip(layers(&detail.children))
+        .map(|(child, layer)| {
+            let member = Member::of(feed, detail, child);
+            let id = Id::new(member.id());
             GraphMember {
-                title: brief.title,
-                stage: brief.rail,
-                hue,
-                needs_you: brief.needs_you,
+                title: member.title().to_owned(),
+                stage: member.rail(),
+                hue: match member.group() {
+                    Some(Group::NeedsYou) => Hue::You,
+                    Some(Group::Verifying) => Hue::Corral,
+                    Some(Group::Producing) => Hue::Worker,
+                    _ if member.done() => Hue::Ok,
+                    _ => Hue::Neutral,
+                },
+                needs_you: member.needs_you(),
                 layer,
-                select,
-                open,
+                select: Action::Live(LiveAction::Member {
+                    plan: plan.clone(),
+                    member: id.clone(),
+                }),
+                open: Action::Live(LiveAction::Task(id.clone())),
                 id,
             }
         })
         .collect();
     let edges = detail
-        .edges
+        .children
         .iter()
-        .map(|edge| (Id::from(&edge.from), Id::from(&edge.to)))
+        .flat_map(|child| {
+            child
+                .depends_on
+                .iter()
+                .filter(|dep| detail.children.iter().any(|other| other.id == **dep))
+                .map(|dep| (Id::new(dep), Id::new(&child.id)))
+        })
         .collect();
     GraphInput { members, edges }
 }
 
 /// The sentence under a header whose detail is the last copy received, if it is.
-pub(super) fn stale_line(cache: &DetailCache, feed: &Feed) -> Option<String> {
+fn stale_line(cache: &DetailCache, feed: &Feed) -> Option<String> {
     let reason = if feed.link == Link::Down {
         "corrald is not connected".to_owned()
     } else if let Some(error) = &cache.error {
@@ -359,21 +200,16 @@ pub(super) fn stale_line(cache: &DetailCache, feed: &Feed) -> Option<String> {
     })
 }
 
-/// The state chip of a served plan.
-pub(super) fn state_chip(state: WireState) -> Chip {
-    let (label, hue) = match state {
-        WireState::Drafting => ("drafting", Hue::Neutral),
-        WireState::Reviewing => ("in plan review", Hue::Corral),
-        WireState::PlanFailed => ("plan failed", Hue::Fail),
-        WireState::Awaiting => ("needs you", Hue::You),
-        WireState::Executing => ("executing", Hue::Corral),
-        WireState::Approved => ("approved", Hue::Neutral),
-        WireState::Complete => ("complete", Hue::Ok),
-        WireState::Cancelled => ("cancelled", Hue::Neutral),
-        WireState::Other => ("state unknown", Hue::Neutral),
+/// The chip of a plan's parent task status.
+fn status_chip(status: Status) -> Chip {
+    let hue = match status {
+        Status::Blocked => Hue::You,
+        Status::Running | Status::Review => Hue::Corral,
+        Status::Done => Hue::Ok,
+        _ => Hue::Neutral,
     };
     Chip {
-        label: label.into(),
+        label: status.as_str().into(),
         hue,
     }
 }
@@ -387,13 +223,23 @@ fn notice(heading: String, body: String, hue: Hue, action: Option<Button>) -> De
     })
 }
 
+fn ask(id: &Id) -> Button {
+    Button::new(
+        "Ask about this",
+        Action::Live(LiveAction::Ask {
+            record: Live::Plan(id.clone()),
+        }),
+    )
+}
+
 /// The detail of one served plan, or what stands in for it.
 pub fn live_detail(state: &State, plan: Option<&Id>, feed: &Feed, env: Env) -> Detail {
     let Some(id) = plan else {
         return if feed.plans.is_empty() {
             notice(
                 "No plan to show".into(),
-                "Plans appear here when corrald serves them.".into(),
+                "A task with children is a plan; plans appear here when corrald serves them."
+                    .into(),
                 Hue::Neutral,
                 None,
             )
@@ -406,10 +252,8 @@ pub fn live_detail(state: &State, plan: Option<&Id>, feed: &Feed, env: Env) -> D
             )
         };
     };
-    let row = feed.plans.get(id.as_str());
     let cache = plan_cache(feed, id);
-    let detail = plan_detail(feed, id);
-    let Some(detail) = detail else {
+    let Some(detail) = plan_detail(feed, id) else {
         if let Some(error) = cache.and_then(|cache| cache.error.as_ref().filter(|_| !cache.loading))
         {
             return notice(
@@ -422,10 +266,13 @@ pub fn live_detail(state: &State, plan: Option<&Id>, feed: &Feed, env: Env) -> D
                 )),
             );
         }
-        if row.is_none() && !topic_loading(feed) && cache.is_none_or(|cache| !cache.loading) {
+        if !feed.plans.contains_key(id.as_str())
+            && !topic_loading(feed)
+            && cache.is_none_or(|cache| !cache.loading)
+        {
             return notice(
                 format!("Plan {id} is not served"),
-                "corrald does not list this plan.".into(),
+                "corrald does not list this task as a plan.".into(),
                 Hue::Neutral,
                 None,
             );
@@ -433,189 +280,148 @@ pub fn live_detail(state: &State, plan: Option<&Id>, feed: &Feed, env: Env) -> D
         return Detail::Loading;
     };
     let stale = cache.and_then(|cache| stale_line(cache, feed));
-    match state.live.lens_of(id) {
-        Some(Lens::Diff { from, to }) => {
-            return Detail::Diff(live_doc::diff(state, feed, id, row, detail, from, to, env));
-        }
-        Some(Lens::Document) if detail.document.is_some() => {
-            return Detail::Document(live_doc::document_view(state, feed, id, row, detail, stale));
-        }
-        _ => {}
-    }
-    match detail.state {
-        WireState::Awaiting => {
-            Detail::Awaiting(live_doc::awaiting(state, feed, id, row, detail, stale, env))
-        }
-        WireState::Approved => Detail::Approved(live_role::approved(id, row, detail, stale, env)),
-        WireState::Drafting | WireState::Reviewing | WireState::PlanFailed => Detail::Planning(
-            super::planning::view(id, row, detail, stale, env.form == Form::Phone),
-        ),
-        WireState::Executing | WireState::Complete | WireState::Cancelled | WireState::Other => {
-            Detail::Executing(executing(state, feed, id, row, detail, stale, env))
-        }
-    }
+    Detail::Plan(Box::new(plan_view(state, feed, id, detail, stale, env)))
 }
 
-/// The plan's title, from its row; the id when corrald lists no row for it.
-pub(super) fn title(id: &Id, row: Option<&WirePlan>) -> String {
-    row.map_or_else(|| id.to_string(), |row| row.title.clone())
-}
-
-/// Header commands for a published plan: Ask (in the phone's navigation bar instead), the
-/// document when served, and the design a tracker came from.
-pub(super) fn tracker_actions(
-    id: &Id,
-    row: Option<&WirePlan>,
-    detail: &PlanDetail,
-    phone: bool,
-) -> Vec<Button> {
-    let mut actions = vec![];
-    if !phone {
-        actions.push(Button::new(
-            "Ask about this",
-            Action::Live(LiveAction::Ask {
-                record: Live::Plan(id.clone()),
-                rev: row.map(|row| row.rev),
-                to: None,
-                text: None,
-            }),
-        ));
-    }
-    if detail.document.is_some() {
-        actions.push(
-            Button::new(
-                "Open document",
-                Action::Live(LiveAction::Document(id.clone())),
-            )
-            .quiet(),
-        );
-    }
-    if let (Some(PlanRole::Tracker), Some(design)) =
-        (live_role::role(row, detail), linked(row, detail))
-    {
-        actions.push(
-            Button::new(
-                format!("Open design {}", linked_label(&design)),
-                Action::Live(LiveAction::Plan(linked_id(&design))),
-            )
-            .quiet(),
-        );
-    }
-    actions
-}
-
-fn executing(
+fn plan_view(
     state: &State,
     feed: &Feed,
     id: &Id,
-    row: Option<&WirePlan>,
     detail: &PlanDetail,
     stale: Option<String>,
     env: Env,
-) -> ExecutingView {
+) -> PlanView {
     let phone = env.form == Form::Phone;
+    // The board's row is fresher than the plan's copy of its parent.
+    let parent = feed.board.task(id).map_or(&detail.parent, |row| row.task());
     let selected = state
-        .live
         .member_of(id)
-        .filter(|member| detail.members.iter().any(|m| m.id == member.as_str()))
+        .filter(|member| {
+            detail
+                .children
+                .iter()
+                .any(|child| child.id == member.as_str())
+        })
         .cloned();
-    let mut meta = vec![];
-    if let Some(at) = row.and_then(|row| row.accepted_at.as_deref()) {
-        let at = when(at, feed);
-        meta.push(if at.is_empty() {
-            "accepted".to_owned()
-        } else {
-            format!("accepted {at}")
-        });
-    }
-    if let Some(delivery) = row.and_then(|row| row.delivery.as_deref()) {
-        meta.push(format!("delivers to {delivery}"));
-    }
-    if let Some(line) = role_line(live_role::role(row, detail), linked(row, detail).as_deref()) {
-        meta.push(line);
-    }
+    let updated = when(&parent.updated.to_string(), feed);
     let story = if phone {
         None
     } else {
         selected.as_ref().and_then(|member| {
             detail
-                .members
+                .children
                 .iter()
-                .find(|m| m.id == member.as_str())
-                .map(|m| live_story::story(feed, id, row, detail, m))
+                .find(|child| child.id == member.as_str())
+                .map(|child| live_story::story(feed, id, detail, child))
         })
     };
-    ExecutingView {
+    PlanView {
         header: Header {
-            plan: Some(id.clone()),
-            chips: vec![state_chip(detail.state)],
+            plan: id.clone(),
+            chips: vec![status_chip(parent.status)],
             id: id.to_string(),
-            project: project_of(row),
-            title: title(id, row),
-            meta: if meta.is_empty() {
+            project: parent.project.clone(),
+            title: parent.title.clone(),
+            meta: if updated.is_empty() {
                 vec![]
             } else {
-                vec![span(meta.join(" · ")).dim()]
+                vec![span(format!("updated {updated}")).dim()]
             },
-            illustrative: None,
-            actions: tracker_actions(id, row, detail, phone),
+            actions: if phone { vec![] } else { vec![ask(id)] },
             stale,
         },
         brief: plan_brief(feed, id, detail),
+        document_fold: phone
+            .then(|| fold(id, parent.body.trim(), state.documents.contains(id)))
+            .flatten(),
+        document: parent.body.trim().to_owned(),
         members_heading: "Members",
-        members_hint: "Laid out by dependency: a member starts once the members it needs have landed.",
-        members_empty: "No members yet. They appear once the plan's tracker is published.",
+        members_hint: "Laid out by dependency: a member starts once the members it depends on are done.",
+        members_empty: "No members yet. A task filed under this one becomes a member.",
         selected,
         story,
     }
 }
 
+/// The lines a phone shows of a long document before its toggle, and the length past which a
+/// document folds at all: a few lines left over read better in place than behind a press.
+const FOLD_AT: usize = 14;
+const FOLD_PAST: usize = 20;
+
+/// The opening of a long document: up to `FOLD_AT` lines, cut at the last paragraph break in
+/// them, and before a code fence that would be left open.
+fn fold(plan: &Id, document: &str, open: bool) -> Option<DocumentFold> {
+    let lines: Vec<&str> = document.lines().collect();
+    if lines.len() <= FOLD_PAST {
+        return None;
+    }
+    let mut cut = lines[..FOLD_AT]
+        .iter()
+        .rposition(|line| line.trim().is_empty())
+        .filter(|at| *at > 0)
+        .unwrap_or(FOLD_AT);
+    let fences: Vec<usize> = (0..cut)
+        .filter(|at| lines[*at].trim_start().starts_with("```"))
+        .collect();
+    if fences.len() % 2 == 1
+        && let Some(open_fence) = fences.last()
+    {
+        cut = (*open_fence).max(1);
+    }
+    let rest = lines.len() - cut;
+    Some(DocumentFold {
+        preview: lines[..cut].join("\n"),
+        open,
+        toggle: Button::new(
+            if open {
+                "Show the opening only".to_owned()
+            } else {
+                format!("Read the whole document · {rest} more lines")
+            },
+            Action::Live(LiveAction::Document(plan.clone())),
+        )
+        .quiet(),
+    })
+}
+
 /// The pushed phone page of one served plan.
 pub fn live_phone_page(state: &State, id: &Id, feed: &Feed, env: Env) -> PhonePage {
-    let row = feed.plans.get(id.as_str());
-    let detail = live_detail(
-        state,
-        Some(id),
-        feed,
-        Env {
-            form: Form::Phone,
-            ..env
-        },
-    );
-    let published = matches!(detail, Detail::Executing(_) | Detail::Planning(_));
     PhonePage {
-        title: match &detail {
-            Detail::Awaiting(_) => "Plan review".into(),
-            Detail::Diff(_) => "Revision diff".into(),
-            Detail::Document(_) => "Plan document".into(),
-            _ => id.to_string(),
-        },
-        right: published.then(|| {
-            Button::new(
-                "Ask about this",
-                Action::Live(LiveAction::Ask {
-                    record: Live::Plan(id.clone()),
-                    rev: row.map(|row| row.rev),
-                    to: None,
-                    text: None,
-                }),
-            )
-        }),
-        right_label: published.then_some("Ask the assistant about this plan"),
-        detail,
+        title: id.to_string(),
+        right: ask(id),
+        right_label: "Ask the assistant about this plan",
+        detail: live_detail(
+            state,
+            Some(id),
+            feed,
+            Env {
+                form: Form::Phone,
+                ..env
+            },
+        ),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::served_layers;
+    use super::layers;
+    use crate::model::daemon::bare_task;
 
     #[test]
-    fn canonical_one_based_layers_draw_from_layer_zero_without_an_empty_layer() {
-        assert_eq!(
-            served_layers(&[Some(1), Some(2), Some(2)]),
-            Some(vec![0, 1, 1])
-        );
-        assert_eq!(served_layers(&[Some(1), None]), None);
+    fn a_member_sits_one_layer_past_its_deepest_prerequisite_and_a_cycle_stays_bounded() {
+        let at = jiff::Timestamp::UNIX_EPOCH;
+        let task = |id: &str, deps: &[&str]| {
+            let mut task = bare_task(id, id, corral_types::Status::Ready, at);
+            task.depends_on = deps.iter().map(|dep| (*dep).to_owned()).collect();
+            task
+        };
+        let plan = [
+            task("T-1", &[]),
+            task("T-2", &["T-1"]),
+            task("T-3", &["T-1", "T-2", "T-99"]),
+        ];
+        assert_eq!(layers(&plan), vec![0, 1, 2]);
+        let cycle = [task("T-1", &["T-2"]), task("T-2", &["T-1"])];
+        assert!(layers(&cycle).iter().all(|layer| *layer <= cycle.len()));
     }
 }

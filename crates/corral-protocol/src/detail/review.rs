@@ -1,6 +1,5 @@
-//! Candidate-bound review summaries and annotation threads.
-use super::ArtifactRef;
-use crate::cmd::annotation::{AnnotationSide, LineRange};
+//! The stored diff and run summary from `done`, with the task's check history.
+use corral_types::{Artifact, Check, Run};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -15,43 +14,16 @@ pub struct ReviewCandidate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewDetail {
     pub task: String,
-    pub candidate_sha: Option<String>,
-    pub base: Option<String>,
-    pub state: String,
-    pub verdicts: Vec<ReviewVerdict>,
-    /// Canonical gate receipts, independent of human or agent reviewer verdicts.
-    #[serde(default)]
-    pub gates: Vec<ReviewGate>,
+    /// The candidate run contains the summary and commit recorded at `done`.
+    #[schemars(with = "Option<crate::schema_types::Run>")]
+    pub run: Option<Run>,
+    #[schemars(with = "Option<crate::schema_types::Artifact>")]
+    pub diff: Option<Artifact>,
+    /// Recorded gate and review checks in insertion order; may span detail pages.
+    #[schemars(with = "Vec<crate::schema_types::Check>")]
+    pub checks: Vec<Check>,
+    pub max_rounds: u32,
     pub files: Vec<ReviewFile>,
-    pub report: Option<String>,
-    pub acceptance: Vec<String>,
-    pub gate_log_tail: Vec<String>,
-    pub artifacts: Vec<ArtifactRef>,
-    pub annotations: Vec<ReviewAnnotation>,
-    pub approvable: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReviewVerdict {
-    pub by: String,
-    pub sha: String,
-    pub verdict: String,
-    pub at: Option<String>,
-    pub text: Option<String>,
-    pub stale: bool,
-}
-
-/// A run's latest gate receipt, retained even when it checked an older candidate.
-/// `by` names its recorded commands; `text` contains failure or stale diagnostics.
-/// Combined canonical output remains available in `ReviewDetail::gate_log_tail`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReviewGate {
-    pub by: String,
-    pub sha: String,
-    pub verdict: String,
-    pub at: Option<String>,
-    pub text: Option<String>,
-    pub stale: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -59,26 +31,4 @@ pub struct ReviewFile {
     pub path: String,
     pub added: u32,
     pub deleted: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReviewAnnotation {
-    pub id: String,
-    pub revision: u32,
-    pub run: String,
-    pub base: String,
-    pub head: String,
-    pub path: String,
-    pub side: AnnotationSide,
-    pub range: Option<LineRange>,
-    pub resolved: bool,
-    pub stale: bool,
-    pub messages: Vec<AnnotationMessage>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct AnnotationMessage {
-    pub by: String,
-    pub at: String,
-    pub text: String,
 }

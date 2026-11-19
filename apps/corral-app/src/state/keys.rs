@@ -11,9 +11,7 @@ use nsh_core::prelude::*;
 
 use super::AppState;
 use crate::model::projects::{FilterScreen, NowScope, WorkspaceMode};
-use crate::model::{
-    DataState, Destination, Effect, Overlay, builds, commands, inbox, plans, review, work,
-};
+use crate::model::{DataState, Destination, Effect, Overlay, commands, plans, review, work};
 
 /// Where the keyboard focus is, as far as key routing needs it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -32,17 +30,31 @@ impl KeyFocus {
 }
 
 /// NSH names a shifted character by its unshifted key: `?` is Shift+/ and the reducers'
-/// capital `J`/`K` are Shift+J/K (a bare "J" would bind plain `j`).
+/// capitals (`J`/`K`, Now's `R`, Review's `A`) are Shift+letter (a bare "J" would bind `j`).
 fn stroke(key: &'static str) -> &'static str {
     match key {
         "?" => "shift+/",
         "J" => "shift+j",
         "K" => "shift+k",
+        "R" => "shift+r",
+        "A" => "shift+a",
         key => key,
     }
 }
 
 impl AppState {
+    /// The control `handle` takes the keyboard focus whenever a direct key names its test id
+    /// (`Effect::Focus`), once it has laid out.
+    pub fn focus_when_asked(self, id: &'static str, handle: ElementRef) {
+        let focus_to = self.focus_to;
+        effect(move || {
+            if focus_to.get() == Some(id) {
+                untracked(|| focus_to.set(None));
+                after_answer(move || handle.focus());
+            }
+        });
+    }
+
     pub(super) fn bind_keys(self) {
         let typing = KeyOptions {
             when: When::NotEditing,
@@ -59,7 +71,7 @@ impl AppState {
                 .into_iter()
                 .filter_map(commands::destination_key),
         );
-        for domain in [inbox::KEYS, work::KEYS, plans::KEYS, review::KEYS] {
+        for domain in [work::KEYS, plans::KEYS, review::KEYS] {
             keys.extend(domain.iter().copied());
         }
         for &key in &keys {
@@ -76,15 +88,15 @@ impl AppState {
                 }
             }
         });
-        on_key_with("mod+k", anywhere, move |_| {
-            if self.is_open(Overlay::Palette) {
-                self.close(Overlay::Palette);
-            } else {
-                self.open_palette();
-            }
-        });
+        on_key_with("mod+k", anywhere, move |_| self.toggle_palette());
         on_key_with("escape", anywhere, move |_| self.close_newest());
         on_key_with("mod+b", typing, move |_| self.toggle_sidebar());
+        // Save the configuration draft from any of its fields, as the save bar's Save does.
+        on_key_with("mod+s", anywhere, move |_| {
+            if self.nav.with_untracked(super::config::on_config) {
+                self.act(self.settings, |state, _| state.save_config());
+            }
+        });
         on_key_with("mod+shift+m", anywhere, move |_| {
             if self.data.get_untracked() == DataState::Disconnected {
                 return;
@@ -95,6 +107,24 @@ impl AppState {
                 state.cycle_model_live(top.as_ref(), ask_open, feed, env)
             });
         });
+    }
+
+    /// The phone form with a hardware keyboard: Ctrl+K (⌘K) opens and closes the palette, as the
+    /// magnifier does. Its letter and list keys stay unbound; a phone has no key line naming them.
+    pub(super) fn bind_phone_keys(self) {
+        let anywhere = KeyOptions {
+            when: When::Always,
+            ..KeyOptions::default()
+        };
+        on_key_with("mod+k", anywhere, move |_| self.toggle_palette());
+    }
+
+    fn toggle_palette(self) {
+        if self.is_open(Overlay::Palette) {
+            self.close(Overlay::Palette);
+        } else {
+            self.open_palette();
+        }
     }
 
     /// Follows the keyboard focus coming into and leaving the app and the destination's list.
@@ -110,14 +140,15 @@ impl AppState {
             .on_focus_out(move || focus.update(|at| at.list = false));
     }
 
-    /// Tracked: the list keys to bind now. None while a confirmation or an overlay is up (its
-    /// own controls take Enter), while a control outside the list has the focus, or without a
-    /// connection.
+    /// Tracked: the list keys to bind now. None while a sheet, an overlay or a menu is up (its
+    /// own items take the arrows and Enter: a menu the pointer opened takes Down into its first
+    /// item), while a control outside the list has the focus, or without a connection.
     fn list_keys_now(&self) -> &'static [&'static str] {
         if !self.key_focus.get().takes_list_keys()
-            || self.confirmation.with(Option::is_some)
+            || self.sheet_open()
             || self.nav.with(|nav| nav.newest().is_some())
             || self.work.with(|state| state.menu.is_some())
+            || self.menus.get() > 0
         {
             return &[];
         }
@@ -131,17 +162,32 @@ impl AppState {
             return &[];
         }
         match self.data.get() {
-            DataState::Daemon | DataState::Fixture => self
-                .nav
-                .with(|nav| commands::list_keys_live(destination, nav.live())),
+            DataState::Daemon | DataState::Fixture => {
+                let keys = self
+                    .nav
+                    .with(|nav| commands::list_keys_live(destination, nav.live()));
+                let focus = self
+                    .key_focus
+                    .get()
+                    .anywhere
+                    .then(|| self.focused_row.get());
+                self.nav.with(|nav| {
+                    commands::with_focus(
+                        keys,
+                        focus.as_ref().map(|row| row.as_deref()),
+                        nav.selection.task.as_deref(),
+                    )
+                })
+            }
             DataState::Disconnected => &[],
         }
     }
 
     fn press_key(&self, key: &str) {
-        if self.confirmation.with_untracked(Option::is_some)
+        if untracked(|| self.sheet_open())
             || self.nav.with_untracked(|nav| nav.newest().is_some())
             || self.work.with_untracked(|state| state.menu.is_some())
+            || self.menus.get_untracked() > 0
         {
             return;
         }
@@ -223,9 +269,6 @@ impl AppState {
                     },
                 );
             }),
-            Destination::Inbox => self.inbox.update(|state| {
-                effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
-            }),
             Destination::Plans => self.plans.update(|state| {
                 effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
             }),
@@ -235,11 +278,19 @@ impl AppState {
             Destination::Review => self.review.update(|state| {
                 effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
             }),
-            Destination::Builds => {
-                effects = builds::key_live_filtered(key, &selection, feed, &filter)
-            }
             _ => {}
         });
         effects
+    }
+}
+
+impl AppState {
+    /// Tracked: the confirm sheet, the refusal sheet, the rewind sheet or the action composer
+    /// is up.
+    pub(super) fn sheet_open(&self) -> bool {
+        self.confirm.with(Option::is_some)
+            || self.refusal.with(Option::is_some)
+            || self.agents.with(|state| state.rewind.is_some())
+            || self.work.with(|state| state.composer.is_some())
     }
 }

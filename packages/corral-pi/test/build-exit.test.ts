@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ownerRun, json, type Run } from "../src/build/corral-cli.ts";
+import { engineRun, gitRun, checked, json, type Run } from "../src/build/corral-cli.ts";
 import { createExit, LAND_REPAIR_ROUNDS, type ExitProgressRecord } from "../src/build/exit.ts";
 import { createJournal } from "../src/build/record.ts";
 import { summarize } from "../src/build/git.ts";
-import type { GateReceipt } from "../src/build/record-types.ts";
+import type { BuildGateResult } from "../src/build/record-types.ts";
+import { verifyBuild } from "../src/build/gate.ts";
+import { prepareWorktree } from "../src/build/worktree.ts";
 import type { BuildContext, ChildSnapshot, ExitPolicy, ExitRecord, FleetSnapshot } from "../src/build/types.ts";
 
 const head = "a".repeat(40), base = "b".repeat(40);
@@ -29,16 +31,21 @@ function git(dirty = false, commits = 2, calls: string[][] = [], branch: string 
     return { code: 0, stdout, stderr: "" };
   };
 }
-function receipt(attempt = "G1", result: GateReceipt["result"] = "pass", head = "a".repeat(40)): GateReceipt {
-  return { attempt, tier: "full", head, result, commands: ["check"], started: "2026-01-01T00:00:00Z", ended: "2026-01-01T00:01:00Z",
-    receipt: `/logs/${attempt}.json`, log: `/logs/${attempt}.log`, ...(result === "fail" ? { failed_command: "check" } : {}) };
+function gateResult(): BuildGateResult {
+  return { attempt: "G1", head, result: "pass", commands: ["check"], started: "2026-01-01T00:00:00Z", ended: "2026-01-01T00:01:00Z", log: "/logs/G1.log" };
 }
 type Repair = (prompt: string, f: { commit(): void; approve(): void }) => { aborted: boolean } | Promise<{ aborted: boolean }>;
-function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; failGates?: number; repair?: Repair; stale?: boolean; conflict?: boolean; patchChanged?: boolean; publishFailure?: boolean } = {}) {
+/** `failGate` fails every gate; `failGates` fails only the first that many. */
+function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; failGates?: number; repair?: Repair; stale?: boolean; conflict?: boolean; patchChanged?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "build-exit-"));
-  const ctx = { ...context(settings.policy), dir };
+  const start = context(settings.policy);
+  const ctx = { ...start, dir, session: { ...start.session, workspaceRoot: dir, worktree: dir } };
+  mkdirSync(join(dir, ".corral-next"));
+  const setGate = (fail: boolean) => writeFileSync(join(dir, ".corral-next", "corral.toml"),
+    `[projects.app]\nbase = \"main\"\ngate = [\"${fail ? "echo failing-check; exit 1" : "true"}\"]\n`);
+  setGate(settings.failGate === true);
   const events: string[] = [], records: ExitRecord[] = [], calls: string[][] = [];
-  let gates = 0, lands = 0, rebased = false, current = head;
+  let gates = 0, rebased = false, current = head;
   const prompts: string[] = [];
   const underlying = git(false, 2, calls);
   const gitRun: Run = async (argv, options) => {
@@ -49,34 +56,21 @@ function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; failGates?
     }
     if (argv.includes("--diff-filter=U")) return { code: 0, stdout: "src/parser.ts\n", stderr: "" };
     if (argv.includes("--binary") && settings.patchChanged && rebased) return { code: 0, stdout: "changed patch", stderr: "" };
+    if (argv.includes("--verify") && settings.stale && rebased) return { code: 0, stdout: "c".repeat(40), stderr: "" };
+    if (argv[0] === "worktree") return { code: 0, stdout: "worktree /primary\0branch refs/heads/main\0\0", stderr: "" };
+    if (argv[0] === "merge") events.push("land");
     return underlying(argv, options);
   };
-  const run: Run = async (argv, options) => {
-    calls.push([...argv]);
-    if (argv[0] !== "build") throw new Error(`Unexpected corral ${argv.join(" ")}`);
-    if (argv[1] === "record") {
-      events.push("record");
-      expect(JSON.parse(readFileSync(argv[3]!, "utf8")).id).toBe(ctx.session.id);
-      return { code: settings.publishFailure ? 1 : 0, stdout: JSON.stringify({ id: ctx.session.id, revision: 1 }), stderr: settings.publishFailure ? "disk full" : "" };
-    }
-    if (argv[1] === "gate") {
-      events.push("gate"); gates++;
-      expect(options.timeoutMs).toBe(7_200_000);
-      expect(argv).toContain("full"); expect(argv).toContain(base);
-      return { code: 0, stdout: JSON.stringify(receipt(`G${gates}`, settings.failGate || gates <= (settings.failGates ?? 0) ? "fail" : "pass", current)), stderr: "" };
-    }
-    if (argv[1] === "land") {
-      events.push("land"); lands++;
-      expect(argv.slice(-5)).toEqual(["--expected-head", current, "--gate-attempt", `G${gates}`, "--json"]);
-      return settings.stale && lands === 1 ? { code: 1, stdout: "", stderr: "landing_stale: base moved" }
-        : { code: 0, stdout: JSON.stringify({ landed: current, base_branch: "main", previous: base }), stderr: "" };
-    }
-    throw new Error(`Unexpected corral ${argv.join(" ")}`);
-  };
-  const journal = createJournal({ context: ctx, run, git: gitRun, fleet: () => fleet });
+  const journal = createJournal({ context: ctx, git: gitRun, fleet: () => fleet });
   const repair = settings.repair;
-  const control = createExit({ context: ctx, run, git: gitRun, journal, fleet: () => fleet,
-    integrationBranch: async () => "main", save: record => { records.push(record); }, changed() {},
+  const control = createExit({ context: ctx, git: gitRun, journal, fleet: () => fleet,
+    save: record => {
+      records.push(record);
+      if ((record as ExitProgressRecord).progress?.phase !== "verifying") return;
+      // The gate reads the project's commands after this save, so each attempt can be made to pass or fail.
+      events.push("gate"); gates++;
+      setGate(settings.failGate === true || gates <= (settings.failGates ?? 0));
+    }, changed() {},
     ...(repair ? { repair: async (prompt: string) => {
       events.push("repair"); prompts.push(prompt);
       return repair(prompt, {
@@ -94,22 +88,53 @@ function child(id = "parser", kind: ChildSnapshot["kind"] = "slice"): ChildSnaps
 }
 
 describe("build exits", () => {
-  test("Land rebases, verifies and lands without handing work to the board", async () => {
-    const f = fixture();
+  test("Verify executes the project's shell lines and Land rebases and fast-forwards its base", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "build-local-land-"));
+    const repo = join(dir, "repo");
+    const run = gitRun();
+    const git = (cwd: string, ...args: string[]) => checked(run, args, cwd);
     try {
-      expect((await f.control.choose("land")).phase).toBe("landed");
-      expect(f.events.filter(event => event !== "record")).toEqual(["rebase", "gate", "land"]);
-      expect(f.records.at(-1)).toMatchObject({ choice: "land", landed: head, baseBranch: "main", gateAttempt: "G1", progress: { phase: "landed" } });
-      expect(f.records.map(record => (record as ExitProgressRecord).progress?.phase)).toEqual(["rebasing", "verifying", "landing", "landed"]);
-      expect(f.journal.record().outcome).toMatchObject({ state: "landed", landed: head });
-      expect(f.calls.some(argv => argv.some(arg => ["assistant", "waive-review", "sync"].includes(arg)))).toBeFalse();
-    } finally { f.close(); }
+      mkdirSync(repo);
+      mkdirSync(join(dir, ".corral-next"));
+      await git(repo, "init", "-b", "release");
+      await git(repo, "config", "user.name", "Build Fixture");
+      await git(repo, "config", "user.email", "build@example.test");
+      await git(repo, "commit", "--allow-empty", "-m", "base");
+      const checkout = prepareWorktree(repo, "gate", false);
+      writeFileSync(join(checkout.worktree, "code.txt"), "verified\n");
+      await git(checkout.worktree, "add", "code.txt");
+      await git(checkout.worktree, "commit", "-m", "build change");
+      const before = (await git(checkout.worktree, "rev-parse", "HEAD")).trim();
+      await git(repo, "commit", "--allow-empty", "-m", "base advanced");
+      const baseTip = (await git(repo, "rev-parse", "HEAD")).trim();
+      const initial = context();
+      const ctx = { ...initial, dir: join(dir, "session"), session: { ...initial.session, repoRoot: repo, workspaceRoot: dir, ...checkout } };
+      const commands = ["test \"$PWD\" = \"$BUILD_WORKTREE\" && printf 'worktree verified\\n'", "grep -x verified code.txt"];
+      writeFileSync(join(dir, ".corral-next", "corral.toml"), `[projects.app]\npath = "repo"\nbase = "release"\ngate = ${JSON.stringify(commands)}\nenv = { BUILD_WORKTREE = ${JSON.stringify(checkout.worktree)} }\n`);
+      const journal = createJournal({ context: ctx, git: run, fleet: () => fleet });
+      const verified = await verifyBuild(ctx, run, journal);
+      expect(verified).toMatchObject({ result: "pass", attempt: "G1", head: before, commands });
+      expect(readFileSync(verified.log!, "utf8")).toContain("worktree verified\n");
+      const records: ExitProgressRecord[] = [];
+      const control = createExit({ context: ctx, git: run, journal, fleet: () => fleet,
+        save: record => records.push(record), changed() {} });
+      const result = await control.choose("land");
+      expect(result.phase).toBe("landed");
+      const landed = (await git(repo, "rev-parse", "release")).trim();
+      expect(landed).not.toBe(before);
+      expect((await git(repo, "rev-parse", "release^")).trim()).toBe(baseTip);
+      expect(readFileSync(join(repo, "code.txt"), "utf8")).toBe("verified\n");
+      expect(records.map(record => record.progress?.phase)).toEqual(["rebasing", "verifying", "landing", "landed"]);
+      expect(result.record).toMatchObject({ landed, baseBranch: "release", gateAttempt: "G2" });
+      expect(journal.record().verification).toMatchObject([{ head: before, result: "pass" }, { head: landed, result: "pass" }]);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
   test("a failing full gate leaves the session open and never lands", async () => {
     const f = fixture({ failGate: true });
     try {
       const state = await f.control.choose("land");
-      expect(state.phase).toBe("failed"); expect(state.detail).toContain("check"); expect(state.detail).toContain("/logs/G1.log");
+      expect(state.phase).toBe("failed"); expect(state.detail).toContain("failing-check");
+      expect(readFileSync(f.journal.latestGate()!.log!, "utf8")).toContain("failing-check");
       expect(f.events).not.toContain("land");
       expect(f.journal.record().outcome.state).toBe("open");
       expect((await f.control.choose("iterate")).phase).toBe("none");
@@ -120,11 +145,12 @@ describe("build exits", () => {
     try {
       const state = await f.control.choose("land");
       expect(state.phase).toBe("landed");
-      expect(f.events.filter(event => event !== "record")).toEqual(["rebase", "gate", "repair", "rebase", "gate", "repair", "rebase", "gate", "land"]);
-      expect(f.prompts[0]).toContain(`rebased head ${head}`); expect(f.prompts[0]).toContain("Failed command: check");
-      expect(f.prompts[0]).toContain("/logs/G1.log"); expect(f.prompts[0]).toContain(`repair 1 of ${LAND_REPAIR_ROUNDS}`);
+      expect(f.events).toEqual(["rebase", "gate", "repair", "rebase", "gate", "repair", "rebase", "gate", "land"]);
+      const [first, second] = f.journal.record().verification;
+      expect(f.prompts[0]).toContain(`rebased head ${head}`); expect(f.prompts[0]).toContain("Failed command: echo failing-check; exit 1");
+      expect(f.prompts[0]).toContain(first!.log!); expect(f.prompts[0]).toContain(`repair 1 of ${LAND_REPAIR_ROUNDS}`);
       expect(f.prompts[0]).not.toContain("build_review");
-      expect(f.prompts[1]).toContain("/logs/G2.log");
+      expect(f.prompts[1]).toContain(second!.log!);
       expect(state.record).toMatchObject({ landed: "2".repeat(40), gateAttempt: "G3" });
       expect(f.records.map(record => (record as ExitProgressRecord).progress?.phase)).toContain("repairing");
       expect(f.journal.record().decisions.filter(decision => decision.kind === "exit")).toHaveLength(1);
@@ -134,7 +160,9 @@ describe("build exits", () => {
     const endless = fixture({ failGate: true, repair: (_prompt, session) => { session.commit(); return { aborted: false }; } });
     try {
       const state = await endless.control.choose("land");
-      expect(state.phase).toBe("failed"); expect(state.detail).toContain(`/logs/G${LAND_REPAIR_ROUNDS + 1}.log`);
+      const last = endless.journal.latestGate()!;
+      expect(last.attempt).toBe(`G${LAND_REPAIR_ROUNDS + 1}`);
+      expect(state.phase).toBe("failed"); expect(state.detail).toContain(last.log!);
       expect(endless.events.filter(event => event === "repair")).toHaveLength(LAND_REPAIR_ROUNDS);
       expect(endless.events).not.toContain("land");
     } finally { endless.close(); }
@@ -143,8 +171,8 @@ describe("build exits", () => {
       const f = fixture({ failGates: 1, repair });
       try {
         const state = await f.control.choose("land");
-        expect(state.phase).toBe("failed"); expect(state.detail).toContain("/logs/G1.log"); expect(state.detail).toContain(why);
-        expect(f.events.filter(event => event !== "record")).toEqual(["rebase", "gate", "repair"]);
+        expect(state.phase).toBe("failed"); expect(state.detail).toContain(f.journal.latestGate()!.log!); expect(state.detail).toContain(why);
+        expect(f.events).toEqual(["rebase", "gate", "repair"]);
       } finally { f.close(); }
     }
   });
@@ -161,12 +189,13 @@ describe("build exits", () => {
       } finally { f.close(); }
     }
   });
-  test("landing_stale retries rebase and a fresh full gate", async () => {
+  test("a base move during verification leaves landing for the next owner choice", async () => {
     const f = fixture({ stale: true });
     try {
-      expect((await f.control.choose("land")).phase).toBe("landed");
-      expect(f.events.filter(event => event !== "record")).toEqual(["rebase", "gate", "land", "rebase", "gate", "land"]);
-      expect(f.control.state().record?.gateAttempt).toBe("G2");
+      const result = await f.control.choose("land");
+      expect(result.phase).toBe("failed");
+      expect(result.detail).toContain("base main moved");
+      expect(f.events).toEqual(["rebase", "gate"]);
     } finally { f.close(); }
   });
   test("review policy requires an approving round or an owner's recorded override", async () => {
@@ -199,12 +228,12 @@ describe("build exits", () => {
       expect(f.events).not.toContain("gate");
     } finally { f.close(); }
   });
-  test("Keep journals and publishes the outcome and publication failure does not fail the exit", async () => {
-    const f = fixture({ publishFailure: true });
+  test("Keep retains its outcome in the private session journal", async () => {
+    const f = fixture();
     try {
       const state = await f.control.choose("keep");
-      expect(state.phase).toBe("kept"); expect(state.detail).toContain("disk full");
-      expect(f.events).toEqual(["record"]);
+      expect(state.phase).toBe("kept");
+      expect(f.events).toEqual([]);
       expect(f.journal.record()).toMatchObject({ outcome: { state: "kept", head }, decisions: [{ kind: "exit", text: "keep" }] });
       expect(statSync(join(f.ctx.dir, "journal.json")).mode & 0o777).toBe(0o600);
     } finally { f.close(); }
@@ -212,15 +241,16 @@ describe("build exits", () => {
   test("landing admission follows workspace, policy, clean commits, live children and the current branch", async () => {
     const dir = mkdtempSync(join(tmpdir(), "build-admission-"));
     try {
+      mkdirSync(join(dir, ".corral-next"));
+      writeFileSync(join(dir, ".corral-next", "corral.toml"), "[projects.app]\nbase = \"main\"\n");
       for (const variant of ["outside", "project", "none", "empty", "dirty", "live", "base", "detached"] as const) {
         const initial = context(variant === "none" ? "none" : "gate");
         const ctx = { ...initial, dir, session: { ...initial.session, here: true,
-          ...(variant === "outside" ? { workspaceRoot: undefined } : {}), ...(variant === "project" ? { project: undefined } : {}) } };
+          workspaceRoot: variant === "outside" ? undefined : dir, ...(variant === "project" ? { project: undefined } : {}) } };
         const snapshot = variant === "live" ? { ...fleet, children: [{ ...child(), state: "running" as const }] } : fleet;
         const gitRun = git(variant === "dirty", variant === "empty" ? 0 : 2, [], variant === "base" ? "main" : variant === "detached" ? null : "build/parser");
-        const run: Run = async () => { throw new Error("Unexpected corral"); };
-        const journal = createJournal({ context: ctx, run, git: gitRun, fleet: () => snapshot });
-        const control = createExit({ context: ctx, run, git: gitRun, journal, fleet: () => snapshot, save() {}, changed() {}, integrationBranch: async () => "main" });
+        const journal = createJournal({ context: ctx, git: gitRun, fleet: () => snapshot });
+        const control = createExit({ context: ctx, git: gitRun, journal, fleet: () => snapshot, save() {}, changed() {} });
         await control.summary(); expect(typeof control.options().find(option => option.choice === "land")?.unavailable).toBe("string"); control.close();
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -249,8 +279,6 @@ test("bare Land only rebases and fast-forwards Git in the clean primary checkout
     const ctx: BuildContext = { ...original, dir, session: { ...original.session,
       workspaceRoot: undefined, project: undefined, bare: true, repository: true, baseBranch: "main" } };
     const writes: { argv: string[]; cwd: string }[] = [], phases: string[] = [];
-    let corralCalls = 0;
-    const run: Run = async () => { corralCalls++; throw new Error("corral must never run"); };
     const fallback = git();
     const gitRun: Run = async (argv, options) => {
       if (argv[0] === "worktree") return { code: 0, stdout: "worktree /primary\0HEAD ignored\0branch refs/heads/main\0\0", stderr: "" };
@@ -262,8 +290,8 @@ test("bare Land only rebases and fast-forwards Git in the clean primary checkout
       if (["rebase", "merge"].includes(argv[0]!)) writes.push({ argv: [...argv], cwd: options.cwd });
       return fallback(argv, options);
     };
-    const journal = createJournal({ context: ctx, run, git: gitRun, fleet: () => fleet });
-    const exit = createExit({ context: ctx, run, git: gitRun, journal, fleet: () => fleet,
+    const journal = createJournal({ context: ctx, git: gitRun, fleet: () => fleet });
+    const exit = createExit({ context: ctx, git: gitRun, journal, fleet: () => fleet,
       save() {}, changed() { phases.push(exit.state().phase); } });
     try {
       await exit.summary();
@@ -281,7 +309,6 @@ test("bare Land only rebases and fast-forwards Git in the clean primary checkout
         expect(writes).toEqual([]);
         expect(result.detail).toContain(primaryBranch === "other" ? "must be on main" : "tracked changes");
       }
-      expect(corralCalls).toBe(0);
     } finally { exit.close(); rmSync(dir, { recursive: true, force: true }); }
   }
 });
@@ -292,25 +319,14 @@ test("bare sessions outside Git offer only Keep and Iterate", async () => {
   const ctx: BuildContext = { ...original, dir, session: { ...original.session,
     workspaceRoot: undefined, project: undefined, bare: true, repository: false, branch: null, base: null } };
   const refuse: Run = async () => { throw new Error("no command needed outside Git"); };
-  const journal = createJournal({ context: ctx, run: refuse, git: refuse, fleet: () => fleet });
-  const exit = createExit({ context: ctx, run: refuse, git: refuse, journal, fleet: () => fleet, save() {}, changed() {} });
+  const journal = createJournal({ context: ctx, git: refuse, fleet: () => fleet });
+  const exit = createExit({ context: ctx, git: refuse, journal, fleet: () => fleet, save() {}, changed() {} });
   try {
     await exit.summary();
     expect(exit.options().map(option => option.choice)).toEqual(["keep", "iterate"]);
     expect((await exit.choose("keep")).phase).toBe("kept");
     expect((await exit.choose("iterate")).phase).toBe("none");
   } finally { exit.close(); rmSync(dir, { recursive: true, force: true }); }
-});
-
-test("ownerRun removes every Rust owner-guard agent marker from the child, not the parent", async () => {
-  const keys = ["AI_AGENT", "PI_CODING_AGENT", "CORRAL_ASSISTANT", "CORRAL_PM"];
-  const old = keys.map(key => process.env[key]);
-  try {
-    for (const key of keys) process.env[key] = "1";
-    const result = await ownerRun(process.execPath)(["-e", `console.log(JSON.stringify(${JSON.stringify(keys)}.filter(key => process.env[key] !== undefined)))`], { cwd: process.cwd() });
-    expect(result.code).toBe(0); expect(JSON.parse(result.stdout)).toEqual([]);
-    expect(keys.every(key => process.env[key] === "1")).toBe(true);
-  } finally { keys.forEach((key, index) => { if (old[index] === undefined) delete process.env[key]; else process.env[key] = old[index]; }); }
 });
 
 test("JSON parse failures include corral's stderr", async () => {
@@ -328,16 +344,15 @@ test("build records retain intent, evidence, resolutions, slice attribution, mes
   ].map(entry => JSON.stringify(entry)).join("\n") + "\n");
   const snapshot: FleetSnapshot = { ...fleet, children: [{ ...child(), steers: ["Use the strict parser"], steeredAt: [2000] }, child("review-1", "review")],
     mail: [{ seq: 1, at: 1000, from: "parser", to: "parent", text: "Ready", delivery: "delivered" }] };
-  const run: Run = async () => ({ code: 0, stdout: "{}", stderr: "" });
   const underlying = git();
   const gitRun: Run = async (argv, options) => argv[0] === "log"
     ? { code: 0, stdout: `${head}\0Implement parser\0Slice: parser\n\0\n`, stderr: "" } : underlying(argv, options);
   try {
-    const journal = createJournal({ context: ctx, run, git: gitRun, fleet: () => snapshot, now: () => 1000 });
+    const journal = createJournal({ context: ctx, git: gitRun, fleet: () => snapshot, now: () => 1000 });
     journal.noteOwnerInput("Build a parser\nwith clear diagnostics");
     expect(journal.record().title).toBe("Build a parser");
     journal.finish("Build a diagnostic parser");
-    journal.gate(receipt());
+    journal.gate(gateResult());
     journal.review({ ...snapshot.children[1]!, verdict: { verdict: "changes", summary: "One defect", head, at: 2000,
       findings: [{ severity: "major", path: "src/parser.ts", line: 3, text: "Empty input crashes" }] } }, head);
     expect(() => journal.resolve(1, "F1", { state: "declined" })).toThrow();
@@ -354,7 +369,7 @@ test("build records retain intent, evidence, resolutions, slice attribution, mes
         total: { input: 24, output: 45, cost: 1.25 } } });
     expect("commands" in record.verification[0]!).toBeFalse();
     expect("receipt" in record.verification[0]!).toBeFalse();
-    const resumed = createJournal({ context: ctx, run, git: gitRun, fleet: () => fleet });
+    const resumed = createJournal({ context: ctx, git: gitRun, fleet: () => fleet });
     expect(resumed.record()).toEqual(record);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -364,11 +379,10 @@ test("record caps bound wire content and missing prices never produce partial to
   const ctx = { ...context(), dir };
   const snapshot: FleetSnapshot = { ...fleet, children: [{ ...child(), report: "r".repeat(8193), usage: { input: 1, output: 2, turns: 1 } }],
     mail: Array.from({ length: 501 }, (_, seq) => ({ seq, at: seq, from: "parent", to: "parser", text: `${seq}:` + "m".repeat(2049), delivery: "delivered" as const })) };
-  const run: Run = async () => ({ code: 0, stdout: "{}", stderr: "" });
   const underlying = git();
   const gitRun: Run = async (argv, options) => argv[0] === "log" ? { code: 0, stdout: Array.from({ length: 201 }, (_, index) => `${index}\0Commit ${index}\0\0`).join("\n"), stderr: "" } : underlying(argv, options);
   try {
-    const journal = createJournal({ context: ctx, run, git: gitRun, fleet: () => snapshot });
+    const journal = createJournal({ context: ctx, git: gitRun, fleet: () => snapshot });
     for (let n = 0; n < 33; n++) journal.noteOwnerInput("i".repeat(4097));
     await journal.refresh();
     const record = journal.record();
@@ -383,7 +397,7 @@ test("record caps bound wire content and missing prices never produce partial to
 
 test("patch digest subprocesses do not reject patches larger than the text output cap", async () => {
   const size = 256 * 1024 + 1;
-  const result = await ownerRun(process.execPath)(["-e", `process.stdout.write("x".repeat(${size}))`], { cwd: process.cwd(), stdoutDigest: "sha256" });
+  const result = await engineRun(process.execPath)(["-e", `process.stdout.write("x".repeat(${size}))`], { cwd: process.cwd(), stdoutDigest: "sha256" });
   expect(result.code).toBe(0);
   expect(result.stdout).toBe(createHash("sha256").update("x".repeat(size)).digest("hex"));
 });

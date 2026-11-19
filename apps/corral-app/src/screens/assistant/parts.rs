@@ -1,5 +1,5 @@
 //! What every part of the assistant screens shares: the transcript's small type, the outlined
-//! message state, the card frame, the quoted owner words, the avatar, link words, and the model's
+//! message state, the card frame, the avatar, link words, and the model's
 //! button descriptors wired to `State::act`.
 
 use nsh_base::button as press_target;
@@ -83,19 +83,6 @@ pub fn strong_run(content: impl Into<SharedString>) -> Text {
         .text_color(color(Token::Ink))
 }
 
-/// A whole mono line: commands, paths, receipts (`.acmd`, `.mono`).
-pub fn mono_line(app: AppState, content: impl Into<SharedString>, size: f32) -> Text {
-    let t = text(content.into()).text_color(color(Token::Ink));
-    if app.form == Form::Terminal {
-        t
-    } else {
-        t.font_family(FONT_MONO)
-            .tabular_nums()
-            .text_size(px(size))
-            .line_height(px((size * 1.45).round()))
-    }
-}
-
 /// The outlined state of a message (`.mstate`, `.pmstate`): its words in the hue inside a thin
 /// line of it at 55 %; [`Hue::Neutral`] is ink-3 inside rule-2. A terminal shows it as a chip.
 pub fn tag(app: AppState, label: impl Into<String>, hue: Hue) -> AnyElement {
@@ -126,75 +113,23 @@ pub fn tag(app: AppState, label: impl Into<String>, hue: Hue) -> AnyElement {
         .into_element()
 }
 
-/// The edge of a card: the plain rule-2 line (`.actcard`, `.filed`), or the needs-you line at
-/// 55 % and 1.5 pt (`.askuser`, `.permcard`).
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Edge {
-    Plain,
-    Asks,
-}
-
-/// A card on the surface, radius 8, its children 6 pt apart; `padded` gives it the 10 by 12 pt
-/// inset of `.filed` (an owner-action card pads its own rows). A terminal draws a framed region a
-/// Cell in from its line.
-pub fn frame(app: AppState, edge: Edge, padded: bool, children: Vec<AnyElement>) -> AnyElement {
+/// A needs-you card on the surface (`.askuser`, `.permcard`): radius 8, the needs-you line at
+/// 55 % and 1.5 pt, its children 6 pt apart inside a 10 by 12 pt inset. A terminal draws a
+/// framed region a Cell in from its line.
+pub fn frame(app: AppState, children: Vec<AnyElement>) -> AnyElement {
     if app.form == Form::Terminal {
         return term::framed(view().px(term::cells(1.0)).children(children)).into_element();
     }
-    let (width, line) = match edge {
-        Edge::Plain => (1.0, color(Token::Rule2)),
-        Edge::Asks => (1.5, color(Token::You).opacity(0.55)),
-    };
     view()
         .bg(color(Token::Surface))
         .rounded(px(8.0))
-        .border(px(width))
-        .border_color(line)
+        .border(px(1.5))
+        .border_color(color(Token::You).opacity(0.55))
         .overflow_hidden()
         .gap(px(6.0))
-        .when(padded, |card| card.px(px(12.0)).py(px(10.0)))
-        .children(children)
-        .into_element()
-}
-
-/// The owner's words, quoted and visibly untouched (`.words`): the caption in spaced capitals,
-/// then the words in curly quotes on the sunken ground behind a hairline. Desktop 14 pt, phone
-/// 16 pt; a terminal draws the caption quiet and the words in ink, two Cells in.
-pub fn quote(app: AppState, caption: &str, said: &str) -> AnyElement {
-    let form = app.form;
-    let quoted = format!("“{said}”");
-    if form == Form::Terminal {
-        return view()
-            .pl(term::cells(2.0))
-            .child(term::quiet(caption.to_uppercase()))
-            .child(text(quoted).text_color(color(Token::Ink)))
-            .into_element();
-    }
-    let phone = form == Form::Phone;
-    let (label, size) = if phone { (11.5, 16.0) } else { (10.5, 14.0) };
-    view()
         .px(px(12.0))
-        .py(px(6.0))
-        .rounded(px(6.0))
-        .bg(color(Token::BgSunk))
-        .border_l(px(1.0))
-        .border_l_color(color(Token::Rule2))
-        .gap(px(2.0))
-        .child(
-            text(caption.to_owned())
-                .uppercase()
-                .font_family(FONT_TEXT)
-                .text_size(px(label))
-                .letter_spacing(px(label * 0.07))
-                .text_color(color(Token::Ink4)),
-        )
-        .child(
-            text(quoted)
-                .font_family(FONT_TEXT)
-                .text_size(px(size))
-                .line_height(px((size * 1.45).round()))
-                .text_color(color(Token::Ink)),
-        )
+        .py(px(10.0))
+        .children(children)
         .into_element()
 }
 
@@ -293,21 +228,11 @@ pub fn button_row(app: AppState, buttons: &[Button], kind: ButtonKind, gap: f32)
     row.children(parts)
 }
 
-/// `btn-<label>`, with the record it acts on when the action names one, so the Edit of two filed
-/// cards stay apart (`btn-edit-T-902`).
+/// `btn-<label>`, with the record it acts on when the action names one, so the Withdraw of two
+/// queued sends, or the File as idea of two messages, stay apart.
 pub fn test_id(button: &Button) -> String {
     let subject = match &button.action {
-        Action::EditIdea(Some(id))
-        | Action::MergeIdea(Some(id))
-        | Action::SaveIdea { task: id, .. }
-        | Action::MergeInto { task: id, .. }
-        | Action::DiscardIdea(id)
-        | Action::FileEntry(id)
-        | Action::WithdrawEntry(id)
-        | Action::WithdrawPm { id, .. }
-        | Action::CancelSend(id)
-        | Action::Answer { key: id, .. }
-        | Action::AnswerText { key: id, .. } => Some(id.as_str()),
+        Action::CancelSend(id) | Action::FileEntry(id) => Some(id.as_str()),
         _ => None,
     };
     let mut slug = String::with_capacity(button.label.len() + 8);

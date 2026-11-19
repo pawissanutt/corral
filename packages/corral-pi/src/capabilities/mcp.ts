@@ -1,4 +1,4 @@
-// Only generation-bound Corral workspace settings enter this adapter. Pi's ambient
+// Only configured Corral workspace settings enter this adapter. Pi's ambient
 // MCP extension stays disabled; this client never reads .pi or another auth store.
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { McpClient, StreamableHttpTransport, toLlmContent, type Tool, type McpTransport } from "@earendil-works/pi-mcp";
@@ -95,7 +95,7 @@ export class McpAccess {
       ? new OwnedStdio({ command: settings.command, args: settings.args, cwd: this.cwd, maxMessageBytes: 1_048_576 }, owner)
       : new StreamableHttpTransport({
         url: settings.url ?? "", maxMessageBytes: 1_048_576,
-        fetch: this.send ?? (() => { throw new McpDenied("no generation-bound HTTP MCP transport"); }),
+        fetch: this.send ?? (() => { throw new McpDenied("no configured HTTP MCP transport"); }),
       });
     try {
       const tracked: McpTransport = {

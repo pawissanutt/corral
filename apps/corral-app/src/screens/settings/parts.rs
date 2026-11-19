@@ -97,22 +97,6 @@ pub fn frame(app: AppState, title: &'static str, gap: f32, parts: Vec<AnyElement
     }
 }
 
-/// A quiet paragraph at the body size (`p.dim`), wrapping.
-pub fn intro(app: AppState, words: &'static str) -> AnyElement {
-    let form = app.form;
-    let words = text(words).text_color(color(Token::Ink3));
-    if form == Form::Terminal {
-        return words.into_element();
-    }
-    let size = text_size(form);
-    let leading = if form == Form::Phone { 1.5 } else { 1.45 };
-    words
-        .font_family(FONT_TEXT)
-        .text_size(px(size))
-        .line_height(px((size * leading).round()))
-        .into_element()
-}
-
 /// The text size of a table cell (`.qtable`, `.devtable`: 12.5 pt); a step up on the phone,
 /// where 12.5 would read small at arm's length.
 pub fn cell_size(form: Form) -> f32 {
@@ -172,44 +156,5 @@ pub fn first_heading(app: AppState, label: &'static str, note: Option<&'static s
     view()
         .mt(px(-lift))
         .child(h3(app, label, note.map(str::to_owned)))
-        .into_element()
-}
-
-/// One record of a phone list: what leads its first line, what sits at that line's trailing
-/// edge, and the lines under it.
-pub struct Record {
-    pub lead: AnyElement,
-    pub end: Option<AnyElement>,
-    pub under: Vec<AnyElement>,
-}
-
-/// Records stacked for a narrow phone, where a table's three or four columns would break names
-/// and model ids mid-token: each record's lead and trailing control on one line, its details
-/// under it at full width, records parted by a hairline.
-pub fn records(records: Vec<Record>) -> AnyElement {
-    view()
-        .min_w(px(0.0))
-        .children(records.into_iter().enumerate().map(|(at, record)| {
-            view()
-                .min_w(px(0.0))
-                .py(px(10.0))
-                .gap(px(4.0))
-                .when(at > 0, |row| {
-                    row.border_t_1().border_t_color(color(Token::Rule))
-                })
-                .child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(8.0))
-                        .min_w(px(0.0))
-                        .child(view().flex_1().min_w(px(0.0)).child(record.lead))
-                        .children(record.end.map(|end| {
-                            view().flex_row().flex_shrink_0().child(end).into_element()
-                        })),
-                )
-                .children(record.under)
-                .into_element()
-        }))
         .into_element()
 }

@@ -1,24 +1,31 @@
-//! One agent session from corrald: its row in Agents, its bounded transcript page, its pane's
-//! screen (read live where corrald serves it, else a recorded capture such as a gate's log), its
-//! action bar (`controls`) and its reply box (`live_reply`) or, for an assistant, the thread its
-//! composer chats in. A session without a pane (a daemon-hosted assistant) has no terminal; none
-//! is drawn for it.
+//! One live run from corrald: its row in Agents, its terminal (its herdr pane's screen, or the
+//! tail of a headless session's log, read live where corrald serves it, else a recorded
+//! capture) with the pane's keys bar and type field (`pane`), the strip under its head, its
+//! Session menu and, from a corrald that serves them (`session.v1`), its bounded transcript
+//! page with the reply box (`live_reply`). A run without a recorded pane or process has no
+//! terminal; none is drawn for it. A headless run that has ended has no roster row; its page
+//! reads the run from its task and shows the retained log (`ended_log`).
 
-use corral_protocol::detail::{DetailBody, DetailRef, SessionItem, SessionPage, TerminalSnapshot};
+use corral_protocol::app::SESSION_V1;
+use corral_protocol::detail::{DetailBody, DetailRef, SessionPage, TerminalSnapshot};
 use corral_protocol::rows::AgentRow;
+use corral_types::SessionRef;
 
+use crate::model::Id;
 use crate::model::board::STAGES;
 use crate::model::daemon::{self, DetailCache, Link};
 use crate::model::effect::Env;
 use crate::model::hue::Hue;
 use crate::model::text::{Rich, Span, span};
-use crate::model::{ActStatus, Id};
+use crate::model::work::session_task;
 
-use super::live::{clock, role_label, shown_id, stale, unix, usage};
+use super::live::{
+    clock, clock_at, excerpt, quiet, role_label, session_name, shown_id, stale, unix,
+};
 use super::replay::transcript;
 use super::{
-    Action, FactValue, Feed, Keys, LineClass, Run, RunFact, Session, State, Terminal, View,
-    controls, keys, line, live_reply, screen, tail_line,
+    Action, Bar, FactValue, Feed, Fill, LineClass, Run, RunFact, Session, State, Terminal,
+    Transcript, View, ended_log, line, live_reply, pane, screen, tail_line,
 };
 
 /// Seconds within which a screen read counts as "just now": it is read about once a second.
@@ -73,7 +80,7 @@ fn read_when(at: &str, feed: &daemon::Feed) -> String {
 
 /// The daemon's reason without its machine prefix: `session has ended` from
 /// `terminal_snapshot_unavailable: session has ended`.
-fn reason(message: &str) -> &str {
+pub(super) fn reason(message: &str) -> &str {
     message
         .split_once(": ")
         .filter(|(head, _)| {
@@ -83,16 +90,18 @@ fn reason(message: &str) -> &str {
         .trim_end_matches('.')
 }
 
-/// The session pane's screen: read live where corrald serves it, or a recorded capture (a
-/// gate's log). Live rows stay as read; only a current read is `Live`. Keys go to the pane only
-/// through `keys`, the bar under it, while corrald offers them.
+/// The run's screen: its herdr pane read live where corrald serves it, or the tail of a process
+/// session's log. Live rows stay as read; only a current read is `Live`. Keys go to a pane from
+/// the session page's keys bar; a log takes none.
 pub(super) fn terminal(
+    id: &Id,
     row: &AgentRow,
-    pane: &str,
     cache: Option<&DetailCache>,
     feed: &daemon::Feed,
-    keys: Option<Keys>,
 ) -> Terminal {
+    let pane = session_name(row).unwrap_or_else(|| "no session".into());
+    let log = matches!(row.run.session, Some(SessionRef::Process { .. }));
+    let current_words = if log { "log tail" } else { "live terminal" };
     let capture = snapshot(cache);
     let loading = cache.is_none_or(|cache| cache.loading);
     let error = cache.and_then(|cache| cache.error.as_ref());
@@ -104,12 +113,11 @@ pub(super) fn terminal(
     let gone = error.is_some_and(|error| error.code == "not_found");
     let unavailable = error.filter(|error| error.code == "unavailable");
     let live = capture.is_some_and(|capture| capture.live);
-    let writable = matches!(&keys, Some(Keys::Open(bar)) if bar.enabled);
     let status = match capture {
         Some(capture) if capture.live => {
             let read = read_when(read_at(cache, capture), feed);
             match (error, unavailable) {
-                _ if current => format!("live terminal · read {read}"),
+                _ if current => format!("{current_words} · read {read}"),
                 _ if gone => format!("pane gone · last screen read {read}"),
                 (_, Some(why)) => format!("{} · last screen read {read}", reason(&why.message)),
                 (Some(error), _) => format!(
@@ -122,7 +130,7 @@ pub(super) fn terminal(
             }
         }
         Some(capture) => format!(
-            "snapshot · captured {} · read-only",
+            "snapshot · captured {}",
             clock(Some(capture.captured_at.as_str()), feed)
                 .unwrap_or_else(|| "at an unknown time".into())
         ),
@@ -140,7 +148,7 @@ pub(super) fn terminal(
         }),
         Some(_) => None,
         None => Some(match (error, unavailable) {
-            _ if gone => format!("The pane is gone: herdr no longer has {pane}."),
+            _ if gone => format!("The session is gone: the runner no longer has {pane}."),
             (_, Some(why)) => format!("The terminal is unavailable: {}.", reason(&why.message)),
             (Some(error), _) => format!(
                 "The terminal could not be loaded: {} ({}).",
@@ -156,17 +164,13 @@ pub(super) fn terminal(
         } else {
             Feed::Snapshot
         },
-        heading: format!(
-            "{} · {pane}",
-            row.runtime.as_deref().unwrap_or("runtime unknown")
-        ),
-        status,
-        input: if writable {
-            "keys go to the pane from the bar below"
+        heading: if log {
+            format!("{} · {pane} · session.log", row.run.harness)
         } else {
-            "keys are not sent"
-        }
-        .into(),
+            format!("{} · {pane}", row.run.harness)
+        },
+        status,
+        input: if log { "read-only log" } else { "herdr pane" }.into(),
         lines: capture
             .map(|capture| {
                 if capture.live {
@@ -187,8 +191,7 @@ pub(super) fn terminal(
             .map(|capture| screen::rows(&capture.rows))
             .unwrap_or_default(),
         empty,
-        keys,
-        refresh: Some(Action::Refresh(DetailRef::Terminal { id: row.id.clone() })),
+        refresh: Some(Action::Refresh(DetailRef::Terminal { id: id.to_string() })),
     }
 }
 
@@ -199,7 +202,7 @@ fn fact(label: &'static str, value: Rich) -> RunFact {
     }
 }
 
-/// A profile, runtime, pane or machine name: an identifier (mono, cut rather than broken where
+/// A profile, model, harness or session name: an identifier (mono, cut rather than broken where
 /// room is short) when known, else the plain words saying it is not.
 fn identifier(name: Option<String>, unknown: &str) -> Span {
     match name {
@@ -208,73 +211,102 @@ fn identifier(name: Option<String>, unknown: &str) -> Span {
     }
 }
 
-/// The thread scope an assistant row chats in: the quick thread's, or its own `A-n`.
-pub fn chat_scope(feed: &daemon::Feed, row: &AgentRow) -> Id {
-    let quick = feed
-        .assistants
-        .get(row.id.as_str())
-        .is_some_and(|assistant| assistant.kind == corral_protocol::rows::AssistantKind::Quick);
-    if quick {
-        Id::from(crate::model::assistant::QUICK)
-    } else {
-        Id::from(row.id.as_str())
-    }
-}
-
-/// The key of the session's latest `assistant.session` control operation, whose reply the
-/// screen reads for [`session`]'s `op`.
-pub fn op_key(state: &State, id: &Id) -> Option<Id> {
-    state
-        .sent
-        .get(id.as_str())
-        .filter(|sent| sent.channel == controls::Channel::Op)
-        .map(|sent| sent.key.clone())
-}
-
-/// Build the session page for a daemon session id. `via` is this device's authenticated
-/// attribution, as replies carry it; `op` is the status of the session's latest
-/// `assistant.session` control operation ([`op_key`]).
-pub fn session(
-    state: &State,
-    id: &Id,
+/// The run's facts beside its transcript: its task and rail, role, profile, model, session,
+/// branch, start and how long it has been quiet.
+fn facts(
+    row: Option<&AgentRow>,
+    board_task: Option<&daemon::Task>,
+    task: &str,
     feed: &daemon::Feed,
-    env: Env,
-    via: &str,
-    op: Option<&ActStatus>,
-) -> Session {
+) -> Vec<RunFact> {
+    let mut value = vec![span(task.to_owned()).mono()];
+    if let Some(found) = board_task {
+        value.extend([span(" "), span(found.title().to_owned())]);
+    }
+    let mut facts = vec![fact("Task", value)];
+    if let Some(found) = board_task {
+        facts.push(RunFact {
+            label: "Rail",
+            value: FactValue::Rail(std::array::from_fn(|at| found.rail[at].mark)),
+        });
+    }
+    let Some(row) = row else {
+        return facts;
+    };
+    let run = &row.run;
+    facts.extend([
+        fact(
+            "Agent",
+            vec![
+                span(format!("{} ", role_label(run.role.as_str()))),
+                span(run.id.clone()).mono(),
+            ],
+        ),
+        fact("Profile", vec![span(run.profile.clone()).mono()]),
+        fact("Model", vec![identifier(run.model.clone(), "not recorded")]),
+        fact(
+            "Session",
+            vec![
+                span(run.harness.clone()).mono(),
+                span(" · "),
+                identifier(session_name(row), "none recorded"),
+            ],
+        ),
+        fact("Branch", vec![span(run.branch.clone()).mono()]),
+        fact(
+            "Started",
+            vec![span(
+                clock_at(run.started, feed).unwrap_or_else(|| "unknown".into()),
+            )],
+        ),
+    ]);
+    if let Some(quiet) = quiet(row, feed) {
+        facts.push(fact("Output", vec![span(quiet)]));
+    }
+    facts
+}
+
+/// Build the session page for a run session id (`T-1_R1`). `via` is this device's authenticated
+/// attribution, as replies carry it.
+pub fn session(state: &State, id: &Id, feed: &daemon::Feed, env: Env, via: &str) -> Session {
     let row = feed.agents.get(id.as_str());
-    let session_cache = feed.detail(&DetailRef::Session { id: id.to_string() });
+    let transcripts = feed.capable(SESSION_V1);
+    let session_cache = transcripts
+        .then(|| feed.detail(&DetailRef::Session { id: id.to_string() }))
+        .flatten();
     let body = page(session_cache);
-    let role = row
-        .map(|row| row.role.clone())
+    let ended = row
+        .is_none()
+        .then(|| ended_log::run(feed, id.as_str()))
+        .flatten();
+    let known = row.map(|row| &row.run).or(ended);
+    let terminal_cache = feed.detail(&DetailRef::Terminal { id: id.to_string() });
+    let role = known
+        .map(|run| run.role.as_str().to_owned())
         .or_else(|| body.map(|page| page.role.clone()))
         .unwrap_or_else(|| "agent".into());
     let task = row
-        .and_then(|row| row.task.clone())
-        .or_else(|| body.and_then(|page| page.task.clone()));
-    let run = row
-        .and_then(|row| row.run.clone())
+        .map(|row| row.run.task.clone())
+        .or_else(|| body.and_then(|page| page.task.clone()))
+        .or_else(|| crate::model::work::session_task(id).map(str::to_owned));
+    let run = known
+        .map(|run| run.id.clone())
         .or_else(|| body.and_then(|page| page.run.clone()));
     let board_task = task.as_deref().and_then(|task| feed.board.task(task));
     let shown = row
         .map(shown_id)
         .or_else(|| task.clone())
         .unwrap_or_else(|| id.to_string());
-    let title = row
-        .map(|row| row.title.clone())
-        .or_else(|| board_task.map(|task| task.title.clone()))
+    let title = board_task
+        .map(|task| task.title().to_owned())
         .unwrap_or_else(|| role_label(&role));
-    let pane = row.and_then(|row| row.pane.clone());
-    let terminal = row.zip(pane.as_deref()).map(|(row, pane)| {
-        terminal(
-            row,
-            pane,
-            feed.detail(&DetailRef::Terminal { id: id.to_string() }),
-            feed,
-            keys::keys(state, id, row, feed, env),
-        )
-    });
-    let profile = row.and_then(|row| row.profile.clone());
+    let terminal = match (row, ended) {
+        (Some(row), _) if row.run.session.is_some() => {
+            Some(terminal(id, row, terminal_cache, feed))
+        }
+        (None, Some(run)) => Some(ended_log::terminal(id, run, terminal_cache, feed)),
+        _ => None,
+    };
     let mut sub = vec![
         [Some(role_label(&role)), run.clone()]
             .into_iter()
@@ -282,68 +314,21 @@ pub fn session(
             .collect::<Vec<_>>()
             .join(" "),
     ];
-    sub.extend(profile.clone());
+    sub.extend(known.map(|run| run.profile.clone()));
     if terminal.is_none() {
         sub.push("no terminal".into());
     }
-    let open_question = body.is_some_and(|page| {
-        page.messages
-            .iter()
-            .flat_map(|m| &m.items)
-            .any(|item| matches!(item, SessionItem::QuestionCard { answer: None, .. }))
-    });
     let notice = match (row, body) {
+        _ if ended.is_some() => ended_log::note(terminal_cache),
         (None, Some(_)) => Some((
             Hue::Neutral,
-            "This session is no longer listed in Agents; this is its last recorded transcript."
-                .into(),
+            "This run is no longer live; this is its last recorded transcript.".into(),
         )),
         (None, None) if !stale(feed, "agents") && feed.topics.contains_key("agents") => {
-            Some((Hue::Held, format!("corrald lists no session {id} now.")))
+            Some((Hue::Held, format!("corrald lists no live run {id} now.")))
         }
         _ => None,
     };
-    let since = row.and_then(|row| clock(row.since.as_deref(), feed));
-    let machine = row
-        .and_then(|row| row.machine.clone())
-        .or_else(|| body.and_then(|page| page.machine.clone()));
-    let mut facts = Vec::new();
-    if let Some(task) = &task {
-        let mut value = vec![span(task.clone()).mono()];
-        if let Some(found) = board_task {
-            value.extend([span(" "), span(found.title.clone())]);
-        }
-        facts.push(fact("Task", value));
-    }
-    if let Some(found) = board_task {
-        facts.push(RunFact {
-            label: "Rail",
-            value: FactValue::Rail(std::array::from_fn(|at| found.rail[at].mark)),
-        });
-    }
-    facts.extend([
-        fact("Agent", vec![identifier(profile, "profile unknown")]),
-        fact(
-            "Runtime",
-            vec![
-                identifier(row.and_then(|row| row.runtime.clone()), "runtime unknown"),
-                span(" · "),
-                identifier(pane.clone(), "no pane"),
-            ],
-        ),
-        fact("Machine", vec![identifier(machine, "unknown")]),
-        fact(
-            "Started",
-            vec![span(since.unwrap_or_else(|| "unknown".into()))],
-        ),
-        fact(
-            "Usage",
-            vec![span(
-                row.and_then(|row| usage(row.cost_usd, row.cost_basis, row.tokens))
-                    .unwrap_or_else(|| "not reported".into()),
-            )],
-        ),
-    ]);
     let steps = board_task
         .map(|found| {
             STAGES
@@ -370,10 +355,11 @@ pub fn session(
                 .collect()
         })
         .unwrap_or_default();
-    let view = if terminal.is_some() {
-        state.live_view
-    } else {
-        View::Transcript
+    let switch = transcripts && terminal.is_some();
+    let view = match &terminal {
+        Some(_) if !transcripts => View::Terminal,
+        Some(_) => state.view_for(feed, id.as_str()),
+        None => View::Transcript,
     };
     Session {
         id: shown.clone(),
@@ -385,6 +371,7 @@ pub fn session(
         desktop_back_label: "Agents",
         back: Action::Back,
         view,
+        switch,
         switch_labels: ["Transcript", "Terminal"],
         switch_actions: [
             Action::SetView(View::Transcript),
@@ -392,16 +379,26 @@ pub fn session(
         ],
         toggle: Action::ToggleView,
         notice,
-        controls: controls::live_bar(state, id, row, feed, env, op),
-        transcript: transcript(id, state, session_cache, feed),
+        controls: Bar {
+            state: row.map(|row| super::live::status(&row.status).chip()),
+            lead: row.and_then(excerpt).map(str::to_owned),
+            menu: session_task(id).map(|_| id.clone()),
+        },
+        transcript: if transcripts {
+            transcript(id, state, session_cache, feed)
+        } else {
+            unserved()
+        },
+        pane: row.and_then(|row| pane::input(state, id, row, feed)),
         terminal,
-        reply: live_reply::reply(id, row, &role, &shown, open_question, state, feed, env, via),
-        chat: row
-            .filter(|row| row.role == "assistant" && row.controls.send.available)
-            .map(|row| chat_scope(feed, row)),
+        reply: live_reply::reply(id, row, &shown, state, feed, env, via),
+        ended: row.map_or(ended.is_some(), |row| row.run.ended.is_some()),
         run_details: Run {
             title: "Run",
-            facts,
+            facts: task
+                .as_deref()
+                .map(|task| facts(row, board_task, task, feed))
+                .unwrap_or_default(),
             steps_title: "Stages",
             steps,
         },
@@ -409,11 +406,30 @@ pub fn session(
     }
 }
 
+/// What a run without a terminal shows while corrald serves no transcripts.
+fn unserved() -> Transcript {
+    Transcript {
+        messages: Vec::new(),
+        older: None,
+        newer: None,
+        paging: false,
+        fill: Fill::Empty {
+            heading: "No terminal",
+            paragraph: "corrald recorded no pane or process for this run, and it serves no session transcripts yet.".into(),
+        },
+        stale: None,
+        disclaimer: None,
+        live: Vec::new(),
+        after: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use corral_protocol::detail::{DetailBody, DetailRef, TerminalSnapshot};
-    use corral_protocol::rows::{AgentRow, AgentStatus};
+    use corral_types::Role;
 
+    use super::super::roster_tests::agent;
     use super::super::{LineClass, State};
     use super::session;
     use crate::model::daemon::{self, DetailCache};
@@ -422,7 +438,7 @@ mod tests {
 
     #[test]
     fn live_screen_rows_are_not_reclassed_or_trimmed() {
-        let id = "T-1/run/R1";
+        let id = "T-1_R1";
         let rows = vec![
             "  ╭─ PASS · ok 12 tests ─╮".to_owned(),
             "Edit    src/lib.rs".to_owned(),
@@ -430,34 +446,8 @@ mod tests {
             "  │ $ cargo test        │".to_owned(),
         ];
         let mut feed = daemon::Feed::default();
-        feed.agents.insert(
-            Id::from(id),
-            AgentRow {
-                id: id.into(),
-                role: "worker".into(),
-                task: Some("T-1".into()),
-                run: Some("R1".into()),
-                title: "Live screen".into(),
-                profile: None,
-                runtime: Some("omp".into()),
-                machine: None,
-                pane: Some("w1:p1".into()),
-                status: AgentStatus::Working,
-                now: String::new(),
-                since: None,
-                tail: Vec::new(),
-                last_output_at: None,
-                activity: None,
-                steps: None,
-                cost_usd: None,
-                cost_basis: None,
-                tokens: None,
-                rev: 1,
-                generation: None,
-                turn: None,
-                controls: Default::default(),
-            },
-        );
+        feed.agents
+            .insert(Id::from(id), agent("T-1", "R1", Role::Worker));
         let target = DetailRef::Terminal { id: id.into() };
         feed.details.insert(
             daemon::detail_key(&target),
@@ -481,9 +471,10 @@ mod tests {
             &feed,
             daemon_env(&feed, Form::Desktop),
             "app:test",
-            None,
         );
-        let terminal = page.terminal.expect("a session with a pane has a terminal");
+        let Some(terminal) = page.terminal else {
+            panic!("a run with a pane has a terminal");
+        };
         let shown: Vec<String> = terminal
             .lines
             .iter()
@@ -498,5 +489,6 @@ mod tests {
         );
         assert!(terminal.verbatim);
         assert!(terminal.styled.is_empty());
+        assert_eq!(page.controls.menu, Some(Id::from(id)));
     }
 }

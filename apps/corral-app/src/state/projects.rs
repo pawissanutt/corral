@@ -89,7 +89,7 @@ impl AppState {
 
     pub fn ask_project(&self, id: Id) {
         self.project_context_removed.set(None);
-        self.ask_about(Some(assistant::project_context(&id)), None, None);
+        self.ask_about(Some(assistant::project_context(&id)), None);
     }
 
     /// Tracked default project; removing its chip suppresses it until context changes or Ask closes.

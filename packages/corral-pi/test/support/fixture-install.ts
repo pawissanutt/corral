@@ -1,14 +1,14 @@
-// Builds a bounded temp asset directory from the package: src/, package.json, bun.lock and
-// compat.json, the package's installed node_modules linked in, and (with overlays) fixture.json
-// plus the fixture role, auth and delivery modules copied to their fixed module paths. Fixture
+// Builds a bounded temp asset directory from the package: src/, package.json and bun.lock,
+// the package's installed node_modules linked in, and (with overlays) fixture.json
+// plus the fixture role and auth modules copied to their fixed module paths. Fixture
 // modules exist only inside that temp directory, never in the package's own src/.
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { roleDir } from "../../src/host/modules.ts";
 import { ROLES } from "../../src/roles/types.ts";
+import type { FakeStep } from "../fixtures/auth/fake-transport.ts";
 
 export const PACKAGE_ROOT = fileURLToPath(new URL("../..", import.meta.url)).replace(/\/$/, "");
 const FILES_MAX = 1024;
@@ -17,8 +17,8 @@ const BYTES_MAX = 16 * 1024 * 1024;
 export interface FixtureOptions {
   /** Copy the fixture modules and fixture.json (default true). */
   readonly overlays?: boolean;
-  /** Fixture modules to leave out, for single-module refusal tests. */
-  readonly omit?: readonly ("role" | "delivery" | "auth")[];
+  /** Omit the role overlay to keep shipped roles, or omit auth to test a missing module. */
+  readonly omit?: readonly ("role" | "auth")[];
   readonly parent?: string;
   /** Give the fixture host a private upstream Pi state directory, including crashes.json. */
   readonly isolatePiState?: boolean;
@@ -65,7 +65,7 @@ function copy(from: string, to: string): void {
 
 export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstall {
   const dir = mkdtempSync(join(options.parent ?? tmpdir(), "corral-pi-assets-"));
-  for (const file of ["package.json", "bun.lock", "compat.json"]) copy(join(PACKAGE_ROOT, file), join(dir, file));
+  for (const file of ["package.json", "bun.lock"]) copy(join(PACKAGE_ROOT, file), join(dir, file));
   copy(join(PACKAGE_ROOT, "src"), join(dir, "src"));
   if (options.isolatePiState) {
     const main = join(dir, "src/host/main.ts");
@@ -91,7 +91,7 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
     const modules: string[] = [];
     if (!omit.has("role")) {
       copy(join(fixtures, "roles/fixture-role.ts"), join(dir, "src/roles/fixture-role.ts"));
-      for (const role of ROLES.map(roleDir)) {
+      for (const role of ROLES) {
         copy(join(fixtures, `roles/${role}/index.ts`), join(dir, `src/roles/${role}/index.ts`));
         modules.push(`src/roles/${role}/index.ts`);
       }
@@ -103,16 +103,20 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
     } else {
       rmSync(join(dir, "src/auth/index.ts"), { force: true });
     }
-    if (!omit.has("delivery")) {
-      copy(join(fixtures, "delivery/index.ts"), join(dir, "src/delivery/index.ts"));
-      modules.push("src/delivery/index.ts");
-    }
     writeFileSync(join(dir, "fixture.json"), `${JSON.stringify({
       version: 1, fixture: true, built_by: "packages/corral-pi/test/support/fixture-install.ts", modules,
     }, null, 2)}\n`);
   }
   bounded(dir);
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+/** Keep the shipped host and roles; script only the offline provider's responses. */
+export function scriptedFixtureInstall(parent: string, steps: readonly FakeStep[]): string {
+  const assets = buildFixtureInstall({ parent, omit: ["role"] });
+  copy(join(PACKAGE_ROOT, "assets"), join(assets.dir, "assets"));
+  appendFileSync(join(assets.dir, "src/auth/index.ts"), `\nfixtureTransport().script(${JSON.stringify(steps)});\n`);
+  return assets.dir;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

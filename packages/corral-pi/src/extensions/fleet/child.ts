@@ -12,8 +12,6 @@ import { exploreLoadout } from "../../roles/common/execution.ts";
 import type { HelperEvent } from "../subagent/inspection.ts";
 import { observeHelperEvent } from "../subagent/session.ts";
 import { researchBudget, researchPrompt, researchResult, type ResearchOptions, type ResearchReport } from "../subagent/research.ts";
-import { reviewSnapshots } from "../subagent/review-snapshot.ts";
-import type { ReviewMission } from "../subagent/runtime.ts";
 import type { FleetContext } from "./runtime.ts";
 import type { ResolvedModel } from "./profiles.ts";
 import { Type } from "typebox";
@@ -28,8 +26,6 @@ export interface ChildHooks extends AgentCommunication {
     deadlineAt?: number;
     research?: ResearchOptions;
     serviceTier?: "priority";
-    review?: ReviewMission;
-    checkReview?: () => Promise<void>;
   };
   onEvent(event: HelperEvent): void;
   onToolStart(name: string, args: unknown): void;
@@ -50,7 +46,7 @@ export interface ChildHandle {
 export interface SdkRunnerOptions {
   readonly sdk: typeof Sdk;
   readonly models: ModelRuntime;
-  readonly paidModels?: (binding: NonNullable<ResolvedModel["binding"]>) => Promise<ModelRuntime>;
+  readonly apiModels?: (choice: ResolvedModel) => Promise<ModelRuntime>;
   readonly context: FleetContext;
   readonly agentDir: string;
   readonly localTools: readonly ToolDefinition[];
@@ -273,7 +269,6 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     let synthesis: "turn_limit" | "time_reserve" | undefined;
     let synthesisUsed: typeof synthesis;
     let limitReached = false;
-    let reviewFenced = false;
     let complete = false;
     let cached: ChildUsage = { input: 0, output: 0, turns: 0 };
     const usage = (): ChildUsage => {
@@ -296,52 +291,39 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     const done = (async () => {
       let unsubscribe = () => {};
       const abort = () => { if (session) void session.abort().catch(() => {}); };
-      let snapshots: { tool: ToolDefinition; complete(): boolean } | undefined;
       const result = (failed?: string): Awaited<ChildHandle["done"]> => {
         const failure = session?.messages.findLast(message => message.role === "assistant" && ["error", "aborted"].includes(message.stopReason));
         failed ??= failure?.role === "assistant" ? failure.errorMessage ?? "Child response interrupted" : undefined;
         let text = session?.getLastAssistantText() ?? "";
         let researchReport: ResearchReport | undefined;
         if (research) {
-          const stopReason: ResearchReport["stopReason"] = reviewFenced ? "cancelled" : signal.aborted
+          const stopReason: ResearchReport["stopReason"] = signal.aborted
             ? signal.reason instanceof Error && signal.reason.name === "TimeoutError" ? "timeout" : "cancelled"
             : limitReached ? synthesisUsed ?? "turn_limit" : failed ? "provider_error" : synthesisUsed ?? "completed";
           const findings = researchResult(session?.messages ?? [], stopReason);
           text = findings.text;
           researchReport = findings.report;
-          if (snapshots) {
-            const snapshotCoverage = snapshots.complete() ? "complete" : "incomplete";
-            researchReport = { ...researchReport, snapshotCoverage,
-              status: snapshotCoverage === "incomplete" && researchReport.status === "completed" ? "partial" : researchReport.status };
-          }
         } else if (limitReached) failed ??= "Child turn limit reached";
-        if (reviewFenced) failed ??= "Review mission is no longer current";
         return { report: text.slice(0, 32768), ...(failed ? { failed } : {}),
           ...(researchReport ? { researchReport } : {}), turns: maxTurns === undefined ? turns : Math.min(turns, maxTurns),
           ...(text.length > 32768 ? { truncated: true } : {}) };
       };
       try {
         signal.throwIfAborted();
-        const models = initialModel.binding ? await options.paidModels?.(initialModel.binding) : options.models;
-        if (!models) throw new Error("paid_admission_required: child API catalog is unavailable");
+        const models = initialModel.connection ? await options.apiModels?.(initialModel) : options.models;
+        if (!models) throw new Error("API children are unavailable outside a build session");
         const model = models.getModel(initialModel.provider, initialModel.model);
         if (!model) throw new Error(`model_unavailable: ${initialModel.provider}/${initialModel.model}`);
         if (execution?.serviceTier && (!research || initialModel.provider !== "openai-codex")) {
           throw new Error("Priority service tier is restricted to openai-codex Explore sessions");
         }
-        const level = initialModel.binding ? thinking(initialModel.effort) : budget?.thinkingLevel ?? thinking(initialModel.effort);
-        snapshots = execution?.review ? reviewSnapshots(execution.review) : undefined;
-        if (snapshots) {
-          if (!allowed.has("read")) throw new Error("local review unavailable: parent has no file-read capability");
-          allowed.add(snapshots.tool.name);
-        }
+        const level = budget?.thinkingLevel ?? thinking(initialModel.effort);
         const extension = (pi: ExtensionAPI) => {
           residentLifecycle(pi);
           for (const tool of options.localTools) {
             if (allowed.has(tool.name) && (!options.bound || (research && !BASE_TOOLS.includes(tool.name)))
-              && !["ask_owner", "agent_message", "agent_roster", "review_verdict", "read_review_snapshot"].includes(tool.name)) pi.registerTool(tool);
+              && !["ask_owner", "agent_message", "agent_roster", "review_verdict"].includes(tool.name)) pi.registerTool(tool);
           }
-          if (snapshots) pi.registerTool(snapshots.tool);
           for (const tool of communication) pi.registerTool(tool);
           if (kind === "review") pi.registerTool({
             name: "review_verdict", label: "Record review verdict", description: "Record your independent review verdict and concrete findings before finishing.",
@@ -391,13 +373,10 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
           };
           // Reserve before the SDK snapshots tools for the following model request.
           pi.on("before_agent_start", () => { reserveSynthesis(1); });
-          pi.on("turn_start", async (_event, ctx) => {
+          pi.on("turn_start", (_event, ctx) => {
             turns++;
             limitReached = (maxTurns !== undefined && turns > maxTurns) || synthesisUsed !== undefined;
-            if (execution?.checkReview && !signal.aborted && !limitReached) {
-              try { await execution.checkReview(); } catch { reviewFenced = true; }
-            }
-            if (signal.aborted || limitReached || reviewFenced) { void ctx.abort(); return; }
+            if (signal.aborted || limitReached) { void ctx.abort(); return; }
             hooks.onTurn();
           });
           // Await the mutation before the SDK constructs the following model request.
@@ -459,7 +438,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     return { done, usage,
       async steer(text) { await ready; if (complete) throw new Error("Child is no longer running"); await session!.steer(text); },
       async setModel(provider, model, effort) {
-        if (initialModel.binding) throw new Error("A running API child keeps its approved route");
+        if (initialModel.connection) throw new Error("A running API child keeps its configured route");
         if (!options.models.getModel(provider, model)) throw new Error(`model_unavailable: ${provider}/${model}`);
         thinking(effort);
         await ready;

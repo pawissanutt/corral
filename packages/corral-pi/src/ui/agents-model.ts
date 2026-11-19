@@ -118,7 +118,7 @@ export function helperStatus(helper: HelperInspection, now: number): Status {
   return agentStatus(helperState(helper), time);
 }
 export function helperKindName(kind: HelperInspection["kind"]): string {
-  switch (kind) { case "explore": return "explore"; case "oracle": return "oracle"; case "web_search": return "search"; case "shadow": return "shadow"; case "expert": return "expert"; }
+  switch (kind) { case "explore": return "explore"; case "oracle": return "oracle"; case "web_search": return "search"; case "expert": return "expert"; }
 }
 
 /** One stretch of the timeline. `to` absent means still open (drawn up to now). */
@@ -204,7 +204,7 @@ export interface AgentRow {
   readonly steeredAt?: readonly number[];
   /** Messages it sent or received from other agents, oldest first; drawn among the replies at the time they were sent. Absent: none. */
   readonly mail?: readonly AgentMail[];
-  readonly meta: readonly string[];      // model id, tier, generation, session, parent
+  readonly meta: readonly string[];      // model id, tier, session, parent
   readonly notes: readonly AgentNote[];
   readonly capabilities: AgentCapabilities;
   readonly disabled?: Disabled;
@@ -305,7 +305,7 @@ export function helperRows(snapshot: PanelSnapshot | null, now: number): AgentRo
     const agent = agents.find(item => item.id === helper.request);
     const parent = agent?.parent === undefined ? undefined : agents.find(item => item.session === agent.parent);
     const fast = helper.serviceTier === "priority";
-    const meta = [`model ${plainLabel(helperText(helper.model))}`, ...(fast ? ["fast tier (priority)"] : []), `generation g${helper.generation}`,
+    const meta = [`model ${plainLabel(helperText(helper.model))}`, ...(fast ? ["fast tier (priority)"] : []),
       ...(agent ? [`session ${plainLabel(agent.session)}`] : []),
       ...(agent?.parent === undefined ? [] : [`parent ${parent ? plainLabel(parent.kind) : "session " + plainLabel(agent.parent)}`]),
       ...(agent?.tokens === undefined ? [] : [`${agent.tokens >= 1000 ? `${Number((agent.tokens / 1000).toFixed(1))}k` : agent.tokens} session tokens`])];
@@ -313,7 +313,7 @@ export function helperRows(snapshot: PanelSnapshot | null, now: number): AgentRo
       ...(helper.error ? [{ text: "Error: " + plainLabel(helperText(helper.error)), tone: "error" as const }] : []),
       ...(helper.inspectionError ? [{ text: "Inspector warning: " + plainLabel(helperText(helper.inspectionError)), tone: "warning" as const }] : []),
       ...(helper.truncated ? [{ text: retentionNote(helper), tone: "warning" as const, retention: true }] : []),
-      ...(bound ? [] : [{ text: "Host unbound · this observation may be stale.", tone: "warning" as const }]),
+      ...(bound ? [] : [{ text: "Host closed · this observation may be stale.", tone: "warning" as const }]),
     ];
     const end = helperEnd(helper, state);
     return {

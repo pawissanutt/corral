@@ -1,0 +1,574 @@
+//! The artifact finder: every task's artifacts, read from corrald one served page at a time as
+//! the list is walked, narrowed by a filter that keeps the keyboard. Words match an artifact's
+//! title, kind and reference; `kind:`, `task:` and `project:` narrow by that field; every token
+//! must match. The request carries the field tokens as corrald's narrowing and the words as its
+//! filter, so corrald pages through matching rows only, newest first. The selected artifact's
+//! content shows beside the results (under them where the page is narrow) and opens full size;
+//! from either, its task opens.
+
+mod content;
+#[cfg(test)]
+mod tests;
+
+pub use content::{Body, Content, Line, PREVIEW_LINES, content, target as content_target};
+pub(crate) use content::{log_hue, plain_text, utf8_text};
+
+use corral_protocol::detail::{ArtifactNarrowing, DetailBody, DetailGet, DetailRef};
+use corral_types::Artifact;
+
+use crate::model::daemon::{DetailCache, Feed};
+use crate::model::work::{stamp_at, when_at};
+use crate::model::{Destination, Effect, Form, Id, Live};
+
+pub const TITLE: &str = "Artifacts";
+pub const SUBTITLE: &str = "Every task's artifacts, newest first";
+pub const PLACEHOLDER: &str = "Filter: words, kind:report, task:T-12, project:site";
+/// What a screen reader calls the filter field.
+pub const FIELD_LABEL: &str = "Filter artifacts";
+pub const HINT: &str = "Words match title, kind and reference; kind:, task: and project: narrow by that field. Every token must match.";
+pub const OPEN_FULL: &str = "Open full size";
+pub const BACK: &str = "Back to results";
+pub const LOAD_MORE: &str = "Load older artifacts";
+pub const LOADING_MORE: &str = "Loading older artifacts…";
+pub const LOADING: &str = "Loading artifacts from corrald…";
+/// Said where an artifact's content will show once corrald serves it.
+pub const LOADING_CONTENT: &str = "Loading its content from corrald…";
+/// The task list's way into the finder, with the task's token filled in.
+pub const FIND_IN_ALL: &str = "Find in all artifacts";
+pub const RETRY: &str = "Retry";
+/// What a screen reader calls the preview beside the results.
+pub const PREVIEW_LABEL: &str = "Selected artifact";
+/// The terminal key line's keys while the finder shows.
+pub const KEYS: [(&str, &str); 3] = [("↑ ↓", "walk"), ("Enter", "full size"), ("Tab", "actions")];
+
+/// Rows a page key moves the selection.
+const PAGE_STEP: usize = 10;
+
+/// The finder's own state; the results are corrald's, in the feed.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct State {
+    /// The filter as typed.
+    pub query: String,
+    /// The selected artifact's reference (`T-12:3`); the first result while none is.
+    pub selected: Option<String>,
+    /// The artifact shown full size in the results' place.
+    pub full: Option<String>,
+    /// Grows each time the filter should take the keyboard focus again.
+    pub focus: u32,
+    /// The filter has the keyboard focus: letters type into it, and the terminal's key line
+    /// gives the filter's keys rather than the destinations'.
+    pub typing: bool,
+}
+
+/// A move of the selection through the results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Walk {
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    Query(String),
+    Walk(Walk),
+    /// A press on a result: it selects; on the selected one it opens full size.
+    Press(String),
+    Open(String),
+    /// Enter in the filter: open the selected result full size.
+    OpenSelected,
+    /// Back from full size to the results.
+    Close,
+    OpenTask(Id),
+    /// Open the finder narrowed to one task.
+    Find(Id),
+    /// Ask corrald for the page after the last served one.
+    LoadMore,
+}
+
+/// The filter, read into the fields it narrows and the words left over (all lower case; a task
+/// as corrald spells it).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Query {
+    pub words: Vec<String>,
+    pub kinds: Vec<String>,
+    pub tasks: Vec<String>,
+    pub projects: Vec<String>,
+}
+
+/// `T-12` from `t-12`, `T-12` or `12`.
+fn task_id(value: &str) -> String {
+    let number = value.strip_prefix("t-").unwrap_or(value);
+    if !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()) {
+        format!("T-{number}")
+    } else {
+        value.to_uppercase()
+    }
+}
+
+impl Query {
+    /// A field token still being typed (`kind:`) narrows nothing yet.
+    pub fn parse(text: &str) -> Query {
+        let mut query = Query::default();
+        for token in text.split_whitespace() {
+            let token = token.to_lowercase();
+            let (field, value) = token.split_once(':').unwrap_or_default();
+            let into = match field {
+                "kind" => &mut query.kinds,
+                "task" => &mut query.tasks,
+                "project" => &mut query.projects,
+                _ => {
+                    query.words.push(token);
+                    continue;
+                }
+            };
+            if !value.is_empty() {
+                into.push(if field == "task" {
+                    task_id(value)
+                } else {
+                    value.to_owned()
+                });
+            }
+        }
+        query
+    }
+
+    /// The list request: the words as corrald's filter and one value of each field as its
+    /// narrowing (the longest prefix of a kind or project, the first task); a second value of
+    /// the same field narrows the served rows here.
+    pub fn request(&self) -> DetailRef {
+        let longest = |values: &[String]| values.iter().max_by_key(|value| value.len()).cloned();
+        let narrowing = ArtifactNarrowing {
+            kind: longest(&self.kinds),
+            task: self.tasks.first().cloned(),
+            project: longest(&self.projects),
+        };
+        DetailRef::Artifacts {
+            filter: (!self.words.is_empty()).then(|| self.words.join(" ")),
+            narrowing: (narrowing != ArtifactNarrowing::default()).then_some(narrowing),
+        }
+    }
+
+    /// Whether the artifact, of a task in `project`, matches every token.
+    pub fn matches(&self, artifact: &Artifact, project: Option<&str>) -> bool {
+        let kind = artifact.kind.as_deref().unwrap_or_default().to_lowercase();
+        let title = artifact.title.to_lowercase();
+        let reference = artifact.reference().to_lowercase();
+        let project = project.map(str::to_lowercase);
+        self.kinds
+            .iter()
+            .all(|wanted| kind.starts_with(wanted.as_str()))
+            && self
+                .tasks
+                .iter()
+                .all(|wanted| artifact.task.eq_ignore_ascii_case(wanted))
+            && self.projects.iter().all(|wanted| {
+                project
+                    .as_deref()
+                    .is_some_and(|project| project.starts_with(wanted.as_str()))
+            })
+            && self.words.iter().all(|word| {
+                title.contains(word.as_str())
+                    || kind.contains(word.as_str())
+                    || reference.contains(word.as_str())
+            })
+    }
+}
+
+/// The project of an artifact's task: as corrald's row states it, else from what the app holds
+/// (the board, the task's detail, a Closed page).
+pub fn project_of(feed: &Feed, artifact: &Artifact) -> Option<String> {
+    if artifact.project.is_some() {
+        return artifact.project.clone();
+    }
+    let task = artifact.task.as_str();
+    if let Some(row) = feed.board.task(task) {
+        return row.task().project.clone();
+    }
+    let detail = DetailRef::Task { id: task.into() };
+    if let Some(DetailBody::Task(detail)) = feed.detail(&detail).and_then(DetailCache::body) {
+        return detail.task.project.clone();
+    }
+    feed.details
+        .values()
+        .filter_map(|cache| match cache.body() {
+            Some(DetailBody::Closed(page)) => page.rows.iter().find(|row| row.id == task),
+            _ => None,
+        })
+        .find_map(|row| row.project.clone())
+}
+
+/// The task's title, where the app holds it.
+fn task_title(feed: &Feed, task: &str) -> Option<String> {
+    if let Some(row) = feed.board.task(task) {
+        return Some(row.title().to_owned());
+    }
+    let detail = DetailRef::Task { id: task.into() };
+    match feed.detail(&detail).and_then(DetailCache::body) {
+        Some(DetailBody::Task(detail)) => Some(detail.task.title.clone()),
+        _ => None,
+    }
+}
+
+/// The served rows in served order (corrald's, newest first across pages), and the next page's
+/// token while nothing is loading or failed.
+fn served<'a>(feed: &'a Feed, target: &DetailRef) -> (Vec<&'a Artifact>, Option<&'a str>) {
+    let Some(cache) = feed.detail(target) else {
+        return (Vec::new(), None);
+    };
+    let rows = cache
+        .pages
+        .iter()
+        .filter_map(|page| match &page.body {
+            Some(DetailBody::Artifacts(page)) => Some(page.rows.iter()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    let next = if cache.loading || cache.error.is_some() {
+        None
+    } else {
+        cache.pages.last().and_then(|page| page.next.as_deref())
+    };
+    (rows, next)
+}
+
+/// The served rows the filter keeps, and the next page's token.
+fn visible<'a>(state: &State, feed: &'a Feed) -> (Vec<&'a Artifact>, Option<&'a str>) {
+    let query = Query::parse(&state.query);
+    let (rows, next) = served(feed, &query.request());
+    let rows = rows
+        .into_iter()
+        .filter(|row| query.matches(row, project_of(feed, row).as_deref()))
+        .collect();
+    (rows, next)
+}
+
+/// Where the selection is among `rows`: the selected reference, else the first row.
+fn selected_at(state: &State, rows: &[&Artifact]) -> Option<usize> {
+    let chosen = state
+        .selected
+        .as_deref()
+        .and_then(|selected| rows.iter().position(|row| row.reference() == selected));
+    chosen.or((!rows.is_empty()).then_some(0))
+}
+
+/// The request for the page after the last served one, while one exists and none is on its
+/// way.
+fn next_page(state: &State, feed: &Feed) -> Option<DetailGet> {
+    let target = Query::parse(&state.query).request();
+    let (_, next) = served(feed, &target);
+    Some(DetailGet {
+        target,
+        etag: None,
+        page: Some(next?.to_owned()),
+    })
+}
+
+/// The next page to ask for as the list is walked: once the selection stands on the last
+/// result shown, or nothing shown matches while corrald has more.
+pub fn more(state: &State, feed: &Feed) -> Option<DetailGet> {
+    let (rows, _) = visible(state, feed);
+    let at_end = selected_at(state, &rows).is_none_or(|at| at + 1 >= rows.len());
+    if at_end { next_page(state, feed) } else { None }
+}
+
+impl State {
+    pub fn act(&mut self, action: Action, feed: &Feed) -> Vec<Effect> {
+        match action {
+            Action::Query(text) => {
+                self.query = text;
+                self.selected = None;
+            }
+            Action::Walk(walk) => {
+                let (rows, _) = visible(self, feed);
+                if let Some(at) = selected_at(self, &rows) {
+                    let last = rows.len() - 1;
+                    let to = match walk {
+                        Walk::Up => at.saturating_sub(1),
+                        Walk::Down => (at + 1).min(last),
+                        Walk::PageUp => at.saturating_sub(PAGE_STEP),
+                        Walk::PageDown => (at + PAGE_STEP).min(last),
+                    };
+                    self.selected = Some(rows[to].reference());
+                }
+            }
+            Action::Press(reference) => {
+                let (rows, _) = visible(self, feed);
+                let shown = selected_at(self, &rows).map(|at| rows[at].reference());
+                if shown.as_deref() == Some(reference.as_str()) {
+                    self.full = Some(reference.clone());
+                }
+                self.selected = Some(reference);
+                self.focus = self.focus.wrapping_add(1);
+            }
+            Action::Open(reference) => {
+                self.selected = Some(reference.clone());
+                self.full = Some(reference);
+            }
+            Action::OpenSelected => {
+                let (rows, _) = visible(self, feed);
+                if let Some(at) = selected_at(self, &rows) {
+                    let reference = rows[at].reference();
+                    self.selected = Some(reference.clone());
+                    self.full = Some(reference);
+                }
+            }
+            Action::Close => {
+                self.full = None;
+                self.focus = self.focus.wrapping_add(1);
+            }
+            Action::OpenTask(task) => {
+                self.full = None;
+                return vec![Effect::OpenLive(Live::Task(task))];
+            }
+            Action::Find(task) => {
+                self.query = format!("task:{task} ");
+                self.selected = None;
+                self.full = None;
+                self.focus = self.focus.wrapping_add(1);
+                return vec![Effect::Go(Destination::Artifacts)];
+            }
+            Action::LoadMore => {
+                return next_page(self, feed)
+                    .map(Effect::Detail)
+                    .into_iter()
+                    .collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Escape: back from full size, else clear a typed filter; whether it did either.
+    pub fn escape(&mut self) -> bool {
+        if self.full.take().is_some() {
+            self.focus = self.focus.wrapping_add(1);
+            true
+        } else if !self.query.is_empty() {
+            self.query.clear();
+            self.selected = None;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// One result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Row {
+    pub reference: String,
+    pub task: Id,
+    pub kind: String,
+    pub title: String,
+    pub project: Option<String>,
+    /// The run that recorded it, when a run did (`R2`).
+    pub run: Option<String>,
+    /// When it was added: the clock today, else the day.
+    pub at: String,
+    /// What a screen reader hears for the row.
+    pub label: String,
+}
+
+/// How the results stand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Status {
+    Loading,
+    Failed(String),
+    Ready,
+}
+
+/// What stands under the last result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum More {
+    /// corrald has served every page.
+    Done,
+    /// More pages wait: walking down, or [`LOAD_MORE`], asks for them.
+    Offer,
+    /// The next page is on its way.
+    Loading,
+}
+
+/// The results list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Results {
+    pub rows: Vec<Row>,
+    pub selected: Option<String>,
+    pub status: Status,
+    /// Said where no result is shown.
+    pub empty: Option<String>,
+    /// How many are shown and whether more exist.
+    pub count: String,
+    pub more: More,
+}
+
+/// The selected artifact: its facts, its content, and its task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Preview {
+    pub reference: String,
+    pub title: String,
+    pub task: Id,
+    /// Labelled facts in display order: kind, size, task, run, project, added, hash.
+    pub facts: Vec<(&'static str, String)>,
+    /// The same facts on one line: kind, size, task (and run), project, when, the hash's start.
+    pub summary: String,
+    pub content: Content,
+    /// The button that opens its task.
+    pub open_task: String,
+}
+
+/// The finder as every form shows it: the results and the selected artifact's preview, or that
+/// artifact full size in their place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Page {
+    pub results: Results,
+    pub preview: Option<Preview>,
+    pub full: Option<Preview>,
+}
+
+/// The task, and the run that recorded it where one did: `T-12 R2`.
+fn source(artifact: &Artifact) -> String {
+    match &artifact.run {
+        Some(run) => format!("{} {run}", artifact.task),
+        None => artifact.task.clone(),
+    }
+}
+
+fn row(feed: &Feed, artifact: &Artifact) -> Row {
+    let kind = artifact.kind.clone().unwrap_or_else(|| "artifact".into());
+    let project = project_of(feed, artifact);
+    let at = stamp_at(artifact.at, feed);
+    let label = format!(
+        "{kind} {}, {}{}, added {at}",
+        artifact.title,
+        source(artifact),
+        project
+            .as_deref()
+            .map(|project| format!(" in {project}"))
+            .unwrap_or_default()
+    );
+    Row {
+        reference: artifact.reference(),
+        task: Id::from(artifact.task.as_str()),
+        kind,
+        title: artifact.title.clone(),
+        project,
+        run: artifact.run.clone(),
+        at,
+        label,
+    }
+}
+
+fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview {
+    let task = Id::from(artifact.task.as_str());
+    let hash = if full {
+        artifact.sha256.clone()
+    } else {
+        format!("{}…", artifact.sha256.chars().take(12).collect::<String>())
+    };
+    let kind = artifact.kind.clone().unwrap_or_else(|| "artifact".into());
+    let size = crate::model::agents::size(artifact.bytes);
+    let project = project_of(feed, artifact);
+    let added = format!(
+        "{} by {}",
+        when_at(artifact.at, feed),
+        crate::model::review::actor(artifact.by)
+    );
+    let summary = [
+        Some(kind.clone()),
+        Some(size.clone()),
+        Some(source(artifact)),
+        project.clone(),
+        Some(added.clone()),
+        Some(format!("sha256 {hash}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ");
+    let mut facts = vec![
+        ("Kind", kind),
+        ("Size", size),
+        (
+            "Task",
+            match task_title(feed, &artifact.task) {
+                Some(title) => format!("{task} · {title}"),
+                None => task.to_string(),
+            },
+        ),
+    ];
+    if let Some(run) = &artifact.run {
+        facts.push(("Run", run.clone()));
+    }
+    if let Some(project) = project {
+        facts.push(("Project", project));
+    }
+    facts.push(("Added", added));
+    facts.push(("SHA-256", hash));
+    Preview {
+        reference: artifact.reference(),
+        title: artifact.title.clone(),
+        open_task: format!("Open {task}"),
+        task,
+        facts,
+        summary,
+        content: content(feed, artifact, form, full),
+    }
+}
+
+/// The finder now.
+pub fn page(state: &State, feed: &Feed, form: Form) -> Page {
+    let query = Query::parse(&state.query);
+    let target = query.request();
+    let (rows, next) = visible(state, feed);
+    let cache = feed.detail(&target);
+    let status = match cache {
+        Some(cache) if cache.pages.is_empty() => match &cache.error {
+            Some(error) => Status::Failed(format!(
+                "corrald could not list artifacts: {}",
+                error.message
+            )),
+            None => Status::Loading,
+        },
+        Some(_) => Status::Ready,
+        None => Status::Loading,
+    };
+    let more = match (next, cache.is_some_and(|cache| cache.loading)) {
+        (Some(_), _) => More::Offer,
+        (None, true) if !rows.is_empty() => More::Loading,
+        _ => More::Done,
+    };
+    let at = selected_at(state, &rows);
+    let shown = at.map(|at| rows[at]);
+    let full = state
+        .full
+        .as_deref()
+        .and_then(|full| rows.iter().find(|row| row.reference() == full))
+        .map(|artifact| preview(feed, artifact, form, true));
+    let count = match (rows.len(), more) {
+        (0, _) => String::new(),
+        (1, More::Done) => "1 artifact".into(),
+        (n, More::Done) => format!("{n} artifacts"),
+        (n, _) => format!("{n} so far · older ones load as you walk down"),
+    };
+    let empty = (status == Status::Ready && rows.is_empty() && more == More::Done).then(|| {
+        if state.query.trim().is_empty() {
+            "No task has recorded an artifact yet.".to_owned()
+        } else {
+            format!("No artifact matches “{}”.", state.query.trim())
+        }
+    });
+    Page {
+        results: Results {
+            rows: rows.iter().map(|artifact| row(feed, artifact)).collect(),
+            selected: shown.map(Artifact::reference),
+            status,
+            empty,
+            count,
+            more,
+        },
+        preview: shown.map(|artifact| preview(feed, artifact, form, false)),
+        full,
+    }
+}

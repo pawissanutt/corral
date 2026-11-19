@@ -213,6 +213,13 @@ impl LiveSession {
                             self.reset();
                             return;
                         }
+                        // A tool runs once the message that called it is complete, so its words
+                        // go before the call; the transcript read after the tool ends holds both.
+                        if let Some(message) = self.messages.last_mut()
+                            && message.settled_at.is_none()
+                        {
+                            message.settled_at = Some(self.reread.saturating_add(1));
+                        }
                         self.tools.push(LiveTool {
                             call,
                             tool,

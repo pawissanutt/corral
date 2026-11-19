@@ -1,24 +1,24 @@
-//! One session per line. Assistant rows supplement agent rows, never duplicate them.
-use corral_protocol::rows::{AgentRow, AgentStatus, AssistantRow};
+//! One session per line: corrald's live runs, then the pinned quick assistant thread. Assistant
+//! rows supplement run rows, never duplicate them.
+use corral_protocol::rows::{AgentRow, AssistantRow};
+use corral_types::SessionStatus;
 
 use crate::model::board::Mark;
 use crate::model::daemon;
 use crate::model::effect::{Effect, Env};
-use crate::model::glance::{Activity, Stat, StatIcon};
+use crate::model::glance::{Stat, StatIcon};
 use crate::model::projects::ProjectFilter;
+use crate::model::work::{Record, session_task};
 use crate::model::{Hue, Id, Live, Selection, assistant};
 
-use super::{Action, State, live};
+use super::{Action, AgentStatus, State, live};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum RosterRole {
     #[default]
     All,
     Worker,
-    Gate,
     Reviewer,
-    Planner,
-    Pm,
     Assistant,
     Other(String),
 }
@@ -26,10 +26,7 @@ impl RosterRole {
     pub fn of(role: &str) -> Self {
         match role {
             "worker" => Self::Worker,
-            "gate" => Self::Gate,
-            "reviewer" | "plan_reviewer" => Self::Reviewer,
-            "planner" => Self::Planner,
-            role if role.eq_ignore_ascii_case("pm") => Self::Pm,
+            "reviewer" => Self::Reviewer,
             "assistant" => Self::Assistant,
             other => Self::Other(other.into()),
         }
@@ -38,10 +35,7 @@ impl RosterRole {
         match self {
             Self::All => "all",
             Self::Worker => "worker",
-            Self::Gate => "gate",
             Self::Reviewer => "reviewer",
-            Self::Planner => "planner",
-            Self::Pm => "pm",
             Self::Assistant => "assistant",
             Self::Other(role) => role,
         }
@@ -50,10 +44,7 @@ impl RosterRole {
         match self {
             Self::All => "All".into(),
             Self::Worker => "Workers".into(),
-            Self::Gate => "Gates".into(),
             Self::Reviewer => "Reviewers".into(),
-            Self::Planner => "Planners".into(),
-            Self::Pm => live::role_label("pm"),
             Self::Assistant => "Assistant".into(),
             Self::Other(role) => live::role_label(role),
         }
@@ -73,6 +64,8 @@ pub struct RoleTab {
 pub struct RosterRow {
     pub id: String,
     pub session: Id,
+    /// The run's task, whose Actions menu the row carries; none for an assistant.
+    pub task: Option<Id>,
     pub chip: String,
     pub hue: Hue,
     pub role: String,
@@ -82,10 +75,11 @@ pub struct RosterRow {
     pub pinned: bool,
     pub doing: String,
     pub doing_hint: String,
-    pub activity: Option<Activity>,
-    pub last_output: String,
+    /// The run's profile and model, as recorded when it started.
+    pub agent: String,
+    /// How long the session has written nothing (`quiet 12m`), or a dash.
+    pub quiet: String,
     pub since: String,
-    pub cost: String,
     pub selected: bool,
     pub action: Action,
 }
@@ -99,65 +93,83 @@ pub struct Roster {
     pub columns: [&'static str; 9],
     pub fill: super::Fill,
     pub stale: Option<String>,
-    pub unknown_activity: &'static str,
-    /// Launch PM, while no PM is live.
-    pub launch: Option<super::Launch>,
 }
 
+/// A roster line's source: a live run (keyed `<task>_<run>`), an assistant session, or both.
 #[derive(Clone, Copy)]
 pub(super) struct Source<'a> {
+    pub id: &'a str,
     pub row: Option<&'a AgentRow>,
     pub assistant: Option<&'a AssistantRow>,
 }
 impl<'a> Source<'a> {
-    pub fn id(self) -> &'a str {
-        self.row
-            .map(|row| row.id.as_str())
-            .or_else(|| self.assistant.map(|row| row.id.as_str()))
-            .unwrap_or("")
-    }
     pub fn role(self) -> &'a str {
-        self.row.map_or("assistant", |row| row.role.as_str())
+        self.row.map_or("assistant", |row| row.run.role.as_str())
     }
     pub fn workspace(self) -> bool {
-        self.role().eq_ignore_ascii_case("pm") || self.role() == "assistant"
+        self.row.is_none()
+    }
+    fn task(self, feed: &'a daemon::Feed) -> Option<&'a daemon::Task> {
+        self.row.and_then(|row| feed.board.task(&row.run.task))
     }
     pub fn project(self, feed: &'a daemon::Feed) -> Option<&'a str> {
-        self.row
-            .and_then(|row| row.task.as_deref())
-            .and_then(|id| feed.board.task(id))
-            .and_then(|task| task.project.as_deref())
+        self.task(feed).and_then(|task| task.project())
     }
     pub fn pinned(self, feed: &daemon::Feed) -> bool {
-        self.role() == "assistant" && assistant::quick_id(feed).as_deref() == Some(self.id())
+        self.row.is_none() && assistant::quick_id(feed).as_deref() == Some(self.id)
+    }
+    fn status(self) -> Option<AgentStatus> {
+        self.row.map(|row| live::status(&row.status))
     }
     pub fn chip(self, feed: &daemon::Feed) -> (String, Hue) {
-        if let Some(row) = self.row {
-            let (label, hue) = live::status(row.status).chip();
-            (label.into(), hue)
-        } else {
-            let chip = assistant::live_chip(feed, self.id());
-            (chip.label, chip.hue)
+        match self.status() {
+            Some(status) => {
+                let (label, hue) = status.chip();
+                (label.into(), hue)
+            }
+            None => {
+                let chip = assistant::live_chip(feed, self.id);
+                (chip.label, chip.hue)
+            }
         }
     }
-    pub fn name(self) -> String {
-        self.assistant
-            .map(|row| row.title.clone())
-            .or_else(|| self.row.map(|row| row.title.clone()))
+    pub fn name(self, feed: &daemon::Feed) -> String {
+        if let Some(row) = self.assistant {
+            return row.title.clone();
+        }
+        self.task(feed)
+            .map(|task| task.title().to_owned())
             .unwrap_or_default()
     }
+    /// What the session is doing: a blocked screen's prompt, the task's progress while the
+    /// session works, else what an idle or ended session says of itself. A turn that was
+    /// cancelled or a session that was terminated leaves the task Running, so the task's line
+    /// would still read "running".
     pub fn doing(self, feed: &daemon::Feed) -> String {
         if let Some(row) = self.row {
-            return if row.now.trim().is_empty() {
-                "Doing now unknown".into()
-            } else {
-                row.now.clone()
+            let task = self.task(feed);
+            let said = match &row.status {
+                SessionStatus::Blocked { .. } => live::excerpt(row)
+                    .map(str::to_owned)
+                    .or_else(|| task.map(daemon::Task::now)),
+                SessionStatus::Working => task.map(daemon::Task::now),
+                SessionStatus::Idle if row.paused == Some(true) => {
+                    Some("paused · its input waits for Resume".into())
+                }
+                SessionStatus::Idle => Some(
+                    task.and_then(daemon::Task::blocked)
+                        .map_or_else(|| "idle · no turn running".into(), |b| b.reason.clone()),
+                ),
+                SessionStatus::Gone => Some("session ended".into()),
             };
+            return said
+                .filter(|text| !text.trim().is_empty())
+                .unwrap_or_else(|| "Doing now unknown".into());
         }
         let scope = if self.pinned(feed) {
             assistant::QUICK
         } else {
-            self.id()
+            self.id
         };
         feed.threads
             .get(scope)
@@ -172,6 +184,14 @@ impl<'a> Source<'a> {
             .filter(|text| !text.trim().is_empty())
             .unwrap_or_else(|| "Doing now unknown".into())
     }
+    /// The run's profile and model; an assistant's profile.
+    pub fn agent(self) -> Option<String> {
+        if let Some(row) = self.row {
+            let model = row.run.model.as_deref().unwrap_or("model unknown");
+            return Some(format!("{} · {model}", row.run.profile));
+        }
+        self.assistant.and_then(|row| row.profile.clone())
+    }
     pub fn is_stale(self, feed: &daemon::Feed) -> bool {
         live::stale(
             feed,
@@ -181,24 +201,21 @@ impl<'a> Source<'a> {
                 "assistant"
             },
         ) || self
-            .row
-            .and_then(|row| row.task.as_deref())
-            .and_then(|id| feed.board.task(id))
+            .task(feed)
             .is_some_and(|task| task.rail.iter().any(|step| step.mark == Mark::Stale))
     }
 }
 
 fn in_scope(source: Source<'_>, feed: &daemon::Feed, filter: &ProjectFilter) -> bool {
-    source.workspace()
-        || match source.row.and_then(|row| row.task.as_deref()) {
-            Some(id) => feed
-                .board
-                .task(id)
-                .map_or(*filter == ProjectFilter::All, |task| {
-                    filter.matches(task.project.as_deref())
-                }),
-            None => filter.matches(None),
-        }
+    match source.row {
+        None => true,
+        Some(row) => feed
+            .board
+            .task(&row.run.task)
+            .map_or(*filter == ProjectFilter::All, |task| {
+                filter.matches(task.project())
+            }),
+    }
 }
 
 pub(super) fn selected<'a>(
@@ -206,16 +223,19 @@ pub(super) fn selected<'a>(
     id: &str,
     filter: &ProjectFilter,
 ) -> Option<Source<'a>> {
+    let (key, row) = feed
+        .agents
+        .get_key_value(id)
+        .map_or((None, None), |(key, row)| (Some(key), Some(row)));
+    let assistant = feed.assistants.get_key_value(id);
     let source = Source {
-        row: feed.agents.get(id),
-        assistant: feed.assistants.get(id),
+        id: key.or(assistant.map(|(key, _)| key))?.as_str(),
+        row,
+        assistant: assistant.map(|(_, row)| row),
     };
-    (source.row.is_some() || source.assistant.is_some())
-        .then_some(source)
-        .filter(|source| {
-            in_scope(*source, feed, &filter.resolved(feed))
-                && (source.role() != "assistant" || source.pinned(feed))
-        })
+    (in_scope(source, feed, &filter.resolved(feed))
+        && (source.row.is_some() || source.pinned(feed)))
+    .then_some(source)
 }
 
 pub(super) fn scoped<'a>(feed: &'a daemon::Feed, filter: &ProjectFilter) -> Vec<Source<'a>> {
@@ -223,31 +243,29 @@ pub(super) fn scoped<'a>(feed: &'a daemon::Feed, filter: &ProjectFilter) -> Vec<
     let quick = assistant::quick_id(feed);
     let mut rows: Vec<_> = feed
         .agents
-        .values()
-        .map(|row| Source {
+        .iter()
+        .map(|(id, row)| Source {
+            id: id.as_str(),
             row: Some(row),
-            assistant: feed.assistants.get(row.id.as_str()),
+            assistant: None,
         })
         .chain(
             feed.assistants
-                .values()
-                .filter(|row| !feed.agents.contains_key(row.id.as_str()))
-                .map(|row| Source {
+                .iter()
+                .filter(|(id, _)| quick.as_deref() == Some(id.as_str()))
+                .map(|(id, row)| Source {
+                    id: id.as_str(),
                     row: None,
                     assistant: Some(row),
                 }),
         )
-        .filter(|source| source.role() != "assistant" || quick.as_deref() == Some(source.id()))
         .filter(|source| in_scope(*source, feed, &filter))
         .collect();
     rows.sort_by(|a, b| {
         let rank = |source: Source<'_>| {
-            if quick.as_deref() == Some(source.id()) {
+            if source.row.is_none() {
                 0
-            } else if source
-                .row
-                .is_some_and(|row| row.status == AgentStatus::Asking)
-            {
+            } else if source.status() == Some(AgentStatus::Blocked) {
                 1
             } else if source.is_stale(feed) {
                 2
@@ -255,7 +273,7 @@ pub(super) fn scoped<'a>(feed: &'a daemon::Feed, filter: &ProjectFilter) -> Vec<
                 3
             }
         };
-        rank(*a).cmp(&rank(*b)).then_with(|| a.id().cmp(b.id()))
+        rank(*a).cmp(&rank(*b)).then_with(|| a.id.cmp(b.id))
     });
     rows
 }
@@ -263,8 +281,6 @@ pub(super) fn scoped<'a>(feed: &'a daemon::Feed, filter: &ProjectFilter) -> Vec<
 pub(super) fn visible(source: Source<'_>, role: &RosterRole) -> bool {
     match role {
         RosterRole::All => true,
-        RosterRole::Reviewer => matches!(source.role(), "reviewer" | "plan_reviewer"),
-        RosterRole::Pm => source.role().eq_ignore_ascii_case("pm"),
         other => source.role() == other.slug(),
     }
 }
@@ -293,185 +309,56 @@ pub(super) fn short(text: &str, max: usize) -> String {
     result
 }
 
-pub(super) fn last_output(at: Option<&str>, feed: &daemon::Feed) -> String {
-    let Some(at) = at
-        .and_then(live::unix)
-        .filter(|at| feed.now > 0 && *at <= feed.now)
-    else {
-        return "—".into();
-    };
-    let age = daemon::age(Some(at), feed.now);
-    if feed.now - at >= 5 * 60 {
-        format!("quiet {age}")
-    } else {
-        format!("{age} ago")
-    }
-}
-
-fn current_activity(window: &corral_protocol::rows::AgentActivity, feed: &daemon::Feed) -> bool {
-    live::unix(&window.until)
-        .is_some_and(|until| feed.now > 0 && until <= feed.now && feed.now - until <= 2 * 60)
-}
-
-fn activity_time(at: &str, feed: &daemon::Feed) -> String {
-    let label = (feed.now > 0)
-        .then(|| crate::model::work::when(at, feed))
-        .unwrap_or_default();
-    if label.is_empty() {
-        "time unknown".into()
-    } else {
-        label
-    }
-}
-
-pub(super) fn activity_axis(row: Option<&AgentRow>, feed: &daemon::Feed) -> [String; 3] {
-    let Some(window) = row
-        .and_then(|row| row.activity.as_ref())
-        .filter(|_| feed.capable(corral_protocol::AGENTS_ACTIVITY_V1))
-    else {
-        return ["—".into(), "events per minute".into(), "—".into()];
-    };
-    let minutes = window.per_minute.len();
-    if current_activity(window, feed) {
-        return [
-            format!("{minutes} min ago"),
-            "events per minute".into(),
-            "now".into(),
-        ];
-    }
-    let start = live::unix(&window.until)
-        .and_then(|until| until.checked_sub(u64::try_from(minutes).ok()?.checked_mul(60)?))
-        .and_then(|second| i64::try_from(second).ok())
-        .and_then(|second| jiff::Timestamp::from_second(second).ok())
-        .map(|at| activity_time(&at.to_string(), feed))
-        .unwrap_or_else(|| "time unknown".into());
-    [
-        start,
-        "events per minute".into(),
-        activity_time(&window.until, feed),
-    ]
-}
-
-pub(super) fn activity(row: Option<&AgentRow>, feed: &daemon::Feed, hue: Hue) -> Option<Activity> {
-    if !feed.capable(corral_protocol::AGENTS_ACTIVITY_V1) {
-        return None;
-    }
-    let window = row?.activity.as_ref()?;
-    let counts = &window.per_minute;
-    let total: u64 = counts.iter().map(|&n| u64::from(n)).sum();
-    Some(Activity {
-        per_minute: counts.clone(),
-        hue,
-        hint: if current_activity(window, feed) {
-            format!("{total} events in the last {} min", counts.len())
-        } else {
-            format!(
-                "{total} events in the {} min to {}",
-                counts.len(),
-                activity_time(&window.until, feed)
-            )
-        },
-    })
-}
-
 pub(super) fn row(source: Source<'_>, state: &State, feed: &daemon::Feed) -> RosterRow {
     let (chip, hue) = source.chip(feed);
     let full = source.doing(feed);
-    let last = last_output(
-        source.row.and_then(|row| row.last_output_at.as_deref()),
-        feed,
-    );
+    let quiet = source.row.and_then(|row| live::quiet(row, feed));
+    let agent = source.agent();
     let mut hints = vec![
         format!("{chip} · {}", live::role_label(source.role())),
         full.clone(),
     ];
-    if let Some(steps) = source
-        .row
-        .and_then(|row| row.steps.as_deref())
-        .filter(|steps| !steps.is_empty())
-    {
-        if let Some((at, step)) = steps
-            .iter()
-            .enumerate()
-            .find(|(_, step)| step.state == corral_protocol::rows::AgentStepState::InProgress)
-        {
-            hints.push(format!(
-                "step {} of {}: {}",
-                at + 1,
-                steps.len(),
-                step.title
-            ));
-        } else {
-            let done = steps
-                .iter()
-                .filter(|step| step.state == corral_protocol::rows::AgentStepState::Done)
-                .count();
-            hints.push(format!("{done} of {} steps done", steps.len()));
-        }
-    }
-    hints.push(if last == "—" {
-        "Last output unknown".into()
-    } else {
-        format!("Last output: {last}")
-    });
-    let cost = source
-        .row
-        .and_then(|row| live::usage(row.cost_usd, row.cost_basis, row.tokens))
-        .or_else(|| {
-            source
-                .assistant
-                .and_then(|row| live::usage(row.cost_usd, row.cost_basis, None))
-        });
+    hints.extend(agent.clone());
+    hints.extend(quiet.clone());
     RosterRow {
-        id: format!("agent-{}", source.id()),
-        session: Id::from(source.id()),
+        id: format!("agent-{}", source.id),
+        session: Id::from(source.id),
+        task: source.row.map(|row| Id::new(&row.run.task)),
         chip,
         hue,
         role: live::role_label(source.role()),
-        shown_id: if source.role().eq_ignore_ascii_case("pm")
-            && source.row.is_some_and(|row| row.task.is_none())
-        {
-            "PM".into()
-        } else {
-            source
-                .row
-                .map(live::shown_id)
-                .unwrap_or_else(|| source.id().into())
-        },
+        shown_id: source
+            .row
+            .map(live::shown_id)
+            .unwrap_or_else(|| source.id.into()),
         project: if source.workspace() {
             "workspace".into()
-        } else if source
-            .row
-            .and_then(|row| row.task.as_deref())
-            .is_some_and(|id| feed.board.task(id).is_none())
-        {
+        } else if source.task(feed).is_none() {
             "project unknown".into()
         } else {
             source.project(feed).unwrap_or("Unassigned").into()
         },
-        name: source.name(),
+        name: source.name(feed),
         pinned: source.pinned(feed),
         doing: short(&full, 76),
         doing_hint: hints.join(" · "),
-        activity: activity(source.row, feed, hue),
-        last_output: last,
+        agent: agent.unwrap_or_else(|| "—".into()),
+        quiet: quiet.unwrap_or_else(|| "—".into()),
         since: source
             .row
-            .and_then(|row| live::clock(row.since.as_deref(), feed))
+            .and_then(|row| live::clock_at(row.run.started, feed))
             .unwrap_or_else(|| "—".into()),
-        cost: cost.unwrap_or_else(|| "—".into()),
         selected: state
             .roster_session
             .as_ref()
-            .is_some_and(|id| id.as_str() == source.id()),
-        action: Action::SelectRoster(Id::from(source.id())),
+            .is_some_and(|id| id.as_str() == source.id),
+        action: Action::SelectRoster(Id::from(source.id)),
     }
 }
 
-/// Counts describe the roster before its role tab: task sessions, the PM and the pinned quick
-/// thread. Named assistant sessions have their own section; workspace sessions do not inflate
-/// a project's task-session count.
-pub fn roster(state: &State, feed: &daemon::Feed, env: Env, filter: &ProjectFilter) -> Roster {
+/// Counts describe the roster before its role tab: live runs and the pinned quick thread.
+/// Workspace sessions do not inflate a project's run count.
+pub fn roster(state: &State, feed: &daemon::Feed, _env: Env, filter: &ProjectFilter) -> Roster {
     let sources = scoped(feed, filter);
     let scoped_project = filter.resolved(feed) != ProjectFilter::All;
     let (mut sessions, mut needs, mut stale_count) = (0, 0, 0);
@@ -480,14 +367,12 @@ pub fn roster(state: &State, feed: &daemon::Feed, env: Env, filter: &ProjectFilt
         .filter(|source| !scoped_project || !source.workspace())
     {
         sessions += 1;
-        needs += usize::from(
-            source
-                .row
-                .is_some_and(|row| row.status == AgentStatus::Asking),
-        );
+        needs += usize::from(source.status() == Some(AgentStatus::Blocked));
         stale_count += usize::from(source.is_stale(feed));
     }
     let mut stats = Vec::new();
+    let one =
+        |n: usize, single: &'static str, many: &'static str| if n == 1 { single } else { many };
     for (key, icon, count, hue, hint) in [
         (
             "sessions",
@@ -496,11 +381,13 @@ pub fn roster(state: &State, feed: &daemon::Feed, env: Env, filter: &ProjectFilt
             Hue::Neutral,
             if scoped_project {
                 format!(
-                    "{sessions} task sessions work in this project scope. The workspace PM and pinned quick thread stay listed; named assistant sessions are counted below."
+                    "{sessions} {} in this project scope. The pinned quick thread stays listed.",
+                    one(sessions, "live run works", "live runs work")
                 )
             } else {
                 format!(
-                    "{sessions} roster sessions: task sessions, the workspace PM and the pinned quick thread. Named assistant sessions are counted below."
+                    "{sessions} {}: live runs and the pinned quick thread.",
+                    one(sessions, "session", "sessions")
                 )
             },
         ),
@@ -509,14 +396,20 @@ pub fn roster(state: &State, feed: &daemon::Feed, env: Env, filter: &ProjectFilt
             StatIcon::NeedsYou,
             needs,
             Hue::You,
-            format!("{needs} sessions need you"),
+            format!(
+                "{needs} {} blocked at a prompt",
+                one(needs, "session is", "sessions are")
+            ),
         ),
         (
             "stale",
             StatIcon::Stale,
             stale_count,
             Hue::Held,
-            format!("{stale_count} sessions have stale task results or last-known session facts"),
+            format!(
+                "{stale_count} {} last-known facts",
+                one(stale_count, "session shows", "sessions show")
+            ),
         ),
     ] {
         if count > 0 {
@@ -526,10 +419,7 @@ pub fn roster(state: &State, feed: &daemon::Feed, env: Env, filter: &ProjectFilt
     let mut roles = vec![
         RosterRole::All,
         RosterRole::Worker,
-        RosterRole::Gate,
         RosterRole::Reviewer,
-        RosterRole::Planner,
-        RosterRole::Pm,
         RosterRole::Assistant,
     ];
     for source in &sources {
@@ -579,8 +469,8 @@ pub fn roster(state: &State, feed: &daemon::Feed, env: Env, filter: &ProjectFilt
             super::Fill::Loading("Loading sessions…")
         } else {
             super::Fill::Empty {
-                heading: "No sessions",
-                paragraph: "Sessions appear here when they start.".into(),
+                heading: "No live runs",
+                paragraph: "A run appears here when a task is dispatched or reviewed.".into(),
             }
         }
     } else {
@@ -597,13 +487,13 @@ pub fn roster(state: &State, feed: &daemon::Feed, env: Env, filter: &ProjectFilt
         columns: [
             "State",
             "ID",
+            "Role",
             "Project",
             "Session",
             "Doing now",
-            "Activity",
-            "Last output",
-            "Since",
-            "Cost",
+            "Agent",
+            "Quiet",
+            "Started",
         ],
         fill,
         stale: (live::stale(feed, "agents") || live::stale(feed, "assistant")).then(|| {
@@ -612,12 +502,12 @@ pub fn roster(state: &State, feed: &daemon::Feed, env: Env, filter: &ProjectFilt
                 feed.synced.as_deref().unwrap_or("time unknown")
             )
         }),
-        unknown_activity: "—",
-        launch: super::controls::launch(state, feed, env),
     }
 }
 
 impl State {
+    /// The roster's keys: j/k (and the arrows) move the selection, Escape clears it, and `.`
+    /// opens the Session menu of the selected run, or of the run whose page is open.
     pub fn key_live_filtered(
         &mut self,
         key: &str,
@@ -627,6 +517,19 @@ impl State {
         _env: Env,
         filter: &ProjectFilter,
     ) -> Option<Vec<Effect>> {
+        if key == "." {
+            let session = match top {
+                Some(Live::Session(id)) => Some(id.clone()),
+                Some(_) => return None,
+                None => self.roster_session.clone(),
+            };
+            return Some(
+                session
+                    .filter(|id| session_task(id).is_some())
+                    .map(|id| vec![Effect::VerbMenu(Record::Session(id))])
+                    .unwrap_or_default(),
+            );
+        }
         if top.is_some() {
             return None;
         }
@@ -638,8 +541,7 @@ impl State {
             "k" | "up" => -1,
             _ => return None,
         };
-        let sources = scoped(feed, filter);
-        let visible: Vec<_> = sources
+        let visible: Vec<_> = scoped(feed, filter)
             .into_iter()
             .filter(|source| visible(*source, &self.roster_role))
             .collect();
@@ -649,20 +551,20 @@ impl State {
         let current = self
             .roster_session
             .as_ref()
-            .and_then(|id| visible.iter().position(|source| source.id() == id.as_str()));
+            .and_then(|id| visible.iter().position(|source| source.id == id.as_str()));
         let at = match (current, direction) {
             (Some(at), 1) => (at + 1).min(visible.len() - 1),
             (Some(at), _) => at.saturating_sub(1),
             (None, _) => 0,
         };
-        self.roster_session = Some(Id::from(visible[at].id()));
+        self.roster_session = Some(Id::from(visible[at].id));
         self.roster_tab = super::RosterPanelTab::Summary;
         Some(vec![])
     }
 }
 
 impl State {
-    /// Reply and pane controls target the roster's session without changing the route.
+    /// Reply and panel presses target the roster's session without changing the route.
     pub fn act_roster(&mut self, action: Action, feed: &daemon::Feed, env: Env) -> Vec<Effect> {
         let selection = Selection {
             session: self.roster_session.clone(),

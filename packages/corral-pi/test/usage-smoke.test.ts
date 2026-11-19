@@ -8,7 +8,7 @@ const profiles = ["worker", "reviewer"].flatMap(role => ["strict", "standard"].m
 const log = (values: unknown[]) => values.map(value => `EARLY_STATIC ${JSON.stringify(value)}`).join("\n");
 
 test("smoke admits exactly four distinct authorized arm controls, ignoring non-cohort static roles", () => {
-  const selected = smokeProfiles(log([...profiles, { role: "pm" }, { role: "planner", runnable: false }]));
+  const selected = smokeProfiles(log([...profiles, { role: "assistant" }, { role: "build" }]));
   expect(selected.map(p => `${p.role}/${p.preset}`)).toEqual([
     "worker/strict", "worker/standard", "reviewer/strict", "reviewer/standard",
   ]);

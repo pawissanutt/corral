@@ -1,27 +1,24 @@
-// The bound task's spec and status, read from `corral show --json`. Presentation only: the task record is canonical;
-// criteria shown here are the spec, never proof they passed. The page is finished rows, each at most `width` cells:
-// a chip header with the read note, the title, then the task's own body sections, the criteria, the bound run and the
-// last comments. From SPLIT_MIN columns a facts column sits beside the prose. State words come from the shared helpers.
+// The bound task's spec and status, read from `corral show --json`. Presentation only: the engine's task record is
+// canonical. The page is finished rows, each at most `width` cells: a chip header with the read note, the title, then
+// the task's own body sections and the bound run. From SPLIT_MIN columns a facts column sits beside the prose. State
+// words come from the shared helpers.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import {
-  bold, chip, chipHeader, field, glyphRows, legacyRow, sectionRule, stateBanner, stateRow, wrap, type Tone,
+  bold, chip, chipHeader, field, glyphRows, sectionRule, stateBanner, stateRow, wrap, type Tone,
 } from "./panel-parts.ts";
-import { splitRow } from "./panels-chrome.ts";
 import { pad, plainLabel, PANEL_CODE, PANEL_MUTED, PANEL_RULE, PANEL_TEXT } from "./panels-view.ts";
 import type { ReadState } from "./read-state.ts";
-import type { TaskRecord, TaskStore } from "./task-store.ts";
+import type { TaskRun, TaskStore, TaskView } from "./task-store.ts";
 
-type TaskRun = TaskRecord["runs"][number];
-
-const STATUS_GLYPH: Readonly<Record<string, string>> = { running: "●", review: "◐", done: "✓", landed: "✓", blocked: "⚠", failed: "✗", backlog: "○", ready: "○", idea: "·" };
+const STATUS_GLYPH: Readonly<Record<string, string>> = { running: "●", review: "◐", done: "✓", blocked: "⚠", dropped: "✗", backlog: "○", ready: "○", idea: "·" };
 export function statusChip(status: string): string {
   return `${STATUS_GLYPH[status] ?? "◇"} ${status.replaceAll("_", " ")}`;
 }
 /** Header facts: task ID, title and the small chips. Undefined when no task is bound. */
 export function taskHeadline(identity: HostIdentity, store: TaskStore): { readonly id: string; readonly title: string; readonly chips: readonly string[] } | undefined {
   if (!identity.task) return undefined;
-  const data = store.current;
+  const data = store.current?.task;
   if (!data) return { id: identity.task, title: store.error ? "Task unavailable" : "Reading task…", chips: [] };
   const chips = [statusChip(data.status), data.priority, data.size].filter((chip): chip is string => !!chip).map(plainLabel);
   return { id: data.id, title: plainLabel(data.title), chips: store.stale ? [...chips, "stale"] : chips };
@@ -40,9 +37,7 @@ const FACT_LABEL = 10;
 const RUN_LABEL = 8;
 /** Prose is wrapped to at most this many cells. */
 const PROSE_MAX = 100;
-/** Below this width a criterion's counts take their own row instead of the right edge. */
-const COUNTS_INLINE = 64;
-const STATUS_TONE: Readonly<Record<string, Tone>> = { done: "ok", landed: "ok", failed: "bad", blocked: "warn" };
+const STATUS_TONE: Readonly<Record<string, Tone>> = { done: "ok", blocked: "warn" };
 
 const muted = (text: string) => PANEL_MUTED + text + PANEL_TEXT;
 const clean = (text: string) => text.replaceAll("\t", "  ").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
@@ -156,38 +151,22 @@ function titleRows(id: string, title: string | undefined, width: number): string
 function runFacts(run: TaskRun, now: number): [string, string][] {
   const out: [string, string][] = [];
   const add = (label: string, value: string | null | undefined) => { if (value) out.push([label, plainLabel(value)]); };
-  add("agent", run.agent); add("state", run.agent_state); add("outcome", run.outcome);
+  add("role", run.role); add("profile", run.profile); add("model", run.model); add("outcome", run.outcome);
   add("started", when(run.started, now)); add("ended", when(run.ended, now));
   return out;
 }
 
-const counts = (steps: number | undefined, evidence: number | undefined) =>
-  [steps === undefined ? "steps unknown" : `${steps} step${steps === 1 ? "" : "s"}`, evidence === undefined ? "evidence unknown" : `${evidence} evidence`].join(" · ");
-
-/** The prose column: the body's sections, the criteria, the bound run and the last comments. */
-function proseRows(data: TaskRecord, identity: HostIdentity, width: number, now: number, wide: boolean): string[] {
+/** The prose column: the body's sections and the bound run. */
+function proseRows(data: TaskView, identity: HostIdentity, width: number, now: number, wide: boolean): string[] {
   const rows: string[] = [];
   const text = Math.min(width, PROSE_MAX);
   const open = (label: string, right: readonly string[] = []) => {
     if (rows.length) rows.push("");
     rows.push(sectionRule(label, width, right));
   };
-  const body = sections(data.body ?? "");
+  const body = sections(data.task.body);
   for (const section of body) { open(section.heading); rows.push(...bodyRows(section.lines, text)); }
   if (!body.length) { open("Summary"); rows.push(muted("○ No task description")); }
-
-  const criteria = data.criteria_progress;
-  open("Criteria · spec only, proof in F10", criteria?.length ? [`${criteria.length} · ☐ required · ◇ optional`] : []);
-  if (!criteria) rows.push(...legacyRow("criteria", "task record", text));
-  else if (!criteria.length) rows.push(...glyphRows("○ No criteria in this task's spec", text));
-  for (const c of criteria ?? []) {
-    const lead = `${c.criterion.required ? "☐" : "◇"} ${plainLabel(c.criterion.id)}  `, tally = muted(counts(c.steps?.length, c.evidence?.length));
-    if (width >= COUNTS_INLINE) {
-      const [first = "", ...rest] = hanging(lead, plainLabel(c.criterion.expected), width - visibleWidth(tally) - 2);
-      rows.push(splitRow(first, tally, width), ...rest);
-    } else rows.push(...hanging(lead, plainLabel(c.criterion.expected), width), `  ${tally}`);
-    if (plainLabel(c.criterion.scenario)) rows.push(...hanging("  ", `scenario · ${plainLabel(c.criterion.scenario)}`, width).map(muted));
-  }
 
   const bound = identity.run, found = bound ? data.runs.find(run => run.id === bound) : undefined;
   const run = found ?? data.runs.at(-1);
@@ -199,26 +178,15 @@ function proseRows(data: TaskRecord, identity: HostIdentity, width: number, now:
     const others = run ? data.runs.length - 1 : data.runs.length;
     if (others > 0) rows.push(muted(`${others} ${run === data.runs.at(-1) ? "earlier" : "other"} run${others === 1 ? "" : "s"} · Browse history in F2`));
   }
-
-  const comments = data.comments.slice(-3);
-  if (comments.length) {
-    open(`Comments · last ${comments.length} of ${data.comments.length}`);
-    comments.forEach((comment, i) => {
-      if (i) rows.push("");
-      rows.push(...hanging("", muted(`${plainLabel(comment.author)} · ${when(comment.at, now)}`), text));
-      rows.push(...prose(comment.text, 2, text));
-    });
-  }
   return rows.map(row => fit(row, width));
 }
 
 /** The facts column: every task field as a label and value, then the bound run's. */
-function factRows(data: TaskRecord, identity: HostIdentity, width: number, now: number): string[] {
-  const rows = [sectionRule("Facts", width)];
-  const since = age(data.status_since, now);
+function factRows(data: TaskView, identity: HostIdentity, width: number, now: number): string[] {
+  const rows = [sectionRule("Facts", width)], task = data.task;
   const add = (label: string, value: string | null | undefined) => rows.push(...field(label, value ?? "", width, FACT_LABEL));
-  add("status", `${data.status.replaceAll("_", " ")}${since ? ` · for ${since}` : ""}`);
-  add("kind", data.kind); add("size", data.size); add("difficulty", data.difficulty); add("priority", data.priority); add("project", data.project);
+  add("status", `${task.status.replaceAll("_", " ")}${task.blocked ? ` · ${plainLabel(task.blocked.reason)}` : ""}`);
+  add("kind", task.kind); add("size", task.size); add("priority", task.priority); add("project", task.project);
   const bound = identity.run, run = (bound ? data.runs.find(r => r.id === bound) : undefined) ?? data.runs.at(-1);
   if (run) {
     rows.push("", sectionRule("Run", width));
@@ -229,12 +197,12 @@ function factRows(data: TaskRecord, identity: HostIdentity, width: number, now: 
 }
 
 /** The status chip, then (below SPLIT_MIN) the small chips; the shared header prepends the read-state chip and adds the read note. */
-function chipRow(data: TaskRecord | undefined, state: ReadState, width: number, now: number, wide: boolean): string[] {
+function chipRow(data: TaskView | undefined, state: ReadState, width: number, now: number, wide: boolean): string[] {
   const chips: string[] = [];
   if (data) {
-    const since = age(data.status_since, now);
-    chips.push(chip(`${statusChip(data.status)}${since ? ` · ${since}` : ""}`, STATUS_TONE[data.status] ?? "none"));
-    if (!wide) for (const value of [data.kind, data.size, data.difficulty, data.priority, data.project]) if (value) chips.push(chip(value));
+    const task = data.task;
+    chips.push(chip(statusChip(task.status), STATUS_TONE[task.status] ?? "none"));
+    if (!wide) for (const value of [task.kind, task.size, task.priority, task.project]) if (value) chips.push(chip(value));
   }
   return chipHeader(chips, width, state, now);
 }
@@ -243,8 +211,7 @@ function legend(state: ReadState, width: number): string[] {
   const rows = ["", sectionRule("Reading rules", width), ...stateBanner(state, "task", width, true)];
   for (const rule of [
     "r rereads the task record; nothing on this page changes it.",
-    "Criteria are the spec: ☐ required, ◇ optional. Counts are plan steps and evidence records, never a pass; Proof (F10) holds the evidence.",
-    "Status, kind, size, difficulty, priority and project are the task's own fields. One that is missing was not recorded; it is never zero.",
+    "Status, kind, size, priority and project are the task's own fields. One that is missing was not recorded; it is never zero.",
   ]) rows.push(...wrap(rule, width).map(muted));
   return rows;
 }
@@ -265,7 +232,7 @@ export function taskLines(identity: HostIdentity, store: TaskStore, width: numbe
     return rows.map(row => fit(row, w));
   }
   const wide = w >= SPLIT_MIN;
-  rows.push(...chipRow(data, state, w, now, wide), ...titleRows(id, data && plainLabel(data.title), w), ...stateBanner(state, "task", w));
+  rows.push(...chipRow(data, state, w, now, wide), ...titleRows(id, data && plainLabel(data.task.title), w), ...stateBanner(state, "task", w));
   if (data) {
     if (wide) {
       const left = w - FACTS_WIDTH - 3, main = proseRows(data, identity, left, now, true), facts = factRows(data, identity, FACTS_WIDTH, now);

@@ -30,6 +30,7 @@ impl AppState {
                                     "Push delivery requires a browser with Service Worker support."
                                         .into(),
                             }),
+                            refusal: None,
                         },
                     );
                 });
@@ -103,26 +104,34 @@ impl AppState {
                 name,
                 result,
             } => self.attach_loaded(feed, upload, kind, name, result),
-            ClientRequest::ActSubmit(request) => {
-                self.command(feed, ACT_SUBMIT, request.cmd_id.clone(), value(request))
-                    .await
+            ClientRequest::PromptAnswer {
+                request_id,
+                request,
+            } => self.operation(feed, request_id, PROMPT_ANSWER, value(request)),
+            ClientRequest::Session {
+                request_id,
+                method,
+                params,
+            } => self.operation(feed, request_id, method, params),
+            ClientRequest::OpSubmit {
+                request_id,
+                request,
+            } => self.operation(feed, request_id, OP_SUBMIT, value(request)),
+            ClientRequest::ConfigGet { request_id } => {
+                self.operation(feed, request_id, CONFIG_GET, json!({}))
             }
-            ClientRequest::PromptAnswer(request) => {
-                self.command(feed, PROMPT_ANSWER, request.cmd_id.clone(), value(request))
-                    .await
-            }
-            ClientRequest::ActResult(request) => {
-                if self.ready {
-                    vec![out(ACT_RESULT, value(&request), Some(request.cmd_id))]
-                } else {
-                    feed.update(|feed| {
-                        if let Some(command) = feed.commands.get_mut(request.cmd_id.as_str()) {
-                            command.error = Some(offline());
-                        }
-                    });
-                    vec![]
-                }
-            }
+            ClientRequest::ConfigPut {
+                request_id,
+                request,
+            } => self.operation(feed, request_id, CONFIG_PUT, value(request)),
+            ClientRequest::PaneFocus {
+                request_id,
+                request,
+            } => self.operation(feed, request_id, PANE_FOCUS, value(request)),
+            ClientRequest::PaneKeys {
+                request_id,
+                request,
+            } => self.operation(feed, request_id, PANE_KEYS, value(request)),
             ClientRequest::Thread {
                 scope,
                 open: should_open,
@@ -242,22 +251,10 @@ impl AppState {
                     )]
                 }
             }
-            ClientRequest::ActPreview {
-                request_id,
-                request,
-            } => self.operation(feed, request_id, ACT_PREVIEW, value(request)),
-            ClientRequest::PromptPreview {
-                request_id,
-                request,
-            } => self.operation(feed, request_id, PROMPT_PREVIEW, value(request)),
             ClientRequest::AssistantWarm {
                 request_id,
                 request,
             } => self.operation(feed, request_id, ASSISTANT_WARM, value(request)),
-            ClientRequest::AssistantStop {
-                request_id,
-                request,
-            } => self.operation(feed, request_id, ASSISTANT_STOP, value(request)),
             ClientRequest::AssistantSession {
                 request_id,
                 request,
@@ -289,116 +286,11 @@ impl AppState {
                     loading: self.ready,
                     value: None,
                     error: (!self.ready).then(|| offline()),
+                    refusal: None,
                 },
             );
         });
         if self.ready {
-            vec![out(method, params, Some(id))]
-        } else {
-            vec![]
-        }
-    }
-    async fn command(
-        &mut self,
-        feed: Signal<Feed>,
-        method: &'static str,
-        id: String,
-        params: Value,
-    ) -> Vec<Outgoing> {
-        trim_commands(feed);
-        let prior = feed.with_untracked(|feed| feed.commands.get(id.as_str()).cloned());
-        if let Some(prior) = prior {
-            let previous = prior
-                .request
-                .get("_request_digest")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .unwrap_or_else(|| request_digest(&prior.method, &prior.request));
-            if previous != request_digest(method, &params) || prior.method != method {
-                feed.update(|feed| {
-                    feed.problem =
-                        Some("Command identity already belongs to different input.".into())
-                });
-                return vec![];
-            }
-            let retry_refused = prior.status == CommandStatus::Refused
-                && prior.error.as_ref().is_some_and(|error| {
-                    matches!(
-                        error.code.as_str(),
-                        "offline" | "local_storage" | "confirm_required"
-                    )
-                });
-            if !retry_refused {
-                return if self.ready
-                    && prior.result.is_none()
-                    && matches!(
-                        prior.status,
-                        CommandStatus::Pending | CommandStatus::Running | CommandStatus::Unknown
-                    ) {
-                    vec![recover(&id)]
-                } else {
-                    vec![]
-                };
-            }
-        }
-        let mut state = feed.with_untracked(|feed| {
-            command_state(feed, method, params.clone(), CommandStatus::Pending)
-        });
-        if !self.ready {
-            state.status = CommandStatus::Refused;
-            state.error = Some(offline());
-        } else if let Err(problem) = super::super::core::preflight_request(method, &params) {
-            state.status = CommandStatus::Refused;
-            state.error = Some(ClientError {
-                code: "local_admission".into(),
-                message: problem,
-            });
-        } else {
-            // Persist only recovery identity, never arbitrary command bodies or credentials.
-            let safe = json!({"_request_digest": request_digest(method, &params)});
-            let result = match self.outbox.as_mut() {
-                Some(outbox) => outbox.update_checked(|saved| {
-                            if let Some(prior) = saved.commands.get(&id) {
-                                if prior.method != method || prior.params != safe {
-                                    return Err("Command identity already belongs to different input.".into());
-                                }
-                                if prior.result.is_some() {
-                                    return Err("This command already has a recorded outcome; recover that outcome instead.".into());
-                                }
-                            }
-                            if saved.commands.len() >= 256 && !saved.commands.contains_key(&id) {
-                                let evict = saved
-                                    .commands
-                                    .iter()
-                                    .find(|(_, command)| command.is_settled())
-                                    .map(|(id, _)| id.clone());
-                                if let Some(evict) = evict {
-                                    saved.commands.remove(&evict);
-                                }
-                            }
-                            saved.commands.insert(
-                                id.clone(),
-                                outbox::Command {
-                                    method: method.into(),
-                                    params: safe.clone(),
-                                    result: None,
-                                    error: None,
-                                },
-                            );
-                            Ok(())
-                }).await,
-                None => Err("Device recovery storage unavailable.".to_owned()),
-            };
-            if let Err(problem) = result {
-                state.status = CommandStatus::Refused;
-                state.error = Some(local_error(problem));
-            }
-        }
-        let send = state.status == CommandStatus::Pending;
-        feed.update(|feed| {
-            feed.commands.insert(Id::from(&id), state);
-        });
-        if send {
             vec![out(method, params, Some(id))]
         } else {
             vec![]

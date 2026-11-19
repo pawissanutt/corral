@@ -13,14 +13,6 @@ impl AppState {
         request: ClientRequest,
     ) -> Result<Vec<Outgoing>, Box<ClientRequest>> {
         let (id, method, params) = match request {
-            ClientRequest::DeviceAuthorityPreview {
-                request_id,
-                request,
-            } => (request_id, DEVICE_AUTHORITY_PREVIEW, value(request)),
-            ClientRequest::DeviceSetAuthority {
-                request_id,
-                request,
-            } => (request_id, DEVICE_SET_AUTHORITY, value(request)),
             ClientRequest::DeviceRevoke {
                 request_id,
                 request,

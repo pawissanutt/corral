@@ -148,7 +148,7 @@ fn outline_row(
         Form::Desktop | Form::Phone => two_lines(app, row, base),
     };
     let drawn = hint_on(app, drawn, row.hint.clone()).into_element();
-    let drawn = with_menu(app, Record::Review(Id::new(&row.id)), drawn);
+    let drawn = with_menu(app, Record::Task(Id::new(&row.id)), drawn);
     if selected {
         revealing(Id::new(&row.id), revealed, drawn)
     } else {
@@ -277,14 +277,30 @@ fn terminal_row(row: &OutlineRow, base: View, room: Signal<f32>) -> View {
             .child(term::space(1.0))
             .child(words.number_of_lines(1u32))
     };
-    base.items_center()
+    let handle = element_ref();
+    let focused = term::focus_of(handle);
+    let selected = row.selected;
+    base.element_ref(&handle)
+        .items_center()
         .h(term::rows(1.0))
         .child(
             view()
                 .w(term::cells(1.0))
                 .flex_shrink_0()
                 .accessibility_elements_hidden(true)
-                .child(text(if row.selected { "▌" } else { " " }).text_color(color(Token::Ink))),
+                .child(
+                    text(move || {
+                        if focused.get() {
+                            term::FOCUS_MARK
+                        } else if selected {
+                            "▌"
+                        } else {
+                            " "
+                        }
+                    })
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(color(Token::Ink)),
+                ),
         )
         .child(
             view()

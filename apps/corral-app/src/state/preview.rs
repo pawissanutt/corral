@@ -1,5 +1,6 @@
 //! The synthetic feed is a local driver, never a transport fallback. The real connection keeps
 //! its own signal, so replies arriving after a source change cannot overwrite sample records.
+//! Each tick of the real clock also moves the sample's running pi turns on by one beat.
 
 use nsh_core::prelude::*;
 
@@ -32,6 +33,7 @@ impl AppState {
                             feed.date = date;
                             feed.clock = clock;
                             feed.time_zone = zone;
+                            preview::tick(feed);
                         })
                     });
                 }
@@ -39,9 +41,14 @@ impl AppState {
         });
     }
 
-    pub(super) fn preview_detail(&self, target: corral_protocol::detail::DetailRef) {
+    /// Serves `target` from the sample, a walked list up to the page `page` asks for.
+    pub(super) fn preview_detail(
+        &self,
+        target: corral_protocol::detail::DetailRef,
+        page: Option<&str>,
+    ) {
         self.feed.update(|feed| {
-            if let Err(message) = preview::detail(feed, &target) {
+            if let Err(message) = preview::detail(feed, &target, page) {
                 feed.details.insert(
                     crate::model::daemon::detail_key(&target),
                     crate::model::daemon::DetailCache {
@@ -50,22 +57,21 @@ impl AppState {
                         merged: None,
                         loading: false,
                         stale: false,
-                        error: Some(crate::model::daemon::ClientError {
-                            code: "preview_missing".into(),
-                            message,
-                        }),
+                        error: Some(preview::failure(message)),
                     },
                 );
             }
         });
     }
 
+    /// The sample engine records the outcome under the operation's key, as the client does.
     pub(super) fn simulate(&self, act: &Act) {
         let mut outcome = Ok(());
         self.feed.update(|feed| outcome = preview::act(feed, act));
-        match outcome {
-            Ok(()) => {}
-            Err(why) => self.toast(format!("Preview · {} · {why}", act.title)),
+        if let Err(why) = outcome {
+            self.watching
+                .update(|watching| _ = watching.remove(&act.key));
+            self.toast(format!("Preview · {} · {why}", act.title));
         }
     }
 
@@ -73,31 +79,7 @@ impl AppState {
         match effect {
             Effect::Act(act) => self.dispatch(act),
             Effect::Detail(get) => {
-                self.preview_detail(get.target);
-            }
-            Effect::Recover(key) => {
-                let status = self.act_status(&key);
-                self.toast(
-                    status
-                        .map(|status| status.line())
-                        .unwrap_or_else(|| "Preview · no local command with this identity".into()),
-                );
-            }
-            Effect::Stop(stop) => {
-                let key = crate::model::Id::from(crate::client::requests::new_id());
-                self.assistant.update(|state| {
-                    state
-                        .live
-                        .stop_ops
-                        .insert(key.clone(), (stop.session.clone(), stop.turn));
-                });
-                let mut outcome = Ok(());
-                self.feed.update(|feed| {
-                    outcome = preview::operation(feed, &key, &Effect::Stop(stop));
-                });
-                if let Err(why) = outcome {
-                    self.toast(format!("Preview · {why}"));
-                }
+                self.preview_detail(get.target, get.page.as_deref());
             }
             other => {
                 if let Effect::Session { key, .. } = &other {

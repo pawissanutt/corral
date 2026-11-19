@@ -1,53 +1,23 @@
-//! Settings › General in every data state: this device's own preferences first (theme, the
-//! sidebar on desktop and terminal, and where its data comes from), which need no connection;
-//! then the workspace as the served feed reports it, or what waits for a connection.
+//! Settings › General in every data state: this device's own preferences (theme, the sidebar on
+//! desktop and terminal, and where its data comes from), which need no connection. The daemon's
+//! facts live in This daemon.
 
 use nsh_core::prelude::*;
 
-use super::live_sections::{facts, snapshot_parts};
-use super::parts::{button_row, cell, first_heading, frame, space};
-use crate::model::settings::{connect, live};
-use crate::model::{Destination, Form};
+use super::parts::{button_row, cell, first_heading, frame};
+use crate::model::Form;
+use crate::model::settings::connect;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with, seg};
-use crate::ui::kit::text::h3;
 use crate::ui::term;
 use crate::ui::tokens::Token;
 
 pub fn page(app: AppState) -> AnyElement {
-    let workspace = if untracked(|| app.daemon()) {
-        snapshot_parts(app, |app, settings, _| {
-            let rows = app
-                .feed
-                .with_untracked(|feed| live::general_facts(feed, settings));
-            vec![
-                facts(app, rows),
-                space(app, 10.0),
-                cell(
-                    app,
-                    format!(
-                        "Workspace settings change from an administrator device; changes made here are recorded with {}.",
-                        app.via()
-                    ),
-                    Token::Ink3,
-                    false,
-                )
-                .into_element(),
-            ]
-        })
-    } else {
-        crate::screens::unavailable_body(app, Destination::Settings)
-    };
     frame(
         app,
         "General",
         12.0,
-        vec![
-            first_heading(app, "This device", None),
-            local(app),
-            h3(app, "Workspace", None),
-            workspace,
-        ],
+        vec![first_heading(app, "This device", None), local(app)],
     )
 }
 

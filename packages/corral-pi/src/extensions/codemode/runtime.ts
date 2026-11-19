@@ -1,12 +1,13 @@
 // Code Mode on the Corral-owned persistent kernel (T-683). Tool execution and model-facing
-// reports retain their authority and receipt contracts; bounded runtime records also feed live rows.
+// reports use Pi's ordinary tool results; bounded runtime records also feed live rows.
 import type { AgentToolCallOutcome } from "@earendil-works/pi-agent-core";
+import type { JsonValue } from "@earendil-works/pi-ai";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 
 import { type CodeChild, childKey, runChild } from "./child.ts";
 import { type CellResult, CodeKernel, type CodeKernelOptions, KernelError, type KernelEvent, type ToolRequest } from "./kernel.ts";
 import { clipUtf8 } from "./kernel-protocol.ts";
-import { type CellReport, type ChildOutcome, classify, contentText, counts, noticeText } from "./report.ts";
+import { type CellReport, type ChildOutcome, classify, contentText, noticeText } from "./report.ts";
 
 export const CODE_CALL_ENTRY = "corral_code_call";
 export const CODE_CELL_ENTRY = "corral_code_cell";
@@ -34,7 +35,6 @@ const clock: CodeClock = {
 };
 
 export interface CodeHost {
-  readonly generation: number;
   emit(kind: string, data: Record<string, unknown>): void;
   /** Defaults to corral_code_call; cell settlements use a separate, recovery-neutral entry type. */
   journal(data: Record<string, unknown>, customType?: string): void;
@@ -47,11 +47,11 @@ export interface CodeHost {
 
 export type Executor = Pick<ExtensionToolContext, "executeTool">;
 type CallCounts = { -readonly [K in keyof CellReport["calls"]]: CellReport["calls"][K] };
+const emptyCounts = (): CallCounts => ({ total: 0, ok: 0, failed: 0, running: 0 });
 
 interface Cell {
   readonly id: string;
   readonly parent: string;
-  readonly epoch: number;
   readonly ctx: Executor;
   readonly children: ChildOutcome[];
   readonly omitted: Record<string, number>;
@@ -103,21 +103,18 @@ function argumentsFor(input: unknown, room: number): Pick<ChildOutcome, "args" |
   return { argsBytes, ...(Buffer.byteLength(args) <= room ? { args } : {}) };
 }
 
-/** A row gets receipt state and scalar result data, never a large receipt or nested payload. */
-function receiptPreview(value: unknown): unknown {
-  if (!record(value) || typeof value.state !== "string") return undefined;
-  const preview: Record<string, unknown> = { state: short(value.state) };
-  if (scalar(value.result)) preview.result = short(value.result);
-  else if (record(value.result)) {
-    const result: Record<string, unknown> = {};
-    preview.result = result;
-    for (const [key, field] of Object.entries(value.result)) {
-      if (!scalar(field)) continue;
-      result[key] = short(field);
-      if (Buffer.byteLength(JSON.stringify(preview)) > ARGS_LIMIT) delete result[key];
-    }
+/** Keep the whole result if it fits; otherwise retain bounded scalar fields for the row. */
+function structuredPreview(value: JsonValue | undefined): unknown {
+  if (value === undefined) return;
+  if (Buffer.byteLength(JSON.stringify(value)) <= ARGS_LIMIT) return value;
+  if (typeof value === "string") return short(value);
+  if (!record(value)) return;
+  const preview: Record<string, unknown> = Object.create(null);
+  for (const [key, field] of Object.entries(value)) {
+    if (!scalar(field)) continue;
+    preview[key] = short(field);
+    if (Buffer.byteLength(JSON.stringify(preview)) > ARGS_LIMIT) delete preview[key];
   }
-  if (Buffer.byteLength(JSON.stringify(preview)) > ARGS_LIMIT) delete preview.result;
   return preview;
 }
 
@@ -130,13 +127,12 @@ function historicalReport(value: unknown): { parent: string; report: CellReport 
     || typeof report.startedAt !== "number" || typeof report.durationMs !== "number"
     || typeof report.stateLost !== "boolean" || typeof report.truncated !== "boolean"
     || !Array.isArray(report.children) || !Array.isArray(report.failures) || !record(calls)
-    || !["total", "ok", "failed", "running", "committed"].every(key => typeof calls[key] === "number")) return;
+    || !["total", "ok", "failed", "running"].every(key => typeof calls[key] === "number")) return;
   return { parent: value.tool_call_id, report: { ...report, outputs: [] } as unknown as CellReport };
 }
 
 export class CodeRuntime {
   private kernel: CodeKernel | undefined;
-  private epoch = 1;
   private sequence = 0;
   private closed = false;
   private deferred: Cell[] | undefined;
@@ -176,10 +172,10 @@ export class CodeRuntime {
       reconciled.add(key);
       const child: ChildOutcome = { ...existing, tool: entry.tool, call: entry.parent.call, key,
         startedAt: existing?.startedAt ?? report.startedAt, durationMs: entry.duration_ms, late: true, ok: entry.ok,
-        ...(typeof entry.effect === "string" ? { effect: entry.effect } : {}),
+        ...(entry.effect === "not_started" || entry.effect === "unknown" ? { effect: entry.effect } : {}),
         ...(typeof entry.code === "string" ? { code: entry.code } : {}),
         ...(typeof entry.message === "string" ? { message: entry.message } : {}),
-        ...(typeof entry.request_id === "string" ? { request_id: entry.request_id } : {}),
+        ...(entry.structured === undefined ? {} : { structured: entry.structured }),
         ...(typeof entry.result_lines === "number" ? { resultLines: entry.result_lines } : {}),
         ...(typeof entry.result_bytes === "number" ? { resultBytes: entry.result_bytes } : {}),
       };
@@ -188,7 +184,7 @@ export class CodeRuntime {
         .sort((a, b) => Number(a.call.split(".").at(-1)) - Number(b.call.split(".").at(-1)));
       this.finished.set(entry.parent.tool_call_id, { ...report, children, failures, calls: {
         ...report.calls, running: report.calls.running - 1, ok: report.calls.ok + Number(entry.ok),
-        failed: report.calls.failed + Number(!entry.ok), committed: report.calls.committed + Number(entry.effect === "committed"),
+        failed: report.calls.failed + Number(!entry.ok),
       } });
     }
   }
@@ -256,7 +252,7 @@ export class CodeRuntime {
 
   private current(): CodeKernel {
     this.kernel ??= new CodeKernel({
-      session: `g${this.host.generation}-e${this.epoch}`, tools: (request) => this.call(request),
+      session: "codemode", tools: (request) => this.call(request),
       onEvent: (event) => this.observe(event), ...this.host.kernel,
     });
     return this.kernel;
@@ -272,14 +268,14 @@ export class CodeRuntime {
       result = this.current().submit(code, { cell: id }).result;
     } catch (error) {
       if (!(error instanceof KernelError)) throw error;
-      const report: CellReport = { cell: id, status: "error", stateLost: false, truncated: false, outputs: [], calls: counts([]), failures: [],
+      const report: CellReport = { cell: id, status: "error", stateLost: false, truncated: false, outputs: [], calls: emptyCounts(), failures: [],
         children: [], startedAt, durationMs: Math.max(0, this.clock.now() - startedAt),
         error: { name: error.name, message: error.message, code: error.code } };
       this.remember(parent, report);
       this.changed(parent, true);
       return report;
     }
-    const cell: Cell = { id, parent, epoch: this.epoch, ctx, children: [], omitted: {}, failures: [], calls: counts([]), result,
+    const cell: Cell = { id, parent, ctx, children: [], omitted: {}, failures: [], calls: emptyCounts(), result,
       startedAt, argsBytes: 0, detached: false, reported: false, terminate: false };
     this.cells.set(id, cell);
     this.parents.set(parent, cell);
@@ -315,7 +311,7 @@ export class CodeRuntime {
 
   async cancel(id: string): Promise<CellReport> {
     const cell = this.cells.get(id);
-    if (!cell) return { cell: id, status: "not_found", stateLost: false, truncated: false, outputs: [], calls: counts([]), failures: [],
+    if (!cell) return { cell: id, status: "not_found", stateLost: false, truncated: false, outputs: [], calls: emptyCounts(), failures: [],
       children: [], startedAt: this.clock.now() };
     cell.reported = true;
     this.kernel?.cancel(id);
@@ -331,7 +327,6 @@ export class CodeRuntime {
   }
 
   async rebind(): Promise<void> {
-    this.epoch++;
     this.releaseWatchers();
     this.deferred ??= [];
     const kernel = this.kernel;
@@ -347,7 +342,6 @@ export class CodeRuntime {
 
   async close(): Promise<void> {
     this.closed = true;
-    this.epoch++;
     this.releaseWatchers();
     const kernel = this.kernel;
     this.kernel = undefined;
@@ -362,7 +356,7 @@ export class CodeRuntime {
 
   state(): Record<string, unknown> {
     return {
-      epoch: this.epoch, closed: this.closed, kernel: this.kernel?.status() ?? null,
+      closed: this.closed, kernel: this.kernel?.status() ?? null,
       cells: [...this.cells.values()].map((cell) => ({ cell: cell.id, parent: cell.parent, detached: cell.detached })),
     };
   }
@@ -376,12 +370,12 @@ export class CodeRuntime {
     this.remember(cell.parent, report);
     if (cell.detached) this.host.journal({ phase: "settled", tool_call_id: cell.parent, cell: cell.id,
       status: result.status, duration_ms: cell.durationMs, counts: { ...cell.calls },
-      report: { cell: report.cell, status: report.status, generation: report.generation, error: report.error,
+      report: { cell: report.cell, status: report.status, error: report.error,
         calls: report.calls, failures: report.failures, children: report.children, childrenOmitted: report.childrenOmitted,
         startedAt: report.startedAt, durationMs: report.durationMs, stateLost: report.stateLost, truncated: report.truncated },
     }, CODE_CELL_ENTRY);
     this.changed(cell.parent, true);
-    this.host.emit("code_cell", { cell: cell.id, phase: "settled", status: result.status, generation: result.generation,
+    this.host.emit("code_cell", { cell: cell.id, phase: "settled", status: result.status,
       state_lost: result.stateLost, detached: cell.detached });
     if (!cell.detached || cell.reported) return;
     cell.reported = true;
@@ -395,7 +389,7 @@ export class CodeRuntime {
   }
 
   private async deliver(cell: Cell): Promise<void> {
-    const key = `code:g${this.host.generation}:${cell.id}`;
+    const key = `code:${cell.parent}:${cell.id}`;
     if (this.closed) {
       this.host.emit("code_cell_unreported", { cell: cell.id, key, reason: "closed" });
       return;
@@ -407,9 +401,9 @@ export class CodeRuntime {
 
   private observe(event: KernelEvent): void {
     if (event.kind === "kernel_started") {
-      this.host.emit("code_kernel_started", { module: event.module, generation: event.generation });
+      this.host.emit("code_kernel_started", { module: event.module });
     } else if (event.kind === "state_lost") {
-      this.host.emit("code_state_lost", { reason: event.reason, generation: event.generation, cells: event.cells });
+      this.host.emit("code_state_lost", { reason: event.reason, cells: event.cells });
     } else if (event.kind === "call_discarded") {
       this.host.emit("code_call_discarded", { cell: event.cell, call: event.call, tool: event.tool });
     }
@@ -417,7 +411,7 @@ export class CodeRuntime {
 
   private async call(request: ToolRequest): Promise<unknown> {
     const cell = this.cells.get(request.cell);
-    if (!cell || cell.epoch !== this.epoch || this.closed || request.signal.aborted) {
+    if (!cell || this.closed || request.signal.aborted) {
       this.host.emit("code_call", { cell: request.cell, call: request.call, tool: request.tool, phase: "refused", reason: "stale_binding" });
       throw new CodeCallError("stale_binding", "the cell's binding was replaced or settled; nothing ran");
     }
@@ -437,8 +431,8 @@ export class CodeRuntime {
       const settled = phase === "settled" ? { ok: outcome.ok === true, effect: outcome.effect ?? null,
         duration_ms: outcome.durationMs, ...(outcome.ok ? {} : { code: outcome.code, message: clipUtf8(outcome.message ?? "", 300) }),
         ...(outcome.resultLines === undefined ? {} : { result_lines: outcome.resultLines, result_bytes: outcome.resultBytes }),
-        ...(outcome.request_id ? { request_id: outcome.request_id } : {}) } : {};
-      this.host.journal({ phase, tool: request.tool, generation: this.host.generation, kernel: request.generation, parent, ...settled });
+        ...(outcome.structured === undefined ? {} : { structured: outcome.structured }) } : {};
+      this.host.journal({ phase, tool: request.tool, parent, ...settled });
       this.host.emit("code_call", { cell: cell.id, call: request.call, key: child.key, tool: request.tool, phase, ...settled });
     };
     const complete = () => {
@@ -453,7 +447,6 @@ export class CodeRuntime {
         if (index < 0) cell.failures.push(outcome);
         else cell.failures.splice(index, 0, outcome);
       }
-      if (outcome.effect === "committed") cell.calls.committed++;
       recordCall("settled");
       this.changed(cell.parent);
     };
@@ -475,9 +468,9 @@ export class CodeRuntime {
       complete();
       throw new CodeCallError("tool_error", outcome.message ?? "");
     }
-    Object.assign(outcome, classify(child, result));
     outcome.id = result.toolCall.id;
     const resultText = contentText(result.result.content);
+    const structured = result.result.structuredContent;
     if (result.result.content.some(part => part.type === "text")) {
       outcome.resultBytes = Buffer.byteLength(resultText);
       outcome.resultLines = resultText.length === 0 ? 0 : 1;
@@ -486,13 +479,14 @@ export class CodeRuntime {
       }
     }
     if (retained) {
-      outcome.preview = clipUtf8(resultText.split("\n", 12).join("\n"), 1024);
-      outcome.structured = receiptPreview(result.result.structuredContent);
+      outcome.structured = structuredPreview(structured);
+      const previewText = resultText || (outcome.structured === undefined ? "" : JSON.stringify(outcome.structured));
+      outcome.preview = clipUtf8(previewText.split("\n", 12).join("\n"), 1024);
     }
+    Object.assign(outcome, classify(child, result, resultText || outcome.preview || ""));
     if (outcome.ok && result.result.terminate === true) cell.terminate = true;
     complete();
-    // Structured refusals still resolve, and unstructured failures still reject, unchanged.
-    const structured = result.result.structuredContent;
+    // The script receives the full structured result, not the bounded journal preview.
     if (structured !== undefined && child.denied === undefined) return structured;
     if (!outcome.ok) throw new CodeCallError(outcome.code ?? "tool_error", outcome.message ?? "");
     return resultText;
@@ -500,7 +494,7 @@ export class CodeRuntime {
 
   private report(cell: Cell, result: CellResult | undefined, waitMs?: number): CellReport {
     return {
-      cell: cell.id, status: result?.status ?? (cell.detached ? "detached" : "running"), ...(result ? { generation: result.generation } : {}),
+      cell: cell.id, status: result?.status ?? (cell.detached ? "detached" : "running"),
       startedAt: cell.startedAt, ...(cell.durationMs === undefined ? {} : { durationMs: cell.durationMs }),
       stateLost: result?.stateLost ?? false, truncated: result?.truncated ?? false,
       ...(result?.value === undefined ? {} : { value: result.value }), ...(result?.error ? { error: result.error } : {}),

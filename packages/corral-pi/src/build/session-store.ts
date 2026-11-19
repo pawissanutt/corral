@@ -2,7 +2,8 @@ import { randomBytes, randomInt } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { BuildLaunch, BuildSessionRecord } from "./types.ts";
-import { parseBuildProfileRoute } from "./profiles.ts";
+import { isProviderId } from "../auth/providers.ts";
+import { resolveConnection } from "../auth/connections.ts";
 
 export function sessionDir(dataRoot: string, id: string): string {
   if (!/^B-[a-z0-9]+$/.test(id)) throw new Error("Invalid build session id");
@@ -13,10 +14,9 @@ export function createSession(launch: BuildLaunch, worktree: Pick<BuildSessionRe
   const now = new Date();
   const suffix = now.getTime().toString(36) + randomInt(36 * 36).toString(36).padStart(2, "0");
   const name = launch.name?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || suffix;
-  return { version: 1, id: launch.paid?.session ?? `B-${suffix}`, name, created: now.toISOString(), updated: now.toISOString(),
+  return { version: 1, id: `B-${suffix}`, name, created: now.toISOString(), updated: now.toISOString(),
     repoRoot: launch.repoRoot, ...worktree, here: launch.here, ...(launch.bare ? { bare: true } : {}),
-    ...(launch.route ? { route: launch.route } : {}),
-    ...(launch.paid?.mixed ? { mixedPaid: true } : {}),
+    route: { provider: launch.provider, model: launch.model, effort: launch.effort, connection: launch.connection, aws: launch.aws },
     ...(launch.project ? { project: launch.project } : {}), ...(launch.workspaceRoot ? { workspaceRoot: launch.workspaceRoot } : {}) };
 }
 
@@ -29,12 +29,14 @@ export function loadSession(dataRoot: string, id: string): BuildSessionRecord {
     || !(record.branch === null || typeof record.branch === "string") || !(record.base === null || typeof record.base === "string")
     || [record.workspaceRoot, record.sessionFile].some(value => value !== undefined && (typeof value !== "string" || !isAbsolute(value)))
     || (record.bare !== undefined && typeof record.bare !== "boolean")
-    || (record.mixedPaid !== undefined && record.mixedPaid !== true)
     || (record.repository !== undefined && typeof record.repository !== "boolean")
     || (record.baseBranch !== undefined && record.baseBranch !== null && typeof record.baseBranch !== "string")
     || (record.bare === true && (record.workspaceRoot !== undefined || record.project !== undefined))
     || (record.project !== undefined && typeof record.project !== "string")) throw new Error(`Invalid build session record: ${id}`);
-  if (record.route) parseBuildProfileRoute(record.route);
+  if (record.route) {
+    if (!isProviderId(record.route.provider) || typeof record.route.model !== "string") throw new Error(`Invalid Build model route: ${id}`);
+    resolveConnection(record.route.provider, record.route.connection);
+  }
   return record;
 }
 
@@ -52,9 +54,17 @@ export function saveSession(dataRoot: string, record: BuildSessionRecord): void 
   const dir = sessionDir(dataRoot, record.id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
+  const path = join(dir, "session.json");
+  let socketState = {};
+  try {
+    const { role, pid, paused, held_input } = JSON.parse(readFileSync(path, "utf8"));
+    if (role === "build") socketState = { role, pid, paused, held_input };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   const temporary = join(dir, `.session-${randomBytes(12).toString("hex")}.tmp`);
   try {
-    writeFileSync(temporary, `${JSON.stringify(record)}\n`, { flag: "wx", mode: 0o600 });
-    renameSync(temporary, join(dir, "session.json"));
+    writeFileSync(temporary, `${JSON.stringify({ ...record, ...socketState })}\n`, { flag: "wx", mode: 0o600 });
+    renameSync(temporary, path);
   } finally { rmSync(temporary, { force: true }); }
 }

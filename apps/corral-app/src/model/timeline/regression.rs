@@ -1,9 +1,26 @@
 use super::*;
 use crate::model::timeline::{BurnupScope, burnup_request};
-use corral_protocol::detail::{TimelineLane, TimelineSegment};
+use std::path::PathBuf;
 
 fn second(at: &str) -> u64 {
     at.parse::<Timestamp>().unwrap().as_second() as u64
+}
+
+fn at(at: &str) -> Timestamp {
+    at.parse().unwrap()
+}
+
+fn event(seq: u64, ts: &str, task: &str, kind: EventKind, actor: Actor) -> Event {
+    Event {
+        seq,
+        ts: at(ts),
+        task: Some(task.into()),
+        run: None,
+        project: None,
+        kind,
+        actor,
+        detail: serde_json::Value::Null,
+    }
 }
 
 #[test]
@@ -45,15 +62,6 @@ fn scope_selection_requests_the_selected_daemon_burnup() {
         );
     }
     state.set_grouping(Grouping::ByAgent);
-    let env = crate::model::effect::Env {
-        conn: crate::model::effect::Conn::Healthy,
-        form: crate::model::nav::Form::Phone,
-    };
-    assert!(
-        crate::model::timeline::head(&state, env, true)
-            .grouping
-            .is_some()
-    );
     let window = window(Range::Today, second("2026-11-15T12:00:00Z"), &TimeZone::UTC).unwrap();
     assert!(matches!(
         request(&state, &window),
@@ -64,33 +72,250 @@ fn scope_selection_requests_the_selected_daemon_burnup() {
     ));
 }
 
+/// Runs and events become spans: a block waits until the task's next move, an open run is idle
+/// from when its output went quiet, and the owner's moves are on their own lane.
 #[test]
-fn timeline_titles_and_waits_belong_to_the_lane_and_partial_reads_are_disclosed() {
+fn runs_and_events_draw_spans_waits_and_idle_on_the_task_lane() {
     let feed = Feed {
         now: second("2026-11-15T12:00:00Z"),
         time_zone: Some(TimeZone::UTC),
         ..Feed::default()
     };
     let window = window(Range::Today, feed.now, &TimeZone::UTC).unwrap();
-    let page = TimelinePage {
-        lanes: vec![TimelineLane {
-            id: "T-1".into(),
-            title: "T-1 · A title".into(),
-            segments: vec![TimelineSegment {
-                kind: TimelineKind::Ask,
-                from: Some("2026-11-15T09:00:00Z".into()),
-                to: None,
-                note: None,
-            }],
-        }],
-        owner_actions: vec![],
-        pm: vec![],
-        last_visit: None,
-        completeness: Default::default(),
+    let run = Run {
+        id: "R1".into(),
+        task: "T-1".into(),
+        role: Role::Worker,
+        profile: "pi".into(),
+        harness: "pi".into(),
+        model: None,
+        effort: None,
+        worktree: PathBuf::new(),
+        branch: String::new(),
+        base: String::new(),
+        base_sha: String::new(),
+        session: None,
+        started: at("2026-11-15T09:00:00Z"),
+        ended: None,
+        outcome: None,
+        summary: None,
+        head_sha: None,
+        quiet_since: Some(at("2026-11-15T10:30:00Z")),
     };
-    let plot = plot(&page, &window, &feed);
-    assert_eq!(plot.lanes[0].title, "A title");
-    assert!(plot.lanes[0].wait.is_some());
-    assert!(plot.lanes[0].segments[0].note.is_none());
-    assert!(plot.completeness.is_some());
+    let page = TimelinePage {
+        runs: vec![run],
+        events: vec![
+            event(
+                1,
+                "2026-11-15T08:00:00Z",
+                "T-1",
+                EventKind::Blocked,
+                Actor::Auto,
+            ),
+            event(
+                2,
+                "2026-11-15T08:20:00Z",
+                "T-1",
+                EventKind::Commented,
+                Actor::Owner,
+            ),
+            event(
+                3,
+                "2026-11-15T08:45:00Z",
+                "T-1",
+                EventKind::Resumed,
+                Actor::Owner,
+            ),
+        ],
+    };
+    let plot = plot(&page, &window, Grouping::ByTask, &feed);
+    let lane = &plot.lanes[0];
+    let kinds: Vec<(Kind, i64, i64)> = lane
+        .segments
+        .iter()
+        .map(|s| (s.kind, s.start, s.end))
+        .collect();
+    assert!(kinds.contains(&(Kind::Ask, 8 * 60, 8 * 60 + 45)));
+    assert!(kinds.contains(&(Kind::Run, 9 * 60, 10 * 60 + 30)));
+    assert!(kinds.contains(&(Kind::Idle, 10 * 60 + 30, 12 * 60)));
+    assert_eq!(plot.owner.len(), 2);
+    assert_eq!(plot.auto.len(), 1);
+    let gaps = gaps(&plot, &window, &feed);
+    assert_eq!(gaps.len(), 1);
+    assert_eq!(gaps[0].kind, Kind::Idle);
+}
+
+/// A drop and a reopen are drawn on their task's lane; a task lane opens its task, a live run's
+/// lane its session terminal, and an ended run's lane its task.
+#[test]
+fn drops_and_reopens_are_drawn_and_each_lane_opens_its_task_or_live_session() {
+    let mut feed = Feed {
+        now: second("2026-11-15T12:00:00Z"),
+        time_zone: Some(TimeZone::UTC),
+        ..Feed::default()
+    };
+    let window = window(Range::Today, feed.now, &TimeZone::UTC).unwrap();
+    let run = |task: &str| Run {
+        id: "R1".into(),
+        task: task.into(),
+        role: Role::Worker,
+        profile: "pi".into(),
+        harness: "pi".into(),
+        model: None,
+        effort: None,
+        worktree: PathBuf::new(),
+        branch: String::new(),
+        base: String::new(),
+        base_sha: String::new(),
+        session: None,
+        started: at("2026-11-15T09:00:00Z"),
+        ended: None,
+        outcome: None,
+        summary: None,
+        head_sha: None,
+        quiet_since: None,
+    };
+    feed.agents.insert(
+        "T-1_R1".into(),
+        corral_protocol::rows::AgentRow {
+            run: run("T-1"),
+            status: corral_types::SessionStatus::Working,
+            paused: None,
+        },
+    );
+    let page = TimelinePage {
+        runs: vec![run("T-1"), run("T-2")],
+        events: vec![
+            event(
+                1,
+                "2026-11-15T10:00:00Z",
+                "T-2",
+                EventKind::Dropped,
+                Actor::Owner,
+            ),
+            event(
+                2,
+                "2026-11-15T11:00:00Z",
+                "T-2",
+                EventKind::Reopened,
+                Actor::Owner,
+            ),
+        ],
+    };
+    let by_task = plot(&page, &window, Grouping::ByTask, &feed);
+    let dropped = by_task.lanes.iter().find(|lane| lane.id == "T-2").unwrap();
+    let instants: Vec<(Kind, i64)> = dropped
+        .segments
+        .iter()
+        .filter(|s| s.start == s.end)
+        .map(|s| (s.kind, s.start))
+        .collect();
+    assert_eq!(instants, [(Kind::Drop, 10 * 60), (Kind::Reopen, 11 * 60)]);
+    assert_eq!(dropped.opens.live, Live::Task("T-2".into()));
+    let by_run = plot(&page, &window, Grouping::ByAgent, &feed);
+    let opens = |id: &str| {
+        let lane = by_run.lanes.iter().find(|lane| lane.id == id).unwrap();
+        lane.opens.live.clone()
+    };
+    assert_eq!(opens("T-1/R1"), Live::Session("T-1_R1".into()));
+    assert_eq!(opens("T-2/R1"), Live::Task("T-2".into()));
+}
+
+/// An ended run's lane opened its task, so the retained log of a headless run was out of reach
+/// from the Timeline; only an ended process session opens its page.
+#[test]
+fn an_ended_headless_runs_lane_opens_its_session_and_another_ended_run_its_task() {
+    let feed = Feed::default();
+    let ended = |session: Option<SessionRef>| Run {
+        id: "R1".into(),
+        task: "T-3".into(),
+        role: Role::Worker,
+        profile: "codex".into(),
+        harness: "codex".into(),
+        model: None,
+        effort: None,
+        worktree: PathBuf::new(),
+        branch: String::new(),
+        base: String::new(),
+        base_sha: String::new(),
+        session,
+        started: at("2026-11-15T09:00:00Z"),
+        ended: Some(at("2026-11-15T10:00:00Z")),
+        outcome: Some(Outcome::Done),
+        summary: None,
+        head_sha: None,
+        quiet_since: None,
+    };
+    let process = SessionRef::Process {
+        pid: 7,
+        dir: PathBuf::from("/runs/T-3/R1"),
+    };
+    assert_eq!(
+        opens_run(&ended(Some(process)), &feed).live,
+        Live::Session("T-3_R1".into())
+    );
+    assert_eq!(
+        opens_run(&ended(None), &feed).live,
+        Live::Task("T-3".into())
+    );
+}
+
+#[test]
+fn burnup_counts_each_task_once_and_follows_drops_and_reopens() {
+    let feed = Feed {
+        now: second("2026-11-15T12:00:00Z"),
+        time_zone: Some(TimeZone::UTC),
+        ..Feed::default()
+    };
+    let burnup = WireBurnup {
+        scope: "workspace".into(),
+        events: vec![
+            event(
+                1,
+                "2026-11-10T08:00:00Z",
+                "T-1",
+                EventKind::Created,
+                Actor::Owner,
+            ),
+            event(
+                2,
+                "2026-11-11T08:00:00Z",
+                "T-2",
+                EventKind::Created,
+                Actor::Owner,
+            ),
+            event(
+                3,
+                "2026-11-12T08:00:00Z",
+                "T-1",
+                EventKind::Landed,
+                Actor::Owner,
+            ),
+            event(
+                4,
+                "2026-11-13T08:00:00Z",
+                "T-1",
+                EventKind::Landed,
+                Actor::Owner,
+            ),
+            event(
+                5,
+                "2026-11-14T08:00:00Z",
+                "T-2",
+                EventKind::Dropped,
+                Actor::Owner,
+            ),
+            event(
+                6,
+                "2026-11-14T09:00:00Z",
+                "T-1",
+                EventKind::Reopened,
+                Actor::Owner,
+            ),
+        ],
+    };
+    let series = burnup_series(&burnup, feed.now, &feed).unwrap();
+    let counts: Vec<(u32, u32)> = series.points.iter().map(|p| (p.1, p.2)).collect();
+    assert!(counts.contains(&(2, 1)));
+    assert_eq!(counts.last(), Some(&(1, 0)));
 }

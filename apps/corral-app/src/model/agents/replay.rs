@@ -139,7 +139,7 @@ pub(super) fn resolve<'a>(
 }
 
 /// A byte count in words: `820 B`, `1.2 KB`, `34 KB`, `1.2 MB`.
-pub(super) fn size(bytes: u64) -> String {
+pub(crate) fn size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     let value = bytes as f64;
     if value < KB {
@@ -189,7 +189,7 @@ fn avatar(author: &str) -> (&'static str, Hue) {
     }
 }
 
-/// The inline handover for a question the agent asked, open or settled.
+/// A question the agent asked, open or settled, as the transcript recorded it.
 fn question(
     key: &str,
     text: &str,
@@ -211,15 +211,12 @@ fn question(
         None => QuestionCard {
             label: format!("{key} · waiting on you"),
             question: text.to_owned(),
-            button: "Open handover · decide",
             hint: format!("{count}{recommended}"),
             open: true,
-            action: Action::OpenQuestion(Id::from(key)),
         },
         Some(answer) => QuestionCard {
             label: format!("{key} · answered by {}", answer.by),
             question: text.to_owned(),
-            button: "Open handover",
             hint: [
                 clock(Some(answer.at.as_str()), feed),
                 Some(answer.option.clone().unwrap_or_else(|| answer.text.clone())),
@@ -229,7 +226,6 @@ fn question(
             .collect::<Vec<_>>()
             .join(" · "),
             open: false,
-            action: Action::OpenQuestion(Id::from(key)),
         },
     }
 }

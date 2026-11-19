@@ -6,32 +6,22 @@ import { pathToFileURL } from "node:url";
 
 import type { ProviderId } from "../auth/providers.ts";
 import type { AuthModule } from "../auth/types.ts";
-import type { DeliveryModule } from "../delivery/types.ts";
-import { CORRAL_OPS, ROLES, type Role, type RoleModule, UPSTREAM_TOOLS } from "../roles/types.ts";
+import { ROLES, type Role, type RoleModule, UPSTREAM_TOOLS } from "../roles/types.ts";
 import { compiledBundle } from "./bundle.ts";
 
-export type ModuleKind = "role" | "delivery" | "auth";
+export type ModuleKind = "role" | "auth";
 
 const ROLE_OWNERS: Record<Role, string> = {
   worker: "worker-role",
   reviewer: "reviewer-role",
-  pm: "pm-role",
-  planner: "plan-roles",
-  plan_reviewer: "plan-roles",
   assistant: "assistant-role",
   build: "build-role",
 };
 
-/** The role module's directory under src/roles; Rust's `AgentRole::module_dir` matches it. */
-export function roleDir(role: Role): string {
-  return role === "plan_reviewer" ? "plan-reviewer" : role;
-}
-
 export class ModuleUnavailable extends Error {
   readonly code: string;
   constructor(readonly kind: ModuleKind, readonly module: string, readonly owner_child: string, role?: Role) {
-    const code = kind === "role" ? "role_unavailable" : kind === "delivery" ? "delivery_unavailable"
-      : "credentials_unavailable";
+    const code = kind === "role" ? "role_unavailable" : "credentials_unavailable";
     super(`${code}${role ? ` ${role}` : ""}: no ${module} (owner ${owner_child})`);
     this.code = code;
   }
@@ -46,15 +36,13 @@ export class ModuleInvalid extends Error {
 
 export interface ModulePaths {
   readonly role: string;
-  readonly delivery: string;
   readonly auth: string;
 }
 
 export function modulePaths(role: Role): ModulePaths {
   if (!ROLES.includes(role)) throw new ModuleInvalid("src/roles", `unknown role ${String(role)}`);
   return {
-    role: `src/roles/${roleDir(role)}/index.ts`,
-    delivery: "src/delivery/index.ts",
+    role: `src/roles/${role}/index.ts`,
     auth: "src/auth/index.ts",
   };
 }
@@ -70,7 +58,6 @@ export function missingModules(assetRoot: string, role: Role): ModuleUnavailable
   if (compiledBundle()?.roles) return [];
   const missing: ModuleUnavailable[] = [];
   if (!present(assetRoot, paths.role)) missing.push(new ModuleUnavailable("role", paths.role, ROLE_OWNERS[role], role));
-  if (!present(assetRoot, paths.delivery)) missing.push(new ModuleUnavailable("delivery", paths.delivery, "inbox-adapter"));
   if (!present(assetRoot, paths.auth)) missing.push(new ModuleUnavailable("auth", paths.auth, "host-install"));
   return missing;
 }
@@ -90,12 +77,8 @@ function checkRole(value: unknown, module: string, role: Role): RoleModule {
   const candidate = object(value, module);
   if (candidate.role !== role) throw new ModuleInvalid(module, `declares role ${String(candidate.role)}`);
   const upstream = candidate.upstreamTools;
-  const ops = candidate.corralOps;
   if (!Array.isArray(upstream) || !upstream.every((t) => UPSTREAM_TOOLS.includes(t))) {
     throw new ModuleInvalid(module, "upstreamTools must list only read, edit, write, bash, grep, find or ls");
-  }
-  if (!Array.isArray(ops) || !ops.every((op) => CORRAL_OPS.includes(op))) {
-    throw new ModuleInvalid(module, "corralOps must list only v1 operations");
   }
   if (typeof candidate.tools !== "function" || typeof candidate.contract !== "function") {
     throw new ModuleInvalid(module, "needs tools() and contract()");
@@ -130,12 +113,6 @@ function checkLocalTools(candidate: Record<string, unknown>, module: string): vo
   }
 }
 
-function checkDelivery(value: unknown, module: string): DeliveryModule {
-  const candidate = object(value, module);
-  if (typeof candidate.accept !== "function") throw new ModuleInvalid(module, "needs accept()");
-  return candidate as unknown as DeliveryModule;
-}
-
 function checkAuth(value: unknown, module: string, provider: ProviderId): AuthModule {
   const candidate = object(value, module);
   if (candidate.provider !== "openai-codex" || typeof candidate.credentials !== "function") {
@@ -150,11 +127,10 @@ function checkAuth(value: unknown, module: string, provider: ProviderId): AuthMo
 
 export interface LoadedModules {
   readonly role: RoleModule;
-  readonly delivery: DeliveryModule;
   readonly auth: AuthModule;
 }
 
-/** Only the auth module, for `corral pi --bare`, which loads no role or delivery module. */
+/** The auth-only loader for `corral pi --bare`. */
 export async function loadAuth(assetRoot: string, provider: ProviderId = "openai-codex"): Promise<AuthModule> {
   const path = "src/auth/index.ts";
   const bundle = compiledBundle();
@@ -163,7 +139,7 @@ export async function loadAuth(assetRoot: string, provider: ProviderId = "openai
   return checkAuth(await importDefault(assetRoot, path), path, provider);
 }
 
-/** Loads the role, delivery and auth modules from their fixed paths under the asset root. */
+/** Loads the role and auth modules from their fixed paths under the asset root. */
 export async function loadModules(
   assetRoot: string, role: Role, provider: ProviderId = "openai-codex",
 ): Promise<LoadedModules> {
@@ -171,16 +147,14 @@ export async function loadModules(
   if (first) throw first;
   const paths = modulePaths(role);
   const bundle = compiledBundle();
-  if (bundle?.roles && bundle.delivery !== undefined) {
+  if (bundle?.roles) {
     return {
       role: checkRole(bundle.roles[role](assetRoot), paths.role, role),
-      delivery: checkDelivery(bundle.delivery, paths.delivery),
       auth: checkAuth(bundle.auth, paths.auth, provider),
     };
   }
   return {
     role: checkRole(await importDefault(assetRoot, paths.role), paths.role, role),
-    delivery: checkDelivery(await importDefault(assetRoot, paths.delivery), paths.delivery),
     auth: checkAuth(await importDefault(assetRoot, paths.auth), paths.auth, provider),
   };
 }

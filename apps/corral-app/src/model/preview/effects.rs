@@ -1,84 +1,22 @@
-use super::{act, change, detail, fleet, sessions, stamp};
+//! Chat, device and subscription effects against the sample, on the unchanged chat wire. A chat
+//! message goes to the thread's pi host, as corrald submits it; the thread shows it once the
+//! host recorded it.
+
+use super::{act, detail, fleet, pi, pi_control, sessions, stamp};
 use crate::model::{
     Id,
-    act::Confirmable,
     daemon::*,
     devices::{DeviceOp, Pairing},
     effect::Effect,
 };
-use corral_protocol::{app::*, assistant::*, detail::*, rows::*};
+use corral_protocol::{app::*, assistant::*, rows::*};
+use corral_types::Origin;
 use serde_json::{Value, json};
-
-pub fn confirmation(feed: &Feed, subject: &Confirmable) -> Result<ActPreview, String> {
-    let session = feed
-        .session
-        .as_ref()
-        .ok_or("Preview device is not enrolled")?;
-    let (class, descriptions) = match subject {
-        Confirmable::Act(act) => {
-            if act.command.app_class() == ActClass::Refused {
-                return Err("This command is unavailable in preview".into());
-            }
-            (
-                act.command.app_class(),
-                act.command_rows()
-                    .into_iter()
-                    .map(|(label, value)| format!("{label}: {value}"))
-                    .collect::<Vec<_>>(),
-            )
-        }
-        Confirmable::Prompt { answer, .. } => {
-            if !session.authority.assistant {
-                return Err("Preview assistant authority is disabled".into());
-            }
-            (
-                ActClass::Confirm,
-                vec![format!(
-                    "Answer permission prompt {} revision {} with {:?}",
-                    answer.key, answer.rev, answer.choice
-                )],
-            )
-        }
-        Confirmable::DeviceAuthority { change, .. } => {
-            if !session.authority.admin {
-                return Err("Preview admin authority is disabled".into());
-            }
-            (
-                ActClass::Admin,
-                vec![format!(
-                    "Change preview device {} authority: reply={}, act={}, assistant={}, assistant_act={}, admin={}",
-                    change.device,
-                    change.authority.reply,
-                    change.authority.act,
-                    change.authority.assistant,
-                    change.authority.assistant_act,
-                    change.authority.admin
-                )],
-            )
-        }
-    };
-    let mut effects = vec![
-        "PREVIEW ONLY · changes synthetic local records; no daemon or external side effects".into(),
-    ];
-    effects.extend(descriptions);
-    Ok(ActPreview {
-        preview_id: format!("preview:{}:{}", subject.key(), feed.changes_head),
-        digest: format!(
-            "preview-local:{}:{}",
-            subject.key(),
-            feed.authority_revision
-        ),
-        class,
-        effects,
-        expires_at: stamp(feed, feed.now.saturating_add(PREVIEW_TTL_SECS)),
-        operation_token: Some(format!("preview-operation:{}", subject.key())),
-    })
-}
 
 pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
     match effect {
         Effect::Act(command) => act(feed, command),
-        Effect::Detail(request) => detail(feed, &request.target),
+        Effect::Detail(request) => detail(feed, &request.target, request.page.as_deref()),
         Effect::Draft { thread, text } => {
             require_thread(feed, thread)?;
             if text.is_empty() {
@@ -90,21 +28,11 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
         }
         Effect::Send(request) => send(feed, request),
         Effect::Session { key, .. } => operation(feed, key, effect),
-        Effect::Stop(_) | Effect::Warm(_) => execute_operation(feed, effect).map(|_| ()),
-        Effect::Prompt { answer, .. } => operation(feed, &Id::from(&answer.cmd_id), effect),
-        Effect::Device(op) => {
-            let key = match op {
-                DeviceOp::Revoke { key, .. } | DeviceOp::SetAuthority { key, .. } => {
-                    Some(key.clone())
-                }
-                _ => None,
-            };
-            if let Some(key) = key {
-                operation(feed, &key, effect)
-            } else {
-                device(feed, op).map(|_| ())
-            }
-        }
+        Effect::Warm(_) => execute_operation(feed, effect).map(|_| ()),
+        Effect::Device(op) => match op {
+            DeviceOp::Revoke { key, .. } => operation(feed, key, effect),
+            _ => device(feed, op).map(|_| ()),
+        },
         Effect::Thread { scope, open } => {
             require_thread(feed, scope)?;
             if *open {
@@ -114,17 +42,15 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
             Ok(())
         }
         Effect::Watch { session, on } => {
-            if feed
-                .detail(&DetailRef::Session {
-                    id: session.to_string(),
-                })
-                .is_none()
-            {
+            if pi::resolve(feed, session).is_none() && !feed.agents.contains_key(session.as_str()) {
                 return Err(format!("Unknown preview session {session}"));
             }
+            // Several views can watch one scope and the sample does not count them, so a scope
+            // once watched stays fed; a later watcher gets the running turn again.
             if *on {
                 feed.topics
                     .insert(format!("session:{session}"), TopicState::default());
+                pi::watch(feed, session.as_str());
                 fleet::watch(feed, session.as_str());
             }
             Ok(())
@@ -150,23 +76,10 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
                 .map_or(request.through, |seen| seen.through.max(request.through));
             feed.seen_received(SeenCursor {
                 through,
-                at: Some(stamp(feed, feed.now)),
+                at: Some(stamp(feed.now)),
             });
-            feed.changes_unseen = Some((
-                through,
-                feed.changes
-                    .values()
-                    .filter(|line| line.seq > through)
-                    .count() as u64,
-            ));
+            feed.changes_unseen = Some((through, feed.changes.range(through + 1..).count() as u64));
             Ok(())
-        }
-        Effect::Recover(key) => {
-            if feed.commands.contains_key(key) || feed.operations.contains_key(key) {
-                Ok(())
-            } else {
-                Err("Preview has no command under that identity; nothing was retried".into())
-            }
         }
         Effect::RetryTopic(topic) => {
             let state = feed
@@ -207,56 +120,32 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
 /// Operation correlation is assigned by the application; preserve it instead of minting another ID.
 pub fn operation(feed: &mut Feed, key: &Id, effect: &Effect) -> Result<(), String> {
     if let Some(operation) = feed.operations.get(key) {
-        return if let Some(error) = &operation.error {
-            Err(error.message.clone())
-        } else {
-            Ok(())
+        return match &operation.error {
+            Some(error) => Err(error.message.clone()),
+            None => Ok(()),
         };
     }
     let method = match effect {
         Effect::Session { .. } => ASSISTANT_SESSION,
-        Effect::Stop(_) => ASSISTANT_STOP,
         Effect::Warm(_) => ASSISTANT_WARM,
-        Effect::Prompt { .. } => PROMPT_ANSWER,
         Effect::Device(DeviceOp::Revoke { .. }) => corral_protocol::device::DEVICE_REVOKE,
-        Effect::Device(DeviceOp::SetAuthority { .. }) => DEVICE_SET_AUTHORITY,
         _ => "preview.local",
     };
     let result = execute_operation(feed, effect);
+    let error = result.as_ref().err().map(|message| ClientError {
+        code: "preview_refused".into(),
+        message: message.clone(),
+    });
     feed.operations.insert(
         key.clone(),
         Operation {
             method: method.into(),
             loading: false,
             value: result.as_ref().ok().cloned(),
-            error: result.as_ref().err().map(|message| ClientError {
-                code: "preview_refused".into(),
-                message: message.clone(),
-            }),
+            error: error.clone(),
+            refusal: None,
         },
     );
-    if let Effect::Prompt { answer, .. } = effect {
-        let error = result.as_ref().err().map(|message| ClientError {
-            code: "preview_refused".into(),
-            message: message.clone(),
-        });
-        feed.commands.insert(
-            answer.cmd_id.clone().into(),
-            CommandState {
-                device: Some("preview-device".into()),
-                method: PROMPT_ANSWER.into(),
-                request: serde_json::to_value(answer).map_err(|error| error.to_string())?,
-                status: if result.is_ok() {
-                    CommandStatus::Done
-                } else {
-                    CommandStatus::Refused
-                },
-                result: None,
-                error,
-                entry: None,
-            },
-        );
-    }
     result.map(|_| ())
 }
 
@@ -293,75 +182,9 @@ fn send_inner(feed: &mut Feed, request: &AssistantSend) -> Result<(), String> {
     if !request.attachments.is_empty() {
         return Err("Preview sends do not upload or deliver attachments; remove them first".into());
     }
-    let assistant = if request.thread == "quick" {
-        "A-7"
-    } else {
-        &request.thread
-    };
-    if feed
-        .assistants
-        .get(assistant)
-        .is_some_and(|row| row.state == AssistantState::Ended)
-    {
-        return Err("Preview assistant session has ended".into());
-    }
-    let authority = &feed
-        .session
-        .as_ref()
-        .ok_or("Preview device is not enrolled")?
-        .authority;
-    match request.target {
-        AskTarget::Assistant if !authority.assistant => {
-            return Err("Preview assistant authority is disabled".into());
-        }
-        AskTarget::Pm if !authority.reply => {
-            return Err("Preview reply authority is disabled".into());
-        }
-        AskTarget::Other => return Err("Unknown preview message recipient".into()),
-        _ => {}
-    }
-    if request.target == AskTarget::Pm {
-        sessions::append(feed, "pm", &request.text)?;
-    }
-    let id = format!("preview-message:{}", request.cmd_id);
-    let at = stamp(feed, feed.now);
-    let mut entry = sessions::entry(
-        &id,
-        &at,
-        if request.target == AskTarget::Pm {
-            EntryKind::PmMessage
-        } else {
-            EntryKind::Message
-        },
-        &request.text,
-    );
-    entry.typed_at = Some(request.typed_at.clone());
-    entry.links = request.context.clone();
-    entry.state = Some(if request.target == AskTarget::Pm {
-        MessageState::PmDelivered
-    } else {
-        MessageState::Delivered
-    });
-    let notice = sessions::entry(
-        &format!("{id}:notice"),
-        &at,
-        EntryKind::Notice,
-        "Preview · message recorded locally. No model ran and no reply was generated.",
-    );
-    let scopes: Vec<String> = if request.thread == "quick" || request.thread == "A-7" {
-        vec!["quick".into(), "A-7".into()]
-    } else {
-        vec![request.thread.clone()]
-    };
-    for scope in scopes {
-        if let Some(thread) = feed.threads.get_mut(scope.as_str()) {
-            thread.entries.insert(id.clone().into(), entry.clone());
-            thread
-                .entries
-                .insert(notice.id.clone().into(), notice.clone());
-        }
-        feed.drafts.remove(scope.as_str());
-    }
+    let id = chat_for(feed, &request.thread)?;
+    let entry = pi::input_entry(&id, &request.cmd_id);
+    feed.drafts.remove(request.thread.as_str());
     feed.commands.insert(
         request.cmd_id.clone().into(),
         CommandState {
@@ -369,19 +192,57 @@ fn send_inner(feed: &mut Feed, request: &AssistantSend) -> Result<(), String> {
             method: ASSISTANT_SEND.into(),
             request: serde_json::to_value(request).map_err(|error| error.to_string())?,
             status: CommandStatus::Done,
-            result: None,
             error: None,
-            entry: Some(id.into()),
+            entry: Some(entry.clone().into()),
         },
     );
+    // As corrald starts a stopped chat host before it submits the message.
+    pi::revive(feed, &id);
+    pi::deliver(feed, &id, &request.text, Origin::Owner, Some(entry));
     feed.retire_echoed_sends();
-    change(
-        feed,
-        None,
-        "message recorded locally".into(),
-        ChangeKind::Comment,
-    );
     Ok(())
+}
+
+/// The chat a message to `thread` reaches: a named session, or the quick thread's current one;
+/// once the quick thread has ended, the next message starts a new session.
+fn chat_for(feed: &mut Feed, thread: &str) -> Result<String, String> {
+    if thread != QUICK_THREAD {
+        return match feed.assistants.get(thread) {
+            Some(row) if row.state == AssistantState::Ended => {
+                Err("chat thread ended; start a new session".into())
+            }
+            Some(_) => Ok(thread.to_owned()),
+            None => Err("Preview assistant session does not exist".into()),
+        };
+    }
+    let current = crate::model::assistant::quick_id(feed).filter(|id| {
+        feed.assistants
+            .get(id.as_str())
+            .is_some_and(|row| row.state != AssistantState::Ended)
+    });
+    if let Some(id) = current {
+        return Ok(id);
+    }
+    let profile = crate::model::assistant::quick_id(feed)
+        .and_then(|id| feed.assistants.get(id.as_str()))
+        .and_then(|row| row.profile.clone());
+    let id = next_chat(feed);
+    sessions::assistant(feed, &id, "Quick thread", None, profile, true);
+    Ok(id)
+}
+
+fn next_chat(feed: &Feed) -> String {
+    let next = feed
+        .assistants
+        .keys()
+        .filter_map(|id| {
+            id.strip_prefix("A-")
+                .and_then(|number| number.parse::<u64>().ok())
+        })
+        .max()
+        .unwrap_or(17)
+        + 1;
+    format!("A-{next}")
 }
 
 fn execute_operation(feed: &mut Feed, effect: &Effect) -> Result<Value, String> {
@@ -389,59 +250,21 @@ fn execute_operation(feed: &mut Feed, effect: &Effect) -> Result<Value, String> 
         Effect::Session { op, .. } => assistant_session(feed, op),
         Effect::Warm(request) => {
             require_thread(feed, &request.thread)?;
-            let id = if request.thread == "quick" {
-                "A-7"
-            } else {
-                &request.thread
-            };
-            let row = feed
-                .assistants
-                .get_mut(id)
+            let id = pi::resolve(feed, &request.thread)
                 .ok_or("Preview assistant session does not exist")?;
-            if row.state == AssistantState::Ended {
+            if feed
+                .assistants
+                .get(id.as_str())
+                .is_none_or(|row| row.state == AssistantState::Ended)
+            {
                 return Err("Preview assistant session ended".into());
             }
-            row.state = AssistantState::Ready;
-            serde_json::to_value(row).map_err(|error| error.to_string())
-        }
-        Effect::Stop(request) => {
+            pi::revive(feed, &id);
             let row = feed
                 .assistants
-                .get_mut(request.session.as_str())
+                .get(id.as_str())
                 .ok_or("Preview assistant session does not exist")?;
-            let running = row.turn == Some(request.turn) && row.state == AssistantState::Working;
-            if running {
-                row.state = AssistantState::Ready;
-                row.turn = None;
-                row.rev += 1;
-            }
-            serde_json::to_value(StopAck {
-                session: request.session.clone(),
-                turn: request.turn,
-                outcome: if running {
-                    StopOutcome::Accepted
-                } else {
-                    StopOutcome::AlreadyStopped
-                },
-                reason: Some("Preview · local turn only".into()),
-            })
-            .map_err(|error| error.to_string())
-        }
-        Effect::Prompt { answer, .. } => {
-            let row = feed
-                .inbox
-                .get_mut(answer.key.as_str())
-                .ok_or("No such local preview permission prompt")?;
-            if row.kind != InboxKind::Prompt
-                || row.question_rev != Some(answer.rev)
-                || row.state != InboxState::Open
-            {
-                return Err("conflict: preview permission prompt changed".into());
-            }
-            row.state = InboxState::Cancelled;
-            row.answerable = false;
-            row.rev += 1;
-            Ok(json!({"accepted": true, "preview": true}))
+            serde_json::to_value(row).map_err(|error| error.to_string())
         }
         Effect::Device(op) => device(feed, op),
         _ => Err("This preview effect has no operation reply".into()),
@@ -449,92 +272,90 @@ fn execute_operation(feed: &mut Feed, effect: &Effect) -> Result<Value, String> 
 }
 
 fn assistant_session(feed: &mut Feed, op: &AssistantSessionOp) -> Result<Value, String> {
-    if !feed
-        .session
-        .as_ref()
-        .is_some_and(|session| session.authority.assistant)
-    {
-        return Err("Preview assistant authority is disabled".into());
-    }
     let id = match op {
         AssistantSessionOp::New { task, profile } => {
             if let Some(task) = task
-                && feed.board.task(task).is_none()
+                && super::record(feed, task).is_none()
             {
                 return Err("Preview focus task does not exist".into());
             }
-            let next = feed
-                .assistants
-                .keys()
-                .filter_map(|id| {
-                    id.strip_prefix("A-")
-                        .and_then(|number| number.parse::<u64>().ok())
-                })
-                .max()
-                .unwrap_or(18)
-                + 1;
-            let id = format!("A-{next}");
+            let id = next_chat(feed);
             sessions::assistant(
                 feed,
                 &id,
                 "New session",
                 task.as_deref(),
-                profile.clone().or_else(|| Some("pi-sol xhigh".into())),
+                profile.clone().or_else(|| Some("omp-sol".into())),
+                false,
             );
             id
         }
         AssistantSessionOp::End { session }
         | AssistantSessionOp::Pause { session }
-        | AssistantSessionOp::Resume { session }
-        | AssistantSessionOp::TakeOver { session } => session.clone(),
-        AssistantSessionOp::SetProfile { thread, .. } => {
-            if thread == "quick" {
-                "A-7".into()
-            } else {
-                thread.clone()
+        | AssistantSessionOp::Resume { session } => pi::resolve(feed, session)
+            .map(|id| id.to_string())
+            .ok_or("Preview assistant session does not exist")?,
+        AssistantSessionOp::SetProfile { thread, .. } => pi::resolve(feed, thread)
+            .map(|id| id.to_string())
+            .ok_or("Preview assistant session does not exist")?,
+        AssistantSessionOp::TakeOver { .. } | AssistantSessionOp::Other => {
+            return Err(
+                "invalid: chat has no take-over operation; use the same session directly".into(),
+            );
+        }
+    };
+    match op {
+        AssistantSessionOp::SetProfile { profile, .. } => {
+            let known = feed.settings.as_ref().is_some_and(|settings| {
+                settings.config["profiles"]
+                    .as_object()
+                    .is_some_and(|profiles| profiles.contains_key(profile))
+            });
+            if !known {
+                return Err("Preview profile does not exist".into());
+            }
+            if let Some(row) = feed.assistants.get_mut(id.as_str()) {
+                row.profile = Some(profile.clone());
             }
         }
-        _ => return Err("Unsupported preview assistant session operation".into()),
-    };
-    if let AssistantSessionOp::SetProfile { profile, .. } = op
-        && !feed.settings.values().any(|settings| {
-            settings
-                .assistant_models
-                .iter()
-                .any(|choice| &choice.name == profile)
-        })
-    {
-        return Err("Preview profile does not exist".into());
+        AssistantSessionOp::End { .. } => {
+            pi::end(feed, &id);
+            if let Some(row) = feed.assistants.get_mut(id.as_str()) {
+                row.state = AssistantState::Ended;
+                row.live_in = AssistantLocation::None;
+            }
+        }
+        AssistantSessionOp::Pause { .. } => {
+            pi_control::control(feed, &id, crate::model::agents::Control::Pause)?;
+        }
+        AssistantSessionOp::Resume { .. } => {
+            pi_control::control(feed, &id, crate::model::agents::Control::Resume)?;
+        }
+        _ => {}
     }
     let row = feed
         .assistants
         .get_mut(id.as_str())
         .ok_or("Preview assistant session does not exist")?;
-    match op {
-        AssistantSessionOp::End { .. } => {
-            row.state = AssistantState::Ended;
-            row.live_in = AssistantLocation::None;
-            row.turn = None;
-        }
-        AssistantSessionOp::Pause { .. } => row.state = AssistantState::Paused,
-        AssistantSessionOp::Resume { .. } => row.state = AssistantState::Ready,
-        AssistantSessionOp::TakeOver { .. } => {
-            row.live_in = AssistantLocation::Daemon;
-            row.state = AssistantState::Ready;
-        }
-        AssistantSessionOp::SetProfile { profile, .. } => row.profile = Some(profile.clone()),
-        _ => {}
-    }
     row.rev += 1;
     serde_json::to_value(row).map_err(|error| error.to_string())
 }
 
 fn device(feed: &mut Feed, op: &DeviceOp) -> Result<Value, String> {
     match op {
-        DeviceOp::PairBegin
-        | DeviceOp::Pair { .. }
-        | DeviceOp::PairConfirm { .. }
-        | DeviceOp::Enrol { .. } => Err(
+        // The pairing page's sample offer; no device can claim it, as no daemon is listening.
+        DeviceOp::PairBegin => {
+            let code = "corral-pair-preview-sample";
+            feed.pairing = Pairing::Offered {
+                pair_id: "preview-pair".into(),
+                code: code.into(),
+                url: Some(format!("http://127.0.0.1:8080/#pair={code}")),
+                expires_at: feed.now + 600,
+                reach: vec![("LAN".into(), "127.0.0.1:7778".into())],
+            };
+            Ok(json!({"pair_id": "preview-pair"}))
+        }
+        DeviceOp::Pair { .. } | DeviceOp::PairConfirm { .. } | DeviceOp::Enrol { .. } => Err(
             "Preview cannot pair or enrol real devices; leave preview to use Settings › Connection"
                 .into(),
         ),
@@ -542,50 +363,20 @@ fn device(feed: &mut Feed, op: &DeviceOp) -> Result<Value, String> {
             feed.pairing = Pairing::Ended {
                 line: "Preview · pairing cancelled locally".into(),
             };
-            Ok(json!({"cancelled":true}))
+            Ok(json!({"cancelled": true}))
         }
         DeviceOp::Forget => Err("Leave preview before forgetting a real browser credential".into()),
         DeviceOp::PushSubscribe { .. } | DeviceOp::PushUnsubscribe => {
             Err("Preview cannot register operating-system notifications".into())
         }
-        DeviceOp::SetAuthority { change, .. } => {
-            if !feed
-                .session
-                .as_ref()
-                .is_some_and(|session| session.authority.admin)
-            {
-                return Err("Preview admin authority is disabled".into());
-            }
-            let row = feed
-                .devices
-                .iter_mut()
-                .find(|row| row.id == change.device)
-                .ok_or("Preview device not found")?;
-            row.authority = Some(change.authority.clone());
-            if let Some(session) = &mut feed.session
-                && session.device.id == change.device
-            {
-                session.authority = change.authority.clone();
-                session.device.authority = Some(change.authority.clone());
-                feed.authority_revision += 1;
-            }
-            Ok(json!({"device": change.device, "authority":change.authority}))
-        }
         DeviceOp::Revoke { device, .. } => {
-            if !feed
-                .session
-                .as_ref()
-                .is_some_and(|session| session.authority.admin)
-            {
-                return Err("Preview admin authority is disabled".into());
-            }
-            let at = stamp(feed, feed.now);
+            let at = stamp(feed.now);
             let row = feed
                 .devices
                 .iter_mut()
                 .find(|row| &row.id == device)
                 .ok_or("Preview device not found")?;
-            row.revoked = Some(at[..10].into());
+            row.revoked = Some(at.chars().take(10).collect());
             if feed
                 .session
                 .as_ref()

@@ -1,21 +1,24 @@
-//! The daemon's recorded spans as a [`Plot`]. Every time is corral's recorded instant in the
-//! viewer's zone; a phase without a recorded start is said on its lane, never drawn at a guessed
-//! time, and an open phase (recorded start, no end yet) runs to now and says so.
+//! The daemon's recorded runs and events as a [`Plot`]. Every time is corral's recorded instant
+//! in the viewer's zone. A run is a span (a worker's run, a reviewer's review); an open run runs
+//! to now, idle from when its output went quiet. Events are instants: gates and landings on
+//! their task's lane, the owner's moves on the owner lane, the pipeline's and assistants' on the
+//! automatic lane. A block waits, and a ready review is held for acceptance, until the task's
+//! next move.
 
-use corral_protocol::detail::{
-    Burnup as WireBurnup, DetailRef, TimelineBy, TimelineKind, TimelinePage,
-};
+use std::collections::{BTreeMap, BTreeSet};
+
+use corral_protocol::detail::{Burnup as WireBurnup, DetailRef, TimelineBy, TimelinePage};
+use corral_types::{Actor, Event, EventKind, Outcome, Role, Run, SessionRef};
 use jiff::tz::TimeZone;
 use jiff::{Timestamp, ToSpan, Zoned};
 
 use super::{
-    BurnupSeries, Gap, Grouping, Kind, Marker, Plot, PlotLane, PlotPm, PlotSegment, PlotTick,
-    Range, State,
+    BURNUP_COUNTS, BurnupSeries, Gap, Grouping, Kind, Marker, Opens, Plot, PlotLane, PlotSegment,
+    PlotTick, Range, State,
 };
 use crate::model::daemon::Feed;
-use crate::model::hue::Hue;
-use crate::model::usage::completeness_label;
 use crate::model::work::{age, stamp, when};
+use crate::model::{Id, Live};
 
 /// Waits and idle stretches at least this long become gaps worth a look.
 const GAP_MINUTES: i64 = 60;
@@ -67,14 +70,13 @@ pub fn request(state: &State, window: &Window) -> DetailRef {
 }
 
 impl Window {
-    /// Whole minutes from the window's start; None for an instant corral did not record.
-    fn minutes(&self, at: &str) -> Option<i64> {
-        let at: Timestamp = at.parse().ok()?;
-        Some((at.as_second() - self.from.as_second()).div_euclid(60))
+    /// Whole minutes from the window's start.
+    fn minutes(&self, at: Timestamp) -> i64 {
+        (at.as_second() - self.from.as_second()).div_euclid(60)
     }
 
     fn now_minutes(&self) -> i64 {
-        (self.now.as_second() - self.from.as_second()).div_euclid(60)
+        self.minutes(self.now)
     }
 
     /// Timeline labels use the same timestamp wording as task and session details.
@@ -105,151 +107,313 @@ fn duration(minutes: i64) -> String {
     )
 }
 
-fn kind(kind: TimelineKind) -> Option<Kind> {
-    Some(match kind {
-        TimelineKind::Run => Kind::Run,
-        TimelineKind::Gate => Kind::Gate,
-        TimelineKind::Review => Kind::Review,
-        TimelineKind::Land => Kind::Land,
-        TimelineKind::Ask => Kind::Ask,
-        TimelineKind::Held => Kind::Held,
-        TimelineKind::Idle => Kind::Idle,
-        TimelineKind::Unavailable => Kind::Unavailable,
-        TimelineKind::Other => return None,
-    })
+fn outcome(outcome: Outcome) -> &'static str {
+    match outcome {
+        Outcome::Done => "done",
+        Outcome::Landed => "landed",
+        Outcome::Failed => "failed",
+        Outcome::Stopped => "stopped",
+        Outcome::Superseded => "superseded",
+    }
+}
+
+/// An event kind as words: "sent back", "review started".
+fn moved(kind: EventKind) -> String {
+    kind.as_str().replace('_', " ")
+}
+
+/// Events that are a task's next move, ending a block or an acceptance hold.
+fn ends_wait(kind: EventKind) -> bool {
+    !matches!(
+        kind,
+        EventKind::Created
+            | EventKind::Edited
+            | EventKind::Commented
+            | EventKind::Artifact
+            | EventKind::Error
+            | EventKind::Gate
+            | EventKind::Verdict
+            | EventKind::ReviewStarted
+    )
+}
+
+/// A lane while it is being filled; `first` orders the lanes by their earliest mark.
+struct Lane {
+    title: String,
+    first: i64,
+    segments: Vec<PlotSegment>,
+    waits: Vec<String>,
+    opens: Opens,
+}
+
+/// Lays recorded instants and spans on the window's clock, clipped to the window up to now.
+struct Clock<'a> {
+    window: &'a Window,
+    feed: &'a Feed,
+    now: i64,
+    lanes: BTreeMap<String, Lane>,
+}
+
+/// A task's lane opens the task.
+fn opens_task(task: &str) -> Opens {
+    Opens {
+        live: Live::Task(Id::new(task)),
+        label: format!("Open {task}"),
+    }
+}
+
+/// A run's lane opens its session terminal while the run is live, and the retained log of a
+/// headless run that ended; any other ended run has no session to show, so its lane opens the
+/// task.
+fn opens_run(run: &Run, feed: &Feed) -> Opens {
+    let session = format!("{}_{}", run.task, run.id);
+    let logged = run.ended.is_some() && matches!(run.session, Some(SessionRef::Process { .. }));
+    if feed.agents.contains_key(session.as_str()) {
+        Opens {
+            label: format!("Open the terminal of {} {}", run.task, run.id),
+            live: Live::Session(Id::from(session.as_str())),
+        }
+    } else if logged {
+        Opens {
+            label: format!("Open the log of {} {} (ended)", run.task, run.id),
+            live: Live::Session(Id::from(session.as_str())),
+        }
+    } else {
+        Opens {
+            label: format!("Open {} (run {} has ended)", run.task, run.id),
+            live: Live::Task(Id::new(&run.task)),
+        }
+    }
+}
+
+impl Clock<'_> {
+    /// Lane `id`, made with its title and what it opens the first time it is named.
+    fn lane(&mut self, id: &str, make: impl FnOnce() -> (String, Opens)) {
+        self.lanes.entry(id.to_owned()).or_insert_with(|| {
+            let (title, opens) = make();
+            Lane {
+                title,
+                first: i64::MAX,
+                segments: Vec::new(),
+                waits: Vec::new(),
+                opens,
+            }
+        });
+    }
+
+    /// Puts `kind` from `from` to `to` (None: still open, to now) on lane `id`, with `what` in
+    /// its label; nothing when it lies wholly outside the window.
+    fn span(&mut self, id: &str, kind: Kind, from: Timestamp, to: Option<Timestamp>, what: &str) {
+        let (start, end) = (
+            self.window.minutes(from).max(0),
+            to.map_or(self.now, |to| self.window.minutes(to))
+                .min(self.now),
+        );
+        if end < start {
+            return;
+        }
+        let from_words = self.window.clock(start, self.feed);
+        let label = if start == end && to.is_some() {
+            format!("{id} {what} {from_words}")
+        } else {
+            let until = match to {
+                Some(_) => self.window.clock(end, self.feed),
+                None => "now (still open)".to_owned(),
+            };
+            format!("{id} {what} {from_words}–{until}")
+        };
+        let wait = matches!(kind, Kind::Ask | Kind::Held) && end - start >= GAP_MINUTES;
+        let wait = wait.then(|| {
+            let state = if kind == Kind::Ask {
+                "blocked"
+            } else {
+                "awaiting acceptance"
+            };
+            format!("{from_words} · {state} · {}", duration(end - start))
+        });
+        let Some(lane) = self.lanes.get_mut(id) else {
+            return;
+        };
+        lane.first = lane.first.min(start);
+        lane.waits.extend(wait);
+        lane.segments.push(PlotSegment {
+            kind,
+            start,
+            end,
+            label,
+        });
+    }
+
+    /// A run as its span: idle from when its output went quiet while it is still open.
+    fn run(&mut self, id: &str, run: &Run) {
+        let who = format!(
+            "{} {}{}",
+            run.id,
+            run.role.as_str(),
+            run.model
+                .as_deref()
+                .map_or_else(|| format!(" · {}", run.profile), |m| format!(" · {m}")),
+        );
+        let kind = match run.role {
+            Role::Worker => Kind::Run,
+            Role::Reviewer => Kind::Review,
+        };
+        match (run.ended, run.quiet_since) {
+            (None, Some(quiet)) if quiet > run.started => {
+                self.span(id, kind, run.started, Some(quiet), &who);
+                self.span(id, Kind::Idle, quiet, None, &format!("{who} quiet"));
+            }
+            (ended, _) => {
+                let what = match run.outcome {
+                    Some(end) => format!("{who} · {}", outcome(end)),
+                    None => who,
+                };
+                self.span(id, kind, run.started, ended, &what);
+            }
+        }
+    }
+
+    /// A task's events on lane `id`: gates, landings, drops and reopens as instants, blocks and
+    /// acceptance holds as waits until the next move.
+    fn events(&mut self, id: &str, events: &[&Event]) {
+        let mut open: Option<(Kind, Timestamp)> = None;
+        for event in events {
+            if ends_wait(event.kind)
+                && let Some((kind, from)) = open.take()
+            {
+                self.span(id, kind, from, Some(event.ts), kind.label());
+            }
+            let instant = match event.kind {
+                EventKind::Blocked => {
+                    open = Some((Kind::Ask, event.ts));
+                    None
+                }
+                EventKind::Ready => {
+                    open = Some((Kind::Held, event.ts));
+                    None
+                }
+                EventKind::Gate => Some(Kind::Gate),
+                EventKind::Landed => Some(Kind::Land),
+                EventKind::Dropped => Some(Kind::Drop),
+                EventKind::Reopened => Some(Kind::Reopen),
+                _ => None,
+            };
+            if let Some(kind) = instant {
+                let what = if kind == Kind::Land {
+                    "landed"
+                } else {
+                    kind.label()
+                };
+                self.span(id, kind, event.ts, Some(event.ts), what);
+            }
+        }
+        if let Some((kind, from)) = open {
+            self.span(id, kind, from, None, kind.label());
+        }
+    }
+
+    /// An action mark: `HH:MM T-1 moved`.
+    fn marker(&self, event: &Event) -> Option<Marker> {
+        let at = self.window.minutes(event.ts);
+        (0..=self.now).contains(&at).then(|| Marker {
+            at,
+            label: format!(
+                "{} {}{}",
+                self.window.clock(at, self.feed),
+                event
+                    .task
+                    .as_deref()
+                    .map(|task| format!("{task} "))
+                    .unwrap_or_default(),
+                moved(event.kind)
+            ),
+        })
+    }
 }
 
 /// The recorded page laid on the window's clock.
-pub fn plot(page: &TimelinePage, window: &Window, feed: &Feed) -> Plot {
+pub fn plot(page: &TimelinePage, window: &Window, grouping: Grouping, feed: &Feed) -> Plot {
     let now = window.now_minutes();
-    let in_window = |at: i64| (0..=now).contains(&at);
-    let mut earliest = now;
-    let lanes: Vec<PlotLane> = page
-        .lanes
-        .iter()
-        .map(|lane| {
-            let mut segments = Vec::new();
-            let mut missing = Vec::new();
-            let mut waits = Vec::new();
-            for segment in &lane.segments {
-                let Some(kind) = kind(segment.kind) else {
-                    missing.push("an unknown phase".to_owned());
-                    continue;
-                };
-                let start = segment.from.as_deref().and_then(|at| window.minutes(at));
-                let end = match &segment.to {
-                    Some(at) => window.minutes(at),
-                    None => Some(now),
-                };
-                let (Some(start), Some(end)) = (start, end) else {
-                    missing.push(match &segment.note {
-                        Some(note) => format!("{} ({note})", kind.label()),
-                        None => kind.label().to_owned(),
-                    });
-                    continue;
-                };
-                let (start, end) = (start.max(0), end.min(now));
-                if end < start || end < 0 || start > now {
-                    continue;
-                }
-                earliest = earliest.min(start);
-                let open = segment.to.is_none();
-                let until = if open {
-                    "now (still open)".to_owned()
-                } else {
-                    window.clock(end, feed)
-                };
-                let length = end - start;
-                let wait = matches!(kind, Kind::Ask | Kind::Held) && length >= GAP_MINUTES;
-                if wait {
-                    let what = if kind == Kind::Ask {
-                        "waiting"
-                    } else {
-                        "awaiting acceptance"
-                    };
-                    waits.push(format!(
-                        "{} · {what} · {}",
-                        window.clock(start, feed),
-                        duration(length)
-                    ));
-                }
-                segments.push(PlotSegment {
-                    kind,
-                    start,
-                    end,
-                    label: format!(
-                        "{} {} {}–{until}{}",
-                        lane.id,
-                        kind.label(),
-                        window.clock(start, feed),
-                        segment
-                            .note
-                            .as_ref()
-                            .map(|n| format!(" · {n}"))
-                            .unwrap_or_default()
-                    ),
-                    note: None,
-                    phone_note: None,
+    let mut clock = Clock {
+        window,
+        feed,
+        now,
+        lanes: BTreeMap::new(),
+    };
+    let mut events: Vec<&Event> = page.events.iter().collect();
+    events.sort_by_key(|event| (event.ts, event.seq));
+    match grouping {
+        Grouping::ByTask => {
+            for run in &page.runs {
+                clock.lane(&run.task, || {
+                    (task_title(&run.task, feed), opens_task(&run.task))
                 });
+                clock.run(&run.task, run);
             }
-            PlotLane {
-                id: lane.id.clone(),
-                title: lane
-                    .title
-                    .strip_prefix(lane.id.as_str())
-                    .and_then(|title| title.strip_prefix(" · "))
-                    .unwrap_or(&lane.title)
-                    .to_owned(),
-                segments,
-                ask: None,
-                wait: (!waits.is_empty()).then(|| waits.join(" · ")),
-                missing: (!missing.is_empty())
-                    .then(|| format!("times not recorded: {}", missing.join(", "))),
+            let mut by_task: BTreeMap<&str, Vec<&Event>> = BTreeMap::new();
+            for event in &events {
+                if let Some(task) = event.task.as_deref() {
+                    by_task.entry(task).or_default().push(event);
+                }
             }
-        })
-        .collect();
-    let owner: Vec<Marker> = page
-        .owner_actions
-        .iter()
-        .filter_map(|action| {
-            let at = window.minutes(&action.at).filter(|&at| in_window(at))?;
-            Some(Marker {
-                at,
-                label: format!("{} {}", window.clock(at, feed), action.text),
-            })
-        })
-        .collect();
-    let pm: Vec<PlotPm> = page
-        .pm
-        .iter()
-        .filter_map(|action| {
-            let at = window.minutes(&action.at).filter(|&at| in_window(at))?;
-            Some(PlotPm {
-                start: at,
-                end: at,
-                hue: Hue::Neutral,
-                label: None,
-                accessible_label: format!("PM {} {}", window.clock(at, feed), action.text),
-            })
-        })
-        .collect();
-    for at in owner.iter().map(|m| m.at).chain(pm.iter().map(|p| p.start)) {
-        earliest = earliest.min(at);
+            for (task, events) in by_task {
+                clock.lane(task, || (task_title(task, feed), opens_task(task)));
+                clock.events(task, &events);
+            }
+        }
+        Grouping::ByAgent => {
+            for run in &page.runs {
+                let id = format!("{}/{}", run.task, run.id);
+                clock.lane(&id, || {
+                    (
+                        format!("{} · {}", run.role.as_str(), run.profile),
+                        opens_run(run, feed),
+                    )
+                });
+                clock.run(&id, run);
+                for event in events.iter().filter(|event| {
+                    event.task.as_deref() == Some(run.task.as_str())
+                        && event.run.as_deref() == Some(run.id.as_str())
+                }) {
+                    match event.kind {
+                        EventKind::Gate => {
+                            clock.span(&id, Kind::Gate, event.ts, Some(event.ts), "gate")
+                        }
+                        EventKind::Landed => {
+                            clock.span(&id, Kind::Land, event.ts, Some(event.ts), "landed")
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
+    let owner: Vec<Marker> = events
+        .iter()
+        .filter(|event| event.actor == Actor::Owner)
+        .filter_map(|event| clock.marker(event))
+        .collect();
+    let auto: Vec<Marker> = events
+        .iter()
+        .filter(|event| matches!(event.actor, Actor::Auto | Actor::Assistant))
+        .filter_map(|event| clock.marker(event))
+        .collect();
+    let mut lanes: Vec<(i64, String, Lane)> = clock
+        .lanes
+        .into_iter()
+        .filter(|(_, lane)| !lane.segments.is_empty())
+        .map(|(id, lane)| (lane.first, id, lane))
+        .collect();
+    lanes.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+    let earliest = lanes
+        .iter()
+        .map(|lane| lane.0)
+        .chain(owner.iter().chain(&auto).map(|marker| marker.at))
+        .fold(now, i64::min);
     let start = match window.range {
         Range::Today => (earliest / 60 * 60).min(now / 60 * 60 - 60).max(0),
         Range::SevenDays => 0,
     };
-    let ticks = ticks(window, start, now);
-    let last_visit = page
-        .last_visit
-        .as_deref()
-        .and_then(|at| window.minutes(at))
-        .filter(|&at| (start..=now).contains(&at))
-        .map(|at| Marker {
-            at,
-            label: format!("your last visit {}", window.clock(at, feed)),
-        });
     let accessible_label = match window.range {
         Range::Today => format!(
             "Run timeline {} to {}",
@@ -261,18 +425,33 @@ pub fn plot(page: &TimelinePage, window: &Window, feed: &Feed) -> Plot {
     Plot {
         start,
         end: now.max(start + 60),
-        ticks,
+        ticks: ticks(window, start, now),
         owner,
-        pm,
-        lanes,
-        last_visit,
+        auto,
+        lanes: lanes
+            .into_iter()
+            .map(|(_, id, lane)| PlotLane {
+                id,
+                title: lane.title,
+                segments: lane.segments,
+                wait: (!lane.waits.is_empty()).then(|| lane.waits.join(" · ")),
+                opens: lane.opens,
+            })
+            .collect(),
         now: Marker {
             at: now,
             label: "now".into(),
         },
         accessible_label,
-        completeness: completeness_label(&page.completeness),
     }
+}
+
+/// A task's title from the board; a closed task is not on it and keeps its id alone.
+fn task_title(task: &str, feed: &Feed) -> String {
+    feed.board
+        .task(task)
+        .map(|task| task.title().to_owned())
+        .unwrap_or_default()
 }
 
 fn ticks(window: &Window, start: i64, now: i64) -> Vec<PlotTick> {
@@ -302,7 +481,8 @@ fn ticks(window: &Window, start: i64, now: i64) -> Vec<PlotTick> {
     }
 }
 
-/// The longest recorded waits, holds and idle stretches in the window, longest first.
+/// The longest recorded blocks, acceptance holds and idle stretches in the window, longest
+/// first.
 pub fn gaps(plot: &Plot, window: &Window, feed: &Feed) -> Vec<Gap> {
     let mut gaps: Vec<(i64, Gap)> = plot
         .lanes
@@ -319,9 +499,9 @@ pub fn gaps(plot: &Plot, window: &Window, feed: &Feed) -> Vec<Gap> {
                 window.clock(s.end, feed)
             };
             let wording = match s.kind {
-                Kind::Ask => format!("waited for {}", duration(length)),
+                Kind::Ask => format!("blocked for {} until the next move", duration(length)),
                 Kind::Held => format!("waited for acceptance for {}", duration(length)),
-                _ => format!("idle for {} with no recorded work", duration(length)),
+                _ => format!("its run went quiet for {}", duration(length)),
             };
             (
                 length,
@@ -345,27 +525,62 @@ pub fn gaps(plot: &Plot, window: &Window, feed: &Feed) -> Vec<Gap> {
 /// What the gaps section says when nothing in the window waited an hour or more.
 pub fn empty_gaps_line(range: Range) -> &'static str {
     match range {
-        Range::Today => "No wait, acceptance hold or idle stretch lasted an hour or more today.",
+        Range::Today => "No block, acceptance hold or idle run lasted an hour or more today.",
         Range::SevenDays => {
-            "No wait, acceptance hold or idle stretch lasted an hour or more in the last seven days."
+            "No block, acceptance hold or idle run lasted an hour or more in the last seven days."
         }
     }
 }
 
-/// How the live gaps are derived, in place of the preview's illustrative-data note.
-pub const LIVE_GAPS_NOTE: &str = "From corral's recorded phase times. Phases recorded without times are named on their lane, not drawn.";
+/// How the gaps are derived from what corral records.
+pub const LIVE_GAPS_NOTE: &str = "From corral's recorded runs and events: a block or a ready \
+                                  review waits until the task's next move; a run is idle from \
+                                  when its output went quiet.";
 
-/// The burn-up as a step series from its first recorded change to now; None when corral has
-/// recorded no goal changes.
+/// The burn-up as a step series from its first recorded event to now: scope counts the tasks
+/// created, less those dropped; landed counts the tasks landed, less those reopened. A reopened
+/// drop comes back into scope. None when corral has recorded none of these.
 pub fn burnup_series(burnup: &WireBurnup, now: u64, feed: &Feed) -> Option<BurnupSeries> {
     let now = Timestamp::from_second(i64::try_from(now).ok()?).ok()?;
-    let mut points: Vec<(Timestamp, u32, u32)> = burnup
-        .points
+    let mut events: Vec<&Event> = burnup
+        .events
         .iter()
-        .filter_map(|p| Some((p.at.parse::<Timestamp>().ok()?, p.total, p.landed)))
-        .filter(|p| p.0 <= now)
+        .filter(|event| event.ts <= now)
         .collect();
-    points.sort_by_key(|p| p.0);
+    events.sort_by_key(|event| (event.ts, event.seq));
+    let mut scope = BTreeSet::new();
+    let mut landed = BTreeSet::new();
+    let mut points: Vec<(Timestamp, u32, u32)> = Vec::new();
+    for event in events {
+        let Some(task) = event.task.as_deref() else {
+            continue;
+        };
+        match event.kind {
+            EventKind::Created => {
+                scope.insert(task);
+            }
+            EventKind::Landed => {
+                // A task landed without its creation in the store still counts in scope.
+                scope.insert(task);
+                landed.insert(task);
+            }
+            EventKind::Dropped => {
+                scope.remove(task);
+                landed.remove(task);
+            }
+            EventKind::Reopened => {
+                scope.insert(task);
+                landed.remove(task);
+            }
+            _ => continue,
+        }
+        let count = |set: &BTreeSet<&str>| u32::try_from(set.len()).unwrap_or(u32::MAX);
+        let point = (event.ts, count(&scope), count(&landed));
+        match points.last_mut() {
+            Some(last) if last.0 == event.ts => *last = point,
+            _ => points.push(point),
+        }
+    }
     let first = points.first()?.0;
     let span = (now.as_second() - first.as_second()).max(1) as f32;
     let at = |t: Timestamp| (t.as_second() - first.as_second()) as f32 / span;
@@ -382,9 +597,9 @@ pub fn burnup_series(burnup: &WireBurnup, now: u64, feed: &Feed) -> Option<Burnu
         series.push((1.0, total, landed));
     }
     let day = stamp(&first.to_string(), feed);
-    let scope = match burnup.scope.as_str() {
-        "all" | "workspace" => "workspace".to_owned(),
-        other => other.to_owned(),
+    let scope = match burnup.scope.split_once(':') {
+        Some((kind, id)) => format!("{kind} {id}"),
+        None => burnup.scope.clone(),
     };
     Some(BurnupSeries {
         title: format!("Goal burn-up · {scope}"),
@@ -392,58 +607,8 @@ pub fn burnup_series(burnup: &WireBurnup, now: u64, feed: &Feed) -> Option<Burnu
         points: series,
         first: day,
         last: "today".into(),
-        completeness: completeness_label(&burnup.completeness),
+        counts: BURNUP_COUNTS,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use corral_protocol::detail::{TimelineLane, TimelineSegment};
-
-    #[test]
-    fn segment_without_recorded_start_is_named_not_drawn() {
-        let tz = TimeZone::UTC;
-        let now = Timestamp::from_second(1_700_000_000).unwrap();
-        let window = window(Range::Today, 1_700_000_000, &tz).unwrap();
-        let page = TimelinePage {
-            lanes: vec![TimelineLane {
-                id: "T-1".into(),
-                title: "t".into(),
-                segments: vec![
-                    TimelineSegment {
-                        kind: TimelineKind::Gate,
-                        from: None,
-                        to: Some(now.to_string()),
-                        note: None,
-                    },
-                    TimelineSegment {
-                        kind: TimelineKind::Run,
-                        from: Some((now - 2.hours()).to_string()),
-                        to: None,
-                        note: None,
-                    },
-                ],
-            }],
-            owner_actions: vec![],
-            pm: vec![],
-            last_visit: None,
-            completeness: Default::default(),
-        };
-        let plot = plot(
-            &page,
-            &window,
-            &Feed {
-                now: 1_700_000_000,
-                time_zone: Some(tz),
-                ..Feed::default()
-            },
-        );
-        let lane = &plot.lanes[0];
-        assert_eq!(lane.segments.len(), 1);
-        assert_eq!(lane.segments[0].end, plot.now.at);
-        assert!(lane.missing.as_deref().is_some_and(|m| m.contains("gate")));
-    }
 }
 
 #[cfg(test)]

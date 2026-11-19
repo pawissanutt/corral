@@ -14,10 +14,8 @@ fn part(entry: &ThreadEntry) -> Option<(&str, usize)> {
     let (base, index) = entry.id.rsplit_once('/')?;
     let index = index.parse().ok()?;
     match entry.kind {
-        EntryKind::Answer | EntryKind::PmReply if base.ends_with("/answer") => Some((base, index)),
-        EntryKind::Message | EntryKind::PmMessage if base.ends_with("/text") => {
-            Some((base.strip_suffix("/text")?, index))
-        }
+        EntryKind::Answer if base.ends_with("/answer") => Some((base, index)),
+        EntryKind::Message if base.ends_with("/text") => Some((base.strip_suffix("/text")?, index)),
         _ => None,
     }
 }
@@ -121,18 +119,6 @@ pub(super) fn has_history(
                 .keys()
                 .any(|id| super::entry_session(id.as_str()) == Some(row.id.as_str()))
         })
-}
-
-/// A stream is only a temporary override. Never replace a newer canonical suffix with an
-/// older stream snapshot, and wait for every part when the server reports completeness.
-pub(super) fn covers(entry: &ThreadEntry, stream: &str) -> bool {
-    let Some(text) = entry.text.as_deref() else {
-        return false;
-    };
-    match &entry.part {
-        Some(part) => part.complete && text.len() as u64 == part.bytes,
-        None => text.starts_with(stream),
-    }
 }
 
 /// Older daemons use a workspace label as the title; prefer the first loaded owner message

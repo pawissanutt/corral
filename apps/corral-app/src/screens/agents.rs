@@ -1,7 +1,8 @@
-//! The Agents destination: the roster of sessions with the selected one's panel, and one agent's
-//! full session page, its transcript beside the run, or its terminal. Everything shown comes from
-//! `model::agents`, built from the feed's rows and details; this module lays it out per form and
-//! sends every press to the model's reducer.
+//! The Agents destination: the roster of live runs and the quick thread with the selected one's
+//! panel, and one run's full session page: its terminal with the pane's keys, or, from a corrald
+//! that serves them, its transcript beside the run. Everything shown comes from `model::agents`,
+//! built from the feed's rows and details; this module lays it out per form and sends every
+//! press to the model's reducer. Each run's row, panel and page carry its Session menu.
 
 mod console;
 mod controls;
@@ -10,47 +11,57 @@ mod keys;
 mod panel;
 mod panel_summary;
 mod reply;
+mod rewind;
 mod roster;
 mod roster_rows;
 mod segs;
 mod session;
+mod surface;
 mod transcript;
 
+pub(crate) use controls::session_menu;
+pub(crate) use rewind::sheet as rewind_sheet;
+pub(crate) use transcript::watch as watch_session;
+
+use corral_protocol::app::SESSION_V1;
 use corral_protocol::detail::{DetailRef, STREAM_TERMINAL_V1};
+use corral_protocol::rows::AgentRow;
 use nsh_core::prelude::*;
 
 use crate::model::Id;
 use crate::model::agents::{self, Action, View};
 use crate::model::daemon::Link;
 use crate::model::projects::FilterScreen;
-use crate::screens::{PhonePage, assistant};
+use crate::model::work::{session_task, task_ref};
+use crate::screens::PhonePage;
 use crate::state::AppState;
 
 /// How a press reaches the agents model: through the full session page's route selection
 /// ([`run`]) or through the roster's own selection ([`run_roster`]).
 type Dispatch = fn(AppState, Action);
 
-/// The Agents page (`pgAgents`). Desktop: the page head with its counts, role tabs and Launch PM,
-/// the project scope, the roster one line per session with the selected session's panel beside
-/// or over it, then the assistant sessions and Filed from chat. Phone: the same head and scopes
-/// over two-line rows that push the session page. Terminal: the roster as a table of Cells with
-/// the panel beside it on a wide grid, in its place otherwise.
+/// The Agents page (`pgAgents`). Desktop: the page head with its counts and role tabs, the
+/// project scope, the roster one line per session with the selected session's panel beside or
+/// over it, then the assistant sessions. Phone: the same head and scopes over two-line rows that
+/// push the session page. Terminal: the roster as a table of Cells with the panel beside it on a
+/// wide grid, in its place otherwise.
 pub fn screen(app: AppState) -> AnyElement {
     roster::screen(app)
 }
 
 /// A session page on desktop and terminal, by its session id: the header with back to Agents,
-/// the Transcript | Terminal switch (the `` ` `` key toggles it too), then the transcript with
-/// its reply box beside the run, or the terminal surface, from the feed's row, transcript page
-/// and its pane's screen.
+/// its Session menu and, where corrald serves transcripts, the Transcript | Terminal switch (the
+/// `` ` `` key toggles it too), the strip with the run's state, then the terminal with the
+/// pane's keys, or the transcript with its reply box beside the run.
 pub fn live_session(app: AppState, id: Id) -> AnyElement {
     let view = computed({
         let id = id.clone();
         move || daemon_session(app, &id)
     });
     follow(app, id.clone());
-    transcript::watch(app, id.clone());
-    chat(app, id.clone());
+    if untracked(|| app.capable(SESSION_V1)) {
+        transcript::watch(app, id.clone());
+    }
     session::page(app, view, id)
 }
 
@@ -61,31 +72,10 @@ pub fn live_session_phone(app: AppState, id: Id) -> PhonePage {
         move || daemon_session(app, &id)
     });
     follow(app, id.clone());
-    transcript::watch(app, id.clone());
-    chat(app, id.clone());
+    if untracked(|| app.capable(SESSION_V1)) {
+        transcript::watch(app, id.clone());
+    }
     session::phone(app, view, id)
-}
-
-/// While an assistant's session page is open, subscribes the thread its composer chats in (the
-/// reference-counted thread scope; released when the page closes or the scope changes, through
-/// the source it mounted on) and settles the composer's session operations, as the thread page
-/// does.
-fn chat(app: AppState, id: Id) {
-    assistant::watch_ops(app);
-    let scoped = untracked(|| app.scope());
-    let scope = computed(move || {
-        app.feed.with(|feed| {
-            feed.agents
-                .get(id.as_str())
-                .filter(|row| row.role == "assistant")
-                .map(|row| agents::chat_scope(feed, row))
-        })
-    });
-    effect(move || {
-        if let Some(scope) = scope.get() {
-            untracked(|| assistant::open_scope(scoped, scope, false));
-        }
-    });
 }
 
 /// Runs one of the model's actions through the feed-backed reducer (with the feed and the root
@@ -96,8 +86,8 @@ fn run(app: AppState, action: Action) {
     });
 }
 
-/// Runs one of the model's actions against the roster's selection: the panel's reply, keys and
-/// controls reach the selected session without the route changing.
+/// Runs one of the model's actions against the roster's selection: the panel's reply reaches
+/// the selected session without the route changing.
 fn run_roster(app: AppState, action: Action) {
     app.reduce(app.agents, move |state, feed, _, env| {
         state.act_roster(action, feed, env)
@@ -126,49 +116,48 @@ fn panel_view(app: AppState) -> Option<agents::RosterPanel> {
     })
 }
 
-/// A session as the model builds it now (tracked), with the reply to its latest
-/// `assistant.session` control operation.
+/// A session as the model builds it now (tracked).
 fn daemon_session(app: AppState, id: &Id) -> agents::Session {
     let env = app.env();
     let via = app.via();
-    let op = app
-        .agents
-        .with(|state| agents::op_key(state, id))
-        .and_then(|key| app.with_operation(&key, |op| op.map(agents::op_status)));
     app.feed.with(|feed| {
         app.agents
-            .with(|state| agents::live_session(state, id, feed, env, &via, op.as_ref()))
+            .with(|state| agents::live_session(state, id, feed, env, &via))
     })
 }
 
-/// Keeps the open session's details current: its transcript page whenever its row changes (not
-/// while the owner reads an earlier page), and its pane's screen while the terminal shows: read
-/// when first shown, then revalidated once a tick of the feed's clock while the link is up. A
-/// failed read is not repeated every tick; it is tried again once the row changes or the link
-/// comes back, or by the owner's Refresh. A corrald that streams terminals sends the screen
-/// itself, its first frame complete, to the session page's stream; reading it here as well
-/// would race that stream, so then nothing is read. The session page itself refreshes the
-/// transcript once a reply is delivered. Reads go to the source the page mounted on.
+/// The run's row as served, compared by equality: rows carry no revision.
+fn row_of(app: AppState, id: Id) -> Memo<Option<AgentRow>> {
+    computed(move || app.feed.with(|feed| feed.agents.get(id.as_str()).cloned()))
+}
+
+/// Keeps the open session's details current: its transcript page, from a corrald that serves
+/// transcripts, whenever its row changes (not while the owner reads an earlier page), and its
+/// pane's screen while the terminal shows: read when first shown, then revalidated once a tick
+/// of the feed's clock while the link is up. A failed read is not repeated every tick; it is
+/// tried again once the row changes or the link comes back, or by the owner's Refresh. A
+/// corrald that streams terminals sends the screen itself, its first frame complete, to the
+/// session page's stream; reading it here as well would race that stream, so then nothing is
+/// read. The session page itself refreshes the transcript once a reply is delivered. Reads go
+/// to the source the page mounted on.
 fn follow(app: AppState, id: Id) {
     let scoped = untracked(|| app.scope());
     let transcript = DetailRef::Session { id: id.to_string() };
     let capture = DetailRef::Terminal { id: id.to_string() };
-    let rev = computed({
-        let id = id.clone();
-        move || {
-            app.feed
-                .with(|feed| feed.agents.get(id.as_str()).map(|row| row.rev))
-        }
-    });
-    let seen_rev = stored(None::<Option<u64>>);
+    let row = row_of(app, id.clone());
+    let transcripts = computed(move || app.capable(SESSION_V1));
+    let seen_row = stored(None::<Option<AgentRow>>);
     {
         let id = id.clone();
         effect(move || {
-            let now = rev.get();
+            let now = row.get();
+            if !transcripts.get() {
+                return;
+            }
             let earlier = app
                 .agents
                 .with_untracked(|state| state.earlier.contains(id.as_str()));
-            match seen_rev.replace(Some(now)) {
+            match seen_row.replace(Some(now.clone())) {
                 None => untracked(|| scoped.load(transcript.clone())),
                 Some(before) if before != now && !earlier => {
                     untracked(|| scoped.refresh(transcript.clone()));
@@ -177,18 +166,36 @@ fn follow(app: AppState, id: Id) {
             }
         });
     }
-    let has_pane = computed(move || {
-        app.feed.with(|feed| {
-            feed.agents
-                .get(id.as_str())
-                .is_some_and(|row| row.pane.is_some())
-        })
+    // A run that left the roster is read from its task: when it ended headless, its log is.
+    if let Some(task) = session_task(id.as_str()).map(task_ref) {
+        let lost = computed(move || row.with(Option::is_none));
+        effect(move || {
+            if lost.get() {
+                untracked(|| scoped.load(task.clone()));
+            }
+        });
+    }
+    let ended = computed({
+        let id = id.clone();
+        move || {
+            app.feed
+                .with(|feed| agents::ended_run(feed, id.as_str()).is_some())
+        }
     });
+    let has_screen = computed(move || {
+        ended.get() || row.with(|row| row.as_ref().is_some_and(|row| row.run.session.is_some()))
+    });
+    // An ended run's log does not change, so it is read once instead of streamed or revalidated.
     let streamed = computed(move || app.feed.with(|feed| feed.capable(STREAM_TERMINAL_V1)));
+    let viewed = id.clone();
     let shown = computed(move || {
-        has_pane.get()
-            && !streamed.get()
-            && app.agents.with(|state| state.live_view == View::Terminal)
+        has_screen.get()
+            && (ended.get() || !streamed.get())
+            && (!transcripts.get()
+                || app.feed.with(|feed| {
+                    app.agents
+                        .with(|state| state.view_for(feed, viewed.as_str()) == View::Terminal)
+                }))
     });
     {
         let capture = capture.clone();
@@ -204,18 +211,18 @@ fn follow(app: AppState, id: Id) {
         app.feed
             .with(|feed| (feed.link == Link::Up).then_some(feed.now))
     });
-    let tried_rev = stored(None::<Option<u64>>);
+    let tried_row = stored(None::<Option<AgentRow>>);
     effect(move || {
-        if !shown.get() {
+        if !shown.get() || ended.get() {
             return;
         }
         if tick.get().is_none() {
-            tried_rev.replace(None);
+            tried_row.replace(None);
             return;
         }
         untracked(|| {
-            let row = rev.get();
-            let changed = tried_rev.replace(Some(row)) != Some(row);
+            let now = row.get();
+            let changed = tried_row.replace(Some(now.clone())) != Some(now);
             let failed = app.feed.with(|feed| {
                 feed.detail(&capture)
                     .is_some_and(|cache| cache.error.is_some())

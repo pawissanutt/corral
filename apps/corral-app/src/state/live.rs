@@ -1,41 +1,22 @@
-//! The canonical feed bridge: shared live navigation, authority gates and reducer effects.
-//! The selected driver either sends typed requests to corrald or applies an isolated synthetic
-//! preview locally; a preview intent never enters the real client's queue.
+//! The canonical feed bridge: shared live navigation, details and reducer effects. The
+//! selected driver either sends typed requests to corrald or applies an isolated synthetic
+//! preview locally; a preview intent never enters the real client's queue. Engine operations
+//! go through `ops`.
 
-use corral_protocol::app::{ActSubmit, ConfirmProof, PREVIEW_TTL_SECS};
 use corral_protocol::assistant::{AssistantSend, ContextRef};
-use corral_protocol::cmd::CmdResultQuery;
 use corral_protocol::detail::{DetailGet, DetailRef};
 
 use nsh_core::prelude::*;
 
 use super::AppState;
 use crate::client::requests;
-use crate::model::act::{self, Confirmable, PreviewState};
+use crate::model::agents::{Control, PaneAsk};
 use crate::model::daemon::{DetailCache, Feed, Operation};
+use crate::model::effect::PaneRequest;
 use crate::model::health::{self, Availability};
-use crate::model::{
-    Act, ActStatus, AskTarget, Authority, Destination, Effect, Env, Id, Live, Overlay, Selection,
-};
+use crate::model::{Destination, Effect, Env, Id, Live, Overlay, Selection};
 
-/// How long `act.result` may wait for a running command when recovering it.
-const RECOVER_WAIT_MS: u32 = 5_000;
-
-const NO_SESSION: &str = "Refused: no app session with corrald yet. Nothing was sent.";
 const NO_LINK: &str = "Refused: needs a live connection to corrald. Nothing was queued.";
-const NO_SOURCE: &str = "Not connected. Choose Preview explicitly to use sample data.";
-
-/// Where a watched command stands between this device and its receipt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Watch {
-    /// Sent without a proof; corrald may still require a confirmation for it.
-    Sent,
-    /// This device's confirmation sheet is open for it; nothing settles until it confirms
-    /// or cancels.
-    Confirming,
-    /// Sent with this device's fresh proof; a refusal now is its outcome.
-    Confirmed,
-}
 
 impl AppState {
     /// Tracked: the live record whose page is on top.
@@ -64,19 +45,11 @@ impl AppState {
         self.nav.update(|nav| nav.selection.set(&live));
     }
 
-    /// Opens the one Ask composer with a real context, a draft and the recipient when given.
-    pub fn ask_about(
-        &self,
-        context: Option<ContextRef>,
-        text: Option<String>,
-        target: Option<AskTarget>,
-    ) {
+    /// Opens the one Ask composer with a real context and a draft when given.
+    pub fn ask_about(&self, context: Option<ContextRef>, text: Option<String>) {
         self.ask_context.set(context);
         if let Some(text) = text {
             self.ask_draft.set(text);
-        }
-        if let Some(target) = target {
-            self.ask_target.set(target);
         }
         self.open_ask();
     }
@@ -92,11 +65,6 @@ impl AppState {
         self.feed.with(|feed| feed.capable(capability))
     }
 
-    /// Tracked: whether this device holds the authority; false without a session.
-    pub fn can(&self, authority: Authority) -> bool {
-        self.feed.with(|feed| granted(feed, authority))
-    }
-
     /// Enqueues an intent for client admission, not an ownership transfer. The composer
     /// retains its words and attachments until the matching persisted acceptance arrives.
     pub fn send_message(&self, mut message: AssistantSend) -> bool {
@@ -105,26 +73,12 @@ impl AppState {
         if self.fixture() {
             return self.preview_send(message);
         }
-        if let Some(refusal) = self.assistant_refusal() {
-            self.toast(refusal);
-            return false;
-        }
         if requests::assistant_send(message) {
             true
         } else {
             self.toast("Not sent: the app's connection to corrald is not running. Your words and attachments stay here.");
             false
         }
-    }
-
-    /// Tracked: this device may message the assistant: granted, or no session right now to say
-    /// otherwise (offline, a message queues in the device outbox under its own identity).
-    pub fn may_message(&self) -> bool {
-        self.feed.with(|feed| {
-            feed.session
-                .as_ref()
-                .is_none_or(|_| granted(feed, Authority::Assistant))
-        })
     }
 
     /// Tracked: the authenticated name of this device.
@@ -140,7 +94,7 @@ impl AppState {
                 .session
                 .as_ref()
                 .map(|session| session.device.id.as_str());
-            crate::model::inbox::provenance(feed, "owner", device, "app")
+            crate::model::provenance::provenance(feed, "owner", device, "app")
         })
     }
 
@@ -179,88 +133,6 @@ impl AppState {
         self.run(effects);
     }
 
-    /// Runs a typed canonical command: refused visibly without a session, the authority or a
-    /// live link; previewed and confirmed on this device when Confirm-class; never resent
-    /// under an identity corrald already knows.
-    pub fn dispatch(&self, act: Act) {
-        if !untracked(|| self.daemon()) {
-            self.toast(NO_SOURCE);
-            return;
-        }
-        if let Some(refusal) = self.refusal(act.authority(), true) {
-            self.toast(refusal);
-            return;
-        }
-        if self
-            .watching
-            .with_untracked(|watching| watching.contains_key(&act.key))
-        {
-            // Already being confirmed or awaiting its receipt: one identity, one flight.
-            let status = untracked(|| self.act_status(&act.key)).unwrap_or(ActStatus::Pending);
-            self.toast(format!("{} · {}", act.title, status.line()));
-            return;
-        }
-        let known = self.feed.with_untracked(|feed| {
-            act::status(feed, &act.key).filter(|_| !act::needs_confirmation(feed, &act.key))
-        });
-        if let Some(status) = known {
-            self.toast(format!("{} · {}", act.title, status.line()));
-            return;
-        }
-        let confirm = act.confirm;
-        let subject = Confirmable::Act(act);
-        let stage = if confirm {
-            Watch::Confirming
-        } else {
-            Watch::Sent
-        };
-        self.watching
-            .update(|watching| _ = watching.insert(subject.key(), (subject.clone(), stage)));
-        if confirm {
-            self.preview(subject);
-        } else if let Confirmable::Act(act) = &subject {
-            if self.fixture() {
-                self.simulate(act);
-            } else {
-                submit(act, None);
-            }
-        }
-    }
-
-    /// Tracked status of a command this app sent or is confirming.
-    pub fn act_status(&self, key: &Id) -> Option<ActStatus> {
-        if let Some(confirmation) = self
-            .confirmation
-            .with(|pending| pending.clone().filter(|c| c.subject.key() == *key))
-        {
-            return Some(self.feed.with(|feed| match confirmation.state(feed) {
-                PreviewState::Loading => ActStatus::Previewing,
-                PreviewState::Ready(_) => ActStatus::Confirming,
-                PreviewState::Failed(why) => ActStatus::Refused(why),
-            }));
-        }
-        self.device_status(key).or_else(|| {
-            self.feed.with(|feed| act::status(feed, key)).or_else(|| {
-                self.watching
-                    .with(|watching| watching.contains_key(key))
-                    .then_some(ActStatus::Pending)
-            })
-        })
-    }
-
-    /// Asks corrald for the outcome of this exact command, never resubmitting it.
-    pub fn recover(&self, key: &Id) {
-        if self.fixture() {
-            self.run_preview(Effect::Recover(key.clone()));
-            return;
-        }
-        requests::act_result(CmdResultQuery {
-            cmd_id: key.to_string(),
-            wait_ms: RECOVER_WAIT_MS,
-            abandon_if_absent: true,
-        });
-    }
-
     /// Requests the detail when it is absent, stale or failed; idempotent while it loads.
     pub fn load(&self, target: DetailRef) {
         if self.fixture() {
@@ -268,7 +140,7 @@ impl AppState {
                 .feed
                 .with_untracked(|feed| feed.detail(&target).is_none())
             {
-                self.preview_detail(target);
+                self.preview_detail(target, None);
             }
             return;
         }
@@ -290,7 +162,7 @@ impl AppState {
     /// Revalidates the detail with its etag, unless a request is already loading.
     pub fn refresh(&self, target: DetailRef) {
         if self.fixture() {
-            self.preview_detail(target);
+            self.preview_detail(target, None);
             return;
         }
         let wanted = self.feed.with_untracked(|feed| match feed.detail(&target) {
@@ -360,8 +232,12 @@ impl AppState {
                     | Effect::Unattach(_)
                     | Effect::Act(_)
                     | Effect::Device(_)
-                    | Effect::Prompt { .. }
                     | Effect::Send(_)
+                    | Effect::Pane { .. }
+                    | Effect::Control { .. }
+                    | Effect::Answer { .. }
+                    | Effect::Config { .. }
+                    | Effect::Refused(_)
             )
         {
             self.run_preview(effect);
@@ -370,14 +246,9 @@ impl AppState {
         match effect {
             Effect::OpenLive(live) => self.open_live(live),
             Effect::Select(live) => self.select(live),
-            Effect::AskAbout {
-                context,
-                text,
-                target,
-            } => self.ask_about(context, text, target),
+            Effect::AskAbout { context, text } => self.ask_about(context, text),
             Effect::Act(act) => self.dispatch(act),
             Effect::VerbMenu(record) => self.work.update(|state| state.menu = Some(record)),
-            Effect::Recover(key) => self.recover(&key),
             Effect::Device(op) => self.device(op),
             Effect::Detail(get) => {
                 let loading = get.page.is_none()
@@ -404,176 +275,168 @@ impl AppState {
             Effect::CancelSend(key) => {
                 // The client owns whether it ever left: it drops a never-sent or refused one
                 // here and asks corrald for the rest, now or on reconnect.
-                if let Some(refusal) = self.assistant_refusal() {
-                    self.toast(refusal);
-                } else if !requests::assistant_cancel(key.to_string()) {
+                if !requests::assistant_cancel(key.to_string()) {
                     self.toast("Not withdrawn: the app's connection to corrald is not running. Nothing changed.");
                 }
             }
-            Effect::Prompt {
-                answer,
-                title,
-                confirm,
-            } => self.prompt(answer, title, confirm),
+            Effect::Answer { key, answer } => self.answer(key, answer),
             Effect::Thread { scope, open } => _ = requests::thread(scope, open),
-            Effect::Stop(stop) => {
-                if let Some(refusal) = self.refusal(Authority::Assistant, true) {
-                    self.assistant
-                        .update(|state| state.stop_failed(&stop.session, stop.turn));
-                    self.toast(refusal);
+            Effect::Control {
+                session,
+                key,
+                control,
+                confirmed,
+            } => {
+                if control.asks() && !confirmed {
+                    let ask = self.feed.with_untracked(|feed| {
+                        crate::model::agents::ask(feed, session, key, control)
+                    });
+                    self.refusal.set(None);
+                    self.confirm
+                        .set(Some(crate::model::act::Confirming::Control(ask)));
                 } else {
-                    let session = stop.session.clone();
-                    let turn = stop.turn;
-                    let correlation = requests::new_id();
-                    if requests::send(requests::ClientRequest::AssistantStop {
-                        request_id: correlation.clone(),
-                        request: stop,
-                    }) {
-                        self.assistant.update(|state| {
-                            state
-                                .live
-                                .stop_ops
-                                .insert(Id::from(correlation), (session, turn));
-                        });
-                    } else {
-                        self.assistant
-                            .update(|state| state.stop_failed(&session, turn));
-                        self.toast("Stop was not sent: the connection task is not running.");
-                    }
+                    self.send_control(session, key, control);
                 }
             }
-            Effect::Warm(warm) => self.assistant_call(|| _ = requests::assistant_warm(warm)),
+            Effect::Refused(sheet) => self.refusal.set(Some(sheet)),
+            Effect::Warm(warm) => {
+                if let Some(refusal) = self.link_refusal() {
+                    self.toast(refusal);
+                } else {
+                    _ = requests::assistant_warm(warm);
+                }
+            }
             Effect::Draft { thread, text } => _ = requests::save_draft(thread, text),
             Effect::Session { key, op } => {
-                if let Some(refusal) = self.refusal(Authority::Assistant, true) {
-                    self.assistant.update(|state| {
-                        state.settle(
-                            &key,
-                            crate::model::assistant::OpOutcome::Failed(refusal.into()),
-                        );
-                    });
-                    self.toast(refusal);
-                } else {
-                    let correlation = requests::new_id();
-                    if requests::send(requests::ClientRequest::AssistantSession {
+                let correlation = requests::new_id();
+                if self.link_refusal().is_none()
+                    && requests::send(requests::ClientRequest::AssistantSession {
                         request_id: correlation.clone(),
                         request: op,
-                    }) {
-                        self.sessions.update(|sessions| {
-                            sessions.insert(key, Id::from(correlation));
-                        });
-                    } else {
-                        let why = "Not sent: the connection task is not running.";
-                        self.assistant.update(|state| {
-                            state.settle(
-                                &key,
-                                crate::model::assistant::OpOutcome::Failed(why.into()),
-                            );
-                        });
-                        self.toast(why);
-                    }
+                    })
+                {
+                    self.sessions.update(|sessions| {
+                        sessions.insert(key, Id::from(correlation));
+                    });
+                } else {
+                    let why = "Not sent: no live connection to corrald.";
+                    self.assistant.update(|state| {
+                        state.settle(&key, crate::model::assistant::OpOutcome::Failed(why.into()));
+                    });
+                    self.toast(why);
                 }
             }
+            Effect::Pane {
+                session,
+                key,
+                what,
+                request,
+            } => self.pane(session, key, what, request),
+            Effect::Config { key, put } => self.send_config(key, put),
             _ => {}
         }
     }
 
-    /// The refusal a command meets on this device now, if any.
-    pub(super) fn refusal(&self, authority: Authority, needs_link: bool) -> Option<&'static str> {
-        self.feed.with_untracked(|feed| {
-            if needs_link && !feed.ready() {
-                Some(NO_LINK)
-            } else if feed.session.is_none() {
-                Some(NO_SESSION)
-            } else if !granted(feed, authority) {
-                Some(authority.refusal())
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Assistant calls are refused only when a session says this device may not make them.
-    fn assistant_refusal(&self) -> Option<&'static str> {
-        self.feed.with_untracked(|feed| {
-            feed.session
-                .as_ref()
-                .filter(|_| !granted(feed, Authority::Assistant))
-                .map(|_| Authority::Assistant.refusal())
-        })
-    }
-
-    fn assistant_call(&self, call: impl FnOnce()) {
-        match self.refusal(Authority::Assistant, true) {
-            Some(refusal) => self.toast(refusal),
-            None => call(),
-        }
-    }
-
-    fn prompt(
-        &self,
-        answer: corral_protocol::assistant::PromptAnswer,
-        title: String,
-        confirm: bool,
-    ) {
-        if let Some(refusal) = self.refusal(Authority::Assistant, true) {
-            self.toast(refusal);
-            return;
-        }
-        let subject = Confirmable::Prompt { answer, title };
-        let stage = if confirm {
-            Watch::Confirming
+    /// Sends a pane request under its key and remembers it as the session's latest, so the
+    /// session shows how it ended; one that cannot leave says why there instead.
+    fn pane(&self, session: Id, key: Id, what: PaneAsk, request: PaneRequest) {
+        let unsent = if self.fixture() {
+            self.feed
+                .update(|feed| crate::model::preview::pane(feed, &key, &request));
+            None
+        } else if let Some(refusal) = self.link_refusal() {
+            Some(refusal.to_owned())
         } else {
-            Watch::Sent
+            let request_id = key.to_string();
+            let sent = requests::send(match request {
+                PaneRequest::Focus(request) => requests::ClientRequest::PaneFocus {
+                    request_id,
+                    request,
+                },
+                PaneRequest::Keys(request) => requests::ClientRequest::PaneKeys {
+                    request_id,
+                    request,
+                },
+            });
+            (!sent).then(|| "the app's connection task is not running".to_owned())
         };
-        self.watching
-            .update(|watching| _ = watching.insert(subject.key(), (subject.clone(), stage)));
-        if self.fixture() && !confirm {
-            if let Confirmable::Prompt { answer, title } = subject {
-                self.run_preview(Effect::Prompt {
-                    answer,
-                    title,
-                    confirm: false,
+        self.agents
+            .update(|state| state.pane_sent(session, key, what, unsent));
+    }
+
+    /// Sends a session control under its key and remembers it as the session's latest, so the
+    /// session shows how it ended; one that cannot leave says why there instead.
+    pub(super) fn send_control(&self, session: Id, key: Id, control: Control) {
+        let unsent = if self.fixture() {
+            self.feed.update(|feed| {
+                crate::model::preview::control(feed, &key, session.as_str(), control)
+            });
+            None
+        } else if let Some(refusal) = self.link_refusal() {
+            Some(refusal.to_owned())
+        } else {
+            let sent = requests::send(requests::ClientRequest::Session {
+                request_id: key.to_string(),
+                method: control.method(),
+                params: control.params(session.as_str()),
+            });
+            (!sent).then(|| "the app's connection task is not running".to_owned())
+        };
+        self.agents
+            .update(|state| state.control_sent(session, key, control, unsent));
+    }
+
+    /// Sends an answer to an agent's question under its key; the card shows how it ended.
+    fn answer(&self, key: Id, answer: corral_protocol::session::SessionPromptAnswer) {
+        if self.fixture() {
+            self.feed
+                .update(|feed| crate::model::preview::answer(feed, &key, &answer));
+        } else if let Some(refusal) = self.link_refusal() {
+            self.toast(refusal);
+        } else if !requests::send(requests::ClientRequest::PromptAnswer {
+            request_id: key.to_string(),
+            request: answer,
+        }) {
+            self.toast("Not sent: the app's connection task is not running.");
+        }
+    }
+
+    /// Why a call that needs the connection cannot leave now.
+    pub(super) fn link_refusal(&self) -> Option<&'static str> {
+        self.feed
+            .with_untracked(|feed| (!feed.ready()).then_some(NO_LINK))
+    }
+
+    /// Tells each session control's outcome once its reply arrives.
+    pub(super) fn settle_controls(self) {
+        effect(move || {
+            let waiting = self.agents.with(|state| {
+                state
+                    .controls
+                    .values()
+                    .filter(|sent| !sent.told && sent.unsent.is_none())
+                    .map(|sent| sent.key.clone())
+                    .collect::<Vec<_>>()
+            });
+            if waiting.is_empty() {
+                return;
+            }
+            let settled = self.feed.with(|feed| {
+                waiting.iter().any(|key| {
+                    feed.operations
+                        .get(key.as_str())
+                        .is_some_and(|operation| !operation.loading)
+                })
+            });
+            if settled {
+                untracked(|| {
+                    self.reduce(self.agents, |state, feed, _, _| state.settle_controls(feed))
                 });
             }
-            return;
-        }
-        match subject {
-            subject if confirm => self.preview(subject),
-            Confirmable::Prompt { answer, .. } => _ = requests::prompt_answer(answer),
-            Confirmable::Act(_) | Confirmable::DeviceAuthority { .. } => {}
-        }
+        });
     }
-}
-
-pub(super) fn granted(feed: &Feed, authority: Authority) -> bool {
-    feed.session.as_ref().is_some_and(|session| {
-        let granted = &session.authority;
-        match authority {
-            Authority::Reply => granted.reply,
-            Authority::Act => granted.act,
-            Authority::Assistant => granted.assistant,
-            Authority::Admin => granted.admin,
-        }
-    })
 }
 
 fn etag(cache: &DetailCache) -> Option<String> {
     cache.pages.first().map(|page| page.etag.clone())
-}
-
-/// Submits under the command's own identity, issued now and expiring with the preview window.
-pub(super) fn submit(act: &Act, confirm: Option<ConfirmProof>) {
-    let now = jiff::Timestamp::now();
-    let expires = now
-        .checked_add(jiff::SignedDuration::from_secs(PREVIEW_TTL_SECS as i64))
-        .unwrap_or(now);
-    requests::act_submit(ActSubmit {
-        cmd_id: act.key.to_string(),
-        expect: act.expect.clone(),
-        issued_at: now.to_string(),
-        expires_at: expires.to_string(),
-        command: act.command.clone(),
-        confirm,
-    });
 }

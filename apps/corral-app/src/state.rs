@@ -1,13 +1,15 @@
 //! App signals, persistence and effect dispatch. Domain reducers stay pure; this layer applies
-//! their effects in order and owns transient confirmations, overlays and toast timing. The live
-//! bridge to corrald (`live`) dispatches typed commands, details and assistant calls; `keys`
-//! routes the keyboard.
+//! their effects in order and owns the confirm and refusal sheets, overlays and toast timing.
+//! The live bridge to corrald (`live`) dispatches details and assistant calls, `ops` submits
+//! engine operations; `keys` routes the keyboard.
 
 mod attach;
-mod confirmation;
+mod config;
 mod devices;
+mod finder;
 mod keys;
 mod live;
+mod ops;
 mod preview;
 mod projects;
 mod selection;
@@ -21,12 +23,12 @@ use corral_protocol::assistant::ContextRef;
 use nsh_core::prelude::*;
 use nsh_core::storage::Storage;
 
-use crate::model::act::{Confirmable, Confirmation};
+use crate::model::act::RefusalSheet;
 use crate::model::commands::Action;
 use crate::model::{
-    AskTarget, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay,
-    SettingsSection, SidebarPref, Snapshot, ThemeChoice, agents, assistant, daemon, inbox, plans,
-    review, settings, timeline, usage, work,
+    Act, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay, SettingsSection,
+    SidebarPref, Snapshot, ThemeChoice, agents, artifacts, assistant, daemon, plans, review,
+    settings, timeline, usage, work,
 };
 
 const DESTINATION_KEY: &str = "corral.destination";
@@ -46,21 +48,26 @@ pub struct AppState {
     daemon_feed: Signal<daemon::Feed>,
     /// Invalidates a system picker opened before a data-source change.
     source_revision: Signal<u64>,
-    pub ask_target: Signal<AskTarget>,
     pub ask_draft: Signal<String>,
     /// Grows by one each time Ask opens, so the composer focuses its field.
     pub ask_focus: Signal<u32>,
-    pub inbox: source::StateSource<inbox::State>,
+    /// The test id of a control a direct key asked to take the keyboard focus (`Effect::Focus`),
+    /// until it has taken it or the next commit has passed.
+    pub focus_to: Signal<Option<&'static str>>,
     pub work: source::StateSource<work::State>,
     pub plans: source::StateSource<plans::State>,
     pub timeline: Signal<timeline::State>,
     pub usage: Signal<usage::State>,
+    pub artifacts: Signal<artifacts::State>,
     pub agents: source::StateSource<agents::State>,
     pub review: source::StateSource<review::State>,
     pub settings: source::StateSource<settings::State>,
     pub assistant: source::StateSource<assistant::State>,
-    /// Fresh device confirmation shared by the daemon and the synthetic preview.
-    pub confirmation: Signal<Option<Confirmation>>,
+    /// The destructive or forced operation, or the session control, waiting for its one local
+    /// confirmation.
+    pub confirm: Signal<Option<crate::model::act::Confirming>>,
+    /// The engine's last refusal and its next steps, until one is pressed or it is closed.
+    pub refusal: Signal<Option<RefusalSheet>>,
     /// The real context "Ask about this" attached to the composer; cleared when Ask closes.
     pub ask_context: Signal<Option<ContextRef>>,
     /// Independent per-store screen scopes persisted as `corral.filters`.
@@ -78,11 +85,8 @@ pub struct AppState {
     /// The app's root owner: a picker's answer is awaited under it, so closing Ask or the
     /// sheet while the system picker is up does not drop the picked files.
     pub root: Owner,
-    /// Live commands sent from here whose receipt has not been shown yet, and where each
-    /// stands with this device's confirmation.
-    watching: Signal<BTreeMap<Id, (Confirmable, live::Watch)>>,
-    /// Revision under which the open device-bound preview was requested.
-    confirmation_revision: Signal<u64>,
+    /// Operations submitted from here whose receipt has not been shown yet.
+    watching: Signal<BTreeMap<Id, Act>>,
     device_ops: Signal<BTreeMap<Id, devices::DeviceOperation>>,
     /// Assistant session operations by their caller key, to the client's correlation.
     sessions: Signal<BTreeMap<Id, Id>>,
@@ -103,11 +107,18 @@ pub struct AppState {
     /// On the destination's keyboard list (Now's, Inbox's): its keys act while the focus is in
     /// it, or nowhere.
     pub list_keys: ElementRef,
+    /// The Now task row that holds the keyboard focus, or that a reply sent beside the list hands
+    /// it to: the list's Enter opens the selected task only while the focus is on its row (or
+    /// nowhere), so Enter on a focused Waiting toggle or another row presses that control.
+    pub focused_row: Signal<Option<String>>,
+    /// Press-opened menus open now: the terminal's key line gives a menu's keys while any is.
+    pub menus: Signal<u32>,
     key_focus: Signal<keys::KeyFocus>,
 }
 
 impl AppState {
-    /// Restores preferences, starts root-owned persistence and toast timing, and binds non-phone keys.
+    /// Restores preferences, starts root-owned persistence and toast timing, and binds the keys
+    /// (on the phone, only the palette's).
     pub fn install(form: Form) -> AppState {
         let pairing_link = crate::client::pairing_link();
         let mut nav = NavState::new(form);
@@ -145,20 +156,9 @@ impl AppState {
                 preference(THEME_KEY, ThemeChoice::from_slug).unwrap_or(ThemeChoice::System),
             ),
             sidebar: signal(preference(SIDEBAR_KEY, SidebarPref::from_slug).unwrap_or_default()),
-            ask_target: signal(AskTarget::Assistant),
             ask_draft: signal(String::new()),
             ask_focus: signal(0),
-            inbox: source::StateSource::new(
-                data,
-                inbox::State {
-                    ids: crate::model::id::IdSupply::new(format!("{namespace}-id")),
-                    ..Default::default()
-                },
-                inbox::State {
-                    ids: crate::model::id::IdSupply::new(format!("{namespace}-if")),
-                    ..Default::default()
-                },
-            ),
+            focus_to: signal(None),
             work: source::StateSource::new(
                 data,
                 work::State {
@@ -183,6 +183,7 @@ impl AppState {
             ),
             timeline: signal(timeline::State::default()),
             usage: signal(usage::State::default()),
+            artifacts: signal(artifacts::State::default()),
             agents: source::StateSource::new(
                 data,
                 agents::State {
@@ -227,7 +228,8 @@ impl AppState {
                     ..Default::default()
                 },
             ),
-            confirmation: signal(None),
+            confirm: signal(None),
+            refusal: signal(None),
             ask_context: signal(None),
             filters: signal(projects::load_filters()),
             project_context_removed: signal(None),
@@ -237,7 +239,6 @@ impl AppState {
             ask_field_error: signal(None),
             root: Owner::current(),
             watching: signal(BTreeMap::new()),
-            confirmation_revision: signal(0),
             device_ops: signal(BTreeMap::new()),
             sessions: signal(BTreeMap::new()),
             toast: signal_with(None, SignalEquals::Never),
@@ -247,6 +248,8 @@ impl AppState {
             sidebar_peek: signal(false),
             focus_root: element_ref(),
             list_keys: element_ref(),
+            focused_row: signal(None),
+            menus: signal(0),
             key_focus: signal(keys::KeyFocus::default()),
         };
         app.follow_browser_pairing();
@@ -263,11 +266,13 @@ impl AppState {
         app.watch_receipts();
         app.follow_sidebar();
         app.follow_projects();
-        app.latch_previews();
+        app.settle_controls();
+        app.settle_config();
         app.follow_cached_feed();
-        app.follow_authority();
         app.watch_device_receipts();
-        if form != Form::Phone {
+        if form == Form::Phone {
+            app.bind_phone_keys();
+        } else {
             app.bind_keys();
         }
         app
@@ -392,15 +397,28 @@ impl AppState {
         }
     }
 
-    /// Escape priority: confirmation, model list, newest overlay, the selection on the Agents or
-    /// Now page in view, the narrow sidebar's labels, then top page.
+    /// Escape priority: confirm sheet, refusal sheet, model list, the operation composer, newest
+    /// overlay, the selection on the Agents or Now page in view, the narrow sidebar's labels,
+    /// then top page.
     pub fn close_newest(&self) {
-        if self.confirmation.get_untracked().is_some() {
+        if self.confirm.get_untracked().is_some() {
             self.confirm_no();
+            return;
+        }
+        if self.refusal.get_untracked().is_some() {
+            self.close_refusal();
             return;
         }
         if self.work.with_untracked(|state| state.menu.is_some()) {
             self.work.update(|state| state.menu = None);
+            return;
+        }
+        if self.work.with_untracked(|state| state.composer.is_some()) {
+            self.work.update(|state| state.composer = None);
+            return;
+        }
+        if self.agents.with_untracked(|state| state.rewind.is_some()) {
+            self.agents.update(|state| state.rewind = None);
             return;
         }
         if self.ask_field.with_untracked(Option::is_some) {
@@ -442,7 +460,8 @@ impl AppState {
             self.hotkey.set(false);
             self.share.set(false);
             self.lock.set(false);
-            self.invalidate_confirmations();
+            self.confirm.set(None);
+            self.refusal.set(None);
             let uploads = self.ask_staged.with_untracked(|staged| {
                 staged
                     .iter()
@@ -525,16 +544,6 @@ impl AppState {
         self.toast.set(Some(text.into()));
     }
 
-    /// Confirms the exact command shown by the shared device confirmation sheet.
-    pub fn confirm_yes(&self) {
-        self.confirm_live();
-    }
-
-    /// Cancels without applying or sending anything.
-    pub fn confirm_no(&self) {
-        self.cancel_live();
-    }
-
     /// Applies reducer effects in source order through the selected feed's driver.
     pub fn run(&self, effects: Vec<Effect>) {
         for effect in effects {
@@ -544,6 +553,12 @@ impl AppState {
                 Effect::GoSettings(section) => self.go_settings(section),
                 Effect::Back => self.back(),
                 Effect::CloseAsk => self.close(Overlay::Ask),
+                Effect::FindArtifacts(task) => self.find_artifacts(task),
+                Effect::Focus(id) => {
+                    let focus_to = self.focus_to;
+                    focus_to.set(Some(id));
+                    after_answer(move || focus_to.set(None));
+                }
                 other => self.run_live(other),
             }
         }
@@ -593,9 +608,15 @@ impl AppState {
         }
     }
 
+    /// Applies a navigation, unless it leaves Configuration with unsaved edits: then the
+    /// confirm sheet asks first.
     fn change(&self, f: impl FnOnce(&mut NavState)) {
         let mut nav = self.nav.get_untracked();
+        let on_config = config::on_config(&nav);
         f(&mut nav);
+        if on_config && self.asks_to_leave(&nav) {
+            return;
+        }
         self.nav.set(nav);
     }
 
@@ -639,7 +660,10 @@ impl AppState {
         let Some(session) = selected else {
             return;
         };
-        self.agents.update(|state| state.toggle_live_view());
+        self.feed.with_untracked(|feed| {
+            self.agents
+                .update(|state| state.toggle_view(feed, session.as_str()))
+        });
         let live = crate::model::Live::Session(session);
         if self.nav.with_untracked(|nav| nav.live() != Some(&live)) {
             self.open_live(live);
@@ -706,8 +730,7 @@ mod tests {
             store: Some("/workspace/.corral".into()),
             ..Default::default()
         };
-        feed.capabilities
-            .insert(corral_protocol::app::ACT_V1.into());
+        feed.capabilities.insert(corral_protocol::TASKS_V1.into());
         feed.mark_stale();
         feed.link = daemon::Link::Down;
         assert!(feed.session.is_none());
@@ -720,14 +743,37 @@ mod tests {
         assert!(!cached_namespace(&feed));
     }
 
+    /// A browser without a saved pairing showed Now's skeletons and "corrald is not reachable"
+    /// while it dialed nothing: with no paired marker it opens Connection's pairing form at once
+    /// and says it is not paired; with the marker it still connects (and may be unreachable).
     #[test]
-    fn unpaired_browser_opens_connection_instead_of_restoring_mockup() {
-        let mut nav = NavState::new(Form::Desktop);
-        nav.destination = Destination::Now;
-        let (data, _) = startup(&mut nav, true, false, Ok(None));
-        assert_eq!(nav.destination, Destination::Settings);
-        assert_eq!(nav.settings, SettingsSection::Connection);
-        assert_eq!(data, DataState::Disconnected);
+    fn unpaired_browser_opens_the_pairing_form_and_does_not_call_corrald_unreachable() {
+        for form in [Form::Desktop, Form::Phone] {
+            let mut nav = NavState::new(form);
+            nav.destination = Destination::Now;
+            let configured = crate::client::saved_pairing(None);
+            let (data, feed) = startup(&mut nav, true, configured, Ok(None));
+            assert_eq!(nav.destination, Destination::Settings);
+            assert_eq!(nav.settings, SettingsSection::Connection);
+            assert_eq!(data, DataState::Disconnected);
+            assert!(matches!(
+                crate::model::devices::pair_browser(&feed),
+                PairBrowser::Form { prefilled: false }
+            ));
+            let guide = crate::model::settings::connect::web_guide(&feed, None);
+            let empty = crate::model::settings::connect::unavailable(&feed, true);
+            for line in [guide.status, empty.reason] {
+                assert!(!line.contains("reachable"), "{line}");
+            }
+            let mut nav = NavState::new(form);
+            let (data, _) = startup(
+                &mut nav,
+                true,
+                crate::client::saved_pairing(Some("1")),
+                Ok(None),
+            );
+            assert_eq!(data, DataState::Daemon);
+        }
     }
 
     #[test]

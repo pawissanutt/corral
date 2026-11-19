@@ -1,9 +1,6 @@
 //! Owned transcript descriptors populated from the shared feed.
 
-use super::{
-    Action, ActionCard, AskUserCard, AttachmentView, Button, Chip, FileChip, FiledCard,
-    PermissionCard, SavedCard, WaitingBlock,
-};
+use super::{Action, AskUserCard, AttachmentView, Button, Chip, FileChip, WaitingBlock};
 use crate::model::text::Rich;
 
 /// An owner message, with origin and delivery state independently available.
@@ -27,32 +24,10 @@ pub struct OwnerMessage {
     pub files: Vec<FileChip>,
     /// The attachment whose canonical readback is open under the message.
     pub opened: Option<AttachmentView>,
-}
-
-/// An owner-authored PM inbox item and optional folded reply.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PmMessage {
-    /// Owner input and its state.
-    pub owner: OwnerMessage,
-    /// `PMI-<n>`, or "PMI on arrival" while it has none yet.
-    pub id: String,
-    /// Folded PM outcome in this same thread.
-    pub reply: Option<PmReply>,
-    /// Non-interruption explanation for queued-for-PM items.
-    pub note: Option<&'static str>,
-    /// Withdraw while the PM has not replied.
-    pub buttons: Vec<Button>,
-    /// Status of a withdrawal this device sent.
-    pub status: Option<Chip>,
-}
-
-/// The PM's outcome of one inbox item, not a separate conversation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PmReply {
-    /// Reply time.
-    pub at: String,
-    /// Outcome text.
-    pub text: String,
+    /// File as idea: files the message's words as an Idea task, with no model.
+    pub file: Option<Button>,
+    /// How the filing sent from here went: the new task's id, or the refusal.
+    pub filed: Option<Chip>,
 }
 
 /// Content inside an assistant reply, in its original order.
@@ -62,14 +37,8 @@ pub enum Body {
     Markdown(String),
     /// Numbered paragraphs.
     Ordered(Vec<Rich>),
-    /// Owner-command class and receipt.
-    Action(ActionCard),
-    /// Answered or answerable ask_user card.
+    /// An agent's question, answered in place.
     AskUser(AskUserCard),
-    /// Deferred permission prompt.
-    Permission(PermissionCard),
-    /// Assistant-filed Idea with editable generated fields.
-    Filed(FiledCard),
     /// Host startup explanation.
     Starting { state: Chip, text: String },
 }
@@ -101,15 +70,13 @@ pub struct SourceLink {
 pub struct AssistantMessage {
     /// Stable identity of the reply in its thread, for per-reply view state.
     pub key: String,
-    /// One-shot reveal and highlight of the decision opened from Inbox.
-    pub anchored: bool,
     /// Session id in the author header.
     pub id: String,
     /// Reply time.
     pub at: String,
     /// Historical model name, unaffected by selecting the next message's model.
     pub model: String,
-    /// Answering, stopped, answered-and-filed or needs-you state.
+    /// Answering, stopped or needs-you state.
     pub state: Option<Chip>,
     /// Ordered reply body, including any cards.
     pub body: Vec<Body>,
@@ -165,16 +132,10 @@ pub enum ThreadItem {
     Owner(OwnerMessage),
     /// Assistant output and cards.
     Assistant(AssistantMessage),
-    /// PM input plus its optional outcome.
-    Pm(PmMessage),
-    /// A PM outcome whose inbox item is not in this page of the thread.
-    PmReply { id: String, reply: PmReply },
     /// Host/model waiting block.
     Waiting(WaitingBlock),
     /// Locally queued delivery note.
     Queued(QueueNote),
-    /// Owner-filed as-written result.
-    Saved(SavedCard),
     /// Retained text's withdrawal explanation, or a thread notice.
     Note(String),
 }

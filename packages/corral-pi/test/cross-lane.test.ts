@@ -75,8 +75,8 @@ effort = "high"
   expect(source.split(attach)).toHaveLength(2);
   writeFileSync(main, source.replace(attach, `${attach}\n  (await import("node:fs")).writeFileSync(${JSON.stringify(join(workspace, "interactive-ready"))}, "attached");`));
   badBun = buildFixtureInstall({ parent: workspace, isolatePiState: true });
-  const compat = JSON.parse(readFileSync(join(badBun.dir, "compat.json"), "utf8"));
-  writeFileSync(join(badBun.dir, "compat.json"), `${JSON.stringify({ ...compat, bun: { range: "0.0.1", tested: ["0.0.1"] } })}\n`);
+  const pkg = JSON.parse(readFileSync(join(badBun.dir, "package.json"), "utf8"));
+  writeFileSync(join(badBun.dir, "package.json"), `${JSON.stringify({ ...pkg, engines: { bun: "0.0.1" } })}\n`);
   configure(good.dir);
   cli("new", "Pi host bridge", "-p", "app", "--ready");
   events = await EventFollower.open(workspace);

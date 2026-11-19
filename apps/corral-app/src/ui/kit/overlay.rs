@@ -1,12 +1,14 @@
 //! What shows over a page for a moment: the toast, and the modal host that carries both the
 //! fresh confirmation of a high-risk command and the phone's generic sheet (a thread, a pairing
 //! code). Both are hosts: they take when to show (`open`, the toast's text) and what closing
-//! does (`on_close`); the shell wires them to the app state.
+//! does (`on_close`); the shell wires them to the app state. A press-opened menu counts itself
+//! open (`counted`), so the terminal's key line can give a menu's keys.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nsh_base::{SheetEvent, dialog, sheet};
+use nsh_base::{MenuEvent, SheetEvent, dialog, sheet};
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
@@ -26,6 +28,27 @@ const DIALOG_MARGIN: f32 = 48.0;
 const SHEET_SHARE: f32 = 0.82;
 const SHEET_HEAD: f32 = 72.0;
 
+/// A menu's `on_open_change`: counts it among `AppState::menus` while it is open, and no longer
+/// once it closes or goes with its trigger, so the key line gives a menu's keys whether the key
+/// or a press opened it.
+pub fn counted(app: AppState) -> impl Fn(&MenuEvent) + 'static {
+    let open = Rc::new(Cell::new(false));
+    let menus = app.menus;
+    let held = open.clone();
+    cleanup(move || {
+        if held.replace(false) {
+            menus.update(|n| *n = n.saturating_sub(1));
+        }
+    });
+    move |event: &MenuEvent| {
+        if let MenuEvent::OpenChange(now, _) = event
+            && open.replace(*now) != *now
+        {
+            menus.update(|n| *n = if *now { *n + 1 } else { n.saturating_sub(1) });
+        }
+    }
+}
+
 /// What a modal shows. Made afresh on each opening by the `content` closure of [`modal`].
 pub struct Modal {
     /// On the panel; its controls take it as a prefix (`<id>-done`, `-cancel`, `-confirm`,
@@ -38,6 +61,9 @@ pub struct Modal {
     pub sub: Option<String>,
     /// The content: the effect preview, a thread, a pairing code.
     pub body: AnyElement,
+    /// The form's own buttons (an operation's Cancel and Send), kept under the scrolling body
+    /// so a form taller than the window still reaches them.
+    pub foot: Option<AnyElement>,
     /// The label of a plain close button in the title row ("Done"), for sheets that only show
     /// something.
     pub done: Option<String>,
@@ -93,16 +119,17 @@ pub fn toast(
 /// The modal host, shown while `open` holds. Escape, the scrim, the phone's swipe and its back
 /// call `on_close`. Desktop: a dialog over the window on a dimmed scrim, the panel centred
 /// (520 pt, padding 18 20 16, radius 12, the title 15 pt bold, the sub line 12.5 pt quiet, the
-/// body scrolling when it runs long), then Cancel and the confirming button at the trailing
-/// edge, the keyboard focus on Cancel once it shows: Enter or Space cancels, Tab reaches the
-/// confirming button. Phone: a bottom sheet (`.psheet`: radius 14 at the top, a grab handle,
-/// the title row 16 pt bold with Done at its end, the body scrolling within 82 % of the
-/// screen); a confirmation adds what Confirm checks, then Cancel (focused, for a hardware
-/// keyboard) and Confirm side by side, full width. Terminal: a framed region over the content
-/// pane, the title and its keys in the first
-/// row, the sub line, the body between joined rules; a confirmation asks for its word to be
-/// typed ("Type approve to confirm") and confirms on Enter when it matches. Role alert dialog
-/// with a confirmation, dialog without; named by the title, described by the sub line.
+/// body scrolling when it runs long), then the foot, then Cancel and the confirming button at
+/// the trailing edge, the keyboard focus on Cancel once it shows: Enter or Space cancels, Tab
+/// reaches the confirming button. Phone: a bottom sheet (`.psheet`: radius 14 at the top, a
+/// grab handle, the title row 16 pt bold with Done at its end, at most 82 % of the screen, the
+/// body scrolling within it); the foot and a confirmation (what Confirm checks, then Cancel,
+/// focused for a hardware keyboard, and Confirm side by side, full width) stay under the body.
+/// Terminal: a framed region over the content pane, the title and its keys in the first row,
+/// the sub line, the body between joined rules, the foot under it; a confirmation asks for its
+/// word to be typed ("Type approve to confirm") and confirms on Enter when it matches. In every
+/// form the body alone scrolls, so the foot and the confirming buttons stay in view. Role alert
+/// dialog with a confirmation, dialog without; named by the title, described by the sub line.
 pub fn modal(
     app: AppState,
     open: impl Fn() -> bool + 'static,
@@ -220,6 +247,7 @@ fn desktop_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEle
         title,
         sub,
         body,
+        foot,
         done,
         confirm,
     } = modal;
@@ -302,8 +330,16 @@ fn desktop_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEle
                     .text_color(color(Token::Ink3)),
             )
         })
-        .child(scroll().flex_auto().min_h(px(0.0)).mt(px(10.0)).child(body))
-        .children(actions);
+        .child(
+            scroll()
+                .flex_auto()
+                .flex_shrink(1.0)
+                .min_h(px(0.0))
+                .mt(px(10.0))
+                .child(body),
+        )
+        .children(foot.map(|foot| view().flex_none().pt(px(14.0)).child(foot)))
+        .children(actions.map(|actions| actions.flex_none()));
     dialog()
         .role(role)
         .label(title)
@@ -324,6 +360,7 @@ fn phone_sheet(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyElemen
         test_id,
         title,
         body,
+        foot,
         done,
         confirm,
         ..
@@ -395,10 +432,24 @@ fn phone_sheet(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyElemen
                     )),
             )
     });
+    // The body scrolls; the foot and the confirmation stay under it, above the home indicator.
+    let tail = (foot.is_some() || confirming.is_some()).then(|| {
+        view()
+            .flex_none()
+            .px(px(18.0))
+            .pt(px(10.0))
+            .pb(move || px(16.0) + bottom_inset())
+            .border_t(px(1.0))
+            .border_color(color(Token::Rule))
+            .children(foot)
+            .children(confirming)
+    });
+    let body_end = tail.is_none();
     view()
         .test_id(&test_id)
         .role(role)
         .label(title)
+        .max_h(move || px((window().height.0 * SHEET_SHARE).max(SHEET_HEAD + 120.0)))
         .pb_keyboard()
         .bg(color(Token::Surface))
         .rounded_t(px(14.0))
@@ -408,6 +459,7 @@ fn phone_sheet(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyElemen
         .shadow_color(color(Token::Shell))
         .child(
             view()
+                .flex_none()
                 .self_center()
                 .w(px(36.0))
                 .h(px(5.0))
@@ -417,26 +469,33 @@ fn phone_sheet(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyElemen
                 .bg(color(Token::Rule2))
                 .accessibility_elements_hidden(true),
         )
-        .child(head)
+        .child(head.flex_none())
         .child(
-            scroll()
-                .max_h(move || px((window().height.0 * SHEET_SHARE - SHEET_HEAD).max(120.0)))
-                .child(
-                    view()
-                        .px(px(18.0))
-                        .pb(move || {
-                            px(30.0)
-                                + if keyboard_height() > px(0.0) {
-                                    px(0.0)
-                                } else {
-                                    safe_area().bottom
-                                }
-                        })
-                        .child(body)
-                        .children(confirming),
-                ),
+            scroll().flex_auto().flex_shrink(1.0).min_h(px(0.0)).child(
+                view()
+                    .px(px(18.0))
+                    .pb(move || {
+                        if body_end {
+                            px(30.0) + bottom_inset()
+                        } else {
+                            px(12.0)
+                        }
+                    })
+                    .child(body),
+            ),
         )
+        .children(tail)
         .into_element()
+}
+
+/// What the sheet's last part keeps clear of at the bottom: the home indicator, unless the
+/// keyboard is up and already lifts the sheet over it.
+fn bottom_inset() -> Points {
+    if keyboard_height() > px(0.0) {
+        px(0.0)
+    } else {
+        safe_area().bottom
+    }
 }
 
 /// The terminal dialog: the content pane turned into the modal, as the palette stands, so no
@@ -447,6 +506,7 @@ fn terminal_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEl
         title,
         sub,
         body,
+        foot,
         confirm,
         ..
     } = modal;
@@ -484,6 +544,8 @@ fn terminal_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEl
         let go = confirm.on_confirm.clone();
         let word = confirm.word;
         let expected = word.clone();
+        // A wrong word keeps the field focused, so it can be corrected and sent again.
+        let field = element_ref();
         view().child(term::hrule()).child(
             view()
                 .flex_row()
@@ -500,6 +562,7 @@ fn terminal_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEl
                 .child(term::space(2.0))
                 .child(
                     input()
+                        .element_ref(&field)
                         .test_id(&format!("{test_id}-word"))
                         .label(format!("Type {word} to confirm"))
                         .placeholder(word)
@@ -507,6 +570,8 @@ fn terminal_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEl
                         .on_submit(move |typed: &str| {
                             if typed.trim() == expected {
                                 go();
+                            } else {
+                                after_answer(move || field.focus());
                             }
                         })
                         .flex_1()
@@ -549,6 +614,12 @@ fn terminal_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEl
                 .min_h(px(0.0))
                 .child(view().px(px(8.0)).child(body)),
         )
+        .children(foot.map(|foot| {
+            view()
+                .flex_none()
+                .child(term::hrule())
+                .child(view().px(px(8.0)).child(foot))
+        }))
         .children(typed);
     dialog()
         .role(role)

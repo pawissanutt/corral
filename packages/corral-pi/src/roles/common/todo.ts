@@ -1,4 +1,4 @@
-// The server selects and persists the canonical ledger using the bound identity.
+// Todo mutations update the ledger owned by the current host session.
 import { Type } from "typebox";
 
 import type { CorralToolSpec } from "../types.ts";
@@ -8,7 +8,7 @@ import { pick } from "./tools.ts";
 export const REQUEST_ASSET = "assets/request-execution.md";
 export const REQUEST_OFF_ASSET = "assets/request-execution-off.md";
 
-/** The PM and assistant request-execution section for the generation's todo setting. */
+/** Prompt section for sessions with a request-level todo plan. */
 export function requestContract(root: string, todo: boolean | undefined): string {
   return readAsset(root, todo === true ? REQUEST_ASSET : REQUEST_OFF_ASSET);
 }
@@ -24,7 +24,7 @@ export const todoTool: CorralToolSpec = {
   label: "Update the todo ledger",
   description: "Update your canonical phase and step ledger. Initialize phases, append steps to a phase, "
     + "start or finish a step, or drop a step with a reason. Use stable phase and step IDs. "
-    + "The server selects the ledger and returns its revision and full canonical progress in the receipt.",
+    + "The tool returns the updated ledger and its revision.",
   op: "todo",
   parameters: Type.Union([
     Type.Object({
@@ -65,7 +65,7 @@ const SessionStep = Type.Object({ id: Type.String(), label: Type.String() }, { a
 const Phase = Type.Object({ id: Type.String(), label: Type.String(), steps: Type.Array(SessionStep) },
   { additionalProperties: false });
 
-/** PM and assistant: one session plan per request, rolled into history once it is finished. */
+/** One session plan per request, rolled into history once it is finished. */
 export const sessionTodoTool: CorralToolSpec = {
   name: "corral_todo",
   label: "Update the request plan",
@@ -73,9 +73,7 @@ export const sessionTodoTool: CorralToolSpec = {
     + "init opens a plan (refused while the current plan has open steps; a finished plan rolls into history). "
     + "append adds steps to a phase, or opens a new phase when you give its label. start, done and drop "
     + "(with a reason) move a step. wait records that an open step waits on a named event or an owner answer; "
-    + "starting or finishing the step clears it. Every wait has a deadline (default 2 h for events, "
-    + "24 h for the owner), after which corral wakes the session for that step. "
-    + "The receipt returns the plan, revision and disposition.",
+    + "starting or finishing the step clears it. The tool returns the plan, revision and disposition.",
   op: "todo",
   parameters: Type.Union([
     Type.Object({ op: Type.Literal("init"), phases: Type.Array(Phase) }, { additionalProperties: false }),

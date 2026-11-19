@@ -1,0 +1,46 @@
+# Corral workspace configuration. Uncomment settings to override the built-in defaults.
+# Add a [projects.NAME] table for each Git repository Corral should manage.
+
+# [limits]
+# running = 4               # Running and Blocked tasks hold slots; Review does not.
+
+# [defaults]
+# profile = "omp-sol"
+# base = "release"         # Optional; unset uses the repository's default branch.
+# max_rounds = 2
+# auto_dispatch = false
+# auto_land = false
+# branch_prefix = "corral/"
+
+# [runner]
+# mode = "herdr"            # Use "process" for headless harness commands.
+# herdr_session = ""        # Optional herdr session name.
+
+# [sync]
+# quiet_after_secs = 120
+# watch_secs = 5            # Seconds between sync --watch passes.
+
+# [daemon]
+# listen = "127.0.0.1:7778"                       # Optional authenticated app listener.
+# web_origin = ["http://127.0.0.1:8080"]          # Exact browser origins allowed to connect.
+
+# [artifacts]
+# globs = ["docs/**/records/*", "**/*report*.html"]
+# max_bytes = 20000000
+
+# [projects.example]
+# path = "example"          # Relative to the workspace root; use "." for the root itself.
+# base = "develop"         # Optional per-project target branch.
+# gate = ["just check"]     # Optional shell commands run in the task worktree.
+# running = 2               # Optional per-project slot cap.
+# reviewer = "omp-sol"      # Optional reviewer profile.
+
+# [profiles.pi]
+# harness = "pi"            # Built in; use runner.mode for pane or headless placement.
+# model = "provider/model"  # Optional, otherwise corral-pi chooses its default.
+
+# [harnesses.example]
+# command = "example-agent {prompt_ref}"
+
+# [profiles.example]
+# harness = "example"

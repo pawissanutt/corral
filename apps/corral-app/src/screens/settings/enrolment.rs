@@ -1,6 +1,6 @@
 //! Device enrolment and browser pairing. Every operation runs through the settings reducer
-//! (`State::device`) as an `Effect::Device`, so the app gates it on the link and authority and
-//! says when it refuses.
+//! (`State::device`) as an `Effect::Device`, so the app gates it on the link and says when it
+//! refuses.
 
 use nsh_core::AutoFill;
 use nsh_core::element::{color as for_appearance, input};
@@ -9,6 +9,7 @@ use nsh_core::prelude::*;
 use super::parts::{button_row, cell, ring, space};
 use crate::model::Form;
 use crate::model::devices::{self, DeviceOp, PairBrowser, ThisDevice};
+use crate::model::settings::Pending;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::term;
@@ -95,23 +96,39 @@ fn enrol_form(app: AppState, name: Signal<String>) -> AnyElement {
     )
 }
 
-/// Forget this browser's pairing: its stored credential goes, and the app returns to the
-/// disconnected Connection page to pair again.
+/// Forget this browser's pairing, after one question in its place: its stored credential goes,
+/// and the app returns to the disconnected Connection page to pair again.
 pub fn forget(app: AppState) -> AnyElement {
-    button_row(
-        app,
-        vec![button_with(
-            app,
-            "Forget this browser",
-            ButtonKind::Ghost,
-            ButtonOptions {
-                danger: true,
-                ..ButtonOptions::default()
-            },
-            "btn-forget-browser",
-            move || run(app, DeviceOp::Forget),
-        )],
-    )
+    let asking = computed(move || {
+        app.settings
+            .with(|state| state.edits.confirming == Some(Pending::Forget))
+    });
+    dynamic(move || {
+        if asking.get() {
+            return untracked(|| super::live_devices::confirmation(app, &Pending::Forget));
+        }
+        untracked(|| {
+            button_row(
+                app,
+                vec![button_with(
+                    app,
+                    "Forget this browser",
+                    ButtonKind::Ghost,
+                    ButtonOptions {
+                        danger: true,
+                        ..ButtonOptions::default()
+                    },
+                    "btn-forget-browser",
+                    move || {
+                        app.act(app.settings, |state, _| {
+                            state.confirm_device(Pending::Forget)
+                        });
+                    },
+                )],
+            )
+        })
+    })
+    .into_element()
 }
 
 /// The browser's pairing form while a code may be entered (before pairing, or after it
@@ -225,27 +242,6 @@ fn field(
         entry,
         move || draft.get(),
         move |text| draft.set(text),
-    )
-}
-
-/// A labelled one-line text field of literal text (ids, names, numbers) showing `value` and
-/// reporting each edit to `on_change`; `hint` says what it takes, under it.
-pub(super) fn bound_field(
-    app: AppState,
-    id: String,
-    label: &'static str,
-    hint: &'static str,
-    value: impl Fn() -> String + 'static,
-    on_change: impl Fn(String) + 'static,
-) -> AnyElement {
-    labelled_field(
-        app,
-        id,
-        label,
-        Some(hint).filter(|hint| !hint.is_empty()),
-        Entry::Text,
-        value,
-        on_change,
     )
 }
 

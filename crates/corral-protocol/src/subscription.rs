@@ -3,21 +3,17 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::Health;
-use crate::board::{BoardCursor, BoardDelta};
+use corral_types::UsageSummary;
 
 use crate::assistant::ThreadEntry;
-use crate::rows::{
-    AgentRow, AssistantRow, BuildRow, InboxRow, PlanRow, ProjectRow, SettingsSnapshot, UsageRow,
-};
+use crate::rows::{AgentRow, AssistantRow, PlanRow, ProjectRow, SettingsSnapshot, TaskRow};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Topic {
     Health,
-    Board,
-    Classic,
-    Inbox,
+    Tasks,
     Plans,
-    Builds,
     Projects,
     Agents,
     Assistant,
@@ -28,6 +24,14 @@ pub enum Topic {
     Terminal,
     #[serde(other)]
     Other,
+}
+
+/// `after = Some(id)` resumes within `rev`; None has consumed that whole revision.
+/// The empty starting cursor is `{ rev: 0, after: None }`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BoardCursor {
+    pub rev: u64,
+    pub after: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -47,9 +51,9 @@ pub struct SubOpen {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "topic", rename_all = "snake_case")]
 pub enum SubDelta {
-    Board {
+    Tasks {
         #[serde(flatten)]
-        delta: BoardDelta,
+        delta: RowsDelta<TaskRow>,
     },
     Health {
         epoch: u64,
@@ -59,21 +63,9 @@ pub enum SubDelta {
         cursor: BoardCursor,
         more: bool,
     },
-    Classic {
-        #[serde(flatten)]
-        notice: crate::classic::ClassicNotice,
-    },
-    Inbox {
-        #[serde(flatten)]
-        delta: RowsDelta<InboxRow>,
-    },
     Plans {
         #[serde(flatten)]
         delta: RowsDelta<PlanRow>,
-    },
-    Builds {
-        #[serde(flatten)]
-        delta: RowsDelta<BuildRow>,
     },
     Projects {
         #[serde(flatten)]
@@ -89,7 +81,8 @@ pub enum SubDelta {
     },
     Usage {
         #[serde(flatten)]
-        delta: RowsDelta<UsageRow>,
+        #[schemars(with = "RowsDelta<crate::schema_types::UsageSummary>")]
+        delta: RowsDelta<UsageSummary>,
     },
     Settings {
         #[serde(flatten)]

@@ -3,24 +3,22 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
-import { RunBudget } from "../capabilities/budget.ts";
 import fixtureAuth from "../../test/fixtures/auth/index.ts";
 import { fakeCodexTransport, requestBody } from "../../test/fixtures/auth/fake-transport.ts";
 import { guardedFetch } from "./restrict.ts";
 import { createSummaryRequest, summarizeQuick, type SummaryRequest } from "./summary.ts";
+import type { ModelUsage } from "../tools/corral.ts";
 
-test("quick rollover uses the configured summary profile for exactly one budgeted request, including split turns", async () => {
+test("quick rollover uses the configured summary profile for exactly one observed request, including split turns", async () => {
   const transport = fakeCodexTransport();
   const calls: Record<string, unknown>[] = [];
-  const budgetEvents: Record<string, unknown>[] = [];
+  const usageRows: ModelUsage[] = [];
   const network = guardedFetch(async (input, init) => {
     calls.push(requestBody(init) as Record<string, unknown>);
     return transport.send(input, init);
   });
-  const budget = new RunBudget({ sessionId: () => "quick-session", cancel() {},
-    record: async value => { budgetEvents.push(value); return { admitted: true, exhausted: false }; } });
   const base = { modules: { auth: fixtureAuth }, agentDir: "/unused", cwd: "/unused" };
-  expect(await createSummaryRequest(base, budget)).toBeUndefined();
+  expect(await createSummaryRequest(base)).toBeUndefined();
   const dir = mkdtempSync(join(tmpdir(), "corral-summary-"));
   const previousData = process.env.XDG_DATA_HOME;
   let request: SummaryRequest | undefined;
@@ -29,7 +27,7 @@ test("quick rollover uses the configured summary profile for exactly one budgete
     request = await createSummaryRequest({ ...base, summary: {
       profile: "cheap-summary", model: "gpt-6.1-terra", provider: "openai-codex", effort: "low",
       network, rules: [],
-    } }, budget);
+    } }, undefined, usage => usageRows.push(usage));
   } finally {
     if (previousData === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = previousData;
@@ -51,7 +49,5 @@ test("quick rollover uses the configured summary profile for exactly one budgete
   expect(result.firstKeptEntryId).toBe("kept");
   expect(result.details).toMatchObject({ summaryProfile: "cheap-summary", summaryModel: "gpt-6.1-terra" });
   expect(result.usage?.input).toBeGreaterThan(0);
-  expect(budgetEvents.filter(value => value.action === "settle")).toMatchObject([
-    { purpose: "summary", model: "gpt-6.1-terra", cache_lineage: "quick-session" },
-  ]);
+  expect(usageRows).toMatchObject([{ model: "openai-codex/gpt-6.1-terra", billing: "subscription", input: 32, output: 3 }]);
 });

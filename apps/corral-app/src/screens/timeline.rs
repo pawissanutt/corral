@@ -19,7 +19,6 @@ use crate::model::timeline::{
     RangeOption,
 };
 use crate::model::{Form, Hue};
-use crate::screens::usage::qualifier;
 use crate::state::AppState;
 use crate::ui::kit::button::seg;
 use crate::ui::kit::marks::hue_ink;
@@ -39,7 +38,7 @@ const BURNUP_COLUMN: f32 = 440.0;
 const GAPS_MEASURE: f32 = 844.0;
 
 /// The Timeline. Desktop: the page head (title, sub line, the Today / 7 days and By task / By
-/// agent switches), then a scrolling pane of the legend, the lanes chart, and the gaps beside
+/// run switches), then a scrolling pane of the legend, the lanes chart, and the gaps beside
 /// the burn-up (stacked when narrow). Phone: the range and grouping switches across the page,
 /// the legend, the compressed chart, the gaps and the burn-up stacked, in one scroll with the Ask
 /// clearance. Terminal: the head, then the sub line, legend, lanes as Cells, gaps and burn-up in
@@ -111,7 +110,7 @@ fn phone(app: AppState, data: Memo<Shown>) -> AnyElement {
                 .mb(px(8.0))
                 .gap(px(8.0))
                 .child(range_switch(app, page.ranges))
-                // By task or by agent: the same lanes regrouped, as on the other forms (LA-15).
+                // By task or by run: the same lanes regrouped, as on the other forms (LA-15).
                 .children(page.grouping.map(|options| grouping_switch(app, options))),
         )
         .child(legend_row(app))
@@ -147,7 +146,7 @@ fn terminal(app: AppState, data: Memo<Shown>) -> AnyElement {
         .child(legend_row(app))
         .child(status(app, data))
         .child(term::blank())
-        .child(cells::lanes(data))
+        .child(cells::lanes(app, data))
         .child(term::blank())
         .child(gaps(app, data))
         .child(term::blank())
@@ -163,23 +162,11 @@ fn terminal(app: AppState, data: Memo<Shown>) -> AnyElement {
 }
 
 /// What the recorded spans' request is doing when it is not simply shown: loading, kept from
-/// before a lost connection, failed, or answered with no lanes; then how complete corrald's scan
-/// of them was.
+/// before a lost connection, failed, or answered with no lanes.
 fn status(app: AppState, data: Memo<Shown>) -> AnyElement {
-    let state = computed(move || {
-        data.with(|shown| {
-            (
-                shown.status.clone(),
-                shown.lanes_empty(),
-                shown
-                    .plot
-                    .as_ref()
-                    .and_then(|plot| plot.completeness.clone()),
-            )
-        })
-    });
+    let state = computed(move || data.with(|shown| (shown.status.clone(), shown.lanes_empty())));
     dynamic(move || {
-        let (status, lanes_empty, coverage) = state.get();
+        let (status, lanes_empty) = state.get();
         untracked(move || {
             let pad = |element: AnyElement| match app.form {
                 Form::Terminal => element,
@@ -193,21 +180,21 @@ fn status(app: AppState, data: Memo<Shown>) -> AnyElement {
                 Status::Ready if lanes_empty => Some(empty(
                     app,
                     "No recorded work in this range",
-                    "corral recorded no run, gate, review or land spans here yet.",
+                    "corral recorded no run or task event here yet.",
                     None,
                 )),
                 Status::Ready => None,
                 Status::Loading => Some(pad(notice(
                     app,
                     Hue::Neutral,
-                    &vec![span("Loading recorded spans from corrald…")],
+                    &vec![span("Loading recorded runs and events from corrald…")],
                     None,
                 ))),
                 Status::Stale => Some(pad(notice(
                     app,
                     Hue::Held,
                     &vec![span(
-                        "Showing the last spans received; they may be out of date until corrald answers again.",
+                        "Showing the last runs and events received; they may be out of date until corrald answers again.",
                     )],
                     None,
                 ))),
@@ -217,10 +204,7 @@ fn status(app: AppState, data: Memo<Shown>) -> AnyElement {
                     None,
                 )),
             };
-            view()
-                .children(said)
-                .children(coverage.map(|line| pad(qualifier(app, &line))))
-                .into_element()
+            view().children(said).into_element()
         })
     })
     .into_element()
@@ -251,7 +235,7 @@ fn range_switch(app: AppState, ranges: [RangeOption; 2]) -> AnyElement {
     )
 }
 
-/// By task / By agent (desktop): runs the model's `set_grouping`.
+/// By task / By run: runs the model's `set_grouping`.
 fn grouping_switch(app: AppState, groups: [GroupOption; 2]) -> AnyElement {
     let options: Vec<(Grouping, &'static str)> = groups
         .iter()
@@ -473,32 +457,24 @@ fn disclosure(form: Form, words: &'static str) -> AnyElement {
 }
 
 /// The goal burn-up: its caption with the period at the trailing edge, the scope it covers (a
-/// menu of the workspace, its projects and plans), the chart (a canvas, or block rows in a
-/// terminal) and how complete corrald's count is. A burn-up corral has not recorded, or one still
-/// loading or failed, says so in place of the chart; a failure with the spans' own cause is not
-/// said twice.
+/// menu of the workspace, its projects and plans) and the chart (a canvas, or block rows in a
+/// terminal). A burn-up corral has not recorded, or one still loading or failed, says so in
+/// place of the chart; a failure with the spans' own cause is not said twice.
 fn burnup_section(app: AppState, data: Memo<Shown>) -> AnyElement {
     let form = app.form;
     let series = computed(move || data.with(|shown| shown.burnup.clone()));
     let state = computed(move || data.with(|shown| shown.burnup_status.clone()));
     let alike = computed(move || data.with(Shown::burnup_failed_alike));
-    let coverage = computed(move || data.with(|shown| shown.burnup_coverage.clone()));
     dynamic(move || {
         let series = series.get();
         let state = state.get();
         let alike = alike.get();
-        let coverage = coverage.get();
         untracked(move || {
             let scope = view()
                 .flex_row()
                 .when(form != Form::Terminal, |row| row.pb(px(6.0)))
                 .child(scope::picker(app));
-            burnup_body(
-                app,
-                (series, state, coverage),
-                alike,
-                Some(scope.into_element()),
-            )
+            burnup_body(app, (series, state), alike, Some(scope.into_element()))
         })
     })
 }
@@ -514,11 +490,11 @@ pub(crate) fn scoped_burnup(app: AppState, request: DetailRef) -> AnyElement {
     })
 }
 
-/// The burn-up's caption, `scope` under it, how complete corrald's count is and the chart, or
-/// the line that says why there is none.
+/// The burn-up's caption, `scope` under it and the chart, or the line that says why there is
+/// none.
 fn burnup_body(
     app: AppState,
-    (series, state, coverage): shown::BurnupParts,
+    (series, state): shown::BurnupParts,
     alike: bool,
     scope: Option<AnyElement>,
 ) -> AnyElement {
@@ -529,19 +505,19 @@ fn burnup_body(
             Status::Failed(_) if alike => "Goal burn-up unavailable.".to_owned(),
             Status::Failed(message) => format!("Goal burn-up unavailable: {message}"),
             Status::Ready | Status::Stale => {
-                "corral has recorded no goal changes to plot yet.".to_owned()
+                "corral has recorded no created or landed task to plot yet.".to_owned()
             }
         };
         return view()
             .flex_col()
             .child(h3(app, "Goal burn-up", None))
             .children(scope)
-            .children(coverage.map(|line| qualifier(app, &line)))
             .child(plain(app, line).text_color(color(Token::Ink3)))
             .into_element();
     };
     let title = series.title.clone();
     let period = series.period.clone();
+    let counts = series.counts;
     let drawn = if form == Form::Terminal {
         cells::burnup(&series)
     } else {
@@ -551,7 +527,12 @@ fn burnup_body(
         .flex_col()
         .child(h3(app, title, Some(period)))
         .children(scope)
-        .children(coverage.map(|line| qualifier(app, &line)))
         .child(drawn)
+        .child(
+            view()
+                .pt(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
+                .test_id("burnup-counts")
+                .child(disclosure(form, counts)),
+        )
         .into_element()
 }

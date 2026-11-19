@@ -15,7 +15,7 @@ export function setMotion(motion: Motion): void { still = motion === "still"; }
 const RESET = "\x1b[0m";
 
 /**
- * Cells the workbench takes from the Task, Proof, lifecycle, Usage, Artifacts and Inbox views: one blank cell each
+ * Cells the workbench takes from the Task, Proof, Events, Usage and Artifacts views: one blank cell each
  * side, so they sit one cell in like the rest of the frame. Their layout thresholds are main-view widths, so they
  * compare `width + VIEW_INSET`.
  */

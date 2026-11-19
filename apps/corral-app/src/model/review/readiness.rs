@@ -1,14 +1,13 @@
-//! Current-candidate evidence stays in the chain; older candidates only inform its hints.
+//! "Ready to land?": the gate check for the task's HEAD, the review check for the current
+//! round, then the owner's verdict, each from what corrald recorded.
 
-use corral_protocol::detail::ReviewDetail;
+use corral_types::{Check, CheckKind, CheckResult, Status};
 
 use crate::model::board::Mark;
-use crate::model::daemon::{Feed, Task};
-use crate::model::glance::{Stat, StatIcon};
+use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 
-use super::live::when;
-use super::outline::sha7;
+use super::live::{Shown, actor, sha7, when};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewQuote {
@@ -22,25 +21,8 @@ pub struct ReadyLink {
     pub hue: Hue,
     pub title: &'static str,
     pub sha7: Option<String>,
-    pub stats: Vec<Stat>,
     pub quote: Option<ReviewQuote>,
     pub hint: String,
-}
-
-fn mark(verdict: &str, stale: bool) -> Mark {
-    if stale {
-        return Mark::Stale;
-    }
-    match verdict.to_ascii_lowercase().as_str() {
-        "pass" | "approve" | "approved" => Mark::Done,
-        "fail" | "changes" | "request_changes" | "request-changes" | "escalate" | "rejected" => {
-            Mark::Fail
-        }
-        "running" => Mark::Active,
-        "stale" => Mark::Stale,
-        "cancelled" => Mark::Na,
-        _ => Mark::Next,
-    }
 }
 
 fn hue(mark: Mark) -> Hue {
@@ -53,225 +35,132 @@ fn hue(mark: Mark) -> Hue {
     }
 }
 
-fn title(mark: Mark, gate: bool) -> &'static str {
-    match (gate, mark) {
-        (true, Mark::Done) => "Gate passed",
-        (true, Mark::Active) => "Gate running",
-        (true, Mark::Fail) => "Gate failed",
-        (true, Mark::Stale) => "Gate stale",
-        (true, Mark::Na) => "Gate not applicable",
-        (true, Mark::Next) => "Gate pending",
-        (false, Mark::Done) => "Review approves",
-        (false, Mark::Fail) => "Review asks changes",
-        (false, Mark::Active) => "Review running",
-        (false, Mark::Stale) => "Review stale",
-        (false, Mark::Na) => "Review not applicable",
-        (false, Mark::Next) => "Review pending",
+fn title(kind: CheckKind, mark: Mark) -> &'static str {
+    match (kind, mark) {
+        (CheckKind::Gate, Mark::Done) => "Gate passed",
+        (CheckKind::Gate, Mark::Fail) => "Gate failed",
+        (CheckKind::Gate, Mark::Active) => "Gate running",
+        (CheckKind::Gate, Mark::Na) => "No gate",
+        (CheckKind::Gate, _) => "Gate pending",
+        (CheckKind::Review, Mark::Done) => "Review approves",
+        (CheckKind::Review, Mark::Fail) => "Review asks changes",
+        (CheckKind::Review, Mark::Active) => "Review running",
+        (CheckKind::Review, Mark::Na) => "No review",
+        (CheckKind::Review, _) => "Review pending",
     }
 }
 
-fn receipt_hint(
-    by: &str,
-    verdict: &str,
-    at: Option<&str>,
-    text: Option<&str>,
+/// One check's link; a missing one is running while the task waits on it in Review. Once
+/// corrald has marked the candidate ready, the pipeline is past every check it runs, so a
+/// missing one is a check this project does not configure.
+fn link(
     feed: &Feed,
-) -> String {
-    let mut hint = format!("{by}: {verdict}");
-    if let Some(at) = at {
-        hint.push_str(" at ");
-        hint.push_str(&when(at, feed));
-    }
-    if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
-        hint.push_str(" · ");
-        hint.push_str(text);
-    }
-    hint
-}
-
-fn earlier_hint(
-    sha: &str,
-    by: &str,
-    verdict: &str,
-    at: Option<&str>,
-    text: Option<&str>,
-    feed: &Feed,
-) -> String {
-    let outcome = match mark(verdict, false) {
-        Mark::Fail => "failed",
-        Mark::Done => "passed",
-        Mark::Active => "was running",
-        Mark::Stale => "was stale",
-        Mark::Na => "was cancelled",
-        Mark::Next => verdict,
-    };
-    let mut hint = format!("An earlier candidate {} {outcome}", sha7(sha));
-    if let Some(at) = at {
-        hint.push_str(" at ");
-        hint.push_str(&when(at, feed));
-    }
-    hint.push_str(" · ");
-    hint.push_str(by);
-    if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
-        hint.push_str(": ");
-        hint.push_str(text);
-    }
-    hint.push_str(". This result is stale for the current candidate.");
-    hint
-}
-
-fn stale_stat(key: &str, hints: Vec<String>) -> Vec<Stat> {
-    if hints.is_empty() {
-        Vec::new()
-    } else {
-        vec![Stat::new(
-            key,
-            StatIcon::Stale,
-            hints.len().to_string(),
-            Hue::Held,
-            hints.join("\n"),
-        )]
-    }
-}
-
-/// Full SHA equality is deliberate: receipt identities never borrow the board's shortened
-/// prefix. A stale receipt on the same SHA (for example, a moved base) stays visibly stale.
-pub fn readiness_chain(feed: &Feed, task: &Task, review: &ReviewDetail) -> Vec<ReadyLink> {
-    let current = review.candidate_sha.as_deref();
-    let mut gate_history = Vec::new();
-    let mut review_history = Vec::new();
-    let mut gates = Vec::new();
-    let mut verdicts = Vec::new();
-    for gate in &review.gates {
-        if current.is_none() {
-            continue;
-        }
-        if current != Some(gate.sha.as_str()) {
-            gate_history.push(earlier_hint(
-                &gate.sha,
-                &gate.by,
-                &gate.verdict,
-                gate.at.as_deref(),
-                gate.text.as_deref(),
-                feed,
-            ));
-            continue;
-        }
-        let mark = mark(&gate.verdict, gate.stale);
-        gates.push(ReadyLink {
+    kind: CheckKind,
+    check: Option<&Check>,
+    waiting: bool,
+    ready: bool,
+) -> ReadyLink {
+    let Some(check) = check else {
+        let mark = if ready {
+            Mark::Na
+        } else if waiting {
+            Mark::Active
+        } else {
+            Mark::Next
+        };
+        return ReadyLink {
             mark,
             hue: hue(mark),
-            title: title(mark, true),
-            sha7: Some(sha7(&gate.sha)),
-            stats: Vec::new(),
+            title: title(kind, mark),
+            sha7: None,
             quote: None,
-            hint: receipt_hint(
-                &gate.by,
-                &gate.verdict,
-                gate.at.as_deref(),
-                gate.text.as_deref(),
-                feed,
-            ),
-        });
-    }
-    for verdict in &review.verdicts {
-        if current.is_none() {
-            continue;
-        }
-        if current != Some(verdict.sha.as_str()) {
-            review_history.push(earlier_hint(
-                &verdict.sha,
-                &verdict.by,
-                &verdict.verdict,
-                verdict.at.as_deref(),
-                verdict.text.as_deref(),
-                feed,
-            ));
-            continue;
-        }
-        let mark = mark(&verdict.verdict, verdict.stale);
-        verdicts.push(ReadyLink {
-            mark,
-            hue: hue(mark),
-            title: title(mark, false),
-            sha7: Some(sha7(&verdict.sha)),
-            stats: Vec::new(),
-            quote: verdict
-                .text
-                .as_ref()
-                .filter(|text| !text.trim().is_empty())
-                .map(|text| ReviewQuote {
-                    by: verdict.by.clone(),
-                    text: text.clone(),
-                }),
-            hint: receipt_hint(
-                &verdict.by,
-                &verdict.verdict,
-                verdict.at.as_deref(),
-                None,
-                feed,
-            ),
-        });
-    }
-    // Rails can describe in-flight work before its receipt exists. Do not turn a completed
-    // rail into an invented receipt: only running/stale/failure marks describe this gap.
-    let rail_matches = current
-        .zip(task.rail[0].sha7.as_deref())
-        .is_some_and(|(current, board)| current.starts_with(board) || board.starts_with(current));
-    let awaiting = |rail: Mark, gate: bool| {
-        let mark =
-            if rail_matches && matches!(rail, Mark::Active | Mark::Stale | Mark::Fail | Mark::Na) {
-                rail
-            } else {
-                Mark::Next
-            };
-        ReadyLink {
-            mark,
-            hue: hue(mark),
-            title: title(mark, gate),
-            sha7: current.map(sha7),
-            stats: Vec::new(),
-            quote: None,
-            hint: if gate {
-                "No gate receipt is recorded for this candidate."
-            } else {
-                "No reviewer verdict is recorded for this candidate."
+            hint: match (kind, ready) {
+                (CheckKind::Gate, false) => "No gate result is recorded for the task's HEAD.",
+                (CheckKind::Review, false) => "No review result is recorded for this round.",
+                (CheckKind::Gate, true) => {
+                    "corrald marked this candidate ready without a gate: the project configures none."
+                }
+                (CheckKind::Review, true) => {
+                    "corrald marked this candidate ready without a review: the project names no reviewer."
+                }
             }
             .into(),
-        }
+        };
     };
-    if gates.is_empty() {
-        gates.push(awaiting(task.rail[1].mark, true));
-    }
-    if verdicts.is_empty() {
-        verdicts.push(awaiting(task.rail[2].mark, false));
-    }
-    if let Some(gate) = gates.first_mut() {
-        gate.stats = stale_stat("earlier-gates", gate_history);
-    }
-    if let Some(verdict) = verdicts.first_mut() {
-        verdict.stats = stale_stat("earlier-reviews", review_history);
-    }
-    gates.extend(verdicts);
-    gates.push(ReadyLink {
-        mark: Mark::Next,
-        hue: if review.approvable {
-            Hue::You
-        } else {
-            Hue::Neutral
+    recorded(feed, check, false)
+}
+
+/// A recorded check: a gate names its commit, a review its round. The reviewer's notes are
+/// quoted; a gate's failing line is quoted too when `quote_gate`, else it joins the hint.
+pub(super) fn recorded(feed: &Feed, check: &Check, quote_gate: bool) -> ReadyLink {
+    let kind = check.kind;
+    let mark = match check.result {
+        CheckResult::Pass => Mark::Done,
+        CheckResult::Fail => Mark::Fail,
+    };
+    let on = match kind {
+        CheckKind::Gate => sha7(&check.key),
+        CheckKind::Review => format!("round {}", check.key),
+    };
+    let mut hint = format!(
+        "{} recorded {} on {on}",
+        actor(check.by),
+        match check.result {
+            CheckResult::Pass => "a pass",
+            CheckResult::Fail => "a failure",
         },
-        title: "Your verdict",
-        sha7: current.map(sha7),
-        stats: Vec::new(),
-        quote: None,
-        hint: match current {
-            Some(sha) if review.approvable => format!(
-                "Your verdict applies to {} only; a new candidate makes the earlier results stale.",
-                sha7(sha)
-            ),
-            Some(sha) => format!("Your verdict on {} is not available yet.", sha7(sha)),
-            None => "The candidate SHA is not known yet.".into(),
+    );
+    let at = when(check.at, feed);
+    if !at.is_empty() {
+        hint.push_str(&format!(" at {at}"));
+    }
+    let notes = check
+        .notes
+        .as_ref()
+        .filter(|notes| !notes.trim().is_empty());
+    let quoted = kind == CheckKind::Review || quote_gate;
+    if !quoted && let Some(notes) = notes {
+        hint.push_str(&format!(" · {notes}"));
+    }
+    ReadyLink {
+        mark,
+        hue: hue(mark),
+        title: title(kind, mark),
+        sha7: (kind == CheckKind::Gate).then(|| sha7(&check.key)),
+        quote: notes.filter(|_| quoted).map(|notes| ReviewQuote {
+            by: actor(check.by).to_owned(),
+            text: notes.clone(),
+        }),
+        hint,
+    }
+}
+
+pub(super) fn readiness_chain(feed: &Feed, shown: &Shown) -> Vec<ReadyLink> {
+    let in_review = shown.task.status() == Status::Review;
+    let gate = shown.check(CheckKind::Gate);
+    let gate_passed = gate.is_some_and(|gate| gate.result == CheckResult::Pass);
+    let ready = shown.task.row.ready;
+    vec![
+        link(feed, CheckKind::Gate, gate, in_review, ready),
+        link(
+            feed,
+            CheckKind::Review,
+            shown.check(CheckKind::Review),
+            in_review && gate_passed,
+            ready,
+        ),
+        ReadyLink {
+            mark: if ready { Mark::Active } else { Mark::Next },
+            hue: if ready { Hue::You } else { Hue::Neutral },
+            title: "Your verdict",
+            sha7: shown.head().map(sha7),
+            quote: None,
+            hint: if ready {
+                "corrald marked this candidate ready: approve and land it, or request changes."
+                    .into()
+            } else {
+                "The pipeline has not marked this candidate ready; you can still decide now.".into()
+            },
         },
-    });
-    gates
+    ]
 }

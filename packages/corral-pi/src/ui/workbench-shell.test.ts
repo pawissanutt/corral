@@ -23,12 +23,12 @@ afterAll(() => rmSync(work, { recursive: true, force: true }));
 
 const KEY = { f1: "\x1bOP", f7: "\x1b[18~", f8: "\x1b[19~", f9: "\x1b[20~", f10: "\x1b[21~", f11: "\x1b[23~", f5: "\x1b[15~", esc: "\x1b", enter: "\r",
   down: "\x1b[B", pageUp: "\x1b[5~", pageDown: "\x1b[6~", end: "\x1b[F", ctrlB: "\x02", ctrlO: "\x0f", alt1: "\x1b1", alt2: "\x1b2" };
-const worker = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1", generation: 3 };
-const assistant = { store: "st-0123456789abcdef", project: "demo", role: "assistant" as const, assistant: "A-7", generation: 1 };
+const worker = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
+const assistant = { store: "st-0123456789abcdef", project: "demo", role: "assistant" as const, assistant: "A-7" };
 const NOW = Date.now();
 
 function helper(request: string, extra: Partial<HelperInspection> = {}): HelperInspection {
-  return { request, kind: "explore", model: "provider/model-a", generation: 1, phase: "completed", createdAt: NOW - 60_000, startedAt: NOW - 58_000,
+  return { request, kind: "explore", model: "provider/model-a", phase: "completed", createdAt: NOW - 60_000, startedAt: NOW - 58_000,
     endedAt: NOW - 30_000, prompt: `Find ${request} callers`, result: `ANSWER_${request}`, truncated: false,
     messages: [{ id: "a", kind: "assistant", text: `ANSWER_${request}`, stopReason: "stop" }], ...extra };
 }
@@ -320,10 +320,10 @@ test("a letter a view defines but does not offer now goes to the composer like a
   } finally { h.stop(); }
 });
 
-test("`/` with an empty draft starts a command in the composer from Changes, Agents and Inbox; Enter without an action stays", () => {
+test("`/` with an empty draft starts a command in the composer from Changes and Agents; Enter without an action stays", () => {
   const h = shell(140, 46, () => snapshot({ helpers: [helper("first")] }), { identity: assistant });
   try {
-    for (const key of [KEY.f7, KEY.f8, KEY.f11]) {
+    for (const key of [KEY.f7, KEY.f8]) {
       expect(h.panels.handleInput(key)).toBeTrue(); expect(h.panels.focus).toBe("main");
       const view = h.panels.workbench.view;
       expect(h.panels.handleInput("/")).toBeFalse();
@@ -361,7 +361,7 @@ test("opening a child's conversation makes it the receiver with a notice; leavin
   const children = [{ id: "alpha", kind: "slice", state: "running" }] as unknown as ChildSnapshot[];
   const build = { fleet: { snapshot: () => ({ children, mail: [], maxParallel: 3, startedAt: NOW }) }, board: { tasks: () => [], proposed: () => undefined },
     target: () => receiver, setTarget: (id: string) => { receiver = id; } } as unknown as BuildUi;
-  const wb = new NativeWorkbench({ cwd: work, identity: { store: "build", project: "", role: "build", generation: 1 }, snapshot: () => snapshot(),
+  const wb = new NativeWorkbench({ cwd: work, identity: { store: "build", project: "", role: "build" }, snapshot: () => snapshot(),
     changed() {}, canInteract: () => true, build });
   wb.mount(new Text("PARENT", 0, 0));
   try {
@@ -407,7 +407,7 @@ test("every surface renders within its frame at the contract's sizes", () => {
       { id: "a", label: "Write the plan", status: { state: "done" }, criteria: [] },
       { id: "b", label: "Wire the workbench", status: { state: "in_progress" }, criteria: [] },
       { id: "c", label: "Verify the frames", status: { state: "pending" }, criteria: [] }] }] } });
-  const views: readonly MainView[] = ["conversation", "task", "agents", "changes", "evidence", "artifacts", "inbox", "usage", "graph", "timeline"];
+  const views: readonly MainView[] = ["conversation", "task", "agents", "changes", "evidence", "artifacts", "usage", "timeline"];
   for (const [columns, rows] of [[185, 40], [140, 46], [105, 30], [92, 40], [80, 24], [80, 14], [61, 40], [52, 24], [46, 40]] as const) {
     const h = shell(columns, rows, () => state);
     try {

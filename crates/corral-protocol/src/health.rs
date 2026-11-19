@@ -1,4 +1,6 @@
 //! Health snapshots are observations, not proof that any requested action completed.
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -11,64 +13,46 @@ pub enum DaemonState {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeState {
-    Ok,
-    Unreachable,
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum PmState {
-    Live,
-    Relaunching,
-    Absent,
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct RuntimeHealth {
-    pub kind: String,
-    pub state: RuntimeState,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct LoopFacts {
-    pub pass_seq: u64,
-    /// RFC 3339 timestamp, absent before the first completed pass.
-    pub last_pass_at: Option<String>,
-    pub last_pass_ms: Option<u64>,
-    pub age_secs: Option<u64>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Health {
     pub daemon: DaemonState,
-    #[serde(default)]
-    pub reasons: Vec<String>,
-    #[serde(default)]
-    pub runtimes: Vec<RuntimeHealth>,
-    pub pm: PmState,
-    #[serde(rename = "loop")]
-    pub loop_facts: LoopFacts,
+    pub runner_reachable: bool,
+    /// RFC 3339 timestamp, absent until the first sync completes.
+    pub last_sync_at: Option<String>,
+    pub last_sync_error: Option<String>,
     pub pid: u32,
     pub version: String,
+    /// Dispatch occupancy and limits, absent when the engine cannot be observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slots: Option<Slots>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Slots {
+    pub global: SlotCount,
+    /// Only projects with an explicit running limit.
+    pub projects: BTreeMap<String, SlotCount>,
+}
+
+#[derive(
+    Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+pub struct SlotCount {
+    /// Running and Blocked tasks currently occupying slots.
+    pub used: u64,
+    pub limit: u64,
 }
 
 impl Health {
     pub fn down() -> Self {
         Self {
             daemon: DaemonState::Down,
-            reasons: Vec::new(),
-            runtimes: Vec::new(),
-            pm: PmState::Absent,
-            loop_facts: LoopFacts::default(),
+            runner_reachable: false,
+            last_sync_at: None,
+            last_sync_error: None,
             pid: 0,
             version: String::new(),
+            slots: None,
         }
     }
 
@@ -80,24 +64,12 @@ impl Health {
             DaemonState::Other => "unknown",
         };
         let mut line = format!("daemon {state}");
-        for reason in &self.reasons {
-            segment(&mut line, reason);
+        if !self.runner_reachable {
+            segment(&mut line, "runner unreachable");
         }
-        for runtime in &self.runtimes {
-            let state = match runtime.state {
-                RuntimeState::Ok => "ok",
-                RuntimeState::Unreachable => "unreachable",
-                RuntimeState::Other => "unknown",
-            };
-            segment(&mut line, &format!("{} {state}", runtime.kind));
+        if let Some(error) = &self.last_sync_error {
+            segment(&mut line, error);
         }
-        let pm = match self.pm {
-            PmState::Live => "live",
-            PmState::Relaunching => "relaunching",
-            PmState::Absent => "absent",
-            PmState::Other => "unknown",
-        };
-        segment(&mut line, &format!("PM {pm}"));
         line
     }
 }
@@ -117,14 +89,11 @@ mod tests {
     #[test]
     fn future_health_enum_values_and_fields_do_not_break_clients() {
         let health: Health = serde_json::from_value(serde_json::json!({
-            "daemon": "future_state", "reasons": [], "pm": "future_pm",
-            "runtimes": [{"kind":"herdr-tui","state":"future_probe","extra":true}],
-            "loop": {"pass_seq":1,"last_pass_at":null,"last_pass_ms":null,"age_secs":null},
+            "daemon": "future_state", "runner_reachable": true,
+            "last_sync_at": null, "last_sync_error": null,
             "pid":42, "version":"1", "future_field":true
         }))
         .unwrap();
         assert_eq!(health.daemon, DaemonState::Other);
-        assert_eq!(health.pm, PmState::Other);
-        assert_eq!(health.runtimes[0].state, RuntimeState::Other);
     }
 }

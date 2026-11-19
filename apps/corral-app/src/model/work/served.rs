@@ -1,8 +1,11 @@
-//! The who-acts-next list and its keyboard selection in the Daemon data state, built from the
-//! daemon's board: its groups in the fixture's order and anatomy, with the real rows and counts.
-//! The selected task is the root's live selection, by its owned id.
+//! The who-moves-next list and its keyboard selection in the Daemon data state, built from the
+//! open tasks corrald serves: the groups the app derives from each row, in the plan's order
+//! (needs you, corral, workers, queued, backlog, ideas). The selected task is the root's live
+//! selection, by its owned id.
 
 use std::collections::BTreeSet;
+
+use corral_types::Status;
 
 use crate::model::board::TaskLine;
 use crate::model::daemon::{self, Link};
@@ -16,20 +19,21 @@ use super::{
 };
 
 /// Said instead of the list while the link is down and no board has arrived.
-pub const NO_BOARD: &str = "No board received from corrald yet.";
-/// Said instead of the list when the daemon's board holds no task.
-pub const EMPTY_BOARD: &str = "Nothing on the board.";
-/// The board failed before producing any rows; the status banner carries the reason and retry.
-pub(super) const BOARD_UNAVAILABLE: &str = "Board unavailable.";
-/// Said instead of the list when no task on the board belongs to the chosen project scope.
-pub const NO_PROJECT_TASKS: &str = "No task on the board matches this project.";
+pub const NO_BOARD: &str = "No tasks received from corrald yet.";
+/// Said instead of the list when corrald serves no open task.
+pub const EMPTY_BOARD: &str = "No open tasks.";
+/// The tasks topic failed before producing any rows; the status banner carries the reason and
+/// retry.
+pub(super) const BOARD_UNAVAILABLE: &str = "Tasks unavailable.";
+/// Said instead of the list when no open task belongs to the chosen project scope.
+pub const NO_PROJECT_TASKS: &str = "No open task matches this project.";
 
-/// Rows a collapsed Queued or Parked group shows on desktop and terminal, and on phone.
+/// Rows a collapsed Queued, Backlog or Ideas group shows on desktop and terminal, and on phone.
 const COLLAPSED: usize = 12;
 const COLLAPSED_PHONE: usize = 4;
 
-/// The display order of the groups, and the daemon groups each one holds; tasks the daemon
-/// cannot place wait with the queued ones.
+/// The display order of the groups, and the derived groups each one holds; a closed task the
+/// topic still carries waits with the queued ones.
 const ORDER: [(GroupKey, &[daemon::Group]); 6] = [
     (GroupKey::You, &[daemon::Group::NeedsYou]),
     (GroupKey::Corral, &[daemon::Group::Verifying]),
@@ -38,8 +42,8 @@ const ORDER: [(GroupKey, &[daemon::Group]); 6] = [
         GroupKey::Queued,
         &[daemon::Group::Queued, daemon::Group::Other],
     ),
-    (GroupKey::Held, &[daemon::Group::Held]),
-    (GroupKey::Parked, &[daemon::Group::Parked]),
+    (GroupKey::Backlog, &[daemon::Group::Backlog]),
+    (GroupKey::Ideas, &[daemon::Group::Ideas]),
 ];
 
 /// The list group a daemon task is shown under.
@@ -50,52 +54,31 @@ pub fn group_key(group: daemon::Group) -> GroupKey {
         .map_or(GroupKey::Queued, |(key, _)| *key)
 }
 
-/// The heading of a group in the Daemon state: the fixture's, except the bucket of tasks no one
-/// is acting on yet, which also holds ideas and backlog nobody queued and so is "Upcoming".
+/// The heading of a group: who moves next.
 pub fn group_label(key: GroupKey) -> &'static str {
-    if key == GroupKey::Queued {
-        return UPCOMING;
-    }
     match key {
         GroupKey::You => "Needs you",
         GroupKey::Corral => "Corral is verifying",
         GroupKey::Worker => "Worker runs in progress",
-        GroupKey::Queued => UPCOMING,
-        GroupKey::Held => "Held",
-        GroupKey::Parked => "Parked",
+        GroupKey::Queued => "Queued",
+        GroupKey::Backlog => "Backlog",
+        GroupKey::Ideas => "Ideas",
     }
 }
 
-/// The Daemon state's heading of the broad bucket `GroupKey::Queued`.
-pub const UPCOMING: &str = "Upcoming";
-
-/// The board's tasks in `filter`'s project scope.
+/// The open tasks in `filter`'s project scope.
 fn shown<'a>(feed: &'a daemon::Feed, filter: &ProjectFilter) -> Vec<&'a daemon::Task> {
     let filter = filter.resolved(feed);
     feed.board
         .tasks()
         .iter()
-        .filter(|task| filter.matches(task.project.as_deref()))
+        .filter(|task| filter.matches(task.project()))
         .collect()
-}
-
-pub(super) fn task_group(feed: &daemon::Feed, task: &daemon::Task) -> GroupKey {
-    if crate::model::inbox::owner_moves(feed).any(|row| {
-        row.task.as_deref() == Some(task.id.as_str())
-            || row.plan.as_deref() == Some(task.id.as_str())
-    }) {
-        GroupKey::You
-    } else if task.group == daemon::Group::NeedsYou {
-        GroupKey::Queued
-    } else {
-        group_key(task.group)
-    }
 }
 
 /// The non-empty groups of `tasks`, in display order, each keeping the board's order.
 fn grouped<'a>(
     tasks: &[&'a daemon::Task],
-    feed: &daemon::Feed,
     grouping: NowGroup,
 ) -> Vec<(GroupKey, String, Vec<&'a daemon::Task>)> {
     // Project sections show all their tasks: state-specific expansion controls cannot
@@ -103,18 +86,21 @@ fn grouped<'a>(
     if grouping == NowGroup::Project {
         let mut ordered = tasks.to_vec();
         ordered.sort_by_cached_key(|task| {
-            let task: &'a daemon::Task = task;
             let rank = ORDER
                 .iter()
-                .position(|(key, _)| *key == task_group(feed, task));
-            (task.project.is_none(), task.project.as_deref(), rank)
+                .position(|(key, _)| *key == group_key(task.group));
+            (
+                task.project().is_none(),
+                task.project().map(str::to_owned),
+                rank,
+            )
         });
         let mut groups: Vec<(GroupKey, String, Vec<&daemon::Task>)> = Vec::new();
         for task in ordered {
             let same = groups
                 .last()
                 .and_then(|(_, _, rows)| rows.first())
-                .is_some_and(|last| last.project == task.project);
+                .is_some_and(|last| last.project() == task.project());
             if same {
                 if let Some((_, _, rows)) = groups.last_mut() {
                     rows.push(task);
@@ -122,7 +108,7 @@ fn grouped<'a>(
             } else {
                 groups.push((
                     GroupKey::Queued,
-                    task.project.clone().unwrap_or_else(|| "Unassigned".into()),
+                    task.project().unwrap_or("Unassigned").to_owned(),
                     vec![task],
                 ));
             }
@@ -135,7 +121,7 @@ fn grouped<'a>(
             let rows: Vec<&daemon::Task> = tasks
                 .iter()
                 .copied()
-                .filter(|task| task_group(feed, task) == *key)
+                .filter(|task| group_key(task.group) == *key)
                 .collect();
             (*key, group_label(*key).to_owned(), rows)
         })
@@ -147,8 +133,8 @@ fn grouped<'a>(
 fn limit(state: &State, key: GroupKey, form: Form) -> usize {
     let expanded = match key {
         GroupKey::Queued => state.all_queued,
-        GroupKey::Held => state.all_held,
-        GroupKey::Parked => state.all_parked,
+        GroupKey::Backlog => state.all_backlog,
+        GroupKey::Ideas => state.all_ideas,
         GroupKey::You | GroupKey::Corral | GroupKey::Worker => return usize::MAX,
     };
     match (expanded, form) {
@@ -162,11 +148,10 @@ fn limit(state: &State, key: GroupKey, form: Form) -> usize {
 fn visible<'a>(
     state: &State,
     tasks: &[&'a daemon::Task],
-    feed: &daemon::Feed,
     form: Form,
     grouping: NowGroup,
 ) -> Vec<&'a Id> {
-    grouped(tasks, feed, grouping)
+    grouped(tasks, grouping)
         .into_iter()
         .flat_map(|(key, _, rows)| {
             let limit = if grouping == NowGroup::Project {
@@ -181,7 +166,7 @@ fn visible<'a>(
 
 /// The selected task: the root's, while the list shows it; none while the board does not list
 /// it at all (Now shows its detail, and no other row stands in for it); otherwise, when nothing
-/// is chosen or the goal filter hides the choice, the first visible row.
+/// is chosen or the project filter hides the choice, the first visible row.
 fn selection<'a>(
     state: &State,
     chosen: Option<&Id>,
@@ -196,7 +181,7 @@ fn selection<'a>(
         }
         feed.board.task(id)?;
     }
-    visible(state, tasks, feed, form, grouping).first().copied()
+    visible(state, tasks, form, grouping).first().copied()
 }
 
 /// The task the daemon's Now treats as selected on the board, if the list shows any.
@@ -221,12 +206,12 @@ pub fn unseen_tasks(feed: &daemon::Feed) -> BTreeSet<&str> {
     };
     feed.changes
         .range(seen.through.saturating_add(1)..)
-        .filter_map(|(_, line)| line.task.as_deref())
+        .filter_map(|(_, event)| event.task.as_deref())
         .collect()
 }
 
-/// Who acts next in the Daemon state: loading placeholders while the first board is on its way,
-/// one quiet line while there is none or it is empty, else the groups.
+/// Who moves next in the Daemon state: loading placeholders while the first tasks page is on
+/// its way, one quiet line while there is none or it is empty, else the groups.
 /// `filter` scopes the rows to one project, Unassigned or All; `grouping` heads them by state or
 /// by project.
 pub fn daemon_list_filtered(
@@ -281,7 +266,7 @@ fn list(
     let phone = form == Form::Phone;
     let selected = selection(state, chosen, tasks, feed, form, grouping);
     let unseen = unseen_tasks(feed);
-    for (key, label, members) in grouped(tasks, feed, grouping) {
+    for (key, label, members) in grouped(tasks, grouping) {
         let limit = if grouping == NowGroup::Project {
             usize::MAX
         } else {
@@ -293,7 +278,7 @@ fn list(
             .map(|task| {
                 Row::Task(TaskRow {
                     line: TaskLine::daemon(task, feed.now, unseen.contains(task.id.as_str())),
-                    project_chip: project_chip(feed, filter, task.project.as_deref()),
+                    project_chip: project_chip(feed, filter, task.project()),
                     selected: !phone && selected == Some(&task.id),
                     action: if phone {
                         Press::Open(Live::Task(task.id.clone()))
@@ -306,9 +291,9 @@ fn list(
         let hidden = members.len().saturating_sub(limit);
         if hidden != 0 {
             let noun = match key {
-                GroupKey::Parked => "parked",
-                GroupKey::Held => "held",
-                _ => "upcoming",
+                GroupKey::Backlog => "in backlog",
+                GroupKey::Ideas => "ideas",
+                _ => "queued",
             };
             rows.push(Row::More(Button::new(
                 format!("+ {hidden} more {noun}"),
@@ -319,17 +304,7 @@ fn list(
         view.groups.push(GroupView {
             key,
             label,
-            count: if grouping == NowGroup::State
-                && key == GroupKey::You
-                && filter.resolved(feed) == ProjectFilter::All
-            {
-                u32::try_from(
-                    crate::model::inbox::attention_counts_filtered(feed, &ProjectFilter::All).now,
-                )
-                .unwrap_or(u32::MAX)
-            } else {
-                u32::try_from(members.len()).unwrap_or(u32::MAX)
-            },
+            count: u32::try_from(members.len()).unwrap_or(u32::MAX),
             hue: if grouping == NowGroup::Project {
                 crate::model::hue::Hue::Neutral
             } else {
@@ -341,60 +316,28 @@ fn list(
     view
 }
 
-/// The session a task's Enter opens: its current run's, from the detail or the board.
-pub fn task_session(feed: &daemon::Feed, task: &daemon::Task) -> Option<Id> {
-    session_for(feed, &task.id, task.agent.as_ref())
-}
-
-/// A task's current run's session by id: the detail's, else its board row's agent's.
-pub(super) fn session_for(
-    feed: &daemon::Feed,
-    id: &str,
-    agent: Option<&daemon::Agent>,
-) -> Option<Id> {
-    super::loaded_task(feed, id)
-        .and_then(|detail| detail.run.as_ref()?.session.clone())
-        .or_else(|| agent?.session.clone())
-        .map(Id::from)
-}
-
-/// The open question asked on a task, by its key, when the inbox serves it.
-pub fn task_question(feed: &daemon::Feed, task: &str) -> Option<Id> {
-    use corral_protocol::rows::InboxState;
-    feed.inbox
-        .values()
-        .find(|row| {
-            row.task.as_deref() == Some(task)
-                && row.state == InboxState::Open
-                && crate::model::inbox::is_question(row)
-        })
-        .map(|row| Id::from(row.id.as_str()))
-}
-
-/// Reuse Inbox's canonical routing for every kind of open task attention.
-pub(super) fn task_attention(feed: &daemon::Feed, task: &str) -> Option<Live> {
-    crate::model::inbox::ordered_filtered(feed, &ProjectFilter::All)
-        .into_iter()
-        .filter(|row| row.task.as_deref() == Some(task) && crate::model::inbox::is_open(row))
-        .find_map(crate::model::inbox::target)
-}
-
-pub(super) fn attention_button(feed: &daemon::Feed, task: &str) -> Option<Button> {
-    let target = task_attention(feed, task)?;
-    let label = match &target {
-        Live::Question(id) => format!("Answer {id}"),
-        Live::Review(_) => "Review candidate".into(),
-        Live::Plan(_) => "Review plan".into(),
-        _ => "Open task".into(),
-    };
-    Some(Button::new(label, Press::Open(target), ButtonKind::Primary))
+/// The live session of a task's run, by its agents key (`<task>_<run>`): the board row's
+/// current run's, else any live run of the task.
+pub fn session_for(feed: &daemon::Feed, id: &str) -> Option<Id> {
+    let current = feed
+        .board
+        .task(id)
+        .and_then(|task| task.row.run.as_ref())
+        .map(|run| Id::new(&format!("{id}_{}", run.id)))
+        .filter(|key| feed.agents.contains_key(key));
+    current.or_else(|| {
+        feed.agents
+            .iter()
+            .find(|(_, row)| row.run.task == id)
+            .map(|(key, _)| key.clone())
+    })
 }
 
 impl State {
     /// Now's keys in the Daemon state: j/k and the arrows walk the visible rows in display
     /// order (a collapsed group's hidden rows are skipped), then the open Closed section's
-    /// rows, ] cycles the inspector, Enter opens canonical attention or shows the session in
-    /// the same inspector, and opens a closed task's own page.
+    /// rows, ] cycles the inspector, Enter opens a review that waits on the owner or else shows
+    /// the session in the same inspector, and opens a closed task's own page.
     /// `top` keeps keys away from another domain's pushed page.
     /// `scope` is the shown list's scope, so the keys walk the rows on screen.
     pub fn key_live_filtered(
@@ -426,7 +369,7 @@ impl State {
         match key {
             "j" | "down" | "ArrowDown" | "k" | "up" | "ArrowUp" => {
                 let closed = super::closed_ids_filtered(&self.closed, feed, filter);
-                let mut ids = visible(self, tasks, feed, form, grouping);
+                let mut ids = visible(self, tasks, form, grouping);
                 ids.extend(closed.iter());
                 // A closed task is never on the board, so `selection` would not find it.
                 let current = chosen
@@ -447,7 +390,10 @@ impl State {
                 )
             }
             "." => {
-                let id = selection(self, chosen, tasks, feed, form, grouping)?;
+                // A task opened by name off the board (a closed one) is the one beside the list.
+                let id = chosen
+                    .filter(|id| feed.board.task(id).is_none())
+                    .or_else(|| selection(self, chosen, tasks, feed, form, grouping))?;
                 Some(vec![Effect::VerbMenu(super::Record::Task(id.clone()))])
             }
             "enter" | "Enter" => {
@@ -457,8 +403,8 @@ impl State {
                 }
                 let task = selection(self, chosen, tasks, feed, form, grouping)
                     .and_then(|id| tasks.iter().find(|task| task.id == *id))?;
-                if let Some(attention) = task_attention(feed, &task.id) {
-                    Some(vec![Effect::OpenLive(attention)])
+                if task.group == daemon::Group::NeedsYou && task.status() == Status::Review {
+                    Some(vec![Effect::OpenLive(Live::Review(task.id.clone()))])
                 } else {
                     self.now_tab = super::NowTab::Session;
                     Some(Vec::new())
@@ -467,6 +413,19 @@ impl State {
             "]" => {
                 self.cycle_tab();
                 Some(Vec::new())
+            }
+            "R" => {
+                let task = selection(self, chosen, tasks, feed, form, grouping)
+                    .and_then(|id| tasks.iter().find(|task| task.id == *id))?;
+                Some(if super::reply_box(task).is_some() {
+                    self.now_tab = super::NowTab::Story;
+                    vec![Effect::Focus(super::REPLY_FIELD)]
+                } else {
+                    vec![Effect::Toast(format!(
+                        "{} has no question waiting for your reply",
+                        task.id
+                    ))]
+                })
             }
             _ => None,
         }

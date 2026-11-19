@@ -1,8 +1,8 @@
 //! Assistant threads, which live inside Agents: the thread page with its composer docked, the
-//! transcript the Ask drawer also shows, the session blocks Agents places under its roster, and
-//! a pending assistant prompt as Inbox shows it. Everything renders the served
-//! threads of the selected feed through `model::assistant`; every button runs its reducer, whose
-//! canonical sends, commands and prompt answers the app performs.
+//! transcript the Ask drawer also shows and the session block Agents places under its roster.
+//! Everything renders the served threads of the selected feed through `model::assistant`;
+//! every button runs its reducer, whose canonical sends, session controls, engine operations
+//! and answers the app performs.
 
 mod agents;
 mod attachments;
@@ -11,8 +11,9 @@ mod page;
 mod parts;
 mod side_facts;
 mod transcript;
-mod verbs;
 
+use corral_protocol::app::SESSION_V1;
+use corral_protocol::detail::DetailRef;
 use corral_protocol::rows::AssistantRow;
 use nsh_core::prelude::*;
 
@@ -21,9 +22,8 @@ use crate::model::{Form, Id};
 use crate::state::AppState;
 
 pub use agents::agents_tail;
-pub use page::{live_prompt, live_thread, live_thread_phone, live_thread_title};
+pub use page::{live_thread, live_thread_phone, live_thread_title};
 pub use side_facts::{identified, stacked};
-pub use verbs::session_verbs;
 
 /// The transcript rows' inset in the Ask drawer (`.drawer .tm` padding 7 16) and on the phone.
 const DRAWER_INSET: f32 = 16.0;
@@ -44,6 +44,9 @@ pub fn items(app: AppState, source: ThreadRef) -> AnyElement {
 /// subscription and the last one closes it. `warm` asks a cold host to start, as Ask does when it
 /// opens so the first answer does not wait for the host. Opening and closing both reach the
 /// source mounted here, so a data-source change never moves a subscription count between feeds.
+/// From a corrald that serves sessions, the thread's session is watched too, so its answer
+/// streams in, and its recorded transcript is read for the questions it asks the owner, again
+/// whenever its row changes.
 pub(crate) fn open_scope(app: AppState, scope: Id, warm: bool) {
     let scoped = app.scope();
     let opening = scope.clone();
@@ -52,6 +55,28 @@ pub(crate) fn open_scope(app: AppState, scope: Id, warm: bool) {
             state.subscribe(opening.as_str(), warm, feed)
         });
     });
+    if untracked(|| app.capable(SESSION_V1)) {
+        crate::screens::agents::watch_session(app, scope.clone());
+        let target = DetailRef::Session {
+            id: scope.to_string(),
+        };
+        let watched = scope.clone();
+        let row = computed(move || {
+            app.feed.with(|feed| {
+                crate::model::assistant::row(feed, watched.as_str())
+                    .map(|row| (row.id.clone(), row.state, row.turn))
+            })
+        });
+        let seen = stored(false);
+        effect(move || {
+            row.with(|_| ());
+            if seen.replace(true) {
+                untracked(|| scoped.refresh(target.clone()));
+            } else {
+                untracked(|| scoped.load(target.clone()));
+            }
+        });
+    }
     cleanup(move || {
         scoped.reduce(scoped.assistant, move |state, _, _, _| {
             state.unsubscribe(scope.as_str())

@@ -1,7 +1,10 @@
 //! UI intents only; each transport accepts its own device-management subset.
 use corral_protocol::attachment::AttachmentKind;
-use corral_protocol::device::{DeviceAuthorityChange, DeviceRevoke, PushKind};
-use corral_protocol::{app::*, assistant::*, cmd::CmdResultQuery, detail::DetailGet};
+use corral_protocol::config::ConfigDocument;
+use corral_protocol::device::{DeviceRevoke, PushKind};
+use corral_protocol::op::OpSubmit;
+use corral_protocol::pane::{PaneFocus, PaneKeys};
+use corral_protocol::{app::*, assistant::*, detail::DetailGet};
 
 #[derive(Debug)]
 pub struct AttachRequest {
@@ -56,12 +59,26 @@ pub enum ClientRequest {
         session: String,
         on: bool,
     },
-    ActPreview {
+    /// `op.submit`, answered on the connection; never journaled or replayed.
+    OpSubmit {
         request_id: String,
-        request: ActPreviewRequest,
+        request: OpSubmit,
     },
-    ActSubmit(ActSubmit),
-    ActResult(CmdResultQuery),
+    ConfigGet {
+        request_id: String,
+    },
+    ConfigPut {
+        request_id: String,
+        request: ConfigDocument,
+    },
+    PaneFocus {
+        request_id: String,
+        request: PaneFocus,
+    },
+    PaneKeys {
+        request_id: String,
+        request: PaneKeys,
+    },
     AssistantSend(AssistantSend),
     AssistantCancel(String),
     Attach(AttachRequest),
@@ -79,34 +96,29 @@ pub enum ClientRequest {
         request_id: String,
         request: AssistantWarm,
     },
-    AssistantStop {
-        request_id: String,
-        request: AssistantStop,
-    },
     AssistantSession {
         request_id: String,
         request: AssistantSessionOp,
     },
-    PromptAnswer(PromptAnswer),
+    /// `prompt.answer`: an agent's question answered in place, read by `request_id`.
+    PromptAnswer {
+        request_id: String,
+        request: corral_protocol::session::SessionPromptAnswer,
+    },
+    /// A session control (`session.cancel`, `.pause`, `.resume`, `.terminate`, `.relaunch`,
+    /// `.rewind`) addressed by the session's public id, read by `request_id`.
+    Session {
+        request_id: String,
+        method: &'static str,
+        params: serde_json::Value,
+    },
     ChangesPage {
         request_id: String,
         request: ChangesQuery,
     },
-    PromptPreview {
-        request_id: String,
-        request: PromptPreview,
-    },
     SeenAdvance {
         request_id: String,
         request: SeenAdvance,
-    },
-    DeviceSetAuthority {
-        request_id: String,
-        request: DeviceAuthorityChange,
-    },
-    DeviceAuthorityPreview {
-        request_id: String,
-        request: DeviceSetAuthority,
     },
     DeviceRevoke {
         request_id: String,
@@ -212,23 +224,10 @@ macro_rules! operation {
     };
 }
 operation!(detail, DetailGet, Detail);
-operation!(act_preview, ActPreviewRequest, ActPreview);
-operation!(prompt_preview, PromptPreview, PromptPreview);
 operation!(assistant_warm, AssistantWarm, AssistantWarm);
-operation!(assistant_stop, AssistantStop, AssistantStop);
 operation!(assistant_session, AssistantSessionOp, AssistantSession);
 operation!(changes_page, ChangesQuery, ChangesPage);
 operation!(seen_advance, SeenAdvance, SeenAdvance);
-operation!(
-    device_set_authority,
-    DeviceAuthorityChange,
-    DeviceSetAuthority
-);
-operation!(
-    device_authority_preview,
-    DeviceSetAuthority,
-    DeviceAuthorityPreview
-);
 pub fn device_revoke(device: String) -> String {
     let request_id = new_id();
     send(ClientRequest::DeviceRevoke {
@@ -240,18 +239,15 @@ pub fn device_revoke(device: String) -> String {
 pub fn terminal(session: String, open: bool) -> bool {
     send(ClientRequest::Terminal { session, open })
 }
-
-pub fn act_submit(request: ActSubmit) -> bool {
-    send(ClientRequest::ActSubmit(request))
-}
-pub fn act_result(request: CmdResultQuery) -> bool {
-    send(ClientRequest::ActResult(request))
+/// Sends the operation under `request_id`, the key its status is read by.
+pub fn submit(request_id: String, request: OpSubmit) -> bool {
+    send(ClientRequest::OpSubmit {
+        request_id,
+        request,
+    })
 }
 pub fn assistant_send(request: AssistantSend) -> bool {
     send(ClientRequest::AssistantSend(request))
-}
-pub fn prompt_answer(request: PromptAnswer) -> bool {
-    send(ClientRequest::PromptAnswer(request))
 }
 pub fn thread(scope: String, open: bool) -> bool {
     send(ClientRequest::Thread { scope, open })

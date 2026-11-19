@@ -1,12 +1,12 @@
-//! Pure Review model: candidate-bound verdicts, evidence, line discussions and decisions.
+//! Pure Review model: the tasks in Review, their stored candidate (the run's summary, its diff
+//! and the gate and review checks) and the engine operations that decide them.
 //!
-//! The feed-backed candidate lists tasks awaiting review and reads their immutable candidate,
-//! task details and expanded file patches. Every decision and comment is a canonical command
-//! carrying the current candidate's preconditions.
+//! The candidate list is the board's Review tasks; the selected one's `Review` and `Task`
+//! details, its expanded file patches and its artifacts are read from the client's cache.
+//! Every decision is one engine operation (`Effect::Act`): the engine decides whether it runs,
+//! and the app never predicts a refusal. Request changes needs words, so it opens the shared
+//! verb composer through the work state (`Action::Verb`, routed by the screen).
 //! Project filters scope the candidate list, not an explicitly pushed candidate page or its actions.
-//! Render the builders' fields without consulting state again.
-//! Patches and new-comment composers carry the same immutable run/base/head identity. An older
-//! daemon that omits a patch identity can still be read, but cannot safely accept line actions.
 //! `loop_page_filtered` is the page: the one-line outline, then the Brief-first candidate with
 //! its evidence tabs and decide bar.
 
@@ -20,41 +20,45 @@ mod live_files;
 mod loop_page;
 mod outline;
 mod readiness;
+mod rounds;
 mod view;
 
 #[cfg(test)]
-mod brief_tests;
-#[cfg(test)]
 mod candidate_tests;
 
-pub use brief::{Brief, ChangedFile, candidate_brief};
+pub use brief::{Brief, ChangedFile};
 pub use brief_side::{AskedFor, BriefSide, ReviewFact};
 pub use diff::{
-    Anchor, Highlight, NumberedLine, ParsedHunk, ParsedPatch, SplitRow, UnifiedRow, line_index,
-    parse_patch, split_rows, unified_rows, word_mark,
+    Highlight, NumberedLine, ParsedHunk, ParsedPatch, SplitRow, UnifiedRow, parse_patch,
+    split_rows, unified_rows, word_mark,
 };
+pub(crate) use live::actor;
 pub use live::{candidates_filtered, selected_filtered};
 pub use loop_page::{LoopCandidate, LoopContent, LoopPage, loop_page_filtered};
-pub use outline::{
-    CandidateHeader, OutlineGroup, OutlineRow, candidate_decide_bar, candidate_header,
-    candidate_tabs, outline_filtered, page_stats,
-};
-pub use readiness::{ReadyLink, ReviewQuote, readiness_chain};
+pub use outline::{CandidateHeader, OutlineGroup, OutlineRow, candidate_header, outline_filtered};
+pub use readiness::{ReadyLink, ReviewQuote};
+pub use rounds::{ReviewerLine, Round, Rounds};
 pub use view::{
-    AcceptanceView, ArtifactContent, ArtifactView, ArtifactsView, Body, Button, ButtonStyle, Chip,
-    CommentView, Composer, DecideBar, DiffContent, DiffView, FileBody, FileView, HunkView,
-    LayoutChoice, LogView, MessageView, Notice, ReportView, StatusLine, TabView, effective_layout,
+    ArtifactContent, ArtifactView, ArtifactsView, Body, Button, ButtonStyle, Chip, DecideBar,
+    DiffContent, DiffView, FileBody, FileView, HunkView, LayoutChoice, LogView, Notice, ReportView,
+    StatusLine, TabView, Target, effective_layout,
 };
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::daemon::Feed;
 use crate::model::effect::{Effect, Env};
 use crate::model::id::Id;
 use crate::model::live::{Live, Selection};
+use crate::model::work::{Record, Verb};
 
-/// Review's keyboard shortcut toggles the stored split/unified preference.
-pub const KEYS: &[&str] = &["s"];
+/// Review's keyboard shortcuts: `s` toggles the stored split/unified preference; `A`
+/// (Shift+A) puts the focus on the shown candidate's Approve, which Tab reaches only after the
+/// list and the brief.
+pub const KEYS: &[&str] = &["s", "A"];
+
+/// The decide bar's Approve (`btn-approve`), which `A` focuses.
+pub const APPROVE: &str = "btn-approve";
 
 /// The desktop preference; phone, terminal and narrow desktop output remain unified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -71,98 +75,32 @@ pub enum Layout {
 pub enum Tab {
     /// Changed files.
     Diff,
-    /// Rendered implementation report and acceptance list.
+    /// The worker run's summary, recorded at `done`.
     Report,
-    /// Candidate artifact records.
+    /// The task's artifact records.
     Shot,
-    /// Gate output.
+    /// The gate check's log artifact.
     Log,
-    /// Readiness, changed files and the task's recorded request.
+    /// Readiness, changed files and the task's request.
     #[default]
     Brief,
 }
-/// A task and the immutable coding candidate an action or draft belongs to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CandidateAt {
-    pub task: Id,
-    pub candidate: corral_protocol::detail::ReviewCandidate,
-}
 
-impl CandidateAt {
-    pub(super) fn draft(&self, suffix: &str) -> String {
-        format!(
-            "{}:{}:{}:{}:{suffix}",
-            self.task, self.candidate.run, self.candidate.base, self.candidate.head
-        )
-    }
-}
-
-/// A line of a served file a new comment is anchored to.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LineAt {
-    pub path: String,
-    /// The deleted side, numbered by the old file; otherwise the new file.
-    pub old_side: bool,
-    pub line: u32,
-}
-
-/// What a composer's Send submits.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Compose {
-    /// A new line comment on the patch's captured candidate.
-    New { candidate: CandidateAt, at: LineAt },
-    /// A reply to a thread at the revision the owner read.
-    Reply {
-        candidate: CandidateAt,
-        thread: Id,
-        revision: u32,
-    },
-    /// The request-changes note for this candidate.
-    Changes(CandidateAt),
-}
-
-/// A command this page sent, kept until its outcome is dismissed or confirmed by the detail.
+/// An engine operation this page submitted, kept until dismissed so its outcome stays visible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sent {
-    /// The command identity, reused for recovery; never replaced after an uncertain result.
+    /// The request id, the key of its status in the feed.
     pub key: Id,
     /// The candidate's task.
     pub task: Id,
-    pub intent: Intent,
-    /// The original candidate, retained even when a failed note is restored later.
-    pub candidate: Option<CandidateAt>,
-}
-
-/// What a sent command was for, with the owner's words so an unsent note can be restored.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Intent {
-    Approve {
-        sha: String,
-    },
-    Changes {
-        text: String,
-    },
-    Retry,
-    Discard,
-    Comment {
-        at: LineAt,
-        text: String,
-    },
-    Reply {
-        candidate: CandidateAt,
-        thread: Id,
-        text: String,
-    },
-    Resolve {
-        thread: Id,
-    },
-    Reopen {
-        thread: Id,
-    },
+    /// What was sent: "Approve and land T-42".
+    pub title: String,
+    /// An unforced `approve`: once refused, the bar offers Land anyway.
+    pub approve: bool,
 }
 
 /// Review's own state. The selected candidate is the root's live selection; what is expanded,
-/// being written or in flight is Review's.
+/// opened or in flight is Review's.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct State {
     pub ids: crate::model::id::IdSupply,
@@ -172,14 +110,12 @@ pub struct State {
     pub tab: Tab,
     /// Served files whose patches are shown, by candidate task.
     pub expanded: BTreeSet<(Id, String)>,
-    /// The line a new comment is being written on.
-    pub composing: Option<(CandidateAt, LineAt)>,
-    /// The candidate whose request-changes note is open.
-    pub changes: Option<CandidateAt>,
-    /// Artifacts whose contents are shown, by candidate task and catalog key.
+    /// Artifacts whose contents are shown, by candidate task and artifact reference.
     pub opened: BTreeSet<(Id, String)>,
-    /// Commands sent from this page, oldest first.
+    /// Operations sent from this page, oldest first.
     pub sent: Vec<Sent>,
+    /// The branch typed into a candidate's Onto field, by candidate; absent means its base.
+    pub onto: BTreeMap<Id, String>,
 }
 
 /// Candidate interaction intents.
@@ -189,10 +125,19 @@ pub enum Action {
     Tab(Tab),
     /// Set the preferred diff presentation (`rlayout`).
     Layout(Layout),
-    /// Approve the shown candidate through preview and confirmation.
+    /// `approve`: land the candidate onto the Onto field's branch.
     Approve,
-    /// Open the request-changes note for the worker.
-    RequestChanges,
+    /// `approve --force`: land past a red gate, onto the same branch.
+    LandAnyway,
+    /// The Onto field's words changed.
+    Onto(String),
+    /// `gate`: run the gate on the task's HEAD.
+    Gate,
+    /// `review`: start the reviewer.
+    StartReview,
+    /// A shared Actions verb on the shown task (Request changes opens its composer); the
+    /// screen runs it through the work state, where the shared composer lives.
+    Verb(Verb),
     /// Show a served candidate.
     Pick(Id),
     /// Show a served file's patch, fetching it once.
@@ -205,43 +150,12 @@ pub enum Action {
     },
     /// Open the shared Ask composer with the whole candidate as context.
     AskCandidate,
-    /// Open the session explicitly recorded by this candidate's task run.
+    /// Open the candidate run's agent session.
     OpenSession,
-    /// Start a new comment on a served line.
-    Annotate {
-        candidate: CandidateAt,
-        at: LineAt,
-    },
-    /// Close the new comment or the request-changes note without sending.
-    CancelCompose,
-    /// Send a composer's text.
-    Submit {
-        target: Compose,
-        text: String,
-    },
-    Resolve {
-        thread: Id,
-        revision: u32,
-    },
-    Reopen {
-        thread: Id,
-        revision: u32,
-    },
-    /// Rerun the candidate's task.
-    Retry,
-    /// Discard the candidate, through corrald's preview and a fresh confirmation.
-    Discard,
-    /// Ask corrald what became of a command whose result was lost, under the same identity.
-    Recover(Id),
-    /// Forget a settled command's line.
+    /// Open the task's live reviewer session.
+    OpenReviewer,
+    /// Forget an operation's status line.
     Dismiss(Id),
-    /// Put an unsent note back into its composer, then forget the failed command. The
-    /// renderer restores the text; the reducer drops the line.
-    Restore {
-        key: Id,
-        draft: String,
-        text: String,
-    },
     /// Show an artifact's contents from corrald's catalog, fetching them once.
     OpenArtifact(String),
     CloseArtifact(String),
@@ -293,14 +207,21 @@ impl State {
             };
             return Some(vec![Effect::Select(Live::Review(rows[next].id.clone()))]);
         }
+        if key == "A" {
+            let shown = matches!(top, Some(Live::Review(_)))
+                || selected_filtered(selection, feed, filter).is_some();
+            return Some(if shown {
+                vec![Effect::Focus(APPROVE)]
+            } else {
+                Vec::new()
+            });
+        }
         if key == "." {
             let id = match top {
                 Some(Live::Review(id)) => id.clone(),
                 _ => selected_filtered(selection, feed, filter)?.id.clone(),
             };
-            return Some(vec![Effect::VerbMenu(crate::model::work::Record::Review(
-                id,
-            ))]);
+            return Some(vec![Effect::VerbMenu(Record::Task(id))]);
         }
         self.toggle(key)
     }

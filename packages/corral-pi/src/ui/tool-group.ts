@@ -1,6 +1,6 @@
 // Runs of one kind: Pi's transcript folds consecutive settled successful tool rows of one kind into one group row
 // (`TranscriptContainer` in the SDK's tool-execution.js asks each row for its member; tool-row.ts offers it). A kind
-// is one tool and the row's verb (`Read`, `Resolved inbox item`), except plan updates, which fold across their
+// is one tool and the row's verb (`Read`, `Attached`), except plan updates, which fold across their
 // operations. A kind with a summary of its own (the table below) folds from two rows, any other from three, as
 // `✓ <verb> ×n · <newest outcome>` with the total time on the right. A click on the group row shows its rows.
 // Presentation only: the rows' models are read, never changed.
@@ -143,19 +143,13 @@ const listed = named(target => target, "end");
 const SUMMARIES: Readonly<Record<string, Summary>> = {
   corral_todo: { key: "tool", summarize: plan },
   corral_artifact: { summarize: attached },
-  corral_content_read: { summarize: pages },
-  corral_show: { summarize: pages },
-  corral_inbox_read: { summarize: pages },
   web_read: { summarize: pages },
-  read_review_snapshot: { summarize: pages },
   read: { summarize: paged("read", wholeFile, fileName, "middle") },
   edit: { summarize: paged("edit", target => target, fileName, "middle") },
   write: { summarize: files },
   grep: { summarize: searches },
   find: { summarize: searches },
   ls: { summarize: listed },
-  corral_search: { summarize: searches },
-  corral_list: { summarize: listed },
   web_search: { summarize: searches },
   tool_search: { summarize: searches },
 };

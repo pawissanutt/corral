@@ -1,14 +1,13 @@
-//! The thread page: its head, the transcript with the composer docked under it, the session's
-//! facts beside them; the same as a pushed phone page; and a pending assistant prompt as Inbox's
-//! detail pane shows it, all from the served thread.
+//! The thread page: its head with the session's controls, the transcript with the composer
+//! docked under it, the session's facts beside them; and the same as a pushed phone page, all
+//! from the served thread.
 
 use std::rc::Rc;
 
 use nsh_core::prelude::*;
 
 use crate::model::assistant::{
-    Action, Button, Fact, LABELS, LivePrompt, PromptCard, PromptPane, QUICK, ThreadHeader,
-    ThreadRef, live_prompt_pane, live_thread_header, quick_id,
+    Action, Button, Fact, LABELS, QUICK, ThreadHeader, ThreadRef, live_thread_header, quick_id,
 };
 use crate::model::{Form, Id};
 use crate::screens::{PhoneBar, PhonePage};
@@ -19,26 +18,24 @@ use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::dot;
 use crate::ui::kit::overlay::{self, Confirm, Modal};
-use crate::ui::kit::page::{Width, body, columns, context, pushed_head, qhead};
+use crate::ui::kit::page::{Width, columns, context, pushed_head};
 use crate::ui::kit::text::{h3, label_value, rich_small};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-use super::parts::{act, model_button, note_size, ring, spacer, words};
-use super::{cards, open_scope, session_verbs, side_facts, transcript, watch_ops};
+use super::parts::{act, model_button, note_size, spacer, words};
+use super::{open_scope, side_facts, transcript, watch_ops};
 
 /// The facts column beside the transcript (`grid-template-columns: minmax(0,1fr) 300px`).
 const FACTS_WIDTH: f32 = 300.0;
 /// The transcript rows' inset on the page (`.tm` padding 8 24); the phone's 14.
 const PAGE_INSET: f32 = 24.0;
 const PHONE_INSET: f32 = 14.0;
-/// The prompt pane's measure (`max-width: 760px`).
-const PROMPT_MEASURE: f32 = 760.0;
 
 /// The served thread `id` ("quick" or A-n) on desktop and in a terminal, subscribed while it is
 /// shown: the head (back to Agents, title, the thread's state, where it runs), the transcript
-/// with its composer docked under it, and the session's facts (with the Ideas filed from it)
-/// beside them. A terminal narrower than its wide grid keeps the transcript alone.
+/// with its composer docked under it, and the session's facts beside them. A terminal narrower
+/// than its wide grid keeps the transcript alone.
 pub fn live_thread(app: AppState, id: Id) -> AnyElement {
     open_scope(app, id.clone(), false);
     watch_ops(app);
@@ -57,7 +54,16 @@ fn page(app: AppState, source: ThreadRef) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(transcript::list(app, source.clone(), inset))
-        .child(ask::docked(app, source.clone()))
+        .child({
+            // An ended session takes no more messages: no composer under its transcript.
+            let ThreadRef::Live(scope) = source.clone();
+            let ended = computed(move || {
+                app.feed
+                    .with(|feed| crate::model::assistant::ended(feed, scope.as_str()))
+            });
+            let source = source.clone();
+            dynamic(move || (!ended.get()).then(|| untracked(|| ask::docked(app, source.clone()))))
+        })
         .into_element();
     let facts = {
         let source = source.clone();
@@ -73,7 +79,7 @@ fn page(app: AppState, source: ThreadRef) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .bg(color(Token::Bg))
-        .child(dynamic(move || Some(head(app, &source))))
+        .child(head(app, &source))
         .child(columns(
             app,
             vec![
@@ -96,34 +102,87 @@ fn header(app: AppState, source: &ThreadRef) -> ThreadHeader {
 }
 
 /// The page head (`.pagehead`): a quiet back button, the title, the thread's state chip, where
-/// it runs and, at the trailing edge, End session while the served session can be ended. A
-/// terminal uses the kit's pushed head with the chip and End at its end.
+/// it runs and, at the trailing edge, the Session menu and End session while the served session
+/// can be ended. A terminal uses the kit's pushed head with the chip, the menu and End at its
+/// end. The head follows the thread's facts part by part: the Session menu is drawn anew only
+/// for another session, so the state a control changes under the open menu leaves its trigger
+/// mounted for the keyboard focus the closing menu puts back on it.
 fn head(app: AppState, source: &ThreadRef) -> AnyElement {
-    let header = header(app, source);
-    let state = header
-        .state
-        .as_ref()
-        .map(|state| chip(app, state.label.clone(), state.hue));
-    let end = header
-        .end
-        .clone()
-        .map(|end| end_button(app, end, ButtonKind::Ghost));
-    let title = header.title;
-    let back = header.back_label;
-    if app.form == Form::Terminal {
-        let trailing = match (state, end) {
-            (None, None) => None,
-            (state, end) => Some(
-                view()
-                    .flex_row()
-                    .items_center()
-                    .children(state)
-                    .when_some(end, |row, end| row.child(term::space(2.0)).child(end))
-                    .into_element(),
-            ),
-        };
-        return pushed_head(app, title, back, move || app.back(), trailing);
+    let shown = {
+        let source = source.clone();
+        computed(move || header(app, &source))
+    };
+    let terminal = app.form == Form::Terminal;
+    let gap = move |row: View| {
+        if terminal {
+            row.child(term::space(2.0))
+        } else {
+            row
+        }
+    };
+    let session = computed(move || shown.with(|header| header.menu.clone()));
+    let menu = dynamic(move || {
+        session.get().map(|session| {
+            gap(view().flex_row().items_center())
+                .child(crate::screens::agents::session_menu(app, session))
+        })
+    });
+    let end = dynamic(move || {
+        shown.with(|header| header.end.clone()).map(|end| {
+            gap(view().flex_row().items_center()).child(end_button(app, end, ButtonKind::Ghost))
+        })
+    });
+    let state = move || {
+        dynamic(move || {
+            shown.with(|header| {
+                header
+                    .state
+                    .as_ref()
+                    .map(|state| chip(app, state.label.clone(), state.hue))
+            })
+        })
+    };
+    if terminal {
+        let trailing = view()
+            .flex_row()
+            .items_center()
+            .child(state())
+            .child(menu)
+            .child(end)
+            .into_element();
+        return pushed_head(
+            app,
+            move || SharedString::from(shown.with(|header| header.title.clone())),
+            move || SharedString::from(shown.with(|header| header.back_label)),
+            move || app.back(),
+            Some(trailing),
+        );
     }
+    let back = untracked(|| shown.with(|header| header.back_label));
+    let title = dynamic(move || {
+        text(shown.with(|header| header.title.clone()))
+            .test_id("page-title")
+            .role(AccessibilityRole::Header)
+            .flex_shrink(1.0)
+            .min_w(px(0.0))
+            .truncate()
+            .font_family(FONT_TEXT)
+            .text_size(px(15.0))
+            .font_weight(FontWeight::BOLD)
+            .letter_spacing(px(-0.08))
+            .text_color(color(Token::Ink))
+    });
+    let subtitle = dynamic(move || {
+        words(
+            app,
+            shown.with(|header| header.subtitle.clone()),
+            12.0,
+            Token::Ink3,
+        )
+        .number_of_lines(1u32)
+        .flex_shrink(1.0)
+        .min_w(px(0.0))
+    });
     view()
         .flex_row()
         .flex_none()
@@ -144,35 +203,19 @@ fn head(app: AppState, source: &ThreadRef) -> AnyElement {
             "page-back",
             move || app.back(),
         ))
-        .child(
-            text(title)
-                .test_id("page-title")
-                .role(AccessibilityRole::Header)
-                .flex_shrink(1.0)
-                .min_w(px(0.0))
-                .truncate()
-                .font_family(FONT_TEXT)
-                .text_size(px(15.0))
-                .font_weight(FontWeight::BOLD)
-                .letter_spacing(px(-0.08))
-                .text_color(color(Token::Ink)),
-        )
-        .children(state)
-        .child(
-            words(app, header.subtitle, 12.0, Token::Ink3)
-                .number_of_lines(1u32)
-                .flex_shrink(1.0)
-                .min_w(px(0.0)),
-        )
-        .when_some(end, |row, end| row.child(spacer()).child(end))
+        .child(title)
+        .child(state())
+        .child(subtitle)
+        .child(spacer())
+        .child(menu)
+        .child(end)
         .into_element()
 }
 
-/// End session as `kind` (outlined beside the desktop title, words alone in a phone's head),
-/// held back while this device may not act for the assistant. The model offers it only on a
-/// served session (or the quick thread's current generation) corrald has not ended.
+/// End session as `kind` (outlined beside the desktop title, words alone in a phone's head).
+/// The model offers it only on a served session (or the quick thread's current generation)
+/// corrald has not ended.
 fn end_button(app: AppState, mut end: Button, kind: ButtonKind) -> AnyElement {
-    end.enabled &= app.may_message();
     if app.form == Form::Phone {
         // The pushed head's trailing slot sits beside the state chip; the title names the session.
         end.label = "End";
@@ -229,6 +272,7 @@ fn end_modal(app: AppState, session: &str) -> Modal {
             Token::Ink2,
         )
         .into_element(),
+        foot: None,
         done: None,
         confirm: Some(Confirm {
             label: if form == Form::Phone {
@@ -244,9 +288,8 @@ fn end_modal(app: AppState, session: &str) -> Modal {
     }
 }
 
-/// The session's facts (`Session`: id, state, where, profile, cost and what is known besides),
-/// how long its host runs, the served session's canonical actions, and the Ideas filed from
-/// this thread.
+/// The session's facts (`Session`: id, state, where, profile, cost and what is known besides)
+/// and how long its host runs.
 fn facts(app: AppState, source: &ThreadRef) -> Vec<AnyElement> {
     let header = header(app, source);
     let form = app.form;
@@ -263,37 +306,6 @@ fn facts(app: AppState, source: &ThreadRef) -> Vec<AnyElement> {
     } else {
         view().mt(px(8.0)).child(note).into_element()
     });
-    let ThreadRef::Live(scope) = source;
-    // The quick thread's actions are its current generation's.
-    let session = if scope.as_str() == QUICK {
-        app.feed.with(quick_id)
-    } else {
-        Some(scope.to_string())
-    };
-    if let Some(session) = session {
-        if form == Form::Terminal {
-            out.push(term::blank());
-        }
-        out.push(h3(app, LABELS.session_actions, None));
-        out.push(session_verbs(app, Id::from(session.as_str())));
-    }
-    if !header.filed.is_empty() {
-        if form == Form::Terminal {
-            out.push(term::blank());
-        }
-        out.push(h3(app, LABELS.filed_from_thread, None));
-        out.push(
-            view()
-                .gap(px(2.0))
-                .children(
-                    header
-                        .filed
-                        .into_iter()
-                        .map(|row| filed_row(app, row.id, row.title, row.action)),
-                )
-                .into_element(),
-        );
-    }
     out
 }
 
@@ -304,59 +316,6 @@ fn fact_row(app: AppState, fact: &Fact) -> AnyElement {
         return side_facts::stacked(app, fact.label, side_facts::identified(app, &fact.value));
     }
     label_value(app, fact.label, rich_small(app, &fact.value))
-}
-
-/// A filed row of the facts column (`.irow`): the mono id and the title cut to fit.
-fn filed_row(
-    app: AppState,
-    id: String,
-    title: String,
-    action: crate::model::assistant::Action,
-) -> AnyElement {
-    let form = app.form;
-    let id_text = text(id.clone())
-        .number_of_lines(1u32)
-        .text_color(color(Token::Ink3));
-    let id_text = if form == Form::Terminal {
-        id_text
-    } else {
-        id_text.font_family(FONT_MONO).text_size(px(11.5))
-    };
-    let row = view()
-        .flex_row()
-        .items_center()
-        .role(AccessibilityRole::Button)
-        .label(format!("{id} {title}"))
-        .test_id(&format!("task-{id}"))
-        .cursor_pointer()
-        .on_press(move || act(app, action.clone()))
-        .child(
-            view()
-                .w(if form == Form::Terminal {
-                    term::cells(6.0)
-                } else {
-                    px(46.0)
-                })
-                .flex_shrink_0()
-                .child(id_text),
-        )
-        .child(
-            words(app, title, 12.5, Token::Ink)
-                .number_of_lines(1u32)
-                .truncate()
-                .flex_1()
-                .min_w(px(0.0)),
-        );
-    if form == Form::Terminal {
-        return row.into_element();
-    }
-    row.gap(px(8.0))
-        .px(px(4.0))
-        .py(px(6.0))
-        .rounded(px(6.0))
-        .hover(|s| s.bg(color(Token::Hover)))
-        .focus_visible(ring)
-        .into_element()
 }
 
 /// The served thread `id` as a pushed phone page, subscribed while it is shown.
@@ -420,75 +379,5 @@ fn phone_page(app: AppState, source: ThreadRef) -> PhonePage {
         bar: Some(PhoneBar::always(ask::docked(app, source))),
         ask: false,
         scroll: false,
-    }
-}
-
-/// Prompt `key` of thread `thread` as Inbox's detail pane shows it, with its real answers; the
-/// thread is subscribed while the pane is shown.
-pub fn live_prompt(app: AppState, thread: Id, key: Id) -> AnyElement {
-    open_scope(app, thread.clone(), false);
-    dynamic(move || {
-        let pane = app.feed.with(|feed| {
-            app.assistant
-                .with(|state| live_prompt_pane(state, feed, thread.as_str(), key.as_str()))
-        });
-        Some(match pane {
-            LivePrompt::Pane(pane) => prompt_view(app, &pane),
-            LivePrompt::Loading => notice(app, "Loading the prompt from its thread…".into()),
-            LivePrompt::Missing(why) => notice(app, why),
-        })
-    })
-}
-
-fn notice(app: AppState, said: String) -> AnyElement {
-    let form = app.form;
-    let line = words(app, said, note_size(form), Token::Ink3);
-    match form {
-        Form::Phone => view().px(px(18.0)).py(px(14.0)).child(line).into_element(),
-        Form::Desktop | Form::Terminal => body(app, "prompt-pane", line.into_element()),
-    }
-}
-
-/// The needs-you chip and where it came from, the title, the card shared with the thread, that
-/// one answer wins, and the way to the thread. Desktop and terminal: it fills its container and
-/// scrolls its body itself. Phone: the same content unscrolled, for a page body.
-fn prompt_view(app: AppState, pane: &PromptPane) -> AnyElement {
-    let form = app.form;
-    let meta = vec![
-        chip(app, pane.state.label.clone(), pane.state.hue),
-        words(app, pane.origin.clone(), note_size(form), Token::Ink3)
-            .flex_shrink(1.0)
-            .min_w(px(0.0))
-            .into_element(),
-    ];
-    let card = match &pane.card {
-        PromptCard::Permission(card) => cards::permission(app, card),
-        PromptCard::Confirmation(card) => cards::action(app, card),
-    };
-    let content = view()
-        .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
-        .when(form == Form::Desktop, |c| c.max_w(px(PROMPT_MEASURE)))
-        .child(card)
-        .when(form == Form::Terminal, |c| c.child(term::blank()))
-        .child(words(app, pane.note, note_size(form), Token::Ink3))
-        .child(
-            view()
-                .flex_row()
-                .child(model_button(app, &pane.open, ButtonKind::Quiet)),
-        )
-        .into_element();
-    let head = qhead(app, meta, pane.title.clone(), None, Vec::new());
-    match form {
-        Form::Phone => view()
-            .child(head)
-            .child(view().px(px(18.0)).py(px(14.0)).child(content))
-            .into_element(),
-        Form::Desktop | Form::Terminal => view()
-            .flex_1()
-            .flex_col()
-            .min_h(px(0.0))
-            .child(head)
-            .child(body(app, "prompt-pane", content))
-            .into_element(),
     }
 }

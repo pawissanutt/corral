@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createTodoLedger } from "../src/build/todo-ledger.ts";
-import { RequestContext } from "../src/host/request.ts";
+import { LocalControlPlane } from "../src/host/local.ts";
 import { sessionTodoTool } from "../src/roles/common/todo.ts";
 import type { HostIdentity } from "../src/roles/types.ts";
 import { ProgressSchema } from "../src/ui/todo.ts";
 import { TodoLedger, snapshotLedger } from "../src/ui/todo.ts";
 
-const identity: HostIdentity = { store: "", project: "", role: "assistant", assistant: "build-test", generation: 1 };
+const identity: HostIdentity = { store: "", project: "", role: "assistant", assistant: "build-test" };
 const directories: string[] = [];
 afterEach(() => {
   for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -20,11 +20,8 @@ function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "corral-build-todo-"));
   directories.push(dir);
   const ledger = createTodoLedger(dir);
-  let request = 0;
   return { dir, ledger, async send(payload: Record<string, unknown>) {
-    return await ledger.handle({ requestId: `todo-${++request}`, payload: sessionTodoTool.payload(payload) }) as {
-      revision: number; progress: unknown; plan: string; disposition: unknown; closed_plans: number;
-    };
+    return ledger.handle(sessionTodoTool.payload(payload));
   } };
 }
 
@@ -43,28 +40,24 @@ async function refused(send: (payload: Record<string, unknown>) => Promise<unkno
 }
 
 test("an empty build snapshot restores through the widget's assistant parser", async () => {
-  const { ledger } = fixture();
-  expect(snapshotLedger(ledger.snapshot(), identity)).toEqual({ progress: null, continued: null });
-  const host = new TodoLedger(identity, async () => ledger.snapshot());
+  const { dir } = fixture();
+  expect(snapshotLedger(new LocalControlPlane(dir, identity).todoSnapshot(), identity)).toEqual({ progress: null, continued: null });
+  const host = new TodoLedger(identity, async () => new LocalControlPlane(dir, identity).todoSnapshot());
   await host.restore();
   expect(host.current).toBeNull();
   expect(host.unavailable).toBe(false);
-  const request = new RequestContext(host, () => {});
-  const inert = { request: { plan: "P1", revision: 0, next: null, continuation: { state: "not_due" } } };
-  expect(request.due(inert)).toBeUndefined();
-  expect(request.stopped(inert)).toBeUndefined();
 });
 
-test("two-phase receipts update the widget ledger and its completion counts", async () => {
-  const { ledger, send } = fixture();
-  const host = new TodoLedger(identity, async () => ledger.snapshot());
+test("local transitions update the widget ledger and its completion counts", async () => {
+  const { dir, send } = fixture();
+  const host = new TodoLedger(identity, async () => new LocalControlPlane(dir, identity).todoSnapshot());
   const initialized = await send(plan);
   expect(initialized).toMatchObject({ revision: 1, plan: "P1", closed_plans: 0,
     disposition: { state: "actionable", next: "read" } });
-  await host.receipt({ state: "committed", result: initialized });
+  await host.restore();
   await send({ op: "start", step: "read", plan: "P1" });
   const done = await send({ op: "done", step: "read", plan: "P1" });
-  await host.receipt({ state: "committed", result: done });
+  await host.restore();
   const progress = ProgressSchema.parse(host.current);
   const steps = progress.phases.flatMap((phase) => phase.steps);
   expect(progress.revision).toBe(3);
@@ -85,7 +78,7 @@ test("revisions advance across rollover and an older plan is refused without a w
   const before = readFileSync(join(dir, "todo.json"), "utf8");
   await refused(send, { op: "done", step: "read", plan: "P1" }, "stale_todo_plan");
   expect(readFileSync(join(dir, "todo.json"), "utf8")).toBe(before);
-  expect(snapshotLedger(ledger.snapshot(), identity).progress?.revision).toBe(3);
+  expect(snapshotLedger(new LocalControlPlane(dir, identity).todoSnapshot(), identity).progress?.revision).toBe(3);
 });
 
 test("invalid identities, transitions and acceptance links cannot partially mutate the plan", async () => {
@@ -109,7 +102,7 @@ test("invalid identities, transitions and acceptance links cannot partially muta
 });
 
 test("append, wait, start and drop preserve canonical dispositions and clear waits", async () => {
-  const { ledger, send } = fixture();
+  const { dir, send } = fixture();
   await send({ op: "init", phases: [{ id: "p", label: "Phase", steps: [{ id: "s", label: "Step" }] }] });
   const event = await send({ op: "wait", step: "s", on: { kind: "event", event: "review finishes" }, when: ["decision:approved"] });
   expect(event.disposition).toEqual({ state: "waiting_event", event: "review finishes", steps: ["s"] });
@@ -126,7 +119,7 @@ test("append, wait, start and drop preserve canonical dispositions and clear wai
   expect(ProgressSchema.parse(dropped.progress).waits).toBeUndefined();
   const appended = await send({ op: "append", phase: "new", label: "New phase", steps: [{ id: "new", label: "New step" }] });
   expect(ProgressSchema.parse(appended.progress).phases.map((phase) => phase.label)).toEqual(["Phase", "New phase"]);
-  const snapshot = snapshotLedger(ledger.snapshot(), identity).progress;
+  const snapshot = snapshotLedger(new LocalControlPlane(dir, identity).todoSnapshot(), identity).progress;
   expect(snapshot?.phases[0]?.steps[1]?.status).toEqual({ state: "dropped", reason: "Owner cancelled this question" });
 });
 
@@ -140,7 +133,7 @@ test("wait validation uses corral refusals without recording invalid waits", asy
   await refused(send, { op: "wait", step: "read", on: { kind: "event", event: "event" }, when: ["arbitrary"] }, "resume-when requires kind:target");
   expect(ledger.snapshot()).toEqual(before);
   let invalid: unknown;
-  try { await ledger.handle({ requestId: "invalid-action", payload: { op: "replace" } }); } catch (error) { invalid = error; }
+  try { await ledger.handle({ op: "replace" }); } catch (error) { invalid = error; }
   expect(invalid).toMatchObject({ code: "bad_request",
     message: "malformed todo payload (data error) at payload; expected fields: a todo init/append/start/done/drop/wait command" });
 });
@@ -151,9 +144,9 @@ test("a resumed ledger reloads its plan and private file permissions", async () 
   await send({ op: "done", step: "read" });
   await send({ op: "wait", step: "implement", on: { kind: "event", event: "dependency lands" }, when: ["landed:T-1"] });
   const resumed = createTodoLedger(dir);
-  expect(snapshotLedger(resumed.snapshot(), identity)).toEqual(snapshotLedger(ledger.snapshot(), identity));
+  expect(snapshotLedger(new LocalControlPlane(dir, identity).todoSnapshot(), identity)).toEqual(snapshotLedger(new LocalControlPlane(dir, identity).todoSnapshot(), identity));
   expect(statSync(join(dir, "todo.json")).mode & 0o777).toBe(0o600);
-  const result = await resumed.handle({ requestId: "resumed", payload: { op: "start", step: "implement", plan: "P1" } });
+  const result = await resumed.handle({ op: "start", step: "implement", plan: "P1" });
   expect(result).toMatchObject({ revision: 4, plan: "P1", disposition: { state: "actionable", next: "implement" } });
-  expect(snapshotLedger(createTodoLedger(dir).snapshot(), identity).progress?.revision).toBe(4);
+  expect(snapshotLedger(new LocalControlPlane(dir, identity).todoSnapshot(), identity).progress?.revision).toBe(4);
 });

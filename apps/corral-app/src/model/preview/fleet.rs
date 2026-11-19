@@ -1,17 +1,15 @@
-//! The sample fleet of one previewed worker: what corrald's live page carries for a watched
-//! session that runs child agents, applied through the live model as the client applies a
-//! daemon's page. Other previewed sessions have none, and show none.
+//! The sample fleet of one previewed assistant session: what corrald's live page carries for a
+//! watched session that runs child agents, held beside the host's live turn as the client holds
+//! a daemon page's fleet. Other previewed sessions have none, and show none.
 
 use corral_protocol::subscription::{
-    SessionAgentMessage, SessionChild, SessionChildVerdict, SessionFleet, SessionLiveEvent,
-    SessionLiveKind,
+    SessionAgentMessage, SessionChild, SessionChildVerdict, SessionFleet,
 };
 
-use super::stamp;
 use crate::model::daemon::Feed;
 
 /// The previewed session that runs children.
-const SESSION: &str = "T-871";
+const SESSION: &str = "A-15";
 
 /// Watching `session` delivers its fleet, once the preview's clock has started.
 pub(super) fn watch(feed: &mut Feed, session: &str) {
@@ -56,7 +54,7 @@ pub(super) fn watch(feed: &mut Feed, session: &str) {
                 ..child(
                     "reader",
                     "slice",
-                    "Read annotation records without dropping the last one",
+                    "Trace where timeline axes format their dates",
                     "running",
                     (420, None),
                 )
@@ -67,7 +65,7 @@ pub(super) fn watch(feed: &mut Feed, session: &str) {
                 ..child(
                     "review-1",
                     "review",
-                    "Review the reader change",
+                    "Review the axis date change",
                     "done",
                     (840, Some(540)),
                 )
@@ -78,7 +76,7 @@ pub(super) fn watch(feed: &mut Feed, session: &str) {
                 ..child(
                     "callers",
                     "explore",
-                    "Find every caller of annot::record",
+                    "Find every caller of the timeline axis formatter",
                     "done",
                     (1200, Some(1020)),
                 )
@@ -89,34 +87,29 @@ pub(super) fn watch(feed: &mut Feed, session: &str) {
                 1,
                 1200,
                 ("parent", "callers"),
-                "List every caller of annot::record and what each expects back.",
+                "List every caller of the axis formatter and the zone each passes.",
                 "delivered",
             ),
             message(
                 2,
                 540,
                 ("review-1", "parent"),
-                "Two findings: the reader drops the trailing record, and its error loses the path.",
+                "Two findings: the axis ignores the local zone, and the day label repeats at midnight.",
                 "delivered",
             ),
             message(
                 3,
                 60,
-                ("parent", "T-854"),
-                "This reader change touches your publish path; rebase once it lands.",
+                ("parent", "A-17"),
+                "The date change touches the Changes list; check it once T-14 lands.",
                 "queued",
             ),
         ],
         messages_total: 3,
         max_parallel: 3,
     };
-    let event = SessionLiveEvent {
-        seq: 1,
-        generation: 1,
-        at: stamp(feed, now),
-        kind: SessionLiveKind::LiveFleet {},
-    };
-    let live = feed.live.entry(SESSION.into()).or_default();
-    live.apply_page(Some(1), vec![event], false);
-    live.replace_fleet(Some(fleet));
+    feed.live
+        .entry(SESSION.into())
+        .or_default()
+        .replace_fleet(Some(fleet));
 }

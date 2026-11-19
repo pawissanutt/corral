@@ -7,12 +7,14 @@ import type { Api, Model, StreamFunction } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { HostConfig } from "./config.ts";
 import type { LoadedModules } from "./modules.ts";
-import type { RunBudget } from "../capabilities/budget.ts";
+import type { Spending } from "../capabilities/budget.ts";
+import type { ModelUsage } from "../tools/corral.ts";
+import { observeUsage } from "./model-usage.ts";
 import { bedrockRoute, createAwsCredentialResolver, type AwsBinding } from "../auth/aws.ts";
 import { PROVIDERS, type DestinationRule, type ProviderId, hostRules } from "../auth/providers.ts";
-import { connectionRules, isApiConnection } from "../auth/connections.ts";
+import { connectionRules, isApiConnection, resolveConnection } from "../auth/connections.ts";
 import type { Fetch } from "../auth/types.ts";
-import { type ConnectionBinding, admitConnection, parseBinding } from "./connections.ts";
+import { type ConnectionBinding, parseBinding } from "./connections.ts";
 import { createModelCatalog, NO_CATALOG_CREDENTIALS } from "./catalog.ts";
 import { createApiCatalog } from "./api-connections.ts";
 import { createLocalModels } from "./local-models.ts";
@@ -46,7 +48,7 @@ export interface SummaryRequest {
 export async function summaryOptions(config: HostConfig, modules: LoadedModules, send: Fetch): Promise<SummaryOptions | undefined> {
   const summary = config.summary;
   if (!summary) return undefined;
-  const connection = admitConnection(summary.provider, summary.binding, true);
+  const connection = resolveConnection(summary.provider, summary.binding?.connection);
   let rules = isApiConnection(connection) ? connectionRules(connection) : undefined;
   let awsRoute: AwsRoute | undefined;
   if (summary.provider === "amazon-bedrock") {
@@ -73,7 +75,7 @@ export async function createSummaryRequest(options: {
   readonly capabilities?: HostSessionOptions["capabilities"];
   readonly agentDir: string;
   readonly cwd: string;
-}, budget: RunBudget): Promise<SummaryRequest | undefined> {
+}, spending?: Spending, report: (usage: ModelUsage) => void = () => {}): Promise<SummaryRequest | undefined> {
   const summary = options.summary;
   if (!summary) return undefined;
   const { provider, binding } = summary;
@@ -85,14 +87,15 @@ export async function createSummaryRequest(options: {
   if (binding?.origin === "registered" && !auth.connections?.includes(binding.connection)) {
     throw new Error("connection_unsupported_by_auth: summary profile binding is unsupported");
   }
-  const connection = admitConnection(provider, binding, true);
+  const connection = resolveConnection(provider, binding?.connection);
   const credentials = provider === "llama.cpp" ? NO_CATALOG_CREDENTIALS
     : options.modules.auth.credentials(authContext(provider, connection));
   const api = isApiConnection(connection);
   const local = provider === "llama.cpp" && options.capabilities?.llama_cpp
     ? await createLocalModels(options.capabilities.llama_cpp, summary.model, summary.network.fetch) : undefined;
-  const direct = api && binding ? await createApiCatalog(credentials, binding, summary.network.fetch,
-    request => budget.physical(request)) : undefined;
+  if (spending && !api && PROVIDERS[provider].lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
+  const direct = api ? await createApiCatalog({ connection, credentials, model: summary.model, effort: summary.effort,
+    send: summary.network.fetch, spending, report }) : undefined;
   const models = direct?.models ?? local?.models ?? await createModelCatalog(credentials, { providers: [provider] });
   const id = summary.model.startsWith(`${provider}/`) ? summary.model.slice(provider.length + 1) : summary.model;
   const model = direct?.model ?? local?.model ?? models.getModel(provider, id);
@@ -103,9 +106,10 @@ export async function createSummaryRequest(options: {
   if (!direct) {
     const source = models.getProvider(provider);
     if (!source) throw new Error("model_unavailable: summary provider not in catalog");
-    models.registerNativeProvider({ ...source,
-      stream: budget.wrap(source.stream.bind(source), PROVIDERS[provider].lane !== undefined),
-      streamSimple: budget.wrap(source.streamSimple.bind(source), PROVIDERS[provider].lane !== undefined) });
+    const route = PROVIDERS[provider];
+    const wrap = (stream: StreamFunction) => observeUsage(stream, local ? undefined : route.auth === "aws-profile" ? "api" : "subscription", report, spending);
+    models.registerNativeProvider({ ...source, stream: wrap(source.stream.bind(source)),
+      streamSimple: wrap(source.streamSimple.bind(source)) });
   }
   return summaryRequest(models, model, summary);
 }

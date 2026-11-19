@@ -1,20 +1,15 @@
-//! Enrolled workspace devices, trusted-side pairing, and per-device authority. Browser and native
-//! devices are equals: any administrator device pairs new devices (showing the pairing link as
-//! a QR Code for a phone's camera), revokes devices and edits every flag of another device's
-//! authority; any device may lower its own. Each change is reviewed here, granting or keeping
-//! administrator goes through corrald's preview and this device's proof, and the row shows
-//! what corrald answered.
+//! Enrolled workspace devices and trusted-side pairing. Browser and native devices are equals:
+//! any enrolled device pairs new devices (showing the pairing link as a QR Code for a phone's
+//! camera) and revokes another device after one local question, and the row shows what
+//! corrald answered.
 
-use nsh_base::toggle;
 use nsh_core::prelude::*;
 
-use super::live_sections::act_line;
-use super::parts::{button_row, cell, frame, mono_cell, ring, space};
-use crate::model::daemon::{Feed, Link};
-use crate::model::devices::{self, DeviceOp, DeviceRow, PairingPanel};
-use crate::model::settings::authority::{self, Draft, Flag};
+use super::parts::{button_row, cell, frame, mono_cell, space};
+use crate::model::daemon::Feed;
+use crate::model::devices::{self, DeviceLink, DeviceOp, DeviceRow, PairingPanel};
 use crate::model::settings::{Pending, device_slot, live};
-use crate::model::{Form, Hue};
+use crate::model::{ActStatus, Form, Hue, Id};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
@@ -22,7 +17,7 @@ use crate::ui::kit::notice::notice;
 use crate::ui::kit::page::Width;
 use crate::ui::kit::table::qtable;
 use crate::ui::kit::text::h3;
-use crate::ui::tokens::{Token, color};
+use crate::ui::tokens::Token;
 
 /// One device as its row shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,92 +25,44 @@ struct Shown {
     row: DeviceRow,
     own: bool,
     seen: Option<String>,
-    /// Whether this session may open the authority editor on it.
-    editable: bool,
-    /// Whether this session may revoke it.
-    revocable: bool,
 }
 
-/// What the page needs besides the pairing panel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Context {
-    devices: Vec<Shown>,
-    /// Why this device can't change other devices, said once above the list.
-    note: Option<&'static str>,
-    confirming: Option<Pending>,
-    draft: Option<Draft>,
-}
-
-fn context(app: AppState, feed: &Feed) -> Context {
-    let admin = feed
-        .session
-        .as_ref()
-        .is_some_and(|session| session.authority.admin);
-    let live = feed.link == Link::Up && feed.session.is_some();
-    let (confirming, draft) = app.settings.with(|state| {
-        (
-            state.edits.confirming.clone(),
-            state.edits.authority.clone(),
-        )
-    });
-    Context {
-        devices: feed
-            .devices
-            .iter()
-            .map(|row| {
-                let own = authority::own(feed, row);
-                Shown {
-                    seen: live::seen_line(row, feed),
-                    editable: authority::refusal(feed, row).is_none(),
-                    revocable: live && admin && !own && row.revoked.is_none(),
-                    own,
-                    row: row.clone(),
-                }
-            })
-            .collect(),
-        note: if !live {
-            Some("Changing devices needs a live connection to corrald.")
-        } else if !admin {
-            Some(
-                "This device isn't an administrator, so it can't change or revoke other devices. It can lower its own authority; an administrator device can raise it.",
-            )
-        } else {
-            None
-        },
-        confirming,
-        draft,
+impl Shown {
+    /// Another device that is still enrolled; this device leaves through Forget instead.
+    fn revocable(&self) -> bool {
+        !self.own && self.row.revoked.is_none()
     }
+}
+
+fn listed(feed: &Feed) -> Vec<Shown> {
+    feed.devices
+        .iter()
+        .map(|row| Shown {
+            own: matches!(&feed.device, DeviceLink::Enrolled { id, .. } if *id == row.id),
+            seen: live::seen_line(row, feed),
+            row: row.clone(),
+        })
+        .collect()
 }
 
 pub fn page(app: AppState) -> AnyElement {
     let shown = computed(move || {
         app.feed
-            .with(|feed| (devices::live_devices(feed), context(app, feed)))
+            .with(|feed| (devices::live_devices(feed), listed(feed)))
     });
+    let confirming = computed(move || app.settings.with(|state| state.edits.confirming.clone()));
     dynamic(move || {
-        let (v, cx) = shown.get();
+        let (v, devices) = shown.get();
+        let confirming = confirming.get();
         untracked(move || {
             let mut parts = vec![pairing(app, &v)];
             parts.push(space(app, 16.0));
             parts.push(h3(app, "Paired devices", None));
-            if let Some(note) = cx.note {
-                parts.push(notice(
-                    app,
-                    Hue::Neutral,
-                    &vec![crate::model::span(note)],
-                    None,
-                ));
-                parts.push(space(app, 10.0));
-            }
-            if let Some(pending @ Pending::Revoke { .. }) = &cx.confirming {
+            if let Some(pending) = &confirming {
                 parts.push(confirmation(app, pending));
                 parts.push(space(app, 10.0));
             }
-            if let Some(draft) = &cx.draft {
-                parts.push(editor(app, draft, cx.confirming.as_ref()));
-                parts.push(space(app, 10.0));
-            }
-            parts.push(rows(app, &cx.devices));
+            parts.push(rows(app, &devices));
             frame(app, "Devices", 12.0, parts)
         })
     })
@@ -257,27 +204,34 @@ fn cancel(app: AppState, pair_id: String) -> AnyElement {
     )
 }
 
-/// The fresh confirmation of a device change: the exact question, then the change or Cancel.
-fn confirmation(app: AppState, pending: &Pending) -> AnyElement {
+/// The one local question a revoke or a Forget asks: the exact question, then the change or
+/// Cancel. It takes the keyboard focus on Cancel, the safe choice, as the confirm sheet does.
+/// Shared with Connection's Forget.
+pub(super) fn confirmation(app: AppState, pending: &Pending) -> AnyElement {
     let confirm = button_with(
         app,
-        pending.confirm_label(),
+        pending.verb(),
         ButtonKind::Primary,
         ButtonOptions {
-            danger: matches!(pending, Pending::Revoke { .. }),
+            danger: true,
             ..ButtonOptions::default()
         },
         "btn-device-confirm",
         move || app.act(app.settings, |state, _| state.apply_device()),
     );
+    let safe = element_ref();
     let dismiss = button_with(
         app,
         "Cancel",
         ButtonKind::Quiet,
-        ButtonOptions::default(),
+        ButtonOptions {
+            focus: Some(safe),
+            ..ButtonOptions::default()
+        },
         "btn-device-cancel",
         move || app.act(app.settings, |state, _| state.cancel_device()),
     );
+    after_answer(move || safe.focus());
     notice(
         app,
         Hue::Held,
@@ -286,164 +240,58 @@ fn confirmation(app: AppState, pending: &Pending) -> AnyElement {
     )
 }
 
-/// The authority editor: one switch per flag (a flag this device may not raise on itself says
-/// why), then Review change, or the confirmation of the reviewed change.
-fn editor(app: AppState, draft: &Draft, confirming: Option<&Pending>) -> AnyElement {
-    let mut parts = vec![
-        cell(
-            app,
-            format!("Authority of {}", draft.name),
-            Token::Ink,
-            true,
-        )
-        .into_element(),
-    ];
-    for flag in Flag::ALL {
-        parts.push(switch(app, draft, flag));
-    }
-    match confirming {
-        Some(pending @ Pending::Authority(_)) => parts.push(confirmation(app, pending)),
-        _ => {
-            let unchanged = draft.changes().is_empty();
-            parts.push(button_row(
-                app,
-                vec![
-                    button_with(
-                        app,
-                        "Review change",
-                        ButtonKind::Primary,
-                        ButtonOptions {
-                            disabled: unchanged,
-                            ..ButtonOptions::default()
-                        },
-                        "btn-authority-review",
-                        move || app.act(app.settings, |state, _| state.review_authority()),
-                    ),
-                    button_with(
-                        app,
-                        "Close",
-                        ButtonKind::Quiet,
-                        ButtonOptions::default(),
-                        "btn-authority-close",
-                        move || app.act(app.settings, |state, _| state.close_authority()),
-                    ),
-                ],
-            ));
-        }
-    }
-    view()
-        .min_w(px(0.0))
-        .gap(px(10.0))
-        .when(app.form != Form::Terminal, |panel| {
-            panel
-                .p(px(14.0))
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(color(Token::Rule))
+/// How the last change sent for a device ended, live; nothing before one is sent.
+fn receipt(app: AppState, device: &str) -> AnyElement {
+    let slot = device_slot(device);
+    dynamic(move || {
+        let key: Option<Id> = app
+            .settings
+            .with(|state| state.edits.acts.get(&slot).cloned());
+        let status = key.as_ref().and_then(|key| app.device_status(key));
+        untracked(move || {
+            let status = status?;
+            let ink = match &status {
+                ActStatus::Failed(_) | ActStatus::Refused(_) => Token::Fail,
+                ActStatus::Done => Token::Ok,
+                ActStatus::Pending | ActStatus::Running => Token::Ink3,
+            };
+            Some(cell(app, status.line(), ink, false).into_element())
         })
-        .children(parts)
-        .into_element()
+    })
+    .into_element()
 }
 
-/// One flag's switch: its on/off chip (pressing flips the draft), its name and what it allows.
-fn switch(app: AppState, draft: &Draft, flag: Flag) -> AnyElement {
-    let on = flag.of(&draft.to);
-    let changed = on != flag.of(&draft.from);
-    let blocked = if on {
-        None
-    } else {
-        authority::may_turn_on(draft, flag).err()
-    };
-    let face = chip(
-        app,
-        if on { "on" } else { "off" },
-        if on { Hue::Ok } else { Hue::Neutral },
-    );
-    let control = toggle()
-        .pressed(move || on)
-        .disabled(blocked.is_some())
-        .on_change(move |_: &bool| app.act(app.settings, move |state, _| state.flip_flag(flag)))
-        .accessibility_label(flag.label())
-        .flex_row()
-        .items_center()
-        .justify_center()
-        .cursor_pointer()
-        .disabled_style(|s| s.opacity(0.45))
-        .when(app.form != Form::Terminal, |t| {
-            t.rounded(px(4.0)).focus_visible(ring)
-        })
-        .when(app.form == Form::Phone, |t| {
-            t.min_w(px(44.0)).min_h(px(44.0))
-        })
-        .child(
-            view()
-                .test_id(&format!("btn-authority-{}", flag.slug()))
-                .child(face),
-        );
-    let words = view()
-        .flex_1()
-        .min_w(px(0.0))
-        .child(cell(
-            app,
-            if changed {
-                format!("{} · changed", flag.label())
-            } else {
-                flag.label().to_owned()
-            },
-            Token::Ink,
-            true,
-        ))
-        .child(cell(app, flag.detail(), Token::Ink3, false))
-        .children(blocked.map(|why| cell(app, why, Token::Ink3, false).into_element()));
-    view()
-        .flex_row()
-        .items_start()
-        .gap(px(10.0))
-        .child(control)
-        .child(words)
-        .into_element()
-}
-
-/// A device's Edit authority and Revoke, as this session may use them.
+/// Revoke on every other device still enrolled; Forget on this one.
 fn controls(app: AppState, device: &Shown) -> AnyElement {
     let mut buttons = Vec::new();
-    if device.editable {
-        let row = device.row.clone();
-        let own = device.own;
-        buttons.push(button_with(
-            app,
-            "Edit authority",
-            ButtonKind::Quiet,
-            ButtonOptions::default(),
-            format!("btn-authority-device-{}", device.row.id),
-            move || {
-                let row = row.clone();
-                app.act(app.settings, move |state, _| {
-                    state.edit_authority(&row, own)
-                });
-            },
-        ));
-    }
-    if device.revocable {
-        let pending = Pending::Revoke {
-            device: device.row.id.clone(),
-            name: device.row.name.clone(),
-        };
-        buttons.push(button_with(
-            app,
+    let (label, id, pending) = if device.own {
+        ("Forget", "btn-forget-device".to_owned(), Pending::Forget)
+    } else if device.revocable() {
+        (
             "Revoke",
-            ButtonKind::Ghost,
-            ButtonOptions {
-                danger: true,
-                ..ButtonOptions::default()
-            },
             format!("btn-revoke-device-{}", device.row.id),
-            move || {
-                let pending = pending.clone();
-                app.act(app.settings, move |state, _| state.confirm_device(pending));
+            Pending::Revoke {
+                device: device.row.id.clone(),
+                name: device.row.name.clone(),
             },
-        ));
-    }
+        )
+    } else {
+        return button_row(app, buttons);
+    };
+    buttons.push(button_with(
+        app,
+        label,
+        ButtonKind::Ghost,
+        ButtonOptions {
+            danger: true,
+            ..ButtonOptions::default()
+        },
+        id,
+        move || {
+            let pending = pending.clone();
+            app.act(app.settings, move |state, _| state.confirm_device(pending));
+        },
+    ));
     button_row(app, buttons)
 }
 
@@ -498,31 +346,17 @@ fn rows(app: AppState, devices: &[Shown]) -> AnyElement {
                     .child(name(app, device))
                     .child(mono_cell(app, row.id.clone(), Token::Ink3))
                     .child(cell(app, facts, Token::Ink3, false))
-                    .child(cell(
-                        app,
-                        authority::summary(row.authority.as_ref()),
-                        Token::Ink,
-                        false,
-                    ))
-                    .child(act_line(app, device_slot(&row.id)))
+                    .child(receipt(app, &row.id))
                     .child(controls(app, device))
                     .into_element()
             }))
             .into_element();
     }
     let mut table = vec![
-        [
-            "Name",
-            "Platform",
-            "Enrolled",
-            "Last seen",
-            "Authority",
-            "Status",
-            "",
-        ]
-        .into_iter()
-        .map(|label| cell(app, label, Token::Ink3, true).into_element())
-        .collect(),
+        ["Name", "Platform", "Enrolled", "Last seen", "Status", ""]
+            .into_iter()
+            .map(|label| cell(app, label, Token::Ink3, true).into_element())
+            .collect(),
     ];
     table.extend(devices.iter().map(|device| {
         let row = &device.row;
@@ -541,15 +375,9 @@ fn rows(app: AppState, devices: &[Shown]) -> AnyElement {
                 .flex_1()
                 .min_w(px(0.0))
                 .gap(px(2.0))
-                .child(cell(
-                    app,
-                    authority::summary(row.authority.as_ref()),
-                    Token::Ink,
-                    false,
-                ))
-                .child(act_line(app, device_slot(&row.id)))
+                .child(cell(app, status(row), Token::Ink3, false))
+                .child(receipt(app, &row.id))
                 .into_element(),
-            cell(app, status(row), Token::Ink3, false).into_element(),
             controls(app, device),
         ]
     }));
@@ -559,10 +387,9 @@ fn rows(app: AppState, devices: &[Shown]) -> AnyElement {
             Width::Fill,
             Width::Fixed(64.0),
             Width::Fixed(92.0),
-            Width::Fixed(130.0),
+            Width::Fixed(150.0),
             Width::Fixed(190.0),
-            Width::Fixed(90.0),
-            Width::Fixed(190.0),
+            Width::Fixed(100.0),
         ],
         table,
     )

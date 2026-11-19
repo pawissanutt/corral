@@ -25,7 +25,7 @@ use crate::model::hue::Hue;
 use crate::model::text::{Rich, span};
 use crate::screens::markdown::provide_styles;
 use crate::state::AppState;
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::{dot, hue_fill, hue_ink};
 use crate::ui::kit::notice::{empty, error, loading, notice};
 use crate::ui::kit::text::{dim, plain, rich};
@@ -336,22 +336,10 @@ fn paragraph(app: AppState, words: &Rich) -> AnyElement {
         .into_element()
 }
 
-/// The inline handover (`.qcard`): an open question in the needs-you colour with the button
-/// that opens it to decide; a settled one quiet, still opening its handover.
+/// An asked question in the transcript (`.qcard`): an open one in the needs-you colour, a
+/// settled one quiet. It is answered through its task's Blocked card or a reply, not here.
 fn question(app: AppState, card: &QuestionCard) -> AnyElement {
     let form = app.form;
-    let action = card.action.clone();
-    let open = button(
-        app,
-        card.button,
-        if card.open {
-            ButtonKind::Primary
-        } else {
-            ButtonKind::Ghost
-        },
-        "btn-open-question",
-        move || run(app, action.clone()),
-    );
     let (label_ink, hue) = if card.open {
         (Token::You, Hue::You)
     } else {
@@ -368,14 +356,7 @@ fn question(app: AppState, card: &QuestionCard) -> AnyElement {
                         .text_color(color(label_ink)),
                 )
                 .child(plain(app, card.question.clone()))
-                .child(
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .child(open)
-                        .child(term::space(2.0))
-                        .child(term::quiet(card.hint.clone())),
-                ),
+                .child(term::quiet(card.hint.clone())),
         )
         .test_id("session-question")
         .into_element();
@@ -423,14 +404,6 @@ fn question(app: AppState, card: &QuestionCard) -> AnyElement {
                 .mb(px(8.0))
                 .child(plain(app, card.question.clone())),
         )
-        .child(
-            view()
-                .flex_row()
-                .flex_wrap()
-                .items_center()
-                .gap(px(8.0))
-                .child(open)
-                .child(dim(app, card.hint.clone())),
-        )
+        .child(dim(app, card.hint.clone()))
         .into_element()
 }

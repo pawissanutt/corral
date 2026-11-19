@@ -45,7 +45,7 @@ export interface RowView { readonly label: string; open(): void }
 
 export interface RowModel {
   readonly state: RowState;
-  /** Accent; what the call does: `bash`, `read`, `Asked the PM`. Clipped only as a last resort. */
+  /** Accent; what the call does: `bash`, `read`, `Finished the run`. Clipped only as a last resort. */
   readonly verb: string;
   /** Text colour; what it touches. Clips first; `targetClip: "middle"` keeps the end (a file name) visible. */
   readonly target?: string;

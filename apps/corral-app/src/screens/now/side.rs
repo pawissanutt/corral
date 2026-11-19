@@ -1,14 +1,12 @@
 //! Now's side column: one panel for one selection. With nothing selected, what changed since the
 //! last visit, one line per task with trouble first (its full sentence on hover or focus) and the
-//! way to every event in Changes; for an owner move, what it asks, what it holds up and its one
-//! button; for a task, open or closed, its story with the Story, Evidence and Session tabs and
-//! its commands. A close control returns the column to the digest, as Escape does.
+//! way to every event in Changes; for a task, open or closed, its story (a Blocked task's reason,
+//! detail and next steps first) with the Story, Evidence and Session tabs and its operations. A
+//! close control returns the column to the digest, as Escape does.
 
 use nsh_core::prelude::*;
 
-use crate::model::work::{
-    self, NowAskPanel, NowDigest, NowDigestRow, NowPage, NowPanel, NowTab, Press,
-};
+use crate::model::work::{self, NowDigest, NowDigestRow, NowPage, NowPanel, NowTab, Press};
 use crate::model::{Destination, Form};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
@@ -18,11 +16,11 @@ use crate::ui::kit::hint::{hint_on, hinted};
 use crate::ui::kit::marks::mark;
 use crate::ui::kit::text::dim;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
+use crate::ui::tokens::{Token, color};
 
-use super::inspector::content;
-use super::parts::{act, go_scoped, model_button, press};
-use super::rows::{figures, kind_mark, words};
+use super::inspector::view_of;
+use super::parts::{act, go_scoped, press};
+use super::rows::{figures, words};
 
 const RING: f32 = 2.0;
 /// The digest's columns (`.dg li`): the mark and the task id.
@@ -34,7 +32,6 @@ const TASK: (f32, f32) = (50.0, 6.0);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Digest,
-    Ask,
     Task,
 }
 
@@ -43,7 +40,6 @@ pub(crate) fn panel(app: AppState, page: Memo<NowPage>) -> AnyElement {
     let kind = computed(move || {
         page.with(|page| match page.panel {
             NowPanel::Digest(_) => Kind::Digest,
-            NowPanel::Ask(_) => Kind::Ask,
             NowPanel::Task(_) | NowPanel::Closed(_) => Kind::Task,
         })
     });
@@ -51,7 +47,6 @@ pub(crate) fn panel(app: AppState, page: Memo<NowPage>) -> AnyElement {
     let close_label = untracked(|| page.with(|page| page.close_label));
     dynamic(move || match kind.get() {
         Kind::Digest => untracked(|| digest_panel(app, panel, page)),
-        Kind::Ask => untracked(|| ask_panel(app, panel, close_label)),
         Kind::Task => untracked(|| {
             let clear = page.with(|page| page.clear_selection.clone());
             task_panel(app, panel, close_label, clear)
@@ -117,23 +112,6 @@ fn close(app: AppState, label: &'static str, action: Press) -> AnyElement {
 
 fn spacer() -> View {
     view().flex_1().min_w(px(0.0))
-}
-
-/// A panel's title (`.phd h2`): 16 pt semibold, wrapping.
-fn title(form: Form, content: String) -> Text {
-    let title = text(content)
-        .role(AccessibilityRole::Header)
-        .font_weight(if form == Form::Terminal {
-            FontWeight::BOLD
-        } else {
-            FontWeight::SEMIBOLD
-        })
-        .text_color(color(Token::Ink));
-    if form == Form::Terminal {
-        title
-    } else {
-        title.font_family(FONT_TEXT).text_size(px(16.0))
-    }
 }
 
 /// What changed since the last visit, in Now's scope.
@@ -286,72 +264,6 @@ fn digest_row(app: AppState, row: &NowDigestRow, index: usize) -> AnyElement {
     hint_on(app, line, row.hint.clone()).into_element()
 }
 
-/// An owner move beside the list: what it asks, what it holds up, who asked and when, its one
-/// button and the record it concerns.
-fn ask_panel(app: AppState, panel: Memo<NowPanel>, close_label: &'static str) -> AnyElement {
-    let ask = computed(move || {
-        panel.with(|panel| match panel {
-            NowPanel::Ask(ask) => Some(ask.clone()),
-            _ => None,
-        })
-    });
-    dynamic(move || ask.with(|ask| ask.as_ref().map(|ask| ask_view(app, ask, close_label))))
-}
-
-fn ask_view(app: AppState, ask: &NowAskPanel, close_label: &'static str) -> AnyElement {
-    let form = app.form;
-    let row = &ask.row;
-    let first = first_line(form)
-        .child(kind_mark(form, row.kind, 14.0))
-        .child(figures(form, row.reference.clone(), 12.0, Token::Ink3).flex_shrink_0())
-        .children(
-            row.project
-                .clone()
-                .map(|project| words(form, project, 12.0, color(Token::Ink3))),
-        )
-        .child(spacer())
-        .child(close(app, close_label, ask.close.clone()));
-    let meta = [ask.asked_by.clone(), ask.asked_at.clone()]
-        .into_iter()
-        .flatten()
-        .map(|part| words(form, part, 12.0, color(Token::Ink3)).into_element())
-        .collect::<Vec<_>>();
-    let header = head(form)
-        .test_id("now-ask")
-        .child(first)
-        .child(title(form, row.title.clone()))
-        .when(!meta.is_empty(), |header| {
-            header.child(view().flex_row().flex_wrap().gap(px(8.0)).children(meta))
-        });
-    let consequence = text(row.consequence.clone()).text_color(color(Token::Ink2));
-    let consequence = if form == Form::Terminal {
-        consequence
-    } else {
-        consequence
-            .font_family(FONT_TEXT)
-            .text_size(px(text_size(form)))
-    };
-    let actions = view()
-        .flex_row()
-        .flex_wrap()
-        .gap(if form == Form::Terminal {
-            term::cells(2.0)
-        } else {
-            px(8.0)
-        })
-        .child(model_button(app, &row.button, "btn-ask-open".into(), false))
-        .children(
-            ask.link
-                .as_ref()
-                .map(|link| model_button(app, link, "btn-ask-link".into(), false)),
-        );
-    view()
-        .child(header)
-        .child(sec(form).child(consequence))
-        .child(sec(form).child(actions))
-        .into_element()
-}
-
 /// A task beside the list: the Story, Evidence and Session tabs with the close control, over
 /// the inspector's content for the model's tab.
 fn task_panel(
@@ -384,8 +296,6 @@ fn task_panel(
     view()
         .test_id("now-task")
         .child(bar)
-        .child(dynamic(move || {
-            inspector.with(|inspector| inspector.as_ref().map(|inspector| content(app, inspector)))
-        }))
+        .child(view_of(app, inspector))
         .into_element()
 }

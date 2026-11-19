@@ -1,26 +1,19 @@
-// The Bun host entry point, exec'd by `corral agent launch` with `--launch-fd <n>`. It reads
-// the launch message from that inherited pipe, refuses an unpinned runtime or a missing module,
-// starts the bridge, binds the generation with hello and hands the pane to InteractiveMode, or,
-// when the generation enables headless, attaches without a terminal UI (`./headless.ts`).
+// Runs the local Pi runtime and its session socket.
 // A Bedrock host also adopts the AWS SDK's Node handlers into the guarded fetch, arms the socket
 // tripwire and reads its named AWS profile before the SDK loads.
 import { mkdirSync } from "node:fs";
-import { ProcessTerminal } from "@earendil-works/pi-tui";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { startBridge } from "../bridge/server.ts";
-import { attestSourceDrain } from "../bridge/source-drain.ts";
+import { preparePrivateDirectory, startBridge, type BridgeHandlers, type BridgeServer } from "../bridge/server.ts";
 import { EventLog } from "../bridge/events.ts";
-import { COMMANDS } from "../bridge/protocol.ts";
-import { CorralClient, sha256Hex } from "../tools/corral.ts";
-import { readLaunchMessage, type HostConfig } from "./config.ts";
+import { BRIDGE_VERSION } from "../bridge/protocol.ts";
+import { CorralClient } from "../tools/corral.ts";
+import type { HostConfig } from "./config.ts";
 import type { BuildContext } from "../build/types.ts";
 import { saveSession } from "../build/session-store.ts";
-import type { HostIdentity } from "../roles/types.ts";
-import { openSession, withRecoveryContext } from "./lifecycle.ts";
+import { inheritTranscript, openSession, siblingTranscript } from "./lifecycle.ts";
 import { loadModules } from "./modules.ts";
-import { loadPeerLookup } from "./peer.ts";
 import { CredentialsUnavailable } from "../auth/paths.ts";
 import { type DestinationRule, PROVIDERS, hostRules } from "../auth/providers.ts";
 import { localInferenceRules } from "../auth/local.ts";
@@ -28,56 +21,64 @@ import { NetworkRefused, guardedFetch, restrictEnvironment } from "./restrict.ts
 import { compiledBundle } from "./bundle.ts";
 import { attachHeadless, headlessEnabled } from "./headless.ts";
 import { herdrLifecycle } from "./herdr.ts";
-import { checkCompiledRuntime, checkRuntime, readCompat } from "./runtime.ts";
 import { serverVisible } from "./mcp-settings.ts";
-import { exportAssistantSession } from "../roles/assistant/env.ts";
-import { type AwsRoute, HostSession, authContext, processStartTime } from "./session.ts";
+import { type AwsRoute, HostSession, authContext } from "./session.ts";
 import { subscriptionRoutes } from "./subscriptions.ts";
 import { guardTerminalStop } from "./terminal-stop.ts";
-import { NEW_ASSISTANT_EXIT, RELINK_ASSISTANT_EXIT } from "./assistant-relink.ts";
-import { RESUME_ASSISTANT_EXIT } from "./assistant-resume.ts";
-import { CONTINUE_ASSISTANT_EXIT } from "./continuation.ts";
-import { admitConnection } from "./connections.ts";
-import { connectionRules, isApiConnection } from "../auth/connections.ts";
-import { presentHostNotice } from "../ui/host-notices.ts";
+import { connectionRules, isApiConnection, resolveConnection } from "../auth/connections.ts";
+import { Spending } from "../capabilities/budget.ts";
 import { errorPresenter } from "../ui/error-copy.ts";
+import { repaintTranscript } from "../ui/transcript-repaint.ts";
+import { presentHostNotice } from "../ui/host-notices.ts";
 import { RemoteOwner } from "./remote-owner.ts";
+import { SessionRecord } from "./session-record.ts";
 import { summaryOptions } from "./summary.ts";
 import { bareProviders, requireBareProvider } from "./bare.ts";
 import { providerTransport } from "./capabilities.ts";
-import { PROFILE_EXIT } from "./profiles.ts";
 
-function launchFd(argv: readonly string[]): number {
-  const index = argv.indexOf("--launch-fd");
-  const value = index === -1 ? undefined : Number(argv[index + 1]);
-  if (value === undefined || !Number.isSafeInteger(value) || value < 3) {
-    throw new Error("launch_message_invalid: run by `corral agent launch` with --launch-fd <n>");
-  }
-  return value;
-}
-
-export async function main(): Promise<void> {
-  await runHost(readLaunchMessage(launchFd(process.argv)));
-}
-
-export async function runHost(config: HostConfig, overrides: {
-  client?: (identity: HostIdentity, sessionId: () => string) => CorralClient;
-  bridge?: false;
+interface HostOverrides {
   build?: BuildContext;
-} = {}): Promise<void> {
+}
+
+export async function runHost(config: HostConfig, overrides: HostOverrides = {}): Promise<void> {
+  const events = new EventLog();
+  const id = config.local?.id ?? config.identity.assistant
+    ?? [config.identity.task, config.identity.run].filter(Boolean).join("/");
+  preparePrivateDirectory(config.local.dir);
+  const bridge = await startBridge({ path: config.local.socket, sessionId: id || config.identity.role, events });
+  try {
+    const record = new SessionRecord(config.local.dir, id, config.identity.role, config.cwd);
+    await runSession(config, overrides, events, bridge, record);
+  } catch (error) {
+    await bridge.close();
+    throw error;
+  }
+}
+
+async function runSession(config: HostConfig, overrides: HostOverrides, events: EventLog,
+  bridge: BridgeServer, record: SessionRecord): Promise<void> {
   const provider = config.provider ?? "openai-codex";
-  const connection = admitConnection(provider, config.binding, true);
+  const connection = resolveConnection(provider, config.connection ?? config.binding?.connection);
   const api = isApiConnection(connection);
   // A bare API session uses its exact API connection, not the bare subscription providers.
   if (overrides.build?.session.bare && !api) requireBareProvider(provider);
+  if (config.maxUsd !== undefined && !api && PROVIDERS[provider].lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
+  // A spending cap is optional: without --max-usd an API session records its usage and nothing stops it.
+  const spending = Spending.open(config.local.dir, config);
+  if (spending && !api && PROVIDERS[provider].lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
   restrictEnvironment(process.env, provider);
   if (config.summary?.provider === "amazon-bedrock") restrictEnvironment(process.env, "amazon-bedrock");
-  exportAssistantSession(process.env, config.identity);
-  const compat = readCompat(config.assets);
-  if (compiledBundle()) checkCompiledRuntime(compat);
-  else checkRuntime(config.assets, compat);
-  const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
-  const events = new EventLog(config.identity.generation);
+  process.env.CORRAL_NEXT_ROOT = config.root;
+  if (config.corral) process.env.CORRAL = config.corral;
+  else delete process.env.CORRAL;
+  process.env.CORRAL_ACTOR = config.identity.role === "worker" ? "agent" : config.identity.role;
+  const compiled = compiledBundle();
+  const assets = config.local && compiled?.writeAssets ? join(config.runtimeDir, "bundle") : config.assets;
+  if (config.local) compiled?.writeAssets?.(assets);
+  const agentDir = join(config.runtimeDir, "pi-agent");
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  if (config.local) process.env.PI_CODING_AGENT_DIR ??= agentDir;
+  const modules = await loadModules(assets, config.identity.role, provider);
   const rawFetch = globalThis.fetch.bind(globalThis);
   const bare = overrides.build?.session.bare && !api ? await bareProviders(modules.auth, provider) : undefined;
   const providers = bare?.providers ?? (api ? [provider] : (await subscriptionRoutes(modules.auth, provider, config.identity.role)).providers);
@@ -122,137 +123,105 @@ export async function runHost(config: HostConfig, overrides: {
   const sdk = await import("@earendil-works/pi-coding-agent");
   process.chdir(config.cwd);
   mkdirSync(config.sessionDir, { recursive: true, mode: 0o700 });
-  const agentDir = join(config.runtimeDir, "pi-agent");
-  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  let remote: RemoteOwner | undefined;
   let host: HostSession | undefined;
-  let physicalTerminal: ProcessTerminal | undefined;
-  const restart = (code: number) => {
-    // Leave the session callback before disposing its runtime.
-    setImmediate(() => { void restartAssistant(code).catch((error: unknown) => {
-      process.stderr.write(`corral: assistant handoff stopped: ${error instanceof Error ? error.message : String(error)}\n`);
-      process.exit(2);
-    }); });
-  };
-  const client = overrides.client?.(config.identity, () => host?.sessionId() ?? "") ?? new CorralClient({
-    corral: config.corral, root: config.root, identity: config.identity, hostCap: config.secrets.hostCap,
-    sessionId: () => host?.sessionId() ?? "",
-  });
+  let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;
+  const client = new CorralClient({ corral: config.corral, root: config.root, cwd: config.cwd, identity: config.identity,
+    sessionDir: config.local.dir });
+  const pane = config.pane || process.env.HERDR_PANE_ID;
+  let transcript = record.transcript;
+  if (!transcript && config.identity.role === "worker" && !config.freshSession) {
+    const sibling = siblingTranscript(config.local.dir);
+    if (sibling) transcript = inheritTranscript(sibling, config.sessionDir);
+  }
   host = await HostSession.create({
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider, ...(aws ? { aws } : {}),
-    ...(config.binding ? { binding: config.binding } : {}),
-    ...(config.daemonHosted ? { daemonHosted: true, ui: "plain" as const } : {}),
+    connection, ...(config.binding ? { binding: config.binding } : {}),
+    spending, apiFetch: rawFetch, sessionDir: config.local.dir,
+    paneInput: async (text, images) => await remote?.paneInput(text, images) ?? false,
+    transcriptRewound: () => { if (terminal) repaintTranscript(terminal); },
+    automatedInput: input => remote?.submit(input),
     ...(config.effort ? { effort: config.effort } : {}),
     quickSummary: config.quickSummary,
     ...(summary ? { summary } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
-    ...(config.memoryFile ? { memoryFile: config.memoryFile } : {}),
-    ...(!config.daemonHosted && config.ui ? { ui: config.ui } : {}),
+    ...(config.ui ? { ui: config.ui } : {}),
     todo: config.todo === true,
     ...(config.capabilities ? { capabilities: config.capabilities } : {}),
     ...(config.guidance ? { guidance: config.guidance } : {}),
     root: config.root, exportDir: join(config.sessionDir, "exports"), runtimeDir: config.runtimeDir,
     modules, client, events, network,
-    ...(overrides.build ? { build: overrides.build, buildApiFetch: rawFetch } : {}),
-    ...(!config.daemonHosted && (overrides.build || config.identity.role === "assistant" || config.identity.role === "pm")
-      ? { switchProfile: () => restart(PROFILE_EXIT) } : {}),
-    ...(config.identity.role === "assistant" && process.argv.includes("--assistant-new")
-      ? { relinkAssistant: () => restart(RELINK_ASSISTANT_EXIT),
-        continueAssistant: () => restart(CONTINUE_ASSISTANT_EXIT),
-        ...(!headlessEnabled(config.capabilities) ? { newAssistant: () => restart(NEW_ASSISTANT_EXIT),
-          resumeAssistant: () => restart(RESUME_ASSISTANT_EXIT) } : {}),
-      } : {}),
-    ...(config.pane !== null && !config.daemonHosted
-      ? herdrLifecycle(process.env, config.pane, config.identity, events, headlessEnabled(config.capabilities)) : {}),
-    sessionManager: openSession(sdk, config.cwd, config.sessionDir, config.identity.generation, config.resumeSession, config.freshSession,
-      config.resumeLeaf),
+    ...(overrides.build ? { build: overrides.build } : {}),
+    ...(pane ? herdrLifecycle(process.env, pane, config.identity, events, config.local?.headless || headlessEnabled(config.capabilities)) : {}),
+    sessionManager: openSession(sdk, config.cwd, config.sessionDir, transcript),
   });
   const session = host;
-  const remote = config.daemonHosted ? new RemoteOwner(session, events, config.identity.assistant ?? "", config.runtimeDir) : undefined;
-  let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;
-  const bridge = overrides.bridge === false ? undefined : await startBridge({
-    path: join(config.runtimeDir, "host.sock"),
-    ctlCap: config.secrets.ctlCap,
-    generation: config.identity.generation,
-    uid: process.getuid?.() ?? -1,
-    peer: await loadPeerLookup(),
-    events,
-    liveEvents: session.liveEvents,
-    handlers: {
+  let closing: Promise<void> | undefined;
+  const close = () => closing ??= (async () => {
+    try { await session.close(); await session.drained(); }
+    finally { await bridge?.close(); }
+  })();
+  const sessionFile = session.session.sessionFile;
+  if (!sessionFile) throw new Error("the Pi session has no transcript");
+  const owner = new RemoteOwner(session, events, record, sessionFile, config.runtimeDir);
+  remote = owner;
+  await session.startLocal();
+  if (overrides.build) {
+    saveSession(dirname(dirname(overrides.build.dir)), { ...overrides.build.session, sessionFile, updated: new Date().toISOString() });
+  }
+  let handlers: BridgeHandlers | undefined;
+  {
+    record.save(sessionFile);
+    handlers = {
       hello: () => ({
-        protocol: 1, generation: config.identity.generation, role: config.identity.role,
-        bound: session.bound, session_id: session.sessionId(), last_seq: events.last,
-        commands: COMMANDS.filter(command => (command !== "handoff_drain" || config.identity.role === "assistant")
-          && (!["owner_turn", "set_model"].includes(command) || remote !== undefined)),
-        daemon_hosted: remote !== undefined, remote_ready: remote?.isReady ?? false, turn: session.state().turn,
+        protocol: BRIDGE_VERSION, role: config.identity.role, session_id: config.local.id,
+        session_file: sessionFile, pid: process.pid,
       }),
-      state: () => session.state(),
-      queueState: limit => session.queue.snapshot(limit, false),
-      queueWithdraw: (key, op_key) => ({ ...session.queue.bridgeWithdraw(key, op_key) }),
-      handoffDrain: args => attestSourceDrain(session, config.identity,
-        { pid: process.pid, start_time: processStartTime() }, args),
-      submit: (input, requestId) => remote && input.origin === "daemon-owner"
-        ? Promise.resolve({ disposition: "rejected" as const, reason: "owner_turn_required" }) : session.submit(input, requestId),
-      ...(remote ? {
-        ownerTurn: async (args: Record<string, unknown>) => ({ ...await remote.submit(args) }),
-        setModel: (args: Record<string, unknown>) => remote.setModel(args),
-      } : {}),
-      cancel: (turn) => {
-        if (remote && turn === undefined) throw new Error("remote_stop_requires_turn");
-        return session.cancel(turn);
+      state: () => {
+        const { identity: _identity, ...state } = session.state();
+        return { ...state, paused: owner.paused, owner_questions: session.pendingOwnerQuestions() };
       },
-      questions: (updates) => session.questionsChanged(updates),
-      shutdown: () => {
+      submit: input => owner.submit(input),
+      answer: input => owner.answer(input),
+      pause: () => owner.pause(),
+      resume: () => owner.resume(),
+      setModel: args => owner.setModel(args),
+      cancel: turn => session.cancel(turn),
+      rewind: input => owner.rewind(input),
+      queueState: limit => session.queue.snapshot(limit),
+      queueWithdraw: key => session.queue.withdrawInput(key),
+      shutdown() {
         events.emit("shutdown");
         terminal?.stop();
-        void session.drained().then(() => session.close()).then(() => bridge?.close()).then(() => process.exit(0));
+        void close().then(() => process.exit(0), error => {
+          process.stderr.write(`corral-pi shutdown failed: ${String(error)}\n`);
+          process.exit(2);
+        });
       },
-    },
-  });
-  async function restartAssistant(code: number): Promise<void> {
-    await physicalTerminal?.drainInput(1000);
-    terminal?.stop();
-    await session.close();
-    await session.runtime.dispose();
-    await session.drained();
-    await bridge?.close();
-    process.exit(code); // 75 /new, 76 relink, 77 /resume, 78 quota continuation, 79 profile selection.
+    };
   }
-  await session.hello(config.secrets.bindNonce, config.pane, sha256Hex(config.secrets.ctlCap));
-  if (overrides.build) {
-    const record = overrides.build.session;
-    const state = session.state().session;
-    if (!state || typeof state !== "object" || !("file" in state) || typeof state.file !== "string") {
-      throw new Error("Build session has no transcript");
+  if (config.local?.headless || headlessEnabled(config.capabilities)) {
+    await attachHeadless(session, events, line => process.stdout.write(line));
+    if (handlers) {
+      bridge.attach(handlers, session.liveEvents);
+      events.emit("ready");
     }
-    saveSession(dirname(dirname(overrides.build.dir)), { ...record, sessionFile: state.file, updated: new Date().toISOString() });
-  }
-  if (remote) {
-    try { await remote.attach(); }
-    catch (error) { await session.close(); await bridge?.close(); throw error; }
-    return;
-  }
-  if (headlessEnabled(config.capabilities)) {
-    await attachHeadless(session, events, (line) => process.stdout.write(line));
     return;
   }
   const panels = session.panels;
-  physicalTerminal = new ProcessTerminal();
+  const { ProcessTerminal } = await import("@earendil-works/pi-tui");
+  const physicalTerminal = new ProcessTerminal();
   terminal = new sdk.InteractiveMode(session.runtime, {
     // corral resumes sessions with its own commands; Pi's `pi --session …` line would name a command that does not work here.
     verbose: false, resumeHint: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
     ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation),
-      userPresentation: (text, bubble) => presentHostNotice(text, bubble, delivered => session.hostDelivered(delivered)),
-      errorPresentation: errorPresenter(() => session.latestStopCause()), ...panels.presentation() } : {}),
+      errorPresentation: errorPresenter(() => session.latestStopCause()), userPresentation: presentHostNotice, ...panels.presentation() } : {}),
   });
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();
   session.markAttached("interactive");
+  if (handlers) bridge.attach(handlers, session.liveEvents);
   try { await terminal.run(); }
-  finally { await session.close(); await bridge?.close(); }
+  finally { await close(); }
 }
 
-if (import.meta.main) main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`corral-pi host stopped: ${message}\n`);
-  process.exit(2);
-});

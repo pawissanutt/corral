@@ -8,22 +8,22 @@ pub mod phone;
 pub mod projects;
 pub mod terminal;
 mod terminal_bar;
+mod terminal_keys;
 
 use std::rc::Rc;
 
 use nsh_core::prelude::*;
 
-use crate::model::act::{Confirmable, PreviewState};
-use crate::model::board::Mark;
+use crate::model::act::NextButton;
 use crate::model::commands::{
-    CONFIRM_CANCEL, CONFIRM_CHECK, CONFIRM_EFFECT_HEADING, CONFIRM_SUB, act_confirm_label,
-    act_confirm_word,
+    CONFIRM_CANCEL, CONFIRM_CHECK, CONFIRM_EFFECT_HEADING, CONFIRM_SUB, REFUSED_SUB,
+    act_confirm_label, act_confirm_word,
 };
 use crate::model::nav::{NavigationTarget, navigation};
-use crate::model::{DataState, Destination, Form, Hue, SettingsSection, work};
+use crate::model::{DataState, Destination, Form, SettingsSection};
 use crate::state::AppState;
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::overlay::{self, Confirm, Modal};
-use crate::ui::kit::table::steps;
 use crate::ui::kit::text::{h3, label_value, mono, plain};
 use crate::ui::tokens::{Token, color};
 
@@ -71,11 +71,10 @@ pub fn sidebar_collapsed(app: AppState) -> bool {
 pub const fn section_short(section: SettingsSection) -> &'static str {
     match section {
         SettingsSection::Devices => "Dev",
-        SettingsSection::Machines => "Mach",
+        SettingsSection::Daemon => "Dmn",
         SettingsSection::Connection => "Conn",
         SettingsSection::Notifications => "Notif",
-        SettingsSection::Assistant => "Asst",
-        SettingsSection::Autopilot => "Auto",
+        SettingsSection::Config => "Conf",
         SettingsSection::General => "Gen",
     }
 }
@@ -86,133 +85,69 @@ pub fn toast(app: AppState) -> AnyElement {
     overlay::toast(app, move || app.toast.get(), move || app.toast.set(None))
 }
 
-/// The fresh confirmation of a high-risk command while one is pending: its title, the sub
-/// line, the exact effect as a list, the frozen command and its preview line, then Cancel and
-/// the confirming button (`app.confirm_no()`, `app.confirm_yes()`). The preview comes from
-/// corrald, or in the labelled preview from its local simulation, which says that nothing is
-/// sent and asks for no device check. The phone shows it as a sheet with the device check; a
-/// terminal asks for the command's word to be typed. Escape and the scrim cancel. test_id
-/// "confirm" ("confirm-cancel", "confirm-confirm", "confirm-word").
+/// The one local question a destructive or forced operation asks: its title, the CLI line it
+/// runs with every argument, its lasting effect and, when forced, what it skips; then Cancel
+/// and the confirming button (`app.confirm_no()`, `app.confirm_yes()`). Nothing has been
+/// sent while it shows. The phone shows it as a sheet; a terminal asks for the operation's
+/// word to be typed. Escape and the scrim cancel. test_id "confirm" ("confirm-cancel",
+/// "confirm-confirm", "confirm-word").
 pub fn confirmation(app: AppState) -> AnyElement {
     overlay::modal(
         app,
-        move || app.confirmation.with(Option::is_some),
+        move || app.confirm.with(Option::is_some),
         move || app.confirm_no(),
-        move || live_modal(app),
+        move || confirm_modal(app),
     )
 }
 
-/// What the sheet says in the labelled preview: the command runs only in the local simulation.
+/// What the sheet says in the labelled preview: the operation runs only in the sample.
 const PREVIEW_SUB: &str = "Preview simulation · runs on this device only; nothing is sent.";
-const PREVIEW_ACTOR: &str = "preview simulation · nothing sent";
 
-/// A command's sheet: its title, then the exact preview once it arrives, or why there is none.
-/// Confirming before the preview arrives does nothing.
-fn live_modal(app: AppState) -> Modal {
+fn confirm_modal(app: AppState) -> Modal {
     let simulated = untracked(|| app.data.get()) == DataState::Fixture;
-    let title = app
-        .confirmation
-        .with_untracked(|pending| pending.as_ref().map(|p| p.subject.title().to_owned()))
-        .unwrap_or_default();
-    // Tracked: the sheet shows the confirmation now pending and the preview it kept, never a
-    // correlation captured when the sheet opened.
-    let state = computed(move || {
-        app.confirmation.with(|pending| {
-            pending.as_ref().map_or(PreviewState::Loading, |pending| {
-                app.feed.with(|feed| pending.state(feed))
+    let (title, heading, rows, sends) = app
+        .confirm
+        .with_untracked(|asked| {
+            asked.as_ref().map(|asked| {
+                (
+                    asked.title().to_owned(),
+                    asked.heading(),
+                    asked.rows(),
+                    asked.sends(),
+                )
             })
         })
-    });
-    // The command this sheet confirms, as frozen when it was asked for: a reader sees the note
-    // and the target it binds, not only the preview's one-line effect.
-    let rows = computed(move || {
-        app.confirmation
-            .with(|pending| match pending.as_ref().map(|p| &p.subject) {
-                Some(Confirmable::Act(act)) => act.command_rows(),
-                _ => Vec::new(),
-            })
-    });
-    let gap = if app.form == Form::Terminal {
-        0.0
-    } else {
-        10.0
+        .unwrap_or((String::new(), CONFIRM_EFFECT_HEADING, Vec::new(), true));
+    let body = view()
+        .child(h3(app, heading, None))
+        .child(command_rows(app, rows))
+        .into_element();
+    let sub = match (sends, simulated) {
+        (false, _) => LEAVE_SUB,
+        (true, true) => PREVIEW_SUB,
+        (true, false) => CONFIRM_SUB,
     };
-    let body = dynamic(move || {
-        let state = state.get();
-        let rows = rows.get();
-        untracked(move || match state {
-            PreviewState::Loading => plain(app, "Waiting for corrald's exact preview…")
-                .text_color(color(Token::Ink3))
-                .into_element(),
-            PreviewState::Failed(why) => {
-                plain(app, format!("No preview: {why}. Nothing was sent."))
-                    .text_color(color(Token::Ink3))
-                    .into_element()
-            }
-            PreviewState::Ready(preview) => {
-                let effects = preview
-                    .effects
-                    .iter()
-                    .map(|effect| {
-                        (
-                            Mark::Na,
-                            Hue::Neutral,
-                            plain(app, effect.clone()).into_element(),
-                        )
-                    })
-                    .collect();
-                let expires = app
-                    .feed
-                    .with_untracked(|feed| work::when(&preview.expires_at, feed));
-                let expires = if expires.is_empty() {
-                    format!("{} UTC", preview.expires_at)
-                } else {
-                    expires
-                };
-                view()
-                    .child(h3(app, CONFIRM_EFFECT_HEADING, None))
-                    .child(steps(app, effects))
-                    .when(!rows.is_empty(), |sheet| {
-                        sheet
-                            .child(h3(app, COMMAND_HEADING, None))
-                            .child(command_rows(app, rows))
-                    })
-                    .child(
-                        mono(
-                            app,
-                            if simulated {
-                                format!("{PREVIEW_ACTOR} · preview expires {expires}")
-                            } else {
-                                format!("actor=owner · {} · preview expires {expires}", app.via())
-                            },
-                        )
-                        .mt(px(gap))
-                        .text_color(color(Token::Ink3)),
-                    )
-                    .into_element()
-            }
-        })
-    });
     Modal {
         test_id: String::from("confirm"),
-        sub: Some(if simulated { PREVIEW_SUB } else { CONFIRM_SUB }.to_owned()),
+        sub: Some(sub.to_owned()),
         body,
+        foot: None,
         done: None,
         confirm: Some(Confirm {
             label: act_confirm_label(&title, app.form),
             cancel: CONFIRM_CANCEL.to_owned(),
             word: act_confirm_word(&title),
-            check: (app.form == Form::Phone && !simulated).then(|| CONFIRM_CHECK.to_owned()),
+            check: (sends && app.form == Form::Phone).then(|| CONFIRM_CHECK.to_owned()),
             on_confirm: Rc::new(move || app.confirm_yes()),
         }),
         title,
     }
 }
 
-/// The heading over the frozen command in a live confirmation.
-const COMMAND_HEADING: &str = "Exact command";
+/// What the sheet says when leaving with unsaved edits: nothing leaves this device.
+const LEAVE_SUB: &str = "Asked once, on this device. Nothing is sent to corrald.";
 
-/// The frozen command's rows as a label-value list, bounded so a long note scrolls inside the
+/// The operation's rows as a label-value list, bounded so a long note scrolls inside the
 /// sheet instead of pushing its buttons away.
 fn command_rows(app: AppState, rows: Vec<(String, String)>) -> AnyElement {
     let list = view().gap(px(5.0)).children(
@@ -227,4 +162,91 @@ fn command_rows(app: AppState, rows: Vec<(String, String)>) -> AnyElement {
             .child(list)
             .into_element(),
     }
+}
+
+/// The engine's refusal of an operation: why, then one button per next step in the engine's
+/// order, the first one filled. A forced step reads "… anyway" and says what it skips under
+/// it, so pressing it is its one confirmation. Each button shows the CLI line it runs. Escape,
+/// the scrim and Close dismiss it; nothing runs. test_id "refused" ("refused-done",
+/// "btn-refusal-<n>").
+pub fn refusal(app: AppState) -> AnyElement {
+    overlay::modal(
+        app,
+        move || app.refusal.with(Option::is_some),
+        move || app.close_refusal(),
+        move || refusal_modal(app),
+    )
+}
+
+fn refusal_modal(app: AppState) -> Modal {
+    let (title, reason, buttons) = app
+        .refusal
+        .with_untracked(|sheet| {
+            sheet.as_ref().map(|sheet| {
+                (
+                    format!("Refused · {}", sheet.title),
+                    sheet.refusal.reason.clone(),
+                    sheet.buttons(),
+                )
+            })
+        })
+        .unwrap_or_default();
+    let gap = if app.form == Form::Terminal {
+        0.0
+    } else {
+        12.0
+    };
+    let none = buttons.is_empty();
+    let steps: Vec<AnyElement> = buttons
+        .into_iter()
+        .enumerate()
+        .map(|(index, step)| next_step(app, index, step))
+        .collect();
+    let body = view()
+        .gap(px(gap))
+        .child(plain(app, reason))
+        .when(none, |body| {
+            body.child(
+                plain(app, "The engine named no step past this.").text_color(color(Token::Ink3)),
+            )
+        })
+        .children(steps)
+        .into_element();
+    Modal {
+        test_id: String::from("refused"),
+        title,
+        sub: Some(REFUSED_SUB.to_owned()),
+        body,
+        foot: None,
+        done: Some("Close".to_owned()),
+        confirm: None,
+    }
+}
+
+/// One next step: its button, the CLI line it runs and, when forced, what it skips.
+fn next_step(app: AppState, index: usize, step: NextButton) -> AnyElement {
+    let skips = step
+        .skips
+        .map(|skips| plain(app, format!("Skips {skips}.")).text_color(color(Token::Ink2)));
+    view()
+        .gap(px(if app.form == Form::Terminal { 0.0 } else { 4.0 }))
+        .child(button_with(
+            app,
+            step.label,
+            if step.primary {
+                ButtonKind::Primary
+            } else {
+                ButtonKind::Ghost
+            },
+            ButtonOptions {
+                wide: app.form == Form::Phone,
+                danger: step.skips.is_some(),
+                ..ButtonOptions::default()
+            },
+            format!("btn-refusal-{index}"),
+            move || app.run_next(index),
+        ))
+        .children(skips)
+        .child(mono(app, step.command).text_color(color(Token::Ink3)))
+        .into_element()
 }

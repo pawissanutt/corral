@@ -1,13 +1,9 @@
 use super::*;
-use corral_protocol::{rpc, subscription::SessionLiveKind};
+use corral_protocol::rpc;
+use serde_json::json;
 
-fn service() -> Arc<Service> {
-    Arc::new(Service {
-        entries: Mutex::default(),
-        revisions: Arc::default(),
-        thread: Mutex::default(),
-        terminal: Arc::default(),
-    })
+fn service() -> Arc<Watches> {
+    Arc::default()
 }
 
 fn event(generation: u32, seq: u64, text: bool) -> SessionLiveEvent {
@@ -35,9 +31,12 @@ fn page(generation: u32, start: u64, end: u64, text: bool) -> LivePage {
     LivePage {
         generation,
         events: (start..=end)
-            .map(|seq| event(generation, seq, text))
+            .map(|seq| {
+                let event = event(generation, seq, text);
+                let bytes = event_bytes(&event).unwrap();
+                (event, bytes)
+            })
             .collect(),
-        last: end,
         next: end,
         more: false,
         gap: None,
@@ -80,7 +79,7 @@ fn receive(
 #[test]
 fn subscribers_do_not_split_one_host_cursor() {
     let service = service();
-    let mut sources = BTreeMap::new();
+    let mut sources = Sources::default();
     let mut calls = 0;
     poll(
         &service,
@@ -105,7 +104,7 @@ fn subscribers_do_not_split_one_host_cursor() {
         || false,
     );
     assert_eq!(calls, 1, "each subscriber opened its own reader");
-    assert_eq!(sources.len(), 1);
+    assert_eq!(sources.readers.len(), 1);
     let mut received = [Vec::new(), Vec::new()];
     for (index, subscriber) in [&mut first, &mut second].into_iter().enumerate() {
         while received[index].len() < 32 {
@@ -128,7 +127,7 @@ fn subscribers_do_not_split_one_host_cursor() {
         || false,
     );
     assert_eq!(calls, 1, "closed scope kept polling its host");
-    assert!(sources.is_empty());
+    assert!(sources.readers.is_empty());
     assert!(lock(&service.entries).is_empty());
 }
 
@@ -137,7 +136,7 @@ fn slow_subscriber_gets_gap_instead_of_unbounded_buffer() {
     // Queue events exercise the count ceiling; escaped text exercises the byte ceiling.
     for text in [false, true] {
         let service = service();
-        let mut sources = BTreeMap::new();
+        let mut sources = Sources::default();
         let mut slow = subscribe(Arc::clone(&service), "pm".into(), 7, None).unwrap();
         poll(
             &service,
@@ -192,7 +191,7 @@ fn slow_subscriber_gets_gap_instead_of_unbounded_buffer() {
 #[test]
 fn generation_change_never_reuses_stale_offsets() {
     let service = service();
-    let mut sources = BTreeMap::new();
+    let mut sources = Sources::default();
     let mut subscriber = subscribe(Arc::clone(&service), "pm".into(), 7, None).unwrap();
     poll(
         &service,
@@ -278,12 +277,11 @@ fn fleet_is_connection_scoped_bounded_and_can_be_renegotiated_off() {
     use corral_protocol::frame::read_frame;
     use std::os::unix::net::UnixStream;
 
-    let service = service();
-    let shared = Shared::new();
-    *lock(&shared.session_live) = Some(Arc::clone(&service));
+    let fixture = crate::views::tests::Fixture::new();
+    let shared = &fixture.shared;
     // Each Topics instance is owned by one connection, just as in both HELLO loops.
-    let mut current = crate::topics::Topics::new(&shared);
-    let mut legacy = crate::topics::Topics::new(&shared);
+    let mut current = crate::topics::Subscriptions::new(shared);
+    let mut legacy = crate::topics::Subscriptions::new(shared);
     current.set_session_fleet(true);
     for topics in [&mut current, &mut legacy] {
         topics
@@ -295,20 +293,20 @@ fn fleet_is_connection_scoped_bounded_and_can_be_renegotiated_off() {
             .unwrap();
     }
     let mut source = page(1, 1, 32, true);
-    source.events[0].kind = SessionLiveKind::LiveFleet {};
-    source.fleet = Some(
-        serde_json::from_value(serde_json::json!({
-            "children": [{"id": "review", "kind": "review", "title": "Review", "state": "running",
-                "model": "provider/model", "tokens": 0}],
-            "messages": (1..=101).map(|seq| serde_json::json!({
-                "seq": seq, "at": seq, "from": "parent", "to": "review",
-                "text": "\0".repeat(2048), "delivery": "delivered"
-            })).collect::<Vec<_>>(),
-            "messages_total": 101, "max_parallel": 3
-        }))
-        .unwrap(),
-    );
-    lock(&lock(&service.entries)["pm"]).publish(source).unwrap();
+    source.events[0].0.kind = SessionLiveKind::LiveFleet {};
+    source.events[0].1 = event_bytes(&source.events[0].0).unwrap();
+    let fleet = serde_json::from_value(json!({
+        "children": [{"id": "review", "kind": "review", "title": "Review", "state": "running",
+            "model": "provider/model", "tokens": 0}],
+        "messages": (1..=101).map(|seq| json!({
+            "seq": seq, "at": seq, "from": "parent", "to": "review",
+            "text": "\0".repeat(2048), "delivery": "delivered"
+        })).collect::<Vec<_>>(),
+        "messages_total": 101, "max_parallel": 3
+    }))
+    .unwrap();
+    source.fleet = Some(bound_fleet(fleet).unwrap());
+    lock(&lock(&shared.session_live.watches.entries)["pm"]).publish(source);
     let (mut current_server, mut current_client) = UnixStream::pair().unwrap();
     let (mut legacy_server, mut legacy_client) = UnixStream::pair().unwrap();
     let receive = |client: &mut UnixStream| {
@@ -367,8 +365,9 @@ fn fleet_is_connection_scoped_bounded_and_can_be_renegotiated_off() {
 
 fn fleet_replacement(generation: u32, seq: u64, empty: bool) -> LivePage {
     let mut page = page(generation, seq, seq, false);
-    page.events[0].kind = SessionLiveKind::LiveFleet {};
-    page.fleet = Some(SessionFleet {
+    page.events[0].0.kind = SessionLiveKind::LiveFleet {};
+    page.events[0].1 = event_bytes(&page.events[0].0).unwrap();
+    let fleet = SessionFleet {
         children: Vec::new(),
         messages: if empty {
             Vec::new()
@@ -384,7 +383,8 @@ fn fleet_replacement(generation: u32, seq: u64, empty: bool) -> LivePage {
         },
         messages_total: u64::from(!empty),
         max_parallel: 3,
-    });
+    };
+    page.fleet = Some(bound_fleet(fleet).unwrap());
     page
 }
 
@@ -404,55 +404,42 @@ fn empty_fleet_clears_clients_but_transcript_pages_keep_the_current_projection()
     let service = service();
     let mut subscriber = subscribe(service, "pm".into(), 7, None).unwrap();
     let entry = Arc::clone(&subscriber.watch.entry);
-    lock(&entry)
-        .publish(fleet_replacement(1, 1, false))
-        .unwrap();
+    lock(&entry).publish(fleet_replacement(1, 1, false));
     let initial = fleet_wire(&mut subscriber);
     assert_eq!(initial["fleet"]["messages_total"], 1);
     // None on the bridge is no update: ordinary live pages must retain the replacement.
-    lock(&entry).publish(page(1, 2, 2, true)).unwrap();
+    lock(&entry).publish(page(1, 2, 2, true));
     let transcript = fleet_wire(&mut subscriber);
     assert_eq!(transcript["fleet"], initial["fleet"]);
-    lock(&entry).publish(fleet_replacement(1, 3, true)).unwrap();
+    lock(&entry).publish(fleet_replacement(1, 3, true));
     assert!(lock(&entry).fleet.is_none());
     let cleared = fleet_wire(&mut subscriber);
     assert!(cleared.get("fleet").is_none());
     assert_eq!(cleared["events"][0]["kind"], "live_fleet");
-    lock(&entry).publish(page(1, 4, 3, false)).unwrap();
+    lock(&entry).publish(page(1, 4, 3, false));
     assert!(subscriber.next(7, true).unwrap().is_none());
 }
 
 #[test]
-fn new_generations_and_same_generation_rebinds_discard_previous_fleets() {
+fn new_generations_and_bridge_loss_discard_previous_fleets() {
     let service = service();
     let mut subscriber = subscribe(service, "pm".into(), 7, None).unwrap();
     let entry = Arc::clone(&subscriber.watch.entry);
-    lock(&entry)
-        .publish(fleet_replacement(1, 1, false))
-        .unwrap();
+    lock(&entry).publish(fleet_replacement(1, 1, false));
     assert!(fleet_wire(&mut subscriber).get("fleet").is_some());
     // A new host has no events or projection yet, but the generation still clears the old data.
-    lock(&entry).publish(page(2, 1, 0, false)).unwrap();
+    lock(&entry).publish(page(2, 1, 0, false));
     assert!(lock(&entry).fleet.is_none());
     let generation = fleet_wire(&mut subscriber);
     assert_eq!(generation["generation"], 2);
     assert_eq!(generation["gap"]["reconcile"], true);
     assert!(generation.get("fleet").is_none());
-    lock(&entry)
-        .publish(fleet_replacement(2, 1, false))
-        .unwrap();
+    lock(&entry).publish(fleet_replacement(2, 1, false));
     assert!(fleet_wire(&mut subscriber).get("fleet").is_some());
-    let mut rebound = page(2, 1, 0, false);
-    rebound.gap = Some(SessionLiveGap {
-        after: 1,
-        resumed: 1,
-        missing: 0,
-        reconcile: true,
-    });
-    lock(&entry).publish(rebound).unwrap();
+    lock(&entry).unavailable();
     assert!(lock(&entry).fleet.is_none());
     let cleared = fleet_wire(&mut subscriber);
-    assert_eq!(cleared["generation"], 2);
+    assert!(cleared["generation"].is_null());
     assert_eq!(cleared["gap"]["reconcile"], true);
     assert!(cleared.get("fleet").is_none());
 }
@@ -462,13 +449,134 @@ fn legacy_hosts_emit_no_fleet_updates_or_spurious_clears() {
     let service = service();
     let mut subscriber = subscribe(service, "pm".into(), 7, None).unwrap();
     let entry = Arc::clone(&subscriber.watch.entry);
-    lock(&entry).publish(page(1, 1, 0, false)).unwrap();
+    lock(&entry).publish(page(1, 1, 0, false));
     assert!(subscriber.next(7, true).unwrap().is_none());
-    lock(&entry).publish(page(1, 1, 1, false)).unwrap();
+    lock(&entry).publish(page(1, 1, 1, false));
     let ordinary = fleet_wire(&mut subscriber);
     assert!(ordinary.get("fleet").is_none());
     assert!(ordinary["gap"].is_null());
     assert_eq!(ordinary["events"][0]["kind"], "live_queue");
-    lock(&entry).publish(page(1, 2, 1, false)).unwrap();
+    lock(&entry).publish(page(1, 2, 1, false));
     assert!(subscriber.next(7, true).unwrap().is_none());
+}
+
+fn lifecycle(last: u64, next: u64, gap: Option<SessionLiveGap>) -> RingPage {
+    RingPage { last, next, gap }
+}
+
+fn gap(after: u64, resumed: u64) -> SessionLiveGap {
+    SessionLiveGap {
+        after,
+        resumed,
+        missing: resumed - after - 1,
+        reconcile: true,
+    }
+}
+
+fn host(last: u64, next: u64, sequences: &[u64], gap: Option<SessionLiveGap>) -> HostPage {
+    serde_json::from_value(json!({
+        "last": last, "next": next, "more": next < last, "gap": gap,
+        "events": sequences.iter().map(|seq| json!({
+            "seq": seq, "at": "2026-11-15T00:00:00Z",
+            "kind": "live_text", "turn": 1, "message": 1, "offset": seq - 1, "text": "a"
+        })).collect::<Vec<_>>(),
+    }))
+    .unwrap()
+}
+
+#[test]
+fn ring_gaps_reconcile_in_live_sequence_space() {
+    let mut reader = LiveReader::default();
+    let mut subscriber = subscribe(service(), "A-1".into(), 7, None).unwrap();
+    let entry = Arc::clone(&subscriber.watch.entry);
+    let page = reader
+        .advance(
+            Cursors::default(),
+            lifecycle(4, 4, None),
+            host(1, 1, &[1], None),
+            false,
+        )
+        .unwrap();
+    lock(&entry).publish(page);
+    assert!(receive(&mut subscriber).2.is_none());
+
+    // Only the lifecycle ring overflowed; its offsets must not leak to the app.
+    let page = reader
+        .advance(
+            Cursors {
+                lifecycle: 4,
+                live: 1,
+            },
+            lifecycle(9, 9, Some(gap(4, 9))),
+            host(1, 1, &[], None),
+            false,
+        )
+        .unwrap();
+    lock(&entry).publish(page);
+    let (generation, events, reconciled) = receive(&mut subscriber);
+    assert_eq!(generation, Some(1));
+    assert!(events.is_empty());
+    assert_eq!(reconciled, Some(gap(1, 2)));
+
+    // The live ring can overflow independently and retains its real missing count.
+    let page = reader
+        .advance(
+            Cursors {
+                lifecycle: 9,
+                live: 1,
+            },
+            lifecycle(9, 9, None),
+            host(5, 5, &[5], Some(gap(1, 5))),
+            false,
+        )
+        .unwrap();
+    lock(&entry).publish(page);
+    let (generation, events, reconciled) = receive(&mut subscriber);
+    assert_eq!(generation, Some(1));
+    assert_eq!(events[0].seq, 5);
+    assert_eq!(reconciled, Some(gap(1, 5)));
+}
+
+#[test]
+fn regression_in_either_host_ring_resets_both_cursors() {
+    for lifecycle_regressed in [false, true] {
+        let mut reader = LiveReader::default();
+        let expected = Cursors {
+            lifecycle: 3,
+            live: 2,
+        };
+        let first = reader
+            .advance(
+                Cursors::default(),
+                lifecycle(3, 3, None),
+                host(2, 2, &[1, 2], None),
+                false,
+            )
+            .unwrap();
+        assert_eq!(first.generation, 1);
+        assert_eq!(reader.cursors, expected);
+        let page = reader
+            .advance(
+                expected,
+                lifecycle(if lifecycle_regressed { 1 } else { 3 }, 3, None),
+                host(if lifecycle_regressed { 2 } else { 1 }, 2, &[], None),
+                false,
+            )
+            .unwrap();
+        assert_eq!(page.generation, 2);
+        assert_eq!(page.next, 0);
+        assert!(page.events.is_empty());
+        assert_eq!(reader.cursors, Cursors::default());
+        let replayed = reader
+            .advance(
+                Cursors::default(),
+                lifecycle(3, 3, None),
+                host(2, 2, &[1, 2], None),
+                false,
+            )
+            .unwrap();
+        assert_eq!(replayed.events[0].0.generation, 2);
+        assert_eq!(replayed.events[0].0.seq, 1);
+        assert_eq!(reader.cursors, expected);
+    }
 }

@@ -3,10 +3,7 @@
 use crate::model::daemon;
 use crate::model::hue::Hue;
 
-use super::{Actor, Mark, Rail, money, rail_label};
-
-/// The cost above which a row draws its cost in the held colour.
-const COST_WARNING: f64 = 20.0;
+use super::{Actor, Mark, Rail, rail_label};
 
 /// Everything a task row shows, owned so a row renders without any store behind it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,10 +21,6 @@ pub struct TaskLine {
     pub now_hue: Hue,
     /// `4m`, or empty when unknown.
     pub age: String,
-    /// `$3.90`, `~$3.90` for an estimate, or empty without a cost.
-    pub cost: String,
-    /// Above the $20 warning.
-    pub cost_high: bool,
 }
 
 /// The colour of a now-phrase for a task `actor` acts on next.
@@ -40,25 +33,14 @@ pub fn now_hue(actor: Actor, now: &str) -> Hue {
     }
 }
 
-/// Who acts next on a daemon task; tasks the daemon cannot place read as queued.
+/// Who acts next on a daemon task: backlog and ideas wait on no one and read as parked.
 pub const fn daemon_actor(group: daemon::Group) -> Actor {
     match group {
         daemon::Group::NeedsYou => Actor::You,
         daemon::Group::Verifying => Actor::Corral,
         daemon::Group::Producing => Actor::Worker,
-        daemon::Group::Held => Actor::Held,
-        daemon::Group::Parked => Actor::Parked,
+        daemon::Group::Backlog | daemon::Group::Ideas => Actor::Parked,
         daemon::Group::Queued | daemon::Group::Other => Actor::Queued,
-    }
-}
-
-/// `$3.90`, `~$3.90` when the cost is not wholly provider-reported, or nothing without a cost.
-fn daemon_cost(cost: Option<f64>, estimated: bool) -> String {
-    let amount = money(cost.map(|cost| cost as f32));
-    if estimated && !amount.is_empty() {
-        format!("~{amount}")
-    } else {
-        amount
     }
 }
 
@@ -67,17 +49,16 @@ impl TaskLine {
     /// the daemon's changes feed holds an event for it past this device's seen cursor.
     pub fn daemon(task: &daemon::Task, now: u64, changed: bool) -> TaskLine {
         let actor = daemon_actor(task.group);
+        let phrase = task.now();
         TaskLine {
             id: task.id.to_string(),
-            title: task.title.clone(),
+            title: task.title().to_owned(),
             actor,
             changed,
             rail: std::array::from_fn(|index| task.rail[index].mark),
-            now: task.now.clone(),
-            now_hue: now_hue(actor, &task.now),
-            age: daemon::age(task.since, now),
-            cost: daemon_cost(task.cost, task.cost_estimated),
-            cost_high: task.cost.is_some_and(|cost| cost > COST_WARNING),
+            now_hue: now_hue(actor, &phrase),
+            now: phrase,
+            age: daemon::age(task.since(), now),
         }
     }
 
@@ -86,21 +67,12 @@ impl TaskLine {
         matches!(self.actor, Actor::Queued | Actor::Parked)
     }
 
-    /// The phone's second-line `age · cost`, either alone, or nothing.
-    pub fn meta(&self) -> String {
-        [self.age.as_str(), self.cost.as_str()]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(" · ")
-    }
-
-    /// What a screen reader hears: id, title, the rail, the now-phrase, age, cost, and whether
-    /// it changed since the last visit; missing parts are left out rather than left empty.
+    /// What a screen reader hears: id, title, the rail, the now-phrase, age, and whether it
+    /// changed since the last visit; missing parts are left out rather than left empty.
     pub fn label(&self) -> String {
         let mut parts = vec![format!("{} {}", self.id, self.title), rail_label(self.rail)];
         parts.extend(
-            [&self.now, &self.age, &self.cost]
+            [&self.now, &self.age]
                 .into_iter()
                 .filter(|part| !part.is_empty())
                 .cloned(),
@@ -129,7 +101,7 @@ mod tests {
     use super::{Actor, Hue, Mark, TaskLine};
 
     #[test]
-    fn row_label_leaves_out_a_missing_age_and_cost_instead_of_empty_parts() {
+    fn row_label_leaves_out_a_missing_age_instead_of_an_empty_part() {
         let label = TaskLine {
             id: "T-1".into(),
             title: "Task".into(),
@@ -139,8 +111,6 @@ mod tests {
             now: "queued".into(),
             now_hue: Hue::Neutral,
             age: String::new(),
-            cost: String::new(),
-            cost_high: false,
         }
         .label();
         assert!(!label.contains(", ,"));

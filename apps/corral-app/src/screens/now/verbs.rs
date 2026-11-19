@@ -3,23 +3,28 @@
 //! Menu key; phone: a held finger opens it as the action sheet), a control's press-opened menu,
 //! the reasons under an action row's unavailable commands, and the work state's overlays the
 //! shells host once beside the confirmation: the command menu the keyboard opens (`.`) and the
-//! composer a text verb opens (a comment, a park reason).
+//! composer a text verb opens (a comment, a park reason). A run's Session menu opens its task's
+//! Actions menu as a submenu (beside it, or in the sheet's place on the phone).
 
-use nsh_base::{button as press_target, context_menu, menu, menu_item};
+use nsh_base::{button as press_target, context_menu, menu, menu_item, submenu};
 use nsh_core::element::{StyleRefinement, color as for_appearance, input};
 use nsh_core::prelude::*;
 
 use crate::model::commands::CONFIRM_CANCEL;
+use crate::model::projects;
 use crate::model::work::{self, Button, Press, Record, VerbAction};
 use crate::model::{Form, Hue, Live};
 use crate::state::AppState;
+use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::hue_ink;
-use crate::ui::kit::overlay::{Modal, modal};
+use crate::ui::kit::overlay::{Modal, counted, modal};
+use crate::ui::kit::suggest::suggestions;
+use crate::ui::kit::walk::walk;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-use super::parts::{press, pressable};
+use super::parts::press;
 
 /// The phone's least touch target.
 const TARGET: f32 = 44.0;
@@ -43,6 +48,7 @@ pub(crate) fn with_menu(app: AppState, record: Record, row: AnyElement) -> AnyEl
     context_menu()
         .popup_style(popup(app.form))
         .backdrop_style(backdrop)
+        .on_open_change(counted(app))
         .trigger(row)
         .child(dynamic(move || {
             let record = record.clone();
@@ -58,6 +64,7 @@ pub(crate) fn verb_menu(app: AppState, record: Record, trigger: AnyElement) -> A
     menu()
         .popup_style(popup(app.form))
         .backdrop_style(backdrop)
+        .on_open_change(counted(app))
         .trigger(trigger)
         .child(dynamic(move || {
             let record = record.clone();
@@ -93,18 +100,91 @@ fn backdrop(s: StyleRefinement) -> StyleRefinement {
     s.bg(color(Token::Shell).opacity(0.5))
 }
 
-/// Every verb of the record, in the table's order: the available ones run when chosen (a verb
-/// with fields opens the composer instead), the unavailable ones stay in place, dimmed, with
-/// the model's reason under them.
+/// Every engine operation of the record, in the table's order; each runs when chosen, or
+/// opens the composer when it asks for input. Nothing is predicted or disabled: the engine
+/// decides, and a refusal opens its sheet. A Session menu's Task entry is a submenu holding the
+/// task's Actions menu; its Focus pane says why where it cannot work.
 fn items(app: AppState, record: &Record) -> AnyElement {
-    let verbs = app.feed.with(|feed| work::record_verbs(feed, record));
+    let verbs = app
+        .feed
+        .with_untracked(|feed| work::record_verbs(record, feed));
     view()
         .children(
             verbs
                 .into_iter()
-                .map(|verb| item(app, verb))
+                .map(|verb| match &verb.press {
+                    Press::Menu(inner) => task_menu(app, inner.clone(), verb.label, verb.slug),
+                    _ => item(app, verb),
+                })
                 .collect::<Vec<_>>(),
         )
+        .into_element()
+}
+
+/// The Task entry of a Session menu: the task's Actions menu, opened beside the entry on
+/// desktop (its chevron; ` ›` in a terminal) and in the sheet's place on the phone, under a
+/// Back row. test_id `btn-<slug>`.
+fn task_menu(app: AppState, record: Record, label: String, slug: &'static str) -> AnyElement {
+    let form = app.form;
+    let words = text(label)
+        .number_of_lines(1u32)
+        .truncate()
+        .flex_1()
+        .min_w(px(0.0))
+        .text_color(color(Token::Ink));
+    let trigger = match form {
+        Form::Terminal => view()
+            .flex_row()
+            .items_center()
+            .h(term::rows(1.0))
+            .px(term::cells(1.0))
+            .child(words),
+        Form::Desktop => view()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .px(px(12.0))
+            .py(px(6.0))
+            .child(words.font_family(FONT_TEXT).text_size(px(12.5)))
+            .child(icon(Icon::Chevron, 12.0, color(Token::Ink3))),
+        Form::Phone => view()
+            .flex_row()
+            .items_center()
+            .min_h(px(TARGET + 4.0))
+            .px(px(18.0))
+            .py(px(8.0))
+            .child(words.font_family(FONT_TEXT).text_size(px(16.0)))
+            .child(icon(Icon::Chevron, 16.0, color(Token::Ink3))),
+    };
+    let trigger = trigger
+        .test_id(&format!("btn-{slug}"))
+        .cursor_pointer()
+        .hover(|s| s.bg(color(Token::Hover)))
+        .focus(|s| s.bg(color(Token::Hover)));
+    let back = view()
+        .flex_row()
+        .items_center()
+        .gap(px(6.0))
+        .min_h(px(TARGET))
+        .px(px(14.0))
+        .cursor_pointer()
+        .role(AccessibilityRole::Button)
+        .label("Back to the Session menu")
+        .test_id("btn-menu-back")
+        .child(icon(Icon::Back, 16.0, color(Token::Ink2)))
+        .child(
+            text("Session")
+                .font_family(FONT_TEXT)
+                .text_size(px(15.0))
+                .text_color(color(Token::Ink2)),
+        );
+    submenu()
+        .trigger(trigger)
+        .back(back)
+        .child(dynamic(move || {
+            let record = record.clone();
+            untracked(move || items(app, &record))
+        }))
         .into_element()
 }
 
@@ -179,37 +259,6 @@ fn item(app: AppState, verb: VerbAction) -> AnyElement {
         .into_element()
 }
 
-/// The verbs of a record as an action row where no story carries them (a Review candidate):
-/// each verb's button (`btn-<slug>`), dimmed while it cannot run, then the reasons why. Nothing
-/// when the record has no verbs.
-pub(crate) fn verb_buttons(app: AppState, verbs: Vec<VerbAction>) -> Option<AnyElement> {
-    if verbs.is_empty() {
-        return None;
-    }
-    let buttons: Vec<Button> = verbs
-        .into_iter()
-        .map(|verb| {
-            let mut button =
-                Button::new(verb.label, verb.press, work::ButtonKind::Ghost).enabled(verb.enabled);
-            button.reason = verb.reason;
-            button
-        })
-        .collect();
-    Some(
-        view()
-            .child(
-                view().flex_row().flex_wrap().gap(px(8.0)).children(
-                    buttons
-                        .iter()
-                        .map(|button| pressable(app, button, false))
-                        .collect::<Vec<_>>(),
-                ),
-            )
-            .children(reasons(app, &buttons))
-            .into_element(),
-    )
-}
-
 /// Why the commands of `buttons` that cannot run now cannot: the commands sharing a reason
 /// named together, then the model's reason, one wrapping line per reason under the action row,
 /// so a held task's many waiting commands read as one fact. Nothing when every command can run.
@@ -281,18 +330,29 @@ fn overlay(state: &work::State) -> Overlay {
 /// menu the keyboard opens on the selected record, and the composer of a text verb. Each is a
 /// dialog on desktop, a sheet on the phone, the framed region over the page in a terminal. The
 /// host follows the overlay last shown, so a closing sheet leaves with its own exit; a verb
-/// chosen in the menu that needs words replaces it with its composer.
+/// chosen in the menu that needs words replaces it with its composer, and a Session menu's Task
+/// entry replaces it with the task's menu.
 pub fn verb_composer(app: AppState) -> AnyElement {
     let shown = computed(move || app.work.with(overlay));
     let host = signal(Overlay::Composer);
+    let listed = signal(None::<Record>);
     effect(move || {
         let now = shown.get();
         if now != Overlay::Hidden && untracked(|| host.get()) != now {
             host.set(now);
         }
+        // The menu's record while it shows; a closing menu keeps the last, so it leaves whole.
+        if let Some(record) = app.work.with(|state| state.menu.clone())
+            && untracked(|| listed.get()).as_ref() != Some(&record)
+        {
+            listed.set(Some(record));
+        }
     });
     dynamic(move || {
         let kind = host.get();
+        if kind == Overlay::Menu {
+            listed.with(|_| ());
+        }
         untracked(|| match kind {
             Overlay::Menu => modal(
                 app,
@@ -318,31 +378,37 @@ pub fn verb_composer(app: AppState) -> AnyElement {
     })
 }
 
-/// The keyboard's command menu for the record the work state names: every verb of the table in
-/// its order, the first available one focused, so Tab moves, Return runs, Escape closes; an
-/// unavailable verb stays in place, quieter, with its reason. test_id "verbs".
+/// The keyboard's command menu for the record the work state names: every operation in the
+/// table's order, the first one focused, so the arrows (or Tab) move, Return runs, Escape
+/// closes. test_id "verbs".
 fn command_menu(app: AppState) -> Modal {
     let form = app.form;
     let record = app.work.with_untracked(|state| state.menu.clone());
-    let verbs = record.as_ref().map_or_else(Vec::new, |record| {
-        app.feed
-            .with_untracked(|feed| work::record_verbs(feed, record))
+    let verbs = app.feed.with_untracked(|feed| {
+        record
+            .as_ref()
+            .map_or_else(Vec::new, |record| work::record_verbs(record, feed))
     });
-    let first = element_ref();
-    let mut focused = false;
+    let mut walked = Vec::new();
     let rows: Vec<AnyElement> = verbs
         .into_iter()
         .map(|verb| {
-            let focus = (verb.enabled && !focused).then(|| {
-                focused = true;
-                first
+            let focus = verb.enabled.then(|| {
+                let handle = element_ref();
+                walked.push(handle);
+                handle
             });
-            command_row(app, verb, focus)
+            let label = match &verb.press {
+                Press::Menu(_) => format!("{} ›", verb.label),
+                _ => verb.label.clone(),
+            };
+            command_row(app, VerbAction { label, ..verb }, focus)
         })
         .collect();
-    if focused {
+    if let Some(&first) = walked.first() {
         after_answer(move || first.focus());
     }
+    walk(walked);
     Modal {
         test_id: "verbs".into(),
         title: record
@@ -354,6 +420,7 @@ fn command_menu(app: AppState) -> Modal {
             .role(AccessibilityRole::List)
             .children(rows)
             .into_element(),
+        foot: None,
         done: None,
         confirm: None,
     }
@@ -479,11 +546,23 @@ fn composer(app: AppState) -> Modal {
                     .text_size(px(14.0))
                     .font_weight(FontWeight::SEMIBOLD),
             };
+            if !field.choices.is_empty() {
+                return choice_row(app, field, index, values, caption);
+            }
+            // A prose field keeps its line breaks: Return breaks the line there, and Tab reaches
+            // Send; a one-line field sends on Return.
+            let multiline = field.multiline;
             let entry = input()
                 .test_id(&format!("field-verb-{index}"))
                 .label(field.label)
                 .placeholder(field.placeholder)
                 .auto_focus(index == 0)
+                .multiline(multiline)
+                .submit_behavior(if multiline {
+                    SubmitBehavior::Newline
+                } else {
+                    SubmitBehavior::BlurAndSubmit
+                })
                 .value(move || values.with(|values| values.get(index).cloned().unwrap_or_default()))
                 .on_change(move |typed: &str| {
                     values.update(|values| {
@@ -502,25 +581,65 @@ fn composer(app: AppState) -> Modal {
                 .border_1()
                 .border_color(color(Token::Rule2))
                 .focus(|s| s.border_color(color(Token::Focus)));
-            let entry = match form {
-                Form::Terminal => entry.h(term::rows(1.0)).px(term::cells(1.0)),
-                Form::Desktop => entry
+            let entry = match (form, multiline) {
+                (Form::Terminal, false) => entry.h(term::rows(1.0)).px(term::cells(1.0)),
+                (Form::Terminal, true) => entry
+                    .min_h(term::rows(3.0))
+                    .max_h(term::rows(8.0))
+                    .px(term::cells(1.0)),
+                (Form::Desktop, false) => entry
                     .font_family(FONT_TEXT)
                     .text_size(px(13.0))
                     .h(px(32.0))
                     .px(px(10.0))
                     .rounded(px(6.0)),
-                Form::Phone => entry
+                (Form::Desktop, true) => entry
+                    .font_family(FONT_TEXT)
+                    .text_size(px(13.0))
+                    .line_height(px(19.0))
+                    .min_h(px(96.0))
+                    .max_h(px(288.0))
+                    .px(px(10.0))
+                    .py(px(7.0))
+                    .rounded(px(6.0)),
+                (Form::Phone, false) => entry
                     .font_family(FONT_TEXT)
                     .text_size(px(16.0))
                     .min_h(px(TARGET))
                     .px(px(12.0))
                     .rounded(px(10.0)),
+                (Form::Phone, true) => entry
+                    .font_family(FONT_TEXT)
+                    .text_size(px(16.0))
+                    .line_height(px(22.0))
+                    .min_h(px(TARGET * 2.5))
+                    .max_h(px(240.0))
+                    .px(px(12.0))
+                    .py(px(10.0))
+                    .rounded(px(10.0)),
             };
+            let offered = (!field.suggestions.is_empty()).then(|| {
+                let all = field.suggestions.clone();
+                let typed = computed(move || {
+                    values.with(|values| {
+                        projects::suggest(&all, values.get(index).map_or("", String::as_str))
+                    })
+                });
+                let pick = move |value: String| {
+                    values.update(|values| {
+                        if let Some(slot) = values.get_mut(index) {
+                            *slot = value;
+                        }
+                    });
+                };
+                let group = field.label.to_lowercase().replace(' ', "-");
+                suggestions(app, projects::BRANCHES_CAPTION, group, typed, pick)
+            });
             view()
                 .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
                 .child(caption)
                 .child(entry)
+                .children(offered)
                 .into_element()
         })
         .collect();
@@ -565,13 +684,20 @@ fn composer(app: AppState) -> Modal {
             send,
         )
     });
-    let actions = view()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .when(!phone, |row| row.justify_end())
-        .child(cancel)
-        .child(submit);
+    // Why Send did not go and the buttons stay under the fields, in view however long the form.
+    let foot = view()
+        .gap(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
+        .child(error)
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .when(!phone, |row| row.justify_end())
+                .child(cancel)
+                .child(submit),
+        )
+        .into_element();
     let body = view()
         .gap(px(match form {
             Form::Terminal => 0.0,
@@ -580,18 +706,95 @@ fn composer(app: AppState) -> Modal {
         }))
         .when(form != Form::Terminal, |body| body.pt(px(4.0)))
         .children(rows)
-        .child(error)
-        .when(form == Form::Terminal, |body| body.child(term::blank()))
-        .child(actions)
         .into_element();
     Modal {
         test_id: "verb".into(),
         title,
         sub: None,
         body,
+        foot: Some(foot),
         done: None,
         confirm: None,
     }
+}
+
+/// A closed set of values (a status, a verdict, a profile) as one button each, the chosen one
+/// filled: a press picks it, Tab walks them, and Return or Space presses the focused one. A
+/// chosen button is drawn anew in its filled look, so the keyboard focus is put back on it.
+/// test_id `seg-<field>-<value>`, the field label lower-cased with dashes, `none` for an empty
+/// value.
+fn choice_row(
+    app: AppState,
+    field: &work::VerbField,
+    index: usize,
+    values: Signal<Vec<String>>,
+    caption: Text,
+) -> AnyElement {
+    let group = field.label.to_lowercase().replace(' ', "-");
+    // Runs under the row, which outlives the buttons a choice redraws.
+    let chosen_at = stored(None::<ElementRef>);
+    let picks = signal(0u64);
+    effect(move || {
+        if picks.get() > 0
+            && let Some(handle) = chosen_at.get()
+        {
+            after_answer(move || handle.focus());
+        }
+    });
+    let buttons: Vec<AnyElement> = field
+        .choices
+        .iter()
+        .map(|choice| {
+            let shown = if choice.value.is_empty() {
+                "none"
+            } else {
+                choice.value.as_str()
+            };
+            let id = format!("seg-{group}-{shown}");
+            let work::Choice { value, label } = choice.clone();
+            let handle = element_ref();
+            dynamic(move || {
+                let chosen = values.with(|values| values.get(index) == Some(&value));
+                let value = value.clone();
+                button_with(
+                    app,
+                    label.clone(),
+                    if chosen {
+                        ButtonKind::Primary
+                    } else {
+                        ButtonKind::Ghost
+                    },
+                    ButtonOptions {
+                        focus: Some(handle),
+                        ..ButtonOptions::default()
+                    },
+                    id.clone(),
+                    move || {
+                        values.update(|values| {
+                            if let Some(slot) = values.get_mut(index) {
+                                slot.clone_from(&value);
+                            }
+                        });
+                        chosen_at.replace(Some(handle));
+                        picks.update(|picks| *picks += 1);
+                    },
+                )
+            })
+        })
+        .collect();
+    view()
+        .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
+        .child(caption)
+        .child(
+            view()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(if app.form == Form::Terminal { 8.0 } else { 6.0 }))
+                .role(AccessibilityRole::Radiogroup)
+                .label(field.label)
+                .children(buttons),
+        )
+        .into_element()
 }
 
 #[cfg(test)]

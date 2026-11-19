@@ -80,7 +80,6 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
                 method: ASSISTANT_SEND.into(),
                 request: json!({"thread":"pending"}),
                 status: CommandStatus::Done,
-                result: None,
                 error: None,
                 entry: Some(Id::new("not-yet-echoed")),
             },

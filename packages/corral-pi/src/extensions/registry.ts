@@ -1,5 +1,5 @@
-// Per-generation runtime registry shared with the watchdog. The session path is bound by hello;
-// the host PID separates generations that reuse a session. Entries disappear when children exit.
+// Runtime registry shared with the watchdog. The session path and host PID scope child
+// ownership to this process; entries disappear when children exit.
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
 
 export type RegisterCapability = (pid: number) => () => void;

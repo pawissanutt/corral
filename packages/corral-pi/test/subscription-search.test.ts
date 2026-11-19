@@ -8,7 +8,7 @@ import * as sdk from "@earendil-works/pi-coding-agent";
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import type { Fetch } from "../src/auth/types.ts";
 import { overrideSdk } from "../src/claude/sdk.ts";
-import { RunBudget } from "../src/capabilities/budget.ts";
+import { observeUsage } from "../src/host/model-usage.ts";
 import { createModelCatalog } from "../src/host/catalog.ts";
 import { HostSession, authContext, restrictProvider } from "../src/host/session.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
@@ -16,16 +16,17 @@ import { EventLog } from "../src/bridge/events.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { workerRole } from "../src/roles/worker/index.ts";
 import type { RoleContext } from "../src/roles/types.ts";
-import { CorralClient, sha256Hex } from "../src/tools/corral.ts";
+import { CorralClient } from "../src/tools/corral.ts";
+import type { ModelUsage } from "../src/tools/corral.ts";
 import { Type } from "typebox";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
-import { writeFakeCorral } from "./support/fake-corral.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 import { nextEvent } from "./support/wait.ts";
 import { AuxiliaryRuntime } from "../src/extensions/subagent/runtime.ts";
 import { boundedSearchResult, runSubscriptionSearch } from "../src/extensions/web/subscription.ts";
 import { SearchEvidence, record } from "../src/extensions/web/evidence.ts";
 import { WebSettingsSchema } from "../src/extensions/web/settings.ts";
-import fixtureAuth, { fixtureTransport } from "./fixtures/auth/index.ts";
+import fixtureAuth from "./fixtures/auth/index.ts";
 import { fakeCodexTransport } from "./fixtures/auth/fake-transport.ts";
 
 const settings = { hosts: ["*"], max_bytes: 1024, timeout_ms: 5000, max_redirects: 3, search_provider: "subscription" as const };
@@ -61,7 +62,7 @@ function codexReply(search = true): Response {
   ];
   return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
 }
-async function fixture(provider: "openai-codex" | "anthropic", send: Fetch, limited = false) {
+async function fixture(provider: "openai-codex" | "anthropic", send: Fetch) {
   const cwd = temp();
   const credentials: CredentialStore = provider === "openai-codex" ? fixtureAuth.credentials(authContext()) : {
     read: async (id) => id === "anthropic" ? { type: "oauth", access: "sk-ant-oat01-SYNTHETIC", refresh: "r", expires: Date.now() + 3600000 } : undefined,
@@ -74,16 +75,12 @@ async function fixture(provider: "openai-codex" | "anthropic", send: Fetch, limi
     configDir: join(cwd, "claude"), cwd, executable: () => "/fixture/claude", searchOnly: true,
     env: { PATH: "/bin", ANTHROPIC_API_KEY: "paid-key", CLAUDE_CODE_OAUTH_TOKEN: "foreign-token" },
   });
-  const budgetRecords: Record<string, unknown>[] = [];
-  const budget = new RunBudget({ cancel() {}, async record(payload) {
-    budgetRecords.push(payload);
-    return { admitted: !limited, exhausted: false, limits: { max_tokens: limited ? 100 : null, max_usd_nanos: null } };
-  } });
+  const usage: ModelUsage[] = [];
   const restricted = models.getProvider(provider)!;
-  models.registerNativeProvider({ ...restricted, streamSimple: budget.wrap(restricted.streamSimple.bind(restricted), true) });
+  models.registerNativeProvider({ ...restricted, streamSimple: observeUsage(restricted.streamSimple.bind(restricted), "subscription", row => usage.push(row)) });
   const refs: Record<string, unknown>[] = [];
   let binding = { provider, model: provider === "openai-codex" ? "gpt-6.1-sol" : "claude-sonnet-5-5" };
-  const runtime = new AuxiliaryRuntime({ generation: 4, provider, model: binding.model,
+  const runtime = new AuxiliaryRuntime({ provider, model: binding.model,
     settings: { web_search: { model: null, timeout_secs: 5 } }, sessionId: () => "parent",
     searchModel: () => binding,
     async record(payload) { refs.push(payload); return { session_id: payload.request, session_file: join(cwd, `${payload.request}.jsonl`) }; },
@@ -91,7 +88,7 @@ async function fixture(provider: "openai-codex" | "anthropic", send: Fetch, limi
   });
   const run = (id: string, signal?: AbortSignal) => runtime.run("web_search", id, JSON.stringify({ query: "Rust docs", count: 1 }), signal);
   const transcript = () => readFileSync(join(cwd, `${refs[0]?.request}.jsonl`), "utf8").split("\n").filter(Boolean).map((s) => record(JSON.parse(s)));
-  return { runtime, run, refs, budgetRecords, transcript, setModel: (model: string) => { binding = { provider, model }; } };
+  return { runtime, run, refs, usage, transcript, setModel: (model: string) => { binding = { provider, model }; } };
 }
 
 test("Codex forces hosted search through OAuth, returns deduplicated sources and persists usage once", async () => {
@@ -116,8 +113,7 @@ test("Codex forces hosted search through OAuth, returns deduplicated sources and
   ]);
   const assistant = fx.transcript().map((entry) => record(entry.message)).find((m) => m.role === "assistant");
   expect(record(assistant?.usage)).toMatchObject({ input: 30, output: 3, cacheRead: 2, totalTokens: 35 });
-  expect(fx.budgetRecords[0]).toMatchObject({ action: "reserve", unbounded: true });
-  expect(fx.budgetRecords[1]).toMatchObject({ action: "settle", tokens: 35 });
+  expect(fx.usage).toMatchObject([{ input: 30, output: 3, cache_read: 2, cache_write: 0, billing: "subscription" }]);
   await fx.runtime.close();
 });
 
@@ -126,7 +122,7 @@ test("a completion without search evidence is refused, while its usage remains a
   await expect(fx.run("not-search")).rejects.toThrow("verified hosted search");
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
   expect(fx.transcript().some((entry) => record(entry.message).role === "assistant")).toBeTrue();
-  expect(fx.budgetRecords.at(-1)?.action).toBe("settle");
+  expect(fx.usage).toHaveLength(1);
 });
 
 test("provider errors do not retry or fall back to another transport", async () => {
@@ -135,15 +131,7 @@ test("provider errors do not retry or fall back to another transport", async () 
   await expect(fx.run("quota")).rejects.toThrow();
   expect(calls).toBe(1);
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
-  expect(fx.budgetRecords).toHaveLength(1);
-});
-
-test("hard budgets refuse the unbounded hosted-search transport before network", async () => {
-  let calls = 0;
-  const fx = await fixture("openai-codex", async () => { calls++; return codexReply(); }, true);
-  await expect(fx.run("limited")).rejects.toThrow("budget_exhausted");
-  expect(calls).toBe(0);
-  expect(fx.budgetRecords[0]?.unbounded).toBeTrue();
+  expect(fx.usage).toHaveLength(0);
 });
 
 test("cancellation retains a single uncertain reference and does not retry the model", async () => {
@@ -159,7 +147,6 @@ test("cancellation retains a single uncertain reference and does not retry the m
   expect((await observed)[0]?.status).toBe("rejected");
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
   expect(wire.requests).toBe(1);
-  expect(fx.budgetRecords).toHaveLength(1);
 });
 
 function fakeClaude(script: (options: Options, interrupted: Promise<void>) => AsyncGenerator<unknown>) {
@@ -205,7 +192,7 @@ test("Claude executes only native WebSearch, scrubs ambient auth and accounts th
   const fx = await fixture("anthropic", async () => { throw new Error("Claude must not use host HTTP"); });
   expect(JSON.parse((await fx.run("claude")).text)).toMatchObject({ provider: "anthropic", answer: "Rust documentation",
     results: [{ title: "Rust", url: "https://www.rust-lang.org/" }] });
-  expect(fx.budgetRecords.at(-1)).toMatchObject({ action: "settle", tokens: 28 });
+  expect(fx.usage).toMatchObject([{ input: 23, output: 5, billing: "subscription" }]);
   expect(run.closes).toBe(1);
 });
 
@@ -227,7 +214,7 @@ test("Claude terminal failures retain reported usage instead of becoming zero-to
   expect(record(assistant?.usage)).toMatchObject({ input: 30, output: 5, totalTokens: 35 });
   expect(JSON.stringify(assistant)).not.toContain("sk-SYNTHETIC-SECRET");
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
-  expect(fx.budgetRecords).toHaveLength(1);
+  expect(fx.usage).toMatchObject([{ input: 30, output: 5, billing: "subscription" }]);
 });
 
 test("Claude search cancellation interrupts and closes its subprocess query", async () => {
@@ -251,7 +238,7 @@ test("bound host search stays subscription-backed for direct and nested calls ac
   try {
     const modules = await loadModules(assets.dir, "worker");
     let searches = 0;
-    const wire = fixtureTransport();
+    const wire = fakeCodexTransport();
     const webSettings = { ...settings, searxng_url: "https://must-not-be-used.example/" };
     const network = guardedFetch(async (url, init) => {
       const tools = body(init).tools;
@@ -266,18 +253,18 @@ test("bound host search stays subscription-backed for direct and nested calls ac
       parameters: Type.Object({}), async execute(_id, _params, signal, _update, context) {
         return (await context.executeTool("web_search", { query: "nested" }, { signal })).result;
       } };
-    const identity = { store: "st-demo", project: "demo", role: "worker" as const, generation: 1, task: "T-123", run: "R1" };
-    const events = new EventLog(1);
-    const corral = writeFakeCorral(cwd);
-    const client = new CorralClient({ corral: corral.path, root: cwd, identity, hostCap: "h".repeat(64), sessionId: () => host?.sessionId() ?? "" });
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const, task: "T-123", run: "R1" };
+    const events = new EventLog();
+    const corral = writeFakeEngine(cwd);
+    const client = new CorralClient({ corral: corral.path, root: cwd, cwd, identity });
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", client, events, network,
-      capabilities: { catalog: 7, digest: "a".repeat(64), preset: "standard", enabled: ["web.enabled", "budget"], web: webSettings },
+      capabilities: { catalog: 7, digest: "a".repeat(64), preset: "standard", enabled: ["web.enabled"], web: webSettings },
       modules: { ...modules, role: { ...role, localToolNames: [...role.localToolNames ?? [], nested.name],
         localTools: (context: RoleContext) => [...role.localTools?.(context) ?? [], nested] } },
       sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")),
     });
     await host.session.bindExtensions({});
-    await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+    await host.startLocal();
     for (const stage of ["startup", "reload"]) {
       if (stage === "reload") await host.session.reload();
       wire.script([
@@ -286,7 +273,7 @@ test("bound host search stays subscription-backed for direct and nested calls ac
         { text: "Done" },
       ]);
       const ended = nextEvent(events, (event) => event.kind === "turn_ended");
-      await host.submit({ text: stage, busyPolicy: "prompt", idempotencyKey: stage, origin: "test" }, `rq-${stage}`);
+      expect((await host.submitLocal({ text: stage, busyPolicy: "prompt", origin: "owner" })).disposition).toBe("started");
       await ended; await host.drained();
       const result = host.session.messages.find((message) => message.role === "toolResult" && message.toolCallId.startsWith(`${stage}-search`));
       expect(result).toBeDefined();
@@ -297,9 +284,11 @@ test("bound host search stays subscription-backed for direct and nested calls ac
         web_search: { running: 0, queued: 0 }, stopped: false });
     }
     expect(searches).toBe(4);
-    const records = corral.calls().map((call) => call.envelope.payload);
-    expect(records.filter((p) => p.kind === "auxiliary" && p.action === "finish" && p.outcome === "completed")).toHaveLength(4);
-    expect(records.filter((p) => p.kind === "budget" && p.action === "reserve" && p.unbounded === true)).toHaveLength(4);
+    const records = events.since(0, 64 * 1024).events.filter(event => event.kind === "auxiliary" && event.usage_kind === "web_search");
+    expect(records.filter(event => event.action === "finish").map(event => event.outcome))
+      .toEqual(["completed", "completed", "completed", "completed"]);
+    expect(corral.calls().filter(argv => argv[3] === "usage" && argv[4] === "add" && argv[argv.indexOf("--cache-read") + 1] === "2"))
+      .toHaveLength(4);
   } finally { host?.session.dispose(); assets.cleanup(); }
 }, 30000);
 

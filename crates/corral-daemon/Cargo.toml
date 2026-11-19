@@ -10,19 +10,25 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 jiff.workspace = true
-corral-core.workspace = true
-corral-ops.workspace = true
+corral-engine.workspace = true
+corral-herdr.workspace = true
+corral-types.workspace = true
 corral-protocol.workspace = true
+clap.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", features = ["net", "process", "event"] }
+rustix = { version = "1.1", features = ["event", "fs", "net", "process", "system"] }
 snow.workspace = true
 tungstenite.workspace = true
 getrandom = "0.4"
 base64.workspace = true
+sha2.workspace = true
+toml.workspace = true
 web-push = { version = "0.11", default-features = false, features = ["isahc-client"] }
 isahc = { version = "1.7", default-features = false }
 futures-lite = "2"
 
-[dev-dependencies]
-corral-herdr.workspace = true
+[[bin]]
+name = "corrald-next"
+path = "src/main.rs"

@@ -1,32 +1,53 @@
-// The bound task's cached, validated read of `corral show --json`. The task record is canonical; this store only holds
-// the last good read, its failure and its freshness. It is the only reader: rendering never does I/O.
+// The bound task's cached, validated read of `corral show --json`: the task, its runs, the newest checks and its
+// artifacts. The engine is canonical; this store only holds the last good read, its failure and its freshness. Task,
+// Proof and the committed candidate in Changes read it; rendering never does I/O.
 import { z } from "zod";
 import type { HostIdentity } from "../roles/types.ts";
 import { readState, type ReadState } from "./read-state.ts";
 
 const Text = z.string().max(65_536);
+const Optional = Text.nullable().optional();
 const TaskSchema = z.object({
-  id: Text, title: Text, status: Text,
-  status_since: Text.optional(), kind: Text.nullable().optional(), size: Text.nullable().optional(),
-  difficulty: Text.nullable().optional(), priority: Text.nullable().optional(), project: Text.optional(),
-  body: Text.nullable().optional(),
-  criteria_progress: z.array(z.object({
-    criterion: z.object({ id: Text, required: z.boolean(), scenario: Text, expected: Text }),
-    steps: z.array(z.unknown()).optional(),
-    evidence: z.array(z.unknown()).optional(),
-  })).max(100).optional(),
-  runs: z.array(z.object({
-    id: Text, agent: Text.nullable().optional(), outcome: Text.nullable().optional(),
-    agent_state: Text.nullable().optional(), started: Text.nullable().optional(), ended: Text.nullable().optional(),
-    summary: Text.nullable().optional(),
-  })).max(200).default([]),
-  comments: z.array(z.object({ at: Text, author: Text, text: Text })).max(500).default([]),
+  id: Text, title: Text, body: Text, status: Text, priority: Text,
+  project: Optional, kind: Optional, size: Optional, profile: Optional, base: Optional, parent: Optional,
+  depends_on: z.array(Text).max(200).default([]),
+  blocked: z.object({ reason: Text, detail: Optional }).nullable().optional(),
+  round: z.number().int().nonnegative().optional(),
+  created: Optional, updated: Optional,
 });
-export type TaskRecord = z.infer<typeof TaskSchema>;
+const RunSchema = z.object({
+  id: Text, role: Text, profile: Text, model: Optional, effort: Optional,
+  worktree: Text, branch: Text, base_sha: Text,
+  started: Text, ended: Optional, outcome: Optional, summary: Optional, head_sha: Optional,
+});
+const CheckSchema = z.object({
+  kind: z.enum(["gate", "review"]), key: Text, result: z.enum(["pass", "fail"]),
+  notes: Optional, log: Optional, by: Text, at: Text,
+});
+const ArtifactSchema = z.object({
+  task: Text, id: z.number().int().positive(), sha256: Text, bytes: z.number().int().nonnegative(),
+  kind: Optional, title: Text, at: Text, by: Text,
+});
+const ViewSchema = z.object({
+  task: TaskSchema,
+  runs: z.array(RunSchema).max(200).default([]),
+  checks: z.array(CheckSchema).max(200).default([]),
+  artifacts: z.array(ArtifactSchema).max(500).default([]),
+});
+export type TaskView = z.infer<typeof ViewSchema>;
+export type TaskRecord = TaskView["task"];
+export type TaskRun = TaskView["runs"][number];
+export type TaskCheck = TaskView["checks"][number];
+export type TaskArtifact = TaskView["artifacts"][number];
+
+/** `T-42:3`, the reference `corral artifact show` reads. */
+export function artifactRef(artifact: TaskArtifact): string {
+  return `${artifact.task}:${artifact.id}`;
+}
 
 /** One cached, validated read. Rendering never does I/O. */
 export class TaskStore {
-  current: TaskRecord | undefined;
+  current: TaskView | undefined;
   error: string | undefined;
   /** When the last failed read failed; set with `error`, cleared by the next successful read. */
   failedAt: number | undefined;
@@ -39,6 +60,16 @@ export class TaskStore {
       applicable: this.bound, reason: this.identity.task ? "no_reader" : "no_task", hasData: this.current !== undefined,
       stale: this.stale, refreshing: this.refreshing, checkedAt: this.checkedAt, error: this.error, failedAt: this.failedAt,
     });
+  }
+  /** This session's run in the last read; undefined while unread or when the record does not hold it. */
+  get run(): TaskRun | undefined {
+    const id = this.identity.run;
+    return id === undefined ? undefined : this.current?.runs.find(run => run.id === id);
+  }
+  /** Marks the held read stale (the worktree changed); a read already in flight cannot clear it. */
+  invalidate(): void {
+    if (!this.bound || this.disposed) return;
+    this.version++; this.stale = true; this.changed();
   }
   refresh(force = false): Promise<void> {
     if (this.disposed || !this.bound) return Promise.resolve();
@@ -53,13 +84,14 @@ export class TaskStore {
     this.refreshing = true; this.changed();
     try {
       if (!this.load) throw new Error("No task bound to this session");
-      const data = TaskSchema.parse(await this.load());
-      if (data.id !== this.identity.task) throw new Error("Task identity mismatch");
+      const data = ViewSchema.parse(await this.load());
+      if (data.task.id !== this.identity.task) throw new Error("Task identity mismatch");
       if (this.disposed || version !== this.version) return;
       this.current = data; this.error = undefined; this.failedAt = undefined; this.stale = false; this.checkedAt = Date.now();
     } catch (error) {
       if (this.disposed || version !== this.version) return;
-      this.error = error instanceof Error ? error.message : String(error); this.failedAt = Date.now(); this.stale = true;
+      this.error = error instanceof z.ZodError ? "the read returned data of an unexpected shape" : error instanceof Error ? error.message : String(error);
+      this.failedAt = Date.now(); this.stale = true;
     } finally { this.refreshing = false; if (!this.disposed) this.changed(); }
   }
   dispose(): void { this.disposed = true; this.version++; }

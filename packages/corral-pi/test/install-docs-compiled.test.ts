@@ -2,14 +2,16 @@ import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { PACKAGE_ROOT } from "./support/fixture-install.ts";
 
 test("release build runs the persistent Code Mode kernel, has no QuickJS path, and installs the Pi prompt's documentation paths", () => {
   const root = mkdtempSync(join(tmpdir(), "corral-pi-docs-"));
   try {
     const binary = join(root, "corral-pi-host");
-    execFileSync(resolve(PACKAGE_ROOT, "../../scripts/build-pi-host.sh"), [binary], { stdio: "pipe" });
+    execFileSync(process.execPath, ["build", "--compile", "--root", ".", "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig",
+      "src/cli.ts", "src/extensions/codemode/kernel-worker.ts", "--outfile", binary], { cwd: PACKAGE_ROOT, stdio: "pipe", timeout: 30_000 });
+    expect(execFileSync(binary, ["--version"], { encoding: "utf8", timeout: 10_000 })).toMatch(/^corral-pi pi /);
     // The persistent kernel's worker is embedded: no source checkout is reachable from root.
     const kernel = execFileSync(binary, ["--check-code-kernel"], { cwd: root, encoding: "utf8", timeout: 30_000 });
     expect(kernel).toMatch(/code kernel worker: file:\/\/\/\$bunfs\/root\/src\/extensions\/codemode\/kernel-worker\.js/);

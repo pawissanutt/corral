@@ -1,11 +1,14 @@
 //! Transport-neutral control replies and per-connection worker accounting.
-use std::os::unix::net::UnixStream;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    net::SocketAddr,
+    os::unix::net::UnixStream,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use corral_protocol::{
-    frame::{Frame, FrameKind, write_frame_until},
+    frame::{CONTROL_MAX, Frame, FrameKind, write_frame_until},
     rpc,
 };
 use serde::Serialize;
@@ -14,6 +17,20 @@ use serde_json::Value;
 use crate::state::Shared;
 
 pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(2);
+
+pub(crate) enum Peer {
+    Unix,
+    Tcp(SocketAddr),
+}
+
+impl Peer {
+    pub(crate) fn is_local(&self) -> bool {
+        match self {
+            Self::Unix => true,
+            Self::Tcp(peer) => peer.ip().to_canonical().is_loopback(),
+        }
+    }
+}
 
 pub(crate) trait Conn {
     fn send_frame(&mut self, frame: &Frame) -> Result<()>;
@@ -25,8 +42,7 @@ impl Conn for UnixStream {
     }
 }
 
-fn send(conn: &mut dyn Conn, value: &impl Serialize) -> Result<()> {
-    let payload = serde_json::to_vec(value).context("encoding daemon response")?;
+fn send(conn: &mut dyn Conn, payload: Vec<u8>) -> Result<()> {
     conn.send_frame(&Frame {
         kind: FrameKind::Control,
         stream: 0,
@@ -34,15 +50,20 @@ fn send(conn: &mut dyn Conn, value: &impl Serialize) -> Result<()> {
     })
 }
 
-pub(crate) fn reply(conn: &mut dyn Conn, id: Value, result: impl Serialize) -> Result<()> {
-    send(
-        conn,
-        &rpc::Response {
-            jsonrpc: rpc::JSONRPC.into(),
-            id,
-            outcome: rpc::ResponseOutcome::Result { result },
-        },
-    )
+pub(crate) fn reply<T: Serialize>(conn: &mut dyn Conn, id: Value, result: T) -> Result<()> {
+    send_reply(conn, id, rpc::ResponseOutcome::Result { result })
+}
+
+pub(crate) fn rpc_error(conn: &mut dyn Conn, id: Value, mut error: rpc::Error) -> Result<()> {
+    if error.code == rpc::ErrorCode::Refused && error.data.is_none() {
+        error = rpc::Error::refused(corral_types::Refusal {
+            reason: error.message,
+            next: Vec::new(),
+            problems: None,
+        })
+        .context("encode refusal details")?;
+    }
+    send_reply::<()>(conn, id, rpc::ResponseOutcome::Error { error })
 }
 
 pub(crate) fn error(
@@ -51,37 +72,86 @@ pub(crate) fn error(
     code: rpc::ErrorCode,
     message: &str,
 ) -> Result<()> {
-    let response: rpc::Response<Value> = rpc::Response {
+    rpc_error(
+        conn,
+        id,
+        rpc::Error {
+            code,
+            message: message.into(),
+            data: None,
+        },
+    )
+}
+
+fn send_reply<T: Serialize>(
+    conn: &mut dyn Conn,
+    id: Value,
+    outcome: rpc::ResponseOutcome<T>,
+) -> Result<()> {
+    let response = rpc::Response {
         jsonrpc: rpc::JSONRPC.into(),
         id,
+        outcome,
+    };
+    let payload = serde_json::to_vec(&response).context("encode daemon response")?;
+    if payload.len() <= CONTROL_MAX {
+        return send(conn, payload);
+    }
+    let response: rpc::Response<()> = rpc::Response {
+        jsonrpc: response.jsonrpc,
+        id: response.id,
         outcome: rpc::ResponseOutcome::Error {
             error: rpc::Error {
-                code,
-                message: message.into(),
+                code: rpc::ErrorCode::TooLarge,
+                message: "control_frame_limit".into(),
                 data: None,
             },
         },
     };
-    send(conn, &response)
+    send(
+        conn,
+        serde_json::to_vec(&response).context("encode frame limit error")?,
+    )
 }
 
 pub(crate) fn notify(conn: &mut dyn Conn, method: &str, params: impl Serialize) -> Result<()> {
-    send(
-        conn,
-        &rpc::Notification {
-            jsonrpc: rpc::JSONRPC.into(),
-            method: method.into(),
-            params,
-        },
-    )
+    let payload = serde_json::to_vec(&rpc::Notification {
+        jsonrpc: rpc::JSONRPC.into(),
+        method: method.into(),
+        params,
+    })
+    .context("encode daemon notification")?;
+    send(conn, payload)
 }
 
 pub(crate) struct WorkerPermit(pub(crate) Arc<Shared>);
 
 impl Drop for WorkerPermit {
     fn drop(&mut self) {
-        let mut state = self.0.lock();
-        state.workers -= 1;
+        self.0.lock().workers -= 1;
         self.0.changed.notify_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Peer;
+
+    #[test]
+    fn tcp_locality_normalizes_mapped_ipv4_peers() {
+        for (addr, expected) in [
+            ("127.0.0.2:4040", true),
+            ("[::1]:4040", true),
+            ("[::ffff:127.0.0.2]:4040", true),
+            ("192.0.2.1:4040", false),
+            ("[2001:db8::1]:4040", false),
+            ("[::ffff:192.0.2.1]:4040", false),
+        ] {
+            assert_eq!(
+                Peer::Tcp(addr.parse().unwrap()).is_local(),
+                expected,
+                "{addr}"
+            );
+        }
     }
 }

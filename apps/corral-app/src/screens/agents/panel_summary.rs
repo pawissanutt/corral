@@ -1,23 +1,21 @@
-//! The panel's Summary tab: what waits on the owner (`.callout`), what the session does now with
-//! its activity, its own steps, and what it said and did (`.log`), each a section (`.sec`) of the
-//! mock's `agentPanel`. Every word and number is the `RosterPanel`'s; presses go through the
-//! roster's selection.
+//! The panel's Summary tab: what waits on the owner (`.callout`, its task's Blocked reason),
+//! what the session does now and how long it has been quiet, and, from a corrald that serves
+//! transcripts, what it said and did (`.log`), each a section (`.sec`) of the mock's
+//! `agentPanel`. Every word and number is the `RosterPanel`'s; presses go through the roster's
+//! selection.
 
 use std::collections::BTreeSet;
 
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::agents::{Recent, RecentEntry, RecentState, RosterPanel, RosterWait, Steps};
-use crate::model::board::Mark;
+use crate::model::agents::{Recent, RecentEntry, RecentState, RosterPanel, RosterWait};
 use crate::model::hue::Hue;
 use crate::model::text::span;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
-use crate::ui::kit::glance::{activity_axis, activity_chart};
 use crate::ui::kit::notice::{loading, notice};
-use crate::ui::kit::table::steps;
 use crate::ui::term::{self, cells};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
@@ -97,11 +95,10 @@ fn quiet(app: AppState, words: impl IntoReactive<SharedString>, size: f32) -> An
 }
 
 /// The Summary, scrolling under the head: what waits on the owner, what the session does now
-/// with its activity, its steps, and what it said and did. Each part follows its own facts, so
-/// the times ticking redraw no button.
+/// and what it said and did. Each part follows its own facts, so the times ticking redraw no
+/// button.
 pub(super) fn summary(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
     let waits = computed(move || current.with(|p| p.waits.clone()));
-    let steps_shown = computed(move || current.with(|p| (p.steps.clone(), p.hue)));
     let recent = computed(move || current.with(|p| p.recent.clone()));
     let open = signal(BTreeSet::<String>::new());
     let content = view()
@@ -114,14 +111,11 @@ pub(super) fn summary(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
         }))
         .child(doing(app, current))
         .child(dynamic(move || {
-            steps_shown.with(|(shown, hue)| {
-                shown
+            recent.with(|recent| {
+                recent
                     .as_ref()
-                    .map(|shown| untracked(|| steps_view(app, shown, *hue)))
+                    .map(|recent| untracked(|| recent_view(app, recent, open)))
             })
-        }))
-        .child(dynamic(move || {
-            recent.with(|recent| untracked(|| recent_view(app, recent, open)))
         }));
     scroll()
         .test_id("agent-panel-summary")
@@ -163,21 +157,11 @@ fn waits_view(app: AppState, wait: &RosterWait) -> AnyElement {
         .into_element()
 }
 
-/// Doing now, with the last output's age at the trailing edge, then the activity chart over its
-/// axis, or the model's words while no activity is reported.
+/// Doing now, with how long the session has been quiet at the trailing edge.
 fn doing(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
     let title = untracked(|| current.with(|p| p.doing_title));
     let words = computed(move || current.with(|p| p.doing.clone()));
-    let last = computed(move || current.with(|p| p.last_output.clone()));
-    let activity = computed(move || {
-        current.with(|p| {
-            (
-                p.activity.clone(),
-                p.activity_axis.clone(),
-                p.unknown_activity,
-            )
-        })
-    });
+    let quiet_for = computed(move || current.with(|p| p.quiet.clone()));
     let sentence = text(move || words.get()).text_color(color(Token::Ink));
     let sentence = if app.form == Form::Terminal {
         sentence
@@ -187,61 +171,11 @@ fn doing(app: AppState, current: Memo<RosterPanel>) -> AnyElement {
             .text_size(px(13.0))
             .line_height(px(19.0))
     };
-    let chart = dynamic(move || {
-        activity.with(|(shown, [from, unit, to], unknown)| {
-            untracked(|| match shown {
-                Some(shown) => view()
-                    .gap(px(4.0))
-                    .child(activity_chart(app, shown))
-                    .child(activity_axis(app, from, unit, to))
-                    .into_element(),
-                None => quiet(app, *unknown, 12.0),
-            })
-        })
-    });
-    let body = view()
-        .child(sentence)
-        .child(
-            view()
-                .when(app.form != Form::Terminal, |chart| chart.mt(px(12.0)))
-                .child(chart),
-        )
-        .into_element();
-    section(app, title, Some(quiet(app, move || last.get(), 11.5)), body)
-}
-
-/// The session's own steps (`.steps`) with how many are done: done in ink, the current one in
-/// semibold ink with its mark in the session's colour, those to come quiet.
-fn steps_view(app: AppState, shown: &Steps, hue: Hue) -> AnyElement {
-    let terminal = app.form == Form::Terminal;
-    let items = shown
-        .items
-        .iter()
-        .map(|(mark, title)| {
-            let current = *mark == Mark::Active;
-            let ink = match mark {
-                Mark::Done | Mark::Active => Token::Ink,
-                _ => Token::Ink3,
-            };
-            let words = text(title.clone()).text_color(color(ink));
-            let words = if terminal {
-                words
-            } else {
-                words
-                    .font_family(FONT_TEXT)
-                    .text_size(px(12.5))
-                    .line_height(px(19.0))
-                    .when(current, |t| t.font_weight(FontWeight::SEMIBOLD))
-            };
-            let hue = if current { hue } else { Hue::Neutral };
-            (*mark, hue, words.into_element())
-        })
-        .collect();
     section(
         app,
-        shown.title,
-        Some(quiet(app, shown.count.clone(), 11.5)),
-        steps(app, items),
+        title,
+        Some(quiet(app, move || quiet_for.get(), 11.5)),
+        sentence.into_element(),
     )
 }
 

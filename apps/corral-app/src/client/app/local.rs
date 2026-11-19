@@ -12,9 +12,7 @@ impl AppState {
             feed.store = None;
             feed.workspace = None;
             feed.board = Board::default();
-            feed.inbox.clear();
             feed.plans.clear();
-            feed.builds.clear();
             feed.projects.clear();
             feed.topics.remove("projects");
             feed.health = None;
@@ -86,25 +84,6 @@ impl AppState {
                     || outbox.saved.messages.contains_key(id.as_str())
                     || matches!(state.status, CommandStatus::Done | CommandStatus::Abandoned)
             });
-            for (id, command) in &outbox.saved.commands {
-                let mut state = command_state(
-                    feed,
-                    &command.method,
-                    command.params.clone(),
-                    CommandStatus::Unknown,
-                );
-                state.result = command.result.clone();
-                state.error = command.error.as_ref().map(|(code, message)| ClientError {
-                    code: code.clone(),
-                    message: message.clone(),
-                });
-                if let Some(result) = &state.result {
-                    state.status = result_status(result);
-                } else if let Some(error) = &state.error {
-                    state.status = error_status(error);
-                }
-                feed.commands.entry(Id::from(id)).or_insert(state);
-            }
             for (id, message) in &outbox.saved.messages {
                 let mut state = command_state(
                     feed,

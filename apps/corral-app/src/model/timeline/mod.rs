@@ -12,6 +12,7 @@ pub use scope::{BurnupScope, ScopeOption, burnup_request, scope_options};
 
 pub const BURNUP_SCOPE_LABEL: &str = "Burn-up scope";
 
+use crate::model::Live;
 use crate::model::effect::{Effect, Env};
 use crate::model::hue::Hue;
 
@@ -28,10 +29,10 @@ pub enum Range {
 /// Selected grouping, available on every form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Grouping {
-    /// Group by task.
+    /// One lane per task.
     #[default]
     ByTask,
-    /// Group by agent session.
+    /// One lane per run.
     ByAgent,
 }
 
@@ -59,27 +60,33 @@ impl State {
         self.burnup_scope = scope;
         Vec::new()
     }
+    /// Open a lane's task or its run's session page.
+    pub fn open(&mut self, opens: Live) -> Vec<Effect> {
+        vec![Effect::OpenLive(opens)]
+    }
 }
 
 /// A timeline segment's semantic state, including the hatched variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    /// Worker running.
+    /// A worker run.
     Run,
-    /// Corral gate.
+    /// A gate result, an instant.
     Gate,
-    /// Review.
+    /// A reviewer run.
     Review,
-    /// Landed.
+    /// Landed, an instant.
     Land,
-    /// Idle hatch.
+    /// Dropped, an instant.
+    Drop,
+    /// Reopened after Done or Dropped, an instant.
+    Reopen,
+    /// An open run whose output has gone quiet.
     Idle,
-    /// Waiting hatch; the owner of the wait is not encoded.
+    /// Blocked, waiting for the owner's next move.
     Ask,
-    /// Waiting for the owner's acceptance.
+    /// Ready, waiting for the owner's acceptance.
     Held,
-    /// A phase whose times corral did not record.
-    Unavailable,
 }
 impl Kind {
     /// Name used in the segment's accessible label.
@@ -89,19 +96,20 @@ impl Kind {
             Self::Gate => "gate",
             Self::Review => "review",
             Self::Land => "land",
+            Self::Drop => "dropped",
+            Self::Reopen => "reopened",
             Self::Idle => "idle",
-            Self::Ask => "ask",
+            Self::Ask => "blocked",
             Self::Held => "awaiting acceptance",
-            Self::Unavailable => "not recorded",
         }
     }
-    /// State colour; the kind also tells the renderer which hatch or mixed fill to use.
+    /// State colour; the kind also tells the renderer which hatch, mixed fill or mark to use.
     pub fn hue(self) -> Hue {
         match self {
-            Self::Run => Hue::Worker,
+            Self::Run | Self::Reopen => Hue::Worker,
             Self::Gate | Self::Review => Hue::Corral,
             Self::Land => Hue::Ok,
-            Self::Idle | Self::Unavailable => Hue::Neutral,
+            Self::Idle | Self::Drop => Hue::Neutral,
             Self::Ask => Hue::You,
             Self::Held => Hue::Held,
         }
@@ -121,7 +129,7 @@ pub struct Marker {
     pub at: i64,
     pub label: String,
 }
-/// One placed span of a lane.
+/// One placed span of a lane; an instant has `start == end`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlotSegment {
     pub kind: Kind,
@@ -129,31 +137,23 @@ pub struct PlotSegment {
     pub end: i64,
     /// Hover and screen-reader description.
     pub label: String,
-    /// Visible desktop annotation above the bar.
-    pub note: Option<String>,
-    /// Visible phone annotation under the bar.
-    pub phone_note: Option<String>,
 }
-/// One lane: its placed spans, its question strip, and what it could not place.
+/// What pressing a lane opens: its task, or a live run's session terminal; and the words that
+/// name the press.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Opens {
+    pub live: Live,
+    pub label: String,
+}
+/// One lane: a task's runs, waits and instants, or one run's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlotLane {
     pub id: String,
     pub title: String,
     pub segments: Vec<PlotSegment>,
-    pub ask: Option<PlotSegment>,
-    /// Phases corral recorded without times, said instead of drawn.
-    pub missing: Option<String>,
     /// Wait summary anchored to this row rather than floating between bars.
     pub wait: Option<String>,
-}
-/// A supervisor interval or instant.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlotPm {
-    pub start: i64,
-    pub end: i64,
-    pub hue: Hue,
-    pub label: Option<String>,
-    pub accessible_label: String,
+    pub opens: Opens,
 }
 /// Everything the chart draws, before geometry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,13 +161,13 @@ pub struct Plot {
     pub start: i64,
     pub end: i64,
     pub ticks: Vec<PlotTick>,
+    /// The owner's recorded moves.
     pub owner: Vec<Marker>,
-    pub pm: Vec<PlotPm>,
+    /// The pipeline's and assistants' recorded moves.
+    pub auto: Vec<Marker>,
     pub lanes: Vec<PlotLane>,
-    pub last_visit: Option<Marker>,
     pub now: Marker,
     pub accessible_label: String,
-    pub completeness: Option<String>,
 }
 
 /// An axis tick with canvas x and optional label (minor ticks are blank on phone).
@@ -189,12 +189,7 @@ pub struct PlacedSegment {
     /// Width, including the mockup's one-unit gap and minimum width.
     pub width: f32,
     pub kind: Kind,
-    pub hue: Hue,
     pub accessible_label: String,
-    /// Additional visible annotation, if any.
-    pub annotation: Option<String>,
-    /// Whether this is the thin overlay rather than a normal segment.
-    pub overlay: bool,
 }
 /// A positioned lane.
 #[derive(Debug, Clone, PartialEq)]
@@ -203,26 +198,16 @@ pub struct PlacedLane {
     pub title: String,
     pub y: f32,
     pub segments: Vec<PlacedSegment>,
-    /// Phases without recorded times, written in the track.
-    pub missing: Option<String>,
     pub wait: Option<String>,
+    pub opens: Opens,
 }
-/// An owner action dot with its accessibility text.
+/// An action mark with its accessibility text.
 #[derive(Debug, Clone, PartialEq)]
-pub struct OwnerMarker {
+pub struct PlacedMarker {
     pub x: f32,
     pub accessible_label: String,
 }
-/// A positioned supervisor interval.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PlacedPm {
-    pub x: f32,
-    pub width: f32,
-    pub hue: Hue,
-    pub label: Option<String>,
-    pub accessible_label: String,
-}
-/// Canvas-ready timeline, including owner and supervisor lanes.
+/// Canvas-ready timeline, including the owner and automatic lanes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
     pub width: f32,
@@ -233,12 +218,11 @@ pub struct Layout {
     pub top: f32,
     pub ticks: Vec<Tick>,
     pub owner_label: (&'static str, &'static str),
-    pub owner: Vec<OwnerMarker>,
-    pub pm_label: (&'static str, &'static str),
-    pub pm: Vec<PlacedPm>,
-    /// Lanes after the six-unit supervisor gap.
+    pub owner: Vec<PlacedMarker>,
+    pub auto_label: (&'static str, &'static str),
+    pub auto: Vec<PlacedMarker>,
+    /// Lanes after the six-unit gap under the action lanes.
     pub lanes: Vec<PlacedLane>,
-    pub last_visit: Option<Line>,
     pub now: Line,
     pub accessible_label: String,
 }
@@ -263,63 +247,38 @@ pub fn layout(plot: &Plot, width: f32, phone: bool) -> Layout {
             },
         })
         .collect();
-    let owner = plot
-        .owner
-        .iter()
-        .map(|a| OwnerMarker {
-            x: x(a.at),
-            accessible_label: a.label.clone(),
-        })
-        .collect();
-    let pm = plot
-        .pm
-        .iter()
-        .map(|p| PlacedPm {
-            x: x(p.start),
-            width: (x(p.end) - x(p.start)).max(2.0),
-            hue: p.hue,
-            label: p.label.clone(),
-            accessible_label: p.accessible_label.clone(),
-        })
-        .collect();
+    let place_markers = |markers: &[Marker]| {
+        markers
+            .iter()
+            .map(|a| PlacedMarker {
+                x: x(a.at),
+                accessible_label: a.label.clone(),
+            })
+            .collect()
+    };
     let lanes = plot
         .lanes
         .iter()
         .enumerate()
-        .map(|(i, lane)| {
-            let place = |s: &PlotSegment, overlay: bool| {
-                let x1 = x(s.start);
-                let raw_width = x(s.end) - x1;
-                PlacedSegment {
-                    x: x1,
-                    width: if overlay {
-                        raw_width
-                    } else {
-                        (raw_width - 1.0).max(2.0)
-                    },
-                    kind: s.kind,
-                    hue: s.kind.hue(),
-                    accessible_label: s.label.clone(),
-                    annotation: if phone {
-                        s.phone_note.clone()
-                    } else {
-                        s.note.clone()
-                    },
-                    overlay,
-                }
-            };
-            let mut segments: Vec<_> = lane.segments.iter().map(|s| place(s, false)).collect();
-            if let Some(ask) = &lane.ask {
-                segments.push(place(ask, true));
-            }
-            PlacedLane {
-                id: lane.id.clone(),
-                title: lane.title.clone(),
-                y: top + 2.0 * lane_height + 6.0 + i as f32 * lane_height,
-                segments,
-                missing: lane.missing.clone(),
-                wait: lane.wait.clone(),
-            }
+        .map(|(i, lane)| PlacedLane {
+            id: lane.id.clone(),
+            title: lane.title.clone(),
+            y: top + 2.0 * lane_height + 6.0 + i as f32 * lane_height,
+            segments: lane
+                .segments
+                .iter()
+                .map(|s| {
+                    let x1 = x(s.start);
+                    PlacedSegment {
+                        x: x1,
+                        width: (x(s.end) - x1 - 1.0).max(2.0),
+                        kind: s.kind,
+                        accessible_label: s.label.clone(),
+                    }
+                })
+                .collect(),
+            wait: lane.wait.clone(),
+            opens: lane.opens.clone(),
         })
         .collect();
     Layout {
@@ -330,15 +289,11 @@ pub fn layout(plot: &Plot, width: f32, phone: bool) -> Layout {
         lane_height,
         top,
         ticks,
-        owner_label: ("You", "owner actions"),
-        owner,
-        pm_label: ("PM", "supervisor"),
-        pm,
+        owner_label: ("You", "owner moves"),
+        owner: place_markers(&plot.owner),
+        auto_label: ("Auto", "pipeline, assistants"),
+        auto: place_markers(&plot.auto),
         lanes,
-        last_visit: plot.last_visit.as_ref().map(|visit| Line {
-            x: x(visit.at),
-            label: visit.label.clone(),
-        }),
         now: Line {
             x: x(plot.now.at),
             label: plot.now.label.clone(),
@@ -392,15 +347,15 @@ pub fn head(state: &State, _env: Env, _phone: bool) -> Head {
                 selected: state.grouping == Grouping::ByTask,
             },
             GroupOption {
-                label: "By agent",
+                label: "By run",
                 grouping: Grouping::ByAgent,
                 selected: state.grouping == Grouping::ByAgent,
             },
         ]),
     }
 }
-/// The live page's subtitle: corral records no stalls or stale verdicts as spans.
-pub const LIVE_SUBTITLE: &str = "who worked when · run, gate, review, land · waits and idle";
+/// The page's subtitle: what the recorded runs and events show.
+pub const LIVE_SUBTITLE: &str = "who worked when · runs, gates, reviews, landings · waits and idle";
 /// A legend entry, with kind identifying hatch and mixed-fill variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LegendItem {
@@ -408,17 +363,18 @@ pub struct LegendItem {
     pub kind: Kind,
     pub hue: Hue,
 }
-/// Timeline legend: the mockup's order in the preview; recorded kinds only when live.
+/// Timeline legend, in the order a task passes through the kinds.
 pub fn legend() -> Vec<LegendItem> {
     let kinds: &[(&str, Kind)] = &[
         ("run", Kind::Run),
         ("gate", Kind::Gate),
         ("review", Kind::Review),
         ("land", Kind::Land),
-        ("waiting", Kind::Ask),
+        ("dropped", Kind::Drop),
+        ("reopened", Kind::Reopen),
+        ("blocked", Kind::Ask),
         ("awaiting acceptance", Kind::Held),
         ("idle", Kind::Idle),
-        ("times not recorded", Kind::Unavailable),
     ];
     kinds
         .iter()
@@ -445,6 +401,10 @@ pub fn gaps_title(range: Range) -> &'static str {
         Range::SevenDays => "Gaps worth a look · 7 days",
     }
 }
+/// What the burn-up counts, said under it.
+pub const BURNUP_COUNTS: &str = "Scope counts the tasks created in this scope, less those \
+                                 dropped; landed counts the tasks landed, less those reopened. \
+                                 Each step is a recorded event.";
 /// Burn-up input: points at fractions of the period with their scope and landed counts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BurnupSeries {
@@ -454,7 +414,8 @@ pub struct BurnupSeries {
     pub points: Vec<(f32, u32, u32)>,
     pub first: String,
     pub last: String,
-    pub completeness: Option<String>,
+    /// What the two lines count.
+    pub counts: &'static str,
 }
 /// A plotted chart point.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -469,7 +430,6 @@ pub struct Burnup {
     pub title: String,
     pub period: String,
     pub accessible_label: String,
-    pub completeness: Option<String>,
     pub size: (f32, f32),
     pub scope: Vec<Point>,
     pub landed: Vec<Point>,
@@ -538,15 +498,7 @@ pub fn burnup(series: &BurnupSeries, width: f32, height: f32) -> Burnup {
     Burnup {
         title: series.title.clone(),
         period: series.period.clone(),
-        accessible_label: format!(
-            "Burn-up: {landed_total} of {scope_total} landed{}",
-            series
-                .completeness
-                .as_ref()
-                .map(|note| format!(" · {note}"))
-                .unwrap_or_default()
-        ),
-        completeness: series.completeness.clone(),
+        accessible_label: format!("Burn-up: {landed_total} of {scope_total} tasks landed"),
         size: (width, height),
         scope,
         landed,
@@ -575,7 +527,7 @@ mod tests {
             points: vec![(0.0, 9, 0), (1.0, 9, 0)],
             first: "11-14".into(),
             last: "today".into(),
-            completeness: None,
+            counts: BURNUP_COUNTS,
         };
         let chart = burnup(&series, 404.0, 150.0);
         let [scope, landed] = &chart.series_labels;

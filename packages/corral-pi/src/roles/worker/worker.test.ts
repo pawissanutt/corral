@@ -1,48 +1,39 @@
-// The real worker role (T-252 worker-role) in a host session: the OD3 loadout, the contract and
-// skill from the installed assets only, each corral tool as one envelope, and turn attribution.
+// Production worker loadout, local tools and engine commands with the offline provider.
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EventLog } from "../../bridge/events.ts";
-import type { SubmitInput } from "../../bridge/protocol.ts";
 import { loadModules } from "../../host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../../host/restrict.ts";
-import { HostSession, authContext } from "../../host/session.ts";
-import { CorralClient, sha256Hex, toolRequestId } from "../../tools/corral.ts";
-import type { CorralCall } from "../../tools/corral.ts";
-import { defineCorralTool } from "../../tools/define.ts";
+import { HostSession } from "../../host/session.ts";
+import { CorralClient } from "../../tools/corral.ts";
 import type { ChildSnapshot, FleetSnapshot } from "../../build/types.ts";
 import { doneTool, workerDoneTool } from "./tools.ts";
-import { fixtureTransport } from "../../../test/fixtures/auth/index.ts";
-import { type FakeCorral, writeFakeCorral } from "../../../test/support/fake-corral.ts";
+import { fakeCodexTransport } from "../../../test/fixtures/auth/fake-transport.ts";
+const provider = fakeCodexTransport();
+import { type FakeEngine, writeFakeEngine } from "../../../test/support/fake-engine.ts";
 import { type FixtureInstall, PACKAGE_ROOT, buildFixtureInstall } from "../../../test/support/fixture-install.ts";
 import { expectReplacementsRefused } from "../../../test/support/replacement.ts";
-import { nextEvent } from "../../../test/support/wait.ts";
+import { nextEvent, within } from "../../../test/support/wait.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import worker, { CONTRACT_ASSET, SKILL_ASSET, kickoff, workerRole } from "./index.ts";
 
-const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-007", run: "R2", generation: 1 };
+const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-007", run: "R2" };
 const UPSTREAM = ["read", "edit", "write", "bash", "grep", "find", "ls"];
-const CORRAL_TOOLS = [
-  "corral_memory_list", "corral_memory_read", "corral_memory_put", "corral_memory_remove",
-  "corral_receipt_lookup", "corral_content_read", "corral_ask", "corral_withdraw", "corral_wait", "corral_progress", "corral_checkpoint", "corral_evidence",
-  "corral_artifact", "corral_gate", "corral_done",
-];
+const CORRAL_TOOLS = ["corral_checkpoint", "corral_artifact", "corral_done"];
 const LSP_TOOLS = ["lsp_diagnostics", "lsp_definition", "lsp_references"];
 const originalFetch = globalThis.fetch;
 
 let assets: FixtureInstall;
 let work: string;
-let corral: FakeCorral;
+let corral: FakeEngine;
 let events: EventLog;
 let host: HostSession;
 
-const input = (text: string, key: string): SubmitInput => ({ text, busyPolicy: "prompt", idempotencyKey: key, origin: "test" });
-
-/** A fixture installation (synthetic auth, fixture delivery) with the real worker role and assets. */
+/** A fixture installation with the offline provider and production worker and assets. */
 function realWorkerInstall(): FixtureInstall {
   const built = buildFixtureInstall();
   rmSync(join(built.dir, "src/roles/worker"), { recursive: true, force: true });
@@ -60,39 +51,36 @@ beforeAll(async () => {
   writeFileSync(join(cwd, ".pi/skills/corral-worker/SKILL.md"), "---\nname: corral-worker\ndescription: worktree copy\n---\nLeak.\n");
   restrictEnvironment(process.env);
   const modules = await loadModules(assets.dir, "worker");
-  events = new EventLog(identity.generation);
-  const transport = modules.auth.transport?.(authContext());
-  if (!transport) throw new Error("the fixture auth module supplies a transport");
-  const network = guardedFetch(transport);
+  events = new EventLog();
+  const network = guardedFetch(provider.send);
   globalThis.fetch = network.fetch as typeof globalThis.fetch;
   const sdk = await import("@earendil-works/pi-coding-agent");
-  corral = writeFakeCorral(work);
-  const client = new CorralClient({ corral: corral.path, root: work, identity, hostCap: "h".repeat(64), sessionId: () => host.sessionId() });
+  corral = writeFakeEngine(work);
+  const client = new CorralClient({ corral: corral.path, root: work, cwd, identity });
   host = await HostSession.create({
     sdk, identity, cwd, agentDir: join(work, "pi-agent"), model: "gpt-6.1-sol", modules, client, events, network,
     sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
+    capabilities: { catalog: 5, enabled: ["ask_user", "todo", "lsp"] },
   });
   // InteractiveMode binds extensions before its first frame; that is when resources_discover runs.
   await host.session.bindExtensions({});
-  await host.hello("n".repeat(64), "pane-1", sha256Hex("c".repeat(64)));
+  await host.startLocal();
 }, 60_000);
 
-afterAll(() => {
+afterAll(async () => {
+  await host?.close();
   globalThis.fetch = originalFetch;
   assets.cleanup();
   rmSync(work, { recursive: true, force: true });
 });
 
-test("the package's worker role is the OD3 loadout and allows only the worker's corral ops", () => {
+test("the worker loadout exposes only its task and local tools", () => {
   expect([...worker.upstreamTools]).toEqual(UPSTREAM);
   const context = { identity, cwd: "/tmp", model: "m" };
   const tools = worker.tools(context);
   expect(tools.map((tool) => tool.name)).toEqual(CORRAL_TOOLS);
-  expect([...worker.corralOps].sort()).toEqual(
-    ["hello", "event", "receipt_lookup", "read_content", "ask", "withdraw", "wait", "progress", "checkpoint", "evidence", "artifact",
-      "gate", "done", "todo", "job", "job_monitor", "memory_list", "memory_read", "memory_put", "memory_remove"].sort(),
-  );
-  expect(tools.every((tool) => worker.corralOps.includes(tool.op))).toBeTrue();
+  expect(tools.map((tool) => tool.op)).toEqual(["checkpoint", "artifact", "done"]);
+  expect(worker.tools({ ...context, todo: true }).map((tool) => tool.name)).toEqual([...CORRAL_TOOLS, "corral_todo"]);
 });
 
 test("the contract is the installed worker-contract.md with the bound identity filled in", () => {
@@ -109,58 +97,81 @@ test("the contract is the installed worker-contract.md with the bound identity f
   }
 });
 
-test("a host session activates exactly the loadout and loads only the installed corral-worker skill", () => {
+test("a host session activates exactly the loadout and loads the installed worker and plan skills", () => {
   const state = host.state();
-  expect([...host.loadout]).toEqual([...UPSTREAM, ...CORRAL_TOOLS, ...LSP_TOOLS, "agent_message", "agent_roster"]);
-  expect([...(state.active_tools as string[])].sort()).toEqual([...UPSTREAM, ...CORRAL_TOOLS, ...LSP_TOOLS, "agent_message", "agent_roster"].sort());
+  const expected = [...UPSTREAM, ...CORRAL_TOOLS, "corral_todo", ...LSP_TOOLS, "ask_user", "agent_message", "agent_roster"];
+  expect([...host.loadout]).toEqual(expected);
+  expect([...(state.active_tools as string[])].sort()).toEqual(expected.sort());
   const skills = host.runtime.services.resourceLoader.getSkills().skills;
-  expect(skills.map((skill) => [skill.name, skill.filePath])).toEqual([["corral-worker", join(assets.dir, SKILL_ASSET)]]);
+  expect(skills.map((skill) => [skill.name, skill.filePath])).toEqual([
+    ["corral-worker", join(assets.dir, SKILL_ASSET)],
+    ["corral-plan", join(assets.dir, "assets/skills/corral-plan/SKILL.md")],
+  ]);
   expect(readFileSync(skills[0]?.filePath ?? "", "utf8")).toBe(readFileSync(join(PACKAGE_ROOT, SKILL_ASSET), "utf8"));
   expect(host.session.systemPrompt).toContain("# corral worker contract (corral-pi)");
 });
 
-test("each corral tool call is one envelope whose request ID derives from the session and tool call", async () => {
-  const transport = fixtureTransport();
-  transport.script([
-    { toolCalls: [{ callId: "call-gate", name: "corral_gate", arguments: {} }] },
-    { toolCalls: [{ callId: "call-done", name: "corral_done", arguments: {
-      summary: "Did it.\nVerified: x\nNot verified: none", contract_sha256: "ab".repeat(32),
-      gate_ref: { attempt: "ag-0123456789abcdef", tier: "quick", receipt_sha256: "cd".repeat(32) },
-    } }] },
+test("worker todo and resume notes stay local; artifact and completion use bound engine argv", async () => {
+  const summary = "Fixed the parser.\nVerified: focused tests\nNot verified: full suite";
+  const note = "Parser fixed; re-run the frontend check if the input grammar changes.";
+  const call = (name: string, arguments_: Record<string, unknown>, id = name) =>
+    ({ toolCalls: [{ callId: id, name, arguments: arguments_ }] });
+  provider.script([
+    call("corral_todo", { op: "init", phases: [{ id: "build", label: "Build", steps: [
+      { id: "fix", label: "Fix parser", criteria: ["C1"] }, { id: "extra", label: "Optional check" },
+    ] }] }, "todo-init"),
+    call("corral_todo", { op: "start", step: "fix" }, "todo-start"),
+    call("corral_todo", { op: "done", step: "fix" }, "todo-done"),
+    call("corral_todo", { op: "drop", step: "extra", reason: "Covered by the focused test" }, "todo-drop"),
+    call("corral_checkpoint", { note }),
+    call("corral_artifact", { path: ".evidence/test output.log" }),
+    call("corral_done", { summary }),
   ]);
   const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 1);
-  expect(await host.submit(input("Start the gate, then finish.", "k-tools"), "rq-tools")).toEqual({ disposition: "started", turn: 1 });
+  expect(await host.submitLocal({ text: "Record your work, attach the output, then finish.", busyPolicy: "prompt", origin: "owner" }))
+    .toEqual({ disposition: "started", turn: 1 });
   await ended;
   await host.drained();
-  const callIds = host.session.messages.flatMap((message) =>
-    message.role === "assistant" ? message.content.filter((part) => part.type === "toolCall") : [])
-    .map((part) => [part.name, part.id]);
-  expect(callIds.map(([name]) => name)).toEqual(["corral_gate", "corral_done"]);
-  const tools = corral.calls().map((call) => call.envelope).filter((envelope) => ["artifact", "gate", "done"].includes(envelope.op));
-  expect(tools.map((envelope) => [envelope.op, envelope.request_id, envelope.identity.turn, envelope.identity.run])).toEqual([
-    ["gate", toolRequestId(host.sessionId(), callIds[0]?.[1] ?? ""), 1, "R2"],
-    ["done", toolRequestId(host.sessionId(), callIds[1]?.[1] ?? ""), 1, "R2"],
+  expect(host.state().last_error).toBeNull();
+  const calls = corral.calls().filter((argv) => ["artifact", "done"].includes(argv[3] ?? ""));
+  expect(calls).toEqual([
+    ["--root", work, "--json", "artifact", "add", identity.task, ".evidence/test output.log"],
+    ["--root", work, "--json", "done", identity.task, "--summary", summary],
   ]);
-  expect(tools[0]?.payload).toEqual({});
-  expect(tools[1]?.payload).toEqual({
-    summary: "Did it.\nVerified: x\nNot verified: none", contract_sha256: "ab".repeat(32),
-    gate_ref: { attempt: "ag-0123456789abcdef", tier: "quick", receipt_sha256: "cd".repeat(32) },
-  });
+  const todo = host.session.messages.findLast((message) => message.role === "toolResult" && message.toolName === "corral_todo");
+  expect(todo).toMatchObject({ isError: false, details: { progress: { revision: 4, phases: [{ steps: [
+    { criteria: ["C1"], status: { state: "done" } },
+    { status: { state: "dropped", reason: "Covered by the focused test" } },
+  ] }] } } });
+  const checkpoint = host.session.sessionManager.getEntries().find((entry) =>
+    entry.type === "custom" && entry.customType === "corral_checkpoint_note");
+  expect(checkpoint).toMatchObject({ data: { turn: 1, note } });
+  expect(corral.calls().some((argv) => argv.includes("todo") || argv.includes("checkpoint"))).toBeFalse();
 });
 
-test("bridge input and owner terminal input are attributed per turn ID", async () => {
+test("an owner steer joins the existing bridge turn and the next pane input gets its own turn", async () => {
+  const transport = provider;
+  transport.holdNext();
+  const held = transport.whenHeld();
   const bridgeEnded = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 2);
-  expect(await host.submit(input("Reply only BRIDGE.", "k-bridge"), "rq-bridge")).toEqual({ disposition: "started", turn: 2 });
-  await bridgeEnded;
+  try {
+    expect(await host.submitLocal({ text: "Reply only BRIDGE.", busyPolicy: "prompt", origin: "owner" }))
+      .toEqual({ disposition: "started", turn: 2 });
+    await within(held, 30_000, "the held bridge turn");
+    await host.session.prompt("Reply only STEERED.", { source: "interactive", streamingBehavior: "steer" });
+  } finally {
+    transport.release();
+  }
+  expect(await bridgeEnded).toMatchObject({ turn: 2, owner_input: true });
+  await host.drained();
   const ownerEnded = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 3);
   await host.session.prompt("Reply only OWNER.", { source: "interactive" });
   await ownerEnded;
   await host.drained();
-  const started = corral.calls().map((call) => call.envelope.payload)
-    .filter((payload) => payload.kind === "turn_started" && [2, 3].includes(payload.turn as number));
-  expect(started).toEqual([
-    { kind: "turn_started", turn: 2, origin: { kind: "bridge", idempotency_key: "k-bridge" }, provider: "openai-codex", model: "gpt-6.1-sol" },
-    { kind: "turn_started", turn: 3, origin: { kind: "owner_terminal" }, provider: "openai-codex", model: "gpt-6.1-sol" },
+  const started = events.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
+    .filter((event) => event.kind === "turn_started" && [2, 3].includes(event.turn as number));
+  expect(started.map((event) => [event.turn, event.origin])).toEqual([
+    [2, { kind: "bridge" }], [3, { kind: "owner_terminal" }],
   ]);
 });
 
@@ -168,57 +179,78 @@ test("while bound, the worker refuses /new, /resume, /fork and import before the
   await expectReplacementsRefused(host, events);
 });
 
-test("a fresh session starts one first turn with the run prompt; a reload or a session with messages does not", () => {
-  const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
+test("a worker kickoff is sent once per run prompt, including on a retained transcript", () => {
+  type Handler = (event: unknown, ctx: unknown) => unknown;
+  const handlers: Handler[] = [];
   const sent: string[] = [];
   const pi = {
-    on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, handler),
+    on: (name: string, handler: Handler) => { if (name === "session_start") handlers.push(handler); },
     sendUserMessage: (text: string) => sent.push(text),
   } as unknown as ExtensionAPI;
-  const context = { identity, cwd: "/tmp", model: "m", promptFile: "/store/prompts/T-007-R2.md" };
-  worker.extend?.(pi, context);
-  const start = handlers.get("session_start");
-  if (!start) throw new Error("the worker role handles session_start");
-  const session = (entries: { type: string }[]) => ({ sessionManager: { getEntries: () => entries } });
-  start({ type: "session_start", reason: "reload" }, session([]));
-  start({ type: "session_start", reason: "startup" }, session([{ type: "message" }]));
+  const context = { identity, cwd: "/tmp", model: "m", promptFile: "/store/prompts/T-007-R2.md",
+    capabilities: { catalog: 5, enabled: [] } };
+  const install = (bound: typeof context) => {
+    handlers.length = 0;
+    worker.extend?.(pi, bound);
+  };
+  const start = (reason: "startup" | "reload", texts: string[]) => {
+    const ctx = { sessionManager: { getEntries: () => texts.map((text) => ({
+      type: "message", message: { role: "user", content: [{ type: "text", text }] },
+    })) } };
+    for (const handler of handlers) handler({ type: "session_start", reason }, ctx);
+  };
+  install(context);
+  start("reload", []);
   expect(sent).toEqual([]);
-  start({ type: "session_start", reason: "startup" }, session([{ type: "model_change" }]));
+  start("startup", []);
+  start("startup", []);
   expect(sent).toEqual([kickoff(context) ?? ""]);
-  expect(sent[0]?.startsWith("Read /store/prompts/T-007-R2.md in full and follow it")).toBeTrue();
-  expect(sent[0]).toContain("call corral_gate");
+  expect(sent[0]).toContain('`"$CORRAL" gate T-007` in bash');
+  const prior = [...sent];
+  sent.length = 0;
+  install(context);
+  start("startup", prior);
+  expect(sent).toEqual([]);
+
+  const next = { ...context, identity: { ...identity, run: "R3" }, promptFile: "/store/prompts/T-007-R3.md" };
+  install(next);
+  start("startup", prior);
+  expect(sent).toEqual([kickoff(next) ?? ""]);
+  prior.push(...sent);
+  sent.length = 0;
+  install(next);
+  start("startup", prior);
+  expect(sent).toEqual([]);
   expect(kickoff({ identity, cwd: "/tmp", model: "m" })).toBeUndefined();
 });
 
-test("in a real host the kickoff turn starts after hello, when extensions bind, and reaches corral", async () => {
+test("the kickoff starts the first local turn when Pi binds extensions", async () => {
   const modules = await loadModules(assets.dir, "worker");
-  const log = new EventLog(identity.generation);
-  const network = guardedFetch(modules.auth.transport?.(authContext()) ?? globalThis.fetch);
+  const log = new EventLog();
+  const network = guardedFetch(fakeCodexTransport().send);
   const sdk = await import("@earendil-works/pi-coding-agent");
   const dir = mkdtempSync(join(work, "kickoff-"));
-  const fake = writeFakeCorral(dir);
   const promptFile = join(dir, "T-007-R2.md");
   writeFileSync(promptFile, "# Task\n\nReply only KICKED.\n");
-  let started: HostSession | undefined;
-  const client = new CorralClient({ corral: fake.path, root: dir, identity, hostCap: "h".repeat(64), sessionId: () => started?.sessionId() ?? "" });
-  started = await HostSession.create({
-    sdk, identity, cwd: join(work, "worktree"), agentDir: join(dir, "pi-agent"), model: "gpt-6.1-sol", modules, client,
-    events: log, network, promptFile, sessionManager: sdk.SessionManager.create(join(work, "worktree"), join(dir, "sessions")),
+  const cwd = join(work, "worktree");
+  const client = new CorralClient({ corral: "", root: dir, cwd, identity });
+  const started = await HostSession.create({
+    sdk, identity, cwd, agentDir: join(dir, "pi-agent"), model: "gpt-6.1-sol", modules, client,
+    events: log, network, promptFile, sessionManager: sdk.SessionManager.create(cwd, join(dir, "sessions")),
   });
-  await started.hello("n".repeat(64), "pane-2", sha256Hex("c".repeat(64)));
   expect(log.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events.some((e) => e.kind === "turn_started")).toBeFalse();
   const ended = nextEvent(log, (event) => event.kind === "turn_ended" && event.turn === 1);
+  await started.startLocal();
   await started.session.bindExtensions({});
   await ended;
   await started.drained();
   const first = started.session.messages.find((message) => message.role === "user");
   const text = first && typeof first.content !== "string" ? first.content.map((part) => part.type === "text" ? part.text : "").join("") : first?.content;
   expect(text).toBe(kickoff({ identity, cwd: "/tmp", model: "m", promptFile }));
-  const lifecycle = fake.calls().map((call) => call.envelope).filter((envelope) => envelope.op === "event").map((envelope) => envelope.payload);
-  expect(lifecycle).toEqual([
-    { kind: "turn_started", turn: 1, origin: { kind: "unknown" }, provider: "openai-codex", model: "gpt-6.1-sol" },
-    { kind: "turn_ended", turn: 1 },
-  ]);
+  const lifecycle = log.since(0, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER).events
+    .filter((event) => event.kind === "turn_started" || event.kind === "turn_ended");
+  expect(lifecycle.map((event) => [event.kind, event.turn])).toEqual([["turn_started", 1], ["turn_ended", 1]]);
+  await started.close();
 });
 
 const completedChild: ChildSnapshot = {
@@ -228,34 +260,36 @@ const completedChild: ChildSnapshot = {
 };
 
 function completionHarness(fleet: FleetSnapshot, recordDir: string, artifact: "committed" | "rejected" | "throw") {
-  const calls: { op: string; call: CorralCall }[] = [];
-  const client = { async call(op: string, call: CorralCall) {
-    calls.push({ op, call });
-    if (op === "artifact" && artifact === "throw") throw new Error("artifact transport unavailable");
-    return { version: 1, request_id: call.requestId, op, state: op === "artifact" ? artifact : "committed",
-      result: op === "artifact" && artifact === "rejected" ? { code: "artifact_refused" } : {} };
-  } } as unknown as CorralClient;
-  const context = { client, sessionId: () => "worker-session", currentTurn: () => 4, task: "T-007", run: "R2", recordDir, fleet: () => fleet };
-  return { calls, tool: workerDoneTool(defineCorralTool(doneTool, { ...context, allowedOps: ["done", "artifact"] }), context) };
+  const calls: { op: string; payload: Record<string, unknown> }[] = [];
+  const tool = workerDoneTool({ ...doneTool, async execute(_id, params) {
+    calls.push({ op: "done", payload: params as Record<string, unknown> });
+    return { content: [{ type: "text", text: "Done" }], details: {}, isError: false, terminate: true };
+  } }, {
+    recordDir, task: identity.task, run: identity.run, fleet: () => fleet,
+    async attachArtifact(payload) {
+      calls.push({ op: "artifact", payload });
+      if (artifact === "rejected") throw new Error("artifact_refused");
+      if (artifact === "throw") throw new Error("artifact transport unavailable");
+    },
+  });
+  return { calls, tool };
 }
 
 test("worker done attaches fleet evidence before completing and attachment refusals or errors never fail done", async () => {
   const directory = mkdtempSync(join(tmpdir(), "corral-worker-record-"));
-  const mail = [{ seq: 1, at: 0, from: "pm", to: "parent", text: "Information", delivery: "delivered" as const }];
+  const mail = [{ seq: 1, at: 0, from: "child", to: "parent", text: "Information", delivery: "delivered" as const }];
   try {
     for (const artifact of ["committed", "rejected", "throw"] as const) {
       const { calls, tool } = completionHarness({ children: artifact === "throw" ? [] : [completedChild], mail, maxParallel: 1 },
         join(directory, artifact), artifact);
       const result = await tool.execute("done-call", { summary: "Done.\nVerified: none\nNot verified: gate" }, undefined, undefined, {} as never);
       expect(calls.map(call => call.op)).toEqual(["artifact", "done"]);
-      expect(calls[0]?.call.payload.title).toBe("Session record");
-      expect(calls[0]?.call.payload.kind).toBe("report");
-      expect(calls[0]?.call.turn).toBe(4);
-      expect(calls[0]?.call.requestId).not.toBe(calls[1]?.call.requestId);
-      const record = JSON.parse(readFileSync(String(calls[0]?.call.payload.path), "utf8"));
+      expect(calls[0]?.payload.title).toBe("Session record");
+      expect(calls[0]?.payload.kind).toBe("report");
+      const record = JSON.parse(readFileSync(String(calls[0]?.payload.path), "utf8"));
       expect(record.version).toBe(1);
       expect(record.slices.map((slice: { id: string }) => slice.id)).toEqual(artifact === "throw" ? [] : ["slice"]);
-      expect(record.messages[0].from).toBe("pm");
+      expect(record.messages[0].from).toBe("child");
       expect(result.isError).toBeFalse();
       expect(result.terminate).toBeTrue();
       const text = result.content.filter(part => part.type === "text").map(part => part.text).join("\n");

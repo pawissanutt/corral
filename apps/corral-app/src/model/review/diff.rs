@@ -1,4 +1,4 @@
-//! Diff numbering, side-by-side pairing, discussion placement and served-patch parsing.
+//! Diff numbering, side-by-side pairing and served-patch parsing.
 
 use crate::model::board::LineKind;
 
@@ -28,24 +28,11 @@ pub struct NumberedLine {
     pub highlight: Option<Highlight>,
 }
 
-/// A discussion placed directly after the row holding the zero-based source line `after`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Anchor {
-    /// Source line index within the hunk.
-    pub after: usize,
-    /// Index into the file's discussions.
-    pub discussion: usize,
-}
-
-/// One unified code row and the discussions placed directly after it.
+/// One unified code row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnifiedRow {
     /// Numbered code line.
     pub line: NumberedLine,
-    /// Original zero-based hunk line index.
-    pub source_index: usize,
-    /// Indexes of the file's discussions inserted after this row.
-    pub discussions: Vec<usize>,
 }
 
 /// One side-by-side row. A missing side is an empty cell, not a context line.
@@ -55,10 +42,6 @@ pub struct SplitRow {
     pub left: Option<NumberedLine>,
     /// New side: use its new gutter number.
     pub right: Option<NumberedLine>,
-    /// Context index or the final source index of the entire deletion/addition run.
-    pub source_index: usize,
-    /// Indexes of the file's discussions inserted after this row.
-    pub discussions: Vec<usize>,
 }
 
 /// Finds only the first highlighted word, matching `wordMark` before HTML rendering.
@@ -105,32 +88,14 @@ fn numbered(
     }
 }
 
-fn placed(anchors: &[Anchor], index: usize) -> Vec<usize> {
-    anchors
-        .iter()
-        .filter(|anchor| anchor.after == index)
-        .map(|anchor| anchor.discussion)
-        .collect()
-}
-
-/// Unified rows in source order; discussions immediately follow their exact source line.
-pub fn unified_rows(lines: Vec<NumberedLine>, anchors: &[Anchor]) -> Vec<UnifiedRow> {
-    lines
-        .into_iter()
-        .enumerate()
-        .map(|(source_index, line)| UnifiedRow {
-            line,
-            source_index,
-            discussions: placed(anchors, source_index),
-        })
-        .collect()
+/// Unified rows in source order.
+pub fn unified_rows(lines: Vec<NumberedLine>) -> Vec<UnifiedRow> {
+    lines.into_iter().map(|line| UnifiedRow { line }).collect()
 }
 
 /// Pairs each deletion run with the additions immediately following it, row by row.
 /// Context occupies both sides; unmatched deletions/additions leave the other side empty.
-/// All rows of a change run share its final source index. A discussion follows the row that
-/// shows its anchored line, on whichever side that line sits.
-pub fn split_rows(lines: &[NumberedLine], anchors: &[Anchor]) -> Vec<SplitRow> {
+pub fn split_rows(lines: &[NumberedLine]) -> Vec<SplitRow> {
     let mut rows = Vec::with_capacity(lines.len());
     let mut i = 0;
     while i < lines.len() {
@@ -138,8 +103,6 @@ pub fn split_rows(lines: &[NumberedLine], anchors: &[Anchor]) -> Vec<SplitRow> {
             rows.push(SplitRow {
                 left: Some(lines[i].clone()),
                 right: Some(lines[i].clone()),
-                source_index: i,
-                discussions: placed(anchors, i),
             });
             i += 1;
             continue;
@@ -154,20 +117,10 @@ pub fn split_rows(lines: &[NumberedLine], anchors: &[Anchor]) -> Vec<SplitRow> {
         }
         let deleted = add_start - del_start;
         let added = i - add_start;
-        let source_index = i - 1;
         for j in 0..deleted.max(added) {
-            let mut discussions = Vec::new();
-            if j < deleted {
-                discussions.extend(placed(anchors, del_start + j));
-            }
-            if j < added {
-                discussions.extend(placed(anchors, add_start + j));
-            }
             rows.push(SplitRow {
                 left: (j < deleted).then(|| lines[del_start + j].clone()),
                 right: (j < added).then(|| lines[add_start + j].clone()),
-                source_index,
-                discussions,
             });
         }
     }
@@ -256,17 +209,6 @@ pub fn parse_patch(text: &str, complete: bool) -> ParsedPatch {
     patch
 }
 
-/// The zero-based index of the line showing `number` on the requested side.
-pub fn line_index(lines: &[NumberedLine], number: u32, old_side: bool) -> Option<usize> {
-    lines.iter().position(|line| {
-        if old_side {
-            line.old == Some(number) && line.kind != LineKind::Add
-        } else {
-            line.new == Some(number) && line.kind != LineKind::Del
-        }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,7 +229,7 @@ mod tests {
             source_lines.extend((0..added).map(|_| LineKind::Add));
             source_lines.push(LineKind::Context);
             let lines = number_lines(&source_lines, (10, 20));
-            let rows = split_rows(&lines, &[]);
+            let rows = split_rows(&lines);
             assert_eq!(rows.len(), deleted.max(added) + 2);
             assert_eq!(rows[0].left, rows[0].right);
             for j in 0..deleted.max(added) {
@@ -331,34 +273,6 @@ mod tests {
     }
 
     #[test]
-    fn split_discussion_follows_the_row_of_its_anchored_line_once() {
-        let lines = number_lines(
-            &[
-                LineKind::Del,
-                LineKind::Del,
-                LineKind::Del,
-                LineKind::Add,
-                LineKind::Add,
-            ],
-            (1, 1),
-        );
-        let placed = |after| {
-            split_rows(
-                &lines,
-                &[Anchor {
-                    after,
-                    discussion: 0,
-                }],
-            )
-            .iter()
-            .map(|row| !row.discussions.is_empty())
-            .collect::<Vec<_>>()
-        };
-        assert_eq!(placed(4), vec![false, true, false]);
-        assert_eq!(placed(2), vec![false, false, true]);
-    }
-
-    #[test]
     fn served_patch_numbers_each_hunk_and_holds_back_a_cut_final_line() {
         let text = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -3,2 +3,2 @@ fn x\n a\n-b\n+c\n\\ No newline at end of file\n@@ -40 +40,2 @@\n z\n+partial";
         let patch = parse_patch(text, false);
@@ -378,8 +292,6 @@ mod tests {
         );
         assert_eq!(patch.hunks[1].lines.len(), 1);
         assert_eq!(parse_patch(text, true).hunks[1].lines.len(), 2);
-        assert_eq!(line_index(&patch.hunks[0].lines, 4, true), Some(1));
-        assert_eq!(line_index(&patch.hunks[0].lines, 4, false), Some(2));
     }
 
     #[test]
