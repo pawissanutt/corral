@@ -129,7 +129,7 @@ export class RemoteBuild {
       }
       let posted = false;
       const post = (state: ExitState) => {
-        if (posted || !this.host.headless()) return;
+        if (posted) return;
         posted = true;
         void this.host.post(exitEntry(option, state)).catch(error => this.host.error(errorMessage(error)));
       };
@@ -190,9 +190,7 @@ export class RemoteBuild {
       const start = choice === "file_start", before = new Set(board.tasks().map(task => task.id));
       this.filing = true;
       this.host.changed();
-      void board.file(plan, start).then(async tasks => {
-        if (this.host.headless()) await this.host.post(boardEntry(tasks.filter(task => !before.has(task.id)), start));
-      }).catch(error => {
+      void board.file(plan, start).then(tasks => this.host.post(boardEntry(tasks.filter(task => !before.has(task.id)), start))).catch(error => {
         pending.error = errorMessage(error);
         this.host.error(pending.error);
       }).finally(() => { this.filing = false; this.host.changed(); });

@@ -9,7 +9,7 @@ import type { ChildHooks } from "../src/extensions/fleet/child.ts";
 import { attachHeadless } from "../src/host/headless.ts";
 import { PendingQuestions } from "../src/host/pending-questions.ts";
 import { RemoteBuild } from "../src/host/remote/build.ts";
-import { questionEntries, questionStatus, registerCards, type AnswerStatus, type CardAnswer, type CardEntry, type SessionCard } from "../src/host/remote/cards.ts";
+import { questionEntries, questionStatus, registerCards, type CardAnswer, type SessionCard } from "../src/host/remote/cards.ts";
 import { RemoteDialogs } from "../src/host/remote/dialogs.ts";
 import { installRemote } from "../src/host/remote/index.ts";
 import { RemoteRegistry } from "../src/host/remote/registry.ts";
@@ -20,9 +20,9 @@ import { connect, testHandlers } from "./support/bridge-client.ts";
 import { codeHost } from "./support/code-host.ts";
 import { within } from "./support/wait.ts";
 
-function cards(entries: () => CardEntry[], absent: (id: string) => AnswerStatus) {
+function cards(dialogs: RemoteDialogs) {
   const registry = new RemoteRegistry();
-  registerCards(registry, { entries, absent, ready: () => true, beforeQuestion: async () => {} });
+  registerCards(registry, { dialogs, ready: () => true, beforeQuestion: async () => {} });
   return {
     list: async (after?: string) => await registry.get("cards")!({ after }) as { cards: SessionCard[]; next?: string },
     answer: async (card: string, answers: CardAnswer[] = [], dismiss = false) =>
@@ -32,7 +32,6 @@ function cards(entries: () => CardEntry[], absent: (id: string) => AnswerStatus)
 
 test("a deferred question, a select and a child question are each a card and each is answered once", async () => {
   const fx = await codeHost("assistant", { enabled: [] });
-  const dialogs = new RemoteDialogs(() => {}), selected = dialogs.context(fx.host.session.extensionRunner.getUIContext(), () => {});
   const deliveries: string[] = [], marks: ChildMark[] = [];
   const pending = new PendingQuestions({ session: () => "parent", append() {}, entries: () => [], changed() {},
     async deliver(text) { deliveries.push(text); return true; } });
@@ -52,6 +51,11 @@ test("a deferred question, a select and a child question are each a card and eac
     ready: () => true, headless: () => true, working: () => false, changed() {}, post: async () => {}, error() {},
     mark(mark) { marks.push(mark); },
   });
+  const dialogs = new RemoteDialogs(() => {}, {
+    entries: () => [...questionEntries(pending), ...build.entries()],
+    absent: id => questionStatus(pending.status(id)), shared: () => false,
+  });
+  const selected = dialogs.context(fx.host.session.extensionRunner.getUIContext(), () => {});
   void fleet.start("test", [{ id: "slice", title: "Test slice", brief: "Ask the owner", owns: [] }]);
   try {
     const id = pending.ask("ask", [{ question: "First?", options: ["one", "two"] }, { question: "Second?", options: ["three", "four"] }]).id;
@@ -60,7 +64,7 @@ test("a deferred question, a select and a child question are each a card and eac
     const childQuestion = { question: "Which path?", options: [{ label: "short" }, { label: "long" }], askedAt: Date.now() };
     const answer = hooks.ask(childQuestion);
     void answer.catch(() => {});
-    const socket = cards(() => [...questionEntries(pending), ...dialogs.entries(), ...build.entries()], key => questionStatus(pending.status(key)));
+    const socket = cards(dialogs);
     const { cards: shown } = await socket.list();
     expect(shown.map(card => card.kind).sort()).toEqual(["child_question", "question", "select"]);
     const deferred = shown.find(card => card.id === id)!;
@@ -94,7 +98,7 @@ test("a dismissed confirm answers no", async () => {
   const dialogs = new RemoteDialogs(() => {});
   try {
     const ui = dialogs.context(fx.host.session.extensionRunner.getUIContext(), () => {});
-    const socket = cards(() => dialogs.entries(), id => dialogs.isExpired(id) ? "expired" : "missing");
+    const socket = cards(dialogs);
     const confirmed = ui.confirm("Continue?", "Choose whether to continue.");
     const card = (await socket.list()).cards[0]!;
     expect(card.kind).toBe("confirm");
@@ -117,7 +121,7 @@ test("large Unicode dialog cards page without losing answers or exceeding either
   const dialogs = new RemoteDialogs(() => {});
   try {
     const ui = dialogs.context(fx.host.session.extensionRunner.getUIContext(), () => {});
-    const socket = cards(() => dialogs.entries(), () => "missing");
+    const socket = cards(dialogs);
     const body = "\u0000界🪶\n".repeat(2000);
     const pending = Array.from({ length: 7 }, (_, i) => ui.confirm(`Confirm ${i}`, body));
     const ids = new Set<string>();
@@ -149,7 +153,7 @@ test("ask_user stays deferred in a headless session that has a remote dialog con
     await within(fx.turn([{ toolCalls: [{ callId: "owner", name: "ask_user", arguments: { questions: [
       { question: "Decision 1?", options: ["a", "b"] }, { question: "Decision 2?", options: ["c", "d"] },
     ] } }] }, { text: "Waiting for the owner." }]), 3000, "the deferred turn settles");
-    const cards = fx.host.remoteCardEntries().map(entry => entry.card);
+    const cards = fx.host.dialogs.entries().map(entry => entry.card);
     expect(cards.map(card => card.kind)).toEqual(["question"]);
     expect(cards[0]?.questions).toHaveLength(2);
     expect(fx.result("owner").details).toMatchObject({ status: "pending", id: cards[0]?.id });

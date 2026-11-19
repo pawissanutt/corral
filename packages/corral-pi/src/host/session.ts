@@ -36,7 +36,7 @@ import { ModelCatalogStatus, modelsPart, registerModels } from "./remote/models.
 import { usagePart, usageTotal, type ParentUsage } from "./remote/usage.ts";
 import { contextPart, planHistory, registerWorkspace, WorkspaceGit, type WorkspaceInputs } from "./remote/workspace.ts";
 import { RemoteBuild } from "./remote/build.ts";
-import { cardBrief, cardDetail, questionEntries, questionStatus, sortedCards, type AnswerStatus, type CardEntry } from "./remote/cards.ts";
+import { cardBrief, cardDetail, questionEntries, questionStatus, sortedCards } from "./remote/cards.ts";
 import { RemoteDialogs } from "./remote/dialogs.ts";
 import { RemoteRegistry } from "./remote/registry.ts";
 import type { TranscriptInput } from "./remote/input.ts";
@@ -329,7 +329,7 @@ export class HostSession {
   private readonly remoteDefaultModel: string;
   private readonly remoteCatalog = new ModelCatalogStatus();
   private remoteJobSample: ReturnType<typeof setTimeout> | undefined;
-  private readonly remoteDialogs: RemoteDialogs;
+  readonly dialogs: RemoteDialogs;
   readonly panels: NativePanels | undefined;
   private readonly unsubscribePanels: (() => void) | undefined;
   private terminalInput: InputObservation | undefined;
@@ -408,7 +408,11 @@ export class HostSession {
   private constructor(private readonly options: HostSessionOptions) {
     const host = this;
     this.liveEvents = new LiveEvents();
-    this.remoteDialogs = new RemoteDialogs(() => this.liveEvents.stateChanged());
+    this.dialogs = new RemoteDialogs(() => this.liveEvents.stateChanged(), {
+      entries: () => [...questionEntries(this.ownerQuestions), ...this.remoteBuild.entries()],
+      absent: id => questionStatus(this.ownerQuestions?.status(id) ?? "missing"),
+      shared: () => this.attached === "interactive",
+    });
     this.provider = options.provider ?? "openai-codex";
     this.local = new LocalControlPlane(options.build?.dir ?? options.runtimeDir ?? options.agentDir, options.identity);
     this.remoteDefaultModel = options.model.startsWith(`${this.provider}/`) ? options.model : `${this.provider}/${options.model}`;
@@ -464,7 +468,20 @@ export class HostSession {
       },
       shellRefusal: options.modules.role.shellRefusal, changed: () => this.fleetChanged(),
     }) : undefined;
+    this.remoteBuild = new RemoteBuild(this.buildControls, {
+      fleet: () => this.buildControls?.ui.fleet ?? this.fleet,
+      children: () => this.readRemoteFleet()?.children ?? [],
+      ready: () => this.remoteActionsReady,
+      headless: () => this.attached === "headless",
+      working: () => this.open || this.session.isStreaming,
+      changed: () => this.liveEvents.stateChanged(),
+      mark: mark => this.addMark(mark),
+      post: entry => this.session.sendCustomMessage(entry, { triggerTurn: false }),
+      error: text => this.addMark({ kind: "note", tone: "error", at: Date.now(), text }),
+    });
+    const ownerDialogs = { dialogs: this.dialogs };
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
+      ...ownerDialogs,
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
       sidebarKey: sidebarToggleKey(process.env),
       marks: this.marks,
@@ -617,17 +634,6 @@ export class HostSession {
         },
       });
     }
-    this.remoteBuild = new RemoteBuild(this.buildControls, {
-      fleet: () => this.buildControls?.ui.fleet ?? this.fleet,
-      children: () => this.readRemoteFleet()?.children ?? [],
-      ready: () => this.remoteActionsReady,
-      headless: () => this.attached === "headless",
-      working: () => this.open || this.session.isStreaming,
-      changed: () => this.liveEvents.stateChanged(),
-      mark: mark => this.addMark(mark),
-      post: entry => this.session.sendCustomMessage(entry, { triggerTurn: false }),
-      error: text => this.addMark({ kind: "note", tone: "error", at: Date.now(), text }),
-    });
     const dialogEnabled = options.capabilities?.enabled.includes("ask_user") === true;
     const questions = dialogEnabled || options.capabilities?.enabled.includes("bash_rules") ? new PendingQuestions({
       session: () => options.sessionManager.getSessionId(),
@@ -654,7 +660,7 @@ export class HostSession {
         this.dialogPi.sendUserMessage(answer, { deliverAs: "steer" });
         return answer;
       }, questions, () => this.questionUi?.busy === true, () => this.dialogPresentation(), localQuestionAsk(questions),
-      () => this.attached === "headless")] : []),
+      () => this.attached === "headless", () => this.attached === "interactive" ? this.dialogs : undefined)] : []),
       ...(this.additionalLsp?.tools ?? []).map(tool => ({ ...tool, execute: (...args: Parameters<ToolDefinition["execute"]>) => {
         const current = this.additionalLsp?.tools.find(candidate => candidate.name === tool.name);
         if (!current) throw new Error("LSP runtime unavailable; no effect started");
@@ -1464,18 +1470,9 @@ export class HostSession {
   }
 
   remoteUiContext() {
-    return this.remoteDialogs.context(this.session.extensionRunner.getUIContext(), (text, tone) => {
+    return this.dialogs.context(this.session.extensionRunner.getUIContext(), (text, tone) => {
       this.addMark({ kind: "note", at: Date.now(), text, tone: tone === undefined || tone === "info" ? "text" : tone });
     });
-  }
-
-  remoteCardEntries(): CardEntry[] {
-    return [...questionEntries(this.ownerQuestions), ...this.remoteDialogs.entries(), ...this.remoteBuild.entries()];
-  }
-
-  absentCard(id: string): AnswerStatus {
-    if (this.remoteDialogs.isExpired(id)) return "expired";
-    return questionStatus(this.ownerQuestions?.status(id) ?? "missing");
   }
 
   markAttached(mode: "interactive" | "headless"): void {
@@ -1520,7 +1517,7 @@ export class HostSession {
     closeResidentSession(this.sessionId());
     if (this.open) this.stopCause ??= "host";
     this.closing = true;
-    this.remoteDialogs.close();
+    this.dialogs.close();
     clearTimeout(this.remoteJobSample);
     this.remoteChanges.close();
     this.workspaceGit.close();
@@ -1788,7 +1785,7 @@ export class HostSession {
     const effort_levels = session.supportsThinking() ? session.getAvailableThinkingLevels() : [];
     const model = session.model ? utf8Prefix(`${session.model.provider}/${session.model.id}`, 512) : undefined;
     const { queue, queue_total } = owner.queueBrief();
-    const entries = sortedCards(this.remoteCardEntries());
+    const entries = sortedCards(this.dialogs.entries());
     const cards = entries.slice(0, 8).map(entry => cardBrief(entry.card));
     const exitState = this.remoteBuild.exitState();
     const exit = exitState ? exitBrief(exitState) : undefined;
