@@ -135,10 +135,19 @@ pub fn quick_title(feed: &Feed) -> String {
     }
 }
 
-/// Whether the app picks this thread's model: the quick thread and daemon-hosted sessions do;
-/// a Pi pane uses its own picker.
+/// Whether the app picks this thread's model: the quick thread, and a named session that is not
+/// ended and whose host runs in the daemon or does not run at all (the daemon keeps the pick and
+/// applies it when the host next starts). A Pi pane uses its own picker; an unknown location
+/// and an ended session take no pick.
 pub fn pickable(feed: &Feed, scope: &str) -> bool {
-    scope == QUICK || row(feed, scope).is_some_and(|row| row.live_in == AssistantLocation::Daemon)
+    scope == QUICK
+        || (!ended(feed, scope)
+            && row(feed, scope).is_some_and(|row| {
+                matches!(
+                    row.live_in,
+                    AssistantLocation::Daemon | AssistantLocation::None
+                )
+            }))
 }
 
 /// Where a requested profile change stands.
@@ -441,15 +450,15 @@ pub fn live_composer(state: &State, feed: &Feed, draft: Draft<'_>, env: Env) -> 
         menu_inline: pickable && env.form == Form::Phone,
         profile_note: if named {
             match row.map(|row| row.live_in) {
-                Some(AssistantLocation::Daemon) if pickable => {
+                Some(AssistantLocation::Daemon | AssistantLocation::None) if pickable => {
                     Some("model for this session".into())
                 }
                 // Only a host that really runs in a Pi pane picks its model there.
                 Some(AssistantLocation::Pane) => row
                     .and_then(|row| row.profile.clone())
                     .map(|profile| format!("{profile} · set in its pane")),
-                // A pane-less host, live without a picker, ended or not running: the profile its
-                // row reports, with nothing to change it from here; none when it reports none.
+                // A session with nothing to change it from here (ended, no models served, host
+                // location unknown): the profile its row reports; none when it reports none.
                 _ => row
                     .and_then(|row| row.profile.clone())
                     .map(|profile| format!("profile {profile}")),
