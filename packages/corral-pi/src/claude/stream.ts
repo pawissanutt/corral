@@ -287,7 +287,7 @@ export function streamClaudeSdk(
       }
     } catch (error) {
       output.stopReason = aborted || options?.signal?.aborted ? "aborted" : "error";
-      const failure = error instanceof NativeFailure ? error.failure : normalizeFailure("anthropic-subscription", {
+      const failure = error instanceof NativeFailure ? error.failure : normalizeFailure("anthropic", {
         message: error instanceof Error ? error.message : undefined,
       });
       (output as typeof output & { providerFailure: ProviderFailure }).providerFailure = failure;

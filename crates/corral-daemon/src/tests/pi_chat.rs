@@ -201,6 +201,17 @@ impl Runner for Placement {
         assert_eq!(args[1], "--dir");
         assert_eq!(Path::new(args[2]), dir);
         assert_eq!(args[3], "--socket");
+        let fallback = [
+            "--fallback",
+            "anthropic-api/claude-sonnet-4-6",
+            "--fallback",
+            "openai/gpt-5.4",
+        ];
+        assert!(args.ends_with(&fallback.map(std::ffi::OsStr::new)));
+        assert!(
+            args.windows(2)
+                .any(|args| args[0] == "--model" && args[1] == "anthropic-api/claude-opus-5-5")
+        );
         assert!(
             command.get_envs().any(|(key, value)| key == "CORRAL_ACTOR"
                 && value.is_some_and(|value| value == "assistant"))
@@ -344,7 +355,17 @@ fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
     let fixture = Fixture::with_runner(Arc::new(move || Box::new(runner.clone())));
     fs::write(
         fixture.root().join(crate::STATE_DIR).join("corral.toml"),
-        "[profiles.chat]\nharness = 'pi'\n[defaults]\nauto_dispatch = false\nauto_land = false\n",
+        r#"
+[profiles.pi]
+harness = "pi"
+model = "anthropic-api/claude-opus-5-5"
+fallback = ["anthropic-api/claude-sonnet-4-6", "openai/gpt-5.4"]
+[profiles.secondary]
+harness = "pi"
+[defaults]
+auto_dispatch = false
+auto_land = false
+"#,
     )
     .unwrap();
     crate::topics::start_session_live(fixture.shared()).unwrap();

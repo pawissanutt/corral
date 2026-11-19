@@ -1,37 +1,100 @@
-import type { AssistantMessageEvent, StreamFunction } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessageEvent, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
-import { type ApiConnectionId, type ConnectionId } from "../auth/connections.ts";
-import { type Spending } from "../capabilities/budget.ts";
+import { isProviderId, type ProviderId } from "../auth/providers.ts";
 import { messageFailure } from "./provider-failure.ts";
 
-export function paidRoute(value: string): { connection: ApiConnectionId; model: string } {
-  const match = /^(openai|anthropic)\/([^\s\0]+)$/.exec(value);
-  if (!match) throw new Error("--paid-route requires openai/<model> or anthropic/<model>");
-  return { connection: match[1] === "openai" ? "openai-api" : "anthropic-api", model: match[2]! };
+export interface FallbackSelector {
+  readonly provider: ProviderId;
+  readonly model: string;
 }
 
-/** Switch before emitting any output from a quota-refused request, keeping the same Pi turn. */
-export function withPaidContinuation(stream: StreamFn, connection: ConnectionId, spending: Spending,
-  route: string, paid: StreamFunction, notice: () => void): StreamFunction {
-  return (model, context, options) => lazyStream(model, async () => {
-    if (spending.activeRoute === route) return paid(model, context, options);
-    const source = await stream(model, context, options);
-    return (async function* () {
-      let start: AssistantMessageEvent | undefined;
-      let visible = false;
-      for await (const event of source) {
-        if (event.type === "start") { start = event; continue; }
-        if (!visible && event.type === "error" && event.reason === "error" && !options?.signal?.aborted
-            && messageFailure(event.error, connection).category === "subscription_quota") {
-          if (spending.continueOn(route)) notice();
-          yield* paid(model, context, options);
-          return;
-        }
-        if (start) { yield start; start = undefined; }
-        visible = true;
-        yield event;
-      }
-    })();
-  });
+interface FallbackSelection {
+  readonly model: Model<Api>;
+  readonly stream: StreamFn;
+  readonly reasoning?: SimpleStreamOptions["reasoning"];
+}
+
+type SelectFallback = (candidate: FallbackSelector, signal?: AbortSignal) =>
+  FallbackSelection | undefined | Promise<FallbackSelection | undefined>;
+
+type StartEvent = Extract<AssistantMessageEvent, { type: "start" }>;
+type ErrorEvent = Extract<AssistantMessageEvent, { type: "error" }>;
+
+/** Retry only an output-free subscription quota failure, inside the same Pi request.
+ * Select preflights a candidate, returning undefined if unavailable, and commits the
+ * model before returning a selection. The selected stream must resolve its own auth. */
+export function withSubscriptionFallback(stream: StreamFn, candidates: readonly FallbackSelector[],
+  select: SelectFallback, notice: (candidate: FallbackSelector, previous: Model<Api>) => void): StreamFn {
+  if (candidates.length === 0) return stream;
+  return (model, context, options) => {
+    const signal = options?.signal;
+    return lazyStream(model, async () => {
+      let source = await stream(model, context, options);
+      return {
+        result: () => source.result(),
+        async *[Symbol.asyncIterator]() {
+          let current = model;
+          let cursor = 0;
+          let seen: Set<string> | undefined;
+          for (;;) {
+            let start: StartEvent | undefined;
+            let quota: ErrorEvent | undefined;
+            let output = false;
+            for await (const event of source) {
+              if (event.type === "start" && !output) { start = event; continue; }
+              if (!output && event.type === "error" && event.reason === "error" && !signal?.aborted
+                  && !start?.partial.content.length && !event.error.content.length && isProviderId(current.provider)
+                  && messageFailure(event.error, current.provider).category === "subscription_quota") {
+                quota = event;
+                break;
+              }
+              if (start) { yield start; start = undefined; }
+              output = true;
+              yield event;
+            }
+            if (!quota) {
+              if (start) yield start;
+              return;
+            }
+
+            if (!seen) {
+              // A persisted fallback model resumes at its position, not the list head.
+              cursor = candidates.findIndex(candidate => candidate.provider === model.provider && candidate.model === model.id) + 1;
+              seen = new Set([`${model.provider}/${model.id}`]);
+              for (let i = 0; i < cursor; i++) {
+                const candidate = candidates[i]!;
+                seen.add(`${candidate.provider}/${candidate.model}`);
+              }
+            }
+            let next: FallbackSelection | undefined;
+            while (!signal?.aborted && cursor < candidates.length) {
+              const candidate = candidates[cursor++]!;
+              const key = `${candidate.provider}/${candidate.model}`;
+              if (seen.has(key)) continue;
+              seen.add(key);
+              try { next = await select(candidate, signal); }
+              catch (error) { if (!signal?.aborted) throw error; }
+              if (next) {
+                notice(candidate, current);
+                break;
+              }
+            }
+            if (!next || signal?.aborted) {
+              if (start) yield start;
+              yield quota;
+              return;
+            }
+            current = next.model;
+            // Let the new provider's guarded route resolve auth and transport. Keep the
+            // same transcript, signal, session id, and provider event hooks.
+            source = await next.stream(current, context, {
+              ...options, apiKey: undefined, env: undefined, headers: undefined, fetch: undefined,
+              serviceTier: undefined, reasoning: next.reasoning,
+            });
+          }
+        },
+      };
+    }, undefined, signal);
+  };
 }

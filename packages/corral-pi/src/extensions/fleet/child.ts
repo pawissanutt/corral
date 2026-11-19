@@ -5,6 +5,8 @@ import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ChildQuestion, ChildSpec, ChildUsage, ReviewVerdict } from "../../build/types.ts";
+import { isApiProvider, isProviderId } from "../../auth/providers.ts";
+import { assertApiEffort } from "../../host/api-providers.ts";
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
 import { closeResidentSession, residentLifecycle } from "../../claude/resident.ts";
 import { classifyBuildWrite } from "../../roles/build/guard.ts";
@@ -46,7 +48,6 @@ export interface ChildHandle {
 export interface SdkRunnerOptions {
   readonly sdk: typeof Sdk;
   readonly models: ModelRuntime;
-  readonly apiModels?: (choice: ResolvedModel) => Promise<ModelRuntime>;
   readonly context: FleetContext;
   readonly agentDir: string;
   readonly localTools: readonly ToolDefinition[];
@@ -282,6 +283,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     const apply = async (choice: ResolvedModel) => {
       const model = options.models.getModel(choice.provider, choice.model);
       if (!model) throw new Error(`model_unavailable: ${choice.provider}/${choice.model}`);
+      if (isProviderId(choice.provider) && isApiProvider(choice.provider)) assertApiEffort(model, choice.effort);
       await session!.setModel(model);
       session!.setThinkingLevel(budget?.thinkingLevel ?? thinking(choice.effort));
     };
@@ -310,10 +312,10 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
       };
       try {
         signal.throwIfAborted();
-        const models = initialModel.connection ? await options.apiModels?.(initialModel) : options.models;
-        if (!models) throw new Error("API children are unavailable outside a build session");
+        const { models } = options;
         const model = models.getModel(initialModel.provider, initialModel.model);
         if (!model) throw new Error(`model_unavailable: ${initialModel.provider}/${initialModel.model}`);
+        if (isProviderId(initialModel.provider) && isApiProvider(initialModel.provider)) assertApiEffort(model, initialModel.effort);
         if (execution?.serviceTier && (!research || initialModel.provider !== "openai-codex")) {
           throw new Error("Priority service tier is restricted to openai-codex Explore sessions");
         }
@@ -438,7 +440,6 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     return { done, usage,
       async steer(text) { await ready; if (complete) throw new Error("Child is no longer running"); await session!.steer(text); },
       async setModel(provider, model, effort) {
-        if (initialModel.connection) throw new Error("A running API child keeps its configured route");
         if (!options.models.getModel(provider, model)) throw new Error(`model_unavailable: ${provider}/${model}`);
         thinking(effort);
         await ready;

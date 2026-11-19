@@ -88,7 +88,7 @@ describe("auth paths", () => {
   });
 });
 
-describe("corral agent login", () => {
+describe("corral-pi login", () => {
   test("Pi's Codex OAuth login writes a 0600 credential into a 0700 corral-owned directory", async () => {
     const dir = join(temp(), "auth");
     const server = fakeOAuthServer();
@@ -115,7 +115,7 @@ describe("the production auth module", () => {
   test("refuses credentials_unavailable before any login", () => {
     process.env.XDG_DATA_HOME = temp();
     expect(() => auth.credentials({ provider: "openai-codex", apiEndpoint: "", refreshEndpoint: TOKEN_URL }))
-      .toThrow(/credentials_unavailable: no OpenAI Codex login .*corral agent login/);
+      .toThrow(/credentials_unavailable: .*corral-pi login --provider openai-codex/);
     expect(auth.state?.()).toEqual({ module: "corral-pi", credential: "absent" });
   });
 
@@ -208,7 +208,7 @@ describe("per-provider credentials (T-479)", () => {
     }));
     const context = { provider: "anthropic" as const, apiEndpoint: PROVIDERS.anthropic.api, refreshEndpoint: ANTHROPIC_TOKEN_URL };
     expect(() => auth.credentials(context)).toThrow(
-      /credentials_unavailable: no Anthropic Claude login \(provider anthropic\) .*run `corral agent login --provider anthropic`/);
+      /credentials_unavailable: .*corral-pi login --provider anthropic/);
     expect(() => auth.credentials({ provider: "openai-codex", apiEndpoint: "", refreshEndpoint: TOKEN_URL })).not.toThrow();
   });
 

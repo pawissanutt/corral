@@ -178,7 +178,7 @@ export function nativeSdkFailure(message: SDKMessage, rateLimit: unknown, lane: 
   const failed = message.type === "assistant" ? assistantFailure(message)
     : message.type === "result" ? resultFailure(message) : undefined;
   if (!failed) return undefined;
-  return new NativeFailure(normalizeFailure("anthropic-subscription", {
+  return new NativeFailure(normalizeFailure("anthropic", {
     ...(message.type === "assistant" ? { sdk_error: message.message.stop_reason === "refusal" ? "invalid_request" : message.error,
       request_id: message.request_id } : {}),
     ...(message.type === "result" ? { sdk_subtype: message.subtype, terminal_reason: message.terminal_reason,

@@ -1,18 +1,22 @@
 import { join } from "node:path";
 
 import type { CredentialStore, Provider } from "@earendil-works/pi-ai";
+import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
+import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
+import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { corralPiRoot } from "../auth/paths.ts";
-import { PROVIDERS, type ProviderId, isProviderId } from "../auth/providers.ts";
+import { PROVIDERS, type ApiProviderId, type ProviderId, isApiProvider, isProviderId, validApiKey } from "../auth/providers.ts";
 import { SUPPLEMENTAL_MODELS } from "./supplemental-models.ts";
-import { CONNECTIONS, type ApiConnectionId, validApiKey } from "../auth/connections.ts";
+
+export function nativeApiProvider(id: ApiProviderId): Provider {
+  return id === "anthropic-api" ? anthropicProvider() : openaiProvider();
+}
 
 export interface CatalogPolicy {
-  /** Only these subscription providers can expose models or resolve credentials. */
+  /** Only these providers can expose models or resolve credentials. */
   readonly providers: readonly ProviderId[];
-  /** Single explicit API route; never inferred from installed credentials or provider alone. */
-  readonly apiConnection?: ApiConnectionId;
   /** Omit for corral's corral-pi/models.json; null disables that file. */
   readonly modelsPath?: string | null;
 }
@@ -47,9 +51,7 @@ export async function createModelCatalog(
   const { InMemoryModelsStore } = await import("@earendil-works/pi-ai");
   const modelsPath = policy.modelsPath === undefined ? join(corralPiRoot(), "models.json") : policy.modelsPath;
   const approved = new Set(policy.providers);
-  const paidProvider = policy.apiConnection ? CONNECTIONS[policy.apiConnection].provider : undefined;
-  if (paidProvider && (approved.size !== 1 || !approved.has(paidProvider))) throw new ModelCatalogInvalid("API connection/provider mismatch");
-  const matchesCredential = (id: string, entry: { type: string; key?: string }) => id === paidProvider
+  const matchesCredential = (id: ProviderId, entry: { type: string; key?: string }) => isApiProvider(id)
     ? entry.type === "api_key" && typeof entry.key === "string" && validApiKey(entry.key) : entry.type === "oauth";
   const scopedCredentials: CredentialStore = {
     read: async (id, options) => {
@@ -58,7 +60,7 @@ export async function createModelCatalog(
       return credential && matchesCredential(id, credential) ? credential : undefined;
     },
     list: async (options) => (await credentials.list(options))
-      .filter((entry) => isProviderId(entry.providerId) && approved.has(entry.providerId) && entry.type === (entry.providerId === paidProvider ? "api_key" : "oauth")),
+      .filter((entry) => isProviderId(entry.providerId) && approved.has(entry.providerId) && entry.type === PROVIDERS[entry.providerId].auth),
     modify: async (id, fn, options) => {
       if (!isProviderId(id) || !approved.has(id)) throw new Error(`provider_not_allowed: ${id}`);
       return credentials.modify(id, fn, options);
@@ -78,23 +80,24 @@ export async function createModelCatalog(
     });
     // Add missing metadata and correct the old Astra subscription limit before Pi
     // composes models.json, so explicit user entries and overrides still win.
-    const { openaiCodexProvider } = await import("@earendil-works/pi-ai/providers/openai-codex");
-    for (const id of ["openai-codex", "openai"] as const) {
-      const provider = id === "openai-codex" ? openaiCodexProvider() : loaded.getProvider(id);
-      if (!provider) throw new ModelCatalogInvalid(`missing native provider ${id}`);
-      const getModels = () => {
-        const listed = provider.getModels().map((model) => id === "openai-codex" && model.id === "gpt-6-astra"
-          ? { ...model, contextWindow: 600000 } : model);
-        const extra = (SUPPLEMENTAL_MODELS[id] ?? []).filter(model => !listed.some(entry => entry.id === model.id));
-        return [...listed, ...extra];
-      };
-      loaded.registerNativeProvider({ ...provider, getModels, getAllModels: getModels });
-    }
+    const provider = openaiCodexProvider();
+    const getModels = () => {
+      const listed = provider.getModels().map(model => model.id === "gpt-6-astra" ? { ...model, contextWindow: 600000 } : model);
+      return [...listed, ...(SUPPLEMENTAL_MODELS["openai-codex"] ?? []).filter(model => !listed.some(entry => entry.id === model.id))];
+    };
+    loaded.registerNativeProvider({ ...provider, getModels, getAllModels: getModels });
     const error = loaded.getError();
     if (error !== undefined) throw new ModelCatalogInvalid(error);
     // Native registration starts an unawaited SDK refresh. It may reload this file after
     // invalidation, so retain validated model values, not that mutable runtime's catalog.
-    const models = new Map(policy.providers.map(id => [id, Object.freeze([...loaded.getModels(id)])] as const));
+    const models = new Map(policy.providers.map(id => {
+      // A configured URL, header or price cannot override the native paid route.
+      if (isApiProvider(id)) {
+        const listed = nativeApiProvider(id).getModels().map(model => ({ ...model, provider: id }));
+        return [id, [...listed, ...(SUPPLEMENTAL_MODELS[id] ?? []).filter(model => !listed.some(entry => entry.id === model.id))]] as const;
+      }
+      return [id, [...loaded.getModels(id)]] as const;
+    }));
     return { runtime: loaded, models };
   };
   let metadata = await loadMetadata();
@@ -104,26 +107,26 @@ export async function createModelCatalog(
   });
   // Native registrations survive SDK refresh/rebuildProviders. Do not re-register them
   // on refresh: the caller may have replaced their streams with guarded lane adapters.
+  const refused = (id: string) => () => { throw new Error(`provider_not_allowed: ${id}`); };
   for (const provider of runtime.getProviders()) {
-    if (isProviderId(provider.id) && approved.has(provider.id)) {
-      const id = provider.id;
-      const getModels = () => (metadata.models.get(id) ?? []).filter((model) => model.api === PROVIDERS[id].modelApi);
+    const id = provider.id;
+    if (isProviderId(id) && approved.has(id) && !isApiProvider(id)) {
+      const getModels = () => (metadata.models.get(id) ?? []).filter(model => model.api === PROVIDERS[id].modelApi);
       runtime.registerNativeProvider({
-        ...provider,
-        auth: id === paidProvider ? {} : provider.auth.oauth ? { oauth: provider.auth.oauth } : {},
-        getModels,
-        getAllModels: getModels,
-        // The metadata runtime, not the native provider's remote catalog, owns this list.
-        refreshModels: undefined,
+        ...provider, auth: provider.auth.oauth ? { oauth: provider.auth.oauth } : {},
+        getModels, getAllModels: getModels, refreshModels: undefined,
       });
     } else {
-      const refused = () => { throw new Error(`provider_not_allowed: ${provider.id}`); };
-      const disabled: Provider = {
-        id: provider.id, name: provider.name, auth: {}, getModels: () => [],
-        stream: refused, streamSimple: refused,
-      };
-      runtime.registerNativeProvider(disabled);
+      const blocked = refused(id);
+      runtime.registerNativeProvider({ id, name: provider.name, auth: {}, getModels: () => [], stream: blocked, streamSimple: blocked });
     }
+  }
+  for (const id of approved) {
+    if (!isApiProvider(id)) continue;
+    const blocked = refused(id);
+    const getModels = () => metadata.models.get(id) ?? [];
+    runtime.registerNativeProvider({ id, name: PROVIDERS[id].label, auth: {}, getModels, getAllModels: getModels,
+      stream: blocked, streamSimple: blocked });
   }
   const refresh = runtime.refresh.bind(runtime);
   runtime.refresh = async (options = {}) => {

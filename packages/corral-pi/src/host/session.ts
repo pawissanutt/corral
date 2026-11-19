@@ -7,6 +7,7 @@ import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type {
   AgentSession, AgentSessionRuntime, CreateAgentSessionRuntimeFactory, ExtensionAPI, SessionManager, ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 
 import type { ImageContent, StreamFunction } from "@earendil-works/pi-ai";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
@@ -22,7 +23,7 @@ import { CHECKPOINT_ENTRY, Checkpoints } from "../capabilities/checkpoints.ts";
 import { jobControl, type JobControl } from "./job-controls.ts";
 import { type HostControls, installToolControls, parseControls } from "./tool-controls.ts";
 import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
-import { PROVIDERS, type ProviderId, hostDestinations } from "../auth/providers.ts";
+import { PROVIDERS, type ProviderId, billingKind, hostDestinations, isApiProvider, isProviderId } from "../auth/providers.ts";
 import type { AuthContext, Fetch } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
 import { LiveEvents } from "./live-events.ts";
@@ -45,7 +46,7 @@ import { buildToolRenderers } from "../ui/build/tool-renderers.ts";
 import { installToolRenderers, type ToolRenderDeps } from "../ui/tool-rendering.ts";
 import { installMarkRows } from "../ui/mark-rows.ts";
 import { TodoLedger, installPlanCommand } from "../ui/todo.ts";
-import type { HostCapabilities, UiMode } from "./config.ts";
+import type { HostCapabilities, ModelChoice, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { askUserTool, localQuestionAsk } from "./ask-user.ts";
 import { PendingQuestions, QUESTION_ENTRY, validAnswer } from "./pending-questions.ts";
@@ -55,11 +56,11 @@ import type { HerdrLifecycle } from "./herdr.ts";
 import type { LoadedModules } from "./modules.ts";
 import { type GuardedFetch, guardedFetch, resourceLoaderOptions, restrictedSettings } from "./restrict.ts";
 import { createModelCatalog } from "./catalog.ts";
-import { installModelSelection, subscriptionRoutes } from "./subscriptions.ts";
-import { bareProviders } from "./bare.ts";
+import { installModelSelection } from "./model-selection.ts";
+import { interactiveModels, sessionRoutes, type SessionRoutes } from "./capabilities.ts";
 import { observeTerminalInput, type InputObservation } from "./input-observation.ts";
 import { browserSettings, browserTools } from "../extensions/browser/index.ts";
-import { createLocalModels } from "./local-models.ts";
+import { installLocalProvider, LocalModelUnavailable } from "./local-models.ts";
 import { webTools } from "../extensions/web/index.ts";
 import { runSubscriptionSearch } from "../extensions/web/subscription.ts";
 import { streamClaudeSearch } from "../claude/search.ts";
@@ -87,12 +88,9 @@ import { workerDoneTool } from "../roles/worker/tools.ts";
 import { transcriptPreview } from "./transcript-preview.ts";
 import { ManagedEffects } from "./managed-effects.ts";
 import { LocalControlPlane } from "./local.ts";
-import { type ConnectionBinding, parseBinding } from "./connections.ts";
-import { CONNECTIONS, type ApiConnectionId, type ConnectionId, isApiConnection, resolveConnection } from "../auth/connections.ts";
 import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
-import { createApiCatalog, type ApiCatalog } from "./api-connections.ts";
-import { paidRoute, withPaidContinuation } from "./continuation.ts";
-import type { Spending } from "../capabilities/budget.ts";
+import { assertApiEffort, installApiProvider } from "./api-providers.ts";
+import { withSubscriptionFallback } from "./continuation.ts";
 import { HostQueue } from "./queue.ts";
 import { recordTranscriptMark, type MarkSink, type ModelMark, type TranscriptMark, type TurnStopCause, type TurnWait } from "./transcript-marks.ts";
 import { TurnFacts, turnWaits } from "./turn-facts.ts";
@@ -111,9 +109,8 @@ export interface HostSessionOptions {
   readonly model: string;
   /** The bound profile's provider; absent means OpenAI Codex, the only pre-T-479 route. */
   readonly provider?: ProviderId;
-  readonly binding?: ConnectionBinding;
-  readonly connection?: ConnectionId;
-  readonly spending?: Spending;
+  readonly fallback?: readonly ModelChoice[];
+  readonly routes?: SessionRoutes;
   readonly apiFetch?: Fetch;
   readonly sessionDir?: string;
   /** The Bedrock binding and its credential resolver; required for an AWS-profile provider. */
@@ -150,7 +147,7 @@ export interface HostSessionOptions {
 
 type TurnOrigin = { kind: "bridge" } | { kind: "owner_terminal" } | { kind: "unknown" };
 
-const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+const THINKING: Record<ThinkingLevel, true> = { off: true, minimal: true, low: true, medium: true, high: true, xhigh: true, max: true };
 const STATE_SECTION_MAX_BYTES = 8 * 1024;
 
 /** A module's own readback, replaced by its size once it could crowd a bridge frame. */
@@ -164,6 +161,7 @@ type Models = Awaited<ReturnType<typeof Sdk.ModelRuntime.create>>;
 export interface AwsRoute {
   readonly binding: AwsBinding;
   readonly resolver: AwsCredentialResolver;
+  readonly modelIds?: ReadonlySet<string>;
 }
 
 /**
@@ -196,6 +194,8 @@ function restrictAwsProvider(
   };
   models.registerNativeProvider({
     ...provider,
+    ...(aws.modelIds ? { getModels: () => provider.getModels().filter(model => aws.modelIds!.has(model.id)),
+      getAllModels: () => provider.getModels().filter(model => aws.modelIds!.has(model.id)) } : {}),
     auth: { apiKey: { name: "corral AWS profile", resolve: async () => ({ auth: {}, source: "corral AWS profile" }) } },
     stream: (current, context, streamOptions) =>
       lazyStream(current, async () => stream(current, context, await signed(current, streamOptions) as never)),
@@ -217,7 +217,7 @@ export function restrictProvider(
   models: Models, providerId: ProviderId, fetch: typeof globalThis.fetch, lane?: ClaudeLaneConfig, aws?: AwsRoute,
 ): void {
   const route = PROVIDERS[providerId];
-  if (route.auth === "api_key") throw new Error("connection_invalid: API provider requires an explicit metered connection binding");
+  if (isApiProvider(providerId)) throw new Error("API providers require installApiProvider");
   const provider = models.getProvider(route.id);
   if (route.auth === "aws-profile") {
     if (!provider) throw new Error(`model_unavailable: ${route.id} is not in Pi's catalog`);
@@ -256,9 +256,8 @@ export function restrictProvider(
     return { ...(streamOptions as object), fetch };
   };
   if (providerId === "anthropic" || providerId === "openai-codex") {
-    const connection = resolveConnection(providerId);
-    stream = withProviderFailures(connection, stream);
-    streamSimple = withProviderFailures(connection, streamSimple);
+    stream = withProviderFailures(providerId, stream);
+    streamSimple = withProviderFailures(providerId, streamSimple);
   }
   models.registerNativeProvider({
     ...provider,
@@ -268,10 +267,8 @@ export function restrictProvider(
   });
 }
 
-export function authContext(provider: ProviderId = "openai-codex", connection?: ConnectionId): AuthContext {
-  const selected = resolveConnection(provider, connection);
-  return { provider, connection: selected, apiEndpoint: PROVIDERS[provider].api,
-    refreshEndpoint: CONNECTIONS[selected].auth === "api_key" ? "" : PROVIDERS[provider].refresh };
+export function authContext(provider: ProviderId = "openai-codex"): AuthContext {
+  return { provider, apiEndpoint: PROVIDERS[provider].api, refreshEndpoint: PROVIDERS[provider].refresh };
 }
 
 export function providerErrorClass(message: string): string {
@@ -354,7 +351,7 @@ export class HostSession {
   private readonly buildControls: BuildControls | undefined;
   private auxiliaryModels: Models | undefined;
   private buildProviders: readonly string[] = [];
-  private readonly apiCatalogs = new Map<string, Promise<ApiCatalog>>();
+  private readonly apiNetworks: GuardedFetch[] = [];
   private searchModels: Models | undefined;
   private ledger: TodoLedger | undefined;
   private closing = false;
@@ -368,13 +365,11 @@ export class HostSession {
   private readonly monitorFacts = new Map<string, MonitorFact>();
 
   readonly provider: ProviderId;
-  private readonly connection: ConnectionId;
 
   private constructor(private readonly options: HostSessionOptions) {
     const host = this;
     this.liveEvents = new LiveEvents();
     this.provider = options.provider ?? "openai-codex";
-    this.connection = resolveConnection(this.provider, options.connection ?? options.binding?.connection);
     this.local = new LocalControlPlane(options.build?.dir ?? options.runtimeDir ?? options.agentDir, options.identity);
     this.remotePrompts = new RemotePrompts(this.liveEvents.events);
     this.marks = options.ui === "plain" ? undefined : { add: mark => this.addMark(mark) };
@@ -394,8 +389,7 @@ export class HostSession {
       },
       approved: () => this.buildProviders,
       parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model,
-        effort: options.effort, ...(isApiConnection(this.connection) ? { connection: this.connection } : {}) },
-      apiModels: async choice => (await this.apiCatalog(choice.connection!, choice.model, choice.effort)).models,
+        effort: options.effort },
       agentDir: options.agentDir, wake: this.inputWake,
       localTools: () => this.localTools.filter(tool => !this.buildControls?.tools.includes(tool)),
       deliverToParent: async text => {
@@ -731,27 +725,7 @@ export class HostSession {
     return tools;
   }
 
-  private apiCatalog(connection: ApiConnectionId, model: string, effort?: string): Promise<ApiCatalog> {
-    const { modules, spending, apiFetch } = this.options;
-    const provider = CONNECTIONS[connection].provider;
-    const key = JSON.stringify([connection, model, effort]);
-    let catalog = this.apiCatalogs.get(key);
-    if (!catalog) {
-      const context = authContext(provider, connection);
-      catalog = createApiCatalog({ connection, model, effort, spending, credentials: modules.auth.credentials(context),
-        send: modules.auth.transport?.(context) ?? apiFetch ?? this.options.network.fetch,
-        report: usage => this.reportUsage(usage) });
-      this.apiCatalogs.set(key, catalog);
-    }
-    return catalog;
-  }
-
   static async create(options: HostSessionOptions): Promise<HostSession> {
-    parseBinding(options.binding, options.provider ?? "openai-codex", options.model, options.effort);
-    const connection = resolveConnection(options.provider ?? "openai-codex", options.connection ?? options.binding?.connection);
-    if (options.binding?.origin === "registered" && !options.modules.auth.connections?.includes(options.binding.connection)) {
-      throw new Error("connection_unsupported_by_auth: installed auth module does not implement the explicit binding");
-    }
     const host = new HostSession(options);
     host.restoreTurn(options.sessionManager);
     const { sdk } = options;
@@ -761,53 +735,54 @@ export class HostSession {
     if (host.provider === "llama.cpp" && local === undefined) {
       throw new Error("module_invalid: llama.cpp requires its explicit configured capability");
     }
-    const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
-    const api = isApiConnection(connection);
-    if (options.spending && !api && route.lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
-    const direct = api ? await host.apiCatalog(connection, options.model, options.effort) : undefined;
-    const subscriptions = direct ? undefined : options.build?.session.bare
-      ? await bareProviders(options.modules.auth, route.id)
-      : await subscriptionRoutes(options.modules.auth, route.id, options.binding ? "worker" : options.identity.role);
-    // A capped session must not switch to the unmeterable Claude SDK subprocess lane.
-    const providers = subscriptions?.providers.filter(id => !options.spending || !PROVIDERS[id].lane) ?? [route.id];
-    const models = direct?.models ?? localModels?.models ?? await createModelCatalog(subscriptions!.credentials, {
-      providers,
-      ...(options.build?.session.bare ? { modelsPath: join(options.build.dir, "..", "..", "models.json") } : {}),
+    const extra = (options.fallback ?? []).map(choice => choice.provider)
+      .filter(id => (id !== "amazon-bedrock" || options.aws) && (id !== "llama.cpp" || options.capabilities?.llama_cpp));
+    const { providers, credentials } = options.routes ?? await sessionRoutes(options.modules.auth, route.id, options.identity.role, extra);
+    const models = await createModelCatalog(credentials, { providers,
+      ...(providers.every(isApiProvider) ? { modelsPath: null }
+        : options.build?.session.bare ? { modelsPath: join(options.build.dir, "..", "..", "models.json") } : {}),
     });
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
-    const model = direct?.model ?? localModels?.model ?? models.getModel(route.id, modelId);
-    if (!model) throw new Error(`model_unavailable: ${route.id}/${modelId}`);
-    for (const id of direct ? [] : providers) {
-      if (!localModels) {
-        const fetch = PROVIDERS[id].auth === "oauth"
-          ? guardedFetch(options.network.fetch, (destination) => { options.network.refuse?.(destination); }, id).fetch
-          : options.network.fetch;
+    const report = (usage: ModelUsage) => host.reportUsage(usage);
+    for (const id of providers) {
+      if (isApiProvider(id)) {
+        const send = options.modules.auth.transport?.(authContext(id)) ?? options.apiFetch ?? options.network.fetch;
+        host.apiNetworks.push(installApiProvider(models, id, credentials, send, report, options.network.refuse));
+        continue;
+      }
+      if (id === "llama.cpp") {
+        const settings = options.capabilities?.llama_cpp;
+        if (!settings) throw new Error("module_invalid: llama.cpp requires its explicit configured capability");
+        const selected = [...(route.id === id ? [modelId] : []),
+          ...(options.fallback ?? []).filter(choice => choice.provider === id).map(choice => choice.model)];
+        try { await installLocalProvider(models, settings, selected, options.network.fetch); }
+        catch (error) { if (route.id === id) throw error; continue; }
+      } else {
+        const fetch = PROVIDERS[id].auth === "oauth" ? guardedFetch(options.network.fetch, options.network.refuse, id).fetch : options.network.fetch;
         restrictProvider(models, id, fetch as typeof globalThis.fetch,
-          { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd,
-            connection: options.binding && CONNECTIONS[options.binding.connection].provider === id
-              ? options.binding.identity : resolveConnection(id) }, options.aws);
+          { configDir: join(options.agentDir, "claude-code"), cwd: options.cwd, connection: id }, options.aws);
       }
       const restricted = models.getProvider(id);
       if (!restricted) throw new Error("model provider is unavailable");
-      const billing = id === "llama.cpp" ? undefined : PROVIDERS[id].auth === "aws-profile" ? "api" : "subscription";
-      const report = (usage: ModelUsage) => host.reportUsage(usage);
+      const billing = billingKind(id);
       models.registerNativeProvider({ ...restricted,
-        stream: observeUsage(restricted.stream.bind(restricted), billing, report, options.spending),
-        streamSimple: observeUsage(restricted.streamSimple.bind(restricted), billing, report, options.spending),
+        stream: observeUsage(restricted.stream.bind(restricted), billing, report),
+        streamSimple: observeUsage(restricted.streamSimple.bind(restricted), billing, report),
       });
     }
-    host.auxiliaryModels = models;
-    host.summaryRequest = await createSummaryRequest(options, options.spending, usage => host.reportUsage(usage));
-    host.buildProviders = providers;
-    const continuationRoute = options.spending?.continuation;
-    if (continuationRoute && CONNECTIONS[connection].billing !== "subscription") {
-      throw new Error("--paid-route requires a subscription model");
+    const model = models.getModel(route.id, modelId);
+    if (!model) {
+      if (local) throw new LocalModelUnavailable(`configured model ${modelId} is not advertised; check the endpoint or set discover = false`);
+      throw new Error(`model_unavailable: ${route.id}/${modelId}`);
     }
-    const fallbackRoute = continuationRoute ? paidRoute(continuationRoute) : undefined;
-    const fallback = fallbackRoute ? await host.apiCatalog(fallbackRoute.connection, fallbackRoute.model) : undefined;
-    if (subscriptions && options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
-      const searchProviders = providers.filter((id) => id === "openai-codex" || id === "anthropic");
-      const search = await createModelCatalog(subscriptions.credentials, { providers: searchProviders });
+    if (isApiProvider(route.id)) assertApiEffort(model, options.effort);
+    host.auxiliaryModels = models;
+    host.summaryRequest = await createSummaryRequest(options, report);
+    const interactive = interactiveModels(options.identity.role);
+    host.buildProviders = interactive ? providers : [route.id];
+    if (options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
+      const searchProviders = host.buildProviders.filter((id): id is ProviderId => id === "openai-codex" || id === "anthropic");
+      const search = await createModelCatalog(credentials, { providers: searchProviders });
       for (const id of searchProviders) {
         const fetch = guardedFetch(options.network.fetch, (destination) => { options.network.refuse?.(destination); }, id).fetch;
         restrictProvider(search, id, fetch as typeof globalThis.fetch,
@@ -821,8 +796,8 @@ export class HostSession {
       }
       host.searchModels = search;
     }
-    const thinkingLevel = options.effort && THINKING.has(options.effort)
-      ? (options.effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh") : undefined;
+    const thinkingLevel = options.effort && Object.hasOwn(THINKING, options.effort)
+      ? options.effort as ThinkingLevel : isApiProvider(route.id) ? "off" : undefined;
     const contract = options.modules.role.contract(host.roleContext);
     const factory: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
       const settingsManager = sdk.SettingsManager.inMemory(host.settings);
@@ -845,15 +820,31 @@ export class HostSession {
         ...(sessionStartEvent ? { sessionStartEvent } : {}),
         ...(thinkingLevel ? { thinkingLevel } : {}),
       });
-      if (!localModels && !direct) installModelSelection(result.session, models, providers);
-      if (fallback && continuationRoute && options.spending) {
-        const agent = result.session.agent;
-        agent.streamFunction = withPaidContinuation(agent.streamFunction, connection, options.spending, continuationRoute,
-          (_model, context, streamOptions) => fallback.models.streamSimple(fallback.model, context, streamOptions as never), () => {
-            const text = `Subscription quota exhausted; continuing on ${continuationRoute} under the same spending cap.`;
-            void result.session.sendCustomMessage({ customType: "corral_paid_continuation", content: text, display: true }, { triggerTurn: false });
-            options.events.emit("paid_continuation", { model: continuationRoute, text });
-          });
+      const { session } = result;
+      const switchForFallback = installModelSelection(session, models, interactive);
+      if (options.fallback?.length) {
+        const agent = session.agent;
+        const original = agent.streamFunction;
+        const fallback = withSubscriptionFallback(original, options.fallback, async (candidate, signal) => {
+          const model = models.getModel(candidate.provider, candidate.model);
+          if (!model) return undefined;
+          try {
+            if (candidate.provider === "amazon-bedrock") await options.aws?.resolver.get();
+            await switchForFallback(model, signal);
+          } catch (error) {
+            // Preflight may find a missing login, failed refresh or absent local SDK.
+            if (session.model !== model) return undefined;
+            throw error;
+          }
+          return { model, stream: original, reasoning: session.thinkingLevel === "off" ? undefined : session.thinkingLevel };
+        }, (candidate, previous) => {
+          const from = `${previous.provider}/${previous.id}`, model = `${candidate.provider}/${candidate.model}`;
+          const text = `Quota exhausted on ${from}; continuing on ${model}`;
+          void session.sendCustomMessage({ customType: "corral_model_fallback", content: text, display: true }, { triggerTurn: false });
+          options.events.emit("model_fallback", { from, model, text });
+        });
+        agent.streamFunction = (current, context, streamOptions) => streamOptions?.sessionId === session.sessionId
+          ? fallback(current, context, streamOptions) : original(current, context, streamOptions);
       }
       result.session.setActiveToolsByName([...host.initialTools]);
       host.watch(result.session);
@@ -892,7 +883,6 @@ export class HostSession {
         const model = this.session.model;
         if (!model) throw new Error("model_unavailable: quick summary has no session model");
         const request = this.summaryRequest ?? { model, effort: this.session.thinkingLevel,
-          binding: this.provider === model.provider ? this.options.binding : undefined,
           stream: ((model, context, options) => this.session.modelRuntime.streamSimple(model, context, options as never)) as StreamFunction };
         return { compaction: await summarizeQuick(this.options.sdk, event.preparation, request,
           event.signal, this.sessionId(), event.customInstructions) };
@@ -1223,9 +1213,8 @@ export class HostSession {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
         const message = event.message.errorMessage ?? "";
-        const provider = session.model?.provider as ProviderId | undefined;
-        const connection = this.currentConnection(provider);
-        const failure = messageFailure(event.message, connection);
+        const provider = isProviderId(event.message.provider) ? event.message.provider : this.provider;
+        const failure = messageFailure(event.message, provider);
         this.report("provider_error", { class: provider === "amazon-bedrock" || provider === "llama.cpp"
           ? providerErrorClass(message) : failureClass(failure),
           ...(provider === "amazon-bedrock" || provider === "llama.cpp" ? {} : { failure }) });
@@ -1303,7 +1292,7 @@ export class HostSession {
   private usageArtifact(): string {
     const path = join(this.options.sessionDir!, "usage.json");
     const { tokens } = this.session.getSessionStats();
-    writeFileSync(path, `${JSON.stringify({ transcriptTokens: tokens, budget: this.options.spending?.snapshot }, null, 2)}\n`, { mode: 0o600 });
+    writeFileSync(path, `${JSON.stringify({ transcriptTokens: tokens }, null, 2)}\n`, { mode: 0o600 });
     return path;
   }
 
@@ -1313,12 +1302,6 @@ export class HostSession {
       const reason = error instanceof Error ? error.message : String(error);
       this.options.events.emit("usage_report_failed", { reason: reason.slice(0, 512) });
     });
-  }
-
-  private currentConnection(provider?: ProviderId): ConnectionId {
-    const active = this.options.spending?.activeRoute;
-    if (active) return paidRoute(active).connection;
-    return !provider || provider === this.provider ? this.connection : resolveConnection(provider);
   }
 
   drained(): Promise<unknown> {
@@ -1491,14 +1474,14 @@ export class HostSession {
   async selectRemoteModel(name: string, effort?: string): Promise<void> {
     if (this.open || this.closing) throw new Error("remote_model_selection_unavailable");
     const slash = name.indexOf("/");
-    const provider = slash < 0 ? this.provider : name.slice(0, slash);
+    const provider = slash < 0 ? this.session.model?.provider ?? this.provider : name.slice(0, slash);
     const id = slash < 0 ? name : name.slice(slash + 1);
-    if (provider !== this.provider) throw new Error("provider change requires relaunching corral-pi with --provider and --model");
     const model = this.auxiliaryModels?.getModel(provider, id);
     if (!model) throw new Error(`model_unavailable: ${name}`);
-    if (effort !== undefined && !THINKING.has(effort)) throw new Error("thinking_level_invalid");
+    if (effort !== undefined && !Object.hasOwn(THINKING, effort)) throw new Error("thinking_level_invalid");
+    if (isProviderId(provider) && isApiProvider(provider)) assertApiEffort(model, effort);
     await this.session.setModel(model, { persist: false });
-    if (effort !== undefined) this.session.setThinkingLevel(effort as "off" | "minimal" | "low" | "medium" | "high" | "xhigh", { persist: false });
+    if (effort !== undefined) this.session.setThinkingLevel(effort as ThinkingLevel, { persist: false });
   }
 
   /** Cause of the latest run's stop, cleared when the next run starts. */
@@ -1566,8 +1549,7 @@ export class HostSession {
     return {
       ...(this.buildControls ? { build: this.buildControls.panelState() } : {}),
       ...(this.fleet ? { fleet: this.fleet.snapshot() } : {}),
-      ...(this.options.spending ? { budget: this.options.spending.snapshot } : {}),
-      bound: this.bound, model: this.options.spending?.activeRoute ?? (session.model ? `${session.model.provider}/${session.model.id}` : null),
+      bound: this.bound, model: session.model ? `${session.model.provider}/${session.model.id}` : null,
       effort: session.thinkingLevel, effortAvailable: session.supportsThinking(),
       ...(this.terminalInput ? { input: this.terminalInput } : {}),
       streaming: session.isStreaming, context: session.getContextUsage(),
@@ -1614,11 +1596,10 @@ export class HostSession {
   state(): Record<string, unknown> {
     const session = this.session;
     const resources = this.runtime.services.resourceLoader;
+    const network = this.options.network.ledger();
     return {
       role: this.options.identity.role,
       identity: this.options.identity,
-      binding: this.options.binding ?? null,
-      connection: this.currentConnection(session.model?.provider as ProviderId | undefined),
       native_children: this.auxiliary?.inspection().map(({ sessionFile: _file, ...child }) => child) ?? null,
       fleet: this.fleet?.snapshot() ?? null,
       todo: this.loadout.includes("corral_todo"),
@@ -1635,7 +1616,7 @@ export class HostSession {
       turn: { current: this.turn, open: this.open },
       last_error: this.turnError,
       last_seq: this.options.events.last,
-      model: this.options.spending?.activeRoute ?? (session.model ? `${session.model.provider}/${session.model.id}` : null),
+      model: session.model ? `${session.model.provider}/${session.model.id}` : null,
       loadout: [...this.loadout],
       active_tools: session.getActiveToolNames(),
       denied_tools: this.deniedTools,
@@ -1661,8 +1642,10 @@ export class HostSession {
       },
       settings: this.settings,
       network: {
-        allowed_destinations: [...(this.options.network.destinations ?? hostDestinations(this.provider))],
-        ...this.options.network.ledger(),
+        allowed_destinations: [...new Set([...(this.options.network.destinations ?? hostDestinations(this.provider)),
+          ...this.apiNetworks.flatMap(network => network.destinations ?? [])])],
+        ...network,
+        allowed: network.allowed + this.apiNetworks.reduce((count, guard) => count + guard.ledger().allowed, 0),
       },
       herdr: this.options.herdr?.readback() ?? null,
       auth: bounded(this.options.modules.auth.state?.() ?? null),
