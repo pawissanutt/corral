@@ -1,13 +1,15 @@
 //! Above the composer, each only while it has content, in the terminal UI's order
-//! (`session::Dock`): the docked choice (a build's exit choice, a child's question, a proposed
-//! board plan) or the line saying one waits put aside; where a chosen exit stands; the owner
-//! questions; the queue of input waiting for the agent with Edit, ↑, ↓ and Remove; where the read
-//! of the waiting cards stands and why they cannot be answered from here; and the sidebar's
-//! summary row while the rail is not beside the main view and no choice is docked. The phone
-//! folds each item to one line with `▴` until tapped open, one open at a time, and gives a queued
-//! row a `⋯` menu. Also the bar standing in the composer's place while the session takes no
-//! message, with Resume or Relaunch where the host can start again.
-//! test ids `session-dock`, `dock-<card>`, `dock-aside`, `session-queue`, `queue-<n>`,
+//! (`session::Dock`): the docked choice the owner opened (a build's exit choice, a child's
+//! question, a proposed board plan), every other waiting choice as one line (`▲ docs asks: … ·
+//! Alt+A to answer`, up to three, then `+n more`) that opens it when pressed; where a chosen exit
+//! stands; the owner questions; the queue, one header line that unfolds to its rows with small
+//! Edit, ↑, ↓ and Remove controls (a `⋯` menu on the phone); where the read of the waiting cards
+//! stands and why they cannot be answered from here; and the sidebar's summary row while the rail
+//! is not beside the main view and no choice is open. The dock never takes more than 45 % of the
+//! window's height, nor so much that the tab's content keeps less than 240 pt: past that it
+//! scrolls. Also the bar standing in the composer's place while the session takes no message,
+//! with Resume or Relaunch where the host can start again.
+//! test ids `session-dock`, `dock-<card>`, `session-queue`, `btn-queue-toggle`, `queue-<n>`,
 //! `btn-queue-<edit|up|down|remove>-<n>`, `btn-cards-retry`.
 
 use nsh_base::{menu, menu_item};
@@ -20,7 +22,7 @@ use crate::model::session::{
 };
 use crate::screens::plans::menu_trigger;
 use crate::state::AppState;
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
+use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::overlay::counted;
 use crate::ui::term;
@@ -32,12 +34,19 @@ use super::{cards, exit, sidebar};
 
 /// The phone's least touch target.
 const TARGET: f32 = 44.0;
+/// The dock's share of the window's height, at most.
+const SHARE: f32 = 0.45;
+/// What the tab's content keeps at least, and what the page's head, tabs, composer and status
+/// take besides the dock.
+const CONTENT_MIN: f32 = 240.0;
+const FRAME: f32 = 300.0;
+/// The least the dock may scroll within.
+const DOCK_MIN: f32 = 96.0;
 
 /// The dock: its items stay mounted and follow their own parts; the whole is hidden while none
 /// shows. `rail` says the sidebar is beside the main view, so its summary row is not here.
 pub(super) fn dock(app: AppState, page: Memo<SessionPage>, rail: Memo<bool>) -> AnyElement {
     let form = app.form;
-    let open = signal(None::<&'static str>);
     let dock = computed(move || page.with(|p| p.dock.clone()));
     let row = computed(move || {
         !rail.get() && page.with(|p| p.sidebar.is_some()) && dock.with(|d| d.choice.is_none())
@@ -47,100 +56,44 @@ pub(super) fn dock(app: AppState, page: Memo<SessionPage>, rail: Memo<bool>) -> 
             || page.with(|p| p.exit.is_some())
             || dock.with(|d| !d.is_empty() || d.read.is_some() || d.inert.is_some())
     });
-    let choice = folded(
-        app,
-        open,
-        "choice",
-        computed(move || dock.with(|d| d.choice.as_ref().map(|c| format!("▲ {}", c.title)))),
-        move || cards::choice(app, page),
-    );
-    let queue = folded(
-        app,
-        open,
-        "queue",
-        computed(move || dock.with(|d| d.queue.as_ref().map(|q| q.header.clone()))),
-        move || queue(app, page),
-    );
     let side = dynamic(move || row.get().then(|| untracked(|| sidebar::summary(app, page))));
     let column = view()
         .test_id("session-dock")
         .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
-        .child(choice)
+        .child(cards::choice(app, page))
+        .child(waiting(app, dock))
         .child(exit::progress(app, page))
-        .child(aside(app, dock))
         .child(questions(app, dock))
-        .child(queue)
+        .child(queue(app, page))
         .child(reading(app, dock))
         .child(inert(app, dock))
         .child(side);
+    let column = match form {
+        Form::Terminal => column.px(term::cells(1.0)),
+        Form::Desktop => column.px(px(18.0)).pt(px(8.0)).pb(px(2.0)),
+        Form::Phone => column.px(px(16.0)).pt(px(8.0)),
+    };
+    // An opened card and the queue scroll within the dock's share of the window, so the tab's
+    // content keeps its room.
+    let shown = scroll()
+        .max_h(move || {
+            let height = window().height.0;
+            px((height * SHARE)
+                .min(height - CONTENT_MIN - FRAME)
+                .max(DOCK_MIN))
+        })
+        .child(column);
     let shell = match form {
-        Form::Terminal => view()
-            .child(term::hrule())
-            .child(column.px(term::cells(1.0))),
-        Form::Desktop => view().child(
-            column
-                .px(px(18.0))
-                .pt(px(8.0))
-                .pb(px(2.0))
-                .border_t(px(1.0))
-                .border_color(color(Token::Rule)),
-        ),
-        Form::Phone => view().child(column.px(px(16.0)).pt(px(8.0))),
+        Form::Terminal => view().child(term::hrule()).child(shown),
+        Form::Desktop => view()
+            .border_t(px(1.0))
+            .border_color(color(Token::Rule))
+            .child(shown),
+        Form::Phone => view().child(shown),
     };
     shell
         .flex_none()
         .style_when(move || !any.get(), |s| s.hidden())
-        .into_element()
-}
-
-/// On the phone an item is one line (`line`, with `▴`) until tapped open, one open at a time;
-/// elsewhere it is drawn whole by `full`.
-fn folded(
-    app: AppState,
-    open: Signal<Option<&'static str>>,
-    key: &'static str,
-    line: Memo<Option<String>>,
-    full: impl Fn() -> AnyElement + 'static,
-) -> AnyElement {
-    if app.form != Form::Phone {
-        return full();
-    }
-    let opened = computed(move || open.get() == Some(key));
-    dynamic(move || {
-        if opened.get() {
-            return Some(untracked(&full));
-        }
-        let said = line.get()?;
-        Some(untracked(|| {
-            phone_line(app, key, said, move || open.set(Some(key)))
-        }))
-    })
-}
-
-/// A folded item's line on the phone: its words cut to the line and `▴`; tapping opens it.
-fn phone_line(
-    app: AppState,
-    key: &'static str,
-    said: String,
-    on_press: impl Fn() + 'static,
-) -> AnyElement {
-    view()
-        .test_id(&format!("dock-line-{key}"))
-        .role(AccessibilityRole::Button)
-        .label(said.clone())
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .min_h(px(TARGET))
-        .cursor_pointer()
-        .active(|s| s.bg(color(Token::Hover)))
-        .on_press(on_press)
-        .child(
-            words(app.form, said, color(Token::Ink))
-                .flex_1()
-                .min_w(px(0.0)),
-        )
-        .child(words(app.form, "▴".to_owned(), color(Token::Ink3)))
         .into_element()
 }
 
@@ -157,7 +110,7 @@ fn words(form: Form, content: String, ink: AdaptiveColor) -> Text {
     }
 }
 
-/// A head in quiet spaced capitals: `QUEUE · 2 waiting`.
+/// A head in quiet spaced capitals: `Queue · 2 waiting`.
 fn head(form: Form, content: String) -> Text {
     let head = text(content)
         .number_of_lines(1u32)
@@ -173,31 +126,49 @@ fn head(form: Form, content: String) -> Text {
     }
 }
 
-/// `The exit choice is waiting · Finish to reopen`: a docked choice put aside; pressing it docks
-/// it again.
-fn aside(app: AppState, dock: Memo<Dock>) -> AnyElement {
+/// The docked choices not opened, one line each (`▲ docs asks: … · Alt+A to answer`), then
+/// `+n more`; pressing a line opens its card.
+fn waiting(app: AppState, dock: Memo<Dock>) -> AnyElement {
     let form = app.form;
-    let line = computed(move || dock.with(|d| d.aside.clone()));
+    let lines = computed(move || dock.with(|d| (d.waiting.clone(), d.more.clone())));
     dynamic(move || {
-        line.get().map(|line| {
+        let (lines, more) = lines.get();
+        (!lines.is_empty()).then(|| {
             untracked(|| {
-                let action = line.action;
+                let rows: Vec<AnyElement> = lines
+                    .into_iter()
+                    .map(|line| {
+                        let action = line.action;
+                        view()
+                            .test_id(&line.id)
+                            .role(AccessibilityRole::Button)
+                            .label(line.text.clone())
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.0))
+                            .cursor_pointer()
+                            .on_press(move || run(app, action.clone()))
+                            .when(form == Form::Phone, |row| row.min_h(px(TARGET)))
+                            .when(form == Form::Desktop, |row| {
+                                row.px(px(10.0))
+                                    .py(px(4.0))
+                                    .rounded(px(6.0))
+                                    .bg(color(Token::YouBg))
+                                    .hover(|s| s.bg(color(Token::Hover)))
+                            })
+                            .child(
+                                words(form, line.text, hue_ink(Hue::You))
+                                    .flex_1()
+                                    .min_w(px(0.0)),
+                            )
+                            .child(words(form, "▴".to_owned(), color(Token::Ink3)))
+                            .into_element()
+                    })
+                    .collect();
                 view()
-                    .test_id("dock-aside")
-                    .role(AccessibilityRole::Button)
-                    .label(line.text.clone())
-                    .flex_row()
-                    .items_center()
-                    .gap(px(8.0))
-                    .cursor_pointer()
-                    .on_press(move || run(app, action.clone()))
-                    .when(form == Form::Phone, |row| row.min_h(px(TARGET)))
-                    .child(
-                        words(form, line.text, hue_ink(Hue::Held))
-                            .flex_1()
-                            .min_w(px(0.0)),
-                    )
-                    .child(words(form, "▴".to_owned(), color(Token::Ink3)))
+                    .gap(px(if form == Form::Terminal { 0.0 } else { 4.0 }))
+                    .children(rows)
+                    .children(more.map(|more| words(form, more, color(Token::Ink3))))
                     .into_element()
             })
         })
@@ -307,9 +278,10 @@ fn question_dock(app: AppState, questions: QuestionDock) -> AnyElement {
     }
 }
 
-/// The queue: the head with its clause and `+k more`, then each owner item in delivery order
-/// (steers first) with its controls, then input from other sources as one read-only line. While
-/// the page gives the queue the keys, its first control has them.
+/// The queue: one header line (`Queue · 2 waiting`, its clause and `+k more`, `▸`/`▾`) that
+/// folds and unfolds it; unfolded, each owner item in delivery order (steers first) with its
+/// controls, then input from other sources as one read-only line. While the page gives the queue
+/// the keys, its first control has them.
 fn queue(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     let shown = computed(move || page.with(|p| p.dock.queue.clone()));
     let keyed = computed(move || page.with(|p| p.focus == Focus::Queue));
@@ -329,30 +301,50 @@ fn queue_face(app: AppState, queue: QueueDock, keyed: Memo<bool>) -> AnyElement 
     });
     let mut said = queue.header.clone();
     said.extend(queue.clause.clone());
+    let toggle = queue.toggle.clone();
+    let caret = if queue.open { "▾" } else { "▸" };
     let top = view()
+        .test_id("btn-queue-toggle")
+        .role(AccessibilityRole::Button)
+        .label(format!(
+            "{said}, {}",
+            if queue.open { "fold" } else { "show" }
+        ))
+        .accessibility_state(AccessibilityState {
+            expanded: Some(queue.open),
+            ..AccessibilityState::default()
+        })
         .flex_row()
         .items_center()
         .gap(px(8.0))
+        .cursor_pointer()
+        .on_press(move || run(app, toggle.clone()))
+        .when(form == Form::Phone, |row| row.min_h(px(TARGET)))
+        .child(head(form, caret.to_owned()).flex_shrink_0())
         .child(head(form, said).flex_1().min_w(px(0.0)))
         .children(queue.more.clone().map(|more| head(form, more)));
-    let rows: Vec<AnyElement> = queue
-        .items
-        .into_iter()
-        .enumerate()
-        .map(|(at, item)| row(app, item, (at == 0).then_some(first)))
-        .collect();
+    let rows: Vec<AnyElement> = if queue.open {
+        queue
+            .items
+            .into_iter()
+            .enumerate()
+            .map(|(at, item)| row(app, item, (at == 0).then_some(first)))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let foreign = queue
+        .foreign
+        .filter(|_| queue.open)
+        .map(|foreign| words(form, foreign, color(Token::Ink3)).into_element());
     view()
         .test_id("session-queue")
         .role(AccessibilityRole::List)
         .label("Queue")
-        .gap(px(if form == Form::Terminal { 0.0 } else { 2.0 }))
+        .gap(px(if form == Form::Terminal { 0.0 } else { 1.0 }))
         .child(top)
         .children(rows)
-        .children(
-            queue
-                .foreign
-                .map(|foreign| words(form, foreign, color(Token::Ink3)).into_element()),
-        )
+        .children(foreign)
         .into_element()
 }
 
@@ -396,6 +388,7 @@ fn row(app: AppState, item: QueueItem, first: Option<ElementRef>) -> AnyElement 
         .items_center()
         .gap(px(8.0))
         .when(form == Form::Phone, |row| row.min_h(px(TARGET)))
+        .when(form == Form::Desktop, |row| row.min_h(px(22.0)))
         .child(words(form, lead, color(Token::Ink3)).flex_shrink_0())
         .child(
             words(form, item.text, color(Token::Ink))
@@ -407,27 +400,61 @@ fn row(app: AppState, item: QueueItem, first: Option<ElementRef>) -> AnyElement 
         .into_element()
 }
 
-/// A queue control: dimmed and inert while the host would refuse it or a change is in flight;
-/// Remove in the failure colour.
+/// A queue control, one text line high: quiet words (Remove in the failure colour), muted and
+/// inert while the host would refuse it or a change is in flight.
 fn control_button(app: AppState, control: &QueueControl, focus: Option<ElementRef>) -> AnyElement {
+    let form = app.form;
     let action = control.action.clone();
-    button_with(
-        app,
-        control.label,
-        ButtonKind::Quiet,
-        ButtonOptions {
-            disabled: action.is_none(),
-            danger: control.danger,
-            focus,
-            ..ButtonOptions::default()
-        },
-        control.id.clone(),
-        move || {
-            if let Some(action) = &action {
-                run(app, action.clone());
-            }
-        },
-    )
+    let enabled = action.is_some();
+    let ink = match (enabled, control.danger) {
+        (false, _) => color(Token::Ink4),
+        (true, true) => hue_ink(Hue::Fail),
+        (true, false) => color(Token::Ink2),
+    };
+    let handle = focus.unwrap_or_else(element_ref);
+    let face = text(control.label).number_of_lines(1u32).text_color(ink);
+    let face = match form {
+        Form::Terminal => face,
+        _ => face.font_family(FONT_TEXT).text_size(px(11.5)),
+    };
+    let pressed = view()
+        .element_ref(&handle)
+        .test_id(&control.id)
+        .role(AccessibilityRole::Button)
+        .label(control.words)
+        .accessibility_state(AccessibilityState {
+            disabled: !enabled,
+            ..AccessibilityState::default()
+        })
+        .flex_row()
+        .flex_shrink_0()
+        .items_center()
+        .focusable(enabled)
+        .when(enabled, |pressed| {
+            pressed.cursor_pointer().on_press(move || {
+                if let Some(action) = &action {
+                    run(app, action.clone());
+                }
+            })
+        });
+    match form {
+        Form::Terminal => pressed
+            .child(term::focus_cell(term::focus_of(handle)))
+            .child(face)
+            .into_element(),
+        _ => pressed
+            .px(px(4.0))
+            .h(px(18.0))
+            .rounded(px(4.0))
+            .hover(|s| s.bg(color(Token::Hover)))
+            .focus_visible(|s| {
+                s.outline(px(2.0))
+                    .outline_color(color(Token::Focus))
+                    .outline_offset(px(1.0))
+            })
+            .child(face)
+            .into_element(),
+    }
 }
 
 /// The phone's `⋯` menu of a queued item: Edit, Move up, Move down, Remove.

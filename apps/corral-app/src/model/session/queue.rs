@@ -2,7 +2,9 @@
 //! (withdraw it into the draft), ↑ and ↓ (move it among the owner's items, as the host allows)
 //! and Remove (withdraw it unsent), through `session.queue.withdraw` and `session.queue.move`.
 //! Input from other sources is one read-only line. A move the host would refuse is drawn inert,
-//! and an item whose change is in flight takes no other until the host answers.
+//! and an item whose change is in flight takes no other until the host answers. The queue is its
+//! one header line until it unfolds: by itself only while no card waits and it holds at most
+//! three items, else when the owner presses it (or Alt+↓ gives it the keys).
 
 use corral_protocol::session_host::{
     QueueMoved, QueueWithdrawn, SessionQueueKey, SessionQueueMove, WithdrawOutcome,
@@ -19,8 +21,12 @@ use super::{Action, Can, Cx, SessionRole, State, Ui};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueDock {
-    /// `QUEUE · 2 waiting`.
+    /// `Queue · 2 waiting`.
     pub header: String,
+    /// The rows show; folded, the header line stands for them.
+    pub open: bool,
+    /// Folds or unfolds the queue.
+    pub toggle: Action,
     pub waiting: u32,
     /// ` · all run when the agent is next idle`, ` · editing is off in this session`.
     pub clause: Option<String>,
@@ -169,6 +175,21 @@ fn foreign(items: &[QueuedInput]) -> Option<String> {
     (!parts.is_empty()).then(|| format!("+ {} · read-only", parts.join(" · ")))
 }
 
+/// At most this many items show unfolded by themselves.
+const SHOWN_UNASKED: usize = 3;
+
+/// Whether the queue of `session` shows its rows: the owner's choice, else only while no card
+/// waits and it holds at most three items, so a waiting card keeps the page's room.
+pub(super) fn open(ui: &Ui, feed: &Feed, session: &str) -> bool {
+    let state = feed.live.get(session).and_then(|live| live.state.as_ref());
+    ui.dock.queue_open.unwrap_or_else(|| {
+        state.is_none_or(|state| {
+            state.cards.is_empty()
+                && usize::try_from(state.queue_total).is_ok_and(|n| n <= SHOWN_UNASKED)
+        })
+    })
+}
+
 /// The queue dock of the session `cx` reads; none while nothing waits.
 pub fn queue_dock(cx: &Cx<'_>) -> Option<QueueDock> {
     let state = cx.state?;
@@ -220,7 +241,9 @@ pub fn queue_dock(cx: &Cx<'_>) -> Option<QueueDock> {
         })
         .collect();
     Some(QueueDock {
-        header: format!("QUEUE · {} waiting", state.queue_total),
+        header: format!("Queue · {} waiting", state.queue_total),
+        open: open(cx.ui, cx.feed, cx.id.as_str()),
+        toggle: Action::Dock(DockAction::ToggleQueue(cx.id.clone())),
         waiting: state.queue_total,
         clause,
         more: (state.queue_total > listed).then(|| format!("+{} more", state.queue_total - listed)),
