@@ -1,5 +1,38 @@
 # The workspace daemon
 
+## App and Pi sessions
+
+`corrald-next` connects the app to the workspace and forwards session reads and
+actions to each running Pi host. A session without a running host is read-only
+until it is resumed. Restarting the daemon stops its assistant hosts; an assistant
+host resumes on the next message. Stopped build sessions must be resumed explicitly;
+see [Build sessions](build-sessions.md).
+
+Run `corrald-next run` in the workspace. It listens locally on
+`.corral-next/daemon.sock`. To allow a browser or device to connect, configure
+the optional app listener in `.corral-next/corral.toml` and restart the daemon:
+
+```toml
+[daemon]
+listen = "127.0.0.1:7841"
+web_origin = ["http://127.0.0.1:8080"]
+```
+
+`listen` is the TCP address for app connections; without it there is no app TCP
+listener. `web_origin` lists the exact browser origins permitted to connect; use
+the origin where you serve the app. Choose the listening interface deliberately
+and protect remotely exposed listeners.
+
+With the daemon running, use `corrald-next pair` to create an offer. Open the
+link on the device, choose Pair, compare the displayed codes and confirm on the
+trusted terminal. For a scripted flow, `corrald-next pair --json` prints the
+offer; `corrald-next pair status <pair-id>` reads its state,
+`corrald-next pair confirm <pair-id>` enrolls the claimed device, and
+`corrald-next pair cancel <pair-id>` cancels the offer. Confirm only after checking
+the codes. Pass `--root <path>` to `corrald-next` to select a workspace explicitly.
+
+## Classic workspace daemon
+
 `corrald` is the always-on sync loop for one workspace, run through `corral daemon`.
 It reconciles runs, advances autopilot, refreshes usage, maintains the database and
 runs PM recovery. It is not the only store writer: owner and agent commands run

@@ -13,6 +13,38 @@ package's locked dependencies (`bun install --frozen-lockfile`).
 | Chat without a task | `corral-pi chat` in a workspace, or send to the daemon's quick thread. |
 | Work directly in Git without a task | `corral-pi build`; see [Build sessions](build-sessions.md). |
 
+## Command reference
+
+```text
+corral-pi run --dir <run-dir> [--socket <path>] [--prompt-file <path>] [--corral <path>] [model flags]
+corral-pi chat [--new | --dir <chat-dir>] [--socket <path>] [--corral <path>] [model flags]
+corral-pi build [--project <name>] [--data-dir <path>] [--id <id>] [--name <name>] [--profile <name>] [--here] [--socket <path>] [--corral <path>] [--headless] [model flags]
+corral-pi build --resume <id> [--data-dir <path>] [--socket <path>] [--corral <path>] [--headless]
+corral-pi build --prune [--session <id> [--json]] [--dry-run] [--data-dir <path>]
+corral-pi login [--provider <id>] [--auth-dir <path>] [--key-file <path>]
+corral-pi models [--provider <id>]
+```
+
+Model flags are `--model [<provider>/]<id>`, `--provider <id>`,
+`--effort <level>`, `--aws-profile <name>`, `--aws-region <region>` and
+repeatable `--fallback <provider>/<model>`. Supply both AWS flags together.
+Sessions also accept `--project <name>` and `--headless`; non-interactive
+launches are headless by default. For build defaults and cleanup, see
+[Build sessions](build-sessions.md).
+
+## From the app
+
+Open a Pi session in Agents to follow its transcript, send or steer messages,
+queue follow-ups, stop a turn, answer questions and dialogs, inspect its work,
+and choose a model. Build sessions can also be started, resumed, finished and
+removed there. Ask opens the conversation in a drawer.
+
+The Pi `/settings` card and audible bell are terminal-only. Sign in to a
+provider in a terminal with `corral-pi login --provider <id>`; the owner shell
+`!command` also remains terminal-only.
+
+## Providers
+
 Each model is named `<provider>/<model>`. The provider decides how you pay:
 
 | Provider | Login and billing |
