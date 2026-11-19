@@ -1,14 +1,19 @@
-// What a build session's UI decides on its own: which docked dialog shows and when, who the composer's
-// Enter reaches, and which outcomes become conversation entries. Views stay pure; this keeps the episodes.
+// What a build session's UI decides on its own: which docked dialog shows and when, and who the composer's Enter
+// reaches. Views stay pure; this keeps the episodes. With the session's dialog registry, every docked decision goes
+// through the registry's card for it, which the app answers too; the host records the outcome in the conversation.
 import type {
   BoardPlan, BuildPanelState, BuildSummary, BuildUi, ChildSnapshot, ExitControl, ExitOption, ExitPhase, FleetSnapshot,
 } from "../../build/types.ts";
 import { LIVE_CHILD_STATES } from "../../build/types.ts";
+import { BridgeRefusal } from "../../bridge/protocol.ts";
+import type { AnswerStatus, CardAnswer, CardEntry } from "../../host/remote/cards.ts";
+import { optionId } from "../../host/remote/cards.ts";
+import type { DialogResolution, ExistingDialog, RemoteDialogs } from "../../host/remote/dialogs.ts";
 import type { ChildMark, MarkSink } from "../../host/transcript-marks.ts";
 import { PANEL_BLUE, PANEL_WARNING } from "../panels-view.ts";
 import { exitDialog, planDialog, questionDialog } from "./build-dialogs.ts";
 import type { PreviewState } from "./build-dialogs.ts";
-import { boardEntry, exitEntry, finishEntry } from "./build-entries.ts";
+import { finishEntry } from "./build-entries.ts";
 import type { BuildEntry } from "./build-entries.ts";
 import { CHOICE_GUARD_MS, ChoiceDock } from "./choice-dock.ts";
 import type { ChoiceDialog, ChoiceOption } from "./choice-dock.ts";
@@ -34,6 +39,13 @@ export interface BuildControllerHost {
   post(entry: BuildEntry<unknown>): void;
   /** Where a child's question, the owner's answer and a steer are recorded as transcript marks; absent records nothing. */
   readonly marks?: MarkSink;
+  /**
+   * The session's dialog registry, read at each use. Present while a terminal is attached: the exit choice, a board
+   * plan and a child's question are decided through its card, which also delivers the answer and records it, and an
+   * answer from the app closes the dock. Absent (a headless session, tests): the controller never watches or answers
+   * a card, and decisions go straight to the build controls.
+   */
+  readonly dialogs?: RemoteDialogs;
   showBoard(): void;
   openChild(id: string): void;
   color(hue: number): string;
@@ -44,8 +56,6 @@ export interface BuildControllerHost {
 type Shown = { readonly kind: "exit" } | { readonly kind: "question"; readonly id: string; readonly askedAt: number } | { readonly kind: "plan" };
 
 const PLAN_DRAFT = "Split the remaining work into board tasks and propose them with board_plan.";
-/** Phases after which an exit episode has an outcome the parent should learn. */
-const SETTLED: readonly ExitPhase[] = ["kept", "landed", "failed"];
 const DONE_REASON: Partial<Record<ExitPhase, string>> = {
   kept: "this session already kept the branch", rebasing: "this session is already landing", verifying: "this session is already landing",
   repairing: "this session is already landing",
@@ -55,7 +65,16 @@ const DONE_REASON: Partial<Record<ExitPhase, string>> = {
 const REASON_TARGET: ComposerTarget = { id: "exit", answer: true };
 
 const questionKey = (id: string, askedAt: number) => `${id}:${askedAt}`;
-const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+/** An error's words for a notice; a registry refusal gives its reason without its code. */
+const message = (error: unknown) => error instanceof BridgeRefusal ? error.reason : error instanceof Error ? error.message : String(error);
+
+/** Which registry card is `shown`'s decision: the exit, the board plan, or this child's question at its `askedAt`. */
+function cardOf(shown: Shown): (card: Readonly<CardEntry["card"]>) => boolean {
+  if (shown.kind === "exit") return card => card.kind === "exit";
+  if (shown.kind === "plan") return card => card.kind === "board_plan";
+  const child = shown.id, opened = new Date(shown.askedAt).toISOString();
+  return card => card.kind === "child_question" && card.child === child && card.opened_at === opened;
+}
 
 export class BuildController implements BuildCardSource {
   readonly dock: ChoiceDock;
@@ -64,8 +83,6 @@ export class BuildController implements BuildCardSource {
   private lastTarget: string;
   /** Exit episodes: one per entry into `pending`. */
   private episode = 0;
-  private posted = -1;
-  private chosen: ExitOption | undefined;
   private choosing = false;
   private summaryValue: BuildSummary | undefined;
   private latest: string | undefined;
@@ -87,6 +104,8 @@ export class BuildController implements BuildCardSource {
   /** When the exit's current phase began, as `sync` saw it change. */
   private phaseAt: number | undefined;
   private readonly watchers = new Set<{ readonly invalidate: () => void }>();
+  /** The docked decision's card in the registry, watched while it is docked so an answer from the app closes it. */
+  private watching: ExistingDialog | undefined;
   private disposed = false;
 
   constructor(private readonly host: BuildControllerHost) {
@@ -105,7 +124,7 @@ export class BuildController implements BuildCardSource {
     });
   }
 
-  /** Every snapshot: track exit/plan/question episodes, auto-open, fetch the summary once per exit episode, start previews, post terminal exit entries, notice a target fallback. */
+  /** Every snapshot: track exit/plan/question episodes, auto-open, fetch the summary once per exit episode, start previews, notice a target fallback. */
   sync(): void {
     if (this.disposed) return;
     const ui = this.host.ui, fleet = ui.fleet.snapshot();
@@ -121,26 +140,17 @@ export class BuildController implements BuildCardSource {
     }
 
     const arrivals: Shown[] = [];
-    const exit = ui.exit.state(), phase = exit.phase;
+    const phase = ui.exit.state().phase;
     if (phase !== this.lastPhase) {
-      const previous = this.lastPhase;
       this.lastPhase = phase;
       this.phaseAt = this.host.now();
       if (phase !== "pending") this.reasonFor = undefined;
       if (phase === "pending") {
         this.episode++;
-        this.chosen = undefined;
         this.summaryValue = undefined;
         this.readSummary(this.episode);
         arrivals.push({ kind: "exit" });
-      } else {
-        if (this.shown?.kind === "exit") this.close();
-        const iterated = phase === "none" && this.chosen?.choice === "iterate" && previous === "pending";
-        if (this.posted !== this.episode && (SETTLED.includes(phase) || iterated)) {
-          const option = this.chosen ?? ui.exit.options().find(entry => entry.choice === exit.record?.choice);
-          if (option) { this.posted = this.episode; this.host.post(exitEntry(option, exit)); }
-        }
-      }
+      } else if (this.shown?.kind === "exit") this.close();
     }
 
     const asking = this.questions(fleet);
@@ -296,15 +306,14 @@ export class BuildController implements BuildCardSource {
     if (!target || !text.trim()) return false;
     const ui = this.host.ui, id = target.id;
     if (target.answer) {
-      if (ui.fleet.answer(id, text)) {
-        this.answerFor = undefined;
+      const askedAt = ui.fleet.snapshot().children.find(child => child.id === id)?.question?.askedAt;
+      this.answerFor = undefined;
+      const delivered = await this.answerChild(id, askedAt, text);
+      if (this.disposed) return true;
+      if (delivered) {
         this.clearDraft(text);
         this.host.notice(`Answered ${id}`, "success");
-        this.mark("answered", id, text);
-      } else {
-        this.answerFor = undefined;
-        this.host.notice(`${id} no longer waits for an answer`, "warning");
-      }
+      } else this.host.notice(`${id} no longer waits for an answer`, "warning");
       this.host.changed();
       return true;
     }
@@ -372,6 +381,8 @@ export class BuildController implements BuildCardSource {
   dispose(): void {
     this.disposed = true;
     this.watchers.clear();
+    this.watching?.dispose();
+    this.watching = undefined;
     this.shown = undefined;
     this.dock.focused = false;
   }
@@ -421,30 +432,44 @@ export class BuildController implements BuildCardSource {
       this.close();
       if (answer) {
         this.answered.add(questionKey(shown.id, shown.askedAt));
-        if (ui.fleet.answer(shown.id, answer.label)) {
-          this.host.notice(`Answered ${shown.id}`, "success");
-          this.mark("answered", shown.id, answer.label);
-        } else this.host.notice(`${shown.id} no longer waits for an answer`, "warning");
-        this.next();
+        void this.answerChild(shown.id, shown.askedAt, answer.label, index).then(delivered => {
+          if (this.disposed) return;
+          if (delivered) this.host.notice(`Answered ${shown.id}`, "success");
+          else this.host.notice(`${shown.id} no longer waits for an answer`, "warning");
+          this.next();
+        });
       } else if (!this.point(shown.id, true)) this.host.notice(`${shown.id} no longer waits for an answer`, "warning");
       return;
     }
     // Only a session with a board (not bare) ever tracks a plan.
     const plan = this.tracked, board = ui.board;
     if (!plan || !board || this.filing) return;
-    if (index === 2) {
+    const dismiss = index === 2, start = index === 0;
+    if (!dismiss && this.preview.state !== "ready") return;
+    if (this.host.dialogs) {
+      this.filing = true;
+      this.fileError = undefined;
+      // The host files (or discards) the plan, and posts the filed tasks to the conversation.
+      this.decide({ kind: "plan" }, [{ options: [dismiss ? "dismiss" : start ? "file_start" : "file"] }]).then(status => {
+        if (this.disposed) return;
+        if (this.shown?.kind === "plan") this.close();
+        if (status === "dismissed") this.host.notice("Nothing filed. The plan is discarded.", "text");
+        else if (status === "started") this.host.showBoard();
+        else this.host.notice("The plan is no longer waiting", "warning");
+      }, error => { this.fileError = message(error); })
+        .finally(() => { this.filing = false; if (!this.disposed) this.host.changed(); });
+      return;
+    }
+    if (dismiss) {
       board.dismiss();
       this.close();
       this.host.notice("Nothing filed. The plan is discarded.", "text");
       return;
     }
-    if (this.preview.state !== "ready") return;
-    const start = index === 0, before = new Set(board.tasks().map(task => task.id));
     this.filing = true;
     this.fileError = undefined;
-    board.file(plan, start).then(tasks => {
+    board.file(plan, start).then(() => {
       if (this.disposed) return;
-      this.host.post(boardEntry(tasks.filter(task => !before.has(task.id)), start));
       if (this.shown?.kind === "plan") this.close();
       this.host.showBoard();
     }, error => { this.fileError = message(error); })
@@ -455,7 +480,7 @@ export class BuildController implements BuildCardSource {
     this.host.notice(`${option.label} is unavailable: ${option.unavailable ?? ""}`, "warning");
   }
 
-  /** Esc: not now. The exit stays pending, the child keeps waiting, the plan stays proposed. */
+  /** Esc: not now. The exit stays pending, the child keeps waiting, the plan stays proposed, in the app as well. */
   private dismiss(): void {
     const shown = this.shown;
     if (!shown) return;
@@ -469,9 +494,14 @@ export class BuildController implements BuildCardSource {
 
   // ---------- internals ----------
 
-  /** Docks `shown`; one that opened by itself ignores Enter and digits for a moment and takes focus only then. */
+  /**
+   * Docks `shown` and watches its card in the registry; one that opened by itself ignores Enter and digits for a
+   * moment and takes focus only then.
+   */
   private show(shown: Shown, auto: boolean): void {
     this.shown = shown;
+    this.watching?.dispose();
+    this.watching = this.host.dialogs?.watch(cardOf(shown), result => this.resolved(shown, result));
     if (shown.kind === "exit") this.reasonFor = undefined;
     if (shown.kind === "question") this.dismissed.delete(questionKey(shown.id, shown.askedAt));
     this.dock.guard(auto ? Date.now() + CHOICE_GUARD_MS : 0);
@@ -484,14 +514,59 @@ export class BuildController implements BuildCardSource {
   private choose(option: ExitOption, overrideReason?: string): void {
     if (this.choosing) return;
     this.choosing = true;
-    this.chosen = option;
-    this.host.ui.exit.choose(option.choice, overrideReason === undefined ? undefined : { overrideReason })
-      .catch(error => { if (!this.disposed) this.host.notice(message(error), "error"); })
+    const chosen: Promise<unknown> = this.host.dialogs
+      ? this.decide({ kind: "exit" }, [{ options: [option.choice], ...(overrideReason === undefined ? {} : { text: overrideReason }) }])
+        .then(status => { if (status !== "started" && !this.disposed) this.host.notice("The exit choice is no longer waiting", "warning"); })
+      : this.host.ui.exit.choose(option.choice, overrideReason === undefined ? undefined : { overrideReason });
+    chosen.catch(error => { if (!this.disposed) this.host.notice(message(error), "error"); })
       .finally(() => { this.choosing = false; if (!this.disposed) this.host.changed(); });
+  }
+
+  /**
+   * Answers the registry's card for `shown` from these keys, as the app would; "missing" when no such card waits.
+   * The card delivers the decision and the host records its outcome, so nothing here applies or posts it again.
+   */
+  private async decide(shown: Shown, answers: readonly CardAnswer[]): Promise<AnswerStatus> {
+    const card = this.host.dialogs?.watch(cardOf(shown), () => {});
+    if (!card) return "missing";
+    try { return await card.answer(answers); } finally { card.dispose(); }
+  }
+
+  /**
+   * Answers child `id`'s question asked at `askedAt` with `text`, an offered option's label when `option` is its
+   * index; true once delivered. Through the registry the question's card delivers and records the answer.
+   */
+  private async answerChild(id: string, askedAt: number | undefined, text: string, option?: number): Promise<boolean> {
+    if (!this.host.dialogs) {
+      if (!this.host.ui.fleet.answer(id, text)) return false;
+      this.mark("answered", id, text);
+      return true;
+    }
+    if (askedAt === undefined) return false;
+    const answer: CardAnswer = option === undefined ? { options: [], text } : { options: [optionId(text, option)] };
+    try { return await this.decide({ kind: "question", id, askedAt }, [answer]) === "delivered"; } catch { return false; }
+  }
+
+  /**
+   * The docked decision settled in the registry: by these keys a moment ago, from the app, or as the session closed.
+   * The dock closes; an answer from another device says so in one quiet notice.
+   */
+  private resolved(shown: Shown, result: DialogResolution): void {
+    if (this.disposed || this.shown !== shown) return;
+    this.watching = undefined;
+    this.close();
+    if (result.by?.source !== "remote") return;
+    this.host.notice(result.kind === "answered" ? "Answered from another device" : "Dismissed from another device", "text");
+    if (shown.kind === "question") {
+      this.answered.add(questionKey(shown.id, shown.askedAt));
+      this.next();
+    }
   }
 
   private close(): void {
     this.shown = undefined;
+    this.watching?.dispose();
+    this.watching = undefined;
     if (this.dock.focused) {
       this.dock.focused = false;
       this.host.focusComposer();

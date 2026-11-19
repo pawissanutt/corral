@@ -5,6 +5,8 @@ import type { PresentedDialog, SelectDialogRequest } from "@earendil-works/pi-co
 import { CHOICE_GUARD_MS } from "./build/choice-dock.ts";
 import { ownerDialogPresentation, ownerListCard } from "./owner-dialog.ts";
 import type { OwnerDialogHost, OwnerListItem } from "./owner-dialog.ts";
+import { BridgeRefusal } from "../bridge/protocol.ts";
+import { RemoteDialogs } from "../host/remote/dialogs.ts";
 
 const ENTER = "\r", ESC = "\x1b", DOWN = "\x1b[B", PAGE_DOWN = "\x1b[6~", CTRL_O = "\x0f";
 const tui = { requestRender() {} } as unknown as TUI;
@@ -149,4 +151,58 @@ test("the list card never chooses a disabled item and hands its extra keys the s
   expect(chosen).toEqual([]);
   card.handleInput(DOWN); card.handleInput(ENTER); card.handleInput(ESC);
   expect(chosen).toEqual(["gamma"]);
+});
+
+/** The registry's result reaches the card through a few promise steps. */
+async function settle(): Promise<void> {
+  for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+}
+
+/** A select or confirm card registered with `dialogs`, as an attached session opens it. */
+function registered(dialogs: RemoteDialogs, request: Partial<SelectDialogRequest> & Pick<SelectDialogRequest, "options">) {
+  const answers: (string | undefined)[] = [], notices: string[] = [];
+  const card = ownerDialogPresentation({ ...host(24), dialogs, notice: text => { notices.push(text); } }).select?.(
+    { kind: "select", title: "Pick one", tui, toggleToolsExpanded() {}, ...request }, value => { answers.push(value); });
+  if (!card) throw new Error("the select hook declined");
+  return { card, answers, notices };
+}
+
+test("a remote answer closes the docked card and a later key press does nothing", async () => {
+  const dialogs = new RemoteDialogs(() => {});
+  const { card, answers, notices } = registered(dialogs, { kind: "confirm", title: "Stop command?", message: "Output is retained.", options: ["Yes", "No"] });
+  const [entry] = dialogs.entries();
+  expect(entry?.card.kind).toBe("confirm");
+  expect(await dialogs.resolve(entry!.card.id, [{ options: ["no"] }], false, { source: "remote", device: "phone" })).toBe("answered");
+  await settle();
+  expect(answers).toEqual(["No"]);
+  expect(notices).toEqual(["Answered from another device"]);
+  armed(() => { card.handleInput("1"); card.handleInput(ENTER); card.handleInput(ESC); });
+  await settle();
+  expect(answers).toEqual(["No"]);
+  expect(notices).toEqual(["Answered from another device"]);
+  expect(dialogs.entries()).toEqual([]);
+});
+
+test("a key press answers the registered card for both sides, once; Pi closing a card withdraws it from the app", async () => {
+  const dialogs = new RemoteDialogs(() => {});
+  const { card, answers, notices } = registered(dialogs, { options: ["Project", "Branch"] });
+  const id = dialogs.entries()[0]!.card.id;
+  armed(() => { card.handleInput("2"); card.handleInput("1"); });
+  await settle();
+  expect(answers).toEqual(["Branch"]);
+  expect(notices).toEqual([]);
+  expect(dialogs.entries()).toEqual([]);
+  let refusal = "";
+  try { await dialogs.resolve(id, [{ options: ["Project"] }], false, { source: "remote" }); } catch (error) { refusal = error instanceof BridgeRefusal ? error.code : String(error); }
+  expect(refusal).toBe("invalid_card_answer");
+  expect(answers).toEqual(["Branch"]);
+
+  // Pi's timeout or an abort removes the card: the app's card goes with it.
+  const typed: (string | undefined)[] = [];
+  const input = ownerDialogPresentation({ ...host(24), dialogs }).input?.({ title: "Name", placeholder: "slot", tui }, value => { typed.push(value); });
+  expect(dialogs.entries().map(entry => entry.card.kind)).toEqual(["input"]);
+  input?.dispose?.();
+  await settle();
+  expect(dialogs.entries()).toEqual([]);
+  expect(typed).toEqual([undefined]);
 });
