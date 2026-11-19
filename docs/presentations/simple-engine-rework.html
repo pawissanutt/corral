@@ -1,0 +1,1414 @@
+<!doctype html>
+<html lang="en" class="no-js" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Report and user guide for the Corral engine rework: executive summary, overview, user guide and technical detail.">
+<title>Corral engine rework: report and user guide</title>
+<style>
+:root{
+  --font-sans:system-ui,-apple-system,"Segoe UI",Ubuntu,Cantarell,"Noto Sans","Helvetica Neue",sans-serif;
+  --font-mono:ui-monospace,"SF Mono","Cascadia Mono","JetBrains Mono",Menlo,Consolas,"DejaVu Sans Mono","Liberation Mono",monospace;
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;--s7:48px;--s8:72px;
+  --t-2xs:.6875rem;--t-xs:.75rem;--t-sm:.8125rem;--t-md:.9375rem;--t-lg:1.125rem;--t-xl:1.375rem;
+  --t-2xl:clamp(1.75rem,1.1rem + 2.8vw,3.25rem);
+  --lh-tight:1.15;--lh:1.55;
+  --r1:3px;--r2:6px;--r3:12px;--r-pill:999px;
+  --line-w:1px;--arrow-w:2px;--focus-w:2px;
+  --dur:180ms;--ease:cubic-bezier(.2,.7,.2,1);
+  --measure:68ch;--page:1320px;--toc-w:15.5rem;--main-w:56rem;
+  --bg:#f2efe6;--surface:#fbf9f4;--surface-2:#ebe7dc;--surface-3:#e1dccd;
+  --line:#d4cebf;--line-strong:#aea691;
+  --ink:#161a22;--ink-2:#454c5b;--ink-3:#5f6676;
+  --cy:#0a6a7e;--gr:#386a14;--ye:#7f5c00;--re:#a6202b;--ma:#6c329f;--or:#94480a;--bl:#2450b0;
+  --accent:var(--cy);--on-accent:#fbf9f4;
+  --shadow:0 1px 0 rgb(40 30 10 / .05),0 12px 32px -18px rgb(40 30 10 / .35);
+  --grid-ink:rgb(22 26 34 / .045);
+  --hatch:rgb(148 72 10 / .09);
+}
+@media (prefers-color-scheme:dark){
+  :root[data-theme="auto"]{
+    --bg:#0c0f15;--surface:#121823;--surface-2:#18202e;--surface-3:#202a3b;
+    --line:#263042;--line-strong:#3a4760;
+    --ink:#e2e8f1;--ink-2:#aab4c4;--ink-3:#8590a4;
+    --cy:#5ccfe6;--gr:#95d36a;--ye:#e6c35c;--re:#f07178;--ma:#c792ea;--or:#ffa759;--bl:#73a6ff;
+    --on-accent:#0c0f15;
+    --shadow:0 1px 0 rgb(0 0 0 / .3),0 16px 40px -20px rgb(0 0 0 / .7);
+    --grid-ink:rgb(200 208 220 / .035);--hatch:rgb(255 167 89 / .07);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0c0f15;--surface:#121823;--surface-2:#18202e;--surface-3:#202a3b;
+  --line:#263042;--line-strong:#3a4760;
+  --ink:#e2e8f1;--ink-2:#aab4c4;--ink-3:#8590a4;
+  --cy:#5ccfe6;--gr:#95d36a;--ye:#e6c35c;--re:#f07178;--ma:#c792ea;--or:#ffa759;--bl:#73a6ff;
+  --on-accent:#0c0f15;
+  --shadow:0 1px 0 rgb(0 0 0 / .3),0 16px 40px -20px rgb(0 0 0 / .7);
+  --grid-ink:rgb(200 208 220 / .035);--hatch:rgb(255 167 89 / .07);
+}
+:root{
+  --st-idea:var(--ink-3);--st-backlog:var(--ink-2);--st-ready:var(--bl);--st-running:var(--cy);
+  --st-needs:var(--ye);--st-review:var(--ma);--st-done:var(--gr);--st-dropped:var(--re);
+}
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%;color-scheme:light dark;scroll-padding-top:var(--s5)}
+html[data-theme="light"]{color-scheme:light}
+html[data-theme="dark"]{color-scheme:dark}
+@media (prefers-reduced-motion:no-preference){html{scroll-behavior:smooth}}
+body{
+  margin:0;background:var(--bg);color:var(--ink);font:1rem/1.6 var(--font-sans);
+  background-image:linear-gradient(var(--grid-ink) var(--line-w),transparent var(--line-w)),linear-gradient(90deg,var(--grid-ink) var(--line-w),transparent var(--line-w));
+  background-size:var(--s6) var(--s6);overflow-x:hidden;
+}
+::selection{background:var(--accent);color:var(--on-accent)}
+h1,h2,h3,h4{margin:0;line-height:var(--lh-tight);text-wrap:balance}
+p,ul,ol,dl,dd{margin:0}
+code,kbd,.mono{font-family:var(--font-mono);font-size:.9em}
+code{background:var(--surface-2);border:var(--line-w) solid var(--line);border-radius:var(--r1);padding:0 var(--s1);overflow-wrap:anywhere;font-variant-ligatures:none}
+kbd{display:inline-block;min-width:1.7em;text-align:center;border:var(--line-w) solid var(--line-strong);border-bottom-width:var(--arrow-w);border-radius:var(--r1);padding:0 var(--s1);background:var(--surface);color:var(--ink);line-height:1.5;white-space:nowrap}
+a{color:var(--accent);text-decoration-thickness:var(--line-w);text-underline-offset:.2em}
+a:hover{text-decoration-thickness:var(--arrow-w)}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:var(--focus-w) solid var(--accent);outline-offset:var(--arrow-w);border-radius:var(--r1)}
+.skip{position:absolute;left:var(--s3);top:calc(-1 * var(--s8));z-index:10;background:var(--accent);color:var(--on-accent);padding:var(--s2) var(--s3);border-radius:var(--r2);font-weight:600}
+.visually-hidden{position:absolute!important;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.skip:focus{top:var(--s3)}
+.wrap{max-width:var(--page);margin:0 auto;padding:0 var(--s5)}
+.no-js .needs-js{display:none!important}
+strong{font-weight:700;color:var(--ink)}
+
+/* Masthead */
+.masthead{padding:var(--s6) 0 var(--s7);border-bottom:var(--line-w) solid var(--line)}
+.masthead .wrap{display:grid;gap:var(--s4)}
+.brandline{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--s3);margin-bottom:var(--s4)}
+.brand{font:700 var(--t-sm)/1 var(--font-mono);color:var(--accent);letter-spacing:.06em}
+.brand span{color:var(--ink-3);font-weight:400}
+.btn{display:inline-flex;align-items:center;gap:var(--s2);min-height:36px;padding:var(--s2) var(--s4);border-radius:var(--r2);border:var(--line-w) solid var(--line-strong);background:transparent;font-size:var(--t-sm);font-weight:600;transition:background var(--dur) var(--ease),border-color var(--dur) var(--ease)}
+.btn:hover{border-color:var(--accent);background:var(--surface-2)}
+h1{font:800 var(--t-2xl)/1.04 var(--font-sans);letter-spacing:-.03em;max-width:18ch}
+.lede{font-size:var(--t-lg);color:var(--ink-2);max-width:var(--measure)}
+.mast-meta{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s6);font-size:var(--t-sm);color:var(--ink-2)}
+.mast-meta div{display:flex;gap:var(--s2);align-items:baseline}
+.mast-meta dt{font:600 var(--t-xs)/1 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.mast-meta dd{color:var(--ink);font-weight:600}
+.status{margin-top:var(--s2);display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--s2) var(--s4);align-items:baseline;max-width:var(--main-w);padding:var(--s4) var(--s5);border:var(--line-w) solid var(--gr);border-radius:var(--r2);background:var(--surface);box-shadow:var(--shadow)}
+.status-label{font:700 var(--t-xs)/1.6 var(--font-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--gr)}
+.status-text{font-size:var(--t-lg);font-weight:600;line-height:1.45}
+.status-text code{font-size:.85em}
+
+/* Layout */
+.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s5);padding-top:var(--s5);padding-bottom:var(--s7)}
+main{min-width:0}
+
+/* Contents */
+.toc{min-width:0}
+.toc details{border:var(--line-w) solid var(--line);border-radius:var(--r2);background:var(--surface)}
+.toc summary{display:flex;align-items:center;justify-content:space-between;gap:var(--s3);min-height:44px;padding:var(--s2) var(--s4);font-weight:700;cursor:pointer;list-style:none}
+.toc summary::-webkit-details-marker{display:none}
+.toc summary::after{content:"";width:8px;height:8px;border-right:var(--arrow-w) solid var(--ink-2);border-bottom:var(--arrow-w) solid var(--ink-2);transform:rotate(45deg) translateY(-2px);transition:transform var(--dur) var(--ease)}
+.toc details[open] summary::after{transform:rotate(225deg) translateY(-2px)}
+.toc-title{font-size:var(--t-md)}
+.toc-body{padding:0 var(--s4) var(--s4)}
+.toc ol{list-style:none;margin:0;padding:0}
+.toc>details>.toc-body>ol>li+li{margin-top:var(--s3)}
+.toc a{display:block;color:var(--ink-2);text-decoration:none;padding:var(--s1) var(--s2);border-radius:var(--r1);font-size:var(--t-sm);line-height:1.35}
+.toc a:hover{color:var(--ink);background:var(--surface-2)}
+.toc .toc-part{color:var(--ink);font-weight:700;font-size:var(--t-sm)}
+.toc .toc-part span{font:600 var(--t-xs)/1 var(--font-mono);color:var(--accent);margin-right:var(--s1)}
+.toc ol ol{margin:var(--s1) 0 0 var(--s2);padding-left:var(--s2);border-left:var(--line-w) solid var(--line)}
+.toc a[aria-current="true"]{color:var(--accent);background:var(--surface-2);font-weight:600}
+.toc a:has(.n){display:grid;grid-template-columns:2.5em minmax(0,1fr);align-items:baseline}
+.toc .n{font-family:var(--font-mono);font-size:var(--t-xs);color:var(--ink-3);font-variant-numeric:tabular-nums}
+.toc a[aria-current="true"] .n{color:inherit}
+.toc-head{display:none}
+
+@media (min-width:1080px){
+  .layout{grid-template-columns:var(--toc-w) minmax(0,var(--main-w));justify-content:center;gap:var(--s7);padding-top:0}
+  .toc{position:sticky;top:0;align-self:start;max-height:100vh;overflow-y:auto;padding:var(--s6) 0 var(--s5);scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
+  .toc details{border:0;background:transparent}
+  .toc summary{display:none}
+  .toc-body{padding:0}
+  .toc-head{display:block;font:700 var(--t-sm)/1.2 var(--font-sans);color:var(--ink);padding:0 var(--s2) var(--s3)}
+  .masthead .wrap{grid-template-columns:var(--toc-w) minmax(0,var(--main-w));justify-content:center;column-gap:var(--s7)}
+  .masthead .wrap>*{grid-column:2}
+  .masthead .wrap>.brandline{grid-column:1 / -1}
+}
+
+/* Parts and sections */
+.part{padding-top:var(--s7)}
+.part-head{border-top:var(--arrow-w) solid var(--ink);padding-top:var(--s4)}
+.part-head h2{display:grid;gap:var(--s2);font:800 clamp(1.75rem,1.3rem + 1.8vw,2.5rem)/1.08 var(--font-sans);letter-spacing:-.025em;scroll-margin-top:var(--s5)}
+.part-num{font:600 var(--t-sm)/1 var(--font-mono);letter-spacing:.08em;color:var(--accent)}
+.part-intro{margin-top:var(--s4);font-size:var(--t-lg);color:var(--ink-2);max-width:var(--measure)}
+.sec{margin-top:var(--s7)}
+.part-head+.sec{margin-top:var(--s6)}
+.sec>h3{font:700 var(--t-xl)/1.2 var(--font-sans);letter-spacing:-.01em;margin-bottom:var(--s3);scroll-margin-top:var(--s5)}
+.sec-no{font:600 .82em/1 var(--font-mono);color:var(--accent);margin-right:.2em;font-variant-numeric:tabular-nums}
+.sec>h3 code{font-size:.85em}
+.sec>*+*{margin-top:var(--s4)}
+.sec>h3+*{margin-top:0}
+.sec p,.sec li{max-width:var(--measure)}
+.sec ul,.sec ol{padding-left:1.4em}
+.sec li+li{margin-top:var(--s2)}
+.sec li::marker{color:var(--ink-3)}
+.sec ol>li::marker{font:600 var(--t-sm) var(--font-mono);color:var(--accent);font-variant-numeric:tabular-nums}
+.sub{color:var(--ink-2);font-size:var(--t-md)}
+.lead{font-size:var(--t-lg);line-height:1.6}
+.note{font-size:var(--t-sm);color:var(--ink-2);padding-left:var(--s3);border-left:var(--line-w) solid var(--line-strong)}
+.note b{color:var(--ink)}
+
+/* Tables */
+.tw{border:var(--line-w) solid var(--line);border-radius:var(--r2);background:var(--surface);overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
+table{width:100%;border-collapse:collapse;font-size:var(--t-md);line-height:1.5;font-variant-numeric:tabular-nums}
+th,td{text-align:left;vertical-align:top;padding:var(--s2) var(--s3);border-bottom:var(--line-w) solid var(--line)}
+thead th{font:700 var(--t-2xs)/1.4 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);background:var(--surface-2);white-space:nowrap}
+tbody th{font-weight:600;color:var(--ink)}
+tbody td{color:var(--ink-2)}
+tbody td strong{color:var(--ink)}
+tbody tr:last-child>*{border-bottom:0}
+tbody tr:hover>*{background:var(--surface-2)}
+.num{text-align:right;white-space:nowrap}
+.wide table{min-width:36rem}
+.c1 th[scope="row"]{width:34%}
+.cmd-table td code,.cmd-table th code{white-space:normal}
+tr.total>*{font-weight:700;color:var(--ink);background:var(--surface-2);border-top:var(--line-w) solid var(--line-strong)}
+
+/* Code */
+.code{border:var(--line-w) solid var(--line);border-radius:var(--r2);background:var(--surface);overflow:hidden}
+.code-h{display:flex;justify-content:space-between;gap:var(--s3);padding:var(--s1) var(--s3);font:600 var(--t-2xs)/1.9 var(--font-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);background:var(--surface-2);border-bottom:var(--line-w) solid var(--line)}
+pre{margin:0;padding:var(--s3) var(--s4);overflow-x:auto;font:var(--t-sm)/1.65 var(--font-mono);color:var(--ink-2);tab-size:4;scrollbar-width:thin;scrollbar-color:var(--line-strong) transparent}
+pre code{background:none;border:0;padding:0;font-size:inherit;overflow-wrap:normal;white-space:pre}
+.cl{color:var(--ink);font-weight:700}
+.pr{color:var(--accent);font-weight:700;-webkit-user-select:none;user-select:none}
+.cm{color:var(--ink-3);font-style:italic}
+.term pre{background:var(--surface)}
+
+/* Callouts and panels */
+.callout{border:var(--line-w) solid var(--or);border-radius:var(--r2);background:repeating-linear-gradient(135deg,var(--hatch) 0 var(--s2),transparent var(--s2) var(--s4)),var(--surface);padding:var(--s4) var(--s5)}
+.callout-label{display:inline-block;font:800 var(--t-xs)/1 var(--font-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--or);border:var(--line-w) solid var(--or);border-radius:var(--r1);padding:var(--s1) var(--s2);background:var(--surface);margin-bottom:var(--s3)}
+.callout p{max-width:var(--measure)}
+.callout p+p{margin-top:var(--s2)}
+.evidence{border:var(--line-w) solid var(--line-strong);border-radius:var(--r3);background:var(--surface);padding:var(--s5);box-shadow:var(--shadow)}
+.evidence>*+*{margin-top:var(--s4)}
+.evidence h3{font:700 var(--t-xl)/1.2 var(--font-sans);letter-spacing:-.01em;scroll-margin-top:var(--s5)}
+.evidence .tw{border:0;border-top:var(--line-w) solid var(--line);border-radius:0;background:transparent}
+.evidence figure{border:0;padding:0;background:transparent;box-shadow:none}
+.evidence th[scope="row"]{width:40%}
+.open-items{border:var(--line-w) solid var(--or);border-radius:var(--r2);padding:var(--s4) var(--s5) var(--s4) calc(var(--s5) + 1.1em);background:repeating-linear-gradient(135deg,var(--hatch) 0 var(--s2),transparent var(--s2) var(--s4)),var(--surface)}
+
+/* Headline figures */
+.figures{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-top:var(--arrow-w) solid var(--ink)}
+.figures>div{padding:var(--s4) var(--s5) var(--s5) 0;border-bottom:var(--line-w) solid var(--line);min-width:0}
+.figures>div:nth-child(2n){padding-left:var(--s5);padding-right:0;border-left:var(--line-w) solid var(--line)}
+.figures dt{font:800 clamp(1.6rem,1.2rem + 1.6vw,2.4rem)/1.1 var(--font-sans);letter-spacing:-.02em;font-variant-numeric:tabular-nums lining-nums;color:var(--ink)}
+.figures dt .to{font-weight:400;color:var(--ink-3);padding:0 .12em}
+.figures dd{margin-top:var(--s2);color:var(--ink-2);font-size:var(--t-md)}
+
+/* Figures */
+figure{margin:0;padding:var(--s4) var(--s5) var(--s5);border:var(--line-w) solid var(--line);border-radius:var(--r3);background:var(--surface)}
+figure svg{display:block;width:100%;height:auto;overflow:visible}
+figcaption{margin-top:var(--s4);font-size:var(--t-sm);color:var(--ink-2);max-width:var(--measure)}
+figcaption b{color:var(--ink)}
+.fig-chart svg{max-width:600px}
+.fig-size svg{max-width:460px}
+.svg-narrow{display:none}
+@media (max-width:700px){figure .svg-wide{display:none}figure .svg-narrow{display:block;max-width:420px;margin:0 auto}}
+svg text{font-family:var(--font-sans);fill:var(--ink)}
+svg .mono{font-family:var(--font-mono)}
+svg .t2{fill:var(--ink-2)}
+svg .t3{fill:var(--ink-3)}
+svg .b{font-weight:700}
+svg .acc{fill:var(--accent);font-weight:700}
+svg .box{fill:var(--bg);stroke:var(--line-strong);stroke-width:1.5}
+svg .box-core{fill:var(--bg);stroke:var(--accent);stroke-width:2.5}
+svg .band{fill:var(--surface-2);stroke:var(--line-strong);stroke-width:1.5;stroke-dasharray:6 4}
+svg .ln{fill:none;stroke:var(--ink-2);stroke-width:1.5}
+svg .ln-acc{fill:none;stroke:var(--accent);stroke-width:2.25}
+svg .mk{fill:var(--ink-2)}
+svg .mk-acc{fill:var(--accent)}
+svg .ko{fill:var(--surface)}
+svg .bar{fill:var(--accent)}
+svg .bar-old{fill:var(--ink-3)}
+svg .axis{stroke:var(--line-strong);stroke-width:1.5}
+svg .pill{fill:var(--bg);stroke-width:2.25}
+svg .any{fill:none;stroke:var(--ink-3);stroke-width:1.5;stroke-dasharray:5 4}
+.st-idea{stroke:var(--st-idea)}.st-backlog{stroke:var(--st-backlog)}.st-ready{stroke:var(--st-ready)}.st-running{stroke:var(--st-running)}
+.st-blocked{stroke:var(--st-needs)}.st-review{stroke:var(--st-review)}.st-done{stroke:var(--st-done)}.st-dropped{stroke:var(--st-dropped)}
+.legend{display:grid;grid-template-columns:minmax(0,13rem) minmax(0,1fr);gap:var(--s2) var(--s5);margin-top:var(--s4);padding-top:var(--s4);border-top:var(--line-w) solid var(--line);font-size:var(--t-sm)}
+.legend dt{font-weight:700;color:var(--ink)}
+.legend dd{color:var(--ink-2)}
+.fig-note{margin-top:var(--s3);font-size:var(--t-md);color:var(--ink)}
+.fig-more{margin-top:var(--s3);font-size:var(--t-sm)}
+.fig-more summary{cursor:pointer;color:var(--accent);font-weight:600;width:max-content;max-width:100%}
+.fig-more ul{margin-top:var(--s2);padding-left:1.3em;color:var(--ink-2)}
+.fig-more li+li{margin-top:var(--s1)}
+
+footer{border-top:var(--line-w) solid var(--line);padding:var(--s5) 0 var(--s7);color:var(--ink-3);font-size:var(--t-sm)}
+footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(--s3)}
+
+@media (max-width:819px){
+  .wrap{padding:0 var(--s4)}
+  .masthead{padding:var(--s5) 0 var(--s6)}
+  .status{grid-template-columns:minmax(0,1fr);padding:var(--s4)}
+  .status-text{font-size:var(--t-md)}
+  .evidence{padding:var(--s4)}
+  figure{padding:var(--s3) var(--s3) var(--s4)}
+  .callout{padding:var(--s4)}
+  .legend{grid-template-columns:minmax(0,1fr);gap:var(--s1)}
+  .legend dd+dt{margin-top:var(--s2)}
+}
+@media (max-width:600px){
+  .figures{grid-template-columns:minmax(0,1fr)}
+  .figures>div,.figures>div:nth-child(2n){padding:var(--s4) 0;border-left:0}
+  pre{padding:var(--s3)}
+  table{font-size:var(--t-md)}
+  th,td{padding:var(--s2)}
+  .evidence th[scope="row"],.c1 th[scope="row"]{width:50%}
+  .cmd-table.c1 th[scope="row"]{width:38%}
+  .cmd-table code{overflow-wrap:normal}
+  figure{padding:var(--s3) var(--s2) var(--s4)}
+  figcaption,.fig-note,.legend,.fig-more{padding:0 var(--s1)}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+}
+@media print{
+  :root,:root[data-theme]{--bg:#fff;--surface:#fff;--surface-2:#f4f4f4;--surface-3:#e8e8e8;--line:#ccc;--line-strong:#999;--ink:#000;--ink-2:#222;--ink-3:#444;--cy:#05586a;--gr:#2c5a0e;--ye:#6b4d00;--re:#8f1a24;--ma:#5a2a85;--or:#7c3c08;--bl:#1d4394;--on-accent:#fff;--shadow:none;--hatch:transparent;color-scheme:light}
+  body{background:#fff;font-size:10.5pt}
+  .skip,.needs-js,.toc summary{display:none!important}
+  .masthead{padding:0 0 var(--s5)}
+  .layout{display:block;padding:0}
+  .toc{position:static;max-height:none;overflow:visible;margin-top:var(--s5)}
+  .toc details{border:0}
+  .toc-head{display:block;font-weight:700;margin-bottom:var(--s2)}
+  .toc a{padding:1px 0}
+  .toc-body>ol{columns:2;column-gap:var(--s6)}
+  .toc-body>ol>li{break-inside:avoid}
+  .part{break-before:page;padding-top:0}
+  .part-head{break-after:avoid}
+  .sec>h3,.evidence h3{break-after:avoid}
+  figure,.code,.callout,.evidence,.figures>div,tr,.open-items{break-inside:avoid}
+  .tw{overflow:visible;border-color:#ccc}
+  .wide table{min-width:0}
+  pre{overflow:visible;white-space:pre-wrap}
+  pre code{white-space:pre-wrap}
+  td code,th code{overflow-wrap:break-word}
+  figure .svg-wide{display:block!important}
+  figure .svg-narrow{display:none!important}
+  .fig-more{display:none}
+  a{color:inherit}
+  tbody tr:hover>*{background:transparent}
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to the report</a>
+<header class="masthead" id="top">
+  <div class="wrap">
+    <div class="brandline">
+      <p class="brand">corral <span>/ engine rework report</span></p>
+      <button class="btn needs-js" type="button" id="theme-btn" aria-label="Color theme: follows the system">Theme: auto</button>
+    </div>
+    <h1>Corral engine rework: report and user guide</h1>
+    <p class="lede">Replacing Corral’s engine, daemon wire, pi host protocol and app wiring.</p>
+    <dl class="mast-meta">
+      <div><dt>Report date</dt><dd><time datetime="2026-11-18">18 November 2026</time></dd></div>
+      <div><dt>Parts</dt><dd>Summary, overview, user guide, technical detail</dd></div>
+    </dl>
+    <p class="status" role="note"><span class="status-label">Status</span><span class="status-text">Landed on <code>main</code> as <code>9e098a06a</code> on 18 November 2026, 22:13. Local commit, not pushed.</span></p>
+  </div>
+</header>
+
+<div class="layout wrap">
+  <nav class="toc" aria-label="Contents">
+    <details open id="toc-details">
+      <summary><span class="toc-title">Contents</span></summary>
+      <div class="toc-body">
+        <p class="toc-head">Contents</p>
+        <ol>
+          <li><a class="toc-part" href="#part-1"><span>Part 1</span> Executive summary</a>
+            <ol>
+              <li><a href="#one-paragraph">The one-paragraph version</a></li>
+              <li><a href="#why">Why it was done</a></li>
+              <li><a href="#what-changed">What changed for the owner</a></li>
+              <li><a href="#headline-numbers">Headline numbers</a></li>
+              <li><a href="#verified">What is verified</a></li>
+              <li><a href="#not-done">What is not done</a></li>
+              <li><a href="#decisions">Decisions waiting on the owner</a></li>
+            </ol>
+          </li>
+          <li><a class="toc-part" href="#part-2"><span>Part 2</span> High-level overview</a>
+            <ol>
+              <li><a href="#rules">The five rules</a></li>
+              <li><a href="#before-after">Before and after</a></li>
+              <li><a href="#architecture">How the parts fit</a></li>
+              <li><a href="#statuses">A task’s life</a></li>
+              <li><a href="#phases">What was built, by phase</a></li>
+              <li><a href="#landing-itself">The landing itself</a></li>
+            </ol>
+          </li>
+          <li><a class="toc-part" href="#part-3"><span>Part 3</span> User guide</a>
+            <ol>
+              <li><a href="#s3-1"><span class="n">3.1</span>What you run now</a></li>
+              <li><a href="#s3-2"><span class="n">3.2</span>Set up a workspace</a></li>
+              <li><a href="#s3-3"><span class="n">3.3</span>A task from start to landed</a></li>
+              <li><a href="#s3-4"><span class="n">3.4</span>When a task stops</a></li>
+              <li><a href="#s3-5"><span class="n">3.5</span>Getting past a refusal</a></li>
+              <li><a href="#s3-6"><span class="n">3.6</span>Old habit, new command</a></li>
+              <li><a href="#s3-7"><span class="n">3.7</span>The app</a></li>
+              <li><a href="#s3-8"><span class="n">3.8</span>Pair a phone or a browser</a></li>
+              <li><a href="#s3-9"><span class="n">3.9</span>Agents with corral-pi</a></li>
+              <li><a href="#s3-10"><span class="n">3.10</span>Moving your open tasks over</a></li>
+              <li><a href="#s3-11"><span class="n">3.11</span>What is gone</a></li>
+            </ol>
+          </li>
+          <li><a class="toc-part" href="#part-4"><span>Part 4</span> Technical detail</a>
+            <ol>
+              <li><a href="#s4-1"><span class="n">4.1</span>One entry point, typed operations</a></li>
+              <li><a href="#s4-2"><span class="n">4.2</span>Force</a></li>
+              <li><a href="#s4-3"><span class="n">4.3</span>After done: the pipeline</a></li>
+              <li><a href="#s4-4"><span class="n">4.4</span>Landing</a></li>
+              <li><a href="#s4-5"><span class="n">4.5</span>Sessions and runners</a></li>
+              <li><a href="#s4-6"><span class="n">4.6</span>Store</a></li>
+              <li><a href="#s4-7"><span class="n">4.7</span>Wire and daemon</a></li>
+              <li><a href="#s4-8"><span class="n">4.8</span>Pi host</a></li>
+              <li><a href="#s4-9"><span class="n">4.9</span>App</a></li>
+              <li><a href="#s4-10"><span class="n">4.10</span>Code size</a></li>
+              <li><a href="#s4-11"><span class="n">4.11</span>Consequences of landing</a></li>
+              <li><a href="#s4-12"><span class="n">4.12</span>Known limits</a></li>
+              <li><a href="#s4-13"><span class="n">4.13</span>What comes next</a></li>
+            </ol>
+          </li>
+        </ol>
+      </div>
+    </details>
+  </nav>
+
+  <main id="main" tabindex="-1">
+
+<!-- ============================ PART 1 ============================ -->
+<section class="part" aria-labelledby="part-1">
+  <div class="part-head">
+    <h2 id="part-1"><span class="part-num">Part 1</span> Executive summary</h2>
+  </div>
+
+  <section class="sec" aria-labelledby="one-paragraph">
+    <h3 id="one-paragraph">The one-paragraph version</h3>
+    <p class="lead">Corral’s engine was replaced with a much smaller one, and the daemon, the pi agent host and the app were moved onto it. The work landed on <code>main</code> on 18 November 2026. The new engine runs a task from creation to a landed commit without any agent managing it, lets the owner get past any check with one command, and runs a gate once per commit. It passes its tests and a real end-to-end run. It has not yet been used on a product repository, and the old engine’s source is still in the tree, unbuilt, waiting for the cutover.</p>
+  </section>
+
+  <section class="sec evidence" aria-labelledby="why">
+    <h3 id="why">Why it was done</h3>
+    <p class="sub">Measured on the workspace store, 17 November 2026: 976 tasks, 621 landed with full history. These measures are the reason for the whole rework.</p>
+    <figure class="fig-chart">
+      <svg viewBox="0 0 480 262" role="img" aria-labelledby="f1-t f1-d">
+        <title id="f1-t">Landed tasks per week, six consecutive weeks</title>
+        <desc id="f1-d">Bar chart of landed tasks per week. Week 1: 136. Week 2: 174. Week 3: 217. Week 4: 74. Week 5: 17. Week 6: 3.</desc>
+        <rect class="bar" x="38" y="113.2" width="44" height="112.8" rx="2"/>
+        <rect class="bar" x="110" y="81.7" width="44" height="144.3" rx="2"/>
+        <rect class="bar" x="182" y="46" width="44" height="180" rx="2"/>
+        <rect class="bar" x="254" y="164.6" width="44" height="61.4" rx="2"/>
+        <rect class="bar" x="326" y="211.9" width="44" height="14.1" rx="2"/>
+        <rect class="bar" x="398" y="223.5" width="44" height="2.5" rx="1"/>
+        <line class="axis" x1="24" y1="226" x2="456" y2="226"/>
+        <g text-anchor="middle" font-size="18" class="b" style="font-variant-numeric:tabular-nums">
+          <text x="60" y="105">136</text>
+          <text x="132" y="73.5">174</text>
+          <text x="204" y="38">217</text>
+          <text x="276" y="156.5">74</text>
+          <text x="348" y="204">17</text>
+          <text x="420" y="215.5">3</text>
+        </g>
+        <g text-anchor="middle" font-size="15" class="t2">
+          <text class="t2" x="60" y="250">Week 1</text>
+          <text class="t2" x="132" y="250">Week 2</text>
+          <text class="t2" x="204" y="250">Week 3</text>
+          <text class="t2" x="276" y="250">Week 4</text>
+          <text class="t2" x="348" y="250">Week 5</text>
+          <text class="t2" x="420" y="250">Week 6</text>
+        </g>
+      </svg>
+      <figcaption><b>Figure 1.</b> Landed tasks per week over six consecutive weeks: 136, 174, 217, 74, 17, 3. Over the same period the Rust source grew from 6 MB to 28 MB.</figcaption>
+    </figure>
+    <div class="tw">
+      <table>
+        <caption class="visually-hidden">Evidence measured on the workspace store</caption>
+        <thead><tr><th scope="col">Measure</th><th scope="col">Value</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Landed tasks per week, six consecutive weeks</th><td>136, 174, 217, 74, 17, 3</td></tr>
+          <tr><th scope="row">Rust source over the same period</th><td>grew from 6 MB to 28 MB</td></tr>
+          <tr><th scope="row">Median time coding a task</th><td>31 min</td></tr>
+          <tr><th scope="row">Median time from “done” to landed</th><td>73 min (mean 4.7 h, 90th percentile 12.4 h)</td></tr>
+          <tr><th scope="row">Gate runs per landed task</th><td>4.9 (plus 2.3 reviews and 1.25 change rounds)</td></tr>
+          <tr><th scope="row"><code>dispatch_failed</code> events</th><td>8,981 for 716 dispatches; 84% were Corral waiting on its own locks</td></tr>
+          <tr><th scope="row">Blocked cards with the PM agent absent</th><td>7 of 10 named the PM as the only one who could unblock them</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="what-changed">
+    <h3 id="what-changed">What changed for the owner</h3>
+    <ul>
+      <li><strong>No state needs an agent.</strong> The owner clears any state with one command. The assistant is optional.</li>
+      <li><strong>Force is one flag.</strong> Dependencies, slot limits, the gate, status rules and a live session can each be passed with <code>--force</code> on the same command. Every refusal names the command that gets past it.</li>
+      <li><strong>A gate runs once per commit</strong> that is landed or sent back. A green rerun clears a red one. No tiers, attempts ledger, credits or receipts.</li>
+      <li><strong>A paired device is the owner.</strong> Per-device authority classes, previews and proofs are gone.</li>
+      <li><strong>One chat assistant</strong> replaces the PM and the assistant. A plan is a parent task with children and a Markdown document.</li>
+    </ul>
+  </section>
+
+  <section class="sec" aria-labelledby="headline-numbers">
+    <h3 id="headline-numbers">Headline numbers</h3>
+    <dl class="figures">
+      <div><dt>657,295<span class="to"> → </span>38,949</dt><dd>Lines of Rust, tests included: the four old engine crates versus the whole seven-crate workspace that now builds. About 17 times smaller.</dd></div>
+      <div><dt>19<span class="to"> → </span>4</dt><dd>Daemon command families: 2 kept, 2 reshaped, 15 dropped.</dd></div>
+      <div><dt>55<span class="to"> → </span>0</dt><dd>Private operations between the pi host and Corral. The host now runs the same commands the owner runs.</dd></div>
+      <div><dt>1,011 files</dt><dd>Changed by the landing: 68,903 lines added, 112,054 removed. 40 commits and 8 merges, written 17 and 18 November 2026.</dd></div>
+    </dl>
+  </section>
+
+  <section class="sec" aria-labelledby="verified">
+    <h3 id="verified">What is verified</h3>
+    <div class="tw verified">
+      <table>
+        <thead><tr><th scope="col">Check</th><th scope="col">Result</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Rust tests, whole workspace</th><td>231 pass</td></tr>
+          <tr><th scope="row">Pi host tests</th><td>1,126 pass; typecheck clean</td></tr>
+          <tr><th scope="row">App tests</th><td>229 library and 27 shell tests pass (run before the final merge, which changed none of the app’s inputs)</td></tr>
+          <tr><th scope="row">Clippy, whole workspace, warnings as errors</th><td>clean</td></tr>
+          <tr><th scope="row">Real end-to-end journey: real CLI, real daemon, real pi host, scripted model</th><td>passes in 4.6 s</td></tr>
+          <tr><th scope="row">The command walkthrough in <a href="#part-3">Part 3</a>, on a scratch workspace with a scripted agent</th><td>every command and output shown there was run</td></tr>
+          <tr><th scope="row">App on a terminal, 140×44 and 80×24</th><td>walked every destination</td></tr>
+          <tr><th scope="row">App in a browser, desktop and phone sizes</th><td>paired with a real daemon by six-digit code; stayed paired after reload; a forced move went through and was recorded</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="not-done">
+    <h3 id="not-done">What is not done</h3>
+    <ul class="open-items">
+      <li><strong>The cutover.</strong> The new programs are still named <code>corral-next</code> and <code>corrald-next</code>, state lives in <code>.corral-next/</code>, the four old crates are still in the tree (out of the workspace, unbuilt), <code>scripts/gate.sh</code> still targets them, and the README and <code>docs/DESIGN.md</code> still describe the old engine.</li>
+      <li><strong>Real use.</strong> The exit criteria have not been shown on a product repository.</li>
+      <li><strong>Old-system work on this repository is stranded</strong>, and the <code>corral-app-tui</code> launcher needs a one-line change. See <a href="#s4-11">Consequences of landing</a> in Part 4.</li>
+    </ul>
+  </section>
+
+  <section class="sec" aria-labelledby="decisions">
+    <h3 id="decisions">Decisions waiting on the owner</h3>
+    <ol>
+      <li>When to finish the cutover: rename, delete the old crates, replace the gate scripts, rewrite the README and design document.</li>
+      <li>What to do with the stranded old-system branches: land their still-relevant parts by hand, or drop them.</li>
+      <li>Whether Artifacts stays its own destination in the app or becomes an overlay.</li>
+      <li>Whether the two app features that have no successor yet are wanted: the welcome tour, and launching <code>corral-pi</code> from the app.</li>
+    </ol>
+  </section>
+</section>
+
+<!-- ============================ PART 2 ============================ -->
+<section class="part" aria-labelledby="part-2">
+  <div class="part-head">
+    <h2 id="part-2"><span class="part-num">Part 2</span> High-level overview</h2>
+  </div>
+
+  <section class="sec" aria-labelledby="rules">
+    <h3 id="rules">The five rules the new engine follows</h3>
+    <ol>
+      <li><strong>The owner clears any state in one action.</strong> No state exists that only an agent can leave.</li>
+      <li><strong>Green is green.</strong> A check passes or fails on a commit.</li>
+      <li><strong>One trust boundary: the network.</strong> The local user is the owner. Only paired remote devices authenticate, and a paired device is the owner.</li>
+      <li><strong>State stays readable.</strong> Tasks, runs, checks, artifacts, events. Nothing derived is stored.</li>
+      <li><strong>Every refusal names the command that gets past it</strong>, including its <code>--force</code> form.</li>
+    </ol>
+  </section>
+
+  <section class="sec" aria-labelledby="before-after">
+    <h3 id="before-after">Before and after</h3>
+    <div class="tw wide" tabindex="0" role="region" aria-label="Before and after table">
+      <table class="c1">
+        <thead><tr><th scope="col">Area</th><th scope="col">Before</th><th scope="col">Now</th></tr></thead>
+        <tbody>
+          <tr><th scope="row" style="width:16%">Engine</th><td><code>corral-ops</code> and <code>corral-core</code>: 544,579 lines</td><td><code>corral-engine</code> and <code>corral-types</code>: 11,298 lines</td></tr>
+          <tr><th scope="row">Who unblocks a task</th><td>Often only the PM agent</td><td>The owner, with one command</td></tr>
+          <tr><th scope="row">Getting past a check</th><td>Authority classes, previews, proofs, attempts, tiers, receipts</td><td><code>--force</code> on the same command</td></tr>
+          <tr><th scope="row">Gate</th><td>Quick, full and slow tiers, selection, lanes, quarantine</td><td>The project’s own gate commands, once per commit</td></tr>
+          <tr><th scope="row">Review</th><td>A new reviewer each round</td><td>One reviewer session for the whole task</td></tr>
+          <tr><th scope="row">Plans</th><td>Separate plan records with their own review</td><td>A parent task with children and a Markdown body</td></tr>
+          <tr><th scope="row">Agents</th><td>PM and assistant</td><td>One chat assistant; roles are worker, reviewer, assistant and build</td></tr>
+          <tr><th scope="row">Pi host and Corral</th><td>55 enumerated operations with receipts, launch secrets and generations</td><td>The host runs owner commands; one local socket per session</td></tr>
+          <tr><th scope="row">Remote devices</th><td>Per-device authority classes</td><td>A paired device is the owner</td></tr>
+          <tr><th scope="row">Surfaces</th><td>Classic terminal board and the app</td><td>The app only: terminal, web and phone forms</td></tr>
+          <tr><th scope="row">State on disk</th><td><code>.corral/</code> Markdown and YAML files</td><td><code>.corral-next/</code>: one SQLite file, content-addressed blobs, run directories</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="architecture">
+    <h3 id="architecture">How the parts fit</h3>
+    <figure>
+      <svg class="svg-wide" viewBox="0 0 940 608" role="img" aria-labelledby="f3w-t f3w-d">
+        <title id="f3w-t">Architecture: who sends operations, the daemon, the engine and what it drives</title>
+        <desc id="f3w-d">Top row: agents (worker, reviewer, chat assistant, in the pi host corral-pi or any other harness), the owner at the CLI corral-next, and the app (terminal, web, phone). Agents point to the CLI with the label “same commands as the owner”. The CLI calls the engine directly. The app goes through the daemon corrald-next (local socket, encrypted WebSocket), which submits { op, force } unchanged to the engine. The engine library has one entry point, Engine::apply(op, force). It drives the store (SQLite, blobs, run logs), Git (worktrees, rebase, fast-forward, a per-repository landing lock) and runners (herdr pane, detached process, pi host, fake for tests). A side band, corral-types, holds the shared types used by the engine, the wire and the app.</desc>
+        <defs>
+          <marker id="mk-aw" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="mk-aw-acc" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto-start-reverse"><path class="mk-acc" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t3" x="10" y="22" font-size="13">Who sends operations</text>
+        <rect class="box" x="10" y="34" width="240" height="100" rx="8"/>
+        <text x="24" y="60" font-size="16" class="b">Agents</text>
+        <text class="t2" x="24" y="84" font-size="13.5">worker, reviewer, chat assistant</text>
+        <text class="t2" x="24" y="104" font-size="13.5">in the pi host (<tspan class="mono">corral-pi</tspan>)</text>
+        <text class="t2" x="24" y="123" font-size="13.5">or any other harness</text>
+        <path class="ln-acc" d="M250,90 H398" marker-end="url(#mk-aw-acc)"/>
+        <text class="acc" x="325" y="62" font-size="13.5" text-anchor="middle">same commands</text>
+        <text class="acc" x="325" y="79" font-size="13.5" text-anchor="middle">as the owner</text>
+        <rect class="box" x="400" y="34" width="170" height="100" rx="8"/>
+        <text x="414" y="60" font-size="16" class="b">The owner</text>
+        <text class="t2" x="414" y="84" font-size="13.5">at the CLI</text>
+        <text class="mono" x="414" y="111" font-size="15">corral-next</text>
+        <rect class="box" x="600" y="34" width="190" height="100" rx="8"/>
+        <text x="614" y="60" font-size="16" class="b">The app</text>
+        <text class="t2" x="614" y="84" font-size="13.5">terminal, web, phone</text>
+        <rect class="band" x="806" y="34" width="124" height="420" rx="8"/>
+        <text class="mono b" x="818" y="60" font-size="13">corral-types</text>
+        <text class="t2" x="818" y="86" font-size="12.5">Shared types</text>
+        <text class="t2" x="818" y="104" font-size="12.5">crate used by</text>
+        <text class="t2" x="818" y="122" font-size="12.5">the engine,</text>
+        <text class="t2" x="818" y="140" font-size="12.5">the wire and</text>
+        <text class="t2" x="818" y="158" font-size="12.5">the app.</text>
+        <text class="t2" x="818" y="184" font-size="12.5">No mirrored</text>
+        <text class="t2" x="818" y="202" font-size="12.5">data types.</text>
+        <path class="ln" d="M485,134 V352" marker-end="url(#mk-aw)"/>
+        <text class="t2" x="495" y="250" font-size="13">calls directly</text>
+        <path class="ln" d="M695,134 V182" marker-end="url(#mk-aw)"/>
+        <rect class="box" x="600" y="184" width="190" height="120" rx="8"/>
+        <text x="614" y="210" font-size="16" class="b">Daemon</text>
+        <text class="mono" x="614" y="233" font-size="14">corrald-next</text>
+        <text class="t2" x="614" y="256" font-size="13.5">local socket,</text>
+        <text class="t2" x="614" y="276" font-size="13.5">encrypted WebSocket</text>
+        <text class="mono t2" x="614" y="296" font-size="13">{ op, force }</text>
+        <path class="ln" d="M695,304 V352" marker-end="url(#mk-aw)"/>
+        <text class="t3" x="10" y="344" font-size="13">Core</text>
+        <rect class="box-core" x="10" y="354" width="780" height="100" rx="8"/>
+        <text x="400" y="382" font-size="16" class="b" text-anchor="middle">Engine library</text>
+        <text class="mono b" x="400" y="414" font-size="20" text-anchor="middle">Engine::apply(op, force)</text>
+        <text class="t2" x="400" y="440" font-size="13.5" text-anchor="middle">one entry point</text>
+        <text class="t3" x="10" y="494" font-size="13">What the engine drives</text>
+        <path class="ln" d="M200,454 V504" marker-end="url(#mk-aw)"/>
+        <path class="ln" d="M470,454 V504" marker-end="url(#mk-aw)"/>
+        <path class="ln" d="M714,454 V504" marker-end="url(#mk-aw)"/>
+        <rect class="box" x="10" y="506" width="293" height="90" rx="8"/>
+        <text x="24" y="532" font-size="16" class="b">Store</text>
+        <text class="t2" x="24" y="557" font-size="13.5">SQLite, blobs, run logs</text>
+        <rect class="box" x="323" y="506" width="294" height="90" rx="8"/>
+        <text x="337" y="532" font-size="16" class="b">Git</text>
+        <text class="t2" x="337" y="557" font-size="13.5">worktrees, rebase, fast-forward,</text>
+        <text class="t2" x="337" y="577" font-size="13.5">a per-repository landing lock</text>
+        <rect class="box" x="637" y="506" width="293" height="90" rx="8"/>
+        <text x="651" y="532" font-size="16" class="b">Runners</text>
+        <text class="t2" x="651" y="557" font-size="13.5">herdr pane, detached process,</text>
+        <text class="t2" x="651" y="577" font-size="13.5">pi host, fake for tests</text>
+      </svg>
+      <svg class="svg-narrow" viewBox="0 0 360 732" role="img" aria-labelledby="f3n-t f3n-d">
+        <title id="f3n-t">Architecture: who sends operations, the daemon, the engine and what it drives</title>
+        <desc id="f3n-d">Agents (worker, reviewer, chat assistant, in the pi host corral-pi or any other harness) point down to the owner’s CLI corral-next, labelled “same commands as the owner”. The CLI calls the engine directly. The app (terminal, web, phone) goes through the daemon corrald-next (local socket, encrypted WebSocket) to the engine. The engine library has one entry point, Engine::apply(op, force), and drives the store, Git and runners. A side band, corral-types, holds the shared types used by the engine, the wire and the app.</desc>
+        <defs>
+          <marker id="mk-an" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto-start-reverse"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="mk-an-acc" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse"><path class="mk-acc" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t3" x="12" y="16" font-size="12">Who sends operations</text>
+        <rect class="box" x="12" y="26" width="288" height="100" rx="8"/>
+        <text x="26" y="50" font-size="15" class="b">Agents</text>
+        <text class="t2" x="26" y="72" font-size="13">worker, reviewer, chat assistant</text>
+        <text class="t2" x="26" y="92" font-size="13">in the pi host (<tspan class="mono">corral-pi</tspan>)</text>
+        <text class="t2" x="26" y="112" font-size="13">or any other harness</text>
+        <path class="ln-acc" d="M76,126 V166" marker-end="url(#mk-an-acc)"/>
+        <text class="acc" x="86" y="151" font-size="13">same commands as the owner</text>
+        <rect class="box" x="12" y="168" width="128" height="76" rx="8"/>
+        <text x="24" y="190" font-size="14" class="b">The owner</text>
+        <text class="t2" x="24" y="210" font-size="12.5">at the CLI</text>
+        <text class="mono" x="24" y="232" font-size="12.5">corral-next</text>
+        <rect class="box" x="156" y="168" width="144" height="76" rx="8"/>
+        <text x="168" y="190" font-size="14" class="b">The app</text>
+        <text class="t2" x="168" y="210" font-size="12.5">terminal, web,</text>
+        <text class="t2" x="168" y="230" font-size="12.5">phone</text>
+        <rect class="band" x="312" y="168" width="36" height="316" rx="6"/>
+        <text class="mono b" x="330" y="326" font-size="12" text-anchor="middle" transform="rotate(-90 330 326)" dy=".35em">corral-types: shared types</text>
+        <path class="ln" d="M228,244 V278" marker-end="url(#mk-an)"/>
+        <rect class="box" x="156" y="280" width="144" height="96" rx="8"/>
+        <text x="168" y="302" font-size="14" class="b">Daemon</text>
+        <text class="mono" x="168" y="322" font-size="12.5">corrald-next</text>
+        <text class="t2" x="168" y="342" font-size="12">local socket,</text>
+        <text class="t2" x="168" y="362" font-size="11.5">encrypted WebSocket</text>
+        <path class="ln" d="M100,244 V398" marker-end="url(#mk-an)"/>
+        <text class="t2" x="92" y="330" font-size="12" text-anchor="end">calls directly</text>
+        <path class="ln" d="M228,376 V398" marker-end="url(#mk-an)"/>
+        <rect class="box-core" x="12" y="400" width="288" height="84" rx="8"/>
+        <text x="156" y="424" font-size="14" class="b" text-anchor="middle">Engine library</text>
+        <text class="mono b" x="156" y="450" font-size="14" text-anchor="middle">Engine::apply(op, force)</text>
+        <text class="t2" x="156" y="472" font-size="12.5" text-anchor="middle">one entry point</text>
+        <path class="ln" d="M28,484 V686"/>
+        <path class="ln" d="M28,528 H46" marker-end="url(#mk-an)"/>
+        <path class="ln" d="M28,602 H46" marker-end="url(#mk-an)"/>
+        <path class="ln" d="M28,686 H46" marker-end="url(#mk-an)"/>
+        <rect class="box" x="48" y="502" width="252" height="52" rx="8"/>
+        <text x="60" y="523" font-size="14" class="b">Store</text>
+        <text class="t2" x="60" y="543" font-size="12.5">SQLite, blobs, run logs</text>
+        <rect class="box" x="48" y="566" width="252" height="72" rx="8"/>
+        <text x="60" y="587" font-size="14" class="b">Git</text>
+        <text class="t2" x="60" y="607" font-size="12.5">worktrees, rebase, fast-forward,</text>
+        <text class="t2" x="60" y="627" font-size="12.5">a per-repository landing lock</text>
+        <rect class="box" x="48" y="650" width="252" height="72" rx="8"/>
+        <text x="60" y="671" font-size="14" class="b">Runners</text>
+        <text class="t2" x="60" y="691" font-size="12.5">herdr pane, detached process,</text>
+        <text class="t2" x="60" y="711" font-size="12.5">pi host, fake for tests</text>
+      </svg>
+      <figcaption><b>Figure 3.</b> How the parts fit. Operations flow down from the people and programs that send them to the one engine entry point, which drives the store, Git and the runners.</figcaption>
+      <dl class="legend">
+        <dt>Who sends operations</dt>
+        <dd>The owner at the CLI (<code>corral-next</code>); the app (terminal, web, phone); agents (worker, reviewer, chat assistant) inside the pi host (<code>corral-pi</code>) or any other harness.</dd>
+        <dt>The daemon (<code>corrald-next</code>)</dt>
+        <dd>Local socket for the app on the same machine; an encrypted WebSocket for paired remote devices. It serves read models and submits <code>{ op, force }</code> unchanged.</dd>
+        <dt>Core: the engine library</dt>
+        <dd>One entry point, <code>Engine::apply(op, force)</code>. The CLI calls it directly; the daemon calls it for the app.</dd>
+        <dt>What the engine drives</dt>
+        <dd>The store (SQLite, blobs, run logs); git (worktrees, rebase, fast-forward, a per-repository landing lock); runners (herdr pane, detached process, pi host, fake for tests).</dd>
+        <dt>Side band: <code>corral-types</code></dt>
+        <dd>The shared types crate used by the engine, the wire and the app. There are no mirrored data types.</dd>
+      </dl>
+    </figure>
+    <p>Agents reach the engine the same way the owner does: they run <code>corral-next</code> commands.</p>
+  </section>
+
+  <section class="sec" aria-labelledby="statuses">
+    <h3 id="statuses">A task’s life</h3>
+    <figure>
+      <svg class="svg-wide" viewBox="0 36 964 364" role="img" aria-labelledby="f4w-t f4w-d">
+        <title id="f4w-t">Task statuses and the transitions between them</title>
+        <desc id="f4w-d">Eight states: Idea, Backlog, Ready, Running, Blocked, Review, Done, Dropped. Idea to Backlog to Ready. Ready to Running and Backlog to Running: dispatch. Running to Blocked: the agent asks, the session ends, or an error. Blocked to Running: reply, retry. Running to Review: done. Review to Running: changes. Review to Blocked: rounds used up, a rebase conflict, or a red gate with no worker. Review to Done: approve. Done to Backlog: reopen. Any state to Dropped: drop.</desc>
+        <defs>
+          <marker id="mk-sw" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto-start-reverse"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <g class="arrows">
+          <path class="ln" d="M116,192 H154" marker-end="url(#mk-sw)"/>
+          <path class="ln" d="M256,192 H294" marker-end="url(#mk-sw)"/>
+          <path class="ln" d="M396,192 H478" marker-end="url(#mk-sw)"/>
+          <path class="ln" d="M580,184 H662" marker-end="url(#mk-sw)"/>
+          <path class="ln" d="M664,200 H582" marker-end="url(#mk-sw)"/>
+          <path class="ln" d="M764,192 H846" marker-end="url(#mk-sw)"/>
+          <path class="ln" d="M222,170 V122 H516 V168" marker-end="url(#mk-sw)"/>
+          <path class="ln" d="M914,170 V72 H190 V168" marker-end="url(#mk-sw)"/>
+          <path class="ln" d="M514,214 V316" marker-end="url(#mk-sw)"/>
+          <path class="ln" d="M546,318 V216" marker-end="url(#mk-sw)"/>
+          <path class="ln" d="M714,214 V340 H582" marker-end="url(#mk-sw)"/>
+          <path class="ln" d="M898,276 V316" marker-end="url(#mk-sw)"/>
+        </g>
+        <g font-size="14.5" text-anchor="middle">
+          <text class="mono" x="437" y="183">dispatch</text>
+          <text class="mono" x="621" y="175">done</text>
+          <text class="mono" x="621" y="228">changes</text>
+          <text class="mono" x="805" y="183">approve</text>
+          <text class="mono" x="369" y="113">dispatch</text>
+          <text class="mono" x="552" y="63">reopen</text>
+        </g>
+        <g font-size="14" text-anchor="end">
+          <text class="t2" x="504" y="256">the agent asks,</text>
+          <text class="t2" x="504" y="273">the session ends,</text>
+          <text class="t2" x="504" y="290">or an error</text>
+        </g>
+        <text class="mono" x="556" y="273" font-size="14.5">reply, retry</text>
+        <text class="t2" x="594" y="371" font-size="14">rounds used up, a rebase conflict,</text>
+        <text class="t2" x="594" y="388" font-size="14">or a red gate with no worker</text>
+        <text class="mono" x="906" y="302" font-size="14.5">drop</text>
+        <rect class="any" x="848" y="244" width="100" height="32" rx="16"/>
+        <text class="t2" x="898" y="265" font-size="14" text-anchor="middle" font-style="italic">any state</text>
+        <g font-size="16" class="b" text-anchor="middle">
+          <rect class="pill st-idea" x="16" y="170" width="100" height="44" rx="22"/><text x="66" y="198">Idea</text>
+          <rect class="pill st-backlog" x="156" y="170" width="100" height="44" rx="22"/><text x="206" y="198">Backlog</text>
+          <rect class="pill st-ready" x="296" y="170" width="100" height="44" rx="22"/><text x="346" y="198">Ready</text>
+          <rect class="pill st-running" x="480" y="170" width="100" height="44" rx="22"/><text x="530" y="198">Running</text>
+          <rect class="pill st-review" x="664" y="170" width="100" height="44" rx="22"/><text x="714" y="198">Review</text>
+          <rect class="pill st-done" x="848" y="170" width="100" height="44" rx="22"/><text x="898" y="198">Done</text>
+          <rect class="pill st-blocked" x="480" y="318" width="100" height="44" rx="22"/><text x="530" y="346">Blocked</text>
+          <rect class="pill st-dropped" x="848" y="318" width="100" height="44" rx="22"/><text x="898" y="346">Dropped</text>
+        </g>
+      </svg>
+      <svg class="svg-narrow" viewBox="0 0 380 650" role="img" aria-labelledby="f4n-t f4n-d">
+        <title id="f4n-t">Task statuses and the transitions between them</title>
+        <desc id="f4n-d">Eight states: Idea, Backlog, Ready, Running, Blocked, Review, Done, Dropped. Idea to Backlog to Ready. Ready to Running and Backlog to Running: dispatch. Running to Blocked: the agent asks, the session ends, or an error. Blocked to Running: reply, retry. Running to Review: done. Review to Running: changes. Review to Blocked: rounds used up, a rebase conflict, or a red gate with no worker. Review to Done: approve. Done to Backlog: reopen. Any state to Dropped: drop.</desc>
+        <defs>
+          <marker id="mk-sn" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <g class="arrows">
+          <path class="ln" d="M120,50 V82" marker-end="url(#mk-sn)"/>
+          <path class="ln" d="M120,122 V154" marker-end="url(#mk-sn)"/>
+          <path class="ln" d="M120,194 V280" marker-end="url(#mk-sn)"/>
+          <path class="ln" d="M68,110 H44 V301 H66" marker-end="url(#mk-sn)"/>
+          <path class="ln" d="M68,619 H14 V96 H66" marker-end="url(#mk-sn)"/>
+          <path class="ln" d="M104,320 V448" marker-end="url(#mk-sn)"/>
+          <path class="ln" d="M136,450 V322" marker-end="url(#mk-sn)"/>
+          <path class="ln" d="M172,292 H312 V364" marker-end="url(#mk-sn)"/>
+          <path class="ln" d="M284,366 V312 H174" marker-end="url(#mk-sn)"/>
+          <path class="ln" d="M172,460 H312 V406" marker-end="url(#mk-sn)"/>
+          <path class="ln" d="M312,562 V598" marker-end="url(#mk-sn)"/>
+        </g>
+        <g transform="rotate(-90 44 205)">
+          <rect class="ko" x="8" y="196" width="72" height="18"/>
+          <text class="mono" x="44" y="205" dy=".35em" font-size="13" text-anchor="middle">dispatch</text>
+        </g>
+        <g transform="rotate(-90 14 450)">
+          <rect class="ko" x="-16" y="441" width="60" height="18"/>
+          <text class="mono" x="14" y="450" dy=".35em" font-size="13" text-anchor="middle">reopen</text>
+        </g>
+        <text class="mono" x="128" y="242" font-size="13">dispatch</text>
+        <text class="mono" x="96" y="390" font-size="13" text-anchor="end">done</text>
+        <text class="mono" x="144" y="404" font-size="13">changes</text>
+        <text class="t2" x="210" y="236" font-size="13">the agent asks,</text>
+        <text class="t2" x="210" y="252" font-size="13">the session ends,</text>
+        <text class="t2" x="210" y="268" font-size="13">or an error</text>
+        <text class="mono" x="182" y="334" font-size="13">reply, retry</text>
+        <text class="t2" x="182" y="484" font-size="13">rounds used up, a rebase</text>
+        <text class="t2" x="182" y="500" font-size="13">conflict, or a red gate</text>
+        <text class="t2" x="182" y="516" font-size="13">with no worker</text>
+        <rect class="any" x="260" y="532" width="104" height="30" rx="15"/>
+        <text class="t2" x="312" y="552" font-size="13" text-anchor="middle" font-style="italic">any state</text>
+        <text class="mono" x="320" y="585" font-size="13">drop</text>
+        <g font-size="15" class="b" text-anchor="middle">
+          <rect class="pill st-idea" x="68" y="12" width="104" height="38" rx="19"/><text x="120" y="36">Idea</text>
+          <rect class="pill st-backlog" x="68" y="84" width="104" height="38" rx="19"/><text x="120" y="108">Backlog</text>
+          <rect class="pill st-ready" x="68" y="156" width="104" height="38" rx="19"/><text x="120" y="180">Ready</text>
+          <rect class="pill st-running" x="68" y="282" width="104" height="38" rx="19"/><text x="120" y="306">Running</text>
+          <rect class="pill st-review" x="68" y="450" width="104" height="38" rx="19"/><text x="120" y="474">Review</text>
+          <rect class="pill st-done" x="68" y="600" width="104" height="38" rx="19"/><text x="120" y="624">Done</text>
+          <rect class="pill st-blocked" x="260" y="366" width="104" height="38" rx="19"/><text x="312" y="390">Blocked</text>
+          <rect class="pill st-dropped" x="260" y="600" width="104" height="38" rx="19"/><text x="312" y="624">Dropped</text>
+        </g>
+      </svg>
+      <figcaption><b>Figure 4.</b> A task’s life: the eight states, with the command or cause on each arrow.</figcaption>
+      <p class="fig-note"><code>move --force</code> sets any status from any status.</p>
+      <details class="fig-more">
+        <summary>The transitions as text</summary>
+        <ul>
+          <li>Idea → Backlog → Ready</li>
+          <li>Ready → Running and Backlog → Running: <code>dispatch</code></li>
+          <li>Running → Blocked: the agent asks, the session ends, or an error</li>
+          <li>Blocked → Running: <code>reply</code>, <code>retry</code></li>
+          <li>Running → Review: <code>done</code></li>
+          <li>Review → Running: <code>changes</code></li>
+          <li>Review → Blocked: rounds used up, a rebase conflict, or a red gate with no worker</li>
+          <li>Review → Done: <code>approve</code></li>
+          <li>Done → Backlog: <code>reopen</code></li>
+          <li>Any state → Dropped: <code>drop</code></li>
+        </ul>
+      </details>
+    </figure>
+  </section>
+
+  <section class="sec" aria-labelledby="phases">
+    <h3 id="phases">What was built, by phase</h3>
+    <div class="tw wide" tabindex="0" role="region" aria-label="Phases table">
+      <table>
+        <thead><tr><th scope="col">Phase</th><th scope="col">Scope</th><th scope="col">State</th></tr></thead>
+        <tbody>
+          <tr><th scope="row" style="width:4.5rem">1</th><td>Shared types, engine library, CLI</td><td>Done</td></tr>
+          <tr><th scope="row">2</th><td>Daemon on the engine, reduced wire, app reshaped, classic board’s functions on the app’s terminal form</td><td>Done</td></tr>
+          <tr><th scope="row">3</th><td>Pi host rework and its runner</td><td>Done</td></tr>
+          <tr><th scope="row">4</th><td>Cutover: import open tasks, rename the binary, delete the old crates and gate scripts</td><td><strong>Import is built and has only been run as a dry run</strong> (977 tasks exported, 171 would import, next id 978). The rest is not started.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="landing-itself">
+    <h3 id="landing-itself">The landing itself</h3>
+    <ul>
+      <li><code>main</code> had moved by ten commits of Build work (API profiles, uncapped metering, repair of a failed landing gate). They were merged into the branch first.</li>
+      <li>Ten files conflicted, all in the pi host and its build guide. The changes to <code>corral-ops</code> and <code>corral-core</code> merged untouched.</li>
+      <li><strong>Carried over:</strong> repair of a failed landing gate, with its three tests; and optional spending caps.</li>
+      <li><strong>Dropped:</strong> edits to the launch message, paid capability, approved bindings and profile catalog, because that machinery no longer exists.</li>
+      <li><strong>Not carried:</strong> the <code>[build.api]</code> default mapping of child presets to API profiles. In the new host a child profile names its API connection directly.</li>
+      <li>The old crates had stopped compiling on the branch when the wire was replaced, so they were taken out of the workspace. The owner chose to keep their source in the tree for now.</li>
+    </ul>
+  </section>
+</section>
+
+<!-- ============================ PART 3 ============================ -->
+<section class="part" aria-labelledby="part-3">
+  <div class="part-head">
+    <h2 id="part-3"><span class="part-num">Part 3</span> User guide</h2>
+    <p class="part-intro">How to do the everyday things with the new engine. Every command below was run on a scratch workspace on 18 November 2026, with a scripted agent. Outputs are real but shortened: long hashes, timestamps and some lines are cut, and the path of the <code>corral-next</code> binary is shortened in <code>next:</code> lines.</p>
+    <p class="note" style="margin-top:var(--s3)">In the terminal blocks, a line that starts with <b><code>$</code></b> and is set in bold is what you type; the lines under it are output.</p>
+  </div>
+
+  <section class="sec" aria-labelledby="s3-1">
+    <h3 id="s3-1"><span class="sec-no">3.1</span> What you run now</h3>
+    <div class="tw wide" tabindex="0" role="region" aria-label="Programs table">
+      <table class="cmd-table">
+        <thead><tr><th scope="col">Program</th><th scope="col">What it is</th><th scope="col">It replaces</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>corral-next</code></th><td>The command line. It calls the engine directly; no daemon is needed.</td><td><code>corral</code></td></tr>
+          <tr><th scope="row"><code>corrald-next</code></th><td>The daemon. Needed only for the app and for paired devices.</td><td><code>corral daemon</code></td></tr>
+          <tr><th scope="row"><code>corral-pi</code></th><td>The Pi agent host.</td><td><code>corral pi</code> and <code>corral-pi-host</code></td></tr>
+          <tr><th scope="row">The app</th><td><code>nsh run --target tui</code> or <code>nsh run --target web</code>, from <code>apps/corral-app</code>.</td><td>The same app on the new wire, and the classic board</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul>
+      <li>State lives in <code>&lt;workspace&gt;/.corral-next/</code>, beside the old <code>.corral/</code>. The old and new systems share no state.</li>
+      <li>The names change to <code>corral</code> and <code>.corral/</code> at cutover.</li>
+      <li><code>corral-next</code> and <code>corrald-next</code> are built by the Cargo workspace (<code>target/debug/corral-next</code>, <code>target/debug/corrald-next</code>).</li>
+      <li><code>corral-pi</code> runs from source with <code>bun packages/corral-pi/src/cli.ts</code> after <code>bun install --frozen-lockfile</code> in <code>packages/corral-pi</code>.</li>
+      <li>The workspace root is <code>--root</code>, else <code>CORRAL_NEXT_ROOT</code>, else the nearest parent directory that contains <code>.corral-next/</code>.</li>
+    </ul>
+  </section>
+
+  <section class="sec" aria-labelledby="s3-2">
+    <h3 id="s3-2"><span class="sec-no">3.2</span> Set up a workspace</h3>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next init</span>
+Initialized &lt;workspace&gt;/.corral-next</code></pre></div>
+    <p><code>init</code> writes a <code>corral.toml</code> with every setting commented out. Add one table per Git repository, and a profile for the agent you use:</p>
+    <div class="code"><div class="code-h"><span>corral.toml</span></div><pre tabindex="0"><code>[defaults]
+profile = "pi-worker"          <span class="cm"># worker profile when nothing else names one</span>
+
+[projects.app]
+path = "app"                   <span class="cm"># relative to the workspace root; "." for the root itself</span>
+gate = ["just check"]          <span class="cm"># optional; each line runs with sh -c in the task's worktree</span>
+reviewer = "pi-worker"         <span class="cm"># optional; a reviewer runs after a green gate</span>
+
+[profiles.pi-worker]
+harness = "pi"                 <span class="cm"># built in: omo, omp, claude, pi, generic</span>
+model = "openai-codex/gpt-6.1-sol"
+effort = "high"</code></pre></div>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next config check</span>
+Configuration is valid</code></pre></div>
+    <p>Settings worth knowing (all optional):</p>
+    <div class="tw wide" tabindex="0" role="region" aria-label="Settings table">
+      <table class="cmd-table">
+        <thead><tr><th scope="col">Setting</th><th scope="col">Default</th><th scope="col">Meaning</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>limits.running</code></th><td>4</td><td>Tasks in Running or Blocked at once. Review, reviewers and gates hold no slot.</td></tr>
+          <tr><th scope="row"><code>defaults.auto_dispatch</code></th><td>false</td><td>Start Ready tasks by themselves when a slot is free.</td></tr>
+          <tr><th scope="row"><code>defaults.auto_land</code></th><td>false</td><td>Land after the gate and review without asking you.</td></tr>
+          <tr><th scope="row"><code>defaults.max_rounds</code></th><td>2</td><td>Automatic send-backs before a task becomes Blocked.</td></tr>
+          <tr><th scope="row"><code>runner.mode</code></th><td><code>herdr</code></td><td><code>herdr</code>: one pane per agent. <code>process</code>: headless child process.</td></tr>
+          <tr><th scope="row"><code>projects.&lt;name&gt;.base</code></th><td>the repository’s default branch</td><td>The branch tasks start from and land onto. Nothing assumes <code>main</code>.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="s3-3">
+    <h3 id="s3-3"><span class="sec-no">3.3</span> A task from start to landed</h3>
+    <p>Run with a scripted agent that writes one file and calls <code>done</code>:</p>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next new "Add a note" -p app --ready</span>
+T-001: ready — Add a note
+
+<span class="cl"><span class="pr">$ </span>corral-next dispatch T-001</span>
+T-001: running — Add a note
+worker R1: &lt;workspace&gt;/app/.worktrees/T-001
+
+<span class="cm">      (the agent works in that worktree, then runs
+       corral-next done T-001 --summary "Added a note")</span>
+
+<span class="cl"><span class="pr">$ </span>corral-next wait --for ready --task T-001 --timeout 1m</span>
+8 2026-11-19T04:20:16Z ready auto T-001 R1 {"sha":"ce0d6944…"}
+
+<span class="cl"><span class="pr">$ </span>corral-next show T-001</span>
+T-001: Add a note
+Status: review    Priority: P2    Round: 0
+Checks:
+  gate ce0d6944…: Pass
+Artifacts:
+  T-001:1  129 B  diff     diff.patch
+  T-001:2   12 B  summary  summary.md
+  T-001:3   20 B  gate     gate-ce0d6944.log
+
+<span class="cl"><span class="pr">$ </span>corral-next approve T-001</span>
+T-001: done — Add a note
+
+<span class="cl"><span class="pr">$ </span>git -C app log --oneline</span>
+ce0d694 T-001 Add a note
+126d00d base</code></pre></div>
+    <p>What happened, in order:</p>
+    <ol>
+      <li><code>new</code> created the task. <code>--ready</code> puts it in Ready; without it the task starts in Backlog; <code>--idea</code> starts it as an Idea.</li>
+      <li><code>dispatch</code> made the worktree <code>app/.worktrees/T-001</code> on branch <code>corral/T-001</code> and started the agent.</li>
+      <li>The agent’s <code>done</code> committed its work, stored the diff and summary, and moved the task to Review.</li>
+      <li>The gate ran at once on that commit and passed. With a reviewer configured, the review would run next.</li>
+      <li><code>ready</code> means the task is waiting for you. <code>approve</code> rebased, fast-forwarded the base branch, removed the worktree and branch, and set Done.</li>
+    </ol>
+    <p>With <code>auto_land = true</code> step 5 happens by itself.</p>
+  </section>
+
+  <section class="sec" aria-labelledby="s3-4">
+    <h3 id="s3-4"><span class="sec-no">3.4</span> When a task stops</h3>
+    <p>A Blocked task always says why and what clears it:</p>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next show T-004</span>
+T-004: Needs a hand
+Status: blocked    Priority: P2    Round: 0
+
+Blocked: agent session ended without corral done
+next: corral-next retry T-004
+next: corral-next approve T-004 --force</code></pre></div>
+    <div class="tw">
+      <table class="cmd-table c1">
+        <thead><tr><th scope="col">What happened</th><th scope="col">What you run</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">The agent asked a question</th><td><code>corral-next reply &lt;id&gt; "&lt;text&gt;"</code></td></tr>
+          <tr><th scope="row">The agent’s session ended without <code>done</code></th><td><code>corral-next retry &lt;id&gt;</code> (add <code>--profile &lt;p&gt;</code>, <code>--fresh</code> to start over from the base, or <code>--note "&lt;text&gt;"</code>)</td></tr>
+          <tr><th scope="row">You want something changed</th><td><code>corral-next changes &lt;id&gt; "&lt;text&gt;"</code>. With no live session this starts a new worker run on the same branch.</td></tr>
+          <tr><th scope="row">The gate is red</th><td><strong>Nothing:</strong> the work goes back to the worker by itself, up to <code>max_rounds</code> times. After that the task is Blocked and names <code>changes</code>, <code>retry</code> and <code>approve --force</code>.</td></tr>
+          <tr><th scope="row">The rebase conflicts</th><td><strong>Nothing:</strong> the worker is told to rebase and resolve.</td></tr>
+          <tr><th scope="row">You want the agent to stop</th><td><code>corral-next stop &lt;id&gt;</code></td></tr>
+          <tr><th scope="row">You give up on the task</th><td><code>corral-next drop &lt;id&gt;</code>; <code>corral-next reopen &lt;id&gt;</code> brings it back to Backlog</td></tr>
+          <tr><th scope="row">You want to see what happened</th><td><code>corral-next log &lt;id&gt;</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="s3-5">
+    <h3 id="s3-5"><span class="sec-no">3.5</span> Getting past a refusal</h3>
+    <p>A refusal exits with status 2 and prints the commands that get past it:</p>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next dispatch T-003</span>
+refused: dispatch blocked by dependencies
+next: corral-next dispatch T-003 --force
+next: corral-next move T-002 done --force
+
+<span class="cl"><span class="pr">$ </span>corral-next dispatch T-003 --force</span>
+T-003: running — Second part</code></pre></div>
+    <p>The forced action is recorded:</p>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next log T-003</span>
+SEQ  KIND        ACTOR  RUN  DETAIL
+12   dispatched  owner  R1   {"base":"main","profile":"script"}
+13   forced      owner  R1   {"operation":"dispatch","skipped":["dependencies"]}</code></pre></div>
+    <p>Force does not get past something physical. The refusal then names a command that can work:</p>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next approve T-003 --onto nosuchbranch</span>
+refused: landing target branch "nosuchbranch" does not exist
+next: corral-next approve T-003 --onto main</code></pre></div>
+    <p class="note">The real <code>next:</code> lines print the full path of the <code>corral-next</code> binary; it is shortened here. The log output is shown without its time column.</p>
+  </section>
+
+  <section class="sec" aria-labelledby="s3-6">
+    <h3 id="s3-6"><span class="sec-no">3.6</span> Old habit, new command</h3>
+    <div class="tw">
+      <table class="cmd-table c1">
+        <thead><tr><th scope="col">You used to</th><th scope="col">Now</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Queue a task, or release a hold</th><td><code>corral-next move &lt;id&gt; ready</code></td></tr>
+          <tr><th scope="row">Hold or park a task</th><td><code>corral-next move &lt;id&gt; backlog</code>, and <code>comment</code> to say why</td></tr>
+          <tr><th scope="row">Admit a task past the queue</th><td><code>corral-next dispatch &lt;id&gt; --force</code></td></tr>
+          <tr><th scope="row">Pause or resume the queue</th><td>The <code>auto_dispatch</code> switch</td></tr>
+          <tr><th scope="row">Answer an agent’s question</th><td><code>corral-next reply &lt;id&gt; "&lt;text&gt;"</code></td></tr>
+          <tr><th scope="row">Request changes in review</th><td><code>corral-next changes &lt;id&gt; "&lt;text&gt;"</code></td></tr>
+          <tr><th scope="row">Discard a review candidate</th><td><code>corral-next drop &lt;id&gt;</code></td></tr>
+          <tr><th scope="row">Accept a plan</th><td>Move each child task to Ready</td></tr>
+          <tr><th scope="row">Change a plan</th><td><code>edit</code> the parent task; <code>comment</code> on it</td></tr>
+          <tr><th scope="row">Switch modes</th><td>Two switches, <code>auto_dispatch</code> and <code>auto_land</code>, plus <code>limits.running</code></td></tr>
+          <tr><th scope="row">Ask the PM to unblock something</th><td>Run the command the card names, or ask the assistant</td></tr>
+          <tr><th scope="row">Wait for a run</th><td><code>corral-next wait --for &lt;kinds&gt; --task &lt;id&gt;</code></td></tr>
+          <tr><th scope="row">Run setup</th><td><code>corral-next init</code>, then Settings › Configuration in the app</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="sec" aria-labelledby="s3-7">
+    <h3 id="s3-7"><span class="sec-no">3.7</span> The app</h3>
+    <p>Start the daemon for the workspace, then the app against its socket:</p>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl">corrald-next --root &lt;workspace&gt; run</span>
+<span class="cl">CORRAL_SOCKET=&lt;workspace&gt;/.corral-next/daemon.sock nsh run --target tui</span>     <span class="cm"># in apps/corral-app</span>
+<span class="cl">nsh run --target web</span>                                                      <span class="cm"># http://127.0.0.1:8790/</span></code></pre></div>
+    <aside class="callout" id="launcher-action" aria-labelledby="launcher-action-label">
+      <span class="callout-label" id="launcher-action-label">Action needed</span>
+      <p><strong>Your <code>corral-app-tui</code> launcher needs this change.</strong> It starts the app from this checkout against the old daemon’s socket. The app now sends every action as <code>op.submit</code>, which the installed old daemon does not have. Point its <code>CORRAL_SOCKET</code> at <code>&lt;workspace&gt;/.corral-next/daemon.sock</code>.</p>
+      <p>The web service on port 8790 serves a packaged build dated 16 November that the landing did not change.</p>
+    </aside>
+    <p>Where things went:</p>
+    <div class="tw">
+      <table class="c1">
+        <thead><tr><th scope="col">Before</th><th scope="col">Now</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Inbox</th><td>Now, in its first group, “Needs you”</td></tr>
+          <tr><th scope="row">Builds</th><td>Agents</td></tr>
+          <tr><th scope="row">PM and assistant</th><td>Ask: one chat agent for questions, ideas and instructions</td></tr>
+          <tr><th scope="row">Classic terminal board</th><td>The app’s terminal form</td></tr>
+          <tr><th scope="row">Mode switch and grants</th><td>Settings › Configuration</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Keys:</p>
+    <div class="tw">
+      <table class="c1">
+        <thead><tr><th scope="col">Key</th><th scope="col">Action</th></tr></thead>
+        <tbody>
+          <tr><th scope="row" class="keys"><kbd>n</kbd> <kbd>.</kbd> <kbd>p</kbd> <kbd>a</kbd> <kbd>r</kbd> <kbd>t</kbd> <kbd>u</kbd> <kbd>f</kbd> <kbd>,</kbd></th><td>Now, Changes, Plans, Agents, Review, Timeline, Usage, Artifacts, Settings</td></tr>
+          <tr><th scope="row"><kbd>.</kbd> on a task</th><td>The task’s Actions menu: all fifteen operations</td></tr>
+          <tr><th scope="row"><kbd>/</kbd></th><td>Ask</td></tr>
+          <tr><th scope="row"><kbd>Ctrl K</kbd> or <kbd>?</kbd></th><td>Palette</td></tr>
+          <tr><th scope="row"><kbd>Shift R</kbd> on Now</th><td>Reply to the selected Blocked task in place</td></tr>
+          <tr><th scope="row"><kbd>Shift A</kbd> on Review</th><td>Approve and land</td></tr>
+          <tr><th scope="row"><kbd>Ctrl S</kbd> in Settings › Configuration</th><td>Save <code>corral.toml</code></td></tr>
+          <tr><th scope="row"><kbd>Ctrl B</kbd></th><td>Fold or show the sidebar</td></tr>
+          <tr><th scope="row"><kbd>`</kbd></th><td>Switch a session between transcript and terminal</td></tr>
+          <tr><th scope="row"><kbd>Esc</kbd></th><td>Close the newest overlay</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>How actions behave:</p>
+    <ul>
+      <li>Every task has the same Actions menu, and no item is ever dimmed. The engine decides.</li>
+      <li>A refused action opens a sheet with the engine’s reason and one button per way past it. A button that forces says “anyway” (Dispatch anyway, Move anyway, Land anyway) and says what it skips.</li>
+      <li>These ask once before they are sent: Drop, Stop, Approve and land, Retry with a fresh start, Move to Done or Dropped, and anything forced. Nothing else asks.</li>
+      <li>Settings › Configuration edits <code>corral.toml</code> in place and keeps your comments. A refused save shows the reason on the field it names.</li>
+    </ul>
+  </section>
+
+  <section class="sec" aria-labelledby="s3-8">
+    <h3 id="s3-8"><span class="sec-no">3.8</span> Pair a phone or a browser</h3>
+    <ol class="steps">
+      <li>Turn on the listener in <code>.corral-next/corral.toml</code>, then restart <code>corrald-next</code>:
+        <div class="code" style="margin-top:var(--s2)"><div class="code-h"><span>.corral-next/corral.toml</span></div><pre tabindex="0"><code>[daemon]
+listen = "127.0.0.1:7841"
+web_origin = ["http://127.0.0.1:8790"]</code></pre></div>
+      </li>
+      <li>Run <code>corrald-next pair</code>. It prints a link. Open it; the page has the code filled in. Press <strong>Pair</strong>.</li>
+      <li>Both sides show the same six-digit code. <code>corrald-next pair status &lt;id&gt;</code> shows it; <code>corrald-next pair confirm &lt;id&gt;</code> enrols the device.</li>
+      <li>The device stays paired after a reload and can do everything you can.</li>
+    </ol>
+    <p>A pairing code expires after two minutes. For a device on another machine the app must be served over HTTPS, <code>web_origin</code> must name its exact origin, and the daemon needs <code>run --web-endpoint wss://host[:port]</code>; TLS comes from a reverse proxy or Tailscale Serve.</p>
+  </section>
+
+  <section class="sec" aria-labelledby="s3-9">
+    <h3 id="s3-9"><span class="sec-no">3.9</span> Agents with corral-pi</h3>
+    <ul>
+      <li>Sign in once with <code>corral-pi login</code>. An API key is a separate connection: <code>corral-pi login --connection anthropic-api</code>.</li>
+      <li>A task uses Pi when its profile has <code>harness = "pi"</code>.</li>
+    </ul>
+    <div class="tw wide" tabindex="0" role="region" aria-label="Agent roles table">
+      <table class="cmd-table">
+        <thead><tr><th scope="col">Role</th><th scope="col">How it starts</th><th scope="col">What it does</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Worker</th><td><code>corral-next dispatch &lt;id&gt; --profile &lt;pi-profile&gt;</code></td><td>Edits the task’s worktree and submits with <code>done</code></td></tr>
+          <tr><th scope="row">Reviewer</th><td>Set the project’s <code>reviewer</code> profile</td><td>Records <code>approve</code> or <code>changes</code>; the next round goes to the same conversation</td></tr>
+          <tr><th scope="row">Assistant</th><td>Ask in the app, or <code>corral-pi chat --dir &lt;session-dir&gt;</code></td><td>Chats, and can run the same commands you can</td></tr>
+          <tr><th scope="row">Build</th><td><code>corral-pi build</code></td><td>Works in Git without a task; you choose Keep, Iterate or Land</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul>
+      <li><strong>Controls:</strong> Cancel stops the current turn. Pause also holds automated input such as gate notes; Resume delivers it. A worker saves a checkpoint before each turn, and Rewind restores the worktree and conversation to one.</li>
+      <li><strong>Spending:</strong> an API model needs no cap. <code>--max-usd &lt;amount&gt;</code> in a profile’s <code>args</code> sets one. Continuing on an API key after a subscription quota error is opt-in with <code>--paid-route &lt;provider/model&gt;</code> and needs a cap.</li>
+      <li><strong>Build Land:</strong> rebase, the project’s gate, fast-forward. If the gate fails, the session is handed the failure and Land runs again when it has committed a fix, at most three times.</li>
+    </ul>
+  </section>
+
+  <section class="sec" aria-labelledby="s3-10">
+    <h3 id="s3-10"><span class="sec-no">3.10</span> Moving your open tasks over</h3>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl">corral export tasks &lt;dir&gt;</span>                 <span class="cm"># with the old corral</span>
+<span class="cl">corral-next init --first-id &lt;N&gt;</span>           <span class="cm"># so new ids do not collide with old ones</span>
+<span class="cl">corral-next import &lt;dir&gt; --dry-run</span>        <span class="cm"># report only</span>
+<span class="cl">corral-next import &lt;dir&gt;</span>                  <span class="cm"># open tasks; --all also takes Done and Dropped</span></code></pre></div>
+    <p>A dry run on this workspace on 18 November: 977 tasks exported, 171 would be imported, next id 978. <strong>The real import has not been run.</strong></p>
+  </section>
+
+  <section class="sec" aria-labelledby="s3-11">
+    <h3 id="s3-11"><span class="sec-no">3.11</span> What is gone, so you do not look for it</h3>
+    <ul>
+      <li>The classic terminal board, the PM role, queue commands and modes.</li>
+      <li>Questions, plans and attention items as separate objects with their own review.</li>
+      <li>Gate tiers, selection, quarantine, attempts and receipts.</li>
+      <li>Authority prompts and proofs on paired devices.</li>
+      <li>In pi sessions: the <code>/plan</code> and <code>/handoff</code> flows, and the <code>[build.api]</code> preset mapping.</li>
+      <li>In the app: the welcome tour, and launching <code>corral-pi</code> from the app. Neither has a successor yet.</li>
+    </ul>
+  </section>
+</section>
+
+<!-- ============================ PART 4 ============================ -->
+<section class="part" aria-labelledby="part-4">
+  <div class="part-head">
+    <h2 id="part-4"><span class="part-num">Part 4</span> Technical detail</h2>
+  </div>
+
+  <section class="sec" aria-labelledby="s4-1">
+    <h3 id="s4-1"><span class="sec-no">4.1</span> One entry point, typed operations</h3>
+    <p>Every operation is one variant of <code>Op</code>. <code>Engine::apply(op, force)</code> is the single entry point for the CLI, the daemon and the pipeline. The CLI parses its arguments into an <code>Op</code>; the wire submits <code>{ op, force }</code> unchanged.</p>
+    <div class="code"><div class="code-h"><span>Rust</span></div><pre tabindex="0"><code>pub enum Op {
+    New { .. }, Edit { .. }, Comment { id, text }, Move { id, status },
+    Dispatch { id, profile, base }, Reply { id, text }, Stop { id },
+    Retry { id, profile, fresh, note }, Done { id, summary }, Gate { id },
+    Review { id, profile }, Verdict { id, approve, notes }, Changes { id, text },
+    Approve { id, onto }, Drop { id }, Reopen { id },
+    ArtifactAdd { .. }, UsageAdd { .. }, Sync,
+}
+
+pub struct Refusal { pub reason: String, pub next: Vec&lt;Next&gt;, <span class="cm">/* config problems */</span> }
+pub struct Next    { pub op: Op, pub force: bool }</code></pre></div>
+    <p>A refusal carries the typed operations that get past it, including the forced form. The app turns each <code>Next</code> into a button; the CLI prints it as a command.</p>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-2">
+    <h3 id="s4-2"><span class="sec-no">4.2</span> Force</h3>
+    <p>Force is not a second mechanism. There is one short list of checks and the owner passes any of them.</p>
+    <div class="tw wide" tabindex="0" role="region" aria-label="Force table">
+      <table class="cmd-table">
+        <thead><tr><th scope="col">Operation</th><th scope="col">Normally requires</th><th scope="col"><code>--force</code> skips</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>dispatch</code></th><td>Backlog or Ready, a project, dependencies Done, a free slot</td><td>Dependencies and slots</td></tr>
+          <tr><th scope="row"><code>approve</code></th><td>Review, and a green gate on the commit being landed</td><td>The gate and the status rule: any task with a branch lands</td></tr>
+          <tr><th scope="row"><code>move</code></th><td>A move among Idea, Backlog, Ready; or Done or Dropped back to Backlog</td><td>Every status rule: any status to any status</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ul>
+      <li><strong>Cannot be skipped:</strong> a rebase conflict, a missing branch, a refusal from git. These are physical.</li>
+      <li><strong>Recorded:</strong> each forced action appends one <code>forced</code> event listing what it skipped.</li>
+      <li><strong>Automation never forces.</strong></li>
+    </ul>
+    <p>Observed in the browser, paired to a real daemon: moving a Backlog task to Done was refused with “cannot move backlog to done without force”; the sheet offered “Move anyway” and showed <code>corral move T-001 done --force</code>; the event log then held <code>forced {"from":"backlog","operation":"move","skipped":["status rule"],"to":"done"}</code> with the owner as actor.</p>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-3">
+    <h3 id="s4-3"><span class="sec-no">4.3</span> After <code>done</code>: the pipeline</h3>
+    <p><code>done</code>, <code>verdict</code> and <code>gate</code> advance the task at once; nothing waits for a timer.</p>
+    <div class="code"><div class="code-h"><span>Pseudocode</span></div><pre tabindex="0"><code>while status is Review:
+    head = branch HEAD
+    gate configured and no gate check for head  -&gt; run the gate; red: send back, stop
+    reviewer configured and no review check for this round:
+        review already requested this round -&gt; stop (waiting for its verdict)
+        reviewer session live -&gt; send it the re-review request, stop
+        else start a reviewer whose prompt carries the earlier rounds' notes, stop
+    review check is Fail -&gt; stop (sent back when the verdict arrived)
+    auto_land -&gt; land, stop
+    else -&gt; append `ready` once, stop (waiting for the owner)</code></pre></div>
+    <p>A red gate, a “changes” verdict and a rebase conflict all use one send-back path. At the round limit the task becomes Blocked and names <code>changes</code>, <code>retry</code> and <code>approve --force</code>.</p>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-4">
+    <h3 id="s4-4"><span class="sec-no">4.4</span> Landing</h3>
+    <p>One function, under a per-repository lock:</p>
+    <ol>
+      <li>Rebase the worktree onto the target. On conflict: abort and send back.</li>
+      <li>If a gate is configured, not skipped, and no green check exists for the rebased commit, run it. Red: send back.</li>
+      <li>Fast-forward the target. If it is checked out in a worktree, <code>git merge --ff-only</code> there; if it is checked out nowhere, update the ref. Git decides whether local changes collide.</li>
+      <li>Close the task’s sessions, remove the worktree, delete the branch, set Done, record <code>landed</code> with the commit.</li>
+    </ol>
+    <p>The target is the branch the run started from, or any existing branch named with <code>approve --onto</code>. Because the lock covers rebase through fast-forward, the base cannot move underneath a landing, so a gate reruns only when the rebase changed the commit.</p>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-5">
+    <h3 id="s4-5"><span class="sec-no">4.5</span> Sessions and runners</h3>
+    <p>A session is an id, a worktree, a transcript and a process. One small interface drives every kind of agent:</p>
+    <div class="code"><div class="code-h"><span>Rust</span></div><pre tabindex="0"><code>pub trait Runner {
+    fn start(&amp;self, spec: &amp;LaunchSpec) -&gt; Result&lt;SessionRef&gt;;
+    fn status(&amp;self, session: &amp;SessionRef) -&gt; Result&lt;SessionStatus&gt;; <span class="cm">// Working, Blocked, Idle, Gone</span>
+    fn send(&amp;self, session: &amp;SessionRef, text: &amp;str, origin: Origin) -&gt; Result&lt;()&gt;;
+    fn stop(&amp;self, session: &amp;SessionRef) -&gt; Result&lt;()&gt;;
+    fn focus(&amp;self, session: &amp;SessionRef) -&gt; Result&lt;()&gt;;
+}</code></pre></div>
+    <p>Four runners: a herdr pane, a detached process, the pi host, and a fake for tests. A sync pass reads each live session, turns “agent is asking” into a Blocked card that names <code>reply</code>, turns “session ended without done” into a Blocked card that names <code>retry</code>, dispatches Ready work when automatic dispatch is on, and advances stalled pipelines.</p>
+    <p>Two rules that came out of testing: slots count Running and Blocked tasks, not sessions; and <code>approve</code> does not wait for the worker to go idle.</p>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-6">
+    <h3 id="s4-6"><span class="sec-no">4.6</span> Store</h3>
+    <div class="code"><div class="code-h"><span>Directory layout</span></div><pre tabindex="0"><code>&lt;workspace&gt;/.corral-next/
+  corral.toml                 <span class="cm">configuration</span>
+  corral.db                   <span class="cm">SQLite, WAL</span>
+  blobs/sha256/&lt;2&gt;/&lt;62&gt;       <span class="cm">artifact bytes, content-addressed</span>
+  runs/&lt;task&gt;/&lt;run&gt;/          <span class="cm">prompt.md, session.log, exit_code</span>
+  runs/&lt;task&gt;/gate-&lt;sha8&gt;.log
+  locks/&lt;task&gt;.pipeline       <span class="cm">held only while that task's pipeline runs</span>
+  chat/, memory/              <span class="cm">the assistant's sessions and notes</span>
+  daemon.sock, devices.json, identity.key</code></pre></div>
+    <p>SQLite tables: <code>tasks</code>, <code>runs</code>, <code>checks</code>, <code>artifacts</code>, <code>events</code>, <code>usage</code>, <code>meta</code>. The engine exposes read functions for every table; the daemon never writes SQL.</p>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-7">
+    <h3 id="s4-7"><span class="sec-no">4.7</span> Wire and daemon</h3>
+    <ul>
+      <li>One write command: <code>op.submit { op, force }</code>. The authority field is gone.</li>
+      <li>Of 19 command families, <code>task</code> and <code>review</code> are kept, <code>session</code> and <code>config</code> are reshaped, and 15 are dropped (question, queue, attention, plan, annotation, mode, assistant, message, pm, inbox, knowledge, meta, repair, run, setup). Each dropped family maps onto an engine operation or has no successor.</li>
+      <li>Session controls for chat and agent sessions: cancel, pause, resume, terminate, relaunch, rewind.</li>
+      <li>Pairing: <code>corrald-next pair</code> prints a link; the browser and the CLI show the same six-digit code; <code>pair confirm</code> enrols the device. Verified in a browser: the pairing survives a page reload.</li>
+    </ul>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-8">
+    <h3 id="s4-8"><span class="sec-no">4.8</span> Pi host</h3>
+    <ul>
+      <li>One-command launch: <code>corral-pi run</code>, <code>chat</code>, <code>build</code>, <code>login</code>.</li>
+      <li>The host’s Corral tools run the same commands as the owner. A repeated <code>done</code> is harmless.</li>
+      <li>No generations, fences, bootstrap files, receipt caps or capability snapshots. Restarting resumes the transcript.</li>
+      <li>Kept by owner decision: checkpoints and rewind inside the host; a reviewer that keeps its context across rounds.</li>
+      <li>A build session lands locally: rebase, the project’s gate, fast-forward.</li>
+      <li><strong>Repair of a failed landing gate</strong> (carried over from <code>main</code> on 18 November): when the gate fails during Land, the host hands the failed command and log to the session and runs Land again once that turn ends with a new commit, at most three times per Land choice.</li>
+      <li><strong>Spending:</strong> an API model runs without a cap and its usage is still reported. <code>--max-usd</code> sets an optional cap. <code>--paid-route</code> still requires a cap.</li>
+      <li>Size: 41,488 lines of TypeScript in 276 source files (321 files before), plus 28,519 lines of tests.</li>
+    </ul>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-9">
+    <h3 id="s4-9"><span class="sec-no">4.9</span> App</h3>
+    <ul>
+      <li>Destinations: Now, Changes, Plans, Agents, Review, Timeline, Usage, Artifacts, Settings. Inbox merged into Now; Builds merged into Agents.</li>
+      <li>Every task shows its operations (15 in the Actions menu). A refused action opens a sheet with one button per way past it. Destructive actions ask once.</li>
+      <li>Settings edits <code>corral.toml</code> directly.</li>
+      <li>Three forms from one codebase: terminal, web desktop, phone. 101,298 lines of Rust.</li>
+    </ul>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-10">
+    <h3 id="s4-10"><span class="sec-no">4.10</span> Code size, measured on <code>main</code> after landing</h3>
+    <p class="sub">Lines of Rust, tests included.</p>
+    <div class="tw wide" tabindex="0" role="region" aria-label="Code size table">
+      <table>
+        <thead><tr><th scope="col">Crate</th><th scope="col" class="num">Lines</th><th scope="col">Role</th></tr></thead>
+        <tbody>
+          <tr><th scope="row"><code>corral-types</code></th><td class="num">994</td><td>Shared types</td></tr>
+          <tr><th scope="row"><code>corral-engine</code></th><td class="num">10,304</td><td>The engine</td></tr>
+          <tr><th scope="row"><code>corral-next</code></th><td class="num">2,350</td><td>CLI</td></tr>
+          <tr><th scope="row"><code>corral-protocol</code></th><td class="num">3,446</td><td>Wire</td></tr>
+          <tr><th scope="row"><code>corral-daemon</code></th><td class="num">14,372</td><td>Daemon (<code>corrald-next</code>)</td></tr>
+          <tr><th scope="row"><code>corral-git</code></th><td class="num">5,210</td><td>Git helpers (kept)</td></tr>
+          <tr><th scope="row"><code>corral-herdr</code></th><td class="num">2,273</td><td>herdr wrapper (kept)</td></tr>
+          <tr class="total"><th scope="row">Workspace total</th><td class="num">38,949</td><td></td></tr>
+          <tr><th scope="row"><code>corral</code> (old binary)</th><td class="num">53,998</td><td>Out of the workspace, unbuilt</td></tr>
+          <tr><th scope="row"><code>corral-core</code> (old)</th><td class="num">148,953</td><td>Out of the workspace, unbuilt</td></tr>
+          <tr><th scope="row"><code>corral-ops</code> (old)</th><td class="num">395,626</td><td>Out of the workspace, unbuilt</td></tr>
+          <tr><th scope="row"><code>corral-tui</code> (old)</th><td class="num">58,718</td><td>Out of the workspace, unbuilt</td></tr>
+          <tr class="total"><th scope="row">Old total</th><td class="num">657,295</td><td></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <figure class="fig-size">
+      <svg viewBox="0 0 380 166" role="img" aria-labelledby="f2-t f2-d">
+        <title id="f2-t">Lines of Rust: old engine crates against the new workspace, drawn to scale</title>
+        <desc id="f2-d">Two horizontal bars drawn to scale. The four old engine crates: 657,295 lines. The seven-crate workspace that now builds: 38,949 lines.</desc>
+        <text x="10" y="18" font-size="15" class="b">Four old engine crates</text>
+        <rect class="bar-old" x="10" y="26" width="360" height="26" rx="2"/>
+        <text class="t2" x="10" y="72" font-size="14" style="font-variant-numeric:tabular-nums">657,295 lines</text>
+        <text x="10" y="104" font-size="15" class="b">Seven-crate workspace that now builds</text>
+        <rect class="bar" x="10" y="112" width="21.33" height="26" rx="2"/>
+        <text class="t2" x="10" y="158" font-size="14" style="font-variant-numeric:tabular-nums">38,949 lines</text>
+      </svg>
+      <figcaption><b>Figure 2.</b> Lines of Rust, tests included: 657,295 in the four old engine crates against 38,949 in the whole seven-crate workspace that now builds. Drawn to scale; about 17 times smaller.</figcaption>
+    </figure>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-11">
+    <h3 id="s4-11"><span class="sec-no">4.11</span> Consequences of landing</h3>
+    <ul>
+      <li><strong>The old <code>corral</code> no longer builds from <code>main</code>.</strong> The installed <code>corral</code> and <code>corral-pi-host</code> binaries keep running.</li>
+      <li><strong><code>scripts/gate.sh</code> targets the old crates</strong>, which no longer compile. It was not rerun after landing.</li>
+      <li><strong>Unlanded old-system branches on this repository are stranded:</strong> T-855 (11 commits), T-965 (4), T-977 (3), T-966 (2), T-973, T-974, T-869, A-78, A-92 (1 each), and the build sessions <code>mwl8ran8sv</code> (21) and <code>mwlv2x2nbv</code> (4).</li>
+      <li><strong>The <code>corral-app-tui</code> launcher</strong> starts the new app against the old daemon’s socket and needs <code>CORRAL_SOCKET</code> pointed at <code>.corral-next/daemon.sock</code> (see <a href="#launcher-action">3.7</a>).</li>
+      <li><strong>The README install line is stale:</strong> <code>cargo install --path crates/corral</code> now fails.</li>
+      <li><strong>Undo:</strong> the landing is one local merge commit; <code>git revert -m 1 9e098a06a</code> reverses it.</li>
+    </ul>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-12">
+    <h3 id="s4-12"><span class="sec-no">4.12</span> Known limits</h3>
+    <ul>
+      <li>Git, session and database effects are not crash-atomic together. A sync pass and the owner’s commands repair a half-finished step.</li>
+      <li>A spending cap can be overshot by requests already in flight.</li>
+      <li>The Claude SDK lane rejects <code>--max-usd</code>.</li>
+      <li>Two clients saving settings at once: the last writer wins.</li>
+      <li>After an operation replies “Running” there is no handle to wait on its completion; the event stream shows it.</li>
+      <li>On the web, a menu opened by pointer ignores the arrow keys; a menu opened by keyboard does not.</li>
+      <li>The terminal form cannot preview images or open an artifact in an external program.</li>
+      <li>Usage totals cover only runs whose harness reports usage; the report says how many runs it covers.</li>
+    </ul>
+  </section>
+
+  <section class="sec" aria-labelledby="s4-13">
+    <h3 id="s4-13"><span class="sec-no">4.13</span> What comes next</h3>
+    <ol>
+      <li>Decide the cutover and do it: rename <code>corral-next</code> to <code>corral</code> and <code>.corral-next/</code> to <code>.corral/</code>, delete the four old crates, replace the gate scripts, rewrite the README and <code>docs/DESIGN.md</code>.</li>
+      <li>Import the open tasks (the dry run found 171 to import).</li>
+      <li>Use it on a product repository and check the four exit criteria:
+        <ul>
+          <li>With no assistant running, <code>new</code>, <code>dispatch</code> and <code>approve</code> land a one-line change.</li>
+          <li>A landed task runs its gate once per commit that is actually landed or sent back.</li>
+          <li>Every Blocked card carries the command that clears it, and none names an agent.</li>
+          <li>Every refusal names its force command, and the app offers each one.</li>
+        </ul>
+      </li>
+    </ol>
+  </section>
+</section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="wrap">
+    <p>Corral engine rework: report and user guide. Report date 18 November 2026.</p>
+    <p><a href="#top">Back to the top</a></p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  root.classList.remove("no-js");
+
+  var THEMES = ["auto", "light", "dark"];
+  var btn = document.getElementById("theme-btn");
+  btn.addEventListener("click", function () {
+    var cur = root.getAttribute("data-theme") || "auto";
+    var nxt = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
+    root.setAttribute("data-theme", nxt);
+    btn.textContent = "Theme: " + nxt;
+    btn.setAttribute("aria-label", nxt === "auto" ? "Color theme: follows the system" : "Color theme: " + nxt);
+  });
+
+  var details = document.getElementById("toc-details");
+  var wide = window.matchMedia("(min-width: 1080px)");
+  var printing = window.matchMedia("print");
+  function syncToc() { details.open = wide.matches || printing.matches; }
+  syncToc();
+  if (wide.addEventListener) wide.addEventListener("change", syncToc);
+  window.addEventListener("beforeprint", function () { details.open = true; });
+  window.addEventListener("afterprint", syncToc);
+  details.addEventListener("click", function (e) {
+    if (!wide.matches && e.target.closest("a")) details.open = false;
+  });
+
+  var nav = document.querySelector(".toc");
+  var links = Array.prototype.slice.call(details.querySelectorAll('a[href^="#"]'));
+  var targets = links.map(function (a) { return document.getElementById(a.getAttribute("href").slice(1)); });
+  var current = null;
+  var queued = false;
+  function spy() {
+    queued = false;
+    var idx = 0;
+    for (var i = 0; i < targets.length; i++) {
+      if (targets[i] && targets[i].getBoundingClientRect().top <= 120) idx = i;
+    }
+    var link = links[idx];
+    if (link === current) return;
+    if (current) current.removeAttribute("aria-current");
+    link.setAttribute("aria-current", "true");
+    current = link;
+    if (wide.matches) {
+      var nr = nav.getBoundingClientRect(), lr = link.getBoundingClientRect();
+      if (lr.top < nr.top + 40 || lr.bottom > nr.bottom - 40) {
+        nav.scrollTop += lr.top - nr.top - nr.height / 3;
+      }
+    }
+  }
+  window.addEventListener("scroll", function () {
+    if (!queued) { queued = true; window.requestAnimationFrame(spy); }
+  }, { passive: true });
+  spy();
+})();
+</script>
+</body>
+</html>
