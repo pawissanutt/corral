@@ -35,6 +35,10 @@ impl AppState {
         if matches!(live, Live::Thread(_)) {
             self.close(Overlay::Ask);
         }
+        if matches!(live, Live::Task(_)) {
+            // Closing Now's inspector hides the selected task; opening one by name must show it.
+            self.work.update(|state| state.digest_only = false);
+        }
         let form = self.form;
         self.change(|nav| nav.open_live(live, form));
     }

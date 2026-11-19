@@ -123,6 +123,7 @@ pub fn event_text(event: &Event) -> String {
         },
         EventKind::Moved => match (status("from"), status("to")) {
             (Some(from), Some(to)) => format!("moved {from} → {to}"),
+            (None, Some(to)) => format!("moved to {to}"),
             _ => "moved".into(),
         },
         EventKind::Commented => match field(event, "text") {
@@ -288,4 +289,25 @@ pub(super) fn changes_notice(feed: &Feed) -> Option<Notice> {
         return Some(Notice::Quiet("No changes received from corrald yet."));
     }
     Some(Notice::Quiet("No changes recorded yet."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Imported moves carry only `to`; they read as a move to it, not a bare "moved".
+    #[test]
+    fn a_move_with_only_a_destination_names_it() {
+        let event = Event {
+            seq: 1,
+            ts: jiff::Timestamp::UNIX_EPOCH,
+            task: Some("T-1".into()),
+            run: None,
+            project: None,
+            kind: EventKind::Moved,
+            actor: corral_types::Actor::Owner,
+            detail: serde_json::json!({"to": "in_progress"}),
+        };
+        assert!(event_text(&event).ends_with("to in progress"));
+    }
 }

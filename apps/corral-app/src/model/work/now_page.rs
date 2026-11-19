@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use super::{
     Action, Button, ClosedView, GroupKey, Inspector, NowDigest, Press, Row, State, TaskRow,
 };
-use crate::model::board::{Mark, TaskLine};
+use crate::model::board::TaskLine;
 use crate::model::daemon::{self, Feed};
 use crate::model::glance::{LoopBand, LoopStage, StageRail, Stat, StatIcon};
 use crate::model::projects::{FilterScreen, NowGroup, ProjectFilter, project_chip};
@@ -97,7 +97,7 @@ pub struct NowPage {
     pub opens_at: Option<crate::model::Id>,
     pub waiting: NowWaiting,
     pub closed: Option<ClosedView>,
-    /// Landed tasks on the loaded Closed page, or recorded landings since the seen cursor.
+    /// Tasks recorded as landed since the seen cursor, in the loaded history: the digest's count.
     pub closed_landed: Option<Stat>,
     pub panel: NowPanel,
     pub clear_selection: Press,
@@ -178,31 +178,12 @@ pub fn now_page(
             row.selected = false;
         }
     }
-    let closed_landed = closed
-        .as_ref()
-        .map(|closed| {
-            closed
-                .rows
-                .iter()
-                .filter(|row| row.mark == Mark::Done)
-                .count()
-        })
-        .filter(|count| *count > 0)
-        .map(|count| {
-            Stat::new(
-                "closed-landed",
-                StatIcon::Landed,
-                count.to_string(),
-                Hue::Ok,
-                format!("{count} done tasks on this loaded closed page"),
-            )
-        })
-        .or_else(|| {
-            digest.landed.clone().map(|landed| Stat {
-                key: "closed-landed".into(),
-                ..landed
-            })
-        });
+    // The same count whether the section is folded or open: the loaded page's rows are one page
+    // of the closed history, not the tasks that landed since the owner's last visit.
+    let closed_landed = digest.landed.clone().map(|landed| Stat {
+        key: "closed-landed".into(),
+        ..landed
+    });
     // A phone pushes the selected task's page instead; its Now keeps the digest's summary row.
     let panel = if form != Form::Phone
         && !state.digest_only
