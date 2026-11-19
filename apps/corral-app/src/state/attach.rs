@@ -134,7 +134,11 @@ impl AppState {
                 mime.trim().starts_with("image/") || assistant::sniff_image(data.bytes()).is_some()
             });
         let mut refusals = self.stage_files(session, PickKind::Image, images);
-        refusals.extend(self.stage_files(session, PickKind::File, others));
+        for why in self.stage_files(session, PickKind::File, others) {
+            if !refusals.contains(&why) {
+                refusals.push(why);
+            }
+        }
         self.toast_refusals(refusals);
     }
 

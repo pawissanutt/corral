@@ -689,6 +689,19 @@ fn an_image_pasted_into_a_build_page_reaches_its_attachments() {
     app.wait_for("text:/^Not attached/").unwrap();
 }
 
+/// A file copied in a file manager arrives as its path alone: pasted into Ask, which takes
+/// attachments, it is refused with that reason rather than dropped.
+#[test]
+fn a_file_pasted_as_a_path_alone_is_refused_visibly() {
+    let mut app = preview(desktop(), &[]);
+    app.press("id:ask-open").unwrap();
+    app.wait_for("id:ask-input").unwrap();
+    let mut paste = PasteEvent::default();
+    paste.uris.push("file:///tmp/shot.png".into());
+    app.paste("id:ask-input", &paste).unwrap();
+    app.wait_for("text:/path alone/").unwrap();
+}
+
 /// A stopped build's row offers Remove…; its sheet shows prune's dry run before anything goes,
 /// and confirming removes the build from the roster.
 #[test]
