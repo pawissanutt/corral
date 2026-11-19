@@ -28,6 +28,7 @@ import { errorPresenter } from "../ui/error-copy.ts";
 import { repaintTranscript } from "../ui/transcript-repaint.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
 import { RemoteOwner } from "./remote-owner.ts";
+import { installRemote } from "./remote/index.ts";
 import { SessionRecord } from "./session-record.ts";
 import { summaryOptions } from "./summary.ts";
 import { interactiveModels, providerTransport, sessionRoutes } from "./capabilities.ts";
@@ -44,7 +45,7 @@ export async function runHost(config: HostConfig, overrides: HostOverrides = {})
   const bridge = await startBridge({ path: config.local.socket, sessionId: id || config.identity.role, events });
   try {
     const record = new SessionRecord(config.local.dir, id, config.identity.role, config.cwd,
-      config.terminalChat && config.freshSession);
+      config.terminalChat && config.freshSession, bridge.path);
     await runSession(config, overrides, events, bridge, record);
   } catch (error) {
     await bridge.close();
@@ -195,8 +196,8 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
       setModel: args => owner.setModel(args),
       cancel: turn => session.cancel(turn),
       rewind: input => owner.rewind(input),
-      queueState: limit => session.queue.snapshot(limit),
-      queueWithdraw: key => session.queue.withdrawInput(key),
+      queueState: limit => owner.queueState(limit),
+      queueWithdraw: key => owner.withdraw(key),
       shutdown() {
         events.emit("shutdown");
         terminal?.stop();
@@ -208,11 +209,13 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     };
   }
   if (config.local?.headless || headlessEnabled(config.capabilities)) {
-    await attachHeadless(session, events, line => process.stdout.write(line));
-    if (handlers) {
-      bridge.attach(handlers, session.liveEvents);
-      events.emit("ready");
-    }
+    await attachHeadless(session, events, line => process.stdout.write(line), () => {
+      if (handlers) {
+        installRemote(session, owner, config.local.dir);
+        bridge.attach(handlers, session.liveEvents, session.remoteRegistry);
+        events.emit("ready");
+      }
+    });
     return;
   }
   const panels = session.panels;
@@ -227,7 +230,10 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();
   session.markAttached("interactive");
-  if (handlers) bridge.attach(handlers, session.liveEvents);
+  if (handlers) {
+    installRemote(session, owner, config.local.dir);
+    bridge.attach(handlers, session.liveEvents, session.remoteRegistry);
+  }
   try { await terminal.run(); }
   finally { await close(); }
 }

@@ -6,8 +6,9 @@ import { restrictEnvironment } from "./host/restrict.ts";
 const usage = `Usage:
   corral-pi run --dir <run-dir> [--socket <path>] [--prompt-file <path>] [--corral <path>] [model flags]
   corral-pi chat [--new | --dir <chat-dir>] [--socket <path>] [--corral <path>] [model flags]
-  corral-pi build [--data-dir <path>] [--name <name> | --resume <id>] [--profile <name>] [--here] [--socket <path>] [--corral <path>] [model flags]
-  corral-pi build --prune [--dry-run] [--data-dir <path>]
+  corral-pi build [--data-dir <path>] [--id <id>] [--name <name>] [--profile <name>] [--here] [--socket <path>] [--corral <path>] [--headless] [model flags]
+  corral-pi build --resume <id> [--data-dir <path>] [--socket <path>] [--corral <path>] [--headless]
+  corral-pi build --prune [--session <id> [--json]] [--dry-run] [--data-dir <path>]
   corral-pi login [--provider <id>] [--auth-dir <path>]
   corral-pi models [--provider <id>]
 Model flags: --model [<provider>/]<id>, --provider <id>, --effort <level>, --aws-profile <name>, --aws-region <region>.

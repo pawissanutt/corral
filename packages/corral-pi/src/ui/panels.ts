@@ -11,6 +11,7 @@ import type { ReviewBases } from "./review-store.ts";
 import type { JobControl } from "../host/job-controls.ts";
 import type { QueueControl } from "../host/queue-control.ts";
 import type { MarkSink } from "../host/transcript-marks.ts";
+import type { RemoteDialogs } from "../host/remote/dialogs.ts";
 import { hiddenThinkingLabel, panelTheme, thinkingLead, userLabel } from "./panels-theme.ts";
 import { type Appearance, type Bell, type Density, type Motion, PACKAGED } from "./appearance.ts";
 import { Activity, ActivityClock, elapsedLabel, PassCache, SYSTEM_SCHEDULER, type Scheduler, type Ticker } from "./activity.ts";
@@ -79,6 +80,11 @@ export interface NativePanelsOptions {
   readonly sidebarKey?: SidebarKey;
   /** Where the build controller appends transcript marks; absent outside build sessions or before the host wires it. */
   readonly marks?: MarkSink;
+  /**
+   * The session's dialog registry: owner dialogs register there and the build dock decides through it, so the app can
+   * answer the same card and whichever side answers first closes the other's. Absent: dialogs answer only here.
+   */
+  readonly dialogs?: RemoteDialogs;
 }
 /** Views a tool row's clickable label can open by name; `plan` is the sidebar's Plan tab. */
 export type PanelView = "chat" | "agents" | "changes" | "task" | "proof" | "artifacts" | "usage" | "board" | "plan";
@@ -203,6 +209,7 @@ export class NativePanels implements PanelSurface {
       source: () => this.questions, focus: () => this.focusQuestions(), focusComposer: () => this.focusComposer(), changed: () => this.refresh(),
     });
     const build = options.build ? routedBuild(options.build, options.deliverBuildInput) : undefined;
+    const panels = this;
     this.build = build ? new BuildController({
       ui: build, state: () => this.snapshot()?.build, streaming: () => this.snapshot()?.streaming ?? false,
       overlay: () => !this.canInteract, draft: () => this.ui?.getEditorText() ?? "", setDraft: text => this.ui?.setEditorText(text),
@@ -210,6 +217,9 @@ export class NativePanels implements PanelSurface {
       notice: (text, tone) => this.workbench.notice(text, tone), post: entry => this.post(entry),
       showBoard: () => { this.workbench.setView("board"); }, openChild: id => this.workbench.openChild(id),
       color: agentColor, now: () => Date.now(), changed: () => this.refresh(), ...(options.marks ? { marks: options.marks } : {}),
+      // Only a terminal the panels draw on is a second surface to race the app: a headless session (panels with no
+      // terminal) never watches or answers its cards, so the app's repeated answers keep their headless replies.
+      get dialogs() { return panels.terminal ? options.dialogs : undefined; },
     }) : undefined;
     this.queue = new QueueDock({
       items: () => this.snapshot()?.queue ?? [], control: () => this.options.queueControl,
@@ -250,7 +260,10 @@ export class NativePanels implements PanelSurface {
    * `!command` draws as a tool row. Plain and headless hosts pass none and keep Pi's own.
    */
   presentation(): Pick<InteractiveModeOptions, "dialogPresentation" | "statusPresentation" | "selectorPresentation" | "bashPresentation"> {
-    const host: OwnerDialogHost = { rows: () => this.terminal?.rows ?? 24, chromeRows: rows => this.cardChrome(rows), changed: () => this.refresh() };
+    const host: OwnerDialogHost = {
+      rows: () => this.terminal?.rows ?? 24, chromeRows: rows => this.cardChrome(rows), changed: () => this.refresh(),
+      ...(this.options.dialogs ? { dialogs: this.options.dialogs, notice: (text: string) => this.workbench.notice(text, "text") } : {}),
+    };
     return {
       dialogPresentation: ownerDialogPresentation(host),
       // Read per notice: before the panels have a terminal, or once disposed, Pi keeps its own line.

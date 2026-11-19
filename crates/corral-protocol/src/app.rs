@@ -15,15 +15,27 @@ pub const PROJECTS_V1: &str = "projects.v1";
 pub const AGENTS_V1: &str = "agents.v1";
 pub const SESSION_V1: &str = "session.v1";
 pub const SESSION_FLEET_V1: &str = "session.fleet.v1";
+/// Grants live state and its events, session parts, and session host operations whenever requested.
+pub const SESSION_STATE_V1: &str = "session.state.v1";
 pub const REVIEW_V1: &str = "review.v1";
 pub const TIMELINE_V1: &str = "timeline.v1";
 pub const USAGE_V1: &str = "usage.v1";
 pub const SETTINGS_V1: &str = "settings.v1";
 pub const ASSISTANT_V1: &str = "assistant.v1";
+/// Grants build operations and build rows whenever requested.
+pub const BUILD_V1: &str = "build.v1";
 pub const CLOSED_V1: &str = "closed.v1";
 /// Includes the complete JSON-RPC envelope, not only its result.
 pub const APP_CONTROL_MAX: usize = 60 * 1024;
+/// Maximum serialized body of a host session part, before the app RPC envelope.
+pub const SESSION_PART_MAX: usize = 48 * 1024;
 pub const CHANGES_LIMIT_MAX: u16 = 200;
+
+/// Either capability grants access to the shared Assistant topic.
+pub fn assistant_topic_enabled(caps: &[String]) -> bool {
+    caps.iter()
+        .any(|cap| matches!(cap.as_str(), ASSISTANT_V1 | BUILD_V1))
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AppSessionRequest {}

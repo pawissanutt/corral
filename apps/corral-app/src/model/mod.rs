@@ -2,11 +2,11 @@
 
 /// Engine operations, the local question destructive ones ask, and their status.
 pub mod act;
-/// Agent sessions and worker wall.
+/// The Agents roster, where sessions start, and each session's run controls.
 pub mod agents;
 /// The artifact finder over every task's artifacts.
 pub mod artifacts;
-/// Ask and assistant threads.
+/// Ask and the assistant's chats.
 pub mod assistant;
 /// Shared board snapshot.
 pub mod board;
@@ -42,8 +42,8 @@ pub mod projects;
 pub mod provenance;
 /// Independent review and candidate evidence.
 pub mod review;
-/// A watched session's open turn and continued transcript items.
-pub mod session_feed;
+/// The one session page every role opens in: header, tabs, transcript, dock, composer.
+pub mod session;
 /// Device, connection and app settings.
 pub mod settings;
 /// Styled model text.

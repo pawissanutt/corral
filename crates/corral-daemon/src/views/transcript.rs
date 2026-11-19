@@ -4,8 +4,9 @@ mod entries;
 mod tokens;
 
 use std::collections::BTreeMap;
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
@@ -14,7 +15,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use self::tokens::{Source, Token};
-use super::json_len;
+use super::{fingerprint, json_len};
 
 const WINDOW: usize = 128 * 1024;
 const RECORDS: usize = 32;
@@ -24,11 +25,14 @@ const CONTINUED_BYTES: usize = 4096;
 
 struct Transcript {
     file: File,
-    len: u64,
+    metadata: Metadata,
 }
 
 impl Transcript {
-    fn open(path: &Path) -> Result<Self> {
+    fn open(path: &Path, scope: Option<&Path>) -> Result<Self> {
+        if let Some(dir) = scope {
+            return Self::from_file(crate::sessions::open_session_file(dir, path)?);
+        }
         use rustix::fs::{Mode, OFlags};
 
         let metadata = std::fs::symlink_metadata(path)
@@ -45,6 +49,10 @@ impl Transcript {
             )
             .with_context(|| format!("opening recorded transcript {}", path.display()))?,
         );
+        Self::from_file(file)
+    }
+
+    fn from_file(file: File) -> Result<Self> {
         let metadata = file
             .metadata()
             .context("reading opened transcript metadata")?;
@@ -52,10 +60,7 @@ impl Transcript {
             metadata.is_file(),
             "recorded transcript is not a regular file"
         );
-        Ok(Self {
-            file,
-            len: metadata.len(),
-        })
+        Ok(Self { file, metadata })
     }
 
     fn ends_line(&mut self, offset: u64) -> Result<bool> {
@@ -70,7 +75,10 @@ impl Transcript {
     }
 
     fn record(&mut self, start: u64, end: u64) -> Result<Value> {
-        ensure!(start < end && end <= self.len, "transcript entry is stale");
+        ensure!(
+            start < end && end <= self.metadata.len(),
+            "transcript entry is stale"
+        );
         self.file
             .seek(SeekFrom::Start(start))
             .context("seeking transcript entry")?;
@@ -80,14 +88,14 @@ impl Transcript {
 
     fn load_item(&mut self, source: Source) -> Result<SessionItem> {
         ensure!(
-            source.start < source.end && source.end <= self.len,
+            source.start < source.end && source.end <= self.metadata.len(),
             "transcript item is stale"
         );
         ensure!(
             (source.start == 0 || self.ends_line(source.start)?) && self.ends_line(source.end)?,
             "transcript item boundary changed; reload the session"
         );
-        entries::message(self.record(source.start, source.end)?)?
+        entries::message(self.record(source.start, source.end)?, None)?
             .and_then(|message| message.items.into_iter().nth(source.index))
             .context("transcript item no longer exists")
     }
@@ -139,42 +147,61 @@ fn branch_key(id: &str) -> u128 {
 }
 
 impl Branch {
-    fn cursor(self, end: u64, skip: usize) -> Option<String> {
+    fn cursor(self, stamp: &str, end: u64, skip: usize) -> Option<String> {
         if end == 0 {
             return None;
         }
         match self {
-            Self::Latest => Some(format!("transcript:{end}:{skip}:*")),
-            Self::Parent(key) => Some(format!("transcript:{end}:{skip}:{key:032x}")),
+            Self::Latest => Some(format!("transcript:{stamp}:{end}:{skip}:*")),
+            Self::Parent(key) => Some(format!("transcript:{stamp}:{end}:{skip}:{key:032x}")),
             Self::Root => None,
         }
     }
 }
 
-fn position(page: &str) -> Result<(u64, usize, Branch)> {
+#[derive(Debug)]
+pub(crate) struct StaleTranscriptCursor;
+
+impl std::fmt::Display for StaleTranscriptCursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("transcript changed; reload the session")
+    }
+}
+
+impl std::error::Error for StaleTranscriptCursor {}
+
+fn position(page: &str, stamp: &str) -> Result<(u64, usize, Branch)> {
     let mut parts = page.split(':');
     ensure!(
         parts.next() == Some("transcript"),
-        "invalid transcript cursor"
+        "invalid: expected a transcript cursor"
     );
+    let tagged = parts
+        .next()
+        .filter(|tag| tag.len() == stamp.len() && tag.bytes().all(|b| b.is_ascii_hexdigit()))
+        .context("invalid: malformed transcript stamp")?;
     let end = parts
         .next()
-        .context("missing transcript position")?
+        .context("invalid: missing transcript position")?
         .parse()
-        .context("invalid transcript position")?;
+        .context("invalid: malformed transcript position")?;
     let skip = parts
         .next()
-        .context("missing transcript item position")?
+        .context("invalid: missing transcript item position")?
         .parse()
-        .context("invalid transcript item position")?;
+        .context("invalid: malformed transcript item position")?;
     let branch = match parts.next() {
         Some("*") => Branch::Latest,
         Some(key) if key.len() == 32 => Branch::Parent(
-            u128::from_str_radix(key, 16).context("invalid transcript branch cursor")?,
+            u128::from_str_radix(key, 16).context("invalid: malformed transcript branch")?,
         ),
-        _ => anyhow::bail!("invalid transcript branch cursor"),
+        _ => anyhow::bail!("invalid: malformed transcript branch"),
     };
-    ensure!(parts.next().is_none(), "invalid transcript cursor");
+    ensure!(
+        end > 0 && parts.next().is_none(),
+        "invalid: malformed transcript cursor"
+    );
+    ensure!(tagged == stamp, StaleTranscriptCursor);
     Ok((end, skip, branch))
 }
 
@@ -185,15 +212,12 @@ struct SelectedItem {
     size: Option<usize>,
 }
 
-type Selection<M> = (SessionMessage, Vec<SelectedItem>, M);
+type Selection = (SessionMessage, Vec<SelectedItem>);
 
-// The request ID is daemon-local; it is not part of the session page or its byte budget.
-#[derive(serde::Serialize)]
-#[serde(transparent)]
-pub(super) struct MessageWithInputId {
-    pub message: SessionMessage,
-    #[serde(skip)]
-    pub request_id: Option<String>,
+pub(super) struct Page {
+    pub(super) messages: Vec<SessionMessage>,
+    pub(super) older: Option<String>,
+    pub(super) stamp: String,
 }
 
 /// Return a newest-first slice of records in chronological display order. The cursor
@@ -201,54 +225,41 @@ pub(super) struct MessageWithInputId {
 pub(super) fn page(
     id: &str,
     path: &Path,
+    scope: Option<&Path>,
     page: Option<&str>,
-) -> Result<(Vec<SessionMessage>, Option<String>)> {
-    read_page(id, path, page, |_| (), |message, ()| message)
-}
-
-pub(super) fn page_with_input_ids(id: &str, path: &Path) -> Result<Vec<MessageWithInputId>> {
-    let input_id = |value: &Value| {
-        value
-            .pointer("/message/corralRequestId")
-            .and_then(Value::as_str)
-            .filter(|id| !id.is_empty() && id.len() <= 80)
-            .map(str::to_owned)
-    };
-    let (messages, _) = read_page(id, path, None, input_id, |message, request_id| {
-        MessageWithInputId {
-            message,
-            request_id,
-        }
-    })?;
-    Ok(messages)
-}
-
-fn read_page<M, T: serde::Serialize>(
-    id: &str,
-    path: &Path,
-    page: Option<&str>,
-    metadata: impl Fn(&Value) -> M,
-    project: impl Fn(SessionMessage, M) -> T,
-) -> Result<(Vec<T>, Option<String>)> {
-    let mut transcript = Transcript::open(path)?;
+) -> Result<Page> {
+    let mut transcript = Transcript::open(path, scope)?;
+    // The same open handle supplies the snapshot stamp, byte limit and records.
+    let meta = &transcript.metadata;
+    let len = meta.len();
+    let stamp = fingerprint(&(
+        id,
+        len,
+        meta.dev(),
+        meta.ino(),
+        meta.mtime(),
+        meta.mtime_nsec(),
+        meta.ctime(),
+        meta.ctime_nsec(),
+    ))?;
     let mut boundaries = Boundaries {
         bytes: [0; WINDOW],
         start: 0,
         end: 0,
     };
     let (mut end, mut skip, mut branch) = if let Some(page) = page {
-        let (end, skip, branch) = position(page)?;
+        let (end, skip, branch) = position(page, &stamp)?;
         ensure!(
-            end > 0 && end <= transcript.len,
-            "transcript cursor is stale"
+            end <= len,
+            "invalid: transcript cursor is beyond the snapshot"
         );
         ensure!(
             transcript.ends_line(end)?,
-            "invalid transcript cursor boundary"
+            "invalid: transcript cursor is not at a record boundary"
         );
         (end, skip, branch)
     } else {
-        let end = boundaries.before(&mut transcript.file, transcript.len)?;
+        let end = boundaries.before(&mut transcript.file, len)?;
         (end, 0, Branch::Latest)
     };
     let mut selected = Vec::new();
@@ -264,7 +275,10 @@ fn read_page<M, T: serde::Serialize>(
         if let Branch::Parent(expected) = branch
             && entry.is_none_or(|id| branch_key(id) != expected)
         {
-            ensure!(skip == 0, "transcript item cursor is stale");
+            ensure!(
+                skip == 0,
+                "invalid: transcript item cursor does not match the record"
+            );
             end = start;
             continue;
         }
@@ -281,10 +295,12 @@ fn read_page<M, T: serde::Serialize>(
         } else {
             branch
         };
-        let metadata = metadata(&value);
-        if let Some(mut message) = entries::message(value)? {
+        if let Some(mut message) = entries::message(value, Some((id, start)))? {
             let all = std::mem::take(&mut message.items);
-            ensure!(skip <= all.len(), "transcript item cursor is stale");
+            ensure!(
+                skip <= all.len(),
+                "invalid: transcript item cursor is beyond the record"
+            );
             entries::bound_header(&mut message);
             let mut cost = json_len(&message)? + 1;
             let mut items = Vec::new();
@@ -316,13 +332,16 @@ fn read_page<M, T: serde::Serialize>(
             if !items.is_empty() {
                 size += cost;
                 items.reverse();
-                selected.push((message, items, metadata));
+                selected.push((message, items));
             }
             if skip < count {
                 break;
             }
         } else {
-            ensure!(skip == 0, "transcript item cursor is stale");
+            ensure!(
+                skip == 0,
+                "invalid: transcript item cursor does not match the record"
+            );
         }
         branch = parent;
         end = start;
@@ -331,26 +350,31 @@ fn read_page<M, T: serde::Serialize>(
     selected.reverse();
     pair_tools(&mut selected);
     let mut messages = Vec::with_capacity(selected.len());
-    for (mut message, items, metadata) in selected {
+    for (mut message, items) in selected {
         for item in items {
             append_preview(id, &mut message.items, item)?;
         }
         if !message.items.is_empty() {
-            messages.push(project(message, metadata));
+            messages.push(message);
         }
     }
     ensure!(
         json_len(&messages)? <= PAGE_BYTES,
         "transcript preview exceeds page budget"
     );
-    Ok((messages, branch.cursor(end, skip)))
+    let older = branch.cursor(&stamp, end, skip);
+    Ok(Page {
+        messages,
+        older,
+        stamp,
+    })
 }
 
 /// Pair only tools selected on this page. Images remain independent items.
-fn pair_tools<M>(messages: &mut [Selection<M>]) {
+fn pair_tools(messages: &mut [Selection]) {
     let mut calls = BTreeMap::new();
     let mut matches = Vec::new();
-    for (row, (_, items, _)) in messages.iter().enumerate() {
+    for (row, (_, items)) in messages.iter().enumerate() {
         for (column, item) in items.iter().enumerate() {
             if let Some(SessionItem::ToolCall {
                 call_id, result, ..
@@ -406,9 +430,14 @@ fn append_preview(id: &str, items: &mut Vec<SessionItem>, selected: SelectedItem
     Ok(())
 }
 
-pub(super) fn item(id: &str, path: &Path, token: &str) -> Result<SessionItemPage> {
+pub(super) fn item(
+    id: &str,
+    path: &Path,
+    scope: Option<&Path>,
+    token: &str,
+) -> Result<SessionItemPage> {
     let token = Token::decode(id, token)?;
-    let mut transcript = Transcript::open(path)?;
+    let mut transcript = Transcript::open(path, scope)?;
     let mut item = transcript.load_item(token.source)?;
     if let Some(pair) = token.pair {
         entries::merge(&mut item, transcript.load_item(pair)?);

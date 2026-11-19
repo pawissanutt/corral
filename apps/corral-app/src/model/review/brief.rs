@@ -1,6 +1,6 @@
 //! Brief-first Review: readiness, expandable changed files and the task's request.
 
-use crate::model::daemon::Feed;
+use crate::model::daemon::{Feed, Task};
 use crate::model::effect::Env;
 
 use super::brief_side::{BriefSide, side};
@@ -90,4 +90,14 @@ pub(super) fn brief(state: &State, feed: &Feed, shown: &Shown, env: Env, width: 
         files_empty,
         side: side(feed, shown),
     }
+}
+
+/// A task's newest gate and review in the readiness chain's words, and its rounds, outside the
+/// Review page (a task-bound session's Proof tab). The owner's verdict is the Review page's to
+/// ask for, so it is left out.
+pub fn checks(feed: &Feed, task: &Task) -> (Vec<ReadyLink>, Option<Rounds>) {
+    let shown = Shown::of(feed, task);
+    let mut chain = readiness_chain(feed, &shown);
+    chain.truncate(2);
+    (chain, rounds(feed, &shown))
 }

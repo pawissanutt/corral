@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
 import { codeHost, type CodeFixture } from "./support/code-host.ts";
+import { join } from "node:path";
+import { startBridge } from "../src/bridge/server.ts";
+import { RemoteOwner } from "../src/host/remote-owner.ts";
+import { installRemote } from "../src/host/remote/index.ts";
+import { SessionRecord } from "../src/host/session-record.ts";
+import { connect, testHandlers } from "./support/bridge-client.ts";
 import { nextEvent } from "./support/wait.ts";
 
 const queueEvents = (fx: CodeFixture) => fx.since(0).filter(entry => entry.kind === "queue_item");
@@ -184,4 +190,52 @@ test("interactive queue listing remains available behind both queue-control capa
       expect(fx.host.session.getFollowUpMessages()).toEqual(["read-only first", "read-only second"]);
     } finally { await fx.close(); }
   }
+});
+
+test("an owner item sent over the socket is withdrawn with its text and moves among owner items", async () => {
+  const fx = await codeHost("assistant", { enabled: [] });
+  try {
+    const { host, events } = fx;
+    host.markAttached("headless");
+    const file = host.session.sessionFile!, dir = join(fx.cwd, "socket");
+    const owner = new RemoteOwner(host, events, new SessionRecord(dir, "A-queue", "assistant", fx.cwd), file, dir);
+    installRemote(host, owner, dir);
+    const bridge = await startBridge({ path: join(dir, "queue.sock"), events, sessionId: "A-queue" });
+    try {
+      bridge.attach(testHandlers({ submit: (input, request) => owner.submit(input, undefined, request), queueState: limit => owner.queueState(limit),
+        queueWithdraw: key => owner.withdraw(key) }), host.liveEvents, host.remoteRegistry);
+      const client = await connect(bridge.path);
+      try {
+        const call = async (command: string, args: Record<string, unknown> = {}) => {
+          const reply = await client.request({ version: 2, id: command, command, args });
+          expect(reply.ok).toBeTrue();
+          return reply.result;
+        };
+        const turn = fx.turn([{ toolCalls: [{ callId: "hold-queue", name: "fixture_hold", arguments: { name: "socket-queue" } }] },
+          { text: "Finished initial turn" }, { text: "Finished queued turn" }]);
+        void turn.catch(() => {});
+        await fx.holds.get("socket-queue").started;
+        const draft = `Unabridged\n${"é".repeat(106)}`;
+        const submit = (input_id: string, text: string, origin = "owner") =>
+          call("submit_input", { input_id, text, origin, busy_policy: "follow_up" });
+        for (const [key, text, origin] of [
+          ["first", "first", "owner"], ["auto", "automatic", "auto"], ["second", "second", "owner"], ["third", draft, "owner"],
+        ] as const) expect(await submit(key, text, origin)).toMatchObject({ input: key, disposition: "queued" });
+        type QueueResult = { items: { item: string; actions: string[]; text: string }[] };
+        const before = (await call("queue_state")) as QueueResult;
+        expect(before.items.map(row => [row.item, row.actions])).toEqual([
+          ["first", ["withdraw"]], ["auto", ["withdraw"]], ["second", ["withdraw", "move_down"]], ["third", ["withdraw", "move_up"]],
+        ]);
+        expect(Buffer.byteLength(before.items[3]!.text)).toBeLessThanOrEqual(200);
+        expect(await call("queue_move", { key: "second", delta: -1 })).toEqual({ moved: false });
+        expect(await call("queue_move", { key: "third", delta: -1 })).toEqual({ moved: true });
+        expect(((await call("queue_state")) as QueueResult).items.map(row => row.item)).toEqual(["first", "auto", "third", "second"]);
+        expect(await call("queue_withdraw", { key: "third" })).toEqual({ outcome: "withdrawn", item: "third", text: draft });
+        expect(await call("queue_withdraw", { key: "third" })).toEqual({ outcome: "unknown_item" });
+        fx.holds.get("socket-queue").release("continue");
+        await turn;
+        expect(queueEvents(fx).filter(event => event.item === "third").map(event => event.event)).toEqual(["queued", "withdrawn"]);
+      } finally { client.close(); }
+    } finally { await bridge.close(); }
+  } finally { await fx.close(); }
 });

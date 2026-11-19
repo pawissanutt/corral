@@ -119,15 +119,6 @@ impl AppState {
         }
     }
 
-    /// Persisted acceptance transfers these staged keys to their message.
-    pub(crate) fn sent_attachments(&self, carried: &[String]) {
-        if carried.is_empty() {
-            return;
-        }
-        self.ask_staged
-            .update(|staged| staged.retain(|item| !carried.iter().any(|key| key == item.key())));
-    }
-
     /// Why an upload cannot start now, if it cannot.
     fn upload_refusal(&self) -> Option<String> {
         if self.fixture() {

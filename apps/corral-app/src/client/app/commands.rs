@@ -91,8 +91,7 @@ impl AppState {
                 }
                 vec![]
             }
-            ClientRequest::AssistantSend(request) => self.send_message_async(feed, request).await,
-            ClientRequest::AssistantCancel(id) => self.cancel_message_async(feed, id).await,
+            ClientRequest::SessionSend(request) => self.send_message_async(feed, request).await,
             ClientRequest::Attach(request) => self.attach(feed, request),
             ClientRequest::AttachDiscard(upload) => self.discard_upload(feed, upload),
             #[cfg(not(target_arch = "wasm32"))]
@@ -104,10 +103,6 @@ impl AppState {
                 name,
                 result,
             } => self.attach_loaded(feed, upload, kind, name, result),
-            ClientRequest::PromptAnswer {
-                request_id,
-                request,
-            } => self.operation(feed, request_id, PROMPT_ANSWER, value(request)),
             ClientRequest::Session {
                 request_id,
                 method,
@@ -124,73 +119,6 @@ impl AppState {
                 request_id,
                 request,
             } => self.operation(feed, request_id, CONFIG_PUT, value(request)),
-            ClientRequest::PaneFocus {
-                request_id,
-                request,
-            } => self.operation(feed, request_id, PANE_FOCUS, value(request)),
-            ClientRequest::PaneKeys {
-                request_id,
-                request,
-            } => self.operation(feed, request_id, PANE_KEYS, value(request)),
-            ClientRequest::Thread {
-                scope,
-                open: should_open,
-            } => {
-                let retry = feed.with_untracked(|feed| {
-                    feed.topics
-                        .get(&topic_key(Topic::Thread, Some(&scope)))
-                        .is_some_and(|state| state.error.is_some())
-                });
-                if should_open && self.scopes.contains(&scope) && self.ready && !retry {
-                    return vec![];
-                }
-                if should_open && !self.scopes.contains(&scope) && self.scopes.len() >= 32 {
-                    feed.update(|feed| {
-                        feed.problem = Some(
-                            "This device already has 32 subscribed threads; close one first."
-                                .into(),
-                        )
-                    });
-                    return vec![];
-                }
-                if should_open {
-                    self.scopes.insert(scope.clone());
-                } else {
-                    self.scopes.remove(&scope);
-                }
-                feed.update(|feed| {
-                    let thread = feed.threads.entry(Id::from(&scope)).or_default();
-                    thread.loading = should_open && self.ready;
-                    thread.stale = true;
-                    if should_open && self.ready {
-                        feed.topics.insert(
-                            topic_key(Topic::Thread, Some(&scope)),
-                            TopicState {
-                                loading: true,
-                                stale: true,
-                                error: None,
-                            },
-                        );
-                    }
-                });
-                self.touch_thread(feed, &scope);
-                self.trim_retained(feed);
-                if !self.ready {
-                    return vec![];
-                }
-                vec![if should_open {
-                    open(Topic::Thread, Some(scope))
-                } else {
-                    out(
-                        wire::SUB_CLOSE,
-                        value(SubClose {
-                            topic: Topic::Thread,
-                            scope: Some(scope),
-                        }),
-                        None,
-                    )
-                }]
-            }
             ClientRequest::Detail {
                 request_id,
                 request,
@@ -296,189 +224,130 @@ impl AppState {
             vec![]
         }
     }
+    /// Takes a message into this device's outbox, in the same durable write that retires the
+    /// session's saved draft its words came from, then sends it at once when the connection is
+    /// up (it waits otherwise, and goes on the next connection under the same id). The reply is
+    /// read under its command id; one this device refuses is written there with why, so the
+    /// session model puts the words back in the draft and says why.
     async fn send_message_async(
         &mut self,
         feed: Signal<Feed>,
-        request: AssistantSend,
+        request: SessionSend,
     ) -> Vec<Outgoing> {
         trim_commands(feed);
         let id = request.cmd_id.clone();
         let params = value(&request);
-        let existing = self
-            .outbox
-            .as_ref()
-            .and_then(|outbox| outbox.saved.messages.get(&id));
-        if existing.is_some_and(|message| message.request != request) {
+        if feed.with_untracked(|feed| feed.commands.contains_key(id.as_str())) {
+            return vec![];
+        }
+        if let Err(problem) = super::super::core::preflight_request(SESSION_SEND, &params) {
+            self.refuse_send(feed, &request, problem);
+            return vec![];
+        }
+        if !outbox::valid_message(&request) || !self.ready_uploads(feed, &request) {
             self.refuse_send(
                 feed,
                 &request,
-                "Message identity already belongs to different text.".into(),
-                false,
-            )
-            .await;
+                "a message needs words or an attachment, and every attachment uploaded (four at most)"
+                    .into(),
+            );
             return vec![];
         }
-        if existing.is_some_and(|message| message.cancel) {
-            return self.cancel_message_async(feed, id).await;
-        }
-        if let Err(problem) = super::super::core::preflight_request(ASSISTANT_SEND, &params) {
-            self.refuse_send(feed, &request, problem, true).await;
-            return vec![];
-        }
-        if !outbox::valid_message(&request)
-            || (existing.is_none() && !self.ready_uploads(feed, &request))
-        {
-            self.refuse_send(
-                feed,
-                &request,
-                "Message needs text and successfully uploaded attachments (maximum four).".into(),
-                true,
-            )
-            .await;
-            return vec![];
-        }
-        if feed.with_untracked(|feed| {
-            feed.commands.get(id.as_str()).is_some_and(|state| {
-                matches!(state.status, CommandStatus::Done | CommandStatus::Abandoned)
-                    || (self.ready && state.status == CommandStatus::Pending)
-            })
-        }) {
-            return vec![];
-        }
-        let attempted = self.ready || existing.is_some_and(|message| message.attempted);
+        let attempted = self.ready;
         let mut consumed_draft = None;
         let result = match self.outbox.as_mut() {
             Some(outbox) => {
                 outbox
                     .update_checked(|saved| {
                         consumed_draft = None;
-                        if saved.cancelled.contains(&id) {
-                            return Err("This message was withdrawn on this device.".into());
+                        if saved.messages.contains_key(&id) {
+                            return Err("this message was already taken on this device".into());
                         }
-                        let first_acceptance = !saved.messages.contains_key(&id);
-                        if let Some(message) = saved.messages.get_mut(&id) {
-                            if message.request != request {
-                                return Err(
-                                    "Message identity already belongs to different text.".into()
-                                );
-                            }
-                            if message.cancel {
-                                return Err(
-                                "This message has a committed cancellation; it cannot be resent."
-                                    .into(),
-                            );
-                            }
-                            message.attempted |= attempted;
-                        } else {
-                            saved.messages.insert(
-                                id.clone(),
-                                outbox::Message {
-                                    request: request.clone(),
-                                    attempted,
-                                    cancel: false,
-                                    refused: false,
-                                    error: None,
-                                },
-                            );
-                        }
-                        // The debounce may have saved an earlier prefix of this composer value.
-                        // A replay must never consume a draft typed after its original handoff.
-                        if first_acceptance
-                            && saved
-                                .drafts
-                                .get(&request.thread)
-                                .is_some_and(|draft| request.text.trim().starts_with(draft.trim()))
+                        saved.messages.insert(
+                            id.clone(),
+                            outbox::Message {
+                                request: request.clone(),
+                                attempted,
+                            },
+                        );
+                        // The pause before saving may have kept an earlier prefix of these words.
+                        if saved
+                            .drafts
+                            .get(&request.id)
+                            .is_some_and(|draft| request.text.trim().starts_with(draft.trim()))
                         {
-                            consumed_draft = saved.drafts.remove(&request.thread);
+                            consumed_draft = saved.drafts.remove(&request.id);
                         }
                         Ok(())
                     })
                     .await
             }
-            None => Err("Pair/enrol before queuing a message on this device.".to_owned()),
+            None => Err("pair or enrol this device before sending; nothing was sent".to_owned()),
         };
-        let mut state = feed.with_untracked(|feed| {
-            command_state(
-                feed,
-                ASSISTANT_SEND,
-                params.clone(),
-                if self.ready {
-                    CommandStatus::Pending
-                } else if attempted {
-                    CommandStatus::Unknown
-                } else {
-                    CommandStatus::Queued
-                },
-            )
-        });
-        if let Err(problem) = &result {
-            state.status = CommandStatus::Refused;
-            state.error = Some(local_error(problem.clone()));
+        if let Err(problem) = result {
+            self.refuse_send(feed, &request, problem);
+            return vec![];
         }
-        let send = state.status == CommandStatus::Pending;
+        let status = if attempted {
+            CommandStatus::Pending
+        } else {
+            CommandStatus::Queued
+        };
         feed.update(|feed| {
-            feed.send_acceptance.insert(
-                Id::from(&id),
-                match &result {
-                    Ok(()) => SendAcceptance::Accepted,
-                    Err(problem) => SendAcceptance::Refused(local_error(problem.clone())),
-                },
-            );
-            if result.is_ok()
-                && consumed_draft
-                    .as_ref()
-                    .is_some_and(|draft| feed.drafts.get(request.thread.as_str()) == Some(draft))
+            if consumed_draft
+                .as_ref()
+                .is_some_and(|draft| feed.drafts.get(request.id.as_str()) == Some(draft))
             {
-                feed.drafts.remove(request.thread.as_str());
+                feed.drafts.remove(request.id.as_str());
             }
+            let state = command_state(feed, SESSION_SEND, params.clone(), status);
             feed.commands.insert(Id::from(&id), state);
+            if attempted {
+                trim_operations(feed);
+                feed.operations.insert(
+                    Id::from(&id),
+                    Operation {
+                        method: SESSION_SEND.into(),
+                        loading: true,
+                        value: None,
+                        error: None,
+                        refusal: None,
+                    },
+                );
+            }
         });
-        if result.is_ok() {
-            self.release_upload_bytes(feed, &request);
-        }
-        if send {
-            vec![out(ASSISTANT_SEND, params, Some(id))]
+        self.release_upload_bytes(feed, &request);
+        if attempted {
+            vec![out(SESSION_SEND, params, Some(id))]
         } else {
             vec![]
         }
     }
 
-    async fn refuse_send(
-        &mut self,
-        feed: Signal<Feed>,
-        request: &AssistantSend,
-        message: String,
-        quarantine: bool,
-    ) {
-        let error = ClientError {
-            code: "local_admission".into(),
-            message,
-        };
+    /// This device did not take the message: it never left, and its operation says why.
+    fn refuse_send(&mut self, feed: Signal<Feed>, request: &SessionSend, message: String) {
+        let error = local_error(message);
         feed.update(|feed| {
-            feed.problem = Some(error.message.clone());
-            feed.send_acceptance.insert(
+            let mut state =
+                command_state(feed, SESSION_SEND, value(request), CommandStatus::Refused);
+            state.error = Some(error.clone());
+            feed.commands.insert(Id::from(&request.cmd_id), state);
+            trim_operations(feed);
+            feed.operations.insert(
                 Id::from(&request.cmd_id),
-                SendAcceptance::Refused(error.clone()),
+                Operation {
+                    method: SESSION_SEND.into(),
+                    loading: false,
+                    value: None,
+                    error: Some(error),
+                    refusal: None,
+                },
             );
-            if quarantine {
-                let mut state =
-                    command_state(feed, ASSISTANT_SEND, value(request), CommandStatus::Refused);
-                state.error = Some(error.clone());
-                feed.commands.insert(Id::from(&request.cmd_id), state);
-            }
         });
-        if quarantine {
-            // Legacy oversized entries stay editable/cancellable, but never poison replay.
-            self.settled(feed, &request.cmd_id).await;
-        }
     }
     #[cfg(test)]
     pub fn request(&mut self, feed: Signal<Feed>, request: ClientRequest) -> Vec<Outgoing> {
         super::super::durable::wait(self.request_async(feed, request))
-    }
-    #[cfg(test)]
-    fn send_message(&mut self, feed: Signal<Feed>, request: AssistantSend) -> Vec<Outgoing> {
-        super::super::durable::wait(self.send_message_async(feed, request))
     }
 }
 
@@ -486,106 +355,22 @@ impl AppState {
 mod tests {
     use super::*;
 
+    /// A full outbox refuses the message before anything is retired: the saved draft stays,
+    /// nothing is kept, and the send's operation says why, so its words go back to the draft.
     #[test]
-    fn accepted_offline_send_consumes_only_its_matching_persisted_draft() {
-        let runtime = nsh_core::element::Runtime::default();
-        let _entered = runtime.enter();
-        let feed = signal(Feed::default());
-        let mut app = AppState::new();
-        app.outbox = Some(Outbox::load("draft-send-handoff", "draft-device").unwrap());
-        let save = |app: &mut AppState, scope: &str, text: &str| {
-            app.request(
-                feed,
-                ClientRequest::SaveDraft {
-                    thread: scope.into(),
-                    text: text.into(),
-                },
-            );
-        };
-        let send = AssistantSend {
-            cmd_id: "one-owner-intent".into(),
-            thread: "A-3".into(),
-            target: AskTarget::Assistant,
-            text: "\towner words \n".into(),
-            typed_at: "2026-11-14T10:10:00Z".into(),
-            context: Vec::new(),
-            attachments: Vec::new(),
-        };
-        save(&mut app, "A-3", "  owner");
-        save(&mut app, "A-4", "another thread's draft");
-        assert!(
-            app.request(feed, ClientRequest::AssistantSend(send.clone()))
-                .is_empty()
-        );
-        assert!(feed.with_untracked(|feed| !feed.drafts.contains_key("A-3")));
-        assert_eq!(
-            feed.with_untracked(|feed| feed.drafts["A-4"].clone()),
-            "another thread's draft"
-        );
-        assert_eq!(
-            feed.with_untracked(|feed| feed.commands["one-owner-intent"].status),
-            CommandStatus::Queued
-        );
-
-        let persisted = Outbox::load("draft-send-handoff", "draft-device").unwrap();
-        assert!(!persisted.saved.drafts.contains_key("A-3"));
-        assert_eq!(persisted.saved.drafts["A-4"], "another thread's draft");
-        assert_eq!(persisted.saved.messages.len(), 1);
-        assert_eq!(persisted.saved.messages["one-owner-intent"].request, send);
-        assert!(!persisted.saved.messages["one-owner-intent"].attempted);
-
-        // A replay of this same identity must not consume a newer composer value.
-        save(&mut app, "A-3", "  owner words\n");
-        assert!(
-            app.request(feed, ClientRequest::AssistantSend(send))
-                .is_empty()
-        );
-        let persisted = Outbox::load("draft-send-handoff", "draft-device").unwrap();
-        assert_eq!(persisted.saved.messages.len(), 1);
-        assert_eq!(persisted.saved.drafts["A-3"], "  owner words\n");
-        assert_eq!(
-            feed.with_untracked(|feed| feed.drafts["A-3"].clone()),
-            "  owner words\n"
-        );
-
-        // Validation refusal never hands the draft over to the durable message outbox.
-        save(&mut app, "A-5", "keep this draft");
-        let invalid = AssistantSend {
-            cmd_id: "invalid-intent".into(),
-            thread: "A-5".into(),
-            target: AskTarget::Assistant,
-            text: " \n".into(),
-            typed_at: "2026-11-14T10:11:00Z".into(),
-            context: Vec::new(),
-            attachments: Vec::new(),
-        };
-        assert!(
-            app.request(feed, ClientRequest::AssistantSend(invalid))
-                .is_empty()
-        );
-        let persisted = Outbox::load("draft-send-handoff", "draft-device").unwrap();
-        assert_eq!(persisted.saved.drafts["A-5"], "keep this draft");
-        assert_eq!(
-            feed.with_untracked(|feed| feed.drafts["A-5"].clone()),
-            "keep this draft"
-        );
-        assert!(!persisted.saved.messages.contains_key("invalid-intent"));
-    }
-
-    #[test]
-    fn full_outbox_refuses_before_retiring_the_composer_draft_and_attachments() {
+    fn a_full_outbox_refuses_before_retiring_the_draft() {
         let runtime = nsh_core::element::Runtime::default();
         let _entered = runtime.enter();
         let feed = signal(Feed::default());
         let mut app = AppState::new();
         let mut outbox = Outbox::load("full-outbox-regression", "device").unwrap();
-        let request = AssistantSend {
+        let request = SessionSend {
+            id: "quick".into(),
             cmd_id: "keep-intent".into(),
-            thread: QUICK_THREAD.into(),
-            target: AskTarget::Assistant,
             text: "keep my newest draft".into(),
-            typed_at: "2026-11-14T10:00:00Z".into(),
-            context: vec![],
+            policy: corral_protocol::session_state::SendPolicy::FollowUp,
+            to: None,
+            typed_at: Some("2026-11-14T10:00:00Z".into()),
             attachments: vec![SendAttachment::Link {
                 url: "https://example.com/owner".into(),
                 title: None,
@@ -593,9 +378,7 @@ mod tests {
         };
         outbox
             .update(|saved| {
-                saved
-                    .drafts
-                    .insert(QUICK_THREAD.into(), request.text.clone());
+                saved.drafts.insert("quick".into(), request.text.clone());
                 for n in 0..128 {
                     let mut queued = request.clone();
                     queued.cmd_id = format!("queued-{n}");
@@ -604,9 +387,6 @@ mod tests {
                         outbox::Message {
                             request: queued,
                             attempted: false,
-                            cancel: false,
-                            refused: false,
-                            error: None,
                         },
                     );
                 }
@@ -614,24 +394,22 @@ mod tests {
             .unwrap();
         app.outbox = Some(outbox);
         feed.update(|feed| {
-            feed.drafts
-                .insert(Id::from(QUICK_THREAD), request.text.clone());
+            feed.drafts.insert(Id::from("quick"), request.text.clone());
         });
-        assert!(app.send_message(feed, request.clone()).is_empty());
-        assert!(feed.with_untracked(|feed| matches!(
-            feed.send_acceptance.get("keep-intent"),
-            Some(SendAcceptance::Refused(_))
-        )));
+        assert!(
+            app.request(feed, ClientRequest::SessionSend(request.clone()))
+                .is_empty()
+        );
+        assert!(feed.with_untracked(|feed| {
+            feed.operations["keep-intent"].error.is_some()
+                && !feed.operations["keep-intent"].loading
+        }));
         assert_eq!(
-            feed.with_untracked(|feed| feed.drafts[QUICK_THREAD].clone()),
+            feed.with_untracked(|feed| feed.drafts["quick"].clone()),
             request.text
         );
         let saved = Outbox::load("full-outbox-regression", "device").unwrap();
-        assert_eq!(saved.saved.drafts[QUICK_THREAD], request.text);
+        assert_eq!(saved.saved.drafts["quick"], request.text);
         assert!(!saved.saved.messages.contains_key("keep-intent"));
-        assert_eq!(
-            feed.with_untracked(|feed| feed.commands["keep-intent"].request["attachments"].clone()),
-            value(&request.attachments)
-        );
     }
 }

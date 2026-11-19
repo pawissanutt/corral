@@ -1,9 +1,11 @@
 // The owner decision card: every Pi `select`, `confirm` and `input` in rich panels, drawn in the composer's place as
 // the docked choice's accent card, with its keys in one hint row under it. Pi keeps the promise, abort signal,
 // countdown timer, blocked status, dialog stack and the `Yes` comparison; the card only presents what Pi passes and
-// answers with an offered option, the typed text, or undefined. Its list form is reused by the SDK pickers.
+// answers with an offered option, the typed text, or undefined. With the session's dialog registry the same decision
+// is a card in the app too, and whichever side answers first wins. Its list form is reused by the SDK pickers.
 // The card itself is owner-card.ts (controller) and owner-card-view.ts (frame); its pure parts owner-dialog-parts.ts.
-import type { DialogPresentation, PresentedDialog, SelectorComponent } from "@earendil-works/pi-coding-agent";
+import type { DialogDone, DialogPresentation, PresentedDialog, SelectorComponent } from "@earendil-works/pi-coding-agent";
+import type { Prompt, RemoteDialogs } from "../host/remote/dialogs.ts";
 import { choiceRows } from "./build/choice-dock.ts";
 import { OwnerCard } from "./owner-card.ts";
 import { optionLines, textLines, type CardSpec, type DialogHint, type Entry } from "./owner-dialog-parts.ts";
@@ -17,6 +19,13 @@ export interface OwnerDialogHost {
   chromeRows(rows: number): number;
   /** The card changed outside a delivered key (a countdown tick, a click): redraw. */
   changed(): void;
+  /**
+   * The session's dialog registry: each `select`, `confirm` and `input` card registers there, so the app can answer it
+   * too. Absent (plain hosts, tests): the card answers Pi directly and only here.
+   */
+  readonly dialogs?: RemoteDialogs;
+  /** A quiet one-line notice: the card was answered or dismissed from another device. */
+  notice?(text: string): void;
 }
 
 /** One row of the list form: `match` is what the filter searches; a `disabled` item is shown but never chosen. */
@@ -73,6 +82,39 @@ function hosted(host: OwnerDialogHost): Pick<CardSpec, "budget" | "changed"> {
   };
 }
 
+/**
+ * A card for Pi's `done`, registered with the session's dialog registry when the host has one. A key press then answers
+ * (or with undefined cancels) the registered prompt, and Pi's `done` follows the prompt's result, whichever side gave
+ * it: an answer from the app settles the card at once, so Pi closes it, focus returns where it was, and a later key
+ * finds nothing to answer. Pi removing the card itself (its timeout, an abort) withdraws the app's card. Without a
+ * registry, or with one that already closed, keys answer Pi directly.
+ */
+function presented(host: OwnerDialogHost, prompt: Prompt, timeoutMs: number | undefined, done: DialogDone,
+  spec: (answer: (value: string | undefined) => void) => CardSpec): OwnerCard {
+  const opened = host.dialogs?.openPrompt(prompt, timeoutMs === undefined ? undefined : { timeout: timeoutMs });
+  if (!opened || opened.settled) return new OwnerCard(spec(done));
+  const card = new OwnerCard({
+    ...spec(value => {
+      try {
+        if (value === undefined) opened.cancel();
+        else opened.answer(value);
+      } catch {
+        // The app answered first; its result is on its way to `done`.
+      }
+    }),
+    closed: () => { if (!opened.settled) opened.cancel(); },
+  });
+  void opened.result.then(async result => {
+    const value = await opened.value;
+    if (result.by?.source === "remote") {
+      card.close();
+      host.notice?.(result.kind === "answered" ? "Answered from another device" : "Dismissed from another device");
+    }
+    done(value);
+  });
+  return card;
+}
+
 /** The rich host's dialogs: one accent card for Pi's `select` and `confirm` (options) and `input` (a text row). */
 export function ownerDialogPresentation(host: OwnerDialogHost): DialogPresentation {
   return {
@@ -83,7 +125,10 @@ export function ownerDialogPresentation(host: OwnerDialogHost): DialogPresentati
         match: plainLabel(label),
         lines: (width, selected) => optionLines(label, list ? undefined : index + 1, width, selected),
       }));
-      return new OwnerCard({
+      const prompt: Prompt = request.kind === "confirm"
+        ? { kind: "confirm", title: request.title, ...(request.message === undefined ? {} : { body: request.message }) }
+        : { kind: "select", title: request.title, options: offered };
+      return presented(host, prompt, request.timeoutMs, done, answer => ({
         ...hosted(host),
         question: lines[0] ?? "",
         body: [...lines.slice(1), ...(request.message === undefined ? [] : textLines(request.message))],
@@ -93,14 +138,15 @@ export function ownerDialogPresentation(host: OwnerDialogHost): DialogPresentati
         enter: "choose", escape: request.kind === "confirm" ? "no" : "cancel", guard: true,
         entries: () => entries,
         expandTools: () => request.toggleToolsExpanded(),
-        choose: index => done(offered[index]),
+        choose: index => answer(offered[index]),
         submit: () => {},
-        cancel: () => done(undefined),
-      });
+        cancel: () => answer(undefined),
+      }));
     },
     input: (request, done): PresentedDialog => {
       const lines = textLines(request.title);
-      return new OwnerCard({
+      const prompt: Prompt = { kind: "input", title: request.title, ...(request.placeholder === undefined ? {} : { placeholder: request.placeholder }) };
+      return presented(host, prompt, request.timeoutMs, done, answer => ({
         ...hosted(host),
         question: lines[0] ?? "", body: lines.slice(1),
         form: "input", placeholder: plainLabel(request.placeholder ?? ""),
@@ -108,9 +154,9 @@ export function ownerDialogPresentation(host: OwnerDialogHost): DialogPresentati
         enter: "use", escape: "cancel", guard: true,
         entries: () => [],
         choose: () => {},
-        submit: text => done(text),
-        cancel: () => done(undefined),
-      });
+        submit: text => answer(text),
+        cancel: () => answer(undefined),
+      }));
     },
   };
 }

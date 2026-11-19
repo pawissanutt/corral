@@ -2,20 +2,24 @@ use super::*;
 
 fn message(id: &str) -> Message {
     Message {
-        request: serde_json::from_value(serde_json::json!({
-            "cmd_id":id,"thread":"quick","target":"assistant","text":format!("owner words {id}"),
-            "typed_at":"2026-11-15T10:00:00Z","context":[]
-        }))
-        .unwrap(),
+        request: SessionSend {
+            id: "quick".into(),
+            cmd_id: id.into(),
+            text: format!("owner words {id}"),
+            policy: SendPolicy::FollowUp,
+            to: None,
+            typed_at: Some("2026-11-15T10:00:00Z".into()),
+            attachments: Vec::new(),
+        },
         attempted: false,
-        cancel: false,
-        refused: false,
-        error: None,
     }
 }
 
+/// Two app instances share one outbox: each transaction must read what the other committed, so
+/// neither drops the other's message or draft, and a message one instance settled is not
+/// brought back by the other.
 #[test]
-fn independent_outboxes_reload_each_transaction_and_never_revert_cancel() {
+fn independent_outboxes_reload_each_transaction_and_never_revive_a_settled_message() {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();
     let mut a = Outbox::load("interleaved-store", "same-device").unwrap();
@@ -30,31 +34,28 @@ fn independent_outboxes_reload_each_transaction_and_never_revert_cancel() {
     })
     .unwrap();
     a.update(|saved| {
-        saved.messages.get_mut("a").unwrap().cancel = true;
-    })
-    .unwrap();
-    b.update(|saved| {
-        saved.drafts.insert("named".into(), "other words".into());
+        saved.drafts.insert("A-3".into(), "other words".into());
     })
     .unwrap();
     let saved = Outbox::load("interleaved-store", "same-device")
         .unwrap()
         .saved;
     assert_eq!(saved.messages.len(), 2);
-    assert!(saved.messages["a"].cancel);
     assert_eq!(saved.drafts.len(), 2);
     a.update(|saved| {
         saved.messages.remove("a");
-        saved.cancelled.insert("a".into());
     })
     .unwrap();
+    // A replay requires the message to still be there; the other instance settled it.
     assert!(
         durable::wait(b.update_checked(|saved| {
-            if saved.cancelled.contains("a") {
-                return Err("withdrawn".into());
+            match saved.messages.get_mut("a") {
+                Some(message) => {
+                    message.attempted = true;
+                    Ok(())
+                }
+                None => Err("settled".into()),
             }
-            saved.messages.insert("a".into(), message("a"));
-            Ok(())
         }))
         .is_err()
     );

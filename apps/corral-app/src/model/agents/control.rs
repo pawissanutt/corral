@@ -6,7 +6,7 @@
 //! offers follows the role and what the rows report; whether the host supports one is
 //! corrald's to say, and its refusal is shown with its reason.
 
-use corral_protocol::rows::{AgentRow, AssistantState};
+use corral_protocol::rows::{AgentRow, AssistantKind, AssistantLocation, AssistantState};
 use corral_protocol::session::{
     RewindReply, Rewound, SESSION_CANCEL, SESSION_PAUSE, SESSION_RELAUNCH, SESSION_RESUME,
     SESSION_REWIND, SESSION_TERMINATE, SessionCancelReply, SessionPauseReply, SessionRelaunched,
@@ -49,6 +49,7 @@ pub enum Kind {
     Worker,
     Reviewer,
     Chat,
+    Build,
 }
 
 impl Control {
@@ -113,6 +114,9 @@ impl Control {
             (Self::Terminate, Some(Kind::Reviewer)) => {
                 "Stops the reviewer host. This round ends with no verdict; the transcript stays."
             }
+            (Self::Terminate, Some(Kind::Build)) => {
+                "Stops the build host. A session with nothing to keep is cleaned up by its host; otherwise the worktree, the branch and the transcript stay and Resume continues it."
+            }
             (Self::Terminate, _) => {
                 "Stops the host. The transcript stays readable and Relaunch starts it again."
             }
@@ -124,8 +128,16 @@ impl Control {
     }
 }
 
-/// The session's role: a chat id, else its run's role; none for a run corrald does not list.
+/// The session's role: a chat or build id, else its run's role; none for a run corrald does not
+/// list.
 pub fn kind(feed: &Feed, session: &str) -> Option<Kind> {
+    let built = feed
+        .assistants
+        .get(session)
+        .is_some_and(|row| row.kind == AssistantKind::Build);
+    if built || session.starts_with("B-") {
+        return Some(Kind::Build);
+    }
     if session == crate::model::assistant::QUICK || session.starts_with("A-") {
         return Some(Kind::Chat);
     }
@@ -138,6 +150,16 @@ pub fn kind(feed: &Feed, session: &str) -> Option<Kind> {
     })
 }
 
+/// A control's words for a session of `kind`: a build is resumed and stopped, a run or a chat
+/// relaunched and terminated.
+pub fn control_label(control: Control, kind: Option<Kind>) -> String {
+    match (control, kind) {
+        (Control::Relaunch, Some(Kind::Build)) => "Resume".into(),
+        (Control::Terminate, Some(Kind::Build)) => "Stop session".into(),
+        _ => control.label(),
+    }
+}
+
 /// The controls that apply to the session now, in menu order. Pause is not a reviewer's:
 /// a reviewer is cancelled by its task's hold already. Rewind is a worker's. Relaunch is for a
 /// host that is lost, Cancel for one working or waiting. A worker shows Pause or Resume as its
@@ -146,7 +168,7 @@ pub fn kind(feed: &Feed, session: &str) -> Option<Kind> {
 /// Relaunch is what applies to it, a new run of the same role and profile.
 pub fn controls(feed: &Feed, session: &str) -> Vec<Control> {
     match kind(feed, session) {
-        Some(Kind::Chat) => chat_controls(feed, session),
+        Some(Kind::Chat | Kind::Build) => chat_controls(feed, session),
         Some(kind) => feed
             .agents
             .get(session)
@@ -183,10 +205,15 @@ fn run_controls(row: &AgentRow, kind: Kind) -> Vec<Control> {
     controls
 }
 
+/// A chat's or a build's controls follow its row's state. A build whose host runs in a terminal
+/// corrald cannot reach is continued there, not resumed here.
 fn chat_controls(feed: &Feed, session: &str) -> Vec<Control> {
     let Some(row) = crate::model::assistant::row(feed, session) else {
         return Vec::new();
     };
+    if row.state == AssistantState::Cold && row.live_in == AssistantLocation::Pane {
+        return Vec::new();
+    }
     match row.state {
         AssistantState::Ended => Vec::new(),
         AssistantState::Cold | AssistantState::Failed => vec![Control::Relaunch],
@@ -200,11 +227,12 @@ fn chat_controls(feed: &Feed, session: &str) -> Vec<Control> {
 
 /// The controls as Session menu entries.
 pub fn control_verbs(feed: &Feed, session: &Id) -> Vec<VerbAction> {
+    let kind = kind(feed, session);
     controls(feed, session)
         .into_iter()
         .map(|control| VerbAction {
             slug: control.slug(),
-            label: control.label(),
+            label: control_label(control, kind),
             enabled: true,
             reason: None,
             press: Press::Control {
@@ -227,7 +255,7 @@ pub struct ControlAsk {
 
 /// The confirm sheet's words for `control` of `session`.
 pub fn ask(feed: &Feed, session: Id, key: Id, control: Control) -> ControlAsk {
-    let title = format!("{} {session}", control.label());
+    let title = format!("{} {session}", control_label(control, kind(feed, &session)));
     let mut rows = vec![(
         "runs".to_owned(),
         format!("{} {}", control.method(), control.params(&session)),

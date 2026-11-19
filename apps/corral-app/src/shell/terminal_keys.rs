@@ -111,6 +111,9 @@ fn fits() -> impl Iterator<Item = Fit> {
 /// the destination is served), the `shown` destinations, then Ask and Go to. A destination whose
 /// key the page takes for itself (`.`, Changes, opens a list's menu) is left out rather than
 /// listed twice with two meanings. `off_board`: Now's selection is off the board.
+/// `session`: the legend of the session page on top for its focused surface (its composer's
+/// keys while it has them), which replaces the page's and the composer's.
+#[allow(clippy::too_many_arguments)]
 fn line(
     destination: Destination,
     live: Option<Live>,
@@ -119,14 +122,22 @@ fn line(
     surface: Option<Surface>,
     off_board: bool,
     shown: &[Destination],
+    session: Option<Vec<(&'static str, &'static str)>>,
 ) -> Line {
     let go_to = Entry::new(PALETTE_CHORD, PALETTE_LABEL, KEEP_GO_TO);
     if typing {
-        return Line {
-            own: COMPOSER_KEYS
+        let own = match &session {
+            Some(legend) => legend
+                .iter()
+                .map(|&(keys, name)| Entry::new(chord(keys), name, KEEP_PAGE))
+                .collect(),
+            None => COMPOSER_KEYS
                 .iter()
                 .map(|hint| Entry::new(hint.keys, hint.action, KEEP_PAGE))
                 .collect(),
+        };
+        return Line {
+            own,
             destinations: Vec::new(),
             actions: vec![go_to],
             sidebar: None,
@@ -148,10 +159,10 @@ fn line(
             sidebar: None,
         };
     }
-    let legend = if served {
-        key_legend_live(destination, live.as_ref(), off_board)
-    } else {
-        Vec::new()
+    let legend = match session {
+        Some(legend) => legend,
+        None if served => key_legend_live(destination, live.as_ref(), off_board),
+        None => Vec::new(),
     };
     let taken = |key: char| {
         legend
@@ -167,12 +178,17 @@ fn line(
     Line {
         own: legend
             .into_iter()
-            .map(|(keys, name)| Entry::new(keys, name, KEEP_PAGE))
+            .map(|(keys, name)| Entry::new(chord(keys), name, KEEP_PAGE))
             .collect(),
         destinations,
         actions: vec![Entry::new(ASK_KEY, ASK_LABEL, KEEP_ASK), go_to],
         sidebar: Some(Entry::new(SIDEBAR_CHORD, SIDEBAR_LABEL, 0)),
     }
+}
+
+/// A key as the line spells it: a control chord as the terminal writes one (`^K`, as Go to's).
+fn chord(keys: &str) -> String {
+    keys.replace("Ctrl+", "^")
 }
 
 impl Line {
@@ -231,15 +247,16 @@ impl Line {
 }
 
 /// Tracked: the surface standing over the page and taking its keys, the newest first: the
-/// palette, the confirmation, the refusal sheet, the rewind sheet, an operation's form, the
-/// keyboard's menu or one a press opened; on Artifacts the full-size view, or the filter while it
-/// has the keys.
+/// palette, the confirmation, the refusal sheet, the Remove sheet, the rewind sheet, an
+/// operation's form, the keyboard's menu or one a press opened; on Artifacts the full-size view,
+/// or the filter while it has the keys.
 fn open_surface(app: AppState) -> Option<Surface> {
     if app.is_open(Overlay::Palette) {
         Some(Surface::Palette)
     } else if app.confirm.with(Option::is_some) {
         Some(Surface::Confirm)
-    } else if app.refusal.with(Option::is_some) {
+    } else if app.refusal.with(Option::is_some) || app.agents.with(|state| state.removing.is_some())
+    {
         Some(Surface::Sheet)
     } else if app.agents.with(|state| state.rewind.is_some()) {
         Some(Surface::Menu)
@@ -258,6 +275,14 @@ fn open_surface(app: AppState) -> Option<Surface> {
     } else {
         None
     }
+}
+
+/// A session legend without its Ctrl+K: the line ends with its own Go to (`^K`).
+fn without_go_to(legend: Vec<(&'static str, &'static str)>) -> Vec<(&'static str, &'static str)> {
+    legend
+        .into_iter()
+        .filter(|&(keys, _)| chord(keys) != PALETTE_CHORD)
+        .collect()
 }
 
 /// The last row, a legend: each key as a cap and the name it goes to, the keys in focus first.
@@ -282,6 +307,35 @@ pub(super) fn key_line(
         )
     });
     let surface = computed(move || open_surface(app));
+    // The session page on top gives the legend of what has its keys (a picker, the `/` menu, the
+    // transcript, a view, a card, the composer), unless Ask's field stands over it. Its Ctrl+K
+    // is the line's own Go to, so it is not listed twice.
+    let session = computed(move || {
+        let Some(Live::Session(id)) = app.live_page() else {
+            return None;
+        };
+        if app.is_open(Overlay::Ask) {
+            return None;
+        }
+        let env = app.env();
+        let legend = app.feed.with(|feed| {
+            app.session.with(|state| {
+                use crate::model::session::{self, Cx, Facts, Tab};
+                let facts = Facts::of(feed, &id);
+                let ui = state.ui(id.as_str());
+                let cx = Cx::new(feed, ui, &id, env, &facts);
+                let tab = if session::shown_tabs(&cx).contains(&ui.tab) {
+                    ui.tab
+                } else {
+                    Tab::Chat
+                };
+                let slash = ui.draft.starts_with('/')
+                    && session::slash(&cx, &session::actions(&cx)).is_some();
+                session::legend_of(&cx, tab, slash)
+            })
+        });
+        Some(without_go_to(legend))
+    });
     dynamic(move || {
         let room = term::columns();
         let (destination, live, data, off_board, project_page) = route.get();
@@ -300,6 +354,7 @@ pub(super) fn key_line(
             surface.get(),
             off_board,
             &shown,
+            session.get(),
         );
         let (fit, count) = line.layout(room);
         let mut row = view()
@@ -359,6 +414,10 @@ mod tests {
                     None,
                     false,
                     &Destination::ALL,
+                    live.as_ref().map(|_| {
+                        use crate::model::session::{Focus, Tab, legend};
+                        without_go_to(legend(Focus::Composer, Tab::Chat, true))
+                    }),
                 );
                 for room in 20..=240 {
                     let (fit, count) = line.layout(room);
@@ -401,6 +460,7 @@ mod tests {
             Some(Surface::Menu),
             false,
             &Destination::ALL,
+            None,
         );
         let keys: Vec<&str> = line.own.iter().map(|entry| entry.keys.as_str()).collect();
         let menu: Vec<&str> = Surface::Menu.keys().iter().map(|(keys, _)| *keys).collect();

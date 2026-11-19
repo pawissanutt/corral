@@ -42,10 +42,12 @@ pub fn detail(feed: &mut Feed, target: &DetailRef, page: Option<&str>) -> Result
                 reply_refusal: Some(
                     "session has no Pi socket; use Terminate to stop its host".into(),
                 ),
+                host: HostPresence::NotRunning,
             };
             put(feed, target.clone(), DetailBody::Session(page));
             Ok(())
         }
+        DetailRef::SessionCards { id } => super::build_ops::cards(feed, id),
         DetailRef::Terminal { id } => {
             if feed.detail(target).and_then(|cache| cache.body()).is_some() {
                 return Ok(());

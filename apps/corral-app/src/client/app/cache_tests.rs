@@ -7,8 +7,28 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
     let feed = signal(Feed::default());
     let mut app = AppState::new();
     app.ready = true;
-    app.scopes.insert("active".into());
     app.session_scopes.insert("session".into(), 1);
+    let mut outbox = Outbox::load("retention-pins", "device").unwrap();
+    outbox
+        .update(|saved| {
+            saved.messages.insert(
+                "pending-send".into(),
+                outbox::Message {
+                    request: SessionSend {
+                        id: "pending".into(),
+                        cmd_id: "pending-send".into(),
+                        text: "not answered yet".into(),
+                        policy: corral_protocol::session_state::SendPolicy::Steer,
+                        to: None,
+                        typed_at: None,
+                        attachments: Vec::new(),
+                    },
+                    attempted: true,
+                },
+            );
+        })
+        .unwrap();
+    app.outbox = Some(outbox);
     let selected = DetailRef::Plan {
         id: "selected".into(),
     };
@@ -45,6 +65,7 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
         older: None,
         replyable: false,
         reply_refusal: None,
+        host: Default::default(),
     });
     app.detail_reply(
         feed,
@@ -66,57 +87,42 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
         assert!(app.retained.entries[&Key::Detail(history_key.clone())].1 >= payload);
     });
     feed.update(|feed| {
-        for scope in ["active", "pending"] {
-            feed.threads
-                .insert(Id::new(scope), ThreadSnapshot::default());
+        for scope in ["session", "pending"] {
+            feed.live.insert(Id::new(scope), Default::default());
         }
-        feed.live.insert(Id::new("session"), Default::default());
         feed.items
             .insert("item".into(), ItemFetch::Failed("retained".into()));
-        feed.commands.insert(
-            Id::new("pending-send"),
-            CommandState {
-                device: None,
-                method: ASSISTANT_SEND.into(),
-                request: json!({"thread":"pending"}),
-                status: CommandStatus::Done,
-                error: None,
-                entry: Some(Id::new("not-yet-echoed")),
-            },
-        );
     });
-    app.touch_thread(feed, "active");
-    app.touch_thread(feed, "pending");
     app.touch_session(feed, "session");
+    app.touch_session(feed, "pending");
     app.touch_item(feed, "session", "item");
     for index in 0..MAX_ENTRIES * 2 {
         let scope = format!("closed-{index}");
-        app.scopes.insert(scope.clone());
         feed.update(|feed| {
-            feed.threads
-                .insert(Id::from(&scope), ThreadSnapshot::default());
+            feed.live.insert(Id::from(&scope), Default::default());
             feed.topics.insert(
-                topic_key(Topic::Thread, Some(&scope)),
+                topic_key(Topic::Session, Some(&scope)),
                 TopicState::default(),
             );
         });
-        app.touch_thread(feed, &scope);
-        app.scopes.remove(&scope);
+        app.touch_session(feed, &scope);
         app.trim_retained(feed);
         assert!(app.retained.entries.len() <= MAX_ENTRIES);
     }
     feed.with_untracked(|feed| {
-        assert!(feed.threads.contains_key("active"));
-        assert!(feed.threads.contains_key("pending"));
-        assert!(!feed.threads.contains_key("closed-0"));
+        assert!(feed.live.contains_key("session"));
+        assert!(
+            feed.live.contains_key("pending"),
+            "a session with an unanswered send is kept"
+        );
+        assert!(!feed.live.contains_key("closed-0"));
         assert!(
             !feed
                 .topics
-                .contains_key(&topic_key(Topic::Thread, Some("closed-0")))
+                .contains_key(&topic_key(Topic::Session, Some("closed-0")))
         );
         assert!(feed.details.contains_key(&detail_key(&selected)));
         assert!(feed.details.contains_key(&history_key));
-        assert!(feed.live.contains_key("session"));
         assert!(feed.items.contains_key("item"));
     });
     let (oldest, next_oldest) = {
@@ -132,14 +138,14 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
         (inactive[0].1.clone(), inactive[1].1.clone())
     };
     app.retained.touch(oldest.clone(), 1);
-    app.retained.touch(Key::Thread("newest".into()), 1);
+    app.retained.touch(Key::Session("newest".into()), 1);
     app.trim_retained(feed);
     assert!(app.retained.entries.contains_key(&oldest));
     assert!(!app.retained.entries.contains_key(&next_oldest));
     // A byte-heavy inactive entry consumes the same budget as every other cache kind.
     let last_scope = format!("closed-{}", MAX_ENTRIES * 2 - 1);
     app.retained
-        .touch(Key::Thread(last_scope.clone()), MAX_BYTES + 1);
+        .touch(Key::Session(last_scope.clone()), MAX_BYTES + 1);
     app.trim_retained(feed);
     assert!(
         app.retained
@@ -149,7 +155,7 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
             .sum::<usize>()
             <= MAX_BYTES
     );
-    assert!(feed.with_untracked(|feed| !feed.threads.contains_key(last_scope.as_str())));
+    assert!(feed.with_untracked(|feed| !feed.live.contains_key(last_scope.as_str())));
     app.disconnected(feed);
     app.ready = true;
     let refreshed = app.refresh_details(feed);

@@ -3,14 +3,13 @@
 //! The 128-entry/16-MiB budget counts pages, merged bodies, reply copies and assemblies
 //! together. Pins may exceed it; in that case no inactive entry is retained.
 use super::*;
-use crate::model::session_feed::ItemFetch;
+use crate::model::session::transcript::ItemFetch;
 
 const MAX_ENTRIES: usize = 128;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Key {
-    Thread(String),
     Session(String),
     Detail(String),
     Item(String),
@@ -124,16 +123,6 @@ impl AppState {
         self.retained.touch(Key::Detail(key), size);
     }
 
-    pub(super) fn touch_thread(&mut self, feed: Signal<Feed>, scope: &str) {
-        let size = feed.with_untracked(|feed| {
-            scope.len()
-                + feed.threads.get(scope).map_or(0, |thread| {
-                    thread.entries.values().map(bytes).sum::<usize>()
-                })
-        });
-        self.retained.touch(Key::Thread(scope.into()), size);
-    }
-
     pub(super) fn touch_session(&mut self, feed: Signal<Feed>, scope: &str) {
         let size = feed.with_untracked(|feed| {
             scope.len()
@@ -184,43 +173,27 @@ impl AppState {
         self.retained.touch(Key::Item(token.into()), size);
     }
 
-    fn scope_pinned(&self, scope: &str, feed: &Feed) -> bool {
-        self.scopes.contains(scope)
-            || self.session_scopes.contains_key(scope)
-            || self.outbox.as_ref().is_some_and(|outbox| {
-                outbox
-                    .saved
-                    .messages
-                    .values()
-                    .any(|message| message.request.thread == scope)
-            })
-            || feed.commands.values().any(|command| {
-                command.method == ASSISTANT_SEND
-                    && command.request["thread"].as_str() == Some(scope)
-                    && (command.entry.is_some()
-                        || matches!(
-                            command.status,
-                            CommandStatus::Queued
-                                | CommandStatus::Pending
-                                | CommandStatus::Running
-                                | CommandStatus::Unknown
-                        ))
-            })
-    }
-
-    fn session_pinned(&self, session: &str, feed: &Feed) -> bool {
-        self.scope_pinned(session, feed)
+    /// A session is pinned while a view watches it or this device has a message to it that
+    /// corrald has not answered.
+    fn session_pinned(&self, session: &str) -> bool {
+        self.session_scopes.contains_key(session)
             || self.terminal_scopes.contains_key(session)
             || self
                 .retained
                 .pins
                 .contains_key(&detail_key(&DetailRef::Session { id: session.into() }))
+            || self.outbox.as_ref().is_some_and(|outbox| {
+                outbox
+                    .saved
+                    .messages
+                    .values()
+                    .any(|message| message.request.id == session)
+            })
     }
 
     fn retained_pinned(&self, key: &Key, feed: &Feed) -> bool {
         match key {
-            Key::Thread(scope) => self.scope_pinned(scope, feed),
-            Key::Session(scope) => self.session_pinned(scope, feed),
+            Key::Session(scope) => self.session_pinned(scope),
             Key::Detail(key) => {
                 self.retained.pins.contains_key(key)
                     || feed
@@ -228,7 +201,7 @@ impl AppState {
                         .get(key)
                         .is_some_and(|cache| match &cache.target {
                             DetailRef::Session { id } | DetailRef::Terminal { id } => {
-                                self.session_pinned(id, feed)
+                                self.session_pinned(id)
                             }
                             _ => false,
                         })
@@ -237,7 +210,7 @@ impl AppState {
                 .retained
                 .item_sessions
                 .get(token)
-                .is_some_and(|session| self.session_pinned(session, feed)),
+                .is_some_and(|session| self.session_pinned(session)),
         }
     }
 
@@ -270,10 +243,6 @@ impl AppState {
     fn evict_retained(&mut self, feed: Signal<Feed>, key: &Key) {
         self.retained.entries.remove(key);
         match key {
-            Key::Thread(scope) => feed.update(|feed| {
-                feed.threads.remove(scope.as_str());
-                feed.topics.remove(&topic_key(Topic::Thread, Some(scope)));
-            }),
             Key::Session(scope) => feed.update(|feed| {
                 feed.live.remove(scope.as_str());
                 feed.topics.remove(&topic_key(Topic::Session, Some(scope)));

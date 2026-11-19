@@ -50,7 +50,7 @@ fn padded(app: AppState, child: AnyElement) -> AnyElement {
 /// reply box survives the story's every change (an age ticking, a run starting): the parts
 /// above and below it are drawn again, the box only when its step changes, keeping the words
 /// being typed and the focus.
-pub(super) fn view_of(app: AppState, inspector: Memo<Option<Inspector>>) -> AnyElement {
+pub(crate) fn view_of(app: AppState, inspector: Memo<Option<Inspector>>) -> AnyElement {
     let story = computed(move || {
         inspector.with(|inspector| match inspector {
             Some(Inspector::LiveStory(story)) => Some((**story).clone()),

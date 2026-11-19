@@ -99,16 +99,4 @@ impl AppState {
             }
         }
     }
-
-    pub(super) fn preview_send(&self, message: corral_protocol::assistant::AssistantSend) -> bool {
-        let mut outcome = Ok(());
-        self.feed
-            .update(|feed| outcome = preview::effect(feed, &Effect::Send(message)));
-        if let Err(why) = outcome {
-            self.toast(format!("Preview · {why}"));
-            false
-        } else {
-            true
-        }
-    }
 }

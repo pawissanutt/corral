@@ -3,6 +3,7 @@ mod chat;
 mod details;
 mod review;
 pub(crate) mod rows;
+mod session_parts;
 mod terminal_screen;
 mod transcript;
 
@@ -23,8 +24,8 @@ use corral_protocol::{
 use serde::Serialize;
 
 use crate::state::Shared;
-pub(crate) use chat::{ThreadStamp, thread};
 pub(crate) use rows::{RowCache, Rows};
+pub(crate) use transcript::StaleTranscriptCursor;
 
 // The transport reserves room for the response envelope and bounded request id.
 const REPLY_MAX: usize = APP_CONTROL_MAX - 2048;
@@ -42,6 +43,9 @@ impl std::error::Error for NotFound {}
 
 pub(crate) fn detail(shared: &Shared, query: DetailGet) -> Result<DetailReply> {
     let engine = shared.engine()?;
+    if let Some(reply) = session_parts::read(shared, &engine, &query)? {
+        return Ok(reply);
+    }
     if let Some(reply) = chat::detail(shared, &engine, &query)? {
         return Ok(reply);
     }
@@ -107,9 +111,13 @@ pub(crate) fn changes(shared: &Shared, request: ChangesRequest) -> Result<Change
 }
 
 pub(crate) fn run_scope(id: &str) -> Result<(&str, &str)> {
+    run_scope_with_separator(id, '_')
+}
+
+pub(crate) fn run_scope_with_separator(id: &str, separator: char) -> Result<(&str, &str)> {
     ensure!(id.len() <= 32, "invalid: terminal scope is too long");
     let (task, run) = id
-        .split_once('_')
+        .split_once(separator)
         .context("invalid: expected terminal scope T-001_R1")?;
     task_number(task)?;
     ensure!(
@@ -188,7 +196,7 @@ fn placed_terminal(engine: &Engine, session: &SessionRef, live: bool) -> Result<
     }
 }
 
-fn json_len(value: &impl Serialize) -> Result<usize> {
+pub(crate) fn json_len(value: &impl Serialize) -> Result<usize> {
     #[derive(Default)]
     struct Count(usize);
     impl Write for Count {

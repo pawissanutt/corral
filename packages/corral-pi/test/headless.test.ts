@@ -1,19 +1,21 @@
 // A headless worker starts without a terminal, keeps its question across a transcript reopen,
 // and uses the engine CLI to report completion after the owner answers.
 import { expect, test } from "bun:test";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { EventLog } from "../src/bridge/events.ts";
 import { attachHeadless, headlessEnabled } from "../src/host/headless.ts";
 import { openSession } from "../src/host/lifecycle.ts";
+import type { TranscriptMark } from "../src/host/transcript-marks.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
 import type { CapabilitySet, HostIdentity } from "../src/roles/types.ts";
 import { CorralClient } from "../src/tools/corral.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
+import { codeHost } from "./support/code-host.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 import { writeFakeEngine } from "./support/fake-engine.ts";
 import { nextEvent } from "./support/wait.ts";
@@ -128,3 +130,28 @@ test("a headless worker asks, reopens its transcript and reports done after the 
     rmSync(work, { recursive: true, force: true });
   }
 }, 120_000);
+
+test("a headless session records run-end, model and note marks", async () => {
+  const fx = await codeHost("assistant", { enabled: [] });
+  const host = fx.host;
+  host.markAttached("headless");
+  try {
+    await fx.turn([{ text: "ready" }]);
+    const session = host.session;
+    const effort = session.getAvailableThinkingLevels().find(level => level !== session.thinkingLevel);
+    if (!effort) throw new Error("fixture model has no alternate effort");
+    const model = session.model!;
+    await host.selectRemoteModel(`${model.provider}/${model.id}`, effort);
+    const [first] = session.getUserMessagesForForking();
+    expect((await host.runtime.fork(first!.entryId)).cancelled).toBeTrue();
+
+    const entries = readFileSync(session.sessionFile!, "utf8").trimEnd().split("\n")
+      .map(line => JSON.parse(line) as { customType?: string; data: TranscriptMark });
+    const marks = entries.filter(entry => entry.customType === "corral_mark").map(entry => entry.data);
+    expect(marks.map(mark => mark.kind)).toEqual(["turn_end", "model", "note"]);
+    expect(marks[0]).toMatchObject({ reason: "done", toolCalls: 0 });
+    expect(marks[1]).toMatchObject({ model: `${model.provider}/${model.id}`, effort });
+    expect(marks[2]).toMatchObject({ tone: "warning" });
+    expect(host.liveEvents.since(0, 56 * 1024).events.filter(event => event.kind === "live_entry").length).toBeGreaterThanOrEqual(3);
+  } finally { await fx.close(); }
+});

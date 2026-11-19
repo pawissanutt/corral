@@ -1,15 +1,15 @@
-use super::{Action, RosterPanelTab, RosterRole, State, roster, roster_panel};
+use super::{Action, RosterRole, Show, State, roster};
 use crate::model::daemon::{Feed, Link, Task, TopicState, bare_task, task_row};
-use crate::model::health::daemon_env;
 use crate::model::projects::{FilterScreen, Filters, ProjectFilter};
-use crate::model::{Form, Id, Selection};
+use crate::model::{Id, Live};
 use corral_protocol::rows::{
-    AgentRow, AssistantKind, AssistantLocation, AssistantRow, AssistantState,
+    AgentRow, AssistantKind, AssistantLocation, AssistantRow, AssistantState, BuildFacts,
 };
-use corral_types::{Blocked, Role, Run, SessionRef, SessionStatus, Status};
+use corral_protocol::session_state::Counts;
+use corral_types::{Role, Run, SessionRef, SessionStatus, Status};
 
 /// A live run of `task`, working in a herdr pane.
-pub(super) fn agent(task: &str, run: &str, role: Role) -> AgentRow {
+pub(crate) fn agent(task: &str, run: &str, role: Role) -> AgentRow {
     AgentRow {
         run: Run {
             id: run.into(),
@@ -39,17 +39,8 @@ pub(super) fn agent(task: &str, run: &str, role: Role) -> AgentRow {
     }
 }
 
-fn key(row: &AgentRow) -> Id {
-    Id::from(format!("{}_{}", row.run.task, row.run.id).as_str())
-}
-
-fn task(id: &str, project: &str, status: Status) -> Task {
-    let mut task = bare_task(id, id, status, jiff::Timestamp::UNIX_EPOCH);
-    task.project = Some(project.into());
-    Task::new(task_row(task))
-}
-
-fn assistant(id: &str, kind: AssistantKind) -> AssistantRow {
+/// A chat or build row, ready and served by corrald.
+pub(crate) fn assistant(id: &str, kind: AssistantKind) -> AssistantRow {
     AssistantRow {
         id: id.into(),
         kind,
@@ -66,7 +57,22 @@ fn assistant(id: &str, kind: AssistantKind) -> AssistantRow {
         wait: None,
         question_id: None,
         rev: 1,
+        model: None,
+        effort: None,
+        created: None,
+        updated: None,
+        build: None,
     }
+}
+
+fn key(row: &AgentRow) -> Id {
+    Id::from(format!("{}_{}", row.run.task, row.run.id).as_str())
+}
+
+fn task(id: &str, project: &str, status: Status) -> Task {
+    let mut task = bare_task(id, id, status, jiff::Timestamp::UNIX_EPOCH);
+    task.project = Some(project.into());
+    Task::new(task_row(task))
 }
 
 fn feed(rows: Vec<AgentRow>) -> Feed {
@@ -93,7 +99,7 @@ fn feed(rows: Vec<AgentRow>) -> Feed {
 }
 
 #[test]
-fn project_scope_hides_other_projects_runs_but_not_the_quick_thread_and_persists() {
+fn project_scope_hides_other_projects_runs_but_not_the_quick_chat_and_persists() {
     let mut feed = feed(vec![
         agent("T-1", "R1", Role::Worker),
         agent("T-2", "R1", Role::Worker),
@@ -102,15 +108,10 @@ fn project_scope_hides_other_projects_runs_but_not_the_quick_thread_and_persists
     feed.assistants
         .insert("A-7".into(), assistant("A-7", AssistantKind::Quick));
     let filter = ProjectFilter::Project("one".into());
-    let model = roster(
-        &State::default(),
-        &feed,
-        daemon_env(&feed, Form::Desktop),
-        &filter,
-    );
-    let ids: Vec<_> = model.rows.iter().map(|row| row.session.as_str()).collect();
+    let model = roster(&State::default(), &feed, &filter);
+    let mut ids: Vec<_> = model.rows.iter().map(|row| row.session.as_str()).collect();
+    ids.sort_unstable();
     assert_eq!(ids, ["A-7", "T-1_R1"]);
-    assert_eq!(model.rows[0].project, "workspace");
     let mut filters = Filters::default();
     filters.set("store", FilterScreen::Agents, filter.clone());
     let restored =
@@ -118,71 +119,83 @@ fn project_scope_hides_other_projects_runs_but_not_the_quick_thread_and_persists
     assert_eq!(restored.get("store", FilterScreen::Agents, &feed), filter);
 }
 
+/// A build whose host stopped stays listed under Show All, with its Session menu's Resume, so
+/// the owner can continue it; Live leaves it out.
 #[test]
-fn quick_thread_leads_a_blocked_run_and_each_run_row_carries_its_task_menu() {
-    let mut blocked = agent("T-2", "R3", Role::Reviewer);
-    blocked.status = SessionStatus::Blocked {
-        excerpt: "Allow edit? (y/n)".into(),
+fn a_cold_build_is_listed_as_resumable() {
+    let mut feed = feed(Vec::new());
+    let mut build = assistant("B-k3x9", AssistantKind::Build);
+    build.state = AssistantState::Cold;
+    build.live_in = AssistantLocation::None;
+    build.build = Some(BuildFacts {
+        name: "walk".into(),
+        project: Some("one".into()),
+        worktree: "/repo/.worktrees/walk".into(),
+        repo_root: "/repo".into(),
+        branch: Some("build/walk".into()),
+        base: Some("main".into()),
+        here: false,
+        exit: None,
+        children: Counts::default(),
+        diff: None,
+    });
+    feed.assistants.insert("B-k3x9".into(), build);
+
+    let live = roster(&State::default(), &feed, &ProjectFilter::All);
+    assert!(live.rows.iter().all(|row| row.session.as_str() != "B-k3x9"));
+
+    let all = State {
+        show: Show::All,
+        ..State::default()
     };
-    let mut feed = feed(vec![agent("T-1", "R1", Role::Worker), blocked]);
-    feed.assistants
-        .insert("A-7".into(), assistant("A-7", AssistantKind::Quick));
-    feed.assistants
-        .insert("A-8".into(), assistant("A-8", AssistantKind::Session));
-    let env = daemon_env(&feed, Form::Desktop);
-    let model = roster(&State::default(), &feed, env, &ProjectFilter::All);
-    let rows: Vec<_> = model
+    let model = roster(&all, &feed, &ProjectFilter::All);
+    let row = model
         .rows
         .iter()
-        .map(|row| (row.session.as_str(), row.task.as_ref().map(Id::as_str)))
-        .collect();
-    assert_eq!(
-        rows,
-        [
-            ("A-7", None),
-            ("T-2_R3", Some("T-2")),
-            ("T-1_R1", Some("T-1"))
-        ]
-    );
-    assert!(model.rows[0].pinned);
-    assert_eq!(model.rows[1].doing, "Allow edit? (y/n)");
+        .find(|row| row.session.as_str() == "B-k3x9")
+        .expect("a stopped build is listed under All");
+    assert!(row.resumable);
+    assert_eq!(row.action, Action::OpenSession(Id::from("B-k3x9")));
     assert!(
         model
             .roles
             .iter()
-            .any(|tab| tab.id == "seg-agents-reviewer" && tab.count == 1)
+            .any(|tab| tab.id == "seg-agents-build" && tab.count == 1)
+    );
+    assert_eq!(
+        crate::model::agents::controls(&feed, "B-k3x9"),
+        [crate::model::agents::Control::Relaunch]
     );
 }
 
+/// A build whose host runs in a terminal corrald cannot reach is not offered Resume here.
 #[test]
-fn a_blocked_task_waits_on_the_owner_from_the_runs_panel() {
-    let mut feed = feed(vec![agent("T-1", "R1", Role::Worker)]);
-    let mut stuck = bare_task("T-1", "T-1", Status::Blocked, jiff::Timestamp::UNIX_EPOCH);
-    stuck.project = Some("one".into());
-    stuck.blocked = Some(Blocked {
-        reason: "gate failed twice".into(),
-        detail: None,
-        next: vec![],
-    });
-    feed.board
-        .apply_batch(2, vec![Task::new(task_row(stuck))], &[]);
-    let state = State {
-        roster_session: Some("T-1_R1".into()),
+fn a_build_open_in_another_terminal_is_not_resumable() {
+    let mut feed = feed(Vec::new());
+    let mut build = assistant("B-k3x9", AssistantKind::Build);
+    build.state = AssistantState::Cold;
+    build.live_in = AssistantLocation::Pane;
+    feed.assistants.insert("B-k3x9".into(), build);
+    let all = State {
+        show: Show::All,
         ..State::default()
     };
-    let panel = roster_panel(
-        &state,
-        &feed,
-        daemon_env(&feed, Form::Desktop),
-        &ProjectFilter::All,
-        "device",
-    )
-    .expect("selected run panel");
-    assert_eq!(panel.menu, Some(Id::from("T-1_R1")));
-    assert_eq!(
-        panel.waits.map(|wait| wait.text),
-        Some("gate failed twice".to_owned())
-    );
+    let model = roster(&all, &feed, &ProjectFilter::All);
+    assert!(model.rows.iter().all(|row| !row.resumable));
+    assert!(crate::model::agents::controls(&feed, "B-k3x9").is_empty());
+}
+
+#[test]
+fn a_session_waiting_on_the_owner_leads_the_roster() {
+    let mut blocked = agent("T-2", "R3", Role::Reviewer);
+    blocked.status = SessionStatus::Blocked {
+        excerpt: "Allow edit? (y/n)".into(),
+    };
+    let feed = feed(vec![agent("T-1", "R1", Role::Worker), blocked]);
+    let model = roster(&State::default(), &feed, &ProjectFilter::All);
+    let rows: Vec<_> = model.rows.iter().map(|row| row.session.as_str()).collect();
+    assert_eq!(rows, ["T-2_R3", "T-1_R1"]);
+    assert!(model.rows[0].needs.is_some());
 }
 
 #[test]
@@ -192,33 +205,37 @@ fn quiet_time_follows_the_runners_quiet_since_and_stays_unknown_without_it() {
     quiet.run.quiet_since =
         Some(jiff::Timestamp::from_second(feed_now - 9 * 60).expect("valid timestamp"));
     let feed = feed(vec![quiet, agent("T-2", "R1", Role::Worker)]);
-    let model = roster(
-        &State::default(),
-        &feed,
-        daemon_env(&feed, Form::Desktop),
-        &ProjectFilter::All,
-    );
-    let quiet: Vec<_> = model.rows.iter().map(|row| row.quiet.as_str()).collect();
-    assert_eq!(quiet, ["quiet 9m", "—"]);
+    let model = roster(&State::default(), &feed, &ProjectFilter::All);
+    let quiet: Vec<(&str, &str)> = model
+        .rows
+        .iter()
+        .map(|row| (row.session.as_str(), row.quiet.as_str()))
+        .collect();
+    assert!(quiet.contains(&("T-1_R1", "quiet 9m")));
+    assert!(quiet.contains(&("T-2_R1", "–")));
 }
 
 #[test]
-fn keys_follow_only_visible_rows() {
+fn keys_follow_only_visible_rows_and_enter_opens_the_selected_session() {
     let feed = feed(vec![
         agent("T-1", "R1", Role::Worker),
         agent("T-2", "R1", Role::Worker),
     ]);
-    let mut state = State {
-        roster_tab: RosterPanelTab::Terminal,
-        ..State::default()
-    };
-    let env = daemon_env(&feed, Form::Desktop);
+    let mut state = State::default();
     let filter = ProjectFilter::Project("one".into());
-    state.key_live_filtered("j", None, &Selection::default(), &feed, env, &filter);
+    state.key("j", None, &feed, &filter);
     assert_eq!(state.roster_session, Some(Id::from("T-1_R1")));
-    assert_eq!(state.roster_tab, RosterPanelTab::Summary);
-    state.act_roster(Action::SetRosterRole(RosterRole::Reviewer), &feed, env);
-    assert!(roster_panel(&state, &feed, env, &filter, "device").is_none());
-    state.key_live_filtered("escape", None, &Selection::default(), &feed, env, &filter);
+    assert_eq!(
+        state.key("enter", None, &feed, &filter),
+        Some(vec![crate::model::Effect::OpenLive(Live::Session(
+            Id::from("T-1_R1")
+        ))])
+    );
+    state.act(Action::SetRosterRole(RosterRole::Reviewer), &feed, &filter);
+    assert!(
+        roster(&state, &feed, &filter).rows.is_empty(),
+        "no reviewer runs in this scope"
+    );
+    state.key("escape", None, &feed, &filter);
     assert!(state.roster_session.is_none());
 }

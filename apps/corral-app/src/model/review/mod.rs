@@ -26,7 +26,7 @@ mod view;
 #[cfg(test)]
 mod candidate_tests;
 
-pub use brief::{Brief, ChangedFile};
+pub use brief::{Brief, ChangedFile, checks};
 pub use brief_side::{AskedFor, BriefSide, ReviewFact};
 pub use diff::{
     Highlight, NumberedLine, ParsedHunk, ParsedPatch, SplitRow, UnifiedRow, parse_patch,

@@ -1,0 +1,8 @@
+{
+  "state": {
+    "turn": 1,
+    "exit": { "phase": "verifying", "choice": "land", "detail": "Waiting for the project gate", "base_branch": "trunk" },
+    "can": [{ "id": "cards" }, { "id": "exit", "unavailable": "Verification is still running" }]
+  },
+  "methods": { "cards": { "cards": [] }, "exit_open": { "phase": "verifying" } }
+}

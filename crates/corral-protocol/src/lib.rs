@@ -4,6 +4,7 @@ pub mod assistant;
 pub mod attachment;
 #[cfg(test)]
 mod attachment_tests;
+pub mod build;
 pub mod config;
 pub mod detail;
 pub mod device;
@@ -17,11 +18,13 @@ pub mod rpc;
 mod schema;
 mod schema_types;
 pub mod session;
+pub mod session_host;
+pub mod session_state;
 pub mod subscription;
 
 pub use app::{
-    AGENTS_V1, ASSISTANT_V1, CHANGES_V1, CLOSED_V1, PLANS_V1, PROJECTS_V1, REVIEW_V1,
-    SESSION_FLEET_V1, SETTINGS_V1, TIMELINE_V1, USAGE_V1,
+    AGENTS_V1, ASSISTANT_V1, BUILD_V1, CHANGES_V1, CLOSED_V1, PLANS_V1, PROJECTS_V1, REVIEW_V1,
+    SESSION_FLEET_V1, SESSION_STATE_V1, SETTINGS_V1, TIMELINE_V1, USAGE_V1,
 };
 pub use corral_types::{
     Applied, Artifact, Blocked, Check, Event, Next, Op, Refusal, Run, SessionStatus, Status, Task,

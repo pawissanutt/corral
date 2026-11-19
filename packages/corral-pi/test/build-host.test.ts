@@ -9,6 +9,10 @@ import { createSession, listSessions, loadSession, saveSession, sessionDir } fro
 import { prepareWorktree } from "../src/build/worktree.ts";
 import type { BuildLaunch } from "../src/build/types.ts";
 import { buildHostConfig, validateBuildResume } from "../src/host/build.ts";
+import { connect } from "./support/bridge-client.ts";
+import { scriptedFixtureInstall } from "./support/fixture-install.ts";
+import { launch } from "./support/pi-process.ts";
+import { within } from "./support/wait.ts";
 
 const temporary: string[] = [];
 function directory(): string {
@@ -115,3 +119,44 @@ test("resume refuses a switched branch or a replaced repository without rewritin
   expect(() => validateBuildResume(record)).toThrow("Git common directory differs");
   expect(readFileSync(file, "utf8")).toBe(saved);
 });
+
+test("a headless build takes --id and records its socket", async () => {
+  const dir = directory(), data = join(dir, "data"), id = "B-daemon123";
+  execFileSync("git", ["init", "--initial-branch=main", dir]);
+  execFileSync("git", ["-C", dir, "-c", "user.name=Build Test", "-c", "user.email=build@example.test",
+    "commit", "--allow-empty", "-m", "base"]);
+  mkdirSync(sessionDir(data, id), { recursive: true, mode: 0o700 });
+  const assets = scriptedFixtureInstall(dir, [{ text: "ready" }]);
+  const env = { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, CORRAL_NEXT_ROOT: dir };
+  const run = async (socket: string, args: string[], transcript?: string): Promise<string> => {
+    const child = launch(assets, ["build", "--headless", "--data-dir", data, "--socket", socket, "--corral", "/unused/corral", ...args], dir, env);
+    try {
+      await child.output(/session socket ready/);
+      const connection = await connect(socket);
+      try {
+        const call = async (command: string, args: Record<string, unknown> = {}) => {
+          const reply = await connection.request({ version: 2, id: command, command, args });
+          if (!reply.ok || !reply.result) throw new Error(`${command}: ${JSON.stringify(reply.error)}`);
+          return reply.result;
+        };
+        const hello = await call("hello");
+        expect(hello).toMatchObject({ role: "build", session_id: id, pid: child.child.pid });
+        expect((await call("get_state")).mode).toBe("headless");
+        const record = loadSession(data, id);
+        expect(record).toMatchObject({ id, socket, sessionFile: hello.session_file, pid: child.child.pid, workspaceRoot: dir });
+        if (transcript === undefined) {
+          expect((await call("submit_input", { text: "Begin", origin: "owner", input_id: "build-first" })).disposition).toBe("started");
+          await child.output(/turn 1 ended/);
+        } else {
+          expect(record.sessionFile).toBe(transcript);
+          expect((await call("get_state")).turn).toMatchObject({ current: 1, open: false });
+        }
+        expect(await call("shutdown")).toEqual({ shutting_down: true });
+        expect(await within(child.exit, 10_000, "build shutdown")).toBe(0);
+        return record.sessionFile!;
+      } finally { connection.close(); }
+    } finally { await child.stop(); }
+  };
+  const transcript = await run(join(dir, "start.sock"), ["--here", "--id", id]);
+  await run(join(dir, "resume.sock"), ["--resume", id], transcript);
+}, 20_000);

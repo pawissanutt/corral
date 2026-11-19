@@ -468,7 +468,7 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
         format!("{}…", artifact.sha256.chars().take(12).collect::<String>())
     };
     let kind = artifact.kind.clone().unwrap_or_else(|| "artifact".into());
-    let size = crate::model::agents::size(artifact.bytes);
+    let size = crate::model::session::transcript::size(artifact.bytes);
     let project = project_of(feed, artifact);
     let added = format!(
         "{} by {}",

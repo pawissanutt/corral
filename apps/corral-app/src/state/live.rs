@@ -3,16 +3,16 @@
 //! preview locally; a preview intent never enters the real client's queue. Engine operations
 //! go through `ops`.
 
-use corral_protocol::assistant::{AssistantSend, ContextRef};
+use corral_protocol::assistant::ContextRef;
 use corral_protocol::detail::{DetailGet, DetailRef};
 
 use nsh_core::prelude::*;
 
 use super::AppState;
 use crate::client::requests;
-use crate::model::agents::{Control, PaneAsk};
-use crate::model::daemon::{DetailCache, Feed, Operation};
-use crate::model::effect::PaneRequest;
+use crate::model::agents::Control;
+use crate::model::daemon::{ClientError, DetailCache, Feed, Operation};
+use crate::model::effect::QueueRequest;
 use crate::model::health::{self, Availability};
 use crate::model::{Destination, Effect, Env, Id, Live, Overlay, Selection};
 
@@ -32,7 +32,7 @@ impl AppState {
     /// Selects a live record and pushes its page where this form stacks it.
     pub fn open_live(&self, live: Live) {
         self.reveal_live(&live);
-        if matches!(live, Live::Thread(_)) {
+        if matches!(live, Live::Session(_)) {
             self.close(Overlay::Ask);
         }
         if matches!(live, Live::Task(_)) {
@@ -53,9 +53,28 @@ impl AppState {
     pub fn ask_about(&self, context: Option<ContextRef>, text: Option<String>) {
         self.ask_context.set(context);
         if let Some(text) = text {
-            self.ask_draft.set(text);
+            self.set_ask_draft(text);
         }
         self.open_ask();
+    }
+
+    /// Tracked: the session Ask reads and sends to (`quick` until its first send is answered).
+    pub fn ask_id(&self) -> Id {
+        self.session.with(|state| state.ask_id())
+    }
+
+    /// Tracked: Ask's draft, which is its session's, the same the session page shows.
+    pub fn ask_draft(&self) -> String {
+        self.session
+            .with(|state| state.ui(state.ask_id().as_str()).draft.clone())
+    }
+
+    /// Replaces Ask's draft with `text`.
+    pub fn set_ask_draft(&self, text: String) {
+        self.reduce(self.session, move |state, feed, _, _| {
+            let session = state.ask_id();
+            state.act(crate::model::session::Action::Draft { session, text }, feed)
+        });
     }
 
     /// Tracked: whether corrald serves the destination to this session.
@@ -67,22 +86,6 @@ impl AppState {
     /// Tracked: whether the session negotiated the capability.
     pub fn capable(&self, capability: &str) -> bool {
         self.feed.with(|feed| feed.capable(capability))
-    }
-
-    /// Enqueues an intent for client admission, not an ownership transfer. The composer
-    /// retains its words and attachments until the matching persisted acceptance arrives.
-    pub fn send_message(&self, mut message: AssistantSend) -> bool {
-        let project = untracked(|| self.composer_project());
-        crate::model::assistant::attach_default_project(&mut message, project.as_ref());
-        if self.fixture() {
-            return self.preview_send(message);
-        }
-        if requests::assistant_send(message) {
-            true
-        } else {
-            self.toast("Not sent: the app's connection to corrald is not running. Your words and attachments stay here.");
-            false
-        }
     }
 
     /// Tracked: the authenticated name of this device.
@@ -234,12 +237,10 @@ impl AppState {
                     | Effect::AskAbout { .. }
                     | Effect::VerbMenu(_)
                     | Effect::Unattach(_)
+                    | Effect::EndThread(_)
                     | Effect::Act(_)
                     | Effect::Device(_)
-                    | Effect::Send(_)
-                    | Effect::Pane { .. }
                     | Effect::Control { .. }
-                    | Effect::Answer { .. }
                     | Effect::Config { .. }
                     | Effect::Refused(_)
             )
@@ -274,17 +275,12 @@ impl AppState {
             }
             Effect::Changes(query) => _ = requests::changes_page(query),
             Effect::Seen(seen) => _ = requests::seen_advance(seen),
-            Effect::Send(message) => _ = self.send_message(message),
             Effect::Unattach(key) => self.unattach(&key),
-            Effect::CancelSend(key) => {
-                // The client owns whether it ever left: it drops a never-sent or refused one
-                // here and asks corrald for the rest, now or on reconnect.
-                if !requests::assistant_cancel(key.to_string()) {
-                    self.toast("Not withdrawn: the app's connection to corrald is not running. Nothing changed.");
-                }
+            Effect::EndThread(chat) => {
+                self.refusal.set(None);
+                self.confirm
+                    .set(Some(crate::model::act::Confirming::end_thread(chat)));
             }
-            Effect::Answer { key, answer } => self.answer(key, answer),
-            Effect::Thread { scope, open } => _ = requests::thread(scope, open),
             Effect::Control {
                 session,
                 key,
@@ -330,42 +326,61 @@ impl AppState {
                     self.toast(why);
                 }
             }
-            Effect::Pane {
-                session,
-                key,
-                what,
-                request,
-            } => self.pane(session, key, what, request),
+            // A message waits in this device's outbox while corrald is unreachable and goes on
+            // the next connection; only a client that is not running leaves it unsent.
+            Effect::SessionSend { key, send } => {
+                let session = Id::from(send.id.as_str());
+                if !requests::session_send(send) {
+                    let why = "the app's connection task is not running".to_owned();
+                    self.session
+                        .update(|state| state.unsent(&session, &key, why));
+                }
+            }
+            Effect::BuildStart { key, start } => {
+                let unsent = match self.link_refusal() {
+                    Some(refusal) => Some(refusal.to_owned()),
+                    None => (!requests::build_start(key.to_string(), start))
+                        .then(|| "the app's connection task is not running".to_owned()),
+                };
+                if let Some(why) = unsent {
+                    self.agents.update(|state| {
+                        state.start.sending = None;
+                        state.start.failed = Some(why);
+                    });
+                }
+            }
+            Effect::SessionCardAnswer { key, answer } => {
+                self.session_request(
+                    key,
+                    corral_protocol::session_host::SESSION_CARD_ANSWER,
+                    answer,
+                );
+            }
+            Effect::SessionQueue { key, request } => {
+                let method = request.method();
+                match request {
+                    QueueRequest::Withdraw(withdraw) => self.session_request(key, method, withdraw),
+                    QueueRequest::Move(step) => self.session_request(key, method, step),
+                }
+            }
+            Effect::SessionAction { key, request } => {
+                self.session_request(key, corral_protocol::session_host::SESSION_ACTION, request);
+            }
+            Effect::SessionModel { key, request } => {
+                self.session_request(key, corral_protocol::session_host::SESSION_MODEL, request);
+            }
+            Effect::SessionChild { key, act } => {
+                self.session_request(key, corral_protocol::session_host::SESSION_CHILD, act);
+            }
+            Effect::SessionJob { key, act } => {
+                self.session_request(key, corral_protocol::session_host::SESSION_JOB, act);
+            }
+            Effect::BuildRemove { key, remove } => {
+                self.session_request(key, corral_protocol::build::BUILD_REMOVE, remove);
+            }
             Effect::Config { key, put } => self.send_config(key, put),
             _ => {}
         }
-    }
-
-    /// Sends a pane request under its key and remembers it as the session's latest, so the
-    /// session shows how it ended; one that cannot leave says why there instead.
-    fn pane(&self, session: Id, key: Id, what: PaneAsk, request: PaneRequest) {
-        let unsent = if self.fixture() {
-            self.feed
-                .update(|feed| crate::model::preview::pane(feed, &key, &request));
-            None
-        } else if let Some(refusal) = self.link_refusal() {
-            Some(refusal.to_owned())
-        } else {
-            let request_id = key.to_string();
-            let sent = requests::send(match request {
-                PaneRequest::Focus(request) => requests::ClientRequest::PaneFocus {
-                    request_id,
-                    request,
-                },
-                PaneRequest::Keys(request) => requests::ClientRequest::PaneKeys {
-                    request_id,
-                    request,
-                },
-            });
-            (!sent).then(|| "the app's connection task is not running".to_owned())
-        };
-        self.agents
-            .update(|state| state.pane_sent(session, key, what, unsent));
     }
 
     /// Sends a session control under its key and remembers it as the session's latest, so the
@@ -390,18 +405,31 @@ impl AppState {
             .update(|state| state.control_sent(session, key, control, unsent));
     }
 
-    /// Sends an answer to an agent's question under its key; the card shows how it ended.
-    fn answer(&self, key: Id, answer: corral_protocol::session::SessionPromptAnswer) {
-        if self.fixture() {
-            self.feed
-                .update(|feed| crate::model::preview::answer(feed, &key, &answer));
-        } else if let Some(refusal) = self.link_refusal() {
-            self.toast(refusal);
-        } else if !requests::send(requests::ClientRequest::PromptAnswer {
-            request_id: key.to_string(),
-            request: answer,
-        }) {
-            self.toast("Not sent: the app's connection task is not running.");
+    /// Sends a session or build request under `key`, whose reply the page reads from
+    /// `feed.operations`. One that cannot leave this device is written there as failed with why,
+    /// so the page says it rather than waiting on it.
+    fn session_request(&self, key: Id, method: &'static str, request: impl serde::Serialize) {
+        let unsent = match self.link_refusal() {
+            Some(refusal) => Some(refusal.to_owned()),
+            None => (!requests::session_request(key.to_string(), method, request))
+                .then(|| "Not sent: the app's connection task is not running.".to_owned()),
+        };
+        if let Some(message) = unsent {
+            self.feed.update(|feed| {
+                feed.operations.insert(
+                    key,
+                    Operation {
+                        method: method.into(),
+                        loading: false,
+                        value: None,
+                        error: Some(ClientError {
+                            code: "unsent".into(),
+                            message,
+                        }),
+                        refusal: None,
+                    },
+                );
+            });
         }
     }
 
@@ -411,32 +439,37 @@ impl AppState {
             .with_untracked(|feed| (!feed.ready()).then_some(NO_LINK))
     }
 
-    /// Tells each session control's outcome once its reply arrives.
-    pub(super) fn settle_controls(self) {
+    /// Follows the feed, through the selected source: retires each session's sends the
+    /// transcript now holds and tells each refused one once, tells each session control's
+    /// outcome once its reply arrives, and opens a started build's page. A state is written only
+    /// when it changed, so the pages reading it redraw only then.
+    pub(super) fn follow_sessions(self) {
         effect(move || {
-            let waiting = self.agents.with(|state| {
-                state
-                    .controls
-                    .values()
-                    .filter(|sent| !sent.told && sent.unsent.is_none())
-                    .map(|sent| sent.key.clone())
-                    .collect::<Vec<_>>()
-            });
-            if waiting.is_empty() {
-                return;
-            }
-            let settled = self.feed.with(|feed| {
-                waiting.iter().any(|key| {
-                    feed.operations
-                        .get(key.as_str())
-                        .is_some_and(|operation| !operation.loading)
-                })
-            });
-            if settled {
-                untracked(|| {
-                    self.reduce(self.agents, |state, feed, _, _| state.settle_controls(feed))
+            self.feed.with(|_| ());
+            untracked(|| {
+                let (sessions, agents, effects) = self.feed.with_untracked(|feed| {
+                    let mut sessions = self.session.with_untracked(Clone::clone);
+                    sessions.settle(feed);
+                    let sessions = self
+                        .session
+                        .with_untracked(|now| *now != sessions)
+                        .then_some(sessions);
+                    let mut agents = self.agents.with_untracked(Clone::clone);
+                    let effects = agents.settle(feed);
+                    let agents = self
+                        .agents
+                        .with_untracked(|now| *now != agents)
+                        .then_some(agents);
+                    (sessions, agents, effects)
                 });
-            }
+                if let Some(sessions) = sessions {
+                    self.session.update(|state| *state = sessions);
+                }
+                if let Some(agents) = agents {
+                    self.agents.update(|state| *state = agents);
+                }
+                self.run(effects);
+            });
         });
     }
 }

@@ -28,7 +28,7 @@ use crate::model::commands::Action;
 use crate::model::{
     Act, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay, SettingsSection,
     SidebarPref, Snapshot, ThemeChoice, agents, artifacts, assistant, daemon, plans, review,
-    settings, timeline, usage, work,
+    session, settings, timeline, usage, work,
 };
 
 const DESTINATION_KEY: &str = "corral.destination";
@@ -48,7 +48,6 @@ pub struct AppState {
     daemon_feed: Signal<daemon::Feed>,
     /// Invalidates a system picker opened before a data-source change.
     source_revision: Signal<u64>,
-    pub ask_draft: Signal<String>,
     /// Grows by one each time Ask opens, so the composer focuses its field.
     pub ask_focus: Signal<u32>,
     /// The test id of a control a direct key asked to take the keyboard focus (`Effect::Focus`),
@@ -60,6 +59,8 @@ pub struct AppState {
     pub usage: Signal<usage::State>,
     pub artifacts: Signal<artifacts::State>,
     pub agents: source::StateSource<agents::State>,
+    /// Every session page's UI state (tab, draft, this device's sends), kept for the app's life.
+    pub session: source::StateSource<session::State>,
     pub review: source::StateSource<review::State>,
     pub settings: source::StateSource<settings::State>,
     pub assistant: source::StateSource<assistant::State>,
@@ -156,7 +157,6 @@ impl AppState {
                 preference(THEME_KEY, ThemeChoice::from_slug).unwrap_or(ThemeChoice::System),
             ),
             sidebar: signal(preference(SIDEBAR_KEY, SidebarPref::from_slug).unwrap_or_default()),
-            ask_draft: signal(String::new()),
             ask_focus: signal(0),
             focus_to: signal(None),
             work: source::StateSource::new(
@@ -192,6 +192,17 @@ impl AppState {
                 },
                 agents::State {
                     ids: crate::model::id::IdSupply::new(format!("{namespace}-af")),
+                    ..Default::default()
+                },
+            ),
+            session: source::StateSource::new(
+                data,
+                session::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-ed")),
+                    ..Default::default()
+                },
+                session::State {
+                    ids: crate::model::id::IdSupply::new(format!("{namespace}-ef")),
                     ..Default::default()
                 },
             ),
@@ -266,7 +277,8 @@ impl AppState {
         app.watch_receipts();
         app.follow_sidebar();
         app.follow_projects();
-        app.settle_controls();
+        app.follow_sessions();
+        app.follow_agents_show();
         app.settle_config();
         app.follow_cached_feed();
         app.watch_device_receipts();
@@ -378,7 +390,7 @@ impl AppState {
 
     /// Sets the draft, then opens Ask with the field focused.
     pub fn open_ask_with(&self, text: &str) {
-        self.ask_draft.set(text.to_owned());
+        self.set_ask_draft(text.to_owned());
         self.open_ask();
     }
 
@@ -421,20 +433,27 @@ impl AppState {
             self.agents.update(|state| state.rewind = None);
             return;
         }
-        if self.ask_field.with_untracked(Option::is_some) {
-            self.close_attach_field();
+        if self.agents.with_untracked(|state| state.start.open) {
+            let filter =
+                untracked(|| self.project_filter(crate::model::projects::FilterScreen::Agents));
+            self.reduce(self.agents, |state, feed, _, _| {
+                state.act(
+                    agents::Action::Start(agents::StartAction::Close),
+                    feed,
+                    &filter,
+                )
+            });
             return;
         }
-        let mut closed = false;
-        self.assistant.update(|state| closed = state.close_menu());
-        if closed {
+        if self.ask_field.with_untracked(Option::is_some) {
+            self.close_attach_field();
             return;
         }
         if let Some(overlay) = self.nav.with_untracked(NavState::newest) {
             self.close(overlay);
             return;
         }
-        if self.clear_page_selection() {
+        if self.clear_page_selection() || self.escape_session() {
             return;
         }
         if !self.close_sidebar_peek() {
@@ -475,7 +494,6 @@ impl AppState {
                 self.unattach(&upload);
             }
             self.ask_staged.set(Vec::new());
-            self.ask_draft.set(String::new());
             self.ask_context.set(None);
             self.project_context_removed.set(None);
             self.change(|nav| {
@@ -589,7 +607,21 @@ impl AppState {
                 Some(text) => self.open_ask_with(&text),
                 None => self.open_ask(),
             },
-            Action::ToggleSession => self.toggle_session(),
+            Action::NewBuild => {
+                self.go(Destination::Agents);
+                let filter =
+                    untracked(|| self.project_filter(crate::model::projects::FilterScreen::Agents));
+                self.reduce(self.agents, |state, feed, _, _| {
+                    state.act(
+                        agents::Action::Start(agents::StartAction::Open),
+                        feed,
+                        &filter,
+                    )
+                });
+            }
+            Action::NewAssistant => self.reduce(self.assistant, |state, feed, _, _| {
+                state.act_live(assistant::Action::NewSession, feed)
+            }),
             Action::Theme(theme) => self.set_theme(theme),
             Action::Data(data) => self.set_data(data),
             Action::Hotkey => self.hotkey.set(true),
@@ -605,6 +637,9 @@ impl AppState {
             Action::Work(press) => self.reduce(self.work, |state, feed, _, env| {
                 state.press(press, feed, env)
             }),
+            Action::Session(action) => {
+                self.reduce(self.session, |state, feed, _, _| state.act(action, feed))
+            }
         }
     }
 
@@ -649,25 +684,6 @@ impl AppState {
             remember(THEME_KEY, choice.slug());
         });
         effect(move || remember(SIDEBAR_KEY, self.sidebar.get().slug()));
-    }
-
-    /// Switches the selected session between its shared transcript and terminal views.
-    fn toggle_session(&self) {
-        if !untracked(|| self.daemon()) {
-            return;
-        }
-        let selected = self.nav.with_untracked(|nav| nav.selection.session.clone());
-        let Some(session) = selected else {
-            return;
-        };
-        self.feed.with_untracked(|feed| {
-            self.agents
-                .update(|state| state.toggle_view(feed, session.as_str()))
-        });
-        let live = crate::model::Live::Session(session);
-        if self.nav.with_untracked(|nav| nav.live() != Some(&live)) {
-            self.open_live(live);
-        }
     }
 }
 

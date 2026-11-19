@@ -2,6 +2,11 @@
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { EventLog, EVENT_MAX_BYTES, type EventPage } from "../bridge/events.ts";
 import type { FleetSnapshot } from "../build/types.ts";
+import type { HelperInspection } from "../extensions/subagent/inspection.ts";
+import { boundFleet, projectFleet, type SessionFleet } from "./remote/fleet.ts";
+import type { LiveInput } from "./remote/input.ts";
+import { boundState, type Activity, type Counts, type HostNotice, type SessionPart,
+  type BoundedSessionState, type SessionState, type StateProjection } from "./remote/state.ts";
 import { utf8Prefix } from "../roles/assistant/owner-action.ts";
 
 // JSON escaping can multiply a payload by six; leave room inside the 8 KiB event bound.
@@ -37,15 +42,10 @@ function outputTail(value: unknown): string | undefined {
   return tail;
 }
 
-/** App-only replacement projection: never includes child prompts, paths or reports. */
-export interface SessionFleet {
-  children: { id: string; kind: string; title: string; state: string; model: string;
-    started_at?: number; ended_at?: number; activity?: string; tokens: number; cost_usd?: number;
-    verdict?: "approve" | "changes"; question?: boolean }[];
-  messages: { seq: number; at: number; from: string; to: string; text: string; delivery: string }[];
-  messages_total: number;
-  max_parallel: number;
-}
+export type { SessionFleet } from "./remote/fleet.ts";
+const STATE_INTERVAL_MS = 250;
+const NOTICE_MS = 8_000;
+const PAGE_BYTES = 56 * 1024;
 
 export class LiveEvents {
   readonly events: EventLog;
@@ -58,6 +58,19 @@ export class LiveEvents {
   private fleet: SessionFleet | undefined;
   private fleetJson = "";
   private fleetSeq = 0;
+  private fleetBytes = 0;
+  private childrenJson = "[]";
+  childCounts: Counts = { live: 0, waiting: 0, total: 0 };
+  activity: Activity | undefined;
+  private readState: (() => StateProjection) | undefined;
+  private state: BoundedSessionState | undefined;
+  private stateSeq = 0;
+  private sampledAt = -Infinity;
+  private stateTimer: ReturnType<typeof setTimeout> | undefined;
+  private noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  private noticeId = 0;
+  private hostNotices: HostNotice[] = [];
+  private readonly parts = new Map<SessionPart, string>();
 
   constructor(capacity = 512) {
     this.events = new EventLog(capacity);
@@ -65,52 +78,118 @@ export class LiveEvents {
 
   rewound(turn: number): void {
     this.events.invalidate("live_rewind", { turn });
+    this.stateChanged();
+  }
+
+  bindState(read: () => StateProjection): void {
+    this.readState = read;
+    this.refreshState();
+  }
+
+  stateChanged(): void {
+    if (!this.readState || this.stateTimer) return;
+    const wait = Math.max(0, Math.ceil(this.sampledAt + STATE_INTERVAL_MS - performance.now()));
+    // Even when the cooldown elapsed, let the SDK finish the synchronous mutation first.
+    this.stateTimer = setTimeout(() => this.refreshState(), wait);
+    this.stateTimer.unref();
+  }
+
+  private refreshState(): void {
+    clearTimeout(this.stateTimer);
+    this.stateTimer = undefined;
+    if (!this.readState) return;
+    this.sampledAt = performance.now();
+    const { state, parts } = this.readState();
+    for (const part of Object.keys(parts) as SessionPart[]) this.observePart(part, parts[part]);
+    const next = boundState(state);
+    if (this.state?.json === next.json) return;
+    this.state = next;
+    this.stateSeq = this.events.emit("live_state").seq;
+  }
+
+  observePart(part: SessionPart, value: unknown): void {
+    const json = JSON.stringify(value ?? null);
+    const previous = this.parts.get(part);
+    if (json === previous) return;
+    this.parts.set(part, json);
+    if (previous !== undefined) this.events.emit("live_part", { part });
+  }
+
+  input(event: LiveInput): void {
+    this.events.emit("live_input", event);
+    if (event.state === "queued" || event.state === "started" || event.state === "withdrawn") this.stateChanged();
+  }
+
+  entry(): void {
+    this.events.emit("live_entry");
+    this.stateChanged();
+  }
+
+  note(tone: HostNotice["tone"], text: string, at: number): void {
+    this.hostNotices = [...this.hostNotices.slice(-3), { id: `note-${++this.noticeId}`, tone, text: utf8Prefix(text, 240),
+      until: new Date(at + NOTICE_MS).toISOString() }];
+    this.expireNotices();
+    this.stateChanged();
+  }
+
+  get notices(): HostNotice[] { return this.hostNotices; }
+
+  private expireNotices(): void {
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = undefined;
+    const now = Date.now();
+    const active = this.hostNotices.filter(notice => Date.parse(notice.until!) > now);
+    if (active.length !== this.hostNotices.length) {
+      this.hostNotices = active;
+      this.stateChanged();
+    }
+    if (active[0]) {
+      this.noticeTimer = setTimeout(() => this.expireNotices(), Date.parse(active[0].until!) - now);
+      this.noticeTimer.unref();
+    }
+  }
+
+  close(): void {
+    clearTimeout(this.stateTimer);
+    clearTimeout(this.noticeTimer);
+    this.readState = undefined;
   }
 
   /** Initially empty fleets stay silent; an empty replacement after activity is a sequenced clear. */
-  observeFleet(snapshot: FleetSnapshot | undefined): void {
-    if (!snapshot || !this.fleet && !snapshot.children.length && !snapshot.mail.length) return;
-    const fleet: SessionFleet = {
-      children: snapshot.children.map(child => ({
-        id: child.id, kind: child.kind, title: child.title.slice(0, 256), state: child.state,
-        model: child.model.slice(0, 128),
-        ...(child.startedAt === undefined ? {} : { started_at: child.startedAt }),
-        ...(child.endedAt === undefined ? {} : { ended_at: child.endedAt }),
-        // Runtime activity includes tool arguments (often paths); expose only the tool name.
-        ...(child.activity ? { activity: child.activity.split(/\s/, 1)[0]!.slice(0, 64) } : {}),
-        tokens: child.usage.input + child.usage.output,
-        ...(child.usage.cost === undefined ? {} : { cost_usd: child.usage.cost }),
-        ...(child.verdict ? { verdict: child.verdict.verdict } : {}),
-        ...(child.question ? { question: true } : {}),
-      })),
-      messages: snapshot.mail.slice(-100).map(message => ({
-        seq: message.seq, at: message.at, from: message.from.slice(0, 128), to: message.to.slice(0, 128),
-        text: Array.from(message.text).slice(0, 2048).join(""), delivery: message.delivery,
-      })),
-      messages_total: snapshot.mail.at(-1)?.seq ?? 0, max_parallel: snapshot.maxParallel,
-    };
+  observeFleet(snapshot: FleetSnapshot | undefined, helpers?: readonly HelperInspection[]): void {
+    if (!this.fleet && !snapshot?.children.length && !snapshot?.mail.length && !helpers?.length) return;
+    const projection = projectFleet(snapshot, helpers);
+    this.childCounts = projection.counts;
+    const fleet = boundFleet(projection.fleet);
     const json = JSON.stringify(fleet);
-    if (json === this.fleetJson) return;
-    this.fleet = fleet;
-    this.fleetJson = json;
-    this.fleetSeq = this.events.emit("live_fleet").seq;
+    if (json !== this.fleetJson) {
+      this.fleet = fleet;
+      this.fleetJson = json;
+      this.fleetBytes = Buffer.byteLength(json);
+      this.fleetSeq = this.events.emit("live_fleet").seq;
+    }
+    const children = JSON.stringify(projection.fleet.children);
+    if (children !== this.childrenJson) {
+      this.childrenJson = children;
+      this.events.emit("live_part", { part: "children" });
+    }
   }
 
-  since(seq: number, maxBytes: number): EventPage & { fleet?: SessionFleet } {
-    const initial = this.events.since(seq, maxBytes);
-    if (!this.fleet || seq >= this.fleetSeq && !initial.gap) return initial;
-    const fleet = { ...this.fleet, children: [...this.fleet.children], messages: [...this.fleet.messages] };
-    // Leave room for at least one intact event and JSON field punctuation.
-    const first = initial.events[0];
-    const required = first?.kind === "owner_prompt" ? Buffer.byteLength(JSON.stringify(first)) : EVENT_MAX_BYTES;
-    const budget = Math.max(0, maxBytes - required - 256);
-    let size = Buffer.byteLength(JSON.stringify(fleet));
-    while (size > budget && (fleet.messages.length || fleet.children.length)) {
-      if (fleet.messages.length) fleet.messages.shift();
-      else fleet.children.shift();
-      size = Buffer.byteLength(JSON.stringify(fleet));
-    }
-    return { ...this.events.since(seq, maxBytes - size - 16), fleet };
+  since(seq: number, maxBytes: number): EventPage & { fleet?: SessionFleet; state?: SessionState } {
+    if (this.stateTimer && performance.now() >= this.sampledAt + STATE_INTERVAL_MS) this.refreshState();
+    const initial = this.events.since(seq, 0, 1);
+    const fleet = initial.gap || seq < this.fleetSeq ? this.fleet : undefined;
+    const state = initial.gap || seq < this.stateSeq ? this.state : undefined;
+    const budget = Math.min(maxBytes, PAGE_BYTES) - (fleet ? this.fleetBytes : 0) - (state?.bytes ?? 0) - 256;
+    const page = this.events.since(seq, budget, 32);
+    // Older owner prompts may carry a full question larger than a live event. Preserve its identity
+    // and status so a reader can reread the canonical card; keep both replacements in the page.
+    const events = page.events.map(event => {
+      if (event.kind !== "owner_prompt" || Buffer.byteLength(JSON.stringify(event)) <= EVENT_MAX_BYTES) return event;
+      const { prompts: _prompts, ...brief } = event;
+      return { ...brief, omitted: "event_too_large" };
+    });
+    return { ...page, events, ...(fleet ? { fleet } : {}), ...(state ? { state: state.state } : {}) };
   }
 
   /** Called after HostSession updates its turn sequence for this same upstream event. */
@@ -123,9 +202,13 @@ export class LiveEvents {
         this.error = undefined;
         this.toolCompletions.length = 0;
         this.awaitingMessagePersistence = false;
+        this.activity = { phase: "working", since: new Date().toISOString() };
+        this.stateChanged();
         this.events.emit("live_turn", { turn, state: "started" });
         break;
       case "agent_settled":
+        this.activity = undefined;
+        this.stateChanged();
         // Settlement also runs after a failed message append; that is not a replay barrier.
         if (this.awaitingMessagePersistence) break;
         this.events.emit("live_turn", { turn, state: "ended", aborted: event.aborted,
@@ -153,6 +236,8 @@ export class LiveEvents {
         }
         break;
       case "tool_execution_start":
+        this.activity = { phase: utf8Prefix(event.toolName, 96), since: new Date().toISOString() };
+        this.stateChanged();
         this.events.emit("live_tool", { turn, call: event.toolCallId, tool: event.toolName,
           state: "started", ...argumentsText(event.args) });
         break;
@@ -163,6 +248,8 @@ export class LiveEvents {
         break;
       }
       case "tool_execution_end":
+        this.activity = { phase: "working", since: new Date().toISOString() };
+        this.stateChanged();
         this.toolCompletions.push({ turn, call: event.toolCallId, tool: event.toolName,
           state: "ended", failed: event.isError,
           ...(event.durationMs === undefined ? {} : { elapsed_ms: event.durationMs }) });
@@ -172,10 +259,20 @@ export class LiveEvents {
         // turn_end; tool_execution_end and message_end public listeners are both too early.
         this.awaitingMessagePersistence = false;
         for (const completion of this.toolCompletions) this.events.emit("live_tool", completion);
+        this.stateChanged();
         this.toolCompletions.length = 0;
         break;
       case "queue_update":
         this.events.emit("live_queue", { steer: event.steering.length, follow_up: event.followUp.length });
+        this.stateChanged();
+        break;
+      case "compaction_start":
+        this.activity = { phase: "compacting", since: new Date().toISOString() };
+        this.stateChanged();
+        break;
+      case "compaction_end":
+        this.activity = this.activity?.phase === "compacting" ? undefined : this.activity;
+        this.stateChanged();
         break;
     }
   }

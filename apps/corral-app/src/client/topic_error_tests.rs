@@ -38,13 +38,13 @@ fn failure(core: &mut Core, scope: &str) {
     receive(
         core,
         json!({"jsonrpc":"2.0","method":"sub.reset","params":{
-            "topic":"thread","scope":scope,"epoch":1
+            "topic":"session","scope":scope,"epoch":1
         }}),
     );
     receive(
         core,
         json!({"jsonrpc":"2.0","id":null,"error":{
-            "code":"unavailable","message":"thread source is unavailable"
+            "code":"unavailable","message":"session source is unavailable"
         }}),
     );
 }
@@ -61,19 +61,19 @@ fn scoped_reset_errors_surface_and_bound_reopens_until_explicit_retry_or_delta()
         failure(&mut core, "A-3");
         publish(&mut core, &mut state, feed);
         feed.with_untracked(|feed| {
-            let error = feed.topics["thread:A-3"]
+            let error = feed.topics["session:A-3"]
                 .error
                 .as_ref()
                 .expect("scoped source error must reach the feed");
             assert_eq!(error.code, "unavailable");
-            assert_eq!(error.message, "thread source is unavailable");
-            assert!(!feed.topics.contains_key("thread:A-4"));
+            assert_eq!(error.message, "session source is unavailable");
+            assert!(!feed.topics.contains_key("session:A-4"));
         });
         reopened += drain_opens(&mut core);
     }
     assert_eq!(reopened, usize::from(MAX_TOPIC_RESET_ERRORS));
-    assert!(!feed.with_untracked(|feed| feed.threads["A-3"].loading));
-    // A stopped scope cannot suppress another thread's independent recovery.
+    assert!(!feed.with_untracked(|feed| feed.topics["session:A-3"].loading));
+    // A stopped scope cannot suppress another session's independent recovery.
     failure(&mut core, "A-4");
     publish(&mut core, &mut state, feed);
     assert_eq!(drain_opens(&mut core), 1);
@@ -81,7 +81,7 @@ fn scoped_reset_errors_surface_and_bound_reopens_until_explicit_retry_or_delta()
     // An explicit same-scope open is the owner's retry, not another automatic loop.
     core.request(
         wire::SUB_OPEN,
-        json!({"topic":"thread","scope":"A-3","since":null}),
+        json!({"topic":"session","scope":"A-3","since":null}),
         0,
     )
     .unwrap();
@@ -92,15 +92,22 @@ fn scoped_reset_errors_surface_and_bound_reopens_until_explicit_retry_or_delta()
         assert_eq!(drain_opens(&mut core), 1);
     }
     // A real delta also starts a fresh failure streak and clears the displayed error.
+    state.request(
+        feed,
+        crate::client::requests::ClientRequest::Watch {
+            session: "A-3".into(),
+            on: true,
+        },
+    );
     receive(
         &mut core,
         json!({"jsonrpc":"2.0","method":"sub.delta","params":{
-            "topic":"thread","scope":"A-3","epoch":1,"rows":[],"left":[],
-            "cursor":{"rev":1,"after":null},"more":false,"live":null
+            "topic":"session","scope":"A-3","epoch":1,"generation":null,"events":[],
+            "cursor":{"rev":1,"after":null},"more":false,"gap":null
         }}),
     );
     publish(&mut core, &mut state, feed);
-    assert!(feed.with_untracked(|feed| feed.topics["thread:A-3"].error.is_none()));
+    assert!(feed.with_untracked(|feed| feed.topics["session:A-3"].error.is_none()));
     drain_opens(&mut core);
     for _ in 0..MAX_TOPIC_RESET_ERRORS.saturating_sub(1) {
         failure(&mut core, "A-3");
@@ -111,7 +118,7 @@ fn scoped_reset_errors_surface_and_bound_reopens_until_explicit_retry_or_delta()
     receive(
         &mut core,
         json!({"jsonrpc":"2.0","method":"sub.reset","params":{
-            "topic":"thread","scope":"A-7","epoch":1
+            "topic":"session","scope":"A-7","epoch":1
         }}),
     );
     receive(
@@ -128,20 +135,20 @@ fn scoped_reset_errors_surface_and_bound_reopens_until_explicit_retry_or_delta()
         }}),
     );
     publish(&mut core, &mut state, feed);
-    assert!(feed.with_untracked(|feed| feed.topics["thread:A-7"].error.is_none()));
+    assert!(feed.with_untracked(|feed| feed.topics["session:A-7"].error.is_none()));
     receive(
         &mut core,
         json!({"jsonrpc":"2.0","method":"sub.reset","params":{
-            "topic":"thread","scope":"A-8","epoch":1
+            "topic":"session","scope":"A-8","epoch":1
         }}),
     );
     failure(&mut core, "A-9");
     publish(&mut core, &mut state, feed);
-    assert!(feed.with_untracked(|feed| feed.topics["thread:A-8"].error.is_none()));
-    assert!(feed.with_untracked(|feed| feed.topics["thread:A-9"].error.is_some()));
+    assert!(feed.with_untracked(|feed| feed.topics["session:A-8"].error.is_none()));
+    assert!(feed.with_untracked(|feed| feed.topics["session:A-9"].error.is_some()));
     drain_opens(&mut core);
-    let key = "thread:A-9";
-    let scope = json!({"topic":"thread","scope":"A-9"});
+    let key = "session:A-9";
+    let scope = json!({"topic":"session","scope":"A-9"});
     core.request(wire::SUB_CLOSE, scope.clone(), 0).unwrap();
     let close: Request = serde_json::from_slice(&core.take_outbox().unwrap().payload).unwrap();
     assert!(core.pages.contains_key(key));
