@@ -27,13 +27,20 @@ import { PROVIDERS, type ProviderId, billingKind, hostDestinations, isApiProvide
 import type { AuthContext, Fetch } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
 import { LiveEvents } from "./live-events.ts";
+import { registerBoard } from "./remote/board.ts";
+import { boundCandidate, RemoteChanges } from "./remote/changes.ts";
+import { archivedChildren, childDetailsChanged, registerChildren } from "./remote/children.ts";
+import { commandsPart, registerCommands, typedSessionAction } from "./remote/commands.ts";
+import { jobsPart, registerJobs } from "./remote/jobs.ts";
+import { ModelCatalogStatus, modelsPart, registerModels } from "./remote/models.ts";
+import { usagePart, usageTotal, type ParentUsage } from "./remote/usage.ts";
+import { contextPart, planHistory, registerWorkspace, WorkspaceGit, type WorkspaceInputs } from "./remote/workspace.ts";
 import { RemoteBuild } from "./remote/build.ts";
 import { cardBrief, cardDetail, questionEntries, questionStatus, sortedCards, type AnswerStatus, type CardEntry } from "./remote/cards.ts";
 import { RemoteDialogs } from "./remote/dialogs.ts";
 import { RemoteRegistry } from "./remote/registry.ts";
 import type { TranscriptInput } from "./remote/input.ts";
-import { boardBrief, capabilities, exitBrief, jobCounts, planBrief, type SessionState,
-  type StateProjection, type UsageBrief } from "./remote/state.ts";
+import { boardBrief, capabilities, exitBrief, jobCounts, planBrief, type SessionState, type StateProjection } from "./remote/state.ts";
 import { utf8Prefix } from "../roles/assistant/owner-action.ts";
 import type { RemoteOwner } from "./remote-owner.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
@@ -41,7 +48,7 @@ import { closeResidentSession, residentLifecycle } from "../claude/resident.ts";
 import { BridgeRefusal, type AnswerInput, type RewindInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
 import { listRewinds, parseRewindCommand, recordRewind, restoreRewind, rewindPoint } from "./rewind.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
-import type { BuildContext, FleetSnapshot } from "../build/types.ts";
+import type { BuildContext, ChildSnapshot, FleetSnapshot } from "../build/types.ts";
 import { createBuildControls, type BuildControls } from "../build/host-controls.ts";
 import { type CorralClient, type ModelUsage } from "../tools/corral.ts";
 import { observeUsage } from "./model-usage.ts";
@@ -84,6 +91,7 @@ import { JobRuntime } from "../extensions/jobs/runtime.ts";
 import { COMMAND_ENTRY, Commands, type CommandFact } from "../extensions/jobs/commands.ts";
 import { MONITOR_ENTRY, type MonitorFact } from "../extensions/jobs/monitors.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
+import type { HelperInspection } from "../extensions/subagent/inspection.ts";
 import { AuxiliaryRuntime } from "../extensions/subagent/runtime.ts";
 import { auxiliarySettings } from "../extensions/subagent/settings.ts";
 import { expertTool, exploreTool } from "../extensions/subagent/index.ts";
@@ -307,12 +315,20 @@ export class HostSession {
   private readonly queuedInputFacts = new WeakMap<object, { facts: TranscriptInput; transcriptId?: string }>();
   private startedInputFacts: { facts: TranscriptInput; transcriptId?: string } | undefined;
   private unobserveTranscript: (() => void) | undefined;
-  private remoteUsage: { leaf: string | null; model: AgentSession["model"]; usage: UsageBrief } | undefined;
+  private remoteUsage: { leaf: string | null; model: AgentSession["model"]; usage: ParentUsage } | undefined;
   private remoteFleetDirty = true;
   private remoteFleet: FleetSnapshot | undefined;
+  private remoteChildPart: unknown;
+  private remoteHelpers: readonly HelperInspection[] = [];
   readonly liveEvents: LiveEvents;
   readonly remoteRegistry = new RemoteRegistry();
   readonly remoteBuild: RemoteBuild;
+  private readonly remoteChanges: RemoteChanges;
+  private readonly workspaceGit: WorkspaceGit;
+  private readonly archivedFleet: readonly ChildSnapshot[];
+  private readonly remoteDefaultModel: string;
+  private readonly remoteCatalog = new ModelCatalogStatus();
+  private remoteJobSample: ReturnType<typeof setTimeout> | undefined;
   private readonly remoteDialogs: RemoteDialogs;
   readonly panels: NativePanels | undefined;
   private readonly unsubscribePanels: (() => void) | undefined;
@@ -395,6 +411,24 @@ export class HostSession {
     this.remoteDialogs = new RemoteDialogs(() => this.liveEvents.stateChanged());
     this.provider = options.provider ?? "openai-codex";
     this.local = new LocalControlPlane(options.build?.dir ?? options.runtimeDir ?? options.agentDir, options.identity);
+    this.remoteDefaultModel = options.model.startsWith(`${this.provider}/`) ? options.model : `${this.provider}/${options.model}`;
+    const { task, run } = options.identity, buildSession = options.build?.session;
+    const reviewBases = persistedBases(
+      () => options.sessionManager.getEntries().flatMap(entry => entry.type === "custom" && entry.customType === REVIEW_BASE_ENTRY ? [entry.data] : []),
+      data => options.sessionManager.appendCustomEntry(REVIEW_BASE_ENTRY, data));
+    this.workspaceGit = new WorkspaceGit(options.cwd, () => this.liveEvents.stateChanged());
+    this.archivedFleet = options.build ? archivedChildren(join(options.build.dir, "journal.json")) : [];
+    this.remoteChanges = new RemoteChanges({
+      cwd: options.cwd, defaultComparison: task && run && options.client.configured ? "candidate" : "session",
+      scopeRequired: options.client.configured && options.identity.role === "assistant" && !options.identity.project,
+      bases: { get: root => (root === this.workspaceGit.worktree ? buildSession?.base : undefined) ?? reviewBases.get(root), set: reviewBases.set },
+      children: () => this.readRemoteFleet()?.children ?? [],
+      ...(options.client.configured ? {
+        projects: () => options.client.projectScopes(),
+        ...(task && run ? { candidate: async () => boundCandidate(await options.client.taskSnapshot(), task, run) } : {}),
+      } : {}),
+      changed: () => this.liveEvents.stateChanged(),
+    });
     this.remotePrompts = new RemotePrompts(this.liveEvents.events);
     this.marks = { add: mark => this.addMark(mark) };
     this.turnFacts = new TurnFacts(this.marks);
@@ -446,9 +480,7 @@ export class HostSession {
         ? { projectDir: options.guidance.projectDir } : {}),
       readProjects: () => options.client.projectScopes(),
       jobControl: (target, action) => this.controlJob?.(target, action) ?? Promise.resolve({ state: "denied", reason: "managed commands are unavailable" }),
-      reviewBases: persistedBases(
-        () => options.sessionManager.getEntries().flatMap(entry => entry.type === "custom" && entry.customType === REVIEW_BASE_ENTRY ? [entry.data] : []),
-        data => options.sessionManager.appendCustomEntry(REVIEW_BASE_ENTRY, data)),
+      reviewBases,
       canRenderTool: name => exploreLoadout(this.loadout).includes(name),
       artifacts: () => options.client.artifacts(),
       artifactFile: reference => options.client.artifactFile(reference),
@@ -683,7 +715,6 @@ export class HostSession {
           ...(this.currentTurn() === undefined ? {} : { turn: this.currentTurn() }) }, failed);
       },
     }) : undefined;
-    const run = options.identity.run;
     if (options.capabilities?.enabled.includes("checkpoints") === true) {
       if (options.identity.role !== "worker" || !run) throw new Error("module_invalid: checkpoints needs a worker run");
       this.checkpoints = new Checkpoints({
@@ -809,6 +840,7 @@ export class HostSession {
     }
     if (isApiProvider(route.id)) assertApiEffort(model, options.effort);
     host.auxiliaryModels = models;
+    host.remoteCatalog.observe(models, () => host.liveEvents.stateChanged());
     host.summaryRequest = await createSummaryRequest(options, report);
     const interactive = interactiveModels(options.identity.role);
     host.buildProviders = interactive ? providers : [route.id];
@@ -989,6 +1021,8 @@ export class HostSession {
     this.ledger = this.loadout.includes("corral_todo")
       ? new TodoLedger(this.options.identity, async () => this.local.todoSnapshot()) : undefined;
     this.ledger?.extend(pi);
+    const unsubscribeLedger = this.ledger?.onChange(() => { this.liveEvents.stateChanged(); this.panels?.refresh(); });
+    if (unsubscribeLedger) pi.on("session_shutdown", () => { unsubscribeLedger(); });
     for (const spec of specs) {
       const tool = defineCorralTool(spec, {
         client: this.options.client, identity: this.options.identity,
@@ -1031,9 +1065,7 @@ export class HostSession {
         job: id => this.commands?.inspection().find(job => job.job === id),
         code: () => this.code, ledger: () => this.ledger, ...(openView ? { openView } : {}),
       });
-      const unsubscribe = this.ledger?.onChange(() => { this.liveEvents.stateChanged(); this.panels?.refresh(); });
       pi.on("session_shutdown", (event) => {
-        unsubscribe?.();
         if (event.reason !== "reload") { this.unsubscribePanels?.(); this.panels?.dispose(); }
       });
     }
@@ -1283,6 +1315,7 @@ export class HostSession {
           ? providerErrorClass(message) : failureClass(failure),
           ...(provider === "amazon-bedrock" || provider === "llama.cpp" ? {} : { failure }) });
       }
+      if (event.type === "tool_execution_end" || event.type === "agent_settled") void this.workspaceGit.refresh();
       this.liveEvents.observe(event, this.turn);
     });
     this.options.events.emit("session_bound", { session_id: session.sessionId });
@@ -1371,6 +1404,65 @@ export class HostSession {
 
   get remoteActionsReady(): boolean { return this.bound && !this.closing && !this.rewinding; }
 
+  installRemoteParts(): void {
+    const registry = this.remoteRegistry, build = this.buildControls, commands = this.commands;
+    if (this.servesChildren) registerChildren(registry, {
+      snapshot: () => this.readRemoteFleet(), helpers: () => this.auxiliary?.inspections() ?? [],
+      fleet: () => build?.fleet ?? this.fleet, ready: () => this.remoteActionsReady,
+    });
+    registerJobs(registry, {
+      list: () => jobsPart(commands, action => this.remoteJobAllowed(action)),
+      read: commands ? (job, args) => {
+        if (!commands.owns(job) && !commands.recovered().some(row => row.job === job)) {
+          throw new BridgeRefusal("job_missing", "No such job in this session");
+        }
+        return commands.output(job, args);
+      } : undefined,
+      act: async (job, action) => this.remoteActionsReady && this.controlJob
+        ? this.controlJob({ job, session: this.sessionId() }, action) : { state: "denied", reason: "Session is not accepting job actions" },
+    });
+    this.remoteChanges.register(registry);
+    registry.register({ name: "usage", parse: () => undefined, run: () => usagePart(
+      this.remoteUsageBrief(), this.readRemoteFleet()?.children ?? [], this.selection?.model,
+      this.session.supportsThinking() ? this.session.thinkingLevel : undefined, build ? this.panelSnapshot() ?? undefined : undefined,
+      this.remoteHelpers,
+    ) });
+    const ledger = this.ledger;
+    registerWorkspace(registry, {
+      context: () => this.remoteContext(), git: this.workspaceGit, ledger: ledger ? () => this.ledger ?? ledger : undefined,
+      history: () => planHistory(join(this.options.build?.dir ?? this.options.runtimeDir ?? this.options.agentDir, "todo.json")),
+    });
+    registerModels(registry, () => modelsPart(this.session, this.remoteDefaultModel, interactiveModels(this.options.identity.role), this.remoteCatalog));
+    if (build) registerBoard(registry, {
+      board: build.board, record: build.ui.record, ready: () => this.remoteActionsReady,
+      unavailable: build.board && this.options.build?.session.workspaceRoot ? undefined : "This build has no board connection",
+    });
+    registerCommands(registry, {
+      list: () => this.remoteCommands(),
+      ready: () => this.remoteActionsReady && !this.open && !this.session.isStreaming && !this.session.isCompacting,
+      compact: instructions => this.session.compact(instructions),
+      export: this.exportable() ? () => this.reportedExport() : undefined,
+    });
+  }
+
+  private remoteCommands() {
+    return commandsPart(this.remoteRegistry, { extensions: this.session.extensionRunner.getRegisteredCommands(),
+      prompts: this.session.promptTemplates, rewind: this.checkpoints !== undefined,
+      skills: this.settings.enableSkillCommands ? this.runtime.services.resourceLoader.getSkills().skills : [] });
+  }
+
+  private remoteContext(): WorkspaceInputs {
+    const { worktree, branch } = this.workspaceGit;
+    return { cwd: this.options.cwd, worktree, branch, context_files: this.guidance.contextFiles.map(file => file.path),
+      skills: this.runtime.services.resourceLoader.getSkills().skills.map(skill => skill.name),
+      prompts: this.session.promptTemplates.map(prompt => prompt.name), tools: this.session.getActiveToolNames(), mcp: this.mcp?.state() };
+  }
+
+  private remoteJobAllowed(action: "stop" | "background"): boolean {
+    const tool = action === "stop" ? "job_kill" : "bash";
+    return this.remoteActionsReady && this.loadout.includes(tool) && this.session.getActiveToolNames().includes(tool);
+  }
+
   remoteUiContext() {
     return this.remoteDialogs.context(this.session.extensionRunner.getUIContext(), (text, tone) => {
       this.addMark({ kind: "note", at: Date.now(), text, tone: tone === undefined || tone === "info" ? "text" : tone });
@@ -1429,6 +1521,9 @@ export class HostSession {
     if (this.open) this.stopCause ??= "host";
     this.closing = true;
     this.remoteDialogs.close();
+    clearTimeout(this.remoteJobSample);
+    this.remoteChanges.close();
+    this.workspaceGit.close();
     this.liveEvents.stateChanged();
     // Close both resource admission barriers synchronously, even if another cleanup fails.
     const resources = this.stopManagedResources();
@@ -1481,6 +1576,9 @@ export class HostSession {
     this.options.herdr?.bind({ sessionId, sessionFile });
     this.options.events.emit("bound", { session_id: sessionId });
     this.commands?.bound(commandFacts, monitorFacts);
+    await this.workspaceGit.refresh();
+    await this.remoteChanges.captureBase(this.workspaceGit.worktree);
+    await this.ledger?.restore().catch(() => false);
     await this.questionUi?.recover();
   }
 
@@ -1511,6 +1609,13 @@ export class HostSession {
     if (input.origin === "owner") this.buildControls?.noteOwnerInput(source?.text ?? input.text);
     const socketId = input.inputId ?? source?.requestId;
     const transcriptId = input.inputId ?? (input.origin === "owner" ? source?.requestId : undefined);
+    if (input.origin === "owner" && (input.inputId || source?.requestId) && !source?.pane && !images?.length && !input.attachments?.length) {
+      const action = typedSessionAction(this.remoteRegistry, input.text);
+      if (action) return action.then<SubmitResult, SubmitResult>(result => {
+        if ("text" in result && typeof result.text === "string") this.addMark({ kind: "note", tone: "text", at: Date.now(), text: result.text });
+        return { disposition: "handled" };
+      }, error => ({ disposition: "rejected", reason: utf8Prefix(error instanceof Error ? error.message : String(error), 256) }));
+    }
     const tag = this.queue.bridgeInput(input, { ...source, socketId, transcriptId });
     return this.promptInput(input, tag, images);
   }
@@ -1587,7 +1692,9 @@ export class HostSession {
 
   /** Select a model in the provider catalog already configured for this process. */
   async selectRemoteModel(name: string, effort?: string): Promise<void> {
-    if (this.open || this.closing) throw new Error("remote_model_selection_unavailable");
+    if (!this.remoteActionsReady || this.open || this.session.isStreaming || this.session.isCompacting) {
+      throw new BridgeRefusal("remote_model_selection_unavailable", "Wait for the current session action to finish");
+    }
     const slash = name.indexOf("/");
     const provider = slash < 0 ? this.session.model?.provider ?? this.provider : name.slice(0, slash);
     const id = slash < 0 ? name : name.slice(slash + 1);
@@ -1665,7 +1772,12 @@ export class HostSession {
     if (this.remoteFleetDirty) {
       this.remoteFleetDirty = false;
       this.remoteFleet = (this.buildControls?.fleet ?? this.fleet)?.snapshot();
-      this.liveEvents.observeFleet(this.remoteFleet, this.auxiliary?.inspections());
+      if (this.remoteFleet && this.archivedFleet.length) {
+        this.remoteFleet = { ...this.remoteFleet, children: [...this.archivedFleet, ...this.remoteFleet.children] };
+      }
+      this.remoteHelpers = this.auxiliary?.inspections() ?? [];
+      this.liveEvents.observeFleet(this.remoteFleet, this.remoteHelpers);
+      if (this.servesChildren) this.remoteChildPart = childDetailsChanged(this.remoteFleet?.children ?? [], this.remoteHelpers);
     }
     return this.remoteFleet;
   }
@@ -1684,42 +1796,53 @@ export class HostSession {
     const plan = this.ledger ? planBrief(this.ledger) : undefined;
     const jobs = this.commands?.inspection() ?? [];
     const recovered = this.commands?.recovered() ?? [];
-    const usage = this.remoteUsageBrief();
+    const children = this.readRemoteFleet()?.children ?? [];
+    const parent = this.remoteUsageBrief(), usageTotalRow = usageTotal(parent, children, this.remoteHelpers.length > 0);
+    const { context_tokens, context_window, context_percent } = parent;
+    const usage = { tokens: usageTotalRow.tokens, cost_usd: usageTotalRow.cost_usd, cost_partial: usageTotalRow.partial,
+      context_tokens, context_window, context_percent };
+    if (!this.closing && !this.remoteJobSample && jobs.some(job => job.state === "running")) {
+      // Job output can grow outside tool events, including without any complete output line.
+      this.remoteJobSample = setTimeout(() => { this.remoteJobSample = undefined; this.liveEvents.stateChanged(); }, 750);
+      this.remoteJobSample.unref();
+    }
     const state: SessionState = {
       mode: this.attached ?? "headless", turn: this.turn, open: this.open, paused: owner.paused,
       activity: this.liveEvents.activity, last_error: this.turnError ?? undefined, model,
       effort: effort_levels.length ? session.thinkingLevel : undefined, effort_levels, usage,
       queue, queue_total, cards, exit, children: this.liveEvents.childCounts, jobs: jobCounts(jobs, recovered.length),
-      board, plan, notices: this.liveEvents.notices, can: capabilities(this.remoteRegistry, {
-        open: this.open, closing: this.closing, rewind: this.checkpoints !== undefined,
+      board, plan, changes: this.remoteChanges.count, notices: this.liveEvents.notices, can: capabilities(this.remoteRegistry, {
+        open: this.open || session.isStreaming || session.isCompacting, closing: this.closing, rewind: this.checkpoints !== undefined,
       }),
     };
     const journal = this.options.build ? statSync(join(this.options.build.dir, "journal.json"), { throwIfNoEntry: false }) : undefined;
     return { state, parts: {
-      cards: entries.map(entry => cardDetail(entry.card)), jobs: [jobs, recovered], usage,
-      context: [model, usage.context_tokens, usage.context_window, usage.context_percent],
-      plan: [plan, this.ledger?.current?.revision], board: [board, build?.board?.tasks(), build?.board?.proposed()],
-      record: journal ? [journal.ino, journal.mtimeMs, journal.size] : undefined,
-      models: [model, state.effort, effort_levels],
-      commands: [
-        session.extensionRunner.getRegisteredCommands().map(command => [command.invocationName, command.description]),
-        session.promptTemplates.map(prompt => prompt.name),
-        this.runtime.services.resourceLoader.getSkills().skills.map(skill => skill.name),
-      ],
+      cards: entries.map(entry => cardDetail(entry.card)),
+      children: this.remoteChildPart,
+      jobs: [jobsPart(this.commands, action => this.remoteJobAllowed(action), jobs, recovered), this.commands?.state()],
+      changes: this.remoteChanges.version,
+      usage: [model, state.effort, parent, children.map(child => [child.id, child.usage]), this.remoteHelpers.map(helper => helper.request)],
+      context: contextPart(this.remoteContext()),
+      plan: this.ledger ? [this.ledger.current, this.ledger.unavailable, this.ledger.continued] : undefined,
+      board: build?.board ? [build.board.tasks(), build.board.proposed()] : undefined,
+      record: journal ? [journal.ino, journal.mtimeMs, journal.size, this.session.sessionManager.getLeafId()] : undefined,
+      models: modelsPart(session, this.remoteDefaultModel, interactiveModels(this.options.identity.role), this.remoteCatalog),
+      commands: this.remoteCommands(),
     } };
   }
 
-  private remoteUsageBrief(): UsageBrief {
+  private remoteUsageBrief(): ParentUsage {
     const session = this.session, model = session.model;
     const leaf = session.sessionManager.getLeafId();
-    if (this.remoteUsage?.leaf === leaf && this.remoteUsage.model === model) return this.remoteUsage.usage;
+    if (this.remoteUsage?.leaf === leaf && this.remoteUsage.model === model && this.remoteUsage.usage.turns === this.turn) return this.remoteUsage.usage;
     const stats = session.getSessionStats();
     const cost_partial = stats.tokens.total > 0 && session.sessionManager.getEntries().some(entry => {
       if (entry.type !== "message" || entry.message.role !== "assistant") return false;
       const { usage } = entry.message;
       return usage.totalTokens > 0 && (!Number.isFinite(usage.cost.total) || usage.cost.total === 0);
     });
-    const usage: UsageBrief = { tokens: stats.tokens.total, cost_partial,
+    const usage: ParentUsage = { tokens: stats.tokens.total, cost_partial, input: stats.tokens.input,
+      output: stats.tokens.output, turns: this.turn,
       cost_usd: Number.isFinite(stats.cost) && (stats.cost > 0 || !cost_partial) ? stats.cost : undefined,
       context_tokens: stats.contextUsage?.tokens ?? 0, context_window: stats.contextUsage?.contextWindow ?? 0,
       context_percent: stats.contextUsage?.percent ?? undefined };

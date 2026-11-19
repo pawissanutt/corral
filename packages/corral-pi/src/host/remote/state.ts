@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { BridgeRefusal, SESSION_PART_MAX } from "../../bridge/protocol.ts";
 import type { BoardControl, ExitState } from "../../build/types.ts";
 import type { JobInspection } from "../../extensions/jobs/runtime.ts";
 import { utf8Prefix } from "../../roles/assistant/owner-action.ts";
@@ -33,6 +35,64 @@ export interface SessionState {
 
 export type SessionPart = "cards" | "children" | "jobs" | "changes" | "usage" | "plan" | "context" | "board" | "record" | "models" | "commands";
 export interface StateProjection { state: SessionState; parts: Partial<Record<SessionPart, unknown>> }
+
+export const jsonBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value));
+
+/** Keep the original prefix, without splitting a Unicode code point or exceeding its JSON budget. */
+export function clipText(text: string, bytes: number): string {
+  const prefix = utf8Prefix(text, bytes);
+  if (jsonBytes(prefix) - 2 <= bytes) return prefix;
+  let lo = 0, hi = prefix.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (jsonBytes(prefix.slice(0, mid)) - 2 <= bytes) lo = mid; else hi = mid - 1;
+  }
+  return prefix.slice(0, lo).replace(/[\uD800-\uDBFF]$/, "");
+}
+
+export function optionalText(text: string | undefined, bytes: number): string | undefined {
+  return text === undefined ? undefined : clipText(text, bytes);
+}
+
+export const isoTime = (at: number): string => new Date(at).toISOString();
+export const optionalTime = (at: number | undefined): string | undefined => at === undefined ? undefined : isoTime(at);
+export const fingerprintPart = (value: unknown): string =>
+  createHash("sha256").update(JSON.stringify(value)).digest("base64url").slice(0, 22);
+
+export function parseCursor(after: unknown): string | undefined {
+  if (after === undefined) return undefined;
+  if (typeof after !== "string" || Buffer.byteLength(after) > 128) throw new BridgeRefusal("bad_input", "invalid part cursor");
+  return after;
+}
+
+export const partCursor = (key: string, offset: number): string => `${key}.${offset}`;
+export function cursorOffset(after: string, key: string): number {
+  const token = /^([A-Za-z0-9_-]{22})\.(0|[1-9]\d{0,15})$/.exec(after);
+  if (!token || !Number.isSafeInteger(Number(token[2]))) throw new BridgeRefusal("bad_input", "invalid part cursor");
+  if (token[1] !== key) throw new BridgeRefusal("stale_page", "this part changed; read it again from the first page");
+  return Number(token[2]);
+}
+
+/** Admit whole elements, counting JSON delimiters and escaping, not just UTF-8 field lengths. */
+export function fitRows<T>(rows: readonly T[], start: number, count: number, budget: number): T[] {
+  const kept: T[] = [];
+  for (let i = start, end = Math.min(rows.length, start + count); i < end; i++) {
+    const row = rows[i]!;
+    budget -= jsonBytes(row) + Number(kept.length > 0);
+    if (budget < 0) break;
+    kept.push(row);
+  }
+  return kept;
+}
+
+export function pageRows<T>(rows: readonly T[], after: string | undefined, key: string, count: number, overhead: number) {
+  const start = after === undefined ? 0 : cursorOffset(after, key);
+  if (start > rows.length) throw new BridgeRefusal("bad_input", "part cursor is outside the list");
+  const items = fitRows(rows, start, count, SESSION_PART_MAX - overhead - 64);
+  const end = start + items.length;
+  if (!items.length && end < rows.length) throw new BridgeRefusal("response_too_large", "one list element exceeds the part bound");
+  return { items, next: end < rows.length ? partCursor(key, end) : undefined };
+}
 
 export interface BoundedSessionState { state: SessionState; json: string; bytes: number }
 
@@ -76,11 +136,14 @@ export function capabilities(registry: RemoteRegistry, options: { open: boolean;
   if (options.rewind) can.push({ id: "rewind" });
   for (const name of registry.names()) {
     const id = REMOTE_CAPABILITIES[name];
-    if (typeof id === "string") can.push({ id });
+    if (typeof id === "string" && (id !== "board" || registry.get("board_refresh"))) can.push({ id });
   }
   for (const capability of can) {
     if (options.closing) capability.unavailable = "Session is stopping";
-    else if (capability.id === "model" && options.open) capability.unavailable = "Wait for the current turn to finish";
+    else if (capability.id === "jobs" && !registry.get("job_output")) capability.unavailable = "Managed jobs are not enabled";
+    else if (options.open && (capability.id === "model" || capability.id === "compact" || capability.id === "export")) {
+      capability.unavailable = "Wait for the current turn to finish";
+    }
   }
   return can;
 }

@@ -12,6 +12,7 @@ export function installRemote(host: HostSession, owner: RemoteOwner, sessionDir:
     absent: id => host.absentCard(id), beforeQuestion: () => owner.resume(),
   });
   host.remoteBuild.register(host.remoteRegistry);
+  host.installRemoteParts();
   host.remoteRegistry.register({ name: "queue_move", parse: args => {
     const key = parseQueueWithdraw(args), { delta } = args;
     if (delta !== -1 && delta !== 1) throw new BridgeRefusal("bad_input", "delta must be -1 or 1");

@@ -6,7 +6,7 @@ import type { HelperInspection } from "../../extensions/subagent/inspection.ts";
 import { utf8Prefix } from "../../roles/assistant/owner-action.ts";
 import { parseChildId } from "./input.ts";
 import type { RemoteRegistry } from "./registry.ts";
-import type { Counts } from "./state.ts";
+import { jsonBytes, type Counts } from "./state.ts";
 
 export const LIVE_FLEET_BYTES = 32 * 1024;
 
@@ -16,6 +16,11 @@ export interface SessionChild {
   verdict?: "approve" | "changes"; question?: boolean; profile?: string; effort?: string; pending_model?: string;
   turns?: number; context_percent?: number; files?: number; outside?: number; owns?: number;
   after?: readonly string[]; steerable: boolean; error?: string;
+}
+
+export function helperState(helper: HelperInspection): string {
+  return helper.phase === "preparing" ? "queued" : helper.phase === "completed" ? "done"
+    : helper.phase === "uncertain" || helper.phase === "not_started" ? "failed" : helper.phase;
 }
 
 export interface SessionFleet {
@@ -41,8 +46,6 @@ function childRow(child: ChildSnapshot): SessionChild {
   };
 }
 
-const sizeOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
-
 export function projectFleet(snapshot: FleetSnapshot | undefined, helpers: readonly HelperInspection[] = []): {
   fleet: SessionFleet; counts: Counts;
 } {
@@ -54,8 +57,7 @@ export function projectFleet(snapshot: FleetSnapshot | undefined, helpers: reado
     if (child.state === "needs" && child.question) waiting++;
   }
   for (const helper of helpers) {
-    const state = helper.phase === "preparing" ? "queued" : helper.phase === "completed" ? "done"
-      : helper.phase === "uncertain" || helper.phase === "not_started" ? "failed" : helper.phase;
+    const state = helperState(helper);
     if (state === "queued" || state === "running") live++;
     children.push({ id: helper.request, kind: `helper:${helper.kind}`, title: helper.kind, state,
       model: utf8Prefix(helper.model, 512), started_at: helper.startedAt, ended_at: helper.endedAt, tokens: 0, steerable: false,
@@ -75,17 +77,17 @@ export function projectFleet(snapshot: FleetSnapshot | undefined, helpers: reado
 }
 
 export function boundFleet(fleet: SessionFleet, limit = LIVE_FLEET_BYTES): SessionFleet {
-  let bytes = sizeOf({ ...fleet, children: [], messages: [] });
+  let bytes = jsonBytes({ ...fleet, children: [], messages: [] });
   // Newest rows win; all older messages are dropped before dropping any children.
   let firstChild = fleet.children.length, firstMessage = fleet.messages.length;
   while (firstChild > 0) {
-    const cost = sizeOf(fleet.children[firstChild - 1]) + Number(firstChild < fleet.children.length);
+    const cost = jsonBytes(fleet.children[firstChild - 1]) + Number(firstChild < fleet.children.length);
     if (bytes + cost > limit) break;
     bytes += cost;
     firstChild--;
   }
   if (firstChild === 0) while (firstMessage > 0) {
-    const cost = sizeOf(fleet.messages[firstMessage - 1]) + Number(firstMessage < fleet.messages.length);
+    const cost = jsonBytes(fleet.messages[firstMessage - 1]) + Number(firstMessage < fleet.messages.length);
     if (bytes + cost > limit) break;
     bytes += cost;
     firstMessage--;
