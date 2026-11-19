@@ -240,30 +240,35 @@ store.
 ## Contributors
 
 Building from source needs Rust at the manifest's minimum version and the
-native linker toolchain:
+native linker toolchain. The checkout builds the new engine's CLI and daemon:
 
 ```sh
-cargo install --path crates/corral --locked
+cargo install --path crates/corral-next --locked
+cargo install --path crates/corral-daemon --locked    # installs corrald-next
 ```
 
 With [`just`](https://just.systems) installed, the checkout's `justfile` wraps the routine
-steps; `just` alone lists them:
+steps for the new engine; `just` alone lists them:
 
 | Recipe | Does |
 |---|---|
-| `just install` | Builds and installs `corral`, then waits for the running daemon to restart on the new binary |
-| `just upgrade` | `just install`, then `corral agent install` to rebuild the corral-pi host from the same commit |
-| `just daemon-restart` | Drains and stops the daemon, then starts its service again (`daemon-stop`, `daemon-start`) |
+| `just install` | Builds and installs `corral-next` and `corrald-next`, then restarts a running daemon on them |
+| `just upgrade` | `just install`, then `pi-install` and `app-web-install` from the same commit |
+| `just daemon-restart` | Lets the running pass finish, stops the daemon, then starts its service again (`daemon-stop`, `daemon-start`) |
 | `just daemon-status`, `just daemon-logs` | Health, and the service journal |
-| `just daemon-service` | Writes the service definition, then enables and starts it |
-| `just agent-install`, `just agent-doctor` | Reinstalls or reports the corral-pi host |
+| `just daemon-service` | Writes `corrald-next.service` for the workspace, then enables and starts it |
+| `just pair` | Pairs a browser or phone with the daemon |
+| `just pi-install` | Copies `packages/corral-pi` to the data directory, installs its dependencies and writes the `corral-pi` launcher |
+| `just pi-check`, `just pi-test` | Type-checks and tests the corral-pi host |
 | `just app` | Runs the [app](../../apps/corral-app/README.md) in this terminal against the workspace daemon |
-| `just app-web` | Rebuilds the packaged web app that a loopback server serves; `just app-serve` is such a server |
+| `just app-web`, `just app-web-install` | Rebuilds the packaged web app; the second also copies it to the directory the web service serves. `just app-serve` serves the build in the foreground |
 | `just app-check`, `just app-test` | Checks and tests the app |
 
-The stop, start, logs and service recipes drive the systemd user service. Recipes address
-the workspace discovered from the checkout; from a worktree or a checkout outside the
-workspace, pass `root=<workspace>` first: `just root=/path/to/workspace daemon-status`.
+The stop, start, logs and service recipes drive the systemd user service
+`corrald-next.service`. Recipes address the workspace found above the checkout, which a
+worktree under the workspace finds too; from a checkout elsewhere, pass `root=<workspace>`
+first: `just root=/path/to/workspace daemon-status`. Restarting the daemon stops the
+assistant hosts it runs.
 
 See the [release runbook](../releases/README.md) for native CI evidence,
 artifact names, version selection, and owner-controlled publication.
