@@ -5,7 +5,7 @@ import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-age
 import type { TSchema } from "typebox";
 import type { WebSettings } from "../extensions/web/settings.ts";
 import type { McpSettings } from "../host/mcp-settings.ts";
-import type { BuildContext } from "../build/types.ts";
+import type { BuildContext, BuildProfile } from "../build/types.ts";
 
 export const ROLES = ["worker", "reviewer", "assistant", "build"] as const;
 export type Role = typeof ROLES[number];
@@ -58,6 +58,8 @@ export interface RoleContext {
   readonly promptFile?: string;
   /** Build sessions only: the worktree the session writes in, its settings and its data directory. */
   readonly build?: BuildContext;
+  /** Worker sessions only: named profiles its `task` children may select. */
+  readonly childProfiles?: readonly BuildProfile[];
   readonly model: string;
   readonly effort?: string;
 }

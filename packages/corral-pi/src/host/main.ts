@@ -15,7 +15,7 @@ import { saveSession } from "../build/session-store.ts";
 import { inheritTranscript, openSession, restoreModelChoice, siblingTranscript } from "./lifecycle.ts";
 import { loadModules } from "./modules.ts";
 import { CredentialsUnavailable } from "../auth/paths.ts";
-import { type DestinationRule, PROVIDERS, hostRules, isApiProvider } from "../auth/providers.ts";
+import { type DestinationRule, PROVIDERS, hostRules, isApiProvider, isProviderId } from "../auth/providers.ts";
 import { localInferenceRules } from "../auth/local.ts";
 import { NetworkRefused, guardedFetch, restrictEnvironment } from "./restrict.ts";
 import { compiledBundle } from "./bundle.ts";
@@ -31,7 +31,8 @@ import { RemoteOwner } from "./remote-owner.ts";
 import { installRemote } from "./remote/index.ts";
 import { SessionRecord } from "./session-record.ts";
 import { summaryOptions } from "./summary.ts";
-import { interactiveModels, providerTransport, sessionRoutes } from "./capabilities.ts";
+import { childProfileProviders, interactiveModels, providerTransport, sessionRoutes } from "./capabilities.ts";
+import { readBuildProfiles } from "../build/profiles.ts";
 
 interface HostOverrides {
   build?: BuildContext;
@@ -87,7 +88,16 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   const { provider, model } = resumed ?? launch;
   const effort = resumed ? sessionManager.getBranch().findLast(entry => entry.type === "thinking_level_change")?.thinkingLevel : config.effort;
   const modules = await loadModules(assets, config.identity.role, provider);
-  const requested = [{ provider, model }, ...config.fallback ?? []];
+  // A worker's child profiles join the session's routes like fallbacks; its own model stays bound.
+  const childProfiles = config.identity.role === "worker" && config.capabilities?.enabled.includes("fleet")
+    ? readBuildProfiles(config.root) : undefined;
+  const childProviders = childProfileProviders(config.identity.role, provider, childProfiles);
+  const profileChoices = (childProfiles ?? []).flatMap(profile => {
+    const slash = profile.model.indexOf("/");
+    const id = profile.model.slice(0, slash);
+    return isProviderId(id) && childProviders.includes(id) ? [{ provider: id, model: profile.model.slice(slash + 1) }] : [];
+  });
+  const requested = [{ provider, model }, ...config.fallback ?? [], ...profileChoices];
   const bedrock = requested.filter(choice => choice.provider === "amazon-bedrock");
   const local = config.capabilities?.llama_cpp;
   let aws: AwsRoute | undefined;
@@ -158,6 +168,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     ...(config.capabilities ? { capabilities: config.capabilities } : {}),
     ...(config.guidance ? { guidance: config.guidance } : {}),
     root: config.root, exportDir: join(config.sessionDir, "exports"), runtimeDir: config.runtimeDir,
+    ...(childProfiles ? { childProfiles } : {}),
     modules, client, events, network,
     ...(overrides.build ? { build: overrides.build } : {}),
     ...(pane ? herdrLifecycle(process.env, pane, config.identity, events, config.local?.headless || headlessEnabled(config.capabilities)) : {}),

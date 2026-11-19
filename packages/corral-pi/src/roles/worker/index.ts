@@ -26,6 +26,18 @@ export function kickoff(context: RoleContext): string | undefined {
     + `\`"$CORRAL" gate ${identity.task ?? "<task>"}\` in bash. Use ask_user for owner questions.`;
 }
 
+/** The named models a worker's `task` children may use; absent when none are configured. */
+export function childProfilesContract(context: RoleContext): string {
+  const profiles = context.childProfiles ?? [];
+  if (!profiles.length) return "";
+  return ["", "", "## Child profiles", "",
+    "Pass `profile` to `task` to choose a child's model. Omit it, or pass `default`, for your own model. "
+      + "API-backed providers are billed per request; choose them only when the work needs that model.",
+    "", ...profiles.map(profile =>
+      `- ${profile.name}: ${profile.model}${profile.effort ? ` (effort ${profile.effort})` : ""}`
+        + `${profile.description ? `; ${profile.description}` : ""}`)].join("\n");
+}
+
 export function workerRole(root: string, lsp: Omit<LspToolkitOptions, "root"> = {}): RoleModule {
   // One LSP toolkit per worktree context, shared by every session the host creates for it.
   const toolkits = new WeakMap<RoleContext, LspToolkit>();
@@ -48,7 +60,8 @@ export function workerRole(root: string, lsp: Omit<LspToolkitOptions, "root"> = 
       return toolkit(context).tools;
     },
     contract(context: RoleContext) {
-      return `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n${askUserContract(context)}`;
+      return `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n${askUserContract(context)}`
+        + childProfilesContract(context);
     },
     extend(pi: ExtensionAPI, context: RoleContext) {
       const skill = assetPath(root, SKILL_ASSET);
