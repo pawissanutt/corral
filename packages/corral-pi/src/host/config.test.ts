@@ -19,6 +19,38 @@ test("flags name the engine run or task reviewer without a legacy launch message
     .toBe("T-1/reviewer");
 });
 
+test("terminal chat discovers the nearest workspace and keeps the launch directory", () => {
+  const outer = mkdtempSync(join(tmpdir(), "corral-terminal-chat-"));
+  try {
+    const root = join(outer, "workspace"), cwd = join(root, "project", "nested");
+    for (const workspace of [outer, root]) {
+      mkdirSync(join(workspace, ".corral-next"), { recursive: true });
+      writeFileSync(join(workspace, ".corral-next", "corral.toml"), "");
+    }
+    mkdirSync(cwd, { recursive: true });
+    const dir = join(root, ".corral-next", "terminal-chat");
+    expect(parseRunFlags("chat", [], "/assets", {}, cwd)).toMatchObject({
+      root, cwd, corral: "corral-next", local: { id: "terminal-chat", dir },
+      sessionDir: join(dir, "sessions"), freshSession: false,
+    });
+    expect(parseRunFlags("chat", ["--new"], "/assets", {}, cwd)).toMatchObject({ local: { dir }, freshSession: true });
+    expect(parseRunFlags("chat", [], "/assets", { CORRAL_NEXT_ROOT: outer }, cwd).root).toBe(outer);
+  } finally { rmSync(outer, { recursive: true, force: true }); }
+});
+
+test("only implicit terminal chat requires a workspace", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "corral-chat-no-workspace-"));
+  try {
+    expect(() => parseRunFlags("chat", [], "/assets", {}, cwd)).toThrow();
+    const dir = join(cwd, "chat", "thread");
+    expect(parseRunFlags("chat", ["--dir", "chat/thread", "--corral", "bin/corral-next", "--socket", "socket"],
+      "/assets", {}, cwd)).toMatchObject({
+      root: cwd, cwd, corral: join(cwd, "bin", "corral-next"), freshSession: false,
+      local: { id: "thread", dir, socket: join(cwd, "socket") }, sessionDir: join(dir, "sessions"),
+    });
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test("fallback uses explicit ordered provider models and cannot point at the launch model", () => {
   const parse = (flags: readonly string[]) => parseRunFlags("chat", ["--dir", "test", "--model", "anthropic-api/claude-opus-5-5", ...flags],
     "/assets", { CORRAL_NEXT_ROOT: "/fixture" }, "/fixture");

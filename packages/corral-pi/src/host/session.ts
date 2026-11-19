@@ -1089,8 +1089,8 @@ export class HostSession {
       else this.lastInputSource = event.source;
       // A build session's record keeps what the owner asked for, verbatim.
       if (event.source === "interactive" && !event.text.startsWith("/")) {
-        this.buildControls?.noteOwnerInput(event.text);
         if (await this.options.paneInput?.(event.text, event.images)) return { action: "handled" as const };
+        this.buildControls?.noteOwnerInput(event.text);
       }
       return { action: "continue" as const };
     });
@@ -1421,6 +1421,7 @@ export class HostSession {
   submitLocal(input: SessionInput, images?: ImageContent[], requestId?: string): Promise<SubmitResult> {
     if (!this.bound || this.closing) return Promise.resolve({ disposition: "rejected", reason: "host_not_ready" });
     if (this.rewinding) return Promise.resolve({ disposition: "rejected", reason: "rewind_in_progress" });
+    if (input.origin === "owner") this.buildControls?.noteOwnerInput(input.text);
     const tag = this.queue.bridgeInput(input);
     if (requestId !== undefined && typeof tag === "object" && tag !== null) this.inputRequestIds.set(tag, requestId);
     return this.promptInput(input, tag, images);

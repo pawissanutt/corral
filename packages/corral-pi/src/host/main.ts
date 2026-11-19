@@ -43,7 +43,8 @@ export async function runHost(config: HostConfig, overrides: HostOverrides = {})
   preparePrivateDirectory(config.local.dir);
   const bridge = await startBridge({ path: config.local.socket, sessionId: id || config.identity.role, events });
   try {
-    const record = new SessionRecord(config.local.dir, id, config.identity.role, config.cwd);
+    const record = new SessionRecord(config.local.dir, id, config.identity.role, config.cwd,
+      config.terminalChat && config.freshSession);
     await runSession(config, overrides, events, bridge, record);
   } catch (error) {
     await bridge.close();
