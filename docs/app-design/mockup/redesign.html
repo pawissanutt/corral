@@ -90,6 +90,8 @@ svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-widt
 .side hr{border:0;border-top:1px solid var(--shell-rule);margin:8px 6px}
 .dev{padding:8px 9px 2px;font-size:11.5px;color:var(--shell-ink-2)}
 .tabbar{display:none}
+.tfold{display:inline-flex;color:var(--shell-ink-2);border-radius:5px;padding:3px}
+.tfold:hover{color:var(--shell-ink);background:oklch(1 0 0/.06)}
 
 /* page frame */
 #view{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;position:relative}
@@ -125,16 +127,24 @@ svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-widt
 .s-done{color:var(--ok)}.s-ready{color:var(--ink)}.s-backlog,.s-idea,.s-idle,.s-dropped,.s-gone{color:var(--ink-4)}
 .st{display:inline-flex;align-items:center;gap:7px;font-weight:600;white-space:nowrap}
 
-/* the one row anatomy: status, id, title, what is happening, context, age, next step */
+/* the one row anatomy: status, id, title, what is happening, then facts in aligned columns, age,
+   next step. The page sets the columns (--cols) from the width it has. */
 .sec{display:flex;align-items:center;gap:8px;padding:14px 20px 6px;font-weight:650;font-size:12.5px}
 .sec .n{font:11.5px var(--mono);color:var(--ink-3);font-weight:400}
 .sec .why{font-weight:400;color:var(--ink-3)}
 .sec.fold{cursor:pointer;color:var(--ink-3)}
 .sec.fold:hover{color:var(--ink)}
-.row{display:grid;grid-template-columns:86px 78px minmax(150px,1.25fr) minmax(120px,1fr) 118px 42px 164px;align-items:center;gap:0 12px;min-height:32px;padding:0 20px;border-top:1px solid var(--rule);cursor:pointer}
-.rows.grouped .row{grid-template-columns:14px 78px minmax(150px,1.25fr) minmax(120px,1fr) 118px 42px 164px}
+.row,.rhead{display:grid;grid-template-columns:var(--cols);align-items:center;gap:0 10px;padding:0 20px}
+.row{min-height:32px;border-top:1px solid var(--rule);cursor:pointer}
+.rhead{position:sticky;top:0;z-index:2;height:25px;background:var(--bg);border-bottom:1px solid var(--rule);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-4);font-weight:650;white-space:nowrap}
+.rhead .num,.row .num{text-align:right}
+.row .num{font:11.5px var(--mono);color:var(--ink-2)}
+.sgh,.sg{display:grid;grid-template-columns:repeat(4,1fr);text-align:center;justify-items:center}
+.sgh i{font-style:normal;font-size:9.5px;letter-spacing:0}
+.sg .mk{width:11px;height:11px;cursor:help}
+.p-ok{color:var(--ok)}.p-now{color:var(--corral)}.p-run{color:var(--worker)}.p-fail{color:var(--fail)}.p-you{color:var(--you)}.p-wait{color:var(--ink-4)}.p-none{color:var(--rule-2)}
+.row.sel,.row.sel:hover{background:var(--sel);box-shadow:inset 2px 0 0 var(--focus)}
 .rows.grouped .st span{display:none}
-.rows.scoped .row .c5.proj{visibility:hidden}
 .rows>.row:last-child,.rows>.inplace:last-child{border-bottom:1px solid var(--rule)}
 .row:hover{background:var(--hover)}
 .row.child{background:var(--sunk)}
@@ -143,6 +153,7 @@ svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-widt
 .row .id{font:12px var(--mono);color:var(--ink-2);white-space:nowrap}
 .row .ti{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .ti .tag{font:400 11.5px var(--mono);color:var(--ink-3);margin-left:8px}
+.row .ti .tag.pri{color:var(--you);font-weight:700}
 .row .ph,.row .c5{color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
 .row .ph .bad{color:var(--fail)}.row .ph .good{color:var(--ok)}
 .row .age{font:11.5px var(--mono);color:var(--ink-3);text-align:right}
@@ -152,7 +163,7 @@ svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-widt
 .caret{display:inline-flex;width:16px;height:16px;margin:0 4px 0 -4px;vertical-align:-3px;justify-content:center;align-items:center;color:var(--ink-3);border-radius:4px}
 .caret:hover{background:var(--surface-2);color:var(--ink)}
 .caret svg{width:12px;height:12px}
-.inplace{margin:0 20px 0 192px;padding:8px 0 12px 14px;border-left:2px solid var(--you);display:flex;flex-direction:column;gap:8px;max-width:760px}
+.inplace{margin:0 20px 0 178px;padding:8px 0 12px 14px;border-left:2px solid var(--you);display:flex;flex-direction:column;gap:8px;max-width:760px}
 .well{background:var(--sunk);border:1px solid var(--rule);border-radius:6px;padding:8px 10px;font:12px/1.5 var(--mono);color:var(--ink-2);white-space:pre-wrap;overflow:auto;max-height:220px}
 .reply{display:flex;gap:8px;align-items:flex-end}
 .reply textarea{flex:1;min-height:30px;padding:5px 9px;border:1px solid var(--rule-2);border-radius:6px;background:var(--sunk)}
@@ -163,6 +174,32 @@ svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-widt
 .opt b{font:600 12px var(--mono);color:var(--ink-3)}
 .opt span{font-weight:600}.opt small{color:var(--ink-3);font-size:12.5px}
 .empty{padding:28px 20px;color:var(--ink-3)}
+
+/* desktop: an inspector beside every list, and overview numbers under the page head */
+.withinsp{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 340px}
+.listcol{display:flex;flex-direction:column;min-width:0;min-height:0}
+.insp{border-left:1px solid var(--rule);background:var(--surface);overflow:auto;min-height:0;font-size:12.5px}
+.ih{padding:10px 14px;display:flex;flex-direction:column;gap:6px}
+.ih .l1{display:flex;align-items:center;gap:8px}
+.ih h2{font-size:14px;line-height:1.35}
+.ih .id{font:12px var(--mono);color:var(--ink-2)}
+.decide.flat,.pin.flat{margin:0;border-radius:0;border-width:1px 0 1px 3px;max-width:none;background:var(--bg);padding:10px 14px}
+.pin.flat{border-width:1px 0;background:var(--you-bg)}
+.insp .well{max-height:150px}
+.insp .md{font-size:12.5px}
+.fgrid{display:grid;grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr);gap:3px 10px}
+.fgrid span{color:var(--ink-3)}
+.fgrid b{font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mini{display:flex;flex-direction:column;gap:6px}
+.mini .you-b{padding:5px 9px}
+.stats{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;padding:7px 20px;border-bottom:1px solid var(--rule);font-size:12px;color:var(--ink-3)}
+.tok{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.tok b{font:600 12px var(--mono);color:var(--ink)}
+a.tok:hover{color:var(--ink)}
+.sepv{width:1px;height:14px;background:var(--rule-2)}
+.meter{display:inline-flex;gap:2px}
+.meter i{width:5px;height:11px;border-radius:1px;background:var(--rule-2)}
+.meter i.on{background:var(--worker)}
 
 /* composer */
 .composer{border-top:1px solid var(--rule);padding:10px 20px 12px;background:var(--bg)}
@@ -181,7 +218,7 @@ svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-widt
 .meta b{font-weight:500;color:var(--ink-2)}
 .meta a{text-decoration:underline dotted;text-underline-offset:3px}
 .decide{margin:14px 20px 0;padding:12px 14px;border:1px solid var(--rule-2);border-left:3px solid var(--ink-3);border-radius:7px;background:var(--surface);display:flex;flex-direction:column;gap:10px;max-width:980px}
-.decide.blocked{border-left-color:var(--you)}.decide.review{border-left-color:var(--corral)}.decide.running{border-left-color:var(--worker)}.decide.done{border-left-color:var(--ok)}
+.decide.blocked{border-left-color:var(--you)}.decide.review{border-left-color:var(--corral)}.decide.running,.decide.working{border-left-color:var(--worker)}.decide.done{border-left-color:var(--ok)}
 .decide .what{font-size:14px;font-weight:650}
 .decide .how{color:var(--ink-2)}
 .decide .how .good{color:var(--ok)}.decide .how .bad{color:var(--fail)}
@@ -223,9 +260,20 @@ a.kv:hover,button.kv:hover{background:var(--hover)}
 .ev .who{text-align:right}
 a.ev:hover{background:var(--hover)}
 
-/* session page: the conversation, and one details panel that is closed until opened */
+/* session page: the conversation, and one details panel (open on a wide screen, closed on a phone) */
 .sbody{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr)}
-.sbody.open{grid-template-columns:minmax(0,1fr) 330px}
+.sbody.open{grid-template-columns:minmax(0,1fr) 350px}
+.queue{margin:0 20px 8px;max-width:980px;font-size:12.5px}
+.qrow{display:flex;gap:10px;align-items:center;min-height:28px;border-top:1px solid var(--rule)}
+.qrow b{font:600 11.5px var(--mono);color:var(--ink-3)}
+.qrow span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sline{display:flex;align-items:center;padding:5px 20px;border-top:1px solid var(--rule);font:11.5px var(--mono);color:var(--ink-3);white-space:nowrap;overflow:hidden}
+.sline>*{padding:0 12px;border-left:1px solid var(--rule)}
+.sline>*:first-child{padding-left:0;border:0;color:var(--ink);font-weight:700}
+.bar.sm{display:inline-block;width:70px;margin:0 4px;vertical-align:middle}
+.burn{margin-top:26px}
+.burn svg{width:100%;height:120px;display:block;border-bottom:1px solid var(--rule);margin:6px 0}
+.burn polyline{fill:none;stroke-width:1.5;vector-effect:non-scaling-stroke}
 .talk{display:flex;flex-direction:column;min-height:0;min-width:0}
 .log{flex:1;min-height:0;overflow:auto;padding:16px 20px;display:flex;flex-direction:column;gap:10px}
 .log>*{max-width:980px;width:100%}
@@ -322,6 +370,10 @@ td.m{font-family:var(--mono)}
 #notes a{text-decoration:underline}
 
 /* phone: the same pages, narrower */
+.app.fold{grid-template-columns:52px minmax(0,1fr)}
+.fold .side .lbl,.fold .side kbd,.fold .side .dev,.fold .side .cnt,.fold .nav.sub,.fold .scope svg:last-child{display:none}
+.fold .nav,.fold .scope{justify-content:center;padding:0}
+.phone .rhead,.phone .row .x,.phone .tfold{display:none}
 .app.phone{width:390px;height:min(844px,100%);border-radius:28px;border:1px solid oklch(.34 .02 238);grid-template:44px minmax(0,1fr) 56px/minmax(0,1fr);font-size:15px}
 .phone .side{display:none}
 .phone .titlebar{padding:0 10px;gap:8px}
@@ -403,10 +455,10 @@ const STATUSES = ["idea","backlog","ready","running","blocked","review","done","
 const ORDER = ["blocked","review","running","ready","backlog","idea"];
 const T = {};
 function task(id, status, project, title, x={}){ T[id] = Object.assign({id, status, project, title, pri:"P2", deps:[], age:"1d"}, x); }
-task("T-887","blocked","corral","corral-pi: reject repeated idle job polling and direct agents to event-driven waits",{kind:"logic",size:"m",age:"4m",small:true,
+task("T-887","blocked","corral","corral-pi: reject repeated idle job polling and direct agents to event-driven waits",{pri:"P1",kind:"logic",size:"m",age:"4m",small:true,
   run:{id:"R1",profile:"pi-sol"},
   blocked:{reason:"agent asks: fail the call, or return a warning?",
-    detail:"job_wait is polled 14 times in one idle turn in the fixture.\nI can make the 3rd poll in a row fail with `use corral_job_monitor`, or return the\nresult with a warning line and let the agent decide. Failing is stricter and\nbreaks two existing transcripts. Which do you want?",
+    detail:"job_wait is polled 14 times in one idle turn in the fixture.\nI can make the 3rd poll in a row fail with `use corral_job_monitor`, or return the result with a warning line and let the agent decide. Failing is stricter and breaks two existing transcripts.\nWhich do you want?",
     next:[{op:"reply"},{op:"stop"}]}});
 task("T-944","blocked","corral","corral new: warn about likely duplicate open tasks by title",{kind:"logic",size:"s",age:"22m",round:2,
   run:{id:"R2",profile:"pi-terra",gone:true}, gate:{sha:"e41b7a0",result:"fail"},
@@ -469,13 +521,19 @@ sess("B-m2q7","Build","gate lanes cleanup","corral","blocked",{model:"anthropic/
   log:[["you","Remove the quarantine lane and the scripts that only it used."],["tool","bash","scripts/gate.sh","passed","6m 12s"],["say","Verify passed. The reviewer approved in round 1 with no open findings."]],
   files:[["scripts/gate_lanes.py",2,88],[".config/gate-quarantine.toml",0,14],["AGENTS.md",1,2]], plan:[["Remove the lane",1],["Verify",1],["Review",1]], usage:"3.4M in · 71k out · 40 requests"});
 sess("B-p8d1","Build","mitigraph facade docs","mitigraph","working",{model:"anthropic/claude-opus-5-5",effort:"high",cost:"$2.05",ctx:24,age:"18m",branch:"build/p8d1",doing:"3 agents running · cargo nextest",quiet:"12s",
-  log:[["you","Document the facade crate's public surface."],["tool","bash","cargo nextest run -p mitigraph","running","41s"]], agents:[["a1","storage docs","running"],["a2","event docs","running"],["a3","examples","running"]]});
+  log:[["you","Document the facade crate's public surface."],["think","Three areas, no shared files: storage, events, examples."],["tool","read","crates/mitigraph/src/lib.rs:1-180","180 lines","0.2s"],["agents",[["a1","storage docs","gpt-6.2-sol","running"],["a2","event docs","gpt-6.2-sol","running"],["a3","examples","gpt-6.1-terra","running"]]],["say","While they write, I am checking that every example in the README still compiles."],["tool","bash","cargo nextest run -p mitigraph","running","41s"]],
+  agents:[["a1","storage docs","running"],["a2","event docs","running"],["a3","examples","running"]], files:[["docs/facade.md",120,0],["crates/mitigraph/src/lib.rs",14,2],["README.md",9,4]],
+  plan:[["Split the surface into three areas",1],["Write the three sections",0],["Check the README examples",0],["Verify and review",0]], usage:"0.9M in · 22k out · 11 requests"});
 sess("T-704/R1","Worker","Pi panels: checkpoint timeline…","corral","working",{task:"T-704",model:"anthropic-api/claude-opus-5-5",effort:"high",cost:"$1.31",ctx:22,age:"31m",doing:"editing panels/checkpoints.tsx",quiet:"8s"});
 sess("T-254/R2","Worker","Knowledge engine 29b…","mitimind-lite","working",{task:"T-254",cost:"$0.92",ctx:31,age:"1h",doing:"running just test-full",quiet:"2m"});
 sess("T-705/R3","Reviewer","Pi side questions…","corral","working",{task:"T-705",model:"openai-codex/gpt-6.2-sol",cost:"$0.48",ctx:17,age:"5m",doing:"reading the round 2 diff",quiet:"20s"});
 sess("T-887/R1","Worker","corral-pi: reject repeated idle job polling…","corral","blocked",{task:"T-887",model:"openai-codex/gpt-6.2-sol",cost:"$0.66",ctx:19,age:"4m",doing:"asks: fail the call, or return a warning?"});
 sess("T-703/R1","Worker","Pi checkpoints: revision-bound restore-impact preview","corral","gone",{task:"T-703",model:"openai-codex/gpt-6.2-sol",effort:"high",cost:"$2.14",age:"40m",doing:"ended at done"});
 sess("T-703/R2","Reviewer","Pi checkpoints: revision-bound restore-impact preview","corral","gone",{task:"T-703",model:"openai-codex/gpt-6.2-sol",cost:"$0.37",age:"12m",doing:"verdict: approve"});
+sess("T-859/R1","Worker","Default-enabled prompt-cache miss and cost anomaly alerts","corral","gone",{task:"T-859",cost:"$0.84",age:"3m",doing:"ended at done"});
+sess("T-705/R1","Worker","Pi side questions: isolated read-only thread lifecycle and handoff","corral","gone",{task:"T-705",model:"openai-codex/gpt-6.2-sol",cost:"$2.72",age:"14m",doing:"ended at done"});
+sess("T-702/R1","Worker","Pi checkpoints: per-turn snapshot refs","corral","gone",{task:"T-702",model:"openai-codex/gpt-6.2-sol",cost:"$1.75",age:"1h",doing:"landed"});
+SS["B-p8d1"].queue = ["Also update the README example once the tests pass."];
 sess("A-4","Chat","quick","","idle",{age:"25m",doing:"last: filed T-962",log:[["you","idea: compare the resident Claude session on and off for a day"],["say","Filed as <b>T-962</b> in Idea, project corral."]]});
 sess("A-3","Chat","release notes","corral","idle",{age:"3h",doing:"last: drafted the 0.4 notes"});
 sess("B-j1c5","Build","tui key line fix","corral","gone",{age:"1h",doing:"landed 5e0c2d1 onto main",at:"10:05",fresh:true,cost:"$1.90"});
@@ -509,7 +567,8 @@ const ASKS = new Set(["drop","stop","approve"]);
 /* ------------------------------------------------------------------------------------------ */
 const q = new URLSearchParams(location.search);
 const S = { theme:q.get("theme")||"dark", frame:q.get("frame")||"desktop", scope:q.get("scope")||"all",
-  details:q.has("details"), notes:q.has("notes"), unfold:{}, closed:{}, drafts:{}, file:0, menu:null, sheet:null, pal:null, toast:"", asub:"workspace" };
+  details:q.has("details") ? true : null, insp:!q.has("noinsp"), fold:q.has("fold"), sel:{home:q.get("sel"), tasks:q.get("sel"), sessions:q.get("sel")},
+  notes:q.has("notes"), unfold:{}, closed:{}, drafts:{}, file:0, menu:null, sheet:null, pal:null, toast:"", asub:"workspace" };
 const cap = s => s[0].toUpperCase()+s.slice(1);
 const h = s => String(s??"").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const IC = {home:"M3 7.5 8 3l5 4.5V13H9.5v-3h-3v3H3z",tasks:"M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01",sessions:"M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z",activity:"M2 8h3l2-4.5 2.5 9L11.5 8H14",
@@ -651,28 +710,73 @@ function answer(id, i, text){
   s.question = null; toast(`answered ${id}: ${word}`);
 }
 
-/* ------------------------------------------------------------------------------------------ */
+/* ------------------------------------------------------------------------------------------
+   Desktop uses its width: facts in aligned columns on every row, overview numbers under the
+   head, and an inspector beside every list. The phone keeps one column; a row opens its page.
+------------------------------------------------------------------------------------------ */
+const LISTS = new Set(["home","tasks","sessions"]);
+let ROWS = [], KEYS = new Set(); // the rows j and k walk, and every row that can be selected
+const sideW = () => S.fold ? 52 : 208;
+const inspOn = () => !isPhone() && S.insp && innerWidth - sideW() >= 980;
+const listW = () => innerWidth - sideW() - (inspOn() ? 340 : 0);
+const detailsOn = () => S.details ?? !isPhone();
+const usd = x => parseFloat((x.cost||"$0").slice(1)) || 0;
+const costOf = x => T[x.id]===x ? Object.values(SS).filter(s => s.task===x.id).reduce((a,s) => a + usd(s), 0) : usd(x);
+const money = v => v ? "$" + v.toFixed(2) : "–";
+/* Columns give way as the list narrows: profile first, then project; both stay in the inspector. */
+function cols(kind){
+  const w = listW(), prof = w >= (kind==="sess" ? 860 : 1040), proj = S.scope==="all" && w >= 1040;
+  const tpl = kind==="tasks" ? `14px 58px minmax(140px,1.4fr) minmax(110px,1fr) 100px ${proj?"104px ":""}${prof?"92px ":""}50px 34px 150px`
+    : kind==="sess" ? `14px 78px minmax(140px,1.2fr) minmax(110px,1fr) ${prof?"118px ":""}40px 50px 34px 100px`
+    : `78px 62px minmax(140px,1.4fr) minmax(110px,1fr) ${proj?"104px ":""}${prof?"110px ":""}50px 34px 126px`;
+  return {tpl, proj, prof};
+}
+function rhead(kind){
+  const c = cols(kind), n = s => [s];
+  const cells = kind==="tasks" ? ["", "ID", "Title", "Now", `<span class="sgh"><i>run</i><i>gate</i><i>rev</i><i>land</i></span>`, c.proj && "Project", c.prof && "Profile", n("Cost"), n("Age"), n("Next step")]
+    : kind==="sess" ? ["", "ID", "Session", "Now", c.prof && "Model", n("Ctx"), n("Cost"), n("Age"), n("Next step")]
+    : ["Status", "ID", "Title", "Now", c.proj && "Project", c.prof && "Profile / model", n("Cost"), n("Age"), n("Next step")];
+  return `<div class="rhead">${cells.filter(x => x!==false).map(x => Array.isArray(x) ? `<span class="num">${x[0]}</span>` : `<span>${x}</span>`).join("")}</div>`;
+}
+/* Where a task stands in run, gate, review and land, each with the words that say it. */
+const PMK = {ok:MK.done, now:MK.running, run:MK.running, fail:MK.dropped, you:MK.blocked, wait:MK.backlog, none:'<circle cx="6" cy="6" r="1" fill="currentColor" stroke="none"/>'};
+const pm = (k, tip) => `<svg class="mk p-${k}" viewBox="0 0 12 12">${tip?`<title>${tip}</title>`:""}${PMK[k]}</svg>`;
+function pipeline(t){
+  const s = t.status, g = t.gate, r = t.review, run = t.run, inRev = s==="review";
+  const R = !run || ["idea","backlog","ready","dropped"].includes(s) ? ["none",""] : s==="running" ? ["now", `worker ${run.id} · ${run.doing||"starting"}`]
+    : s==="blocked" && g?.result!=="fail" ? ["you", t.blocked.reason] : ["ok", `worker ${run.id} ended at done`];
+  const G = !g ? [inRev?"wait":"none", inRev?"not started":""] : g.result==="pass" ? ["ok", `passed on ${g.sha}`] : g.result==="fail" ? ["fail", `failed on ${g.sha}`] : ["now", `running on ${g.sha}`];
+  const V = !r ? [inRev?"wait":"none", inRev?"waits for the gate":""] : r.result==="pass" ? ["ok", `approved in round ${r.round} of 2`] : ["now", `round ${r.round} of 2, reviewer working`];
+  const L = s==="done" ? ["ok", t.landed ? `landed ${t.landed} onto ${base(t)}` : "done"] : t.ready ? ["you", "ready, waits on your approve"] : inRev ? ["wait", "after gate and review"] : ["none",""];
+  return [["Run",...R],["Gate",...G],["Review",...V],["Land",...L]];
+}
 function row(x, o={}){
-  const isT = !!T[x.id] && x===T[x.id];
+  const isT = T[x.id]===x, kind = o.kind||"home", c = cols(kind), insp = inspOn(), page = route().page;
   const status = x.status, to = isT ? `task/${x.id}` : `session/${x.id}`;
+  KEYS.add(x.id); if (!o.child) ROWS.push(x.id);
+  const inlist = kind==="home" && !insp; // without an inspector, Home answers small things in the list
   let act = "";
   if (isT){
-    const n = o.home && !x.small && (status==="blocked"||x.ready) ? {nav:to, label:"Open"} : nextStep(x);
-    if (n && !(o.home && status==="running")) act = n.nav ? `<a class="btn" href="#${n.nav}">${n.label}</a>` : `<button class="btn${status==="blocked"||x.ready?" pri":""}" data-a="op" data-op="${n.op}" data-id="${x.id}" ${n.arg?`data-arg="${n.arg}"`:""} ${n.force?"data-force=1":""}>${n.label}</button>`;
-    if (o.home && x.small) act = "";
+    const n = inlist && !x.small && (status==="blocked"||x.ready) ? {nav:to, label:"Open"} : nextStep(x);
+    if (n && !(kind==="home" && status==="running")) act = n.nav ? `<a class="btn" href="#${n.nav}">${n.label}</a>` : `<button class="btn${status==="blocked"||x.ready?" pri":""}" data-a="op" data-op="${n.op}" data-id="${x.id}" ${n.arg?`data-arg="${n.arg}"`:""} ${n.force?"data-force=1":""}>${n.label}</button>`;
+    if (inlist && x.small && status==="blocked") act = "";
     act += `<button class="btn ghost more" data-a="more" data-id="${x.id}" aria-label="More for ${x.id}">${ic("more")}</button>`;
   } else {
-    if (status==="blocked" && !(o.home && x.small)) act = `<a class="btn${o.home?"":" pri"}" href="#${to}">Open</a>`;
+    if (status==="blocked" && !(inlist && x.small)) act = `<a class="btn${kind==="home"?"":" pri"}" href="#${to}">Open</a>`;
     if (status==="gone" && x.role!=="Worker" && !x.fresh) act = `<button class="btn" data-a="say" data-say="resumed ${x.id}">Resume</button>`;
     act += `<button class="btn ghost more" data-a="smore" data-id="${x.id}" aria-label="More for ${x.id}">${ic("more")}</button>`;
   }
-  const title = isT ? h(x.title) + (x.parent && !o.child ? `<span class="tag">in ${x.parent}</span>` : "") : `${h(x.name)}<span class="tag">${x.role}</span>`;
+  const pri = isT && x.pri!=="P2" ? `<span class="tag pri">${x.pri}</span>` : "";
+  const title = isT ? h(x.title) + pri + (x.parent && !o.child ? `<span class="tag">in ${x.parent}</span>` : "") : `${h(x.name)}<span class="tag">${x.role}</span>`;
   const what = isT ? phrase(x) : h(x.doing||"") + (x.quiet && status==="working" ? ` · quiet ${x.quiet}` : "");
-  const c5 = o.c5==="model" ? `<span class="c5">${h((x.model||"").split("/").pop())}</span>` : `<span class="c5 proj">${h(x.project||"")}</span>`;
-  const car = x.children && !o.home ? `<button class="caret" data-a="unfold" data-id="${x.id}" aria-label="Show children">${ic(S.unfold[x.id]?"down":"right")}</button>` : "";
-  return `<div class="row${o.child?" child":""}${o.quiet?" quiet":""}" data-a="nav" data-to="${to}">
+  const stages = kind==="tasks" ? `<span class="sg x">${pipeline(x).map((p,i) => pm(p[1]==="now" && i===0 ? "run" : p[1], `${p[0]}: ${h(p[2]||"not started")}`)).join("")}</span>` : "";
+  const proj = c.proj && kind!=="sess" ? `<span class="c5 x">${h(x.project||"–")}</span>` : "";
+  const prof = c.prof ? `<span class="c5 x">${h(isT ? (x.run?.profile || PROJECTS[x.project]?.profile || "") : (x.model||"").split("/").pop())}</span>` : "";
+  const ctx = kind==="sess" ? `<span class="num x">${status==="gone" ? "–" : x.ctx+"%"}</span>` : "";
+  const car = x.children && kind==="tasks" ? `<button class="caret" data-a="unfold" data-id="${x.id}" aria-label="Show children">${ic(S.unfold[x.id]?"down":"right")}</button>` : "";
+  return `<div class="row${o.child?" child":""}${o.quiet?" quiet":""}${insp && S.sel[page]===x.id?" sel":""}" data-a="nav" data-to="${to}" data-key="${x.id}">
     ${st(status)}<span class="id">${x.id}</span><span class="ti">${car}${title}</span>
-    <span class="ph" data-st="${cap(status)}" data-id="${x.id}">${what}</span>${c5}<span class="age">${x.at&&o.quiet?x.at:x.age}</span><span class="act">${act}</span></div>`;
+    <span class="ph" data-st="${cap(status)}" data-id="${x.id}">${what}</span>${stages}${proj}${prof}${ctx}<span class="num x">${money(costOf(x))}</span><span class="age">${x.at&&o.quiet?x.at:x.age}</span><span class="act">${act}</span></div>`;
 }
 function replyBox(id, ph="Reply to the worker…"){
   return `<div class="reply"><textarea rows="1" placeholder="${ph}" data-draft="${id}" aria-label="Reply to ${id}">${h(S.drafts[id]||"")}</textarea><button class="btn pri" data-a="send" data-id="${id}">Reply</button></div>`;
@@ -689,38 +793,11 @@ function composer(){
   return `<div class="composer"><div class="cbox"><textarea rows="1" id="ask" data-draft="ask" placeholder="Ask, file an idea, or tell Corral what to do…" aria-label="Message to the assistant">${h(S.drafts.ask||"")}</textarea>
   <div class="cbar"><span class="pill">${ic("folder")}${S.scope==="all"?"all projects":h(S.scope)}</span><span class="pill">pi-terra · medium ${ic("down")}</span><span class="sp"></span><span class="hidep">Enter sends · the reply opens as a chat</span><button class="btn pri" data-a="ask">Send</button></div></div></div>`;
 }
-
-function vHome(){
-  const need = [...tasks(t => t.status==="blocked" || t.ready), ...sessions(s => s.status==="blocked" && !s.task)];
-  const work = [...tasks(t => t.status==="running" || (t.status==="review" && !t.ready)), ...sessions(s => s.status==="working" && !s.task)];
-  const fin = [...tasks(t => t.fresh), ...sessions(s => s.fresh)];
-  const p = PROJECTS[S.scope];
-  const say = [need.length?`<span class="you">${need.length} need you</span>`:"nothing needs you", `${work.length} working`, `${fin.length} finished since 09:16`].join(" · ");
-  const sec = (name, list, o, why) => `<div class="sec">${name} <span class="n">${list.length}</span><span class="why hidep">${why}</span></div><div class="rows${S.scope!=="all"?" scoped":""}">${list.map(x => row(x,o) + (o.home && x.small && x.status==="blocked" ? inplace(x) : "")).join("") || `<div class="empty">Nothing here.</div>`}</div>`;
-  return `<div class="phead"><h1>${S.scope==="all"?"Home":h(S.scope)}</h1><span class="say">${say}</span></div>
-  ${p ? `<div class="facts"><span>base <b>${p.base}</b></span><span>gate <b class="mono">${h(p.gate)}</b></span><span>reviewer <b>${p.reviewer}</b></span><span>profile <b>${p.profile}</b></span><span>auto dispatch <b>off</b></span><span>auto land <b>off</b></span><a href="#settings" class="dim">Edit in Settings</a></div>` : ""}
-  <div class="scroll">${sec("Needs you", need, {home:true}, "Blocked, or ready to land")}${sec("Working", work, {home:true}, "")}${sec("Just finished", fin, {home:true,quiet:true}, "since your last visit at 09:16")}<div style="height:16px"></div></div>${composer()}`;
-}
-function vTasks(){
-  const f = (S.drafts.filter||"").toLowerCase();
-  const hit = t => !f || (t.id+" "+t.title+" "+t.project).toLowerCase().includes(f);
-  let out = "";
-  for (const s of ORDER){
-    const list = tasks(t => t.status===s && hit(t)); if (!list.length) continue;
-    out += `<div class="sec s-${s}">${mark(s)}<span style="color:var(--ink)">${cap(s)}</span> <span class="n">${list.length}</span>${s==="running"||s==="blocked"?`<span class="why hidep">${slots()} of ${LIMIT} slots used</span>`:""}</div><div class="rows grouped${S.scope!=="all"?" scoped":""}">` +
-      list.map(t => row(t) + (t.children && S.unfold[t.id] ? t.children.map(c => row(T[c],{child:true})).join("") : "")).join("") + `</div>`;
-  }
-  for (const s of ["done","dropped"]){
-    const list = tasks(t => t.status===s && hit(t)), open = S.closed[s];
-    out += `<div class="sec fold" data-a="closed" data-id="${s}">${ic(open?"down":"right")}${cap(s)} <span class="n">${s==="done"?620+list.length:13+list.length}</span></div>` + (open ? `<div class="rows grouped${S.scope!=="all"?" scoped":""}">${list.map(t => row(t,{quiet:true})).join("")}<div class="empty" style="padding:8px 20px">Showing the newest ${list.length}. <button class="btn ghost" data-a="say" data-say="loaded 50 more">Load more</button></div></div>` : "");
-  }
-  return `<div class="phead"><h1>Tasks</h1><label class="field">${ic("search")}<input data-draft="filter" id="filter" placeholder="Filter tasks…" value="${h(S.drafts.filter||"")}" aria-label="Filter tasks"></label><span class="sp"></span><button class="btn pri" data-a="form" data-op="new">${ic("plus")}New task</button></div><div class="scroll">${out}<div style="height:24px"></div></div>`;
-}
-function vTask(id, tab="overview"){
-  const t = T[id]; if (!t) return `<div class="empty">No task ${h(id)}.</div>`;
-  const n = nextStep(t), p = PROJECTS[t.project];
+/* The decision of a task: what is happening, the evidence, and the next step as buttons. */
+function decision(t, cls=""){
+  const id = t.id, n = nextStep(t), p = PROJECTS[t.project];
   const btn = (x, pri) => x.nav ? `<a class="btn lg${pri?" pri":""}" href="#${x.nav}">${x.label}</a>` : `<button class="btn lg${pri?" pri":""}${x.force?" warn":""}" data-a="op" data-op="${x.op}" data-id="${id}" ${x.arg?`data-arg="${x.arg}"`:""} ${x.force?"data-force=1":""}>${x.label||opLabel(x)}${x.force?` <small>skips ${SKIPS[x.op]}</small>`:""}</button>`;
-  const runs = Object.values(SS).filter(s => s.task===id), live = runs.find(s => s.status!=="gone");
+  const live = Object.values(SS).find(s => s.task===id && s.status!=="gone");
   let what, how = "", btns = "", extra = "";
   if (t.status==="blocked"){
     what = `Blocked: ${h(t.blocked.reason)}`;
@@ -738,29 +815,117 @@ function vTask(id, tab="overview"){
   } else if (t.status==="done"){ what = `Done`; how = `<div class="how">${phrase(t)} · ${t.at||""}</div>`;
   } else if (t.status==="dropped"){ what = `Dropped`; btns = btn({op:"reopen",label:"Reopen"});
   } else { what = t.status==="ready" ? `Ready to dispatch` : cap(t.status); how = `<div class="how">${phrase(t) || (t.status==="ready" ? `dependencies done · ${slots()} of ${LIMIT} slots used · resolves to profile ${p.profile}` : "Not started.")}</div>`; btns = btn(n,true); }
-  const files = t.files||[];
+  return `<div class="decide ${t.status} ${cls}"><div class="what">${what}</div>${how}${extra}${btns?`<div class="btns">${btns}</div>`:""}</div>`;
+}
+const dsec = (name, body) => `<div class="dsec"><div class="h">${name}</div>${body}</div>`;
+const mdOf = t => { const b = t.body || {goal:t.title+".", accept:["Stated in the task body."], notes:""}; return `<div class="md"><h3>Goal</h3><p>${h(b.goal)}</p><h3>Acceptance</h3><ul>${b.accept.map(a => `<li>${h(a)}</li>`).join("")}</ul>${b.notes?`<h3>Notes</h3><p>${h(b.notes)}</p>`:""}</div>`; };
+const runRows = id => Object.values(SS).filter(s => s.task===id).map(s => `<a class="kv" href="#session/${s.id}"><span class="k">${mark(s.status)}${s.id.split("/")[1]} · ${s.role}</span><span class="v">${h(s.doing||"")}</span><span class="t">${s.cost}</span></a>`).join("") || `<div class="kv"><span class="v">No run yet.</span></div>`;
+const pipeRows = t => pipeline(t).map(p => `<div class="kv"><span class="k">${pm(p[1]==="now" && p[0]==="Run" ? "run" : p[1])}${p[0]}</span><span class="v">${h(p[2]||"not started")}</span><span></span></div>`).join("");
+const logOf = s => s.log || [["you", s.task ? `Prompt for ${s.task}: ${T[s.task]?.title||""}` : "…"],["tool","read","AGENTS.md","312 lines","0.1s"],["say",h(s.doing||"")]];
+const logItem = x => x[0]==="you" ? `<div class="you-b"><small>you</small>${h(x[1])}</div>` : x[0]==="think" ? `<div class="think">${h(x[1])}</div>` :
+  x[0]==="tool" ? `<div class="tool">${mark(x[3]==="running"?"working":"done")}<b>${x[1]}</b><span>${h(x[2])} · ${x[3]}</span><u>${x[4]}</u></div>` :
+  x[0]==="agents" ? `<div class="card"><div class="hd">task · ${x[1].length} agents</div>${x[1].map(a => `<div class="kv"><span class="k mono">${a[0]}</span><span class="v" style="color:var(--ink-2)">${a[1]}</span><span class="t">${a[2]} · ${a[3]}</span></div>`).join("")}</div>` : `<div class="say">${x[1]}</div>`;
+/* What a session's host serves besides its conversation; the Details panel and the inspector share it. */
+function detailSections(s){
+  const t = T[s.task], f = s.files||[];
+  return (t ? dsec("Task", `<a class="kv" href="#task/${t.id}"><span class="k">${mark(t.status)}<span class="mono">${t.id}</span></span><span class="v" style="color:var(--ink-2)">${cap(t.status)}</span><span class="t">open</span></a>${pipeRows(t)}`) : "")
+    + dsec(`Changes${f.length?` · ${f.length} files <span class="good">+${f.reduce((a,x) => a+x[1],0)}</span> <span class="bad">−${f.reduce((a,x) => a+x[2],0)}</span>`:""}`, f.map(x => `<button class="kv" style="width:100%" data-a="say" data-say="diff of ${x[0]} opens full width"><span class="k mono" style="font-size:11.5px">${h(x[0])}</span><span class="v"></span><span class="t"><span class="good">+${x[1]}</span> <span class="bad">−${x[2]}</span></span></button>`).join("") || `<span class="dim">No changes.</span>`)
+    + dsec("Agents", (s.agents||[]).map(a => `<div class="kv"><span class="k mono">${a[0]}</span><span class="v" style="color:var(--ink-2)">${a[1]}</span><span class="t">${a[2]}</span></div>`).join("") || `<span class="dim">No child agents.</span>`)
+    + dsec("Plan", (s.plan||[]).map(p => `<div class="step${p[1]?" dn":""}"><span>${p[1]?"✓":"○"}</span>${h(p[0])}</div>`).join("") || `<span class="dim">No plan recorded.</span>`)
+    + dsec("Usage", `<div class="kv"><span class="k">cost</span><span class="v"></span><span class="t">${s.cost}</span></div><div class="dim" style="font-size:12px;margin-top:4px">${s.usage||"tokens not recorded"}</div>`)
+    + dsec("Context", `<div class="bar"><i style="width:${s.ctx}%"></i></div><span class="dim" style="font-size:12px">${s.ctx}% of the model's window</span>`);
+}
+/* The selected row, in full, beside the list: decide without leaving the list. */
+function inspector(id){
+  const t = T[id], s = SS[id], x = t||s;
+  if (!x) return `<aside class="insp"><div class="empty">Select a row to inspect it here.</div></aside>`;
+  const fact = (k, v) => v ? `<span>${k}</span><b title="${h(v)}">${h(v)}</b>` : "";
+  const head = `<div class="ih"><div class="l1">${st(x.status)}<span class="id">${x.id}</span>${s?`<span class="dim">${s.role}</span>`:""}<span class="sp"></span><a class="btn" href="#${t?"task":"session"}/${id}">Open page</a><button class="btn ghost" data-a="${t?"more":"smore"}" data-id="${id}" aria-label="More for ${id}">${ic("more")}</button></div><h2>${h(t?t.title:s.name)}</h2></div>`;
+  if (t){
+    const evs = EVENTS.filter(e => e[2]===id).slice(0,5), files = t.files||[], cost = costOf(t);
+    return `<aside class="insp">${head}${decision(t, "flat")}
+      ${dsec("Facts", `<div class="fgrid">${fact("project",t.project)}${fact("priority",t.pri)}${fact("kind",t.kind)}${fact("size",t.size)}${fact("base",base(t))}${fact("profile", t.run?.profile || PROJECTS[t.project].profile+" (resolved)")}${fact("round", t.run ? `${t.round||0} of 2` : "")}${fact("cost", cost ? money(cost) : "")}${fact("in",t.parent)}${fact("after",t.deps.join(", "))}</div>`)}
+      ${dsec("Pipeline", pipeRows(t))}
+      ${t.children ? dsec("Children", t.children.map(c => `<a class="kv" href="#task/${c}"><span class="k">${mark(T[c].status)}<span class="mono">${c}</span></span><span class="v" style="color:var(--ink-2)">${h(T[c].title)}</span><span class="t">${cap(T[c].status)}</span></a>`).join("")) : ""}
+      ${files.length ? dsec(`Changes · ${files.length} files`, files.map(f => `<a class="kv" href="#task/${id}/changes"><span class="k mono" style="font-size:11.5px">${h(f.p.split("/").slice(-2).join("/"))}</span><span class="v"></span><span class="t"><span class="good">+${f.a}</span> <span class="bad">−${f.r}</span></span></a>`).join("")) : ""}
+      ${dsec("Description", mdOf(t))}
+      ${dsec("Runs", runRows(id))}
+      ${dsec("History", evs.map(e => `<div class="kv"><span class="k mono">${e[0]}</span><span class="v"><b style="color:var(--ink-2)">${e[1]}</b> ${h(e[3])}</span><span class="t">${e[4]}</span></div>`).join("") || `<span class="dim">No events in this sample.</span>`)}</aside>`;
+  }
+  return `<aside class="insp">${head}
+    ${s.question ? `<div class="pin flat"><div class="q">${h(s.question.text)}</div>${options(s)}</div>` : `<div class="decide ${s.status} flat"><div class="what">${cap(s.status)}${s.doing?": "+h(s.doing):""}</div></div>`}
+    ${dsec("Facts", `<div class="fgrid">${fact("project",s.project)}${fact("branch",s.branch)}${fact("model",s.model.split("/").pop())}${fact("effort",s.effort)}${fact("cost",s.cost)}${fact("context",s.status==="gone"?"":s.ctx+"%")}${fact("quiet",s.status==="working"?s.quiet:"")}${fact("age",s.age)}</div>`)}
+    ${dsec("Latest", `<div class="mini">${logOf(s).slice(-4).map(logItem).join("")}</div>`)}${detailSections(s)}</aside>`;
+}
+/* Overview numbers: where every task stands, the slots, the sessions, today's cost, what changed. */
+function stats(){
+  const all = tasks(), ss = sessions(), by = s => all.filter(t => t.status===s).length, sby = s => ss.filter(x => x.status===s).length;
+  const today = all.reduce((a,t) => a + costOf(t), 0) + ss.filter(s => !s.task).reduce((a,s) => a + usd(s), 0);
+  const since = k => EVENTS.filter(e => e[1]===k && e[0] >= "09:16" && inScope(T[e[2]]||SS[e[2]]||{project:""})).length;
+  return `<div class="stats hidep">${ORDER.map(s => `<a class="tok" href="#tasks">${mark(s)}<span>${cap(s)}</span><b>${by(s)}</b></a>`).join("")}
+    <span class="sepv"></span><span class="tok"><span>slots</span><span class="meter">${Array.from({length:LIMIT}, (_,i) => `<i class="${i<slots()?"on":""}"></i>`).join("")}</span><b>${slots()}/${LIMIT}</b></span>
+    <span class="sepv"></span><a class="tok" href="#sessions"><span>sessions</span>${["blocked","working","idle"].map(k => `${mark(k)}<b title="${sby(k)} sessions ${cap(k)}">${sby(k)}</b>`).join("")}</a>
+    <span class="sepv"></span><a class="tok" href="#activity/usage"><span>today</span><b>${money(today)}</b></a>
+    <span class="sepv"></span><a class="tok" href="#activity/feed"><span>since 09:16</span><b>${since("landed")}</b>landed <b>${since("dropped")}</b>dropped <b>${since("created")}</b>created <b>${since("forced")}</b>forced</a></div>`;
+}
+const inspBtn = () => isPhone() ? "" : `<button class="btn" data-a="insp" aria-pressed="${S.insp}" title="Show or hide the inspector (i)">${ic("panel")}Inspector</button>`;
+/* A list page: the table, and beside it the inspector of the selected row when there is room. */
+function listPage(kind, key, body, foot=""){
+  const list = `<div class="scroll list" style="--cols:${cols(kind).tpl}">${rhead(kind)}${body}<div style="height:20px"></div></div>`;
+  return inspOn() ? `<div class="withinsp"><div class="listcol">${list}${foot}</div>${inspector(S.sel[key])}</div>` : list + foot;
+}
+
+function vHome(){
+  const need = [...tasks(t => t.status==="blocked" || t.ready), ...sessions(s => s.status==="blocked" && !s.task)];
+  const work = [...tasks(t => t.status==="running" || (t.status==="review" && !t.ready)), ...sessions(s => s.status==="working" && !s.task)];
+  const fin = [...tasks(t => t.fresh), ...sessions(s => s.fresh)];
+  const p = PROJECTS[S.scope], insp = inspOn();
+  const say = [need.length?`<span class="you">${need.length} need you</span>`:"nothing needs you", `${work.length} working`, `${fin.length} finished since 09:16`].join(" · ");
+  const sec = (name, list, o, why) => `<div class="sec">${name} <span class="n">${list.length}</span><span class="why hidep">${why}</span></div><div class="rows">${list.map(x => row(x,o) + (!insp && x.small && x.status==="blocked" ? inplace(x) : "")).join("") || `<div class="empty">Nothing here.</div>`}</div>`;
+  return `<div class="phead"><h1>${S.scope==="all"?"Home":h(S.scope)}</h1><span class="say">${say}</span><span class="sp"></span>${inspBtn()}</div>
+  ${p ? `<div class="facts"><span>base <b>${p.base}</b></span><span>gate <b class="mono">${h(p.gate)}</b></span><span>reviewer <b>${p.reviewer}</b></span><span>profile <b>${p.profile}</b></span><span>auto dispatch <b>off</b></span><span>auto land <b>off</b></span><a href="#settings" class="dim">Edit in Settings</a></div>` : ""}
+  ${stats()}${listPage("home", "home", sec("Needs you", need, {}, "Blocked, or ready to land") + sec("Working", work, {}, "") + sec("Just finished", fin, {quiet:true}, "since your last visit at 09:16"), composer())}`;
+}
+function vTasks(){
+  const f = (S.drafts.filter||"").toLowerCase();
+  const hit = t => !f || (t.id+" "+t.title+" "+t.project).toLowerCase().includes(f);
+  let out = "";
+  for (const s of ORDER){
+    const list = tasks(t => t.status===s && hit(t)); if (!list.length) continue;
+    out += `<div class="sec s-${s}">${mark(s)}<span style="color:var(--ink)">${cap(s)}</span> <span class="n">${list.length}</span></div><div class="rows grouped">` +
+      list.map(t => row(t,{kind:"tasks"}) + (t.children && S.unfold[t.id] ? t.children.map(c => row(T[c],{kind:"tasks",child:true})).join("") : "")).join("") + `</div>`;
+  }
+  for (const s of ["done","dropped"]){
+    const list = tasks(t => t.status===s && hit(t)), open = S.closed[s];
+    out += `<div class="sec fold" data-a="closed" data-id="${s}">${ic(open?"down":"right")}${cap(s)} <span class="n">${s==="done"?620+list.length:13+list.length}</span></div>` + (open ? `<div class="rows grouped">${list.map(t => row(t,{kind:"tasks",quiet:true})).join("")}<div class="empty" style="padding:8px 20px">Showing the newest ${list.length}. <button class="btn ghost" data-a="say" data-say="loaded 50 more">Load more</button></div></div>` : "");
+  }
+  const open = tasks(t => !["done","dropped"].includes(t.status)).length;
+  return `<div class="phead"><h1>Tasks</h1><label class="field">${ic("search")}<input data-draft="filter" id="filter" placeholder="Filter tasks…" value="${h(S.drafts.filter||"")}" aria-label="Filter tasks"></label>
+    <span class="say hidep"><b>${open}</b> open · slots <b>${slots()}</b> of ${LIMIT} used</span><span class="sp"></span>${inspBtn()}<button class="btn pri" data-a="form" data-op="new">${ic("plus")}New task</button></div>${listPage("tasks", "tasks", out)}`;
+}
+function vTask(id, tab="overview"){
+  const t = T[id]; if (!t) return `<div class="empty">No task ${h(id)}.</div>`;
+  const files = t.files||[], cost = costOf(t);
   const checks = [t.gate && [`gate`, t.gate.result, `${t.gate.sha}`], t.review && [`review round ${t.review.round}`, t.review.result, `reviewer`], t.round>1 && [`gate`, "fail", "6a0c1ee"]].filter(Boolean);
   const evs = EVENTS.filter(e => e[2]===id);
   let body;
   if (tab==="changes") body = files.length ? `<div class="summary"><div class="h">Summary from done</div>${h(t.summary)}</div><div class="diffwrap"><div class="files">${files.map((f,i) => `<button class="file${i===S.file?" on":""}" data-a="file" data-i="${i}"><span>${h(f.p)}</span><i>+${f.a}</i><em>−${f.r}</em></button>`).join("")}</div><div class="diff">${files[S.file].d.map(l => `<div class="${l[0]}">${h(l[1])}</div>`).join("")}</div></div>` : `<div class="empty">No changes yet. The diff is stored when the worker runs <code>corral done</code>.</div>`;
   else if (tab==="history") body = `<div class="scroll">${evs.map(evRow).join("") || `<div class="empty">No events in this sample.</div>`}<div style="padding:12px 20px;max-width:760px"><div class="reply"><textarea rows="1" placeholder="Comment on ${id}…" data-draft="c-${id}" aria-label="Comment">${h(S.drafts["c-"+id]||"")}</textarea><button class="btn" data-a="comment" data-id="${id}">Comment</button></div></div></div>`;
-  else {
-    const b = t.body || {goal:t.title+".", accept:["Stated in the task body."], notes:""};
-    body = `<div class="scroll"><div class="ov"><div>
-      <div class="blk"><div class="h">Description</div><div class="md"><h3>Goal</h3><p>${h(b.goal)}</p><h3>Acceptance</h3><ul>${b.accept.map(a => `<li>${h(a)}</li>`).join("")}</ul>${b.notes?`<h3>Notes</h3><p>${h(b.notes)}</p>`:""}</div></div>
+  else body = `<div class="scroll"><div class="ov"><div>
+      <div class="blk"><div class="h">Description</div>${mdOf(t)}</div>
       ${t.children ? `<div class="blk"><div class="h">Children</div>${t.children.map(c => `<a class="kv" href="#task/${c}"><span class="k">${mark(T[c].status)}<span class="mono">${c}</span></span><span class="v" style="color:var(--ink-2)">${h(T[c].title)}</span><span class="t">${cap(T[c].status)}${T[c].deps.length?` · after ${T[c].deps.join(", ")}`:""}</span></a>`).join("")}</div>` : ""}
       ${t.deps.length ? `<div class="blk"><div class="h">Depends on</div>${t.deps.map(c => `<a class="kv" href="#task/${c}"><span class="k">${mark(T[c].status)}<span class="mono">${c}</span></span><span class="v">${h(T[c].title)}</span><span class="t">${cap(T[c].status)}</span></a>`).join("")}</div>` : ""}
     </div><div>
+      <div class="blk hidep"><div class="h">Pipeline</div>${pipeRows(t)}</div>
       <div class="blk"><div class="h">Checks</div>${checks.map(c => `<div class="kv"><span class="k">${c[0]}</span><span class="v ${c[1]==="pass"?"good":c[1]==="fail"?"bad":""}">${c[1]==="pass"?"passed":c[1]==="fail"?"failed":"running"}</span><span class="t">${c[2]}</span></div>`).join("") || `<div class="kv"><span class="v">None yet.</span></div>`}</div>
-      <div class="blk"><div class="h">Runs</div>${runs.map(s => `<a class="kv" href="#session/${s.id}"><span class="k">${mark(s.status)}${s.id.split("/")[1]} · ${s.role}</span><span class="v">${h(s.doing||"")}</span><span class="t">${s.cost}</span></a>`).join("") || `<div class="kv"><span class="v">No run yet.</span></div>`}</div>
+      <div class="blk"><div class="h">Runs</div>${runRows(id)}</div>
       <div class="blk"><div class="h">Artifacts</div>${files.length ? `<a class="kv" href="#activity/artifacts"><span class="k">diff</span><span class="v">${files.length} files</span><span class="t">${t.gate?.sha||""}</span></a><a class="kv" href="#activity/artifacts"><span class="k">log</span><span class="v">gate-${t.gate?.sha||""}.log</span><span class="t">41 kB</span></a>` : `<div class="kv"><span class="v">None yet.</span></div>`}</div>
     </div></div></div>`;
-  }
   const tabn = (k, label, n) => `<a class="tab${tab===k?" on":""}" href="#task/${id}${k==="overview"?"":"/"+k}">${label}${n?`<span class="n">${n}</span>`:""}</a>`;
   return `<div class="thead"><a class="back" href="#tasks">${ic("left")}Tasks</a>
     <div class="l1">${st(t.status)}<span class="id">${id}</span><h1>${h(t.title)}</h1><button class="btn" data-a="more" data-id="${id}">More ${ic("down")}</button></div>
-    <div class="meta"><span>project <b>${h(t.project)}</b></span><span>priority <b>${t.pri}</b></span>${t.kind?`<span>kind <b>${t.kind}</b></span>`:""}${t.size?`<span>size <b>${t.size}</b></span>`:""}<span>base <b>${base(t)}</b></span>${t.parent?`<span>in <a href="#task/${t.parent}">${t.parent}</a></span>`:""}</div></div>
-  <div class="decide ${t.status}"><div class="what">${what}</div>${how}${extra}${btns?`<div class="btns">${btns}</div>`:""}</div>
+    <div class="meta"><span>project <b>${h(t.project)}</b></span><span>priority <b>${t.pri}</b></span>${t.kind?`<span>kind <b>${t.kind}</b></span>`:""}${t.size?`<span>size <b>${t.size}</b></span>`:""}<span>base <b>${base(t)}</b></span>${t.run?`<span class="hidep">profile <b>${t.run.profile}</b></span><span class="hidep">round <b>${t.round||0} of 2</b></span>`:""}${cost?`<span class="hidep">cost <b>${money(cost)}</b></span>`:""}${t.parent?`<span>in <a href="#task/${t.parent}">${t.parent}</a></span>`:""}</div></div>
+  ${decision(t)}
   <div class="tabs">${tabn("overview","Overview")}${tabn("changes","Changes",files.length)}${tabn("history","History",evs.length)}</div>${body}`;
 }
 const evRow = e => { const to = T[e[2]] ? `task/${e[2]}` : `session/${e[2]}`; return `<a class="ev" href="#${to}"><span class="t">${e[0]}</span><span class="kd${e[1]==="forced"?" bad":""}">${e[1]}</span><span class="id mono">${e[2]}</span><span class="tx" data-k="${e[1]} ${e[2]}">${h(e[3])}</span><span class="who">${e[4]}</span></a>`; };
@@ -769,33 +934,26 @@ function vSessions(){
   let out = "";
   for (const [s, why] of [["blocked","waits on you"],["working",""],["idle","host running, nothing to do"]]){
     const list = sessions(x => x.status===s); if (!list.length) continue;
-    out += `<div class="sec s-${s}">${mark(s)}<span style="color:var(--ink)">${cap(s)}</span> <span class="n">${list.length}</span><span class="why hidep">${why}</span></div><div class="rows grouped">${list.map(x => row(x,{c5:"model"})).join("")}</div>`;
+    out += `<div class="sec s-${s}">${mark(s)}<span style="color:var(--ink)">${cap(s)}</span> <span class="n">${list.length}</span><span class="why hidep">${why}</span></div><div class="rows grouped">${list.map(x => row(x,{kind:"sess"})).join("")}</div>`;
   }
-  const gone = sessions(x => x.status==="gone"), open = S.closed.gone;
-  out += `<div class="sec fold" data-a="closed" data-id="gone">${ic(open?"down":"right")}Gone <span class="n">${10+gone.length}</span></div>` + (open ? `<div class="rows grouped">${gone.map(x => row(x,{c5:"model",quiet:true})).join("")}</div>` : "");
-  return `<div class="phead"><h1>Sessions</h1><span class="say">every agent conversation: chats, builds, workers and reviewers</span><span class="sp"></span><button class="btn pri" data-a="newmenu">${ic("plus")}New ${ic("down")}</button></div><div class="scroll">${out}<div style="height:24px"></div></div>`;
+  const gone = sessions(x => x.status==="gone"), open = S.closed.gone, live = sessions(x => x.status!=="gone");
+  out += `<div class="sec fold" data-a="closed" data-id="gone">${ic(open?"down":"right")}Gone <span class="n">${10+gone.length}</span></div>` + (open ? `<div class="rows grouped">${gone.map(x => row(x,{kind:"sess",quiet:true})).join("")}</div>` : "");
+  return `<div class="phead"><h1>Sessions</h1><span class="say"><b>${live.length}</b> live<span class="hidep"> · <b>${money(live.reduce((a,s) => a + usd(s), 0))}</b> spent by them</span></span><span class="sp"></span>${inspBtn()}<button class="btn pri" data-a="newmenu">${ic("plus")}New ${ic("down")}</button></div>${listPage("sess", "sessions", out)}`;
 }
 function vSession(id){
   const s = SS[id]; if (!s) return `<div class="empty">No session ${h(id)}.</div>`;
-  const lg = s.log || [["you", s.task ? `Prompt for ${s.task}: ${T[s.task]?.title||""}` : "…"],["tool","read","AGENTS.md","312 lines","0.1s"],["say",h(s.doing||"")]];
-  const item = x => x[0]==="you" ? `<div class="you-b"><small>you</small>${h(x[1])}</div>` : x[0]==="think" ? `<div class="think">${h(x[1])}</div>` :
-    x[0]==="tool" ? `<div class="tool"><span class="${x[3]==="running"?"run":"ok"}">${x[3]==="running"?"◐":"✓"}</span><b>${x[1]}</b><span>${h(x[2])} · ${x[3]}</span><u>${x[4]}</u></div>` :
-    x[0]==="agents" ? `<div class="card"><div class="hd">task · ${x[1].length} agents</div>${x[1].map(a => `<div class="kv"><span class="k mono">${a[0]}</span><span class="v" style="color:var(--ink-2)">${a[1]}</span><span class="t">${a[2]} · ${a[3]}</span></div>`).join("")}</div>` : `<div class="say">${x[1]}</div>`;
-  const dsec = (name, body) => `<div class="dsec"><div class="h">${name}</div>${body}</div>`;
-  const det = !S.details ? "" : `<aside class="details"><div class="dh">Details<span class="sp"></span><button class="btn ghost" data-a="details" aria-label="Close details">✕</button></div>
-    ${dsec("Changes", (s.files||[]).map(f => `<button class="kv" style="width:100%" data-a="say" data-say="diff of ${f[0]} opens full width"><span class="k mono" style="font-size:11.5px">${h(f[0].split("/").pop())}</span><span class="v"></span><span class="t"><span class="good">+${f[1]}</span> <span class="bad">−${f[2]}</span></span></button>`).join("") || `<span class="dim">No changes.</span>`)}
-    ${dsec("Agents", (s.agents||[]).map(a => `<div class="kv"><span class="k mono">${a[0]}</span><span class="v" style="color:var(--ink-2)">${a[1]}</span><span class="t">${a[2]}</span></div>`).join("") || `<span class="dim">No child agents.</span>`)}
-    ${dsec("Plan", (s.plan||[]).map(p => `<div class="step${p[1]?" dn":""}"><span>${p[1]?"✓":"○"}</span>${h(p[0])}</div>`).join("") || `<span class="dim">No plan recorded.</span>`)}
-    ${dsec("Usage", `<div class="kv"><span class="k">cost</span><span class="v"></span><span class="t">${s.cost}</span></div><div class="dim" style="font-size:12px;margin-top:4px">${s.usage||"not recorded"}</div>`)}
-    ${dsec("Context", `<div class="bar"><i style="width:${s.ctx}%"></i></div><span class="dim" style="font-size:12px">${s.ctx}% of the model's window</span>`)}</aside>`;
+  const open = detailsOn(), live = s.status!=="gone", working = s.status==="working", qd = s.queue||[];
+  const det = !open ? "" : `<aside class="details"><div class="dh">Details<span class="sp"></span><button class="btn ghost" data-a="details" aria-label="Close details">✕</button></div>${detailSections(s)}</aside>`;
   const pin = s.question ? `<div class="pin"><div class="q">${h(s.question.text)}</div>${options(s)}</div>` : "";
-  const live = s.status!=="gone";
+  const queue = qd.length ? `<div class="queue"><div class="h">Queue · ${qd.length} waiting · sent when the agent is next idle</div>${qd.map((m,i) => `<div class="qrow"><b>${i+1}</b><span>${h(m)}</span><button class="btn ghost" data-a="unqueue" data-id="${id}" data-i="${i}">Remove</button></div>`).join("")}</div>` : "";
+  const send = working ? `<button class="btn" data-a="queue" data-id="${id}">Queue</button><button class="btn pri" data-a="msg" data-id="${id}">Steer</button>` : `<button class="btn pri" data-a="msg" data-id="${id}">Send</button>`;
+  const sline = `<div class="sline hidep"><span>${s.role.toUpperCase()}</span><span>${s.cost}</span><span>ctx<span class="bar sm"><i style="width:${s.ctx}%"></i></span>${s.ctx}% · ${Math.round(s.ctx*2)}k / 200k</span><span>${h(s.model)} · ${s.effort}</span>${working&&s.quiet?`<span>quiet ${s.quiet}</span>`:""}${qd.length?`<span>${qd.length} queued</span>`:""}</div>`;
   return `<div class="thead"><a class="back" href="#sessions">${ic("left")}Sessions</a>
     <div class="l1">${st(s.status)}<span class="id">${s.id}</span><h1>${h(s.name)} <span class="dim" style="font-weight:400;font-size:13px">${s.role}</span></h1>
-      <button class="btn" data-a="details" aria-pressed="${S.details}">${ic("panel")}Details</button><button class="btn" data-a="smore" data-id="${s.id}">More ${ic("down")}</button></div>
+      <button class="btn" data-a="details" aria-pressed="${open}">${ic("panel")}Details</button><button class="btn" data-a="smore" data-id="${s.id}">More ${ic("down")}</button></div>
     <div class="meta">${s.project?`<span>project <b>${h(s.project)}</b></span>`:""}${s.branch?`<span>branch <b class="mono">${s.branch}</b></span>`:""}${s.task?`<span>task <a href="#task/${s.task}">${s.task}</a></span>`:""}<span>model <b>${h(s.model)}</b> · ${s.effort}</span><span>${h(s.doing||"")}</span></div></div>
-  <div class="sbody${S.details?" open":""}"><div class="talk"><div class="log">${lg.map(item).join("")}</div>${pin}
-    ${live ? `<div class="composer"><div class="cbox"><textarea rows="1" data-draft="m-${id}" placeholder="Message ${s.role==="Chat"?"the assistant":"this "+s.role.toLowerCase()}…" aria-label="Message">${h(S.drafts["m-"+id]||"")}</textarea><div class="cbar"><span class="pill">${h(s.model.split("/").pop())} · ${s.effort} ${ic("down")}</span><span class="sp"></span><button class="btn pri" data-a="msg" data-id="${id}">${s.status==="working"?"Steer":"Send"}</button></div></div></div>` : `<div class="composer dim">This session's host is gone. ${s.role==="Worker"?"Retry its task to start a new run.":"Resume it from More."}</div>`}
+  <div class="sbody${open?" open":""}"><div class="talk"><div class="log">${logOf(s).map(logItem).join("")}</div>${pin}${queue}
+    ${live ? `<div class="composer"><div class="cbox"><textarea rows="1" data-draft="m-${id}" placeholder="Message ${s.role==="Chat"?"the assistant":"this "+s.role.toLowerCase()}…" aria-label="Message">${h(S.drafts["m-"+id]||"")}</textarea><div class="cbar"><span class="pill">${h(s.model.split("/").pop())} · ${s.effort} ${ic("down")}</span><span class="sp"></span>${send}</div></div></div>${sline}` : `<div class="composer dim">This session's host is gone. ${s.role==="Worker"?"Retry its task to start a new run.":"Resume it from More."}</div>`}
   </div>${det}</div>`;
 }
 
@@ -808,7 +966,9 @@ function vActivity(sub="feed"){
       .filter(l => inScope(T[l[0]]||SS[l[0]]));
     return `<div class="phead"><h1>Timeline</h1><span class="say">today, 06:00 to now</span></div>${subnav(sub)}<div class="scroll"><div class="tl"><div class="axis"><span></span><div><span>06</span><span>07</span><span>08</span><span>09</span><span>10</span><span>now</span></div></div>
       ${lanes.map(l => `<a class="lane" href="#${T[l[0]]?"task":"session"}/${l[0]}"><span class="nm">${l[0]}</span><span class="track">${l[1].map(g => `<i class="k-${g[2]}" style="left:${g[0]*100}%;width:${(g[1]-g[0])*100}%"></i>`).join("")}</span></a>`).join("")}
-      <div class="legend"><span><i class="k-run"></i>Running</span><span><i class="k-gate"></i>Review (gate, reviewer)</span><span><i class="k-blocked"></i>Blocked</span><span><i class="k-ready"></i>Ready to land</span></div></div></div>`;
+      <div class="legend"><span><i class="k-run"></i>Running</span><span><i class="k-gate"></i>Review (gate, reviewer)</span><span><i class="k-blocked"></i>Blocked</span><span><i class="k-ready"></i>Ready to land</span></div>
+      <div class="burn"><div class="h">Burn-up · last 14 days</div><svg viewBox="0 0 130 60" preserveAspectRatio="none"><polyline stroke="var(--ink-3)" points="${[4,6,9,9,12,15,17,20,22,22,25,27,29,31].map((v,i) => `${i*10},${58-v*1.7}`).join(" ")}"/><polyline stroke="var(--ok)" points="${[1,2,4,5,7,9,12,14,15,17,19,21,23,24].map((v,i) => `${i*10},${58-v*1.7}`).join(" ")}"/></svg>
+        <div class="legend" style="margin-top:0"><span><i style="background:var(--ink-3)"></i>created 31</span><span><i style="background:var(--ok)"></i>landed 24</span><span>dropped 3</span><span>reopened 1</span><span>counts events; it does not narrow with the range above</span></div></div></div></div>`;
   }
   if (sub==="usage"){
     const rows = [["pi-opus-api","claude-opus-5-5",9,"4.1M","212k","$31.40"],["pi-sol-high","gpt-6.2-sol",11,"6.8M","301k","$12.75"],["pi-sol","gpt-6.2-sol",14,"5.2M","240k","$8.10"],["pi-terra","gpt-6.1-terra",7,"2.0M","96k","$1.92"]];
@@ -848,7 +1008,7 @@ function shell(view){
   const nav = (k, label, key, extra="") => `<a class="nav${top===k?" on":""}" href="#${k}">${ic(k)}<span class="lbl">${label}</span>${extra}<kbd>${key}</kbd></a>`;
   const scope = S.scope==="all" ? "All projects" : S.scope;
   const d = new Date();
-  return `<header class="titlebar"><span class="brand">${mark("ready")}<span>Corral</span></span><button class="tscope" data-a="scope">${ic("folder")}${h(scope)}</button><span class="path">~/miti-workspace</span><span class="hl"><i></i>healthy</span><span class="sp"></span>
+  return `<header class="titlebar"><button class="tfold" data-a="fold" aria-label="Fold the sidebar" title="Fold the sidebar (Ctrl B)">${ic("panel")}</button><span class="brand">${mark("ready")}<span>Corral</span></span><button class="tscope" data-a="scope">${ic("folder")}${h(scope)}</button><span class="path">~/miti-workspace</span><span class="hl"><i></i>healthy</span><span class="sp"></span>
       <span class="when">${d.toDateString().slice(0,10)} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}</span><span class="sample">sample</span><a class="tgear" href="#settings" aria-label="Settings">${ic("gear")}</a></header>
     <nav class="side"><button class="scope" data-a="scope">${ic("folder")}<span class="lbl">${h(scope)}<small>${S.scope==="all"?Object.keys(PROJECTS).length+" projects":"project in scope"}</small></span>${ic("down")}</button>
       ${nav("home","Home","h",needs?`<span class="cnt">${needs}</span>`:"")}${nav("tasks","Tasks","t")}${nav("sessions","Sessions","s")}${nav("activity","Activity","a")}
@@ -903,8 +1063,10 @@ function render(keep){
   const r = route(), app = document.getElementById("app");
   const focus = document.activeElement?.dataset?.draft, at = document.activeElement?.selectionStart, sc = app.querySelector(".scroll,.log")?.scrollTop;
   document.documentElement.className = "t-"+S.theme;
-  app.className = "app" + (isPhone() ? " phone" : "");
-  const view = r.page==="tasks" ? vTasks() : r.page==="task" ? vTask(r.rest[0], r.rest[1]) : r.page==="sessions" ? vSessions() : r.page==="session" ? vSession(r.rest.join("/")) : r.page==="activity" ? vActivity(r.rest[0]) : r.page==="settings" ? vSettings() : vHome();
+  app.className = "app" + (isPhone() ? " phone" : S.fold ? " fold" : "");
+  const build = () => { ROWS = []; KEYS = new Set(); return r.page==="tasks" ? vTasks() : r.page==="task" ? vTask(r.rest[0], r.rest[1]) : r.page==="sessions" ? vSessions() : r.page==="session" ? vSession(r.rest.join("/")) : r.page==="activity" ? vActivity(r.rest[0]) : r.page==="settings" ? vSettings() : vHome(); };
+  let view = build();
+  if (LISTS.has(r.page) && inspOn() && !KEYS.has(S.sel[r.page])){ S.sel[r.page] = ROWS[0]; view = build(); } // the inspector always has a row
   app.innerHTML = shell(view) + overlays();
   document.getElementById("mock").innerHTML = `<b>Corral app redesign</b><span>reference · sample data</span><span class="sp"></span>
     <span class="seg"><button data-a="frame" data-id="desktop" aria-pressed="${S.frame==="desktop"}">Desktop</button><button data-a="frame" data-id="phone" aria-pressed="${S.frame==="phone"}">Phone</button></span>
@@ -915,6 +1077,8 @@ function render(keep){
   if (again && (focus || !keep || !app.contains(document.activeElement))){ again.focus(); try { again.setSelectionRange(at ?? again.value.length, at ?? again.value.length); } catch(e){} }
   if (keep && sc){ const el = app.querySelector(".scroll,.log"); if (el) el.scrollTop = sc; }
   const lg = app.querySelector(".log"); if (lg && !keep) lg.scrollTop = lg.scrollHeight;
+  if (S.focusDraft){ app.querySelector(`[data-draft="${S.focusDraft}"]`)?.focus(); S.focusDraft = null; }
+  if (S.reveal){ app.querySelector(".row.sel")?.scrollIntoView({block:"nearest"}); S.reveal = false; }
   const pal = document.getElementById("pal"); if (pal){ pal.focus(); pal.setSelectionRange(pal.value.length, pal.value.length); }
 }
 function openMenu(el, kind, id){
@@ -926,9 +1090,14 @@ const NEEDS_TEXT = new Set(["reply","changes","comment","edit","verdict","retry"
 function openForm(op, id){ const t = T[id]; S.menu = null; S.sheet = {kind:"form", op, id, f:{to:op==="new"?"backlog":"ready", project:S.scope==="all"?"corral":S.scope, profile:t?PROJECTS[t.project].profile:"pi-terra", fresh:"same branch", verdict:"approve", text:op==="edit"&&t?t.title:""}}; }
 
 const A = {
-  nav(el, e){ if (e.target.closest("button,a,textarea,input")) return true; location.hash = el.dataset.to; return true; },
+  nav(el, e){ if (e.target.closest("button,a,textarea,input")) return true;
+    const twice = A.nav.key===el.dataset.key && e.timeStamp - A.nav.at < 450; A.nav.key = el.dataset.key; A.nav.at = e.timeStamp;
+    if (inspOn() && LISTS.has(route().page) && !twice){ S.sel[route().page] = el.dataset.key; return; } // select; Enter or a second click opens the page
+    location.hash = el.dataset.to; return true; },
   noop(){ return true; },
-  op(el){ const d = el.dataset; if (NEEDS_TEXT.has(d.op) && !d.arg && !d.force){ openForm(d.op, d.id); return; } apply(d.op, d.id, {arg:d.arg, force:!!d.force, sure:!!d.sure}); },
+  op(el){ const d = el.dataset, page = route().page;
+    if (d.op==="reply" && inspOn() && LISTS.has(page) && T[d.id]?.blocked?.next[0].op==="reply" && !el.closest(".sheet")){ S.sel[page] = d.id; S.focusDraft = d.id; return; }
+    if (NEEDS_TEXT.has(d.op) && !d.arg && !d.force){ openForm(d.op, d.id); return; } apply(d.op, d.id, {arg:d.arg, force:!!d.force, sure:!!d.sure}); },
   menuop(el){ const d = el.dataset; if (NEEDS_TEXT.has(d.op) || d.op==="dispatch") openForm(d.op, d.id); else apply(d.op, d.id); },
   more(el){ openMenu(el, "task", el.dataset.id); }, smore(el){ openMenu(el, "session", el.dataset.id); }, newmenu(el){ openMenu(el, "new"); }, scope(el){ openMenu(el, "scope"); },
   setscope(el){ S.scope = el.dataset.id; S.menu = null; },
@@ -945,7 +1114,10 @@ const A = {
   ask(){ const text = (S.drafts.ask||"").trim(); if (!text) return; const s = SS["A-4"]; s.log = (s.log||[]).concat([["you",text],["think","Reading the board…"]]); Object.assign(s, {status:"working", doing:"answering", age:"now"}); S.drafts.ask = ""; S.sheet = null; location.hash = "session/A-4"; },
   ask2(){ S.menu = null; location.hash = "home"; setTimeout(() => document.getElementById("ask")?.focus(), 30); },
   msg(el){ const id = el.dataset.id, text = (S.drafts["m-"+id]||"").trim(); if (!text) return; SS[id].log = (SS[id].log||[]).concat([["you",text]]); S.drafts["m-"+id] = ""; toast(`sent to ${id}`); },
-  details(){ S.details = !S.details; }, unfold(el){ S.unfold[el.dataset.id] = !S.unfold[el.dataset.id]; }, closed(el){ S.closed[el.dataset.id] = !S.closed[el.dataset.id]; },
+  details(){ S.details = !detailsOn(); }, insp(){ S.insp = !S.insp; }, fold(){ S.fold = !S.fold; },
+  queue(el){ const id = el.dataset.id, text = (S.drafts["m-"+id]||"").trim(); if (!text) return; (SS[id].queue = SS[id].queue||[]).push(text); S.drafts["m-"+id] = ""; toast(`queued for ${id}`); },
+  unqueue(el){ SS[el.dataset.id].queue.splice(+el.dataset.i, 1); },
+  unfold(el){ S.unfold[el.dataset.id] = !S.unfold[el.dataset.id]; }, closed(el){ S.closed[el.dataset.id] = !S.closed[el.dataset.id]; },
   file(el){ S.file = +el.dataset.i; }, asub(el){ S.asub = el.dataset.id; }, say(el){ S.menu = null; toast(el.dataset.say); },
   frame(el){ S.frame = el.dataset.id; }, theme(el){ S.theme = el.dataset.id; }, notes(){ S.notes = !S.notes; }, pal(){ S.pal = ""; },
 };
@@ -965,6 +1137,7 @@ document.addEventListener("keydown", e => {
   const typing = /INPUT|TEXTAREA/.test(document.activeElement?.tagName||"");
   if (e.key==="Escape"){ if (S.menu||S.sheet||S.pal!==null||S.notes){ A.close(); S.notes = false; render(true); } else if (typing) document.activeElement.blur(); else if (route().page==="task") location.hash = "tasks"; else if (route().page==="session") location.hash = "sessions"; return; }
   if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="k"){ e.preventDefault(); S.pal = ""; render(true); return; }
+  if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="b"){ e.preventDefault(); S.fold = !S.fold; render(true); return; }
   if (e.key==="Enter" && !e.shiftKey && typing){
     const d = document.activeElement.dataset.draft, el = document.activeElement;
     if (el.id==="pal"){ const first = document.querySelector(".pal a.mi"); if (first){ S.pal = null; location.hash = first.getAttribute("href"); render(); } return; }
@@ -972,6 +1145,13 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (typing || e.ctrlKey || e.metaKey || e.altKey || S.sheet || S.menu) return;
+  const page = route().page;
+  if (LISTS.has(page) && inspOn()){
+    const d = {j:1, ArrowDown:1, k:-1, ArrowUp:-1}[e.key];
+    if (d){ e.preventDefault(); S.sel[page] = ROWS[Math.max(0, Math.min(ROWS.length-1, ROWS.indexOf(S.sel[page])+d))]; S.reveal = true; render(true); return; }
+    if (e.key==="Enter" && !/BUTTON|A/.test(document.activeElement?.tagName||"")){ const el = document.querySelector(".row.sel"); if (el) location.hash = el.dataset.to; return; }
+  }
+  if (e.key==="i" && LISTS.has(page)){ S.insp = !S.insp; render(true); return; }
   const go = {h:"home", t:"tasks", s:"sessions", a:"activity", ",":"settings"}[e.key];
   if (go){ location.hash = go; return; }
   if (e.key==="/"){ e.preventDefault(); if (route().page!=="home") S.sheet = {kind:"ask"}; render(true); document.getElementById("ask")?.focus(); }
@@ -979,11 +1159,11 @@ document.addEventListener("keydown", e => {
 addEventListener("hashchange", () => { S.menu = null; S.file = 0; render(); });
 addEventListener("resize", () => render(true));
 
-document.getElementById("notes").innerHTML = `<h2>Design notes</h2><p>Brief: <code>docs/app-design/REDESIGN.md</code>, from the owner interview of 2026-11-19. This file is a reference for the next step, not the app. Its data is a sample and its actions run on a small local engine.</p>
-<h3>Principles</h3><ol><li><b>Attention first.</b> The first thing on screen is what waits on you.</li><li><b>Four places at rest.</b> Home, Tasks, Sessions, Activity; every other page has exactly one home under them.</li><li><b>One page per thing.</b> A task has one page, a session has one page; lists only open them.</li><li><b>One next step.</b> Each thing shows the one press that moves it; the rest is under More.</li><li><b>Decide where it is cheapest.</b> Small answers in the list, large ones at the top of the page.</li><li><b>One scope.</b> The project in scope applies everywhere and is always visible.</li><li><b>The engine's words, the engine decides.</b> 8 statuses, CLI operation names, progress as a plain phrase; the app suggests but never predicts a refusal.</li><li><b>One column, one optional panel.</b> No tabs inside pages (the task page excepted); details stay closed until opened.</li><li><b>Dense but quiet.</b> One row anatomy: status, id, title, what is happening, age, next step. Colour only for state.</li><li><b>Same product on every device.</b> Phone is the same pages, narrower.</li></ol>
-<h3>Things to try</h3><ol><li>Home: reply to T-887 in place; answer B-k3x9 with an option.</li><li>Tasks: press Dispatch on T-707 (refused: no slot) and on T-706 (refused: dependency); each refusal offers its forced form.</li><li>Open T-703: Approve asks once, then the task moves to Just finished. Its Changes tab holds the diff.</li><li>Open T-944: a Blocked task with a log; the engine's next steps are its buttons.</li><li>Any row's ⋯: all 15 operations, the next step marked.</li><li>The scope switcher at the top of the sidebar scopes every page. A scoped Home is the Project page.</li><li>Open B-k3x9 and press Details. Open B-m2q7 to choose a build's exit.</li><li>Keys: <code>h t s a ,</code> places, <code>/</code> composer, <code>Ctrl K</code> go to, <code>Esc</code> back.</li></ol>
+document.getElementById("notes").innerHTML = `<h2>Design notes</h2><p>Brief: <code>docs/app-design/REDESIGN.md</code>, from the owner interviews of 2026-11-19. This file is a reference for the next step, not the app. Its data is a sample and its actions run on a small local engine.</p>
+<h3>Principles</h3><ol><li><b>Attention first.</b> The first thing on screen is what waits on you.</li><li><b>Four places at rest.</b> Home, Tasks, Sessions, Activity; every other page has exactly one home under them.</li><li><b>One page per thing.</b> A task has one page, a session has one page; lists only open them.</li><li><b>One next step.</b> Each thing shows the one press that moves it; the rest is under More.</li><li><b>Decide where it is cheapest.</b> On a wide screen, in the inspector beside the list. On a phone, small answers in the list and large ones at the top of the page.</li><li><b>One scope.</b> The project in scope applies everywhere and is always visible.</li><li><b>The engine's words, the engine decides.</b> 8 statuses, CLI operation names, progress as a plain phrase; the app suggests but never predicts a refusal.</li><li><b>One list, one panel beside it.</b> No tabs inside pages (the task page excepted). A wide screen keeps the panel open: the inspector beside a list, Details beside a conversation. A phone shows one column and opens the rest.</li><li><b>Dense, and it uses the width.</b> The owner is technical: a row is a table row with a header (status, id, title, now, run, gate, review, land, project, profile, cost, age, next step), and columns give way only when there is no room. Colour only for state.</li><li><b>Same product on every device.</b> The phone has the same places, pages and actions, with less on screen at once.</li></ol>
+<h3>Things to try</h3><ol><li>Any list: click a row, or walk with <code>j</code> <code>k</code>, and read it in the inspector; <code>Enter</code> or a second click opens its page; <code>i</code> hides the inspector and every column comes back; <code>Ctrl B</code> folds the sidebar.</li><li>Home: reply to T-887 and answer B-k3x9 from the inspector. On the phone frame the same answers sit in the list.</li><li>Tasks: press Dispatch on T-707 (refused: no slot) and on T-706 (refused: dependency); each refusal offers its forced form.</li><li>Open T-703: Approve asks once, then the task moves to Just finished. Its Changes tab holds the diff.</li><li>Open T-944: a Blocked task with a log; the engine's next steps are its buttons.</li><li>Any row's ⋯: all 15 operations, the next step marked.</li><li>The scope switcher at the top of the sidebar scopes every page. A scoped Home is the Project page.</li><li>Open B-p8d1: Details are open, a message can be queued or steer the turn, and the status line is under the composer. Open B-m2q7 to choose a build's exit.</li><li>Activity › Timeline ends with the burn-up.</li><li>Keys: <code>h t s a ,</code> places, <code>j k Enter i</code> lists, <code>/</code> composer, <code>Ctrl K</code> go to, <code>Ctrl B</code> sidebar, <code>Esc</code> back.</li></ol>
 <h3>Where the nine destinations went</h3><table><tr><th>Today</th><th>Here</th></tr><tr><td>Now › Needs you</td><td>Home › Needs you</td></tr><tr><td>Now › Corral, Workers</td><td>Home › Working</td></tr><tr><td>Now › Waiting, Closed</td><td>Tasks</td></tr><tr><td>Changes</td><td>Activity › Feed</td></tr><tr><td>Plans</td><td>A task page with Children; a row in Tasks that unfolds</td></tr><tr><td>Agents</td><td>Sessions</td></tr><tr><td>Review</td><td>The task page: decision band and Changes tab</td></tr><tr><td>Timeline, Usage, Artifacts</td><td>Activity › Timeline, Usage, Artifacts</td></tr><tr><td>Project list, Project page, filter chips</td><td>The scope switcher; scoped Home</td></tr><tr><td>Ask drawer</td><td>The composer on Home; <code>/</code> elsewhere</td></tr><tr><td>Actions menu, Session menu</td><td>One next step plus More</td></tr></table>
-<h3>Deep links</h3><p><code>#home #tasks #task/T-703/changes #sessions #session/B-k3x9 #activity/usage #settings</code>, with <code>?frame=phone&amp;theme=light&amp;scope=corral&amp;details&amp;notes&amp;demo=more|refusal|confirm|scope|form</code> before the hash.</p>`;
+<h3>Deep links</h3><p><code>#home #tasks #task/T-703/changes #sessions #session/B-k3x9 #activity/usage #settings</code>, with <code>?frame=phone&amp;theme=light&amp;scope=corral&amp;sel=T-703&amp;noinsp&amp;fold&amp;details&amp;notes&amp;demo=more|refusal|confirm|scope|form</code> before the hash.</p>`;
 
 render();
 /* `?demo=` opens one overlay for a screenshot, by pressing the real control. */
