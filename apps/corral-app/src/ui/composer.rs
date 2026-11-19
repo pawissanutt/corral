@@ -109,7 +109,8 @@ impl Attach {
 /// Stages the images (and files) pasted into session `id`'s composer; the pasted text is the
 /// field's own. Refused visibly where the session takes no attachments now.
 fn paste(app: AppState, id: &Id, attach: Attach, paste: &PasteEvent) {
-    if paste.files.is_empty() && paste.uris.is_empty() {
+    // A copied file's path pasted where no attachments are offered is only text.
+    if paste.files.is_empty() && (paste.uris.is_empty() || !attach.offered.get_untracked()) {
         return;
     }
     match attach.refusal.get_untracked() {
