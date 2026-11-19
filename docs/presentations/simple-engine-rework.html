@@ -369,7 +369,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
               <li><a href="#s3-8"><span class="n">3.8</span>The app</a></li>
               <li><a href="#s3-9"><span class="n">3.9</span>Pair a phone or a browser</a></li>
               <li><a href="#s3-10"><span class="n">3.10</span>Agents with corral-pi</a></li>
-              <li><a href="#s3-11"><span class="n">3.11</span>Do you need to migrate your data?</a></li>
+              <li><a href="#s3-11"><span class="n">3.11</span>Your data: what was migrated</a></li>
               <li><a href="#s3-12"><span class="n">3.12</span>What is gone</a></li>
             </ol>
           </li>
@@ -494,7 +494,8 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
           <tr><th scope="row">App on a terminal, 140×44 and 80×24</th><td>walked every destination</td></tr>
           <tr><th scope="row">App in a browser, desktop and phone sizes</th><td>paired with a real daemon by six-digit code; stayed paired after reload; a forced move went through and was recorded</td></tr>
           <tr><th scope="row">Setup on this machine</th><td><code>corrald-next</code> runs as a user service and reports healthy; the terminal app reaches it; the web app on port 8890 opens on its pairing page; <code>corral-next config check</code> passes on the translated configuration</td></tr>
-          <tr><th scope="row">Import dry run on the real workspace</th><td>171 open tasks would be imported; nothing was changed</td></tr>
+          <tr><th scope="row">Import on the real workspace</th><td>977 tasks and 1,783 dated events imported on 18 November; the old system was only read</td></tr>
+          <tr><th scope="row">The app on the imported data</th><td>Now, Changes, the burn-up and the largest task were seen in a browser on a scratch copy made with the same import</td></tr>
         </tbody>
       </table>
     </div>
@@ -506,7 +507,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
       <li><strong>The cutover.</strong> The new programs are still named <code>corral-next</code> and <code>corrald-next</code>, state lives in <code>.corral-next/</code>, the four old crates are still in the tree (out of the workspace, unbuilt), <code>scripts/gate.sh</code> still targets them, and the README and <code>docs/DESIGN.md</code> still describe the old engine.</li>
       <li><strong>Real use.</strong> The exit criteria have not been shown on a product repository.</li>
       <li><strong>Old-system work on this repository is stranded.</strong> See <a href="#s4-11">Consequences of landing</a> in Part 4.</li>
-      <li><strong>Three things only you can do:</strong> enrol the terminal app, pair your browser, and decide when to import your open tasks. See <a href="#s3-1">3.1</a>.</li>
+      <li><strong>Three things only you can do:</strong> enrol the terminal app, pair your browser, and try one task. See <a href="#s3-1">3.1</a>.</li>
     </ul>
   </section>
 
@@ -517,7 +518,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
       <li>What to do with the stranded old-system branches: land their still-relevant parts by hand, or drop them.</li>
       <li>Whether Artifacts stays its own destination in the app or becomes an overlay.</li>
       <li>Whether the two app features that have no successor yet are wanted: the welcome tour, and launching <code>corral-pi</code> from the app.</li>
-      <li>When to import the 171 open tasks and stop the old daemon.</li>
+      <li>When to stop the old daemon. Until then both boards hold the same 171 open tasks.</li>
     </ol>
   </section>
 </section>
@@ -831,7 +832,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
           <tr><th scope="row" style="width:4.5rem">1</th><td>Shared types, engine library, CLI</td><td>Done</td></tr>
           <tr><th scope="row">2</th><td>Daemon on the engine, reduced wire, app reshaped, classic board’s functions on the app’s terminal form</td><td>Done</td></tr>
           <tr><th scope="row">3</th><td>Pi host rework and its runner</td><td>Done</td></tr>
-          <tr><th scope="row">4</th><td>Cutover: import open tasks, rename the binary, delete the old crates and gate scripts</td><td><strong>Import is built and has only been run as a dry run</strong> (977 tasks exported, 171 would import, next id 978). The rest is not started.</td></tr>
+          <tr><th scope="row">4</th><td>Cutover: import open tasks, rename the binary, delete the old crates and gate scripts</td><td><strong>The import is done on this workspace:</strong> 977 tasks with their history, on 18 November. The rest is not started.</td></tr>
         </tbody>
       </table>
     </div>
@@ -860,7 +861,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
 
   <section class="sec" aria-labelledby="s3-1">
     <h3 id="s3-1"><span class="sec-no">3.1</span> Your setup on this machine</h3>
-    <p class="lead">Done on 18 November 2026. The old system was not changed and still runs.</p>
+    <p class="lead">Done on 18 November 2026. The old system was not changed and still runs. Your tasks and their history were imported the same day; see <a href="#s3-11">3.11</a>.</p>
     <aside class="callout todo" aria-labelledby="s3-1-left">
       <h4 class="callout-label" id="s3-1-left">Three things left for you</h4>
       <ol>
@@ -896,6 +897,7 @@ footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(-
           <tr><th scope="row">Web app</th><td><code>http://127.0.0.1:8790/</code></td><td><code>http://127.0.0.1:8890/</code></td></tr>
           <tr><th scope="row">Terminal</th><td><code>corral</code> (classic board)</td><td><code>corral-app-tui</code></td></tr>
           <tr><th scope="row">Task ids</th><td>up to T-977</td><td>start at T-2000</td></tr>
+          <tr><th scope="row">Tasks</th><td>977, still changing</td><td>the same 977 as of the import, plus anything new from T-2000</td></tr>
         </tbody>
       </table>
     </div>
@@ -1198,30 +1200,68 @@ Paired dev-975a05cfa40497b7 "Browser"</code></pre></div>
   </section>
 
   <section class="sec" aria-labelledby="s3-11">
-    <h3 id="s3-11"><span class="sec-no">3.11</span> Do you need to migrate your data?</h3>
-    <p class="lead"><strong>No, not to use the new app.</strong> The new system starts empty and the old one keeps all its data. The only thing worth moving is your open tasks, and only at the moment you stop working them in the old system.</p>
+    <h3 id="s3-11"><span class="sec-no">3.11</span> Your data: what was migrated</h3>
+    <p class="lead"><strong>Yes.</strong> The old board’s tasks and their history were imported on 18 November 2026. The old system was only read and still has everything.</p>
     <div class="tw wide" tabindex="0" role="region" aria-label="Data migration table">
       <table class="cmd-table">
-        <thead><tr><th scope="col">Data</th><th scope="col">Migrate?</th><th scope="col">What happens</th></tr></thead>
+        <thead><tr><th scope="col">Data</th><th scope="col">Migrated?</th><th scope="col">What you get</th></tr></thead>
         <tbody>
-          <tr><th scope="row">Configuration</th><td><strong>Done</strong></td><td>Translated on 18 November. See <a href="#s3-1">3.1</a>.</td></tr>
-          <tr><th scope="row">Agent logins</th><td><strong>No</strong></td><td>Read in place from the old host’s directory</td></tr>
-          <tr><th scope="row">Open tasks</th><td><strong>Your choice</strong></td><td><code>corral-next import</code> brings them over with their ids. Dry run on 18 November: 171 would be imported (42 ideas, 109 backlog, 20 ready), 806 closed tasks skipped, none unreadable, every project configured.</td></tr>
-          <tr><th scope="row">Tasks in flight: running, waiting on you, in review</th><td><strong>They arrive as Backlog</strong></td><td>Their runs, worktrees, sessions and review rounds stay with the old system</td></tr>
-          <tr><th scope="row">History: events, artifacts, usage, gate and review records</th><td><strong>No</strong></td><td>Stays in <code>.corral/</code>, readable with the old <code>corral</code></td></tr>
-          <tr><th scope="row">Done and Dropped tasks</th><td><strong>Optional</strong></td><td><code>corral-next import --all</code></td></tr>
+          <tr><th scope="row">Configuration</th><td><strong>Yes</strong></td><td>Translated on 18 November. See <a href="#s3-1">3.1</a>.</td></tr>
+          <tr><th scope="row">Agent logins</th><td><strong>Not needed</strong></td><td>Read in place from the old host’s directory</td></tr>
+          <tr><th scope="row">Open tasks</th><td><strong>Yes, 171</strong></td><td>42 ideas, 110 backlog, 19 ready, with their ids, plans and dependencies</td></tr>
+          <tr><th scope="row">Done and Dropped tasks</th><td><strong>Yes, 806</strong></td><td>702 done and 104 dropped, each with its real closing date</td></tr>
+          <tr><th scope="row">History</th><td><strong>A summary</strong></td><td>1,783 events at the times they happened: created, landed with its commit, moved to done, dropped</td></tr>
+          <tr><th scope="row">Results and comments</th><td><strong>Yes</strong></td><td>In each task’s body, under “Result” and “Comments on the old board”</td></tr>
+          <tr><th scope="row">Tasks in flight</th><td><strong>As Backlog</strong></td><td>7 tasks (4 waiting on you, 3 in review), with a note naming the last run’s branch and worktree</td></tr>
+          <tr><th scope="row">Held tasks</th><td><strong>As Backlog</strong></td><td>11 tasks, with the hold’s reason as the last line of the body</td></tr>
+          <tr><th scope="row">Runs, sessions, gate and review records, artifacts, questions, usage</th><td><strong>No</strong></td><td>They stay in <code>.corral/</code>, readable with the old <code>corral</code></td></tr>
           <tr><th scope="row">Paired devices</th><td><strong>Pair again</strong></td><td>The new daemon has its own identity and device list</td></tr>
         </tbody>
       </table>
     </div>
-    <p><strong>When to import.</strong> At the moment you stop the old daemon. Until then the same task would be open in both systems, and both could start an agent on it.</p>
-    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl">corral export tasks /tmp/corral-export</span>          <span class="cm"># old corral; reads only</span>
-<span class="cl">corral-next import /tmp/corral-export --dry-run</span> <span class="cm"># report only</span>
-<span class="cl">corral-next import /tmp/corral-export</span></code></pre></div>
-    <p>Two things to know:</p>
+    <h4 id="s3-11-how">How it was done</h4>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral export tasks /tmp/corral-old-export</span>                       <span class="cm"># old corral; reads only</span>
+<span class="cl"><span class="pr">$ </span>corral export events --json &gt; /tmp/corral-old-events.jsonl</span>       <span class="cm"># old corral; reads only</span>
+<span class="cl"><span class="pr">$ </span>corral-next import /tmp/corral-old-export --all --events /tmp/corral-old-events.jsonl --dry-run</span>
+<span class="cl"><span class="pr">$ </span>corral-next import /tmp/corral-old-export --all --events /tmp/corral-old-events.jsonl</span>
+Import counts:
+  idea: 42
+  backlog: 110
+  ready: 19
+  done: 702
+  dropped: 104
+Skipped as closed: 0
+Skipped as existing: 0
+Unparsable: 0
+Unconfigured projects: 0
+Dependencies already done: 0
+Dependencies needing owner attention: 0
+Closing dates: 754 from the event log, 39 from the task’s status time, 13 from its last update
+Next task ID: T-2000</code></pre></div>
+    <h4 id="s3-11-see">What you will see</h4>
+    <p>The app’s facts below were checked in a browser on a scratch copy made with the same import, not on the real daemon.</p>
     <ul>
+      <li><strong>Now</strong> has Waiting 171 (19 ready, 110 backlog, 42 ideas) and Closed 806, with real closing dates.</li>
+      <li><strong>Changes</strong> lists the 1,783 events newest first, for example “T-977 landed e722e94 on main”. Each device shows all 1,783 as new until “Mark seen” is pressed on Changes.</li>
+      <li><strong>The Timeline burn-up</strong> starts on 15 October and ends at scope 873, landed 648.</li>
+      <li><strong>The largest task</strong> (47 KB) opens.</li>
+    </ul>
+    <p>One task’s log after the import:</p>
+    <div class="code term"><div class="code-h"><span>Terminal</span></div><pre tabindex="0"><code><span class="cl"><span class="pr">$ </span>corral-next log T-977</span>
+SEQ   TIME                  KIND     ACTOR      RUN  DETAIL
+1780  2026-11-18T02:52:19Z  created  assistant  -    {"imported":true,"title":"red-main: restore the Rust size ceiling for pi_cmd.rs"}
+1781  2026-11-18T03:35:32Z  landed   assistant  -    {"base":"main","imported":true,"sha":"e722e94..."}</code></pre></div>
+    <p class="note">Times are shortened to the second and the commit to seven characters.</p>
+    <h4 id="s3-11-know">Things to know</h4>
+    <ul>
+      <li>Both boards hold the same 171 open tasks. Automatic dispatch is off on the new board, but the old board can still start an agent on one. Work a task on one board only.</li>
+      <li>It is a one-time copy. The old board keeps running, and a change made there after the import does not come over. Running the import again adds tasks created since and skips the ones already imported; it does not update them.</li>
       <li>New task ids start at T-2000 on this machine, so an import cannot collide with a task created here first.</li>
       <li>An imported task that still has a worktree or branch from the old system, such as T-855, is refused at dispatch (“task worktree or branch already exists outside its run history”) until that worktree and branch are landed or removed.</li>
+      <li>The burn-up counts a task as landed only when a commit landed. The 54 tasks moved to Done by hand are in scope and not counted as landed.</li>
+      <li>Closing times: 754 from the old event log, 39 from the task’s own status time, 13 from its last update. Those 13 can be days late.</li>
+      <li>The Usage page stays empty until a new run reports.</li>
+      <li><strong>Undo:</strong> the empty store from before the import is in <code>~/.local/share/corral-next/backups/pre-import-20261118/</code>. Stop <code>corrald-next.service</code>, copy its three files back into <code>.corral-next/</code>, start the service.</li>
     </ul>
   </section>
 
@@ -1433,6 +1473,7 @@ pub struct Next    { pub op: Op, pub force: bool }</code></pre></div>
       <li>On the web, a menu opened by pointer ignores the arrow keys; a menu opened by keyboard does not.</li>
       <li>The terminal form cannot preview images or open an artifact in an external program.</li>
       <li>Usage totals cover only runs whose harness reports usage; the report says how many runs it covers.</li>
+      <li>Imported history is a summary: one created event per task and one closing event. The old board’s gates, reviews and runs are not in the new log.</li>
       <li>Fixed after the landing: a <code>corral-pi build</code> session created a directory that hid the old host’s saved logins from every later session. Commit <code>780c5154f</code>, with a regression test.</li>
     </ul>
   </section>
@@ -1441,7 +1482,7 @@ pub struct Next    { pub op: Op, pub force: bool }</code></pre></div>
     <h3 id="s4-13"><span class="sec-no">4.13</span> What comes next</h3>
     <ol>
       <li>Decide the cutover and do it: rename <code>corral-next</code> to <code>corral</code> and <code>.corral-next/</code> to <code>.corral/</code>, delete the four old crates, replace the gate scripts, rewrite the README and <code>docs/DESIGN.md</code>.</li>
-      <li>Import the open tasks when you stop the old daemon (171 in the dry run). See <a href="#s3-11">3.11</a>.</li>
+      <li>Stop the old daemon when you are ready to work from the new board only. Your tasks are already imported. See <a href="#s3-11">3.11</a>.</li>
       <li>Use it on a product repository and check the four exit criteria:
         <ul>
           <li>With no assistant running, <code>new</code>, <code>dispatch</code> and <code>approve</code> land a one-line change.</li>
