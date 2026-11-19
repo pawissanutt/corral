@@ -3,8 +3,11 @@ const APP_REQUEST_DEADLINE_MS: u64 = 5_000;
 const APP_REQUEST_MARGIN_MS: u64 = 5_000;
 const APP_READ_WAIT_MS: u64 = 25_000;
 const APP_READ_DEADLINE_MS: u64 = APP_READ_WAIT_MS + APP_REQUEST_MARGIN_MS;
-/// The daemon answers a long operation with `running` after 5 s; this leaves it room.
+/// The daemon answers a long operation with `running` after 5 s, and gives up on a call to a
+/// running host after 10 s; this leaves both room.
 const APP_COMMAND_DEADLINE_MS: u64 = 25_000 + APP_REQUEST_MARGIN_MS;
+/// corrald gives a host 30 s to start and its first call 10 s more before it answers.
+const APP_LAUNCH_DEADLINE_MS: u64 = 40_000 + APP_REQUEST_MARGIN_MS;
 use corral_protocol::frame::{Frame, FrameKind};
 #[cfg(test)]
 use corral_protocol::rpc::Request;
@@ -715,9 +718,25 @@ fn request_deadline(method: &str, params: &Value) -> u64 {
             .unwrap_or(0)
             .min(APP_READ_WAIT_MS)
             .saturating_add(APP_REQUEST_MARGIN_MS),
-        // A card answer, a host action and a build's removal wait on the host or on prune.
+        // These may start the session's host before they answer. Expiring sooner reports a
+        // start as failed while corrald completes it.
+        wire::build::BUILD_START
+        | wire::session::SESSION_RELAUNCH
+        | wire::session_host::SESSION_SEND
+        | wire::assistant::ASSISTANT_WARM => APP_LAUNCH_DEADLINE_MS,
+        // These wait on an operation, on a running host or on prune.
         wire::op::OP_SUBMIT
+        | wire::session::SESSION_CANCEL
+        | wire::session::SESSION_PAUSE
+        | wire::session::SESSION_RESUME
+        | wire::session::SESSION_TERMINATE
+        | wire::session::SESSION_REWIND
+        | wire::session_host::SESSION_QUEUE_WITHDRAW
+        | wire::session_host::SESSION_QUEUE_MOVE
+        | wire::session_host::SESSION_MODEL
         | wire::session_host::SESSION_CARD_ANSWER
+        | wire::session_host::SESSION_CHILD
+        | wire::session_host::SESSION_JOB
         | wire::session_host::SESSION_ACTION
         | wire::build::BUILD_REMOVE => APP_COMMAND_DEADLINE_MS,
         _ => APP_REQUEST_DEADLINE_MS,
