@@ -3,6 +3,7 @@ use std::{
     io::Write,
     os::unix::{fs::symlink, process::ExitStatusExt},
     process::{ExitStatus, Output},
+    sync::atomic::{AtomicBool, Ordering},
     time::Instant,
 };
 
@@ -135,6 +136,91 @@ fn page(client: &mut Client, id: &str) -> SessionPage {
         panic!("expected session transcript")
     };
     page
+}
+
+#[test]
+fn a_brief_of_two_pages_is_served_with_one_etag_and_joins_to_the_whole_text() {
+    const BEFORE: &str = "aaaaaaaaaaaaaaaaaaaaaa";
+    const AFTER: &str = "bbbbbbbbbbbbbbbbbbbbbb";
+    let fixture = Fixture::new();
+    let id = "B-plan";
+    let key = "draft";
+    let front = "界".repeat(12_000);
+    let back = "先".repeat(12_000);
+    let whole = format!("{front}{back}");
+    let split = front.len();
+    let changed = Arc::new(AtomicBool::new(false));
+    let revised = Arc::clone(&changed);
+    let script = Script::default().reply_result("board_plan_task", move |_, request, _| {
+        let args = &request["args"];
+        if args["key"] != key {
+            return Err(("board_plan_task_missing", "task is not in the proposal"));
+        }
+        let revised = revised.load(Ordering::Relaxed);
+        let stamp = if revised { AFTER } else { BEFORE };
+        let cursor = format!("{stamp}.{split}");
+        let bytes = split + back.len();
+        if let Some(after) = args["after"].as_str() {
+            if after != cursor {
+                return Err(("stale_page", "proposal changed"));
+            }
+            let tail = if revised {
+                "後".repeat(12_000)
+            } else {
+                back.clone()
+            };
+            return Ok(json!({"key": key, "body": tail, "bytes": bytes, "offset": split}));
+        }
+        Ok(json!({"key": key, "body": front, "bytes": bytes, "offset": 0, "next": cursor}))
+    });
+    let _host = terminal(&fixture, id, script);
+    let mut owner = Client::connect_with(&fixture.unix_server(), vec![wire::BUILD_V1.into()]);
+    let query = json!({"kind": "build_plan_task", "id": id, "key": key});
+    let first: DetailReply = owner.ok(wire::app::DETAIL_GET, &query);
+    let cursor = first
+        .next
+        .as_deref()
+        .expect("expected a brief continuation");
+    assert_eq!(cursor, format!("{BEFORE}.{split}"));
+    let next = json!({"kind": "build_plan_task", "id": id, "key": key, "page": cursor});
+    let second: DetailReply = owner.ok(wire::app::DETAIL_GET, &next);
+    assert_eq!(first.etag, second.etag);
+    assert!(second.next.is_none());
+    let (Some(DetailBody::BuildPlanTask(first_page)), Some(DetailBody::BuildPlanTask(second_page))) =
+        (first.body, second.body)
+    else {
+        panic!("expected two brief pages");
+    };
+    assert_eq!(first_page.key, key);
+    assert_eq!(first_page.bytes, whole.len() as u64);
+    assert_eq!(first_page.offset, 0);
+    assert_eq!(second_page.key, key);
+    assert_eq!(second_page.bytes, first_page.bytes);
+    assert_eq!(second_page.offset, split as u64);
+    assert_eq!(first_page.body + &second_page.body, whole);
+
+    let mut conditional = query;
+    conditional["etag"] = json!(first.etag);
+    let unchanged: DetailReply = owner.ok(wire::app::DETAIL_GET, &conditional);
+    assert!(unchanged.body.is_none());
+    assert!(unchanged.next.is_none());
+    changed.store(true, Ordering::Relaxed);
+    let new: DetailReply = owner.ok(wire::app::DETAIL_GET, &conditional);
+    assert_ne!(new.etag, first.etag);
+    assert!(matches!(
+        new.body,
+        Some(DetailBody::BuildPlanTask(page)) if page.bytes == whole.len() as u64
+    ));
+    let stale = owner.call(wire::app::DETAIL_GET, &next).unwrap_err();
+    assert_eq!(stale.code, rpc::ErrorCode::Conflict);
+
+    let missing = owner
+        .call(
+            wire::app::DETAIL_GET,
+            json!({"kind": "build_plan_task", "id": id, "key": "missing"}),
+        )
+        .unwrap_err();
+    assert_eq!(missing.code, rpc::ErrorCode::NotFound);
 }
 
 #[test]

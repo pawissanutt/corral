@@ -77,7 +77,8 @@ fn exchange<R: DeserializeOwned + Serialize>(
     args: impl Serialize,
     deadline: Instant,
 ) -> Result<R> {
-    let reply = Client::request_on(stream, command, args, deadline).map_err(host_error)?;
+    let reply = Client::request_on(stream, command, args, deadline)
+        .map_err(|error| host_error(command, error))?;
     ensure!(
         json_len(&reply).context("sizing typed Pi reply")? <= SESSION_PART_MAX,
         PartTooLarge
@@ -237,9 +238,18 @@ pub(crate) fn action(shared: &Shared, request: SessionActionRequest) -> Result<S
     }
 }
 
-fn host_error(error: anyhow::Error) -> anyhow::Error {
+fn host_error(command: &str, error: anyhow::Error) -> anyhow::Error {
     match error.downcast::<PiRefusal>() {
         Ok(error) if error.code == "unknown_command" => refuse(OLDER_HOST_HINT, vec![]),
+        Ok(error)
+            if command == "board_plan_task"
+                && matches!(
+                    error.code.as_str(),
+                    "stale_page" | "board_plan_task_missing"
+                ) =>
+        {
+            error.into()
+        }
         Ok(error) => refuse(error.reason, vec![]),
         Err(error) => error,
     }
