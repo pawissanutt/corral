@@ -6,11 +6,11 @@
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
-use crate::model::Form;
-use crate::model::assistant::{Action, AttachField, Composer, ContextChip, StagedChip};
+use crate::model::assistant::{AttachField, Composer, ContextChip, StagedChip};
 use crate::model::hue::Hue;
+use crate::model::{Form, Id};
 use crate::state::AppState;
-use crate::ui::ask::act;
+use crate::ui::ask::{act, act_on};
 use crate::ui::atoms::control_height;
 use crate::ui::composer::state_mark;
 use crate::ui::icons::{Icon, icon};
@@ -122,7 +122,7 @@ fn context_chip(app: AppState, context: &ContextChip, glyph: Icon, remove_id: &s
                     app,
                     remove_id.into(),
                     remove_label.into(),
-                    remove,
+                    move || act(app, remove.clone()),
                 )),
         )
         .child(note)
@@ -130,12 +130,17 @@ fn context_chip(app: AppState, context: &ContextChip, glyph: Icon, remove_id: &s
 }
 
 /// A chip's close control: 20 pt, its own hover and focus ring, a phone's larger hit area.
-fn close_button(app: AppState, test_id: String, label: String, action: Action) -> AnyElement {
+fn close_button(
+    app: AppState,
+    test_id: String,
+    label: String,
+    press: impl Fn() + 'static,
+) -> AnyElement {
     view()
         .test_id(&test_id)
         .role(AccessibilityRole::Button)
         .label(label)
-        .on_press(move || act(app, action.clone()))
+        .on_press(press)
         .w(px(20.0))
         .h(px(20.0))
         .flex_shrink_0()
@@ -161,21 +166,23 @@ fn close_button(app: AppState, test_id: String, label: String, action: Action) -
         .into_element()
 }
 
-/// What is staged, under the context chip: wrapping pills on desktop, one row that scrolls
-/// sideways on a phone, a line per item in a terminal. Rows are keyed, so an upload's progress
-/// redraws its own pill and a focused Remove keeps its focus.
-pub(crate) fn tray(app: AppState, built: Memo<Composer>) -> AnyElement {
+/// What is staged for `session`, under the context chip: wrapping pills on desktop, one row
+/// that scrolls sideways on a phone, a line per item in a terminal. Rows are keyed, so an
+/// upload's progress redraws its own pill and a focused Remove keeps its focus.
+pub(crate) fn tray(app: AppState, session: Id, built: Memo<Composer>) -> AnyElement {
     let form = app.form;
     let chips = computed(move || built.with(|c| c.staged.clone()));
     let shown = computed(move || chips.with(|chips| !chips.is_empty()));
     when(
         move || shown.get(),
         move || {
+            let session = session.clone();
             let rows = each(
                 move || chips.get(),
                 |chip: &StagedChip| chip.key.clone(),
                 move |row: ReadSignal<StagedChip>, _| {
-                    dynamic(move || row.with(|chip| untracked(|| staged_chip(app, chip))))
+                    let session = session.clone();
+                    dynamic(move || row.with(|chip| untracked(|| staged_chip(app, &session, chip))))
                 },
             );
             match form {
@@ -217,10 +224,12 @@ fn glyph(kind: &str) -> Icon {
 }
 
 /// One staged item: its kind, name and size, where its upload stands, and Remove.
-fn staged_chip(app: AppState, chip: &StagedChip) -> AnyElement {
+fn staged_chip(app: AppState, session: &Id, chip: &StagedChip) -> AnyElement {
     let form = app.form;
     let id = slug(&chip.key);
     let remove = chip.remove.clone();
+    let session = session.clone();
+    let unattach = move || act_on(app, &session, remove.clone());
     let kind = text(chip.kind)
         .number_of_lines(1u32)
         .text_color(color(Token::Ink3));
@@ -256,7 +265,7 @@ fn staged_chip(app: AppState, chip: &StagedChip) -> AnyElement {
                 ButtonKind::Quiet,
                 ButtonOptions::default(),
                 format!("btn-unattach-{id}"),
-                move || act(app, remove.clone()),
+                unattach,
             ))
             .into_element();
     }
@@ -266,7 +275,7 @@ fn staged_chip(app: AppState, chip: &StagedChip) -> AnyElement {
         app,
         format!("btn-unattach-{id}"),
         chip.remove_label.clone(),
-        remove,
+        unattach,
     );
     view()
         .test_id(&format!("chip-attach-{id}"))
@@ -300,16 +309,28 @@ fn staged_chip(app: AppState, chip: &StagedChip) -> AnyElement {
 
 /// Screenshot, Link and File with why any is dimmed; the open link or path field takes their
 /// place. Desktop and terminal; a phone keeps them behind its "+" ([`plus`]).
-pub(crate) fn foot_controls(app: AppState, built: Memo<Composer>) -> AnyElement {
-    let open = computed(move || app.ask_field.with(Option::is_some));
-    when(move || open.get(), move || untracked(|| field_row(app)))
-        .otherwise(move || untracked(|| controls(app, built)))
-        .into_element()
+pub(crate) fn foot_controls(app: AppState, session: Id, built: Memo<Composer>) -> AnyElement {
+    let open = field_open(app, session.clone());
+    let field = session.clone();
+    when(
+        move || open.get(),
+        move || untracked(|| field_row(app, field.clone())),
+    )
+    .otherwise(move || untracked(|| controls(app, session.clone(), built)))
+    .into_element()
+}
+
+/// Whether the inline field is open in `session`'s composer.
+fn field_open(app: AppState, session: Id) -> Memo<bool> {
+    computed(move || {
+        app.ask_field
+            .with(|open| open.as_ref().is_some_and(|(owner, _)| *owner == session))
+    })
 }
 
 /// The controls in a row, then why any is dimmed on its own line under them, wrapping inside
 /// the room left beside Send so it never runs under it.
-fn controls(app: AppState, built: Memo<Composer>) -> AnyElement {
+fn controls(app: AppState, session: Id, built: Memo<Composer>) -> AnyElement {
     let form = app.form;
     let count = built.with_untracked(|c| c.attachments.len());
     let note = computed(move || built.with(|c| c.attach_note.clone()));
@@ -322,7 +343,7 @@ fn controls(app: AppState, built: Memo<Composer>) -> AnyElement {
                 .flex_wrap()
                 .items_center()
                 .gap(px(if form == Form::Terminal { 16.0 } else { 4.0 }))
-                .children((0..count).map(|index| control(app, built, index, None))),
+                .children((0..count).map(|index| control(app, &session, built, index, None))),
         )
         .child(dynamic(move || {
             note.get().map(|note| {
@@ -348,7 +369,7 @@ const MENU_WIDTH: f32 = 248.0;
 /// Screenshot, Link and File as a menu above it, each a full-height row, and why any is dimmed
 /// under them. Pressing one closes the menu before it attaches; pressing outside closes it.
 /// Nothing when the composer offers no attachments.
-pub(crate) fn plus(app: AppState, built: Memo<Composer>) -> AnyElement {
+pub(crate) fn plus(app: AppState, session: Id, built: Memo<Composer>) -> AnyElement {
     let count = built.with_untracked(|c| c.attachments.len());
     if count == 0 {
         return view().into_element();
@@ -412,7 +433,10 @@ pub(crate) fn plus(app: AppState, built: Memo<Composer>) -> AnyElement {
                         .border_color(color(Token::Rule2))
                         .shadow_xl()
                         .shadow_color(color(Token::Shell))
-                        .children((0..count).map(|index| control(app, built, index, Some(open))))
+                        .children(
+                            (0..count)
+                                .map(|index| control(app, &session, built, index, Some(open))),
+                        )
                         .child(dynamic(move || {
                             note.get().map(|note| {
                                 note_text(Form::Phone, note)
@@ -443,6 +467,7 @@ const TARGET: f32 = 44.0;
 /// menu as it is pressed.
 fn control(
     app: AppState,
+    session: &Id,
     built: Memo<Composer>,
     index: usize,
     menu: Option<Signal<bool>>,
@@ -454,8 +479,10 @@ fn control(
                 .map(|b| (b.label, b.action.clone(), b.enabled, c.attach_note.clone()))
         })
     });
+    let session = session.clone();
     dynamic(move || {
         state.get().map(|(label, action, enabled, note)| {
+            let session = session.clone();
             untracked(|| {
                 let form = app.form;
                 let (glyph, spoken) = CONTROLS.get(index).copied().unwrap_or((Icon::Plans, label));
@@ -482,7 +509,7 @@ fn control(
                             if let Some(open) = menu {
                                 open.set(false);
                             }
-                            act(app, action.clone());
+                            act_on(app, &session, action.clone());
                         })
                         .cursor_pointer()
                     })
@@ -536,10 +563,18 @@ fn control(
 }
 
 /// The open link or path field: `link › [Paste a link] Attach Cancel`, Enter attaches and Esc
-/// cancels; the reason under it when what was typed is not attached. Nothing while closed.
-pub(crate) fn field_row(app: AppState) -> AnyElement {
+/// cancels; the reason under it when what was typed is not attached. Nothing while closed or
+/// open in another session's composer.
+pub(crate) fn field_row(app: AppState, session: Id) -> AnyElement {
+    let field = computed(move || {
+        app.ask_field.with(|open| {
+            open.as_ref()
+                .filter(|(owner, _)| *owner == session)
+                .map(|(_, field)| *field)
+        })
+    });
     dynamic(move || {
-        app.ask_field
+        field
             .get()
             .map(|field| untracked(|| field_view(app, field)))
     })

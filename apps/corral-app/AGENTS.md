@@ -68,7 +68,7 @@ Agent sessions keep these rules:
 - `src/ui/kit/page_phone.rs`: phone page scaffolds and helpers.
 - `src/ui/`: tokens, atoms, icons, Ask and composer surfaces, palette and terminal-specific pieces in `term.rs`.
 - `src/ui/ask.rs`, `src/ui/ask/`: Ask over the session page: `drawer.rs` where Ask opens (a drawer on desktop, a pane in a terminal, a sheet on the phone, each the session page's compact form under Ask's head), `attach.rs` the chips and attachment controls, `models.rs` and `models/session.rs` the composer's model pill, effort and picker, `hotkey.rs` and `share.rs` the labelled preview illustrations, `unconnected.rs` Ask without a connection.
-- `src/ui/composer.rs`, `src/ui/composer/{session,draft}.rs`: the one session composer of every session page and of Ask, and Ask's unsent draft kept on this device under the session it goes to.
+- `src/ui/composer.rs`, `src/ui/composer/{session,draft}.rs`: the one session composer of every session page and of Ask with each session's own staged attachments (Screenshot, Link, File and images pasted into the field; a session page offers them while its host declares `attachments`), and Ask's unsent draft kept on this device under the session it goes to. `src/state/attach.rs` stages, uploads and removes them per session.
 - `src/shell/`: desktop, phone and terminal shells; `src/shell/phone/nav.rs` owns phone page stacks/navigation.
 - `src/shell/terminal_bar.rs`: terminal top bar.
 - `src/shell/lock.rs`: explicitly labelled phone lock-screen push illustration of the first Blocked task.

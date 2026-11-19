@@ -12,12 +12,11 @@ pub(crate) use attach::{chip_row, field_row, foot_controls, plus, tray};
 
 use nsh_core::prelude::*;
 
-use crate::model::assistant;
+use crate::model::{Id, assistant};
 use crate::state::AppState;
 
 /// Runs one of the assistant model's typed actions through the feed-backed reducer, which
-/// returns the canonical effects (Remove context clears Ask's real context). Attaching runs at
-/// the root, in this press: a browser opens its file picker only from inside one.
+/// returns the canonical effects (Remove context clears Ask's real context).
 pub(crate) fn act(app: AppState, action: assistant::Action) {
     match action {
         assistant::Action::Unchip => {
@@ -28,19 +27,25 @@ pub(crate) fn act(app: AppState, action: assistant::Action) {
             app.remove_composer_project();
             return;
         }
-        assistant::Action::Attach(pick) => {
-            app.attach(pick);
-            return;
-        }
-        assistant::Action::AttachLink => {
-            app.open_attach_field(assistant::AttachField::Link);
-            return;
-        }
         _ => {}
     }
     app.reduce(app.assistant, move |state, feed, _, _| {
         state.act_live(action, feed)
     });
+}
+
+/// Runs an attachment control of `session`'s composer: attaching and removing act on that
+/// session's next message alone. Attaching runs at the root, in this press: a browser opens its
+/// file picker only from inside one.
+pub(crate) fn act_on(app: AppState, session: &Id, action: assistant::Action) {
+    match action {
+        assistant::Action::Attach(pick) => app.attach(session, pick),
+        assistant::Action::AttachLink => {
+            app.open_attach_field(session, assistant::AttachField::Link);
+        }
+        assistant::Action::Unattach(key) => app.unattach(Some(session), &Id::from(key)),
+        action => act(app, action),
+    }
 }
 
 /// The labelled preview's small Ask window, shown while `app.hotkey` holds: on desktop a window

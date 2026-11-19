@@ -74,11 +74,11 @@ pub struct AppState {
     /// Independent per-store screen scopes persisted as `corral.filters`.
     pub filters: Signal<crate::model::projects::Filters>,
     project_context_removed: Signal<Option<Id>>,
-    /// What is staged for the next message, shared by Ask and docked composers like the draft.
-    /// In memory only; it outlives a closed Ask so a picker answering late still lands.
-    pub ask_staged: Signal<Vec<assistant::Staged>>,
-    /// The inline link or path field open in the composer foot, if any.
-    pub ask_field: Signal<Option<assistant::AttachField>>,
+    /// What is staged for each session's next message, shared by Ask and the session page like
+    /// the draft. In memory only; it outlives a closed Ask so a picker answering late still lands.
+    pub ask_staged: Signal<BTreeMap<Id, Vec<assistant::Staged>>>,
+    /// The inline link or path field open in a session composer's foot, if any.
+    pub ask_field: Signal<Option<(Id, assistant::AttachField)>>,
     /// The open field's text; never persisted, never logged.
     pub ask_field_text: Signal<String>,
     /// Why the open field's text was not attached.
@@ -244,7 +244,7 @@ impl AppState {
             ask_context: signal(None),
             filters: signal(projects::load_filters()),
             project_context_removed: signal(None),
-            ask_staged: signal(Vec::new()),
+            ask_staged: signal(BTreeMap::new()),
             ask_field: signal(None),
             ask_field_text: signal(String::new()),
             ask_field_error: signal(None),
@@ -483,7 +483,8 @@ impl AppState {
             self.refusal.set(None);
             let uploads = self.ask_staged.with_untracked(|staged| {
                 staged
-                    .iter()
+                    .values()
+                    .flatten()
                     .filter_map(|item| match item {
                         assistant::Staged::Upload { upload, .. } => Some(upload.clone()),
                         assistant::Staged::Link { .. } => None,
@@ -491,9 +492,9 @@ impl AppState {
                     .collect::<Vec<_>>()
             });
             for upload in uploads {
-                self.unattach(&upload);
+                self.unattach(None, &upload);
             }
-            self.ask_staged.set(Vec::new());
+            self.ask_staged.set(BTreeMap::new());
             self.ask_context.set(None);
             self.project_context_removed.set(None);
             self.change(|nav| {
