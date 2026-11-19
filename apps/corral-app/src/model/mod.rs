@@ -2,6 +2,8 @@
 
 /// Engine operations, the local question destructive ones ask, and their status.
 pub mod act;
+/// The place the navigation shows, as an address.
+pub mod address;
 /// The Agents roster, where sessions start, and each session's run controls.
 pub mod agents;
 /// The artifact finder over every task's artifacts.

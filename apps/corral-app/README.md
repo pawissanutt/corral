@@ -108,6 +108,33 @@ the browser stores its credential encrypted in IndexedDB with a non-extractable
 WebCrypto AES-GCM key. NSH Storage holds only the non-secret paired marker, never keys.
 The WebSocket carrier uses Noise IK; initial pairing uses single-use Noise IKpsk2.
 
+### Addresses
+
+In a browser the address names the place shown, so a reload or a link opens there:
+
+| Path | Place |
+|---|---|
+| `/now`, `/changes`, `/plans`, `/agents`, `/review`, `/timeline`, `/usage`, `/artifacts` | A destination |
+| `/now/<task>`, `/plans/<plan>`, `/review/<task>` | The task, plan or candidate shown there |
+| `/agents/<session>` | A session's page; a child's conversation is `/agents/<session>/child/<id>` |
+| `/projects/<id>` | A project's page |
+| `/settings/<section>` | A Settings section: `devices`, `daemon`, `connection`, `notifications`, `config`, `general` |
+
+On the desktop every destination or page visited is an entry of the browser's history, so Back
+and Forward step through them; walking a list only rewrites the current entry. The phone's
+pushed pages are history entries already, so there the address only follows, and its More and
+Settings lists are not named: a reload inside a Settings section returns to the Settings list.
+A page's own tabs, filters and scroll position are not in the address. The site's root opens
+the last destination, and an unpaired browser opens Settings › Connection whatever the path.
+The sample preview is not restored, so a reload at one of its records shows what corrald has
+under that id. The native and terminal forms have no address and restore the last destination.
+
+The site is served at its host's root (`nsh.json` `web.base` is `/`), and the host answers the
+app's paths with `index.html`: a `GET` that asks for HTML at a path whose last segment has no
+file extension. `nsh run --target web` and `nsh package --target web --run` do; nginx needs
+`location / { try_files $uri /index.html; }`, and a plain file server such as
+`python3 -m http.server` answers a reload below `/` with 404.
+
 ### Live behavior and revocation
 
 Typed live subscriptions and details cover every destination. Availability depends on
@@ -268,7 +295,7 @@ Run one cargo or NSH build at a time on this shared host.
 | `nsh test --target tui` | Run TypeScript test files on the terminal target; none at present |
 | `nsh test --target web` | Run TypeScript test files on the web target; none at present |
 | `nsh package --target web` | Write a static site to `.nsh/out/Corral/`; a cold build takes about 2m 40s |
-| `python3 -m http.server --bind 127.0.0.1 --directory .nsh/out/Corral 4173` | Serve the packaged site on loopback |
+| `nsh package --target web --run` | Package, then serve the site on loopback at the address it prints, answering the app's [paths](#addresses) with the page |
 | `nsh run --target web` | Run the web development server |
 | `nsh run --target tui` | Run in the current terminal |
 
@@ -327,7 +354,7 @@ menu, form, sheet or the palette is open, the key line shows that surface's keys
 
 - `src/lib.rs`: root `App`.
 - `src/model/`: pure Rust data, wording, state, reducers and view builders, with no `nsh_*` imports or I/O. `preview.rs`/`preview/` supplies synthetic sample data to the live models; `work/` covers Now and Changes.
-- `src/state.rs`: app signals, effect dispatch and persistence.
+- `src/state.rs`: app signals, effect dispatch and persistence; `src/state/address.rs` keeps the browser's address on the place shown (`src/model/address.rs`).
 - `src/ui/kit/`: shared pieces used to build screens, including rows, page scaffolds, buttons, notices, tables and overlays.
 - `src/ui/`: shared UI, Ask and composer surfaces, palette, tokens, icons and terminal-specific pieces in `term.rs`.
 - `src/shell/`: desktop, phone and terminal shells.
