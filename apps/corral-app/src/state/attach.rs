@@ -95,7 +95,8 @@ impl AppState {
                 let files = files
                     .into_iter()
                     .map(|file: PickedFile| (file.name, file.mime, file.data));
-                app.stage_files(&session, pick, files);
+                let refusals = app.stage_files(&session, pick, files);
+                app.toast_refusals(refusals);
             });
         });
     }
@@ -103,9 +104,16 @@ impl AppState {
     /// What the owner pasted into `session`'s composer: each image (a screenshot, an image
     /// copied from a page or an app) is checked and uploaded as a picked one is, any other
     /// pasted file as a text file. The pasted text stays the field's; a paste without files
-    /// stages nothing. Refused visibly when corrald cannot take an upload now.
+    /// stages nothing. Refused visibly when corrald cannot take an upload now, and for files
+    /// copied in a file manager, which arrive as paths alone.
     pub fn paste(&self, session: &Id, paste: &PasteEvent) {
         if paste.files.is_empty() {
+            if !paste.uris.is_empty() {
+                self.toast(
+                    "Not attached: a copied file arrives as its path alone; attach it with \
+                     Screenshot or File, or paste the image itself.",
+                );
+            }
             return;
         }
         if let Some(refusal) = self.upload_refusal(session) {
@@ -125,8 +133,15 @@ impl AppState {
             .partition(|(_, mime, data)| {
                 mime.trim().starts_with("image/") || assistant::sniff_image(data.bytes()).is_some()
             });
-        self.stage_files(session, PickKind::Image, images);
-        self.stage_files(session, PickKind::File, others);
+        let mut refusals = self.stage_files(session, PickKind::Image, images);
+        refusals.extend(self.stage_files(session, PickKind::File, others));
+        self.toast_refusals(refusals);
+    }
+
+    fn toast_refusals(&self, refusals: Vec<String>) {
+        if !refusals.is_empty() {
+            self.toast(refusals.join(" · "));
+        }
     }
 
     /// Opens the inline field in `session`'s composer, or closes it when that field is open.
@@ -221,14 +236,14 @@ impl AppState {
     }
 
     /// Checks each picked or pasted file (its name, type and bytes) before anything is uploaded
-    /// and stages the accepted ones for `session`. An empty answer is a cancelled picker (or a
-    /// portal that failed and logged it): nothing.
+    /// and stages the accepted ones for `session`, answering why each other one is not. An
+    /// empty answer is a cancelled picker (or a portal that failed and logged it): nothing.
     fn stage_files(
         &self,
         session: &Id,
         pick: PickKind,
         files: impl IntoIterator<Item = (String, String, ImageData)>,
-    ) {
+    ) -> Vec<String> {
         let mut refusals = Vec::new();
         for (name, mime, data) in files {
             if self.staged_count(session) >= ATTACHMENTS_PER_MESSAGE {
@@ -270,9 +285,7 @@ impl AppState {
                 },
             );
         }
-        if !refusals.is_empty() {
-            self.toast(refusals.join(" · "));
-        }
+        refusals
     }
 
     fn stage_link(&self, session: &Id, text: &str) -> Result<(), String> {
