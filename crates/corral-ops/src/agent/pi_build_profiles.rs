@@ -111,7 +111,11 @@ pub(super) fn resolve(config: &Config, name: &str, args: &BuildArgs) -> Result<R
     };
     let model = resolved.model.context("profile names no model")?;
     let provider = binding.connection.provider().to_owned();
-    require_provider(&provider)?;
+    // API bindings already identify the connection. Their runtime provider may differ
+    // from the login ID (`openai` vs. `openai-api`).
+    if !binding.connection.api_key() {
+        require_provider(&provider)?;
+    }
     let label = config
         .profiles
         .get(name)
@@ -174,7 +178,6 @@ pub(super) fn recorded(data_root: &std::path::Path, id: &str) -> Result<(Option<
 }
 
 pub(super) fn validate_recorded(config: &Config, route: &Route) -> Result<()> {
-    require_provider(&route.provider)?;
     if let Some(binding) = &route.binding {
         binding.validate()?;
         ensure!(
@@ -191,12 +194,14 @@ pub(super) fn validate_recorded(config: &Config, route: &Route) -> Result<()> {
                 "paid_admission_required: recorded API route changed; select its profile again"
             );
         } else {
+            require_provider(&route.provider)?;
             ensure!(
                 route.paid.is_none(),
                 "subscription route carries paid approval"
             );
         }
     } else {
+        require_provider(&route.provider)?;
         ensure!(route.paid.is_none(), "paid route has no binding");
     }
     Ok(())
