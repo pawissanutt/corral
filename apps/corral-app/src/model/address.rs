@@ -20,11 +20,19 @@ pub enum Place {
     Project(Id),
 }
 
+/// What a shell shows that the navigation itself does not hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Shown {
+    /// Whether Now shows its selected task beside the list.
+    pub inspector: bool,
+    /// The Settings section the phone's stack has open over its Settings list.
+    pub phone_section: Option<SettingsSection>,
+}
+
 impl Place {
-    /// Where the navigation is. `inspector` is whether Now shows its selected task; off the
-    /// phone a task, plan or review is selected beside its list rather than pushed, so the
-    /// selection is part of the place there.
-    pub fn of(nav: &NavState, form: Form, inspector: bool) -> Place {
+    /// Where the navigation is. Off the phone a task, plan or review is selected beside its
+    /// list rather than pushed, so the selection is part of the place there.
+    pub fn of(nav: &NavState, form: Form, shown: Shown) -> Place {
         match nav.pages.last() {
             Some(Route::Live(live)) => return Place::Live(live.clone()),
             Some(Route::Project(id)) => return Place::Project(id.clone()),
@@ -39,8 +47,11 @@ impl Place {
         };
         match nav.destination {
             // The phone lists the sections first; which one is open is its shell's.
-            Destination::Settings if form != Form::Phone => Place::Settings(nav.settings),
-            Destination::Now if inspector => selected(&nav.selection.task, Live::Task),
+            Destination::Settings if form == Form::Phone => shown
+                .phone_section
+                .map_or(Place::Destination(Destination::Settings), Place::Settings),
+            Destination::Settings => Place::Settings(nav.settings),
+            Destination::Now if shown.inspector => selected(&nav.selection.task, Live::Task),
             Destination::Plans => selected(&nav.selection.plan, Live::Plan),
             Destination::Review => selected(&nav.selection.review, Live::Review),
             destination => Place::Destination(destination),
@@ -154,15 +165,20 @@ fn unescape(path: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    const SHOWN: Shown = Shown {
+        inspector: true,
+        phone_section: None,
+    };
+
     fn reloaded(nav: &NavState, form: Form) -> Place {
-        let place = Place::of(nav, form, true);
+        let place = Place::of(nav, form, SHOWN);
         let mut fresh = NavState::new(form);
         Place::parse(&place.path())
             .unwrap_or_else(|| panic!("{} names nothing", place.path()))
             .open(&mut fresh, form);
         assert_eq!(fresh.pages, nav.pages, "{}", place.path());
         assert_eq!(fresh.destination, nav.destination, "{}", place.path());
-        Place::of(&fresh, form, true)
+        Place::of(&fresh, form, SHOWN)
     }
 
     /// A reload lost everything but the destination: each place a form can show has to come
@@ -173,7 +189,7 @@ mod tests {
             let mut nav = NavState::new(form);
             for destination in Destination::ALL {
                 nav.go(destination);
-                assert_eq!(reloaded(&nav, form), Place::of(&nav, form, true));
+                assert_eq!(reloaded(&nav, form), Place::of(&nav, form, SHOWN));
             }
             for live in [
                 Live::Task(Id::from("T-12")),
@@ -195,6 +211,31 @@ mod tests {
         assert_eq!(
             reloaded(&nav, Form::Desktop),
             Place::Settings(SettingsSection::Config)
+        );
+    }
+
+    /// The phone's open section was only "Settings" in the address, so a reload there showed
+    /// the Settings list: the section its stack shows is the place, and its path asks the
+    /// shell to open that section again.
+    #[test]
+    fn a_phone_reload_inside_a_settings_section_opens_it_again() {
+        let mut nav = NavState::new(Form::Phone);
+        nav.go_settings(SettingsSection::Config);
+        let list = Place::of(&nav, Form::Phone, SHOWN);
+        assert_eq!(list, Place::Destination(Destination::Settings));
+        let open = Shown {
+            phone_section: Some(SettingsSection::Config),
+            ..SHOWN
+        };
+        let section = Place::of(&nav, Form::Phone, open);
+        assert_ne!(section.path(), list.path());
+        let mut fresh = NavState::new(Form::Phone);
+        Place::parse(&section.path())
+            .unwrap_or_else(|| panic!("{} names nothing", section.path()))
+            .open(&mut fresh, Form::Phone);
+        assert_eq!(
+            (fresh.settings, fresh.section_opens),
+            (SettingsSection::Config, 1)
         );
     }
 

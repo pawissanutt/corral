@@ -1,7 +1,8 @@
 //! The browser's address bar. The page's path names the place the navigation shows, so a
 //! reload or a link opens there, and each destination or page the owner visits on the desktop
 //! is an entry the browser's Back and Forward return to. The phone's stack already makes its
-//! pages the browser's entries, so there the address only follows. Native and terminal forms
+//! pages the browser's entries, so there the address only follows (its shell tells which
+//! Settings section is open). Native and terminal forms
 //! have no address; they restore the stored destination.
 
 use nsh_core::platform::Os;
@@ -9,7 +10,7 @@ use nsh_core::prelude::*;
 use nsh_core::url_scheme::HistoryBehavior;
 
 use super::AppState;
-use crate::model::address::{Place, url_path};
+use crate::model::address::{Place, Shown, url_path};
 use crate::model::{Form, Live};
 
 /// The place the page was opened at, read before the first screen is built so a reload never
@@ -39,8 +40,11 @@ impl AppState {
         }
         let form = self.form;
         let place = computed(move || {
-            let inspector = self.work.with(|state| !state.digest_only);
-            self.nav.with(|nav| Place::of(nav, form, inspector))
+            let shown = Shown {
+                inspector: self.work.with(|state| !state.digest_only),
+                phone_section: self.phone_section.get(),
+            };
+            self.nav.with(|nav| Place::of(nav, form, shown))
         });
         // The place the address already names: what the page was opened at, the last one
         // written, or the one the browser moved to.
