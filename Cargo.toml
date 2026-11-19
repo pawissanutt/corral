@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# The old engine: these four were written against the protocol and daemon the new engine
+# replaced and no longer compile. Their source stays for reference until it is deleted.
+exclude = ["crates/corral", "crates/corral-core", "crates/corral-ops", "crates/corral-tui"]
 
 [workspace.package]
 version = "0.4.0"
