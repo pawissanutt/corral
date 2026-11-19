@@ -555,10 +555,11 @@ export class BuildController implements BuildCardSource {
 
   /**
    * The docked decision settled in the registry: by these keys a moment ago, from the app, or as the session closed.
-   * The dock closes; an answer from another device says so in one quiet notice.
+   * The dock closes; an answer from another device says so in one quiet notice. A question the app only put aside
+   * (its "not now") is still waiting: the dock stays, still watched, and its keys still answer.
    */
   private resolved(shown: Shown, result: DialogResolution): void {
-    if (this.disposed || this.shown !== shown) return;
+    if (this.disposed || this.shown !== shown || result.kind === "put_aside") return;
     this.watching = undefined;
     this.close();
     if (result.by?.source !== "remote") return;

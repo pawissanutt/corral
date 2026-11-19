@@ -444,6 +444,38 @@ test("Finish opens the chooser again after Iterate", async () => {
   expect(s.notices.filter(notice => notice.tone === "warning")).toEqual([]);
 });
 
+test("a child's question put aside in the app stays docked in the terminal and is still answered there", async () => {
+  const { s, controller, dialogs, key } = harness({ remote: true });
+  const phone = { source: "remote", device: "phone" } as const;
+  const answered = () => s.marks.filter(mark => mark.kind === "child" && mark.act === "answered");
+  const childCard = () => dialogs!.entries().find(entry => entry.card.kind === "child_question")!.card;
+  s.children = [asking("picker-ui", 10)];
+  controller.sync();
+  expect(await dialogs!.resolve(childCard().id, [], true, phone)).toBe("dismissed");
+  // Still docked, focused and silent: the child still waits.
+  expect(controller.dialog()?.key).toBe("question:picker-ui:10");
+  expect(s.focus).toBe("choice");
+  expect(s.notices).toEqual([]);
+  controller.dock.guard(0);
+  key("1");
+  await settle();
+  expect(s.calls).toEqual(["answer picker-ui Show a new game action"]);
+  expect(answered()).toHaveLength(1);
+  expect(controller.dialog()).toBeUndefined();
+
+  // Put aside, then answered in the app: the dock stays through the first and closes on the second, once.
+  s.children = [asking("picker-ui", 30)];
+  controller.sync();
+  const later = childCard().id;
+  expect(await dialogs!.resolve(later, [], true, phone)).toBe("dismissed");
+  expect(controller.dialog()?.key).toBe("question:picker-ui:30");
+  expect(await dialogs!.resolve(later, [{ options: [], text: "Show both" }], false, phone)).toBe("delivered");
+  expect(controller.dialog()).toBeUndefined();
+  expect(s.notices.filter(notice => notice.text.includes("another device"))).toEqual([{ text: "Answered from another device", tone: "text" }]);
+  expect(s.calls).toEqual(["answer picker-ui Show a new game action", "answer picker-ui Show both"]);
+  expect(answered()).toHaveLength(2);
+});
+
 test("a child's question, each answer and a delivered steer leave one transcript mark each", async () => {
   const { s, controller, key } = harness();
   const acts = () => s.marks.flatMap(mark => mark.kind === "child" ? [`${mark.act} ${mark.child}`] : []);

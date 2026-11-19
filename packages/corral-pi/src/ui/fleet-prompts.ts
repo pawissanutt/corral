@@ -53,7 +53,7 @@ export function childPrompts(host: ChildPromptHost): Pick<ChildActionHost, "poin
       let close: (() => void) | undefined;
       const cards = host.cards;
       const card = cards?.watch(id, asked.askedAt, result => {
-        // A dismissal in the app is its "not now": the child keeps waiting and so does this prompt.
+        // Only an answer closes this prompt. A question put aside in the app (its "not now") keeps waiting, still watched.
         if (result.by?.source !== "remote" || result.kind !== "answered") return;
         close?.();
         host.notice("Answered from another device", "text");

@@ -347,7 +347,7 @@ export class OwnerQuestionUi {
       // The app lists this question as a card under the same ID: an answer there closes this dialog.
       const questionId = id;
       const card = this.dialogs()?.watch(entry => entry.id === questionId, result => {
-        // A dismissal in the app is its "not now": the question stays pending, and so does this dialog.
+        // Only an answer closes this dialog. A question put aside in the app (its "not now") stays pending, still watched.
         if (result.by?.source !== "remote" || result.kind !== "answered") return;
         abort.abort();
         ctx.ui.notify("Answered from another device", "info");
