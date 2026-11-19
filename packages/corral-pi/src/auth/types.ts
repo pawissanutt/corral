@@ -5,14 +5,11 @@
 import type { CredentialStore } from "@earendil-works/pi-ai";
 
 import type { ProviderId } from "./providers.ts";
-import type { ConnectionId } from "./connections.ts";
 
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export interface AuthContext {
-  /** Native provider and separately selected Corral credential/billing connection. */
   readonly provider: ProviderId;
-  readonly connection?: ConnectionId;
   readonly apiEndpoint: string;
   readonly refreshEndpoint: string;
 }
@@ -22,8 +19,6 @@ export interface AuthModule {
   readonly provider: "openai-codex";
   /** Every provider the module serves; absent means only `provider`. */
   readonly providers?: readonly ProviderId[];
-  /** Required for new explicit connection bindings; legacy modules never receive a paid one. */
-  readonly connections?: readonly ConnectionId[];
   /** The credential store handed to Pi's ModelRuntime. */
   credentials(context: AuthContext): CredentialStore;
   /** Transport behind the guard; production omits it and the real network is used. */

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { corralPiDirectory } from "../auth/paths.ts";
-import { modelFlags, modelSettings } from "../host/config.ts";
+import { modelFlags, modelSettings, rejectRemovedModelOptions } from "../host/config.ts";
 import { DEFAULT_MAX_PARALLEL, type BuildLaunch } from "./types.ts";
 import { buildProfileArgs, readBuildProfiles, readWorkspaceToml } from "./profiles.ts";
 
@@ -15,6 +15,7 @@ export interface LocalBuildOptions {
 
 export function parseBuildFlags(argv: readonly string[], assets: string, env = process.env,
   cwd = process.cwd()): { launch: BuildLaunch; local: LocalBuildOptions } {
+  rejectRemovedModelOptions(argv);
   const options = {
     ...modelFlags, "data-dir": { type: "string" }, socket: { type: "string" }, corral: { type: "string" },
     project: { type: "string" }, profile: { type: "string" }, name: { type: "string" }, resume: { type: "string" },
@@ -35,9 +36,9 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
   // A build must not create the directory whose absence keeps a legacy installation's logins in use.
   const dataRoot = values["data-dir"] ? resolve(cwd, values["data-dir"])
     : corralPiDirectory(join(env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "corral", "corral-pi"));
-  const profile = values.profile ? parseArgs({
-    args: buildProfileArgs(workspaceRoot ?? cwd, values.profile), options: modelFlags,
-  }).values : {};
+  const profileArgs = values.profile ? buildProfileArgs(workspaceRoot ?? cwd, values.profile) : [];
+  rejectRemovedModelOptions(profileArgs);
+  const profile = parseArgs({ args: profileArgs, options: modelFlags }).values;
   return {
     launch: { version: 1, assets, dataRoot, repoRoot, here: values.here === true,
       ...modelSettings({ ...profile, ...values }), ...(corral ? { corral } : { bare: true }),

@@ -1,12 +1,7 @@
-// The providers corral-pi can run (OD5, T-479, T-504): each one's corral vendor, picker label, Pi
-// model API, auth kind, and the only destinations its host and its login may reach. The Rust side
-// (crates/corral-ops/src/agent/credentials.rs, PROVIDERS) lists the same ids and labels.
-// These are upstream provider defaults, not spending permissions. connections.ts binds separate
-// subscription/API billing routes; Anthropic API uses the same native provider without its SDK lane.
+// Each provider has one authentication and billing route, independent of any fallback policy.
+export type ProviderId = "openai-codex" | "openai" | "anthropic" | "anthropic-api" | "amazon-bedrock" | "llama.cpp";
+export type ApiProviderId = "openai" | "anthropic-api";
 
-export type ProviderId = "openai-codex" | "openai" | "anthropic" | "amazon-bedrock" | "llama.cpp";
-
-/** Default provider auth; an explicit connection may further restrict it (Anthropic API). */
 export type AuthKind = "oauth" | "api_key" | "aws-profile" | "local";
 
 export interface ProviderRoute {
@@ -70,12 +65,16 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderRoute>> = {
     modelApi: "anthropic-messages",
     auth: "oauth",
     api: "https://api.anthropic.com/v1/messages",
-    // Pi sends subscription OAuth requests through the SDK's beta messages client.
-    apiQueries: ["?beta=true"],
+    apiQueries: [],
     refresh: "https://platform.claude.com/v1/oauth/token",
     oauthTokenMarker: "sk-ant-oat",
     login: ["https://platform.claude.com/v1/oauth/token"],
     lane: "claude-agent-sdk",
+  },
+  "anthropic-api": {
+    id: "anthropic-api", vendor: "anthropic", brand: "Anthropic", label: "Anthropic API (metered)",
+    modelApi: "anthropic-messages", auth: "api_key", api: "https://api.anthropic.com/v1/messages",
+    apiQueries: ["?beta=true"], refresh: "", login: [],
   },
   "amazon-bedrock": {
     id: "amazon-bedrock",
@@ -106,8 +105,15 @@ export const PROVIDERS: Readonly<Record<ProviderId, ProviderRoute>> = {
 /** The subscription OAuth providers (OD5), the policy a session's provider capabilities draw from. */
 export const PROVIDER_IDS: readonly ProviderId[] = ["openai-codex", "anthropic"];
 
-/** Known native providers. Knowing an API provider never admits an unbound or unpaid request. */
-export const HOST_PROVIDER_IDS: readonly ProviderId[] = [...PROVIDER_IDS, "openai", "amazon-bedrock", "llama.cpp"];
+export const HOST_PROVIDER_IDS: readonly ProviderId[] = [...PROVIDER_IDS, "openai", "anthropic-api", "amazon-bedrock", "llama.cpp"];
+
+export function isApiProvider(id: ProviderId): id is ApiProviderId {
+  return PROVIDERS[id].auth === "api_key";
+}
+
+export function billingKind(id: ProviderId): "subscription" | "api" | undefined {
+  return PROVIDERS[id].auth === "oauth" ? "subscription" : PROVIDERS[id].auth === "local" ? undefined : "api";
+}
 
 export function isProviderId(value: unknown): value is ProviderId {
   return typeof value === "string" && (HOST_PROVIDER_IDS as readonly string[]).includes(value);
@@ -190,7 +196,22 @@ function hostOnly(method: "GET" | "POST", host: string, path: string, query: boo
 export function hostRules(provider: ProviderId, bedrock?: BedrockRoute): readonly DestinationRule[] {
   const route = PROVIDERS[provider];
   // Local inference receives only the session's explicitly configured origin rules.
-  if (route.auth === "local" || route.auth === "api_key") return [];
+  if (route.auth === "local") return [];
+  if (route.auth === "api_key") {
+    const urls = [route.api, ...route.apiQueries.map(query => `${route.api}${query}`)];
+    return [{
+      method: "POST", display: route.api,
+      matches(url, headers) {
+        const authorization = headers.get("authorization");
+        const key = provider === "anthropic-api" ? headers.get("x-api-key")
+          : authorization?.startsWith("Bearer ") ? authorization.slice(7) : undefined;
+        const otherAuth = provider === "anthropic-api" ? headers.has("authorization") : headers.has("x-api-key");
+        return urls.includes(url) && typeof key === "string" && validApiKey(key) && !otherAuth
+          && !headers.has("cookie") && !headers.has("proxy-authorization")
+          && !headers.get("anthropic-beta")?.includes("oauth");
+      },
+    }];
+  }
   if (route.auth === "aws-profile") {
     if (!bedrock || !isAwsRegion(bedrock.region) || bedrock.ssoRegions.some((region) => !isAwsRegion(region))) return [];
     return [
@@ -209,4 +230,9 @@ export function hostRules(provider: ProviderId, bedrock?: BedrockRoute): readonl
 /** The destinations a host run of `provider` may reach, as get_state shows them. */
 export function hostDestinations(provider: ProviderId, bedrock?: BedrockRoute): readonly string[] {
   return hostRules(provider, bedrock).map((rule) => rule.display);
+}
+
+/** Literal key only: never Pi's command/env syntax or an OAuth token. No secret in errors. */
+export function validApiKey(key: unknown): key is string {
+  return typeof key === "string" && /^sk-[A-Za-z0-9_-]{8,4093}$/.test(key) && !key.includes("sk-ant-oat") && !key.includes("sk-ant-ort");
 }

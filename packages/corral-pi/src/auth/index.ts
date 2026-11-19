@@ -1,6 +1,5 @@
-// The production auth module (F6, owner host-install): Pi reads and refreshes the bound
-// provider's subscription OAuth credential in the corral-owned auth directory that
-// `corral agent login` provisioned. It supplies no transport, so the host's guarded fetch sends
+// Pi reads the selected provider's credential from the corral-owned auth directory.
+// Production supplies no transport, so the host's guarded fetch sends
 // over the real network. Amazon Bedrock has no OAuth credential: its host signs with the bound AWS
 // profile (src/auth/aws.ts), so Pi gets an empty store that refuses writes.
 import type { CredentialStore } from "@earendil-works/pi-ai";
@@ -9,7 +8,6 @@ import type { AuthModule } from "./types.ts";
 import { CredentialsUnavailable, authDir } from "./paths.ts";
 import { HOST_PROVIDER_IDS, PROVIDERS } from "./providers.ts";
 import { FileCredentialStore } from "./store.ts";
-import { CONNECTIONS, type ConnectionId, isApiConnection, resolveConnection } from "./connections.ts";
 
 let store: FileCredentialStore | undefined;
 
@@ -27,18 +25,18 @@ const NO_STORED_CREDENTIAL: CredentialStore = {
 const auth: AuthModule = {
   provider: "openai-codex",
   providers: HOST_PROVIDER_IDS,
-  connections: Object.keys(CONNECTIONS) as ConnectionId[],
   credentials(context) {
-    const connection = resolveConnection(context.provider, context.connection);
-    if (!isApiConnection(connection) && PROVIDERS[context.provider].auth !== "oauth") return NO_STORED_CREDENTIAL;
-    store = new FileCredentialStore(authDir(), context.provider, {}, connection);
-    if (!store.present()) {
+    const kind = PROVIDERS[context.provider].auth;
+    if (kind !== "api_key" && kind !== "oauth") return NO_STORED_CREDENTIAL;
+    const candidate = new FileCredentialStore(authDir(), context.provider);
+    if (!candidate.present()) {
       const name = PROVIDERS[context.provider].label.split(" (")[0];
-      throw new CredentialsUnavailable(isApiConnection(connection)
-        ? `no platform API key for connection ${connection} in the corral-owned store`
-        : `no ${name} login (provider ${context.provider}) in ${store.dir}; run \`corral agent login --provider ${context.provider}\``);
+      throw new CredentialsUnavailable(kind === "api_key"
+        ? `no platform API key for ${context.provider}; run \`corral-pi login --provider ${context.provider}\``
+        : `no ${name} login (provider ${context.provider}) in ${candidate.dir}; run \`corral-pi login --provider ${context.provider}\``);
     }
-    return store;
+    store = candidate;
+    return candidate;
   },
   state() {
     return { module: "corral-pi", credential: store?.present() ? "present" : "absent" };

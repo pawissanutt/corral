@@ -5,7 +5,7 @@ import { parseBuildFlags, type LocalBuildOptions } from "../build/launch.ts";
 import { createSession, loadSession, saveSession, sessionDir } from "../build/session-store.ts";
 import { prepareWorktree } from "../build/worktree.ts";
 import type { BuildContext, BuildLaunch, BuildSessionRecord } from "../build/types.ts";
-import { sessionSocket, workspaceSettings, type HostConfig } from "./config.ts";
+import { RemovedModelOption, sessionSocket, workspaceSettings, type HostConfig } from "./config.ts";
 import { runHost } from "./main.ts";
 
 /** A refused launch or resume: the error's message keeps the code and detail; `what` and `fix` are what the owner reads. */
@@ -78,9 +78,8 @@ export function buildHostConfig(launch: BuildLaunch, record: BuildSessionRecord,
     ...workspaceSettings(record.workspaceRoot ?? record.repoRoot, "build"),
     local: { dir, id: record.id, socket: local.socket ?? sessionSocket(dir, process.env), headless: local.headless },
     provider: (record.route ?? launch).provider, model: (record.route ?? launch).model,
-    effort: (record.route ?? launch).effort, connection: (record.route ?? launch).connection,
+    effort: (record.route ?? launch).effort, fallback: (record.route ?? launch).fallback,
     aws: (record.route ?? launch).aws,
-    maxUsd: launch.maxUsd, paidRoute: launch.paidRoute,
   };
 }
 
@@ -167,6 +166,7 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
     });
     await runHost(config, { build });
   } catch (error) {
+    if (error instanceof RemovedModelOption) throw error;
     process.stderr.write(`${refusalLines(error, resume).join("\n")}\n`);
     process.exit(2);
   }

@@ -299,7 +299,10 @@ fn default_profile(config: &Config) -> &str {
                     && (*name != "pi"
                         || p.model.is_some()
                         || p.effort.is_some()
-                        || !p.args.is_empty())
+                        || !p.args.is_empty()
+                        || p.fallback
+                            .as_ref()
+                            .is_some_and(|fallback| !fallback.is_empty()))
             })
             .map_or("pi", |(name, _)| name.as_str())
     }

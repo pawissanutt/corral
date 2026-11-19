@@ -12,10 +12,10 @@ import { CorralClient } from "../tools/corral.ts";
 import type { HostConfig } from "./config.ts";
 import type { BuildContext } from "../build/types.ts";
 import { saveSession } from "../build/session-store.ts";
-import { inheritTranscript, openSession, siblingTranscript } from "./lifecycle.ts";
+import { inheritTranscript, openSession, restoreModelChoice, siblingTranscript } from "./lifecycle.ts";
 import { loadModules } from "./modules.ts";
 import { CredentialsUnavailable } from "../auth/paths.ts";
-import { type DestinationRule, PROVIDERS, hostRules } from "../auth/providers.ts";
+import { type DestinationRule, PROVIDERS, hostRules, isApiProvider } from "../auth/providers.ts";
 import { localInferenceRules } from "../auth/local.ts";
 import { NetworkRefused, guardedFetch, restrictEnvironment } from "./restrict.ts";
 import { compiledBundle } from "./bundle.ts";
@@ -23,18 +23,14 @@ import { attachHeadless, headlessEnabled } from "./headless.ts";
 import { herdrLifecycle } from "./herdr.ts";
 import { serverVisible } from "./mcp-settings.ts";
 import { type AwsRoute, HostSession, authContext } from "./session.ts";
-import { subscriptionRoutes } from "./subscriptions.ts";
 import { guardTerminalStop } from "./terminal-stop.ts";
-import { connectionRules, isApiConnection, resolveConnection } from "../auth/connections.ts";
-import { Spending } from "../capabilities/budget.ts";
 import { errorPresenter } from "../ui/error-copy.ts";
 import { repaintTranscript } from "../ui/transcript-repaint.ts";
 import { presentHostNotice } from "../ui/host-notices.ts";
 import { RemoteOwner } from "./remote-owner.ts";
 import { SessionRecord } from "./session-record.ts";
 import { summaryOptions } from "./summary.ts";
-import { bareProviders, requireBareProvider } from "./bare.ts";
-import { providerTransport } from "./capabilities.ts";
+import { interactiveModels, providerTransport, sessionRoutes } from "./capabilities.ts";
 
 interface HostOverrides {
   build?: BuildContext;
@@ -57,17 +53,9 @@ export async function runHost(config: HostConfig, overrides: HostOverrides = {})
 
 async function runSession(config: HostConfig, overrides: HostOverrides, events: EventLog,
   bridge: BridgeServer, record: SessionRecord): Promise<void> {
-  const provider = config.provider ?? "openai-codex";
-  const connection = resolveConnection(provider, config.connection ?? config.binding?.connection);
-  const api = isApiConnection(connection);
-  // A bare API session uses its exact API connection, not the bare subscription providers.
-  if (overrides.build?.session.bare && !api) requireBareProvider(provider);
-  if (config.maxUsd !== undefined && !api && PROVIDERS[provider].lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
-  // A spending cap is optional: without --max-usd an API session records its usage and nothing stops it.
-  const spending = Spending.open(config.local.dir, config);
-  if (spending && !api && PROVIDERS[provider].lane) throw new Error("--max-usd is unavailable with the Claude SDK lane");
-  restrictEnvironment(process.env, provider);
-  if (config.summary?.provider === "amazon-bedrock") restrictEnvironment(process.env, "amazon-bedrock");
+  const launchProvider = config.provider ?? "openai-codex";
+  restrictEnvironment(process.env, config.aws || config.summary?.provider === "amazon-bedrock" ? "amazon-bedrock" : launchProvider);
+  const rawFetch = globalThis.fetch.bind(globalThis);
   process.env.CORRAL_NEXT_ROOT = config.root;
   if (config.corral) process.env.CORRAL = config.corral;
   else delete process.env.CORRAL;
@@ -78,30 +66,57 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   const agentDir = join(config.runtimeDir, "pi-agent");
   mkdirSync(agentDir, { recursive: true, mode: 0o700 });
   if (config.local) process.env.PI_CODING_AGENT_DIR ??= agentDir;
-  const modules = await loadModules(assets, config.identity.role, provider);
-  const rawFetch = globalThis.fetch.bind(globalThis);
-  const bare = overrides.build?.session.bare && !api ? await bareProviders(modules.auth, provider) : undefined;
-  const providers = bare?.providers ?? (api ? [provider] : (await subscriptionRoutes(modules.auth, provider, config.identity.role)).providers);
-  const send = bare ? providerTransport(modules.auth, bare.providers, rawFetch)
-    : modules.auth.transport?.(authContext(provider, connection)) ?? rawFetch;
-  let aws: AwsRoute | undefined;
-  let rules: readonly DestinationRule[] | undefined = api ? connectionRules(connection) : undefined;
-  if (provider === "llama.cpp" && config.capabilities?.llama_cpp) {
-    rules = localInferenceRules(config.capabilities.llama_cpp);
+  mkdirSync(config.sessionDir, { recursive: true, mode: 0o700 });
+  // Keep SDK startup offline; the selected provider's guard is installed after the transcript is opened.
+  globalThis.fetch = guardedFetch(rawFetch, undefined, []).fetch as typeof globalThis.fetch;
+  const smithy = config.aws || config.summary?.provider === "amazon-bedrock" ? await import("./smithy.ts") : undefined;
+  smithy?.adoptSmithyHandlers();
+  const sdk = await import("@earendil-works/pi-coding-agent");
+  let transcript = record.transcript;
+  if (!transcript && config.identity.role === "worker" && !config.freshSession) {
+    const sibling = siblingTranscript(config.local.dir);
+    if (sibling) transcript = inheritTranscript(sibling, config.sessionDir);
   }
-  if (PROVIDERS[provider].auth === "aws-profile") {
-    if (!config.aws) {
+  const sessionManager = openSession(sdk, config.cwd, config.sessionDir, transcript);
+  const launch = { provider: launchProvider, model: config.model.startsWith(`${launchProvider}/`)
+    ? config.model.slice(launchProvider.length + 1) : config.model };
+  const resumed = record.transcript ? restoreModelChoice(sessionManager, interactiveModels(config.identity.role),
+    config.fallback, record.legacyAnthropicApi) : undefined;
+  const { provider, model } = resumed ?? launch;
+  const effort = resumed ? sessionManager.getBranch().findLast(entry => entry.type === "thinking_level_change")?.thinkingLevel : config.effort;
+  const modules = await loadModules(assets, config.identity.role, provider);
+  const requested = [{ provider, model }, ...config.fallback ?? []];
+  const bedrock = requested.filter(choice => choice.provider === "amazon-bedrock");
+  const local = config.capabilities?.llama_cpp;
+  let aws: AwsRoute | undefined;
+  const rules: DestinationRule[] = [];
+  if (local && requested.some(choice => choice.provider === "llama.cpp")) rules.push(...localInferenceRules(local));
+  if (bedrock.length) {
+    if (!config.aws && provider === "amazon-bedrock") {
       throw new CredentialsUnavailable(`no Amazon Bedrock binding was passed for provider ${provider}; ` +
         `run \`corral agent login --provider ${provider}\``);
     }
-    const [{ bedrockRoute, createAwsCredentialResolver }, { adoptSmithyHandlers }] =
-      await Promise.all([import("../auth/aws.ts"), import("./smithy.ts")]);
-    adoptSmithyHandlers();
-    const resolver = createAwsCredentialResolver(config.aws, homedir());
-    const model = config.model.startsWith(`${provider}/`) ? config.model.slice(provider.length + 1) : config.model;
-    rules = hostRules(provider, bedrockRoute(config.aws, model, await resolver.profile()));
-    aws = { binding: config.aws, resolver };
+    if (config.aws) {
+      try {
+        const { bedrockRoute, createAwsCredentialResolver } = await import("../auth/aws.ts");
+        const resolver = createAwsCredentialResolver(config.aws, homedir());
+        const profile = await resolver.profile();
+        const modelIds = new Set(bedrock.map(choice => choice.model));
+        for (const id of modelIds) rules.push(...hostRules("amazon-bedrock", bedrockRoute(config.aws, id, profile)));
+        aws = { binding: config.aws, resolver, modelIds };
+      } catch (error) {
+        if (provider === "amazon-bedrock") throw error;
+      }
+    }
   }
+  const routes = await sessionRoutes(modules.auth, provider, config.identity.role, requested.map(choice => choice.provider)
+    .filter(id => (id !== "amazon-bedrock" || aws !== undefined) && (id !== "llama.cpp" || local !== undefined)));
+  // Key-authenticated API requests never get the generic transport: the API stream owns their guard.
+  const providers = routes.providers.filter(id => !isApiProvider(id));
+  for (const id of providers) if (PROVIDERS[id].auth === "oauth") rules.push(...hostRules(id));
+  const fallbackSend = PROVIDERS[provider].auth === "local" || PROVIDERS[provider].auth === "aws-profile"
+    ? modules.auth.transport?.(authContext(provider)) ?? rawFetch : rawFetch;
+  const send = providerTransport(modules.auth, providers.filter(id => PROVIDERS[id].auth === "oauth"), fallbackSend);
   const network = guardedFetch(send, (destination) => events.emit("network_refused", { destination }), providers, rules,
     config.capabilities?.web ? { settings: config.capabilities.web, send: rawFetch } : undefined,
     config.capabilities?.mcp ? {
@@ -112,36 +127,27 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     } : undefined);
   const summary = await summaryOptions(config, modules, rawFetch);
   if (aws || summary?.awsRoute) {
-    const { installSocketTripwire } = await import("./smithy.ts");
-    installSocketTripwire((destination) => network.refuse?.(destination) ?? new NetworkRefused(destination));
+    smithy!.installSocketTripwire((destination) => network.refuse?.(destination) ?? new NetworkRefused(destination));
   }
   globalThis.fetch = summary?.awsRoute ? guardedFetch(rawFetch, undefined, providers,
-    [...(rules ?? providers.flatMap(id => hostRules(id))), ...summary.rules]).fetch as typeof globalThis.fetch
+    [...rules, ...summary.rules]).fetch as typeof globalThis.fetch
     : network.fetch as typeof globalThis.fetch;
-  // An unusable profile or an expired SSO session stops the host here, before any session exists.
-  if (aws) await aws.resolver.get();
-  const sdk = await import("@earendil-works/pi-coding-agent");
+  if (provider === "amazon-bedrock") await aws!.resolver.get();
+  if (summary?.awsRoute) await summary.awsRoute.resolver.get();
   process.chdir(config.cwd);
-  mkdirSync(config.sessionDir, { recursive: true, mode: 0o700 });
   let remote: RemoteOwner | undefined;
   let host: HostSession | undefined;
   let terminal: InstanceType<typeof sdk.InteractiveMode> | undefined;
   const client = new CorralClient({ corral: config.corral, root: config.root, cwd: config.cwd, identity: config.identity,
     sessionDir: config.local.dir });
   const pane = config.pane || process.env.HERDR_PANE_ID;
-  let transcript = record.transcript;
-  if (!transcript && config.identity.role === "worker" && !config.freshSession) {
-    const sibling = siblingTranscript(config.local.dir);
-    if (sibling) transcript = inheritTranscript(sibling, config.sessionDir);
-  }
   host = await HostSession.create({
-    sdk, identity: config.identity, cwd: config.cwd, agentDir, model: config.model, provider, ...(aws ? { aws } : {}),
-    connection, ...(config.binding ? { binding: config.binding } : {}),
-    spending, apiFetch: rawFetch, sessionDir: config.local.dir,
+    sdk, identity: config.identity, cwd: config.cwd, agentDir, model, provider, ...(aws ? { aws } : {}),
+    routes, fallback: config.fallback, apiFetch: rawFetch, sessionDir: config.local.dir,
     paneInput: async (text, images) => await remote?.paneInput(text, images) ?? false,
     transcriptRewound: () => { if (terminal) repaintTranscript(terminal); },
     automatedInput: input => remote?.submit(input),
-    ...(config.effort ? { effort: config.effort } : {}),
+    ...(effort ? { effort } : {}),
     quickSummary: config.quickSummary,
     ...(summary ? { summary } : {}),
     ...(config.promptFile ? { promptFile: config.promptFile } : {}),
@@ -153,7 +159,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     modules, client, events, network,
     ...(overrides.build ? { build: overrides.build } : {}),
     ...(pane ? herdrLifecycle(process.env, pane, config.identity, events, config.local?.headless || headlessEnabled(config.capabilities)) : {}),
-    sessionManager: openSession(sdk, config.cwd, config.sessionDir, transcript),
+    sessionManager,
   });
   const session = host;
   let closing: Promise<void> | undefined;

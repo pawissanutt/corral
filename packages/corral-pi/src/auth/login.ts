@@ -9,7 +9,7 @@ import type { AuthEvent, AuthInteraction, AuthPrompt } from "@earendil-works/pi-
 
 import type { Fetch } from "./types.ts";
 import { CredentialsUnavailable, authDir } from "./paths.ts";
-import { PROVIDERS, type ProviderId, isProviderId } from "./providers.ts";
+import { PROVIDERS, type ProviderId, isApiProvider, isProviderId } from "./providers.ts";
 import { FileCredentialStore } from "./store.ts";
 
 /** The OpenAI Codex login endpoints; every provider's list is `PROVIDERS[id].login`. */
@@ -221,23 +221,23 @@ export function runLogin(argv: readonly string[]): void {
     return index === -1 ? undefined : argv[index + 1];
   };
   const dir = arg("--auth-dir") ?? authDir();
-  const connection = arg("--connection");
-  if (connection !== undefined) {
-    void import("./api-key.ts").then(({ apiKeyCommand }) => {
-      if (arg("--provider") !== undefined || argv.filter(arg => arg === "--connection").length !== 1) {
-        throw new CredentialsUnavailable("API setup requires only its selected connection, not a provider override");
-      }
-      return apiKeyCommand(dir, connection, argv);
-    }).then(() => process.exit(0), () => {
+  const removed = argv.find(value => value === "--connection" || value.startsWith("--connection="));
+  if (removed) {
+    const provider = (arg("--connection") ?? removed.split("=")[1]) === "openai-api" ? "openai" : "anthropic-api";
+    process.stderr.write(`--connection was removed; use --provider ${provider}\n`);
+    process.exit(2);
+  }
+  const provider = arg("--provider") ?? "openai-codex";
+  if (!isProviderId(provider)) {
+    process.stderr.write(`corral-pi login: unknown provider ${provider}; use openai-codex, anthropic, openai or anthropic-api\n`);
+    process.exit(2);
+  }
+  if (isApiProvider(provider)) {
+    void import("./api-key.ts").then(({ apiKeyCommand }) => apiKeyCommand(dir, provider, argv)).then(() => process.exit(0), () => {
       process.stderr.write("corral API key setup refused or cancelled: use a terminal to enter a platform API key, or --key-file with a protected 0600 file; no credential content is shown\n");
       process.exit(1);
     });
     return;
-  }
-  const provider = arg("--provider") ?? "openai-codex";
-  if (!isProviderId(provider)) {
-    process.stderr.write(`corral agent login failed: unknown provider ${provider}; use openai-codex or anthropic\n`);
-    process.exit(2);
   }
   if (PROVIDERS[provider].auth !== "oauth") {
     process.stderr.write(`corral agent login failed: ${new LoginNotOAuth(provider).message}\n`);

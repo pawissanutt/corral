@@ -1,4 +1,5 @@
 import type { Api, Model, Provider } from "@earendil-works/pi-ai";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { z } from "zod";
 
@@ -44,13 +45,11 @@ async function discover(settings: LlamaCppSettings, send: Fetch): Promise<readon
 }
 
 /** A host-local, chat-only catalog. No upstream llama extension or model manager is enabled. */
-export async function createLocalModels(settings: LlamaCppSettings, selected: string, send: Fetch) {
-  const selectedId = selected.startsWith("llama.cpp/") ? selected.slice("llama.cpp/".length) : selected;
-  if (!ModelId.safeParse(selectedId).success) throw new LocalModelUnavailable("invalid configured model ID");
-  const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, { providers: [], modelsPath: null });
+export async function installLocalProvider(runtime: ModelRuntime, settings: LlamaCppSettings, selected: readonly string[], send: Fetch) {
+  if (selected.some(id => !ModelId.safeParse(id).success)) throw new LocalModelUnavailable("invalid configured model ID");
   const origin = new URL(settings.endpoint).origin;
   // Discovery is refreshed explicitly; the host keeps its configured transport.
-  let ids: readonly string[] = settings.discover ? await discover(settings, send) : [selectedId];
+  let ids = settings.discover ? await discover(settings, send) : selected;
   const metadata = (id: string): Model<"openai-completions"> => ({
     id, name: id, provider: "llama.cpp", api: "openai-completions", baseUrl: `${origin}/v1`,
     reasoning: false, input: ["text"], contextWindow: settings.context_window, maxTokens: settings.max_tokens,
@@ -86,9 +85,15 @@ export async function createLocalModels(settings: LlamaCppSettings, selected: st
   const refresh = runtime.refresh.bind(runtime);
   runtime.refresh = async (options = {}) => {
     if (settings.discover && options.allowNetwork === true) ids = await discover(settings, send);
-    return refresh({ ...options, providers: ["llama.cpp"], allowNetwork: false });
+    return refresh({ ...options, allowNetwork: false });
   };
   await runtime.refresh();
+}
+
+export async function createLocalModels(settings: LlamaCppSettings, selected: string, send: Fetch) {
+  const selectedId = selected.startsWith("llama.cpp/") ? selected.slice("llama.cpp/".length) : selected;
+  const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, { providers: ["llama.cpp"], modelsPath: null });
+  await installLocalProvider(runtime, settings, [selectedId], send);
   const model = runtime.getModel("llama.cpp", selectedId);
   if (!model) throw new LocalModelUnavailable(`configured model ${selectedId} is not advertised; check the endpoint or set discover = false`);
   return { models: runtime, model };
