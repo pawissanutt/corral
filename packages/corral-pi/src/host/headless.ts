@@ -42,14 +42,18 @@ export function headlessLine(event: BridgeEvent): string | undefined {
  */
 export async function attachHeadless(
   host: HostSession, events: EventLog, write: (line: string) => void,
+  ready?: () => void,
 ): Promise<() => void> {
   const off = events.on((event) => {
     const line = headlessLine(event);
     if (line !== undefined) write(`${line}\n`);
   });
   host.markAttached("headless");
+  // A startup handler can await a card; the bound transcript must already be reachable over the socket.
+  ready?.();
   await host.session.bindExtensions({
     mode: "print",
+    uiContext: host.remoteUiContext(),
     onError: (error) => write(`extension error (${error.extensionPath}): ${String(error.error)}\n`),
   });
   return off;

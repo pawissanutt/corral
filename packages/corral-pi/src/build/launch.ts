@@ -22,13 +22,17 @@ function buildDataRoot(value: string | undefined, env: NodeJS.ProcessEnv, cwd: s
 }
 
 export function parsePruneFlags(argv: readonly string[], env = process.env, cwd = process.cwd()):
-  { dataRoot: string; dryRun: boolean } | undefined {
-  if (!argv.some(arg => /^--(?:prune|dry-run)(?:=|$)/.test(arg))) return undefined;
+  { dataRoot: string; dryRun: boolean; session?: string; json?: true } | undefined {
+  if (!argv.some(arg => /^--(?:prune|dry-run|session|json)(?:=|$)/.test(arg))) return undefined;
   const { values } = parseArgs({ args: [...argv], options: {
     prune: { type: "boolean" }, "dry-run": { type: "boolean" }, "data-dir": { type: "string" },
+    session: { type: "string" }, json: { type: "boolean" },
   } });
-  if (!values.prune) throw new Error("--dry-run requires --prune");
-  return { dataRoot: buildDataRoot(values["data-dir"], env, cwd), dryRun: values["dry-run"] === true };
+  if (!values.prune) throw new Error("--dry-run, --session and --json require --prune");
+  if (values.session !== undefined) validateBuildId(values.session);
+  if (values.json && !values.session) throw new Error("--json requires --session");
+  return { dataRoot: buildDataRoot(values["data-dir"], env, cwd), dryRun: values["dry-run"] === true,
+    ...(values.session ? { session: values.session } : {}), ...(values.json ? { json: true as const } : {}) };
 }
 
 export function parseBuildFlags(argv: readonly string[], assets: string, env = process.env,

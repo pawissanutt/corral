@@ -32,6 +32,16 @@ function queuedInput(key: string, text: string, policy: BusyPolicy, origin: Queu
     ...(to === undefined ? {} : { to }), actions: ["withdraw"] };
 }
 
+// The SDK can append but not insert. Only the owner-only tail of each policy can move without rewriting foreign items.
+function ownerBoundary(ordered: readonly Queued[]): Record<Queued["mode"], number> {
+  const foreign = { steer: -1, follow_up: -1 };
+  for (let i = 0; i < ordered.length; i++) {
+    const item = ordered[i]!;
+    if (item.origin !== "owner") foreign[item.mode] = i;
+  }
+  return foreign;
+}
+
 function heldView(item: HeldInput): QueuedInput {
   return queuedInput(item.queueKey, item.text, item.busyPolicy, item.origin, item.to);
 }
@@ -141,11 +151,12 @@ export class HostQueue {
     const items: Record<string, unknown>[] = [];
     const positions = { prompt: 0, steer: 0, follow_up: 0 };
     const ordered = this.ordered();
+    const foreign = ownerBoundary(ordered);
     let bytes = 0;
     for (let i = 0; i < ordered.length + held.length; i++) {
       if (items.length === limit) return { available: true, items, more: true };
       const item = ordered[i], saved = held[i - ordered.length];
-      const { key, policy, ...view } = item ? this.view(item) : heldView(saved!);
+      const { key, policy, ...view } = item ? this.view(ordered, i, foreign) : heldView(saved!);
       const row = { ...view, item: key, origin: item?.origin ?? view.origin, mode: policy, state: "queued",
         position: ++positions[policy], text_sha256: sha256Hex(item?.text ?? saved!.text) };
       bytes += Buffer.byteLength(JSON.stringify(row)) + 1;
@@ -155,13 +166,20 @@ export class HostQueue {
     return { available: true, items, more: false };
   }
 
-  private view(item: Queued): QueuedInput {
-    return queuedInput(item.key, item.text, item.mode, item.origin === "extension" ? "auto" : item.origin, item.facts.to);
+  private view(ordered: readonly Queued[], index: number, foreign: Record<Queued["mode"], number>): QueuedInput {
+    const item = ordered[index]!;
+    const view = queuedInput(item.key, item.text, item.mode, item.origin === "extension" ? "auto" : item.origin, item.facts.to);
+    if (index > foreign[item.mode]) {
+      if (index - 1 > foreign[item.mode] && ordered[index - 1]?.mode === item.mode) view.actions.push("move_up");
+      if (ordered[index + 1]?.mode === item.mode) view.actions.push("move_down");
+    }
+    return view;
   }
 
   brief(held: readonly HeldInput[] = []): { queue: QueuedInput[]; queue_total: number } {
     const ordered = this.ordered();
-    const queue = ordered.slice(0, 12).map(item => this.view(item));
+    const foreign = ownerBoundary(ordered);
+    const queue = ordered.slice(0, 12).map((_, i) => this.view(ordered, i, foreign));
     for (let i = 0; i < held.length && queue.length < 12; i++) queue.push(heldView(held[i]!));
     return { queue, queue_total: ordered.length + held.length };
   }
@@ -197,19 +215,26 @@ export class HostQueue {
     return item && await this.remove(key) ? item.text : undefined;
   }
 
-  /** The SDK can remove and append the same object, so move an editable suffix as one batch. */
+  moveOwner(key: string, delta: -1 | 1): boolean {
+    return this.moveInput(this.queued.get(key), delta, "owner");
+  }
+
   async move(key: string, delta: -1 | 1): Promise<boolean> {
-    const item = this.editable(key);
-    if (!item || this.reordering) return false;
+    return this.moveInput(this.editable(key), delta, "pane");
+  }
+
+  /** Reorder exact Pi objects without re-admitting or withdrawing any input. */
+  private moveInput(item: Queued | undefined, delta: -1 | 1, origin: "owner" | "pane"): boolean {
+    if (item?.origin !== origin || this.reordering) return false;
     const session = this.options.session();
     const group = this.ordered().filter(entry => entry.mode === item.mode);
     const index = group.indexOf(item), next = index + delta;
     if (index < 0 || next < 0 || next >= group.length) return false;
     const suffix = group.slice(Math.min(index, next));
-    if (suffix.some(entry => entry.origin !== "pane")) return false;
+    if (suffix.some(entry => entry.origin !== origin)) return false;
     this.reordering = true;
     try {
-      for (const entry of suffix) session.removeQueuedMessage(entry.message, "pane_move");
+      for (const entry of suffix) session.removeQueuedMessage(entry.message, origin === "pane" ? "pane_move" : "owner_move");
       const first = suffix[0], second = suffix[1];
       if (first && second) { suffix[0] = second; suffix[1] = first; }
       for (const entry of suffix) session.agent[item.mode === "steer" ? "steer" : "followUp"](entry.message);

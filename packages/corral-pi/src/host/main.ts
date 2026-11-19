@@ -209,12 +209,13 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     };
   }
   if (config.local?.headless || headlessEnabled(config.capabilities)) {
-    await attachHeadless(session, events, line => process.stdout.write(line));
-    if (handlers) {
-      installRemote(session, owner, config.local.dir);
-      bridge.attach(handlers, session.liveEvents, session.remoteRegistry);
-      events.emit("ready");
-    }
+    await attachHeadless(session, events, line => process.stdout.write(line), () => {
+      if (handlers) {
+        installRemote(session, owner, config.local.dir);
+        bridge.attach(handlers, session.liveEvents, session.remoteRegistry);
+        events.emit("ready");
+      }
+    });
     return;
   }
   const panels = session.panels;

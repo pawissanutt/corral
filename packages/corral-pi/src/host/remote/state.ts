@@ -88,7 +88,7 @@ export function capabilities(registry: RemoteRegistry, options: { open: boolean;
 export function exitBrief(exit: ExitState): ExitBrief {
   return { phase: exit.phase, detail: exit.detail === undefined ? undefined : utf8Prefix(exit.detail, 512),
     choice: exit.record?.choice, landed: exit.record?.landed,
-    base_branch: exit.record?.baseBranch === undefined ? undefined : utf8Prefix(exit.record.baseBranch, 256) };
+    base_branch: exit.record?.baseBranch === undefined ? undefined : utf8Prefix(exit.record.baseBranch, 256), repair: exit.repair };
 }
 
 export function boardBrief(board: BoardControl): BoardBrief {

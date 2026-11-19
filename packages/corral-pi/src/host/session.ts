@@ -27,9 +27,12 @@ import { PROVIDERS, type ProviderId, billingKind, hostDestinations, isApiProvide
 import type { AuthContext, Fetch } from "../auth/types.ts";
 import type { EventLog } from "../bridge/events.ts";
 import { LiveEvents } from "./live-events.ts";
+import { RemoteBuild } from "./remote/build.ts";
+import { cardBrief, cardDetail, questionEntries, questionStatus, sortedCards, type AnswerStatus, type CardEntry } from "./remote/cards.ts";
+import { RemoteDialogs } from "./remote/dialogs.ts";
 import { RemoteRegistry } from "./remote/registry.ts";
 import type { TranscriptInput } from "./remote/input.ts";
-import { boardBrief, capabilities, exitBrief, jobCounts, planBrief, type CardBrief, type SessionState,
+import { boardBrief, capabilities, exitBrief, jobCounts, planBrief, type SessionState,
   type StateProjection, type UsageBrief } from "./remote/state.ts";
 import { utf8Prefix } from "../roles/assistant/owner-action.ts";
 import type { RemoteOwner } from "./remote-owner.ts";
@@ -38,7 +41,7 @@ import { closeResidentSession, residentLifecycle } from "../claude/resident.ts";
 import { BridgeRefusal, type AnswerInput, type RewindInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
 import { listRewinds, parseRewindCommand, recordRewind, restoreRewind, rewindPoint } from "./rewind.ts";
 import type { HostIdentity, RoleContext } from "../roles/types.ts";
-import type { BuildContext } from "../build/types.ts";
+import type { BuildContext, FleetSnapshot } from "../build/types.ts";
 import { createBuildControls, type BuildControls } from "../build/host-controls.ts";
 import { type CorralClient, type ModelUsage } from "../tools/corral.ts";
 import { observeUsage } from "./model-usage.ts";
@@ -306,8 +309,11 @@ export class HostSession {
   private unobserveTranscript: (() => void) | undefined;
   private remoteUsage: { leaf: string | null; model: AgentSession["model"]; usage: UsageBrief } | undefined;
   private remoteFleetDirty = true;
+  private remoteFleet: FleetSnapshot | undefined;
   readonly liveEvents: LiveEvents;
   readonly remoteRegistry = new RemoteRegistry();
+  readonly remoteBuild: RemoteBuild;
+  private readonly remoteDialogs: RemoteDialogs;
   readonly panels: NativePanels | undefined;
   private readonly unsubscribePanels: (() => void) | undefined;
   private terminalInput: InputObservation | undefined;
@@ -386,6 +392,7 @@ export class HostSession {
   private constructor(private readonly options: HostSessionOptions) {
     const host = this;
     this.liveEvents = new LiveEvents();
+    this.remoteDialogs = new RemoteDialogs(() => this.liveEvents.stateChanged());
     this.provider = options.provider ?? "openai-codex";
     this.local = new LocalControlPlane(options.build?.dir ?? options.runtimeDir ?? options.agentDir, options.identity);
     this.remotePrompts = new RemotePrompts(this.liveEvents.events);
@@ -578,6 +585,17 @@ export class HostSession {
         },
       });
     }
+    this.remoteBuild = new RemoteBuild(this.buildControls, {
+      fleet: () => this.buildControls?.ui.fleet ?? this.fleet,
+      children: () => this.readRemoteFleet()?.children ?? [],
+      ready: () => this.remoteActionsReady,
+      headless: () => this.attached === "headless",
+      working: () => this.open || this.session.isStreaming,
+      changed: () => this.liveEvents.stateChanged(),
+      mark: mark => this.addMark(mark),
+      post: entry => this.session.sendCustomMessage(entry, { triggerTurn: false }),
+      error: text => this.addMark({ kind: "note", tone: "error", at: Date.now(), text }),
+    });
     const dialogEnabled = options.capabilities?.enabled.includes("ask_user") === true;
     const questions = dialogEnabled || options.capabilities?.enabled.includes("bash_rules") ? new PendingQuestions({
       session: () => options.sessionManager.getSessionId(),
@@ -603,7 +621,8 @@ export class HostSession {
         if (!this.dialogPi) throw new Error("dialog session is unavailable");
         this.dialogPi.sendUserMessage(answer, { deliverAs: "steer" });
         return answer;
-      }, questions, () => this.questionUi?.busy === true, () => this.dialogPresentation(), localQuestionAsk(questions))] : []),
+      }, questions, () => this.questionUi?.busy === true, () => this.dialogPresentation(), localQuestionAsk(questions),
+      () => this.attached === "headless")] : []),
       ...(this.additionalLsp?.tools ?? []).map(tool => ({ ...tool, execute: (...args: Parameters<ToolDefinition["execute"]>) => {
         const current = this.additionalLsp?.tools.find(candidate => candidate.name === tool.name);
         if (!current) throw new Error("LSP runtime unavailable; no effect started");
@@ -1251,8 +1270,10 @@ export class HostSession {
           { stopCause: this.stopCause, error: !!this.turnError });
       } else if (event.type === "tool_execution_start") {
         this.turnFacts.toolStarted(this.turn, event.toolCallId);
-      } else if (event.type === "agent_settled") this.turnEnded(event.aborted);
-      else if (event.type === "queue_update") {
+      } else if (event.type === "agent_settled") {
+        this.turnEnded(event.aborted);
+        this.remoteBuild.refreshExit();
+      } else if (event.type === "queue_update") {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
         const message = event.message.errorMessage ?? "";
@@ -1348,8 +1369,26 @@ export class HostSession {
 
   private get recordsTurnMarks(): boolean { return this.attached === "headless" || this.options.ui !== "plain"; }
 
+  get remoteActionsReady(): boolean { return this.bound && !this.closing && !this.rewinding; }
+
+  remoteUiContext() {
+    return this.remoteDialogs.context(this.session.extensionRunner.getUIContext(), (text, tone) => {
+      this.addMark({ kind: "note", at: Date.now(), text, tone: tone === undefined || tone === "info" ? "text" : tone });
+    });
+  }
+
+  remoteCardEntries(): CardEntry[] {
+    return [...questionEntries(this.ownerQuestions), ...this.remoteDialogs.entries(), ...this.remoteBuild.entries()];
+  }
+
+  absentCard(id: string): AnswerStatus {
+    if (this.remoteDialogs.isExpired(id)) return "expired";
+    return questionStatus(this.ownerQuestions?.status(id) ?? "missing");
+  }
+
   markAttached(mode: "interactive" | "headless"): void {
     this.attached = mode;
+    this.remoteBuild.refreshExit();
     this.liveEvents.stateChanged();
     this.options.events.emit(mode);
   }
@@ -1389,6 +1428,7 @@ export class HostSession {
     closeResidentSession(this.sessionId());
     if (this.open) this.stopCause ??= "host";
     this.closing = true;
+    this.remoteDialogs.close();
     this.liveEvents.stateChanged();
     // Close both resource admission barriers synchronously, even if another cleanup fails.
     const resources = this.stopManagedResources();
@@ -1508,7 +1548,7 @@ export class HostSession {
       if (prior?.answers?.[0]?.option === "allow") return;
       return "The owner did not allow this command; nothing ran";
     }
-    const question = questions.ask(crypto.randomUUID(), [{ question: text, options: ["allow", "deny"], freeText: false }]);
+    const question = questions.ask(crypto.randomUUID(), [{ question: text, options: ["allow", "deny"], freeText: false }], "bash");
     this.bashQuestions.set(command, question.id);
     return `Waiting for owner question ${question.id}; nothing ran`;
   }
@@ -1530,8 +1570,7 @@ export class HostSession {
     if (!choice || record.questions.length !== 1 || !validAnswer(choice, { option, text })) {
       throw new BridgeRefusal("invalid_question_answer", "choose a listed option or use free text if allowed");
     }
-    await before();
-    return pending.answer(question, [{ option, text }]);
+    return pending.answer(question, [{ option, text }], before);
   }
 
   async replyToQuestion(text: string): Promise<boolean> {
@@ -1622,27 +1661,26 @@ export class HostSession {
     this.panels?.refresh();
   }
 
+  private readRemoteFleet(): FleetSnapshot | undefined {
+    if (this.remoteFleetDirty) {
+      this.remoteFleetDirty = false;
+      this.remoteFleet = (this.buildControls?.fleet ?? this.fleet)?.snapshot();
+      this.liveEvents.observeFleet(this.remoteFleet, this.auxiliary?.inspections());
+    }
+    return this.remoteFleet;
+  }
+
   remoteState(owner: RemoteOwner): StateProjection {
     const session = this.session;
     const build = this.buildControls;
-    if (this.remoteFleetDirty) {
-      this.remoteFleetDirty = false;
-      this.liveEvents.observeFleet((build?.fleet ?? this.fleet)?.snapshot(), this.auxiliary?.inspections());
-    }
     const effort_levels = session.supportsThinking() ? session.getAvailableThinkingLevels() : [];
     const model = session.model ? utf8Prefix(`${session.model.provider}/${session.model.id}`, 512) : undefined;
     const { queue, queue_total } = owner.queueBrief();
-    const questions = this.ownerQuestions?.pending() ?? [];
-    const cards: CardBrief[] = questions.slice(0, 8).map(question => ({
-      id: utf8Prefix(question.id, 160), kind: "question", title: utf8Prefix(question.questions[0]?.question ?? "", 160),
-      expires_at: new Date(question.expires).toISOString(),
-    }));
-    for (const card of this.liveEvents.childCards) if (cards.length < 8) cards.push(card);
-    const exit = build ? exitBrief(build.exit.state()) : undefined;
-    if (exit?.phase === "pending" && cards.length < 8) cards.push({ id: "exit", kind: "exit", title: "Build exit" });
+    const entries = sortedCards(this.remoteCardEntries());
+    const cards = entries.slice(0, 8).map(entry => cardBrief(entry.card));
+    const exitState = this.remoteBuild.exitState();
+    const exit = exitState ? exitBrief(exitState) : undefined;
     const board = build?.board ? boardBrief(build.board) : undefined;
-    if (board?.proposed && cards.length < 8) cards.push({ id: "board_plan", kind: "board_plan",
-      title: utf8Prefix(build?.board?.proposed()?.title ?? "", 160) });
     const plan = this.ledger ? planBrief(this.ledger) : undefined;
     const jobs = this.commands?.inspection() ?? [];
     const recovered = this.commands?.recovered() ?? [];
@@ -1658,7 +1696,7 @@ export class HostSession {
     };
     const journal = this.options.build ? statSync(join(this.options.build.dir, "journal.json"), { throwIfNoEntry: false }) : undefined;
     return { state, parts: {
-      cards: [cards, questions], jobs: [jobs, recovered], usage,
+      cards: entries.map(entry => cardDetail(entry.card)), jobs: [jobs, recovered], usage,
       context: [model, usage.context_tokens, usage.context_window, usage.context_percent],
       plan: [plan, this.ledger?.current?.revision], board: [board, build?.board?.tasks(), build?.board?.proposed()],
       record: journal ? [journal.ino, journal.mtimeMs, journal.size] : undefined,

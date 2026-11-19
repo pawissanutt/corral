@@ -144,6 +144,7 @@ pub(crate) fn serve(
         chat::ASSISTANT_SESSION => answer!(Ok(assistant::session(shared, decode(params)?)?)),
         chat::PROMPT_ANSWER => answer!(Ok(sessions::answer(shared, decode(params)?)?)),
         build::BUILD_START => answer!(Ok(builds::start(shared, decode(params)?)?)),
+        build::BUILD_REMOVE => answer!(Ok(builds::remove(shared, decode(params)?)?)),
         host::SESSION_SEND => answer!(Ok(sessions::send(
             shared,
             device.as_ref().map_or("local", |device| device.id.as_str()),

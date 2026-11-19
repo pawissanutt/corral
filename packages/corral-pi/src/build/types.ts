@@ -356,6 +356,7 @@ export interface ExitState {
   readonly record?: ExitRecord;
   /** Progress or failure text for the conversation. */
   readonly detail?: string;
+  readonly repair?: { readonly round: number; readonly of: number };
 }
 
 export interface ExitControl {

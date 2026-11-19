@@ -6,11 +6,11 @@ import type { InputWake } from "../extensions/input-wake.ts";
 import { createSdkRunner, type ChildRunner } from "../extensions/fleet/child.ts";
 import { createBoard } from "./board.ts";
 import { engineRun, gitRun, type Run } from "./corral-cli.ts";
-import { createExit } from "./exit.ts";
+import { createExit, type BuildExitControl } from "./exit.ts";
 import { loadSession, saveSession } from "./session-store.ts";
 import { boardPlanTool, buildEvidenceTools, buildFinishTool } from "./tools.ts";
 import { createJournal, type BuildJournal } from "./record.ts";
-import { LIVE_CHILD_STATES, type BoardControl, type BoardPlan, type BuildContext, type BuildPanelState, type BuildUi, type ExitControl, type FleetControl } from "./types.ts";
+import { LIVE_CHILD_STATES, type BoardControl, type BoardPlan, type BuildContext, type BuildPanelState, type BuildUi, type FleetControl } from "./types.ts";
 import { buildShellRefusal } from "../roles/build/guard.ts";
 
 export interface BuildControlsOptions extends Omit<FleetOptions, "models" | "approved" | "localTools" | "context"> {
@@ -28,7 +28,7 @@ export interface BuildControlsOptions extends Omit<FleetOptions, "models" | "app
 
 export interface BuildControls {
   readonly fleet: FleetRuntime;
-  readonly exit: ExitControl & { open(): void; close(): void };
+  readonly exit: BuildExitControl;
   readonly board?: BoardControl & { propose(plan: BoardPlan): void; close(): void };
   readonly tools: ToolDefinition[];
   readonly ui: BuildUi;

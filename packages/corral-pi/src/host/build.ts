@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync, statSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { buildIsRunning, errorMessage, hasOwnerMessage, inspectBuildCleanup, pruneBuilds, removeBuild } from "../build/cleanup.ts";
+import { buildIsRunning, errorMessage, hasOwnerMessage, inspectBuildCleanup, pruneBuildSession, pruneBuilds, removeBuild } from "../build/cleanup.ts";
 import { parseBuildFlags, parsePruneFlags, type LocalBuildOptions } from "../build/launch.ts";
 import { createSession, loadSession, saveSession, sessionDir } from "../build/session-store.ts";
 import { prepareWorktree } from "../build/worktree.ts";
@@ -126,7 +126,11 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
   try {
     const prune = parsePruneFlags(argv);
     if (prune) {
-      await pruneBuilds(prune.dataRoot, prune.dryRun, line => process.stdout.write(`${line}\n`));
+      if (prune.session) {
+        const result = await pruneBuildSession(prune.dataRoot, prune.session, prune.dryRun);
+        if (prune.json) process.stdout.write(`${JSON.stringify(result)}\n`);
+        else for (const line of result.lines) process.stdout.write(`${line}\n`);
+      } else await pruneBuilds(prune.dataRoot, prune.dryRun, line => process.stdout.write(`${line}\n`));
       return;
     }
     const { launch, local } = parseBuildFlags(argv, assets);

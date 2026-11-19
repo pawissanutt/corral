@@ -1,11 +1,17 @@
-use std::{ffi::OsStr, os::unix::fs::symlink};
+use std::{
+    ffi::OsStr,
+    os::unix::{fs::symlink, process::ExitStatusExt},
+    process::{ExitStatus, Output},
+};
 
 use corral_protocol::{
-    build::BUILD_START,
+    build::{BUILD_REMOVE, BUILD_START, BuildRemove, BuildRemoved},
     detail::{DetailBody, DetailReply, HostPresence, SessionPage},
     rows::{AssistantKind, AssistantLocation, AssistantRow, AssistantState},
     session::{SESSION_RELAUNCH, SESSION_TERMINATE, SessionRelaunched},
-    session_host::{InputDisposition, SESSION_SEND, SessionSent},
+    session_host::{
+        InputDisposition, SESSION_CARD_ANSWER, SESSION_SEND, SessionCardAnswered, SessionSent,
+    },
     session_state::InputOrigin,
 };
 use corral_types::SessionRef;
@@ -211,6 +217,150 @@ fn a_build_of_another_workspace_is_not_listed() {
         .call(SESSION_RELAUNCH, json!({"id": "B-../outside"}))
         .unwrap_err();
     assert_eq!(malformed.code, rpc::ErrorCode::InvalidParams);
+}
+
+#[test]
+fn a_card_answer_reaches_the_host_and_its_brief_leaves_the_state() {
+    let fixture = Fixture::new();
+    let id = "B-card";
+    let mut script = Script::default();
+    script.state = Some(json!({
+        "mode": "headless", "turn": 1, "open": false, "paused": false, "queue_total": 0,
+        "usage": {"tokens": 0, "cost_partial": false, "context_tokens": 0, "context_window": 0},
+        "children": {"live": 0, "waiting": 0, "total": 0},
+        "jobs": {"live": 0, "waiting": 0, "total": 0},
+        "cards": [{"id": "question-1", "kind": "question", "title": "Which option?"}],
+    }));
+    let host = terminal(&fixture, id, script);
+    let socket = fixture.unix_server();
+    crate::topics::start_session_live(fixture.shared()).unwrap();
+    let caps = || vec![wire::BUILD_V1.into(), wire::app::SESSION_STATE_V1.into()];
+    let mut subscriber = Client::connect_with(&socket, caps());
+    subscriber.ok::<()>(wire::SUB_OPEN, json!({"topic": "session", "scope": id}));
+    let mut snapshot = || {
+        let frame = read_frame(&mut subscriber.0).unwrap().unwrap();
+        let delta: rpc::Notification<SubDelta> = serde_json::from_slice(&frame.payload).unwrap();
+        let SubDelta::Session {
+            scope,
+            cursor,
+            state: Some(state),
+            ..
+        } = delta.params
+        else {
+            panic!("expected a state replacement");
+        };
+        assert_eq!(scope, id);
+        subscriber.ok::<()>(
+            wire::SUB_ACK,
+            json!({"topic": "session", "scope": scope, "cursor": cursor}),
+        );
+        state
+    };
+    let before = snapshot();
+    assert_eq!(before.cards.len(), 1);
+    assert_eq!(before.cards[0].id, "question-1");
+
+    let answers = json!([{"options": ["first"], "text": "the selected option"}]);
+    let mut owner = Client::connect_with(&socket, caps());
+    let reply: SessionCardAnswered = owner.ok(
+        SESSION_CARD_ANSWER,
+        json!({"id": id, "card": "question-1", "answers": answers, "dismiss": false}),
+    );
+    assert_eq!(reply.status, "delivered");
+    assert_eq!(
+        host.state.lock().unwrap().requests.as_slice(),
+        &[(
+            "card_answer".to_owned(),
+            json!({"card": "question-1", "answers": answers, "dismiss": false}),
+        )],
+    );
+    assert!(snapshot().cards.is_empty());
+}
+
+#[test]
+fn remove_is_refused_while_the_host_answers() {
+    let fixture = Fixture::new();
+    let id = "B-live";
+    let _host = terminal(&fixture, id, Script::default());
+    let request = BuildRemove {
+        id: id.into(),
+        dry_run: false,
+    };
+    let refusal = crate::builds::remove_with(fixture.shared(), request.clone(), |_| {
+        panic!("prune must not run while the host answers")
+    })
+    .unwrap_err();
+    assert!(refusal.is::<Refusal>());
+    let mut owner = Client::connect_with(&fixture.unix_server(), vec![wire::BUILD_V1.into()]);
+    let error = owner.call(BUILD_REMOVE, request).unwrap_err();
+    assert_eq!(error.code, rpc::ErrorCode::Refused);
+    assert!(dir(&fixture, id).join("session.json").is_file());
+}
+
+#[test]
+fn remove_reports_what_prune_kept_and_why() {
+    let fixture = Fixture::new();
+    let id = "B-cold";
+    let build = dir(&fixture, id);
+    fs::create_dir_all(&build).unwrap();
+    save_record(
+        &build,
+        fixture.root(),
+        &fixture.root().join("absent.sock"),
+        false,
+    );
+    let data_root = fixture.root().join("pi-data");
+    let kept = "contains owner input";
+    for dry_run in [true, false] {
+        let line = if dry_run {
+            "would remove checkout"
+        } else {
+            "removed checkout"
+        };
+        let removed = crate::builds::remove_with(
+            fixture.shared(),
+            BuildRemove {
+                id: id.into(),
+                dry_run,
+            },
+            |command| {
+                assert_eq!(command.get_program(), "corral-pi");
+                assert_eq!(command.get_current_dir(), Some(fixture.root()));
+                assert!(command.get_envs().any(|(key, value)| {
+                    key == "CORRAL_NEXT_ROOT" && value == Some(fixture.root().as_os_str())
+                }));
+                let mut expected = ["build", "--prune", "--session", id, "--json"]
+                    .map(OsStr::new)
+                    .to_vec();
+                if dry_run {
+                    expected.push(OsStr::new("--dry-run"));
+                }
+                expected.extend([OsStr::new("--data-dir"), data_root.as_os_str()]);
+                assert_eq!(command.get_args().collect::<Vec<_>>(), expected);
+                Ok(Output {
+                    status: ExitStatus::from_raw(0),
+                    stdout: serde_json::to_vec(&json!({
+                        "worktree": true, "branch": true, "record": false,
+                        "kept": kept, "lines": [line],
+                    }))
+                    .unwrap(),
+                    stderr: Vec::new(),
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            removed,
+            BuildRemoved {
+                worktree: true,
+                branch: true,
+                record: false,
+                kept: Some(kept.into()),
+                lines: vec![line.into()],
+            },
+        );
+        assert!(build.join("session.json").is_file());
+    }
 }
 
 #[test]

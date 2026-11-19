@@ -3,11 +3,14 @@ import { lstatSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { join, sep } from "node:path";
 import { canConnect } from "../bridge/server.ts";
 import { sessionSocket } from "../host/config.ts";
+import { utf8Prefix } from "../roles/assistant/owner-action.ts";
 import { landingBaseFromRef, landingBaseLookups, landingBaseName } from "./git.ts";
 import { listSessions, loadSession, saveSession, sessionDir } from "./session-store.ts";
 import type { BuildSessionRecord } from "./types.ts";
 
 export type CleanupPlan = { readonly reason: string } | { readonly worktree: boolean; readonly branches: readonly string[] };
+interface Removed { worktree: boolean; branch: boolean; record: boolean }
+interface BuildRemoved extends Removed { kept?: string; lines: string[] }
 
 type GitResult = { readonly status: number | null; readonly stdout: string; readonly stderr: string };
 function git(cwd: string, args: readonly string[]): GitResult {
@@ -104,6 +107,11 @@ export function hasOwnerMessage(dataRoot: string, record: BuildSessionRecord): b
 
 export function removeBuild(dataRoot: string, record: BuildSessionRecord,
   plan: Exclude<CleanupPlan, { reason: string }>, removeRecord: boolean, dryRun = false): string {
+  return applyCleanup(dataRoot, record, plan, removeRecord, dryRun);
+}
+
+function applyCleanup(dataRoot: string, record: BuildSessionRecord, plan: Exclude<CleanupPlan, { reason: string }>,
+  removeRecord: boolean, dryRun: boolean, result?: Removed): string {
   const dir = sessionDir(dataRoot, record.id);
   const removed: string[] = [];
   try {
@@ -117,14 +125,17 @@ export function removeBuild(dataRoot: string, record: BuildSessionRecord,
         })) throw new Error("worktree contains the session record or transcript");
       }
       if (!dryRun) checked(git(record.repoRoot, ["worktree", "remove", "--", record.worktree]));
+      if (result) result.worktree = true;
       removed.push(`worktree ${record.worktree} (including ignored build output)`);
     }
     for (const branch of plan.branches) {
       if (!dryRun) checked(git(record.repoRoot, ["branch", "-d", "--", branch]));
+      if (result) result.branch = true;
       removed.push(`branch ${branch}`);
     }
     if (removeRecord) {
       if (!dryRun) rmSync(dir, { recursive: true });
+      if (result) result.record = true;
       removed.push(`record ${dir}`);
     } else if (!dryRun) saveSession(dataRoot, { ...record, cleaned: true });
   } catch (error) {
@@ -153,14 +164,64 @@ export function errorMessage(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).replace(/\r?\n/g, "; ");
 }
 
-export async function pruneBuilds(dataRoot: string, dryRun: boolean, write: (line: string) => void): Promise<void> {
-  const sessions = listSessions(dataRoot);
+function worktreeOwners(sessions: readonly BuildSessionRecord[]): Map<string, BuildSessionRecord> {
   const owners = new Map<string, BuildSessionRecord>();
   for (const record of sessions) {
     if (record.here || record.repository === false || record.cleaned) continue;
     const previous = owners.get(record.worktree);
     if (!previous || record.created > previous.created) owners.set(record.worktree, record);
   }
+  return owners;
+}
+
+export async function pruneBuildSession(dataRoot: string, id: string, dryRun: boolean): Promise<BuildRemoved> {
+  const result: BuildRemoved = { worktree: false, branch: false, record: false, lines: [] };
+  let label = id;
+  const say = (text: string) => result.lines.push(utf8Prefix(`${label}: ${text}`, 512));
+  const keep = (reason: string) => {
+    result.kept = utf8Prefix(reason, 512);
+    say(`kept (${reason})`);
+    return result;
+  };
+  try {
+    const record = loadSession(dataRoot, id);
+    label += ` (${record.name})`;
+    if (await buildIsRunning(dataRoot, record)) return keep("running");
+    if (!record.here && record.repository !== false && !record.cleaned &&
+        worktreeOwners(listSessions(dataRoot)).get(record.worktree)?.id !== id) {
+      return keep("newer session owns this worktree path");
+    }
+    // Quit may have already removed the Git resources; explicit removal also deletes the retained conversation.
+    const plan = record.cleaned && !record.here && record.repository !== false
+      ? { worktree: false, branches: [] } : inspectBuildCleanup(record);
+    if ("reason" in plan) return keep(plan.reason);
+    const current = loadSession(dataRoot, id);
+    if (livePid(current)) return keep("running");
+    if (current.pid !== record.pid || current.updated !== record.updated || current.cleaned !== record.cleaned) {
+      return keep("session changed during inspection");
+    }
+    const dir = sessionDir(dataRoot, id);
+    let removesConversation = false;
+    if (record.sessionFile && exists(record.sessionFile)) {
+      const transcript = realpathSync(record.sessionFile);
+      removesConversation = transcript.startsWith(realpathSync(dir) + sep) ||
+        plan.worktree && exists(record.worktree) && transcript.startsWith(realpathSync(record.worktree) + sep);
+    }
+    say(applyCleanup(dataRoot, record, plan, true, dryRun, result));
+    if (removesConversation) {
+      say(dryRun ? "would delete the conversation with the session record" : "deleted the conversation with the session record");
+    } else if (record.sessionFile && exists(record.sessionFile)) keep("transcript is outside the removed session directories");
+  } catch (error) {
+    const reason = errorMessage(error);
+    result.kept = utf8Prefix(reason, 512);
+    say(`cleanup refused: ${reason}`);
+  }
+  return result;
+}
+
+export async function pruneBuilds(dataRoot: string, dryRun: boolean, write: (line: string) => void): Promise<void> {
+  const sessions = listSessions(dataRoot);
+  const owners = worktreeOwners(sessions);
   let kept = 0, pruned = 0, refused = 0;
   for (const listed of sessions) {
     const say = (detail: string) => write(`${listed.id} (${listed.name}): ${detail}`);
