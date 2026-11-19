@@ -1,6 +1,5 @@
 //! The quick thread and named chats are Pi sessions, not a separate message store.
 use std::{
-    collections::BTreeMap,
     fs::{self, DirBuilder},
     io::{ErrorKind, Write},
     os::unix::fs::DirBuilderExt,
@@ -12,15 +11,15 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use corral_engine::{
     Config, Runner, refuse,
-    runner::pi::{self, ChatLaunch, Client, Disposition, PiRunner},
+    runner::pi::{self, ChatLaunch, Client, PiRunner},
 };
 use corral_protocol::{
     assistant::*,
     rows::*,
-    session::{AssistantCancelRequest, SessionCancel, SessionCancelReply, SessionRelaunched},
+    session::SessionRelaunched,
     session_host::{SessionSend, SessionSent},
 };
-use corral_types::{Origin, SessionRef};
+use corral_types::SessionRef;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -31,14 +30,8 @@ pub(crate) mod attachments;
 #[derive(Default)]
 pub(crate) struct Service {
     // Serialize creation and mutations. Readers observe atomically replaced chat files.
-    inputs: Mutex<BTreeMap<u64, Input>>,
+    mutation: Mutex<()>,
     uploads: Mutex<()>,
-}
-
-struct Input {
-    cmd_id: String,
-    entry: String,
-    turn: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -225,7 +218,21 @@ impl Chat {
 }
 
 pub(crate) fn resolve(shared: &Shared, scope: &str) -> Result<sessions::Session> {
-    require(shared, scope)?.resolve(shared)
+    match lookup(shared, scope)? {
+        Some(chat) if scope != QUICK_THREAD || !chat.meta.ended => chat.resolve(shared),
+        _ if scope == QUICK_THREAD => Ok(sessions::Session {
+            id: QUICK_THREAD.into(),
+            role: "assistant",
+            task: None,
+            run: None,
+            dir: None,
+            session: None,
+            transcript: None,
+            ended: false,
+            unreachable: false,
+        }),
+        _ => Err(NotFound("chat session not found").into()),
+    }
 }
 
 /// Built-ins alone are not an opt-in. A Pi harness override or any named Pi
@@ -481,111 +488,17 @@ pub(crate) fn send_session(
 ) -> Result<SessionSent> {
     let _lock = shared
         .chat
-        .inputs
+        .mutation
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let (chat, session) = start_on_send(shared, &request.id)?;
     sessions::send_on(shared, device, &chat.id(), &session, None, request)
 }
 
-pub(crate) fn send(shared: &Shared, device: &str, request: AssistantSend) -> Result<SendAck> {
-    ensure!(
-        !request.text.trim().is_empty() && request.text.len() <= MESSAGE_TEXT_MAX,
-        "invalid: chat message must be nonblank and within the message limit"
-    );
-    ensure!(
-        matches!(request.target, AskTarget::Assistant | AskTarget::Pm),
-        "invalid: unknown chat target"
-    );
-    let mut inputs = shared
-        .chat
-        .inputs
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let (chat, session) = start_on_send(shared, &request.thread)?;
-    let client = Client::for_session(&session)?;
-    let files = attachments::prepare(shared, device, &chat.dir, &request.attachments)?;
-    let result: pi::SubmitReply = if files.is_empty() {
-        client.submit_input(&request.text, Origin::Owner)?
-    } else {
-        client.request(
-            "submit_input",
-            json!({"text": request.text, "origin": "owner", "attachments": files}),
-        )?
-    };
-    if result.disposition == Disposition::Rejected {
-        return Err(refuse(
-            result.reason.unwrap_or_else(|| "Pi rejected input".into()),
-            vec![],
-        ));
-    }
-    let entry = input_entry_id(
-        &chat.id(),
-        result.input.as_deref().unwrap_or(&result.request_id),
-    );
-    // Only an active turn's transient handle; never an idempotency/replay journal.
-    if let Some(turn) = result.turn {
-        inputs.insert(
-            chat.number,
-            Input {
-                cmd_id: request.cmd_id,
-                entry: entry.clone(),
-                turn: Some(turn),
-            },
-        );
-    }
-    shared.publish();
-    Ok(SendAck {
-        entry,
-        state: if result.disposition == Disposition::Handled {
-            MessageState::Delivered
-        } else {
-            MessageState::Sent
-        },
-        replayed: false,
-    })
-}
-
-pub(crate) fn cancel(shared: &Shared, request: AssistantCancelRequest) -> Result<CancelAck> {
-    let (control, entry) = match request {
-        AssistantCancelRequest::Session(control) => (control, None),
-        AssistantCancelRequest::Input(request) => {
-            let inputs = shared
-                .chat
-                .inputs
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let Some((&number, input)) = inputs
-                .iter()
-                .find(|(_, input)| input.cmd_id == request.cmd_id)
-            else {
-                return Ok(CancelAck {
-                    cancelled: false,
-                    entry: None,
-                    state: None,
-                });
-            };
-            (
-                SessionCancel {
-                    id: format!("A-{number}"),
-                    turn: input.turn,
-                },
-                Some(input.entry.clone()),
-            )
-        }
-    };
-    let result: SessionCancelReply = sessions::cancel(shared, control)?;
-    Ok(CancelAck {
-        cancelled: result.cancelled,
-        entry,
-        state: None,
-    })
-}
-
 pub(crate) fn warm(shared: &Shared, request: AssistantWarm) -> Result<()> {
     let _lock = shared
         .chat
-        .inputs
+        .mutation
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let config = config(shared)?;
@@ -594,32 +507,19 @@ pub(crate) fn warm(shared: &Shared, request: AssistantWarm) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn stop(shared: &Shared, request: AssistantStop) -> Result<StopAck> {
-    terminate(shared, &request.session)?;
-    Ok(StopAck {
-        session: request.session,
-        turn: request.turn,
-        outcome: StopOutcome::Accepted,
-        reason: None,
-    })
-}
-
 pub(crate) fn terminate(shared: &Shared, id: &str) -> Result<()> {
-    let mut inputs = shared
+    let _lock = shared
         .chat
-        .inputs
+        .mutation
         .lock()
         .unwrap_or_else(|error| error.into_inner());
-    let chat = require(shared, id)?;
-    chat.stop(shared)?;
-    inputs.remove(&chat.number);
-    Ok(())
+    require(shared, id)?.stop(shared)
 }
 
 pub(crate) fn relaunch(shared: &Shared, id: &str) -> Result<SessionRelaunched> {
     let _lock = shared
         .chat
-        .inputs
+        .mutation
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let chat = require(shared, id)?;
@@ -641,7 +541,7 @@ pub(crate) fn session(shared: &Shared, operation: AssistantSessionOp) -> Result<
         } => {
             let _lock = shared
                 .chat
-                .inputs
+                .mutation
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             let config = config(shared)?;
@@ -652,26 +552,17 @@ pub(crate) fn session(shared: &Shared, operation: AssistantSessionOp) -> Result<
             chat.row(shared)
         }
         AssistantSessionOp::End { session } => {
-            let mut inputs = shared
+            let _lock = shared
                 .chat
-                .inputs
+                .mutation
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             let mut chat = require(shared, &session)?;
             chat.stop(shared)?;
             chat.meta.ended = true;
             chat.save()?;
-            inputs.remove(&chat.number);
             shared.publish();
             chat.row(shared)
-        }
-        AssistantSessionOp::Pause { session } => {
-            sessions::pause(shared, &session)?;
-            require(shared, &session)?.row(shared)
-        }
-        AssistantSessionOp::Resume { session } => {
-            sessions::resume(shared, &session)?;
-            require(shared, &session)?.row(shared)
         }
         AssistantSessionOp::SetProfile {
             thread,
@@ -679,7 +570,7 @@ pub(crate) fn session(shared: &Shared, operation: AssistantSessionOp) -> Result<
         } => {
             let _lock = shared
                 .chat
-                .inputs
+                .mutation
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
             let config = config(shared)?;
@@ -711,9 +602,7 @@ pub(crate) fn session(shared: &Shared, operation: AssistantSessionOp) -> Result<
             }
             chat.row(shared)
         }
-        AssistantSessionOp::TakeOver { .. } | AssistantSessionOp::Other => {
-            bail!("invalid: chat has no take-over operation; use the same session directly")
-        }
+        AssistantSessionOp::Other => bail!("invalid: unknown assistant session operation"),
     }
 }
 

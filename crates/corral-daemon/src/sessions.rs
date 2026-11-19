@@ -11,11 +11,11 @@ use corral_engine::{
     Engine, Role, Run, SessionRef, refuse,
     runner::{
         InputTag,
-        pi::{self, Answer, Client, Disposition, PiRefusal, SubmitReply},
+        pi::{self, Client, Disposition, PiRefusal, SubmitReply},
     },
 };
 use corral_protocol::{
-    assistant::{PromptChoice, QUICK_THREAD},
+    assistant::QUICK_THREAD,
     detail::HostPresence,
     session::*,
     session_host::{InputDisposition, SendPolicy, SessionSend, SessionSent},
@@ -397,7 +397,14 @@ impl Session {
         self.dir.as_deref().filter(|_| self.role == "child")
     }
 
+    pub(crate) fn is_empty_quick(&self) -> bool {
+        self.id == QUICK_THREAD
+    }
+
     pub(crate) fn transcript_view(&self) -> (Option<PathBuf>, HostPresence, Option<String>) {
+        if self.is_empty_quick() {
+            return (None, HostPresence::NotRunning, None);
+        }
         if self.role == "build" && self.session.is_some() {
             // Build resolution already observed hello and validated the socket's identity.
             return (self.transcript.clone(), HostPresence::Running, None);
@@ -528,51 +535,6 @@ pub(crate) fn rewind(shared: &Shared, request: SessionRewind) -> Result<RewindRe
             Ok(RewindReply::Turn(result))
         }
     }
-}
-
-pub(crate) fn answer(
-    shared: &Shared,
-    request: PromptAnswerRequest,
-) -> Result<SessionPromptAnswered> {
-    let request = match request {
-        PromptAnswerRequest::Session(request) => request,
-        PromptAnswerRequest::Legacy(request) => {
-            let (session, question) = request
-                .key
-                .rsplit_once('/')
-                .context("invalid: Pi prompt.answer requires the addressed session and question")?;
-            let option = match request.choice {
-                PromptChoice::Once => "once",
-                PromptChoice::Hour => "hour",
-                PromptChoice::Session => "session",
-                PromptChoice::Deny => "deny",
-                PromptChoice::Confirm => "confirm",
-                PromptChoice::Decline => "decline",
-                PromptChoice::Other => {
-                    return Err(refuse("unknown option for this Pi question", vec![]));
-                }
-            };
-            SessionPromptAnswer {
-                session: session.into(),
-                question: question.into(),
-                option: Some(option.into()),
-                text: None,
-            }
-        }
-    };
-    let answer = match (request.option.as_deref(), request.text.as_deref()) {
-        (Some(option), Some(text)) => Answer::OptionWithNote { option, text },
-        (Some(option), None) => Answer::Option(option),
-        (None, Some(text)) => Answer::Text(text),
-        (None, None) => anyhow::bail!("invalid: answer requires an option or text"),
-    };
-    let reply = resolve(shared, &request.session)?
-        .pi()?
-        .answer(&request.question, answer)?;
-    shared.publish();
-    Ok(SessionPromptAnswered {
-        status: reply.status,
-    })
 }
 
 pub(crate) fn available_for_pane(session: &SessionRef) -> &SessionRef {

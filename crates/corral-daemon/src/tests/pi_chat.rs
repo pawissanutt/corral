@@ -1,9 +1,13 @@
-use super::fake_host::{Host, PID, Placement, Script};
+use super::fake_host::{AT, Host, PID, Placement, Script};
 use super::*;
 use corral_protocol::{
     assistant::*,
-    detail::{DetailBody, DetailReply, SessionItem},
+    detail::{DetailBody, DetailReply, HostPresence, SessionItem, SessionPage},
     session::*,
+    session_host::{
+        InputDisposition, SESSION_CARD_ANSWER, SESSION_SEND, SendPolicy, SessionCardAnswered,
+        SessionSend, SessionSent,
+    },
     subscription::SubDelta,
 };
 use corral_types::SessionRef;
@@ -14,27 +18,27 @@ fn watch(path: &Path, id: &str) -> Client {
     subscriber
 }
 
+fn live_page(subscriber: &mut Client) -> SubDelta {
+    let frame = read_frame(&mut subscriber.0).unwrap().unwrap();
+    let notification: rpc::Notification<SubDelta> = serde_json::from_slice(&frame.payload).unwrap();
+    let SubDelta::Session { scope, cursor, .. } = &notification.params else {
+        panic!("expected session page");
+    };
+    subscriber.ok::<()>(
+        wire::SUB_ACK,
+        json!({"topic":"session", "scope":scope, "cursor":cursor}),
+    );
+    notification.params
+}
+
 fn text(subscriber: &mut Client, expected: &str) {
     loop {
-        let frame = read_frame(&mut subscriber.0).unwrap().unwrap();
-        let notification: rpc::Notification<SubDelta> =
-            serde_json::from_slice(&frame.payload).unwrap();
-        let SubDelta::Session {
-            events,
-            scope,
-            cursor,
-            ..
-        } = notification.params
-        else {
-            panic!("expected session page")
+        let SubDelta::Session { events, .. } = live_page(subscriber) else {
+            panic!("expected session page");
         };
         if events.iter().any(|event| matches!(&event.kind, wire::subscription::SessionLiveKind::LiveText { text, .. } if text == expected)) {
             return;
         }
-        subscriber.ok::<()>(
-            wire::SUB_ACK,
-            json!({"topic":"session", "scope":scope, "cursor":cursor}),
-        );
     }
 }
 
@@ -186,51 +190,118 @@ auto_land = false
     (fixture, placement)
 }
 
-fn quick_send(cmd: &str, text: &str) -> AssistantSend {
-    AssistantSend {
+fn quick_send(cmd: &str, text: &str) -> SessionSend {
+    SessionSend {
+        id: QUICK_THREAD.into(),
         cmd_id: cmd.into(),
-        thread: QUICK_THREAD.into(),
-        target: AskTarget::Assistant,
         text: text.into(),
-        typed_at: "2026-11-18T12:00:00Z".into(),
-        context: Vec::new(),
+        policy: SendPolicy::Steer,
+        to: None,
+        typed_at: Some(AT.into()),
         attachments: Vec::new(),
     }
 }
 
+fn session_page(owner: &mut Client, id: &str) -> SessionPage {
+    let detail: DetailReply = owner.ok(wire::app::DETAIL_GET, json!({"kind": "session", "id": id}));
+    let Some(DetailBody::Session(page)) = detail.body else {
+        panic!("expected session detail");
+    };
+    page
+}
+
 #[test]
-fn assistant_thread_replays_owner_input_with_acknowledged_id() {
+fn an_empty_quick_scope_serves_an_empty_page_and_the_first_send_creates_the_chat() {
     let (fixture, _placement) = chat_fixture();
     let path = fixture.unix_server();
+    crate::topics::start_session_live(fixture.shared()).unwrap();
     let mut owner = Client::connect(&path);
-    let ack: SendAck = owner.ok(ASSISTANT_SEND, quick_send("send", "app input"));
-    let read_thread = || {
-        let mut subscriber = Client::connect(&path);
-        subscriber.ok::<()>(wire::SUB_OPEN, json!({"topic":"thread", "scope":"A-1"}));
-        let frame = read_frame(&mut subscriber.0).unwrap().unwrap();
-        let notification: rpc::Notification<SubDelta> =
-            serde_json::from_slice(&frame.payload).unwrap();
-        let SubDelta::Thread { delta, .. } = notification.params else {
-            panic!("expected thread page");
-        };
-        delta.rows
-    };
+    for method in [
+        "assistant.send",
+        "assistant.cancel",
+        "assistant.stop",
+        "prompt.answer",
+    ] {
+        let error = owner.call(method, json!({})).unwrap_err();
+        assert_eq!(error.code, rpc::ErrorCode::MethodNotFound);
+    }
+    let mut live = watch(&path, QUICK_THREAD);
 
-    let rows = read_thread();
-    let texts: Vec<_> = rows.iter().map(|row| row.text.as_deref()).collect();
+    let empty = |page: SessionPage, delta| {
+        assert_eq!(page.id, QUICK_THREAD);
+        assert_eq!(page.role, "assistant");
+        assert_eq!(page.host, HostPresence::NotRunning);
+        assert!(page.replyable);
+        assert!(page.reply_refusal.is_none());
+        assert!(page.messages.is_empty());
+        assert!(page.older.is_none());
+        assert!(matches!(
+            delta,
+            SubDelta::Session {
+                scope, generation: None, events, more: false, gap: None, fleet: None,
+                state: None, cursor, ..
+            } if scope == QUICK_THREAD && events.is_empty() && cursor.rev == 0
+        ));
+    };
+    empty(session_page(&mut owner, QUICK_THREAD), live_page(&mut live));
+    assert!(
+        crate::assistant::rows(fixture.shared(), false)
+            .unwrap()
+            .is_empty()
+    );
+
+    let sent: SessionSent = owner.ok(SESSION_SEND, quick_send("send", "app input"));
+    assert_eq!(sent.session, "A-1");
+    assert_eq!(sent.entry, "A-1/input/send");
+    assert_eq!(sent.disposition, InputDisposition::Started);
+    text(&mut live, "assistant live text");
+    let page = session_page(&mut owner, QUICK_THREAD);
+    assert_eq!(page.id, sent.session);
+    let texts: Vec<_> = page
+        .messages
+        .iter()
+        .flat_map(|row| &row.items)
+        .filter_map(|item| match item {
+            SessionItem::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
         texts,
         [
-            Some("terminal input"),
-            Some("recorded **Pi** text"),
-            Some("app input"),
-            Some("assistant live text"),
+            "terminal input",
+            "recorded **Pi** text",
+            "app input",
+            "assistant live text",
         ],
     );
-    assert_eq!(rows[0].id, "A-1/entry/terminal");
-    assert_eq!(rows[2].id, ack.entry);
-    assert_eq!(rows[2].state, Some(MessageState::Delivered));
-    assert_eq!(read_thread(), rows);
+    assert_eq!(page.messages[0].id, "A-1/entry/terminal");
+    assert_eq!(page.messages[2].id, sent.entry);
+
+    owner.ok::<Value>(
+        ASSISTANT_SESSION,
+        AssistantSessionOp::End {
+            session: sent.session.clone(),
+        },
+    );
+    let ended = session_page(&mut owner, &sent.session);
+    assert!(!ended.replyable);
+    assert_eq!(ended.messages, page.messages);
+    let reset = live_page(&mut live);
+    // The poller can observe socket shutdown before End persists the record.
+    let reset = if matches!(
+        &reset,
+        SubDelta::Session {
+            generation: None,
+            gap: Some(_),
+            ..
+        }
+    ) {
+        live_page(&mut live)
+    } else {
+        reset
+    };
+    empty(session_page(&mut owner, QUICK_THREAD), reset);
 }
 
 #[test]
@@ -254,8 +325,9 @@ fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
         },
     );
     assert_eq!(welcome.caps, [wire::ASSISTANT_V1]);
-    let first: SendAck = owner.ok(ASSISTANT_SEND, quick_send("first", "first chat"));
-    assert!(first.entry.starts_with("A-1/"));
+    let first: SessionSent = owner.ok(SESSION_SEND, quick_send("first", "first chat"));
+    assert_eq!(first.session, "A-1");
+    assert_eq!(first.entry, "A-1/input/first");
     text(&mut watch(&path, "A-1"), "assistant live text");
     let state = placement.state("A-1");
     state.lock().unwrap().questions = vec![
@@ -266,21 +338,30 @@ fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
     assert_eq!(rows[0].state, wire::rows::AssistantState::Waiting);
     assert_eq!(rows[0].question_id.as_deref(), Some("question-1"));
     assert_eq!(rows[0].wait.as_ref().unwrap().text, "Which change?");
-    let reply: SessionPromptAnswered = owner.ok(PROMPT_ANSWER, json!({"session":"A-1", "question":"question-1", "option":"Fix", "text":"in this worktree"}));
+    let reply: SessionCardAnswered = owner.ok(
+        SESSION_CARD_ANSWER,
+        json!({
+            "id":"A-1", "card":"question-1", "answers":[{"options":["Fix"], "text":"in this worktree"}],
+        }),
+    );
     assert_eq!(reply.status, "delivered");
     assert_eq!(
         state.lock().unwrap().requests.last().unwrap(),
         &(
-            "answer".into(),
-            json!({"question":"question-1", "option":"Fix", "text":"in this worktree"})
+            "card_answer".to_owned(),
+            json!({
+                "card":"question-1", "answers":[{"options":["Fix"], "text":"in this worktree"}],
+                "dismiss":false, "device":"local",
+            })
         )
     );
     let rows = crate::assistant::rows(fixture.shared(), false).unwrap();
     assert_eq!(rows[0].question_id.as_deref(), Some("question-2"));
-    let cancelled: CancelAck = owner.ok(
-        ASSISTANT_CANCEL,
-        AssistantCancel {
-            cmd_id: "first".into(),
+    let cancelled: SessionCancelReply = owner.ok(
+        SESSION_CANCEL,
+        SessionCancel {
+            id: first.session,
+            turn: first.turn,
         },
     );
     assert!(cancelled.cancelled);
@@ -292,8 +373,9 @@ fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
         },
     );
     assert!(state.lock().unwrap().stopped);
-    let second: SendAck = owner.ok(ASSISTANT_SEND, quick_send("next", "next chat"));
-    assert!(second.entry.starts_with("A-2/"));
+    let second: SessionSent = owner.ok(SESSION_SEND, quick_send("next", "next chat"));
+    assert_eq!(second.session, "A-2");
+    assert_eq!(second.entry, "A-2/input/next");
     assert_eq!(placement.state("A-2").lock().unwrap().text, ["next chat"]);
     assert!(
         fixture

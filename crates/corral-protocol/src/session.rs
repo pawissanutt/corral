@@ -43,15 +43,6 @@ pub struct SessionResumeReply {
     pub paused: bool,
 }
 
-/// Input cancellation names the submitted message; direct cancellation
-/// names the session and optionally the turn.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub enum AssistantCancelRequest {
-    Session(SessionCancel),
-    Input(crate::assistant::AssistantCancel),
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionRelaunched {
     pub id: String,
@@ -105,29 +96,6 @@ pub struct Rewound {
     pub head: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
-}
-
-/// `prompt.answer` accepts a Pi question ID and a choice, free text, or both.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct SessionPromptAnswer {
-    pub session: String,
-    pub question: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub option: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct SessionPromptAnswered {
-    pub status: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub enum PromptAnswerRequest {
-    Session(SessionPromptAnswer),
-    Legacy(crate::assistant::PromptAnswer),
 }
 
 #[cfg(test)]

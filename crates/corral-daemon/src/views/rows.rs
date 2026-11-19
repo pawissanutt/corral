@@ -14,7 +14,6 @@ use corral_engine::{
 };
 use corral_protocol::{
     Health,
-    assistant::ThreadEntry,
     rows::*,
     subscription::{BoardCursor, Topic},
 };
@@ -34,10 +33,6 @@ pub(crate) enum Rows {
     Agents(Vec<AgentRow>),
     Usage(Vec<UsageSummary>),
     Assistant(Vec<AssistantRow>),
-    Thread {
-        scope: String,
-        rows: Vec<ThreadEntry>,
-    },
     Settings(Vec<SettingsSnapshot>),
 }
 
@@ -51,7 +46,6 @@ macro_rules! each {
             Rows::Agents($rows) => $body,
             Rows::Usage($rows) => $body,
             Rows::Assistant($rows) => $body,
-            Rows::Thread { rows: $rows, .. } => $body,
             Rows::Settings($rows) => $body,
         }
     };
@@ -74,7 +68,6 @@ impl Rows {
             }
             Self::Usage(_) => "usage".into(),
             Self::Assistant(rows) => rows[index].id.as_str().into(),
-            Self::Thread { rows, .. } => rows[index].id.as_str().into(),
             Self::Settings(_) => "settings".into(),
         }
     }
@@ -88,32 +81,6 @@ impl Rows {
         left: &[String],
         more: bool,
     ) -> Result<corral_protocol::frame::Frame> {
-        if let Self::Thread { scope, rows } = self {
-            #[derive(Serialize)]
-            struct ThreadPage<'a> {
-                topic: Topic,
-                scope: &'a str,
-                epoch: u64,
-                rows: &'a [ThreadEntry],
-                left: &'a [String],
-                cursor: BoardCursor,
-                more: bool,
-                live: Option<corral_protocol::subscription::LiveText>,
-            }
-            return crate::topics::notification(
-                corral_protocol::SUB_DELTA,
-                ThreadPage {
-                    topic,
-                    scope,
-                    epoch,
-                    rows: &rows[range],
-                    left,
-                    cursor,
-                    more,
-                    live: None,
-                },
-            );
-        }
         #[derive(Serialize)]
         struct Page<'a, T> {
             topic: Topic,

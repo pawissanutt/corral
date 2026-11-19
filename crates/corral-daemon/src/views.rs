@@ -24,7 +24,6 @@ use corral_protocol::{
 use serde::Serialize;
 
 use crate::state::Shared;
-pub(crate) use chat::{ThreadStamp, thread};
 pub(crate) use rows::{RowCache, Rows};
 pub(crate) use transcript::StaleTranscriptCursor;
 

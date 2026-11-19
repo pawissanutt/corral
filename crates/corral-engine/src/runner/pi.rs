@@ -59,18 +59,6 @@ pub struct Hello {
     pub pid: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum Answer<'a> {
-    Option(&'a str),
-    Text(&'a str),
-    OptionWithNote { option: &'a str, text: &'a str },
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AnswerReply {
-    pub status: String,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct SubmitReply {
     pub request_id: String,
@@ -226,17 +214,6 @@ impl<'a> Client<'a> {
 
     pub fn resume(&self) -> Result<Value> {
         self.request("resume", json!({}))
-    }
-
-    pub fn answer(&self, question: &str, answer: Answer<'_>) -> Result<AnswerReply> {
-        let args = match answer {
-            Answer::Option(option) => json!({"question": question, "option": option}),
-            Answer::Text(text) => json!({"question": question, "text": text}),
-            Answer::OptionWithNote { option, text } => {
-                json!({"question": question, "option": option, "text": text})
-            }
-        };
-        self.request("answer", args)
     }
 
     #[cfg(unix)]

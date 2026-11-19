@@ -22,12 +22,10 @@ const ROWS_PER_PAGE: usize = 100;
 
 pub(super) struct Subscriber {
     pub topic: Topic,
-    pub(super) scope: Option<String>,
     epoch: u64,
     reset: bool,
     rev: u64,
     pending: Option<BoardCursor>,
-    thread_stamp: Option<Option<crate::views::ThreadStamp>>,
     delivered: Option<Arc<Rows>>,
     walk: Option<Walk>,
 }
@@ -43,7 +41,6 @@ impl Subscriber {
     pub(super) fn new(epoch: u64, open: SubOpen) -> Self {
         Self {
             topic: open.topic,
-            scope: open.scope,
             epoch,
             // The daemon does not keep replay history for disconnected callers.
             reset: open.since.is_some_and(|since| {
@@ -51,7 +48,6 @@ impl Subscriber {
             }),
             rev: 0,
             pending: None,
-            thread_stamp: None,
             delivered: None,
             walk: None,
         }
@@ -75,24 +71,10 @@ impl Subscriber {
             return Ok(None);
         }
         if self.reset || self.epoch != shared.epoch() {
-            return Ok(Some((
-                super::reset(self.topic, shared.epoch(), self.scope.clone())?,
-                true,
-            )));
+            return Ok(Some((super::reset(self.topic, shared.epoch())?, true)));
         }
         if self.walk.is_none() {
-            let next = if let Some(scope) = &self.scope {
-                let Some((rows, stamp)) =
-                    crate::views::thread(shared, scope, self.thread_stamp.as_ref())?
-                else {
-                    return Ok(None);
-                };
-                self.thread_stamp = Some(stamp);
-                if self.delivered.as_deref() == Some(&rows) {
-                    return Ok(None);
-                }
-                Arc::new(rows)
-            } else if self.topic == Topic::Assistant && build_rows {
+            let next = if self.topic == Topic::Assistant && build_rows {
                 shared.row_cache.assistant_with_builds(shared)?
             } else {
                 shared.row_cache.get(shared, self.topic)?

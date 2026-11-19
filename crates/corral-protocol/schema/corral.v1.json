@@ -155,36 +155,6 @@
         ],
         "type": "object"
       },
-      "AskTarget": {
-        "enum": [
-          "assistant",
-          "pm",
-          "other"
-        ],
-        "type": "string"
-      },
-      "AssistantCancel": {
-        "properties": {
-          "cmd_id": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "cmd_id"
-        ],
-        "type": "object"
-      },
-      "AssistantCancelRequest": {
-        "anyOf": [
-          {
-            "$ref": "#/components/schemas/SessionCancel"
-          },
-          {
-            "$ref": "#/components/schemas/AssistantCancel"
-          }
-        ],
-        "description": "Input cancellation names the submitted message; direct cancellation\nnames the session and optionally the turn."
-      },
       "AssistantKind": {
         "enum": [
           "quick",
@@ -338,46 +308,6 @@
         ],
         "type": "object"
       },
-      "AssistantSend": {
-        "properties": {
-          "attachments": {
-            "items": {
-              "$ref": "#/components/schemas/SendAttachment"
-            },
-            "type": "array"
-          },
-          "cmd_id": {
-            "type": "string"
-          },
-          "context": {
-            "items": {
-              "$ref": "#/components/schemas/ContextRef"
-            },
-            "type": "array"
-          },
-          "target": {
-            "$ref": "#/components/schemas/AskTarget"
-          },
-          "text": {
-            "type": "string"
-          },
-          "thread": {
-            "type": "string"
-          },
-          "typed_at": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "cmd_id",
-          "thread",
-          "target",
-          "text",
-          "typed_at",
-          "context"
-        ],
-        "type": "object"
-      },
       "AssistantSessionOp": {
         "oneOf": [
           {
@@ -408,55 +338,6 @@
             "properties": {
               "op": {
                 "const": "end",
-                "type": "string"
-              },
-              "session": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "op",
-              "session"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "op": {
-                "const": "take_over",
-                "type": "string"
-              },
-              "session": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "op",
-              "session"
-            ],
-            "type": "object"
-          },
-          {
-            "description": "Fence the session: its host stays up and queued messages wait. An owner message or\n`resume` lifts it.",
-            "properties": {
-              "op": {
-                "const": "pause",
-                "type": "string"
-              },
-              "session": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "op",
-              "session"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "op": {
-                "const": "resume",
                 "type": "string"
               },
               "session": {
@@ -525,23 +406,6 @@
             "type": "string"
           }
         ]
-      },
-      "AssistantStop": {
-        "properties": {
-          "session": {
-            "type": "string"
-          },
-          "turn": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "session",
-          "turn"
-        ],
-        "type": "object"
       },
       "AssistantWarm": {
         "properties": {
@@ -1466,33 +1330,6 @@
         ],
         "type": "object"
       },
-      "CancelAck": {
-        "properties": {
-          "cancelled": {
-            "type": "boolean"
-          },
-          "entry": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "state": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/MessageState"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "cancelled"
-        ],
-        "type": "object"
-      },
       "Capability": {
         "description": "An absent ID means unsupported for this role. A reason means supported but unavailable now.",
         "properties": {
@@ -2053,29 +1890,6 @@
       "ConfigProblem": {
         "type": "object",
         "x-rust-type": "corral_types::ConfigProblem"
-      },
-      "ContextRef": {
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "rev": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "kind",
-          "id"
-        ],
-        "type": "object"
       },
       "ContextUse": {
         "properties": {
@@ -3481,263 +3295,6 @@
         ],
         "type": "object"
       },
-      "EntryCard": {
-        "oneOf": [
-          {
-            "properties": {
-              "criteria": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "duplicates": {
-                "items": {
-                  "$ref": "#/components/schemas/ContextRef"
-                },
-                "type": "array"
-              },
-              "kind": {
-                "const": "idea",
-                "type": "string"
-              },
-              "labels": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "task": {
-                "type": "string"
-              },
-              "title": {
-                "type": "string"
-              },
-              "words": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind",
-              "task",
-              "title",
-              "labels",
-              "criteria",
-              "duplicates",
-              "words"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "class": {
-                "type": "string"
-              },
-              "command": {
-                "description": "Historical display data, not a command that can be submitted."
-              },
-              "input": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "kind": {
-                "const": "action",
-                "type": "string"
-              },
-              "outcome": true
-            },
-            "required": [
-              "kind",
-              "command",
-              "class"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "accepts_text": {
-                "default": false,
-                "description": "Whether the historical question card offered an owner reply.",
-                "type": "boolean"
-              },
-              "answer": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/QuestionAnswer"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "key": {
-                "type": "string"
-              },
-              "kind": {
-                "const": "question",
-                "type": "string"
-              },
-              "options": {
-                "items": {
-                  "$ref": "#/components/schemas/QuestionOption"
-                },
-                "type": "array"
-              },
-              "rev": {
-                "format": "uint32",
-                "minimum": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "kind",
-              "key",
-              "rev",
-              "options"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "choices": {
-                "items": {
-                  "$ref": "#/components/schemas/PromptChoice"
-                },
-                "type": "array"
-              },
-              "key": {
-                "type": "string"
-              },
-              "kind": {
-                "const": "prompt",
-                "type": "string"
-              },
-              "needs_presence": {
-                "type": "boolean"
-              },
-              "path": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "preview": {
-                "type": "string"
-              },
-              "rev": {
-                "format": "uint32",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "tool": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            },
-            "required": [
-              "kind",
-              "key",
-              "rev",
-              "preview",
-              "choices",
-              "needs_presence"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "kind": {
-                "const": "pm_item",
-                "type": "string"
-              },
-              "revision": {
-                "default": 0,
-                "description": "Canonical PM inbox revision used by pm.inbox-withdraw, not ThreadEntry.rev.",
-                "format": "uint32",
-                "minimum": 0,
-                "type": "integer"
-              }
-            },
-            "required": [
-              "kind",
-              "id"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "kind": {
-                "const": "other",
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind"
-            ],
-            "type": "object"
-          }
-        ]
-      },
-      "EntryKind": {
-        "enum": [
-          "message",
-          "answer",
-          "idea",
-          "pm_message",
-          "pm_reply",
-          "action",
-          "question",
-          "prompt",
-          "notice",
-          "roll",
-          "other"
-        ],
-        "type": "string"
-      },
-      "EntryPart": {
-        "properties": {
-          "bytes": {
-            "description": "Whole canonical content length in UTF-8 bytes at this revision.",
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "complete": {
-            "description": "No more content will be appended. All `total` parts must still be collected.",
-            "type": "boolean"
-          },
-          "id": {
-            "description": "Semantic message ID; answers use the live stream's `<message>/answer/0` anchor.",
-            "type": "string"
-          },
-          "index": {
-            "description": "Zero-based transport part position, independent of page boundaries.",
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "total": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id",
-          "index",
-          "total",
-          "bytes",
-          "complete"
-        ],
-        "type": "object"
-      },
       "Error": {
         "properties": {
           "code": {
@@ -4139,39 +3696,6 @@
         ],
         "type": "object"
       },
-      "LiveText": {
-        "description": "UTF-8 text offset in bytes; acknowledged pages advance the running turn.",
-        "properties": {
-          "done": {
-            "type": "boolean"
-          },
-          "entry": {
-            "type": "string"
-          },
-          "offset": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "text": {
-            "description": "At most 32 KiB per page.",
-            "type": "string"
-          },
-          "turn": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "entry",
-          "turn",
-          "offset",
-          "text",
-          "done"
-        ],
-        "type": "object"
-      },
       "McpServer": {
         "properties": {
           "name": {
@@ -4186,138 +3710,6 @@
           "state"
         ],
         "type": "object"
-      },
-      "MessageState": {
-        "oneOf": [
-          {
-            "properties": {
-              "state": {
-                "const": "sent",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "reason": {
-                "$ref": "#/components/schemas/WaitReason"
-              },
-              "state": {
-                "const": "waiting",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "reason"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "state": {
-                "const": "delivered",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "state": {
-                "const": "late",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "state": {
-                "const": "queued_for_pm",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "state": {
-                "const": "pm_delivered",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "state": {
-                "const": "pm_replied",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "state": {
-                "const": "saved",
-                "type": "string"
-              },
-              "task": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "state",
-              "task"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "state": {
-                "const": "withdrawn",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state"
-            ],
-            "type": "object"
-          },
-          {
-            "properties": {
-              "state": {
-                "const": "other",
-                "type": "string"
-              }
-            },
-            "required": [
-              "state"
-            ],
-            "type": "object"
-          }
-        ]
       },
       "ModelChoice": {
         "properties": {
@@ -5008,53 +4400,6 @@
           "open"
         ],
         "type": "object"
-      },
-      "PromptAnswer": {
-        "properties": {
-          "choice": {
-            "$ref": "#/components/schemas/PromptChoice"
-          },
-          "cmd_id": {
-            "type": "string"
-          },
-          "key": {
-            "type": "string"
-          },
-          "rev": {
-            "format": "uint32",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "cmd_id",
-          "key",
-          "rev",
-          "choice"
-        ],
-        "type": "object"
-      },
-      "PromptAnswerRequest": {
-        "anyOf": [
-          {
-            "$ref": "#/components/schemas/SessionPromptAnswer"
-          },
-          {
-            "$ref": "#/components/schemas/PromptAnswer"
-          }
-        ]
-      },
-      "PromptChoice": {
-        "enum": [
-          "once",
-          "hour",
-          "session",
-          "deny",
-          "confirm",
-          "decline",
-          "other"
-        ],
-        "type": "string"
       },
       "Proto": {
         "properties": {
@@ -5749,25 +5094,6 @@
         },
         "required": [
           "through"
-        ],
-        "type": "object"
-      },
-      "SendAck": {
-        "properties": {
-          "entry": {
-            "type": "string"
-          },
-          "replayed": {
-            "type": "boolean"
-          },
-          "state": {
-            "$ref": "#/components/schemas/MessageState"
-          }
-        },
-        "required": [
-          "entry",
-          "state",
-          "replayed"
         ],
         "type": "object"
       },
@@ -8123,45 +7449,6 @@
         ],
         "type": "object"
       },
-      "SessionPromptAnswer": {
-        "description": "`prompt.answer` accepts a Pi question ID and a choice, free text, or both.",
-        "properties": {
-          "option": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "question": {
-            "type": "string"
-          },
-          "session": {
-            "type": "string"
-          },
-          "text": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "session",
-          "question"
-        ],
-        "type": "object"
-      },
-      "SessionPromptAnswered": {
-        "properties": {
-          "status": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "status"
-        ],
-        "type": "object"
-      },
       "SessionQueueKey": {
         "properties": {
           "id": {
@@ -8725,51 +8012,6 @@
         ],
         "type": "object"
       },
-      "StopAck": {
-        "description": "Acceptance is not proof of abort; only canonical `ThreadEntry.completion` attests settlement.",
-        "properties": {
-          "outcome": {
-            "$ref": "#/components/schemas/StopOutcome"
-          },
-          "reason": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "session": {
-            "type": "string"
-          },
-          "turn": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "session",
-          "turn",
-          "outcome"
-        ],
-        "type": "object"
-      },
-      "StopOutcome": {
-        "oneOf": [
-          {
-            "enum": [
-              "accepted",
-              "failed",
-              "other"
-            ],
-            "type": "string"
-          },
-          {
-            "const": "already_stopped",
-            "description": "The requested turn is no longer running, not necessarily because it was aborted.",
-            "type": "string"
-          }
-        ]
-      },
       "Stopped": {
         "type": "object"
       },
@@ -9135,61 +8377,6 @@
             },
             "required": [
               "topic",
-              "epoch",
-              "rows",
-              "left",
-              "cursor",
-              "more"
-            ],
-            "type": "object"
-          },
-          {
-            "description": "One bounded page in flight; `left` contains removed row IDs.",
-            "properties": {
-              "cursor": {
-                "$ref": "#/components/schemas/BoardCursor"
-              },
-              "epoch": {
-                "format": "uint64",
-                "minimum": 0,
-                "type": "integer"
-              },
-              "left": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "live": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/LiveText"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "more": {
-                "type": "boolean"
-              },
-              "rows": {
-                "items": {
-                  "$ref": "#/components/schemas/ThreadEntry"
-                },
-                "type": "array"
-              },
-              "scope": {
-                "type": "string"
-              },
-              "topic": {
-                "const": "thread",
-                "type": "string"
-              }
-            },
-            "required": [
-              "topic",
-              "scope",
               "epoch",
               "rows",
               "left",
@@ -9638,142 +8825,6 @@
         ],
         "type": "object"
       },
-      "ThreadEntry": {
-        "properties": {
-          "at": {
-            "type": "string"
-          },
-          "attachments": {
-            "items": {
-              "$ref": "#/components/schemas/AttachmentFact"
-            },
-            "type": "array"
-          },
-          "card": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/EntryCard"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "completion": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/TurnCompletion"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Canonical host settlement, never inferred from a Stop request or a generic done stream."
-          },
-          "cost_basis": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/CostBasis"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "cost_usd": {
-            "description": "One semantic answer's amount, carried only by part zero. None means unknown, never zero.",
-            "format": "double",
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "device": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/EntryKind"
-          },
-          "links": {
-            "items": {
-              "$ref": "#/components/schemas/ContextRef"
-            },
-            "type": "array"
-          },
-          "model": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "part": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/EntryPart"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Absent on older servers; continuation IDs remain readable as legacy transport parts."
-          },
-          "rev": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "state": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/MessageState"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "text": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "tools": {
-            "items": {
-              "$ref": "#/components/schemas/ToolLine"
-            },
-            "type": "array"
-          },
-          "typed_at": {
-            "description": "Original owner-typed RFC 3339 time; `at` remains the canonical receipt/order time.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "via": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "rev",
-          "at",
-          "kind",
-          "tools",
-          "links"
-        ],
-        "type": "object"
-      },
       "TimelineBy": {
         "enum": [
           "task",
@@ -9803,41 +8854,6 @@
         ],
         "type": "object"
       },
-      "ToolLine": {
-        "properties": {
-          "elapsed_ms": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": [
-              "integer",
-              "null"
-            ]
-          },
-          "failed": {
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "input": {
-            "type": "string"
-          },
-          "output": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "tool": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "tool",
-          "input"
-        ],
-        "type": "object"
-      },
       "Topic": {
         "oneOf": [
           {
@@ -9849,7 +8865,6 @@
               "agents",
               "usage",
               "settings",
-              "thread",
               "session",
               "terminal",
               "other"
@@ -9862,15 +8877,6 @@
             "type": "string"
           }
         ]
-      },
-      "TurnCompletion": {
-        "enum": [
-          "completed",
-          "aborted",
-          "failed",
-          "other"
-        ],
-        "type": "string"
       },
       "UploadAck": {
         "properties": {
@@ -10679,8 +9685,7 @@
             6,
             7,
             8,
-            9,
-            10
+            9
           ]
         },
         {
@@ -10701,8 +9706,7 @@
             6,
             7,
             8,
-            9,
-            10
+            9
           ]
         },
         {
@@ -10725,7 +9729,7 @@
             "type": "array"
           },
           "x-required-in": [
-            9
+            8
           ]
         },
         {
@@ -10786,23 +9790,8 @@
             4,
             5,
             6,
-            7,
-            8
+            7
           ]
-        },
-        {
-          "name": "live",
-          "required": false,
-          "schema": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/LiveText"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
         },
         {
           "name": "more",
@@ -10820,8 +9809,7 @@
             6,
             7,
             8,
-            9,
-            10
+            9
           ]
         },
         {
@@ -10877,12 +9865,6 @@
                   "$ref": "#/components/schemas/SettingsSnapshot"
                 },
                 "type": "array"
-              },
-              {
-                "items": {
-                  "$ref": "#/components/schemas/ThreadEntry"
-                },
-                "type": "array"
               }
             ]
           },
@@ -10894,8 +9876,7 @@
             4,
             5,
             6,
-            7,
-            8
+            7
           ]
         },
         {
@@ -10906,8 +9887,7 @@
           },
           "x-required-in": [
             8,
-            9,
-            10
+            9
           ]
         },
         {
@@ -10975,10 +9955,6 @@
               },
               {
                 "const": "settings",
-                "type": "string"
-              },
-              {
-                "const": "thread",
                 "type": "string"
               },
               {
@@ -12244,142 +11220,6 @@
       ]
     },
     {
-      "name": "assistant.send",
-      "params": [
-        {
-          "name": "attachments",
-          "required": false,
-          "schema": {
-            "items": {
-              "$ref": "#/components/schemas/SendAttachment"
-            },
-            "type": "array"
-          }
-        },
-        {
-          "name": "cmd_id",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "context",
-          "required": true,
-          "schema": {
-            "items": {
-              "$ref": "#/components/schemas/ContextRef"
-            },
-            "type": "array"
-          }
-        },
-        {
-          "name": "target",
-          "required": true,
-          "schema": {
-            "$ref": "#/components/schemas/AskTarget"
-          }
-        },
-        {
-          "name": "text",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "thread",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "typed_at",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$ref": "#/components/schemas/SendAck"
-        }
-      },
-      "x-notification": false,
-      "x-params-schema": {
-        "$ref": "#/components/schemas/AssistantSend"
-      },
-      "x-wire-errors": [
-        {
-          "code": "invalid_params",
-          "message": "invalid_params"
-        },
-        {
-          "code": "refused",
-          "message": "refused"
-        },
-        {
-          "code": "conflict",
-          "message": "conflict"
-        },
-        {
-          "code": "busy",
-          "message": "busy"
-        },
-        {
-          "code": "unavailable",
-          "message": "unavailable"
-        },
-        {
-          "code": "internal",
-          "message": "internal"
-        }
-      ]
-    },
-    {
-      "name": "assistant.cancel",
-      "params": [],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$ref": "#/components/schemas/CancelAck"
-        }
-      },
-      "x-notification": false,
-      "x-params-schema": {
-        "$ref": "#/components/schemas/AssistantCancelRequest"
-      },
-      "x-wire-errors": [
-        {
-          "code": "invalid_params",
-          "message": "invalid_params"
-        },
-        {
-          "code": "refused",
-          "message": "refused"
-        },
-        {
-          "code": "conflict",
-          "message": "conflict"
-        },
-        {
-          "code": "busy",
-          "message": "busy"
-        },
-        {
-          "code": "unavailable",
-          "message": "unavailable"
-        },
-        {
-          "code": "internal",
-          "message": "internal"
-        }
-      ]
-    },
-    {
       "name": "attachment.begin",
       "params": [
         {
@@ -12613,63 +11453,6 @@
       ]
     },
     {
-      "name": "assistant.stop",
-      "params": [
-        {
-          "name": "session",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        },
-        {
-          "name": "turn",
-          "required": true,
-          "schema": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          }
-        }
-      ],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$ref": "#/components/schemas/StopAck"
-        }
-      },
-      "x-notification": false,
-      "x-params-schema": {
-        "$ref": "#/components/schemas/AssistantStop"
-      },
-      "x-wire-errors": [
-        {
-          "code": "invalid_params",
-          "message": "invalid_params"
-        },
-        {
-          "code": "not_found",
-          "message": "not_found"
-        },
-        {
-          "code": "refused",
-          "message": "refused"
-        },
-        {
-          "code": "conflict",
-          "message": "conflict"
-        },
-        {
-          "code": "unavailable",
-          "message": "unavailable"
-        },
-        {
-          "code": "internal",
-          "message": "internal"
-        }
-      ]
-    },
-    {
       "name": "assistant.session",
       "params": [
         {
@@ -12683,18 +11466,6 @@
               },
               {
                 "const": "end",
-                "type": "string"
-              },
-              {
-                "const": "take_over",
-                "type": "string"
-              },
-              {
-                "const": "pause",
-                "type": "string"
-              },
-              {
-                "const": "resume",
                 "type": "string"
               },
               {
@@ -12725,7 +11496,7 @@
             ]
           },
           "x-required-in": [
-            5
+            2
           ]
         },
         {
@@ -12735,10 +11506,7 @@
             "type": "string"
           },
           "x-required-in": [
-            1,
-            2,
-            3,
-            4
+            1
           ]
         },
         {
@@ -12758,7 +11526,7 @@
             "type": "string"
           },
           "x-required-in": [
-            5
+            2
           ]
         }
       ],
@@ -12792,50 +11560,6 @@
         {
           "code": "busy",
           "message": "busy"
-        },
-        {
-          "code": "unavailable",
-          "message": "unavailable"
-        },
-        {
-          "code": "internal",
-          "message": "internal"
-        }
-      ]
-    },
-    {
-      "name": "prompt.answer",
-      "params": [],
-      "result": {
-        "name": "result",
-        "schema": {
-          "$ref": "#/components/schemas/SessionPromptAnswered"
-        }
-      },
-      "x-notification": false,
-      "x-params-schema": {
-        "$ref": "#/components/schemas/PromptAnswerRequest"
-      },
-      "x-wire-errors": [
-        {
-          "code": "invalid_params",
-          "message": "invalid_params"
-        },
-        {
-          "code": "not_found",
-          "message": "not_found"
-        },
-        {
-          "code": "refused",
-          "message": "refused"
-        },
-        {
-          "code": "conflict",
-          "message": "conflict"
-        },
-        {
-          "code": "expired",
-          "message": "expired"
         },
         {
           "code": "unavailable",

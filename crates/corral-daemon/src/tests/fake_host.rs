@@ -37,7 +37,7 @@ pub(super) struct Script {
 
 impl Default for Script {
     fn default() -> Self {
-        let handlers: [(&str, Handler); 11] = [
+        let handlers: [(&str, Handler); 10] = [
             ("get_state", |state, _, _| {
                 json!({"mode": state.mode, "paused": state.paused,
                 "turn": {"current": 1, "open": state.open}, "owner_questions": state.questions,
@@ -70,30 +70,27 @@ impl Default for Script {
                 state.text.append(&mut state.held);
                 json!({"paused": false})
             }),
-            ("answer", |state, request, _| {
-                state
-                    .questions
-                    .retain(|question| question["id"] != request["args"]["question"]);
-                json!({"status": "delivered"})
-            }),
             ("card_answer", |state, request, _| {
-                let Some(cards) = state
+                let card = &request["args"]["card"];
+                let before = state.questions.len();
+                state.questions.retain(|question| &question["id"] != card);
+                let question_removed = state.questions.len() < before;
+                let brief_removed = state
                     .projection
                     .as_mut()
                     .and_then(|projection| projection.get_mut("cards"))
                     .and_then(Value::as_array_mut)
-                else {
-                    return json!({"status": "missing"});
-                };
-                let before = cards.len();
-                cards.retain(|card| card["id"] != request["args"]["card"]);
-                if cards.len() == before {
-                    return json!({"status": "missing"});
+                    .is_some_and(|cards| {
+                        let before = cards.len();
+                        cards.retain(|brief| &brief["id"] != card);
+                        cards.len() < before
+                    });
+                if brief_removed {
+                    state.events.push(
+                        json!({"seq": state.events.len() + 1, "at": AT, "kind": "live_state"}),
+                    );
                 }
-                state
-                    .events
-                    .push(json!({"seq": state.events.len() + 1, "at": AT, "kind": "live_state"}));
-                json!({"status": "delivered"})
+                json!({"status": if question_removed || brief_removed { "delivered" } else { "missing" }})
             }),
             ("rewind", |_, request, _| {
                 let args = &request["args"];
