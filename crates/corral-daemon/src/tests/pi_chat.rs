@@ -19,6 +19,7 @@ struct HostState {
     requests: Vec<(String, Value)>,
     text: Vec<String>,
     held: Vec<String>,
+    transcript_tail: Option<String>,
     events: Vec<Value>,
     paused: bool,
     open: bool,
@@ -43,7 +44,8 @@ impl Host {
         let transcript = dir.join("pi.jsonl");
         fs::write(&transcript, concat!(
             "{\"type\":\"session\",\"id\":\"fixture\",\"version\":3}\n",
-            "{\"type\":\"message\",\"id\":\"first\",\"parentId\":null,\"timestamp\":\"2026-11-18T12:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"recorded **Pi** text\"}]}}\n",
+            "{\"type\":\"message\",\"id\":\"terminal\",\"parentId\":null,\"timestamp\":\"2026-11-18T12:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"terminal input\"}}\n",
+            "{\"type\":\"message\",\"id\":\"first\",\"parentId\":\"terminal\",\"timestamp\":\"2026-11-18T12:00:01Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"recorded **Pi** text\"}]}}\n",
         )).unwrap();
         if record {
             fs::write(
@@ -99,6 +101,29 @@ impl Host {
                             json!({"request_id":request["id"], "disposition":"queued"})
                         } else {
                             assert_eq!(args["origin"], "owner");
+                            if record {
+                                let request_id = request["id"].as_str().unwrap();
+                                let input_id = format!("owner-{request_id}");
+                                let answer_id = format!("answer-{request_id}");
+                                let mut file = fs::OpenOptions::new()
+                                    .append(true)
+                                    .open(&transcript)
+                                    .unwrap();
+                                let input = json!({
+                                    "type": "message", "id": input_id,
+                                    "parentId": state.transcript_tail.as_deref().unwrap_or("first"),
+                                    "timestamp": "2026-11-18T12:00:02Z",
+                                    "message": {"role": "user", "content": [{"type": "text", "text": text}],
+                                        "corralRequestId": request_id}
+                                });
+                                let answer = json!({
+                                    "type": "message", "id": answer_id, "parentId": input_id,
+                                    "timestamp": "2026-11-18T12:00:03Z",
+                                    "message": {"role": "assistant", "content": "assistant live text"}
+                                });
+                                writeln!(file, "{input}\n{answer}").unwrap();
+                                state.transcript_tail = Some(answer_id);
+                            }
                             state.open = true;
                             state.text.push(text);
                             state.emit("assistant live text");
@@ -201,6 +226,17 @@ impl Runner for Placement {
         assert_eq!(args[1], "--dir");
         assert_eq!(Path::new(args[2]), dir);
         assert_eq!(args[3], "--socket");
+        let fallback = [
+            "--fallback",
+            "anthropic-api/claude-sonnet-4-6",
+            "--fallback",
+            "openai/gpt-5.4",
+        ];
+        assert!(args.ends_with(&fallback.map(std::ffi::OsStr::new)));
+        assert!(
+            args.windows(2)
+                .any(|args| args[0] == "--model" && args[1] == "anthropic-api/claude-opus-5-5")
+        );
         assert!(
             command.get_envs().any(|(key, value)| key == "CORRAL_ACTOR"
                 && value.is_some_and(|value| value == "assistant"))
@@ -337,16 +373,78 @@ fn worker_live_replay_cancel_and_paused_engine_send_back_share_the_session() {
     ));
 }
 
-#[test]
-fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
+fn chat_fixture() -> (Fixture, Placement) {
     let placement = Placement::default();
     let runner = placement.clone();
     let fixture = Fixture::with_runner(Arc::new(move || Box::new(runner.clone())));
     fs::write(
         fixture.root().join(crate::STATE_DIR).join("corral.toml"),
-        "[profiles.chat]\nharness = 'pi'\n[defaults]\nauto_dispatch = false\nauto_land = false\n",
+        r#"
+[profiles.pi]
+harness = "pi"
+model = "anthropic-api/claude-opus-5-5"
+fallback = ["anthropic-api/claude-sonnet-4-6", "openai/gpt-5.4"]
+[profiles.secondary]
+harness = "pi"
+[defaults]
+auto_dispatch = false
+auto_land = false
+"#,
     )
     .unwrap();
+    (fixture, placement)
+}
+
+fn quick_send(cmd: &str, text: &str) -> AssistantSend {
+    AssistantSend {
+        cmd_id: cmd.into(),
+        thread: QUICK_THREAD.into(),
+        target: AskTarget::Assistant,
+        text: text.into(),
+        typed_at: "2026-11-18T12:00:00Z".into(),
+        context: Vec::new(),
+        attachments: Vec::new(),
+    }
+}
+
+#[test]
+fn assistant_thread_replays_owner_input_with_acknowledged_id() {
+    let (fixture, _placement) = chat_fixture();
+    let path = fixture.unix_server();
+    let mut owner = Client::connect(&path);
+    let ack: SendAck = owner.ok(ASSISTANT_SEND, quick_send("send", "app input"));
+    let read_thread = || {
+        let mut subscriber = Client::connect(&path);
+        subscriber.ok::<()>(wire::SUB_OPEN, json!({"topic":"thread", "scope":"A-1"}));
+        let frame = read_frame(&mut subscriber.0).unwrap().unwrap();
+        let notification: rpc::Notification<SubDelta> =
+            serde_json::from_slice(&frame.payload).unwrap();
+        let SubDelta::Thread { delta, .. } = notification.params else {
+            panic!("expected thread page");
+        };
+        delta.rows
+    };
+
+    let rows = read_thread();
+    let texts: Vec<_> = rows.iter().map(|row| row.text.as_deref()).collect();
+    assert_eq!(
+        texts,
+        [
+            Some("terminal input"),
+            Some("recorded **Pi** text"),
+            Some("app input"),
+            Some("assistant live text"),
+        ],
+    );
+    assert!(rows[0].id.starts_with("A-1/replay/"));
+    assert_eq!(rows[2].id, ack.entry);
+    assert_eq!(rows[2].state, Some(MessageState::Delivered));
+    assert_eq!(read_thread(), rows);
+}
+
+#[test]
+fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
+    let (fixture, placement) = chat_fixture();
     crate::topics::start_session_live(fixture.shared()).unwrap();
     let path = fixture.unix_server();
     let mut owner = Client::connect(&path);
@@ -365,16 +463,7 @@ fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
         },
     );
     assert_eq!(welcome.caps, [wire::ASSISTANT_V1]);
-    let send = |cmd: &str, text: &str| AssistantSend {
-        cmd_id: cmd.into(),
-        thread: QUICK_THREAD.into(),
-        target: AskTarget::Assistant,
-        text: text.into(),
-        typed_at: "2026-11-18T12:00:00Z".into(),
-        context: Vec::new(),
-        attachments: Vec::new(),
-    };
-    let first: SendAck = owner.ok(ASSISTANT_SEND, send("first", "first chat"));
+    let first: SendAck = owner.ok(ASSISTANT_SEND, quick_send("first", "first chat"));
     assert!(first.entry.starts_with("A-1/"));
     text(&mut watch(&path, "A-1"), "assistant live text");
     let state = Arc::clone(&placement.hosts.lock().unwrap()["A-1"].state);
@@ -412,7 +501,7 @@ fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
         },
     );
     assert!(state.lock().unwrap().stopped);
-    let second: SendAck = owner.ok(ASSISTANT_SEND, send("next", "next chat"));
+    let second: SendAck = owner.ok(ASSISTANT_SEND, quick_send("next", "next chat"));
     assert!(second.entry.starts_with("A-2/"));
     assert_eq!(
         placement.hosts.lock().unwrap()["A-2"]

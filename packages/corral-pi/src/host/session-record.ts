@@ -14,14 +14,17 @@ export function readSessionRecord(dir: string): Record<string, unknown> {
 export class SessionRecord {
   private readonly path: string;
   readonly transcript: string | undefined;
+  readonly legacyAnthropicApi: boolean;
   paused: boolean;
   held: SessionInput[];
 
   constructor(private readonly dir: string, private readonly id: string,
-    private readonly role: string, private readonly worktree: string) {
+    private readonly role: string, private readonly worktree: string, fresh = false) {
     this.path = join(dir, "session.json");
-    const saved = readSessionRecord(dir);
+    const saved = fresh ? {} : readSessionRecord(dir);
     this.transcript = typeof saved.sessionFile === "string" ? saved.sessionFile : undefined;
+    const route = saved.route as { provider?: unknown; connection?: unknown } | undefined;
+    this.legacyAnthropicApi = role === "build" && route?.provider === "anthropic" && route.connection === "anthropic-api";
     this.paused = saved.paused === true;
     this.held = Array.isArray(saved.held_input) ? saved.held_input as SessionInput[] : [];
   }

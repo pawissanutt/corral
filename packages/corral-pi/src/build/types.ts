@@ -3,15 +3,14 @@
 import type { AwsBinding } from "../auth/aws.ts";
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
 import type { BuildRecord } from "./record-types.ts";
-import type { ApiConnectionId, ConnectionId } from "../auth/connections.ts";
 import type { ProviderId } from "../auth/providers.ts";
-import type { SpendingOptions } from "../capabilities/budget.ts";
+import type { ModelChoice } from "../host/config.ts";
 
 export interface BuildRoute {
   readonly provider: ProviderId;
   readonly model: string;
   readonly effort?: string;
-  readonly connection?: ConnectionId;
+  readonly fallback?: readonly ModelChoice[];
   readonly aws?: AwsBinding;
 }
 
@@ -25,7 +24,6 @@ export interface BuildProfile {
   readonly model: string;
   readonly effort?: string;
   readonly description?: string;
-  readonly connection?: ApiConnectionId;
 }
 
 export interface BuildSettings {
@@ -42,7 +40,7 @@ export const MAX_PARALLEL_LIMIT = 32;
 export const MAX_CHILDREN_PER_CALL = 32;
 
 /** Options derived from the local build flags. */
-export interface BuildLaunch extends BuildRoute, SpendingOptions {
+export interface BuildLaunch extends BuildRoute {
   readonly version: 1;
   readonly assets: string;
   /** `$XDG_DATA_HOME/corral/corral-pi`; build sessions live under `<dataRoot>/build/`. */
@@ -89,6 +87,12 @@ export interface BuildSessionRecord {
   readonly workspaceRoot?: string;
   /** Frozen route identity; resume does not consult mutable profile defaults. */
   readonly route?: BuildRoute;
+  /** Actual bridge address, including any explicit --socket. */
+  readonly socket?: string;
+  /** Written before binding, so cleanup also sees a host in startup. */
+  readonly pid?: number;
+  /** A retained record no longer owns its old worktree or branch name. */
+  readonly cleaned?: true;
   /** The Pi transcript of the parent conversation. */
   readonly sessionFile?: string;
   readonly exit?: ExitRecord;

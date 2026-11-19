@@ -185,7 +185,16 @@ struct SelectedItem {
     size: Option<usize>,
 }
 
-type Selection = (SessionMessage, Vec<SelectedItem>);
+type Selection<M> = (SessionMessage, Vec<SelectedItem>, M);
+
+// The request ID is daemon-local; it is not part of the session page or its byte budget.
+#[derive(serde::Serialize)]
+#[serde(transparent)]
+pub(super) struct MessageWithInputId {
+    pub message: SessionMessage,
+    #[serde(skip)]
+    pub request_id: Option<String>,
+}
 
 /// Return a newest-first slice of records in chronological display order. The cursor
 /// skips already-returned items at the newer end of a split record.
@@ -194,6 +203,33 @@ pub(super) fn page(
     path: &Path,
     page: Option<&str>,
 ) -> Result<(Vec<SessionMessage>, Option<String>)> {
+    read_page(id, path, page, |_| (), |message, ()| message)
+}
+
+pub(super) fn page_with_input_ids(id: &str, path: &Path) -> Result<Vec<MessageWithInputId>> {
+    let input_id = |value: &Value| {
+        value
+            .pointer("/message/corralRequestId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 80)
+            .map(str::to_owned)
+    };
+    let (messages, _) = read_page(id, path, None, input_id, |message, request_id| {
+        MessageWithInputId {
+            message,
+            request_id,
+        }
+    })?;
+    Ok(messages)
+}
+
+fn read_page<M, T: serde::Serialize>(
+    id: &str,
+    path: &Path,
+    page: Option<&str>,
+    metadata: impl Fn(&Value) -> M,
+    project: impl Fn(SessionMessage, M) -> T,
+) -> Result<(Vec<T>, Option<String>)> {
     let mut transcript = Transcript::open(path)?;
     let mut boundaries = Boundaries {
         bytes: [0; WINDOW],
@@ -245,6 +281,7 @@ pub(super) fn page(
         } else {
             branch
         };
+        let metadata = metadata(&value);
         if let Some(mut message) = entries::message(value)? {
             let all = std::mem::take(&mut message.items);
             ensure!(skip <= all.len(), "transcript item cursor is stale");
@@ -279,7 +316,7 @@ pub(super) fn page(
             if !items.is_empty() {
                 size += cost;
                 items.reverse();
-                selected.push((message, items));
+                selected.push((message, items, metadata));
             }
             if skip < count {
                 break;
@@ -294,12 +331,12 @@ pub(super) fn page(
     selected.reverse();
     pair_tools(&mut selected);
     let mut messages = Vec::with_capacity(selected.len());
-    for (mut message, items) in selected {
+    for (mut message, items, metadata) in selected {
         for item in items {
             append_preview(id, &mut message.items, item)?;
         }
         if !message.items.is_empty() {
-            messages.push(message);
+            messages.push(project(message, metadata));
         }
     }
     ensure!(
@@ -310,10 +347,10 @@ pub(super) fn page(
 }
 
 /// Pair only tools selected on this page. Images remain independent items.
-fn pair_tools(messages: &mut [Selection]) {
+fn pair_tools<M>(messages: &mut [Selection<M>]) {
     let mut calls = BTreeMap::new();
     let mut matches = Vec::new();
-    for (row, (_, items)) in messages.iter().enumerate() {
+    for (row, (_, items, _)) in messages.iter().enumerate() {
         for (column, item) in items.iter().enumerate() {
             if let Some(SessionItem::ToolCall {
                 call_id, result, ..

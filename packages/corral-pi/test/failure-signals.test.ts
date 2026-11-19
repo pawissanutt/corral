@@ -12,34 +12,34 @@ test("unknown provider failures are not transient", () => {
 
 test("native failure evidence distinguishes subscription exhaustion from 429 and paid billing without retaining secrets", () => {
   const at = 1_800_000_000_000;
-  const codex = normalizeFailure("openai-subscription", { status: 429,
+  const codex = normalizeFailure("openai-codex", { status: 429,
     body: { error: { type: "usage_limit_reached", resets_at: 1_800_000_600, message: "sk-secret must not persist" } },
     headers: new Headers({ "retry-after": "3", "x-request-id": "req_secret" }) }, at);
   expect(codex).toMatchObject({ version: 1, connection: "openai-subscription", category: "subscription_quota", scope: "account",
     reset_at: "2027-01-15T08:10:00.000Z", retry_after_secs: 3 });
   expect(codex.request_ref).toMatch(/^[a-f0-9]{64}$/);
   const cases = [
-    ["openai-subscription", { status: 429, body: { error: { type: "rate_limit_exceeded", message: "usage limit quota exceeded" } } }, "transient"],
-    ["openai-subscription", { status: 401, body: { error: { type: "usage_limit_reached" } } }, "auth"],
-    ["openai-api", { status: 429, body: { error: { code: "insufficient_quota" } } }, "billing"],
+    ["openai-codex", { status: 429, body: { error: { type: "rate_limit_exceeded", message: "usage limit quota exceeded" } } }, "transient"],
+    ["openai-codex", { status: 401, body: { error: { type: "usage_limit_reached" } } }, "auth"],
+    ["openai", { status: 429, body: { error: { code: "insufficient_quota" } } }, "billing"],
     ["anthropic-api", { status: 400, body: { error: { type: "invalid_request_error", message: "credit balance is too low" } } }, "billing"],
-    ["openai-subscription", { status: 400, body: { error: { type: "invalid_request_error" } } }, "invalid_request"],
-    ["openai-subscription", { message: "You have hit your ChatGPT usage limit. Try again in 5 minutes." }, "unknown"],
-    ["openai-subscription", { message: "tool says quota exhausted" }, "unknown"],
-    ["anthropic-subscription", { sdk_error: "rate_limit" }, "transient"],
-    ["anthropic-subscription", { sdk_error: "rate_limit", rate_limit: { status: "allowed_warning", rateLimitType: "five_hour" } }, "transient"],
-    ["anthropic-subscription", { sdk_error: "rate_limit", rate_limit: { status: "rejected", rateLimitType: "five_hour", resetsAt: 1_800_000_600 } }, "subscription_quota"],
-    ["anthropic-subscription", { sdk_error: "billing_error", rate_limit: { status: "rejected", rateLimitType: "five_hour" } }, "billing"],
-    ["anthropic-subscription", { sdk_error: "unknown", rate_limit: { status: "rejected", rateLimitType: "novel_period" } }, "unknown"],
-    ["anthropic-subscription", { sdk_error: "rate_limit", rate_limit: { status: "rejected", rateLimitType: "novel_period" } }, "unknown"],
-    ["anthropic-subscription", { sdk_error: "rate_limit", rate_limit: { status: "rejected", rateLimitType: "five_hour", errorCode: "credits_required" } }, "billing"],
-    ["anthropic-subscription", { terminal_reason: "blocking_limit", status: 429, rate_limit: { status: "rejected", rateLimitType: "five_hour" } }, "subscription_quota"],
-    ["anthropic-subscription", { terminal_reason: "blocking_limit", status: 401, rate_limit: { status: "rejected" } }, "auth"],
-    ["anthropic-subscription", { terminal_reason: "blocking_limit", status: 429, rate_limit: { status: "rejected", errorCode: "credits_required" } }, "billing"],
-    ["anthropic-subscription", { terminal_reason: "blocking_limit", status: 429, sdk_subtype: "error_max_turns", rate_limit: { status: "rejected" } }, "invalid_request"],
-    ["anthropic-subscription", { status: 429 }, "transient"],
+    ["openai-codex", { status: 400, body: { error: { type: "invalid_request_error" } } }, "invalid_request"],
+    ["openai-codex", { message: "You have hit your ChatGPT usage limit. Try again in 5 minutes." }, "unknown"],
+    ["openai-codex", { message: "tool says quota exhausted" }, "unknown"],
+    ["anthropic", { sdk_error: "rate_limit" }, "transient"],
+    ["anthropic", { sdk_error: "rate_limit", rate_limit: { status: "allowed_warning", rateLimitType: "five_hour" } }, "transient"],
+    ["anthropic", { sdk_error: "rate_limit", rate_limit: { status: "rejected", rateLimitType: "five_hour", resetsAt: 1_800_000_600 } }, "subscription_quota"],
+    ["anthropic", { sdk_error: "billing_error", rate_limit: { status: "rejected", rateLimitType: "five_hour" } }, "billing"],
+    ["anthropic", { sdk_error: "unknown", rate_limit: { status: "rejected", rateLimitType: "novel_period" } }, "unknown"],
+    ["anthropic", { sdk_error: "rate_limit", rate_limit: { status: "rejected", rateLimitType: "novel_period" } }, "unknown"],
+    ["anthropic", { sdk_error: "rate_limit", rate_limit: { status: "rejected", rateLimitType: "five_hour", errorCode: "credits_required" } }, "billing"],
+    ["anthropic", { terminal_reason: "blocking_limit", status: 429, rate_limit: { status: "rejected", rateLimitType: "five_hour" } }, "subscription_quota"],
+    ["anthropic", { terminal_reason: "blocking_limit", status: 401, rate_limit: { status: "rejected" } }, "auth"],
+    ["anthropic", { terminal_reason: "blocking_limit", status: 429, rate_limit: { status: "rejected", errorCode: "credits_required" } }, "billing"],
+    ["anthropic", { terminal_reason: "blocking_limit", status: 429, sdk_subtype: "error_max_turns", rate_limit: { status: "rejected" } }, "invalid_request"],
+    ["anthropic", { status: 429 }, "transient"],
   ] as const;
-  for (const [connection, input, category] of cases) expect(normalizeFailure(connection, input, at).category).toBe(category);
+  for (const [provider, input, category] of cases) expect(normalizeFailure(provider, input, at).category).toBe(category);
   // F1: terminal blocking-limit results must not turn unsupported rejected evidence into retries.
   for (const rate_limit of [
     { status: "rejected", rateLimitType: "novel_period" },
@@ -47,8 +47,8 @@ test("native failure evidence distinguishes subscription exhaustion from 429 and
     { status: "rejected", rateLimitType: "five_hour", limitScope: "service" },
     { status: "rejected", rateLimitType: "five_hour", limitScope: "channel" },
   ]) {
-    const assistant = normalizeFailure("anthropic-subscription", { sdk_error: "rate_limit", rate_limit }, at);
-    const terminal = normalizeFailure("anthropic-subscription", { terminal_reason: "blocking_limit", status: 429, rate_limit }, at);
+    const assistant = normalizeFailure("anthropic", { sdk_error: "rate_limit", rate_limit }, at);
+    const terminal = normalizeFailure("anthropic", { terminal_reason: "blocking_limit", status: 429, rate_limit }, at);
     expect({ assistant: assistant.category, terminal: terminal.category }).toEqual({ assistant: "unknown", terminal: "unknown" });
   }
   expect(JSON.stringify(codex)).not.toContain("secret");
@@ -68,7 +68,7 @@ test("per-request structured evidence wins over Codex's quota-looking 429 rewrit
     })();
     return output;
   };
-  const run = withProviderFailures("openai-subscription", source);
+  const run = withProviderFailures("openai-codex", source);
   for (const type of ["usage_limit_reached", "rate_limit_exceeded", "new_error"] as const) {
     const stream = run(type === "new_error" ? { ...model, id: "local-invariant" } : model, normalizeContext({ messages: [] }),
       { fetch: async () => Response.json({ error: { type } }, { status: type === "new_error" ? 418 : 429 }) });

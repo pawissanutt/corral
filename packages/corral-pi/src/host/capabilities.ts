@@ -2,8 +2,24 @@
 // The initial model is not a capability boundary.
 import type { CredentialStore } from "@earendil-works/pi-ai";
 import { CredentialsUnavailable } from "../auth/paths.ts";
-import { PROVIDERS, type ProviderId } from "../auth/providers.ts";
+import { HOST_PROVIDER_IDS, PROVIDERS, type ProviderId, isProviderId, validApiKey } from "../auth/providers.ts";
 import type { AuthModule, Fetch } from "../auth/types.ts";
+import { NO_CATALOG_CREDENTIALS } from "./catalog.ts";
+
+export function interactiveModels(role: string): boolean {
+  return role === "assistant" || role === "build";
+}
+
+export function sessionRoutes(auth: AuthModule, primary: ProviderId, role: string, additional: readonly ProviderId[] = []) {
+  const supported = auth.providers ?? [auth.provider];
+  const policy = new Set([primary, ...additional.filter(id => supported.includes(id))]);
+  if (interactiveModels(role)) for (const id of HOST_PROVIDER_IDS) {
+    if ((PROVIDERS[id].auth === "oauth" || PROVIDERS[id].auth === "api_key") && supported.includes(id)) {
+      policy.add(id);
+    }
+  }
+  return providerCapabilities(auth, primary, [...policy]);
+}
 
 export interface ProviderAvailability {
   readonly provider: ProviderId;
@@ -11,18 +27,29 @@ export interface ProviderAvailability {
   readonly reason?: string;
 }
 
+export interface SessionRoutes {
+  readonly providers: readonly ProviderId[];
+  readonly credentials: CredentialStore;
+  readonly availability: readonly ProviderAvailability[];
+}
+
 export async function providerCapabilities(
   auth: AuthModule, initial: ProviderId, policy: readonly ProviderId[],
-) {
+): Promise<SessionRoutes> {
   const stores = new Map<ProviderId, CredentialStore>();
   const availability: ProviderAvailability[] = [];
   for (const provider of policy) {
     try {
-      const store = auth.credentials({
+      const kind = PROVIDERS[provider].auth;
+      const store = kind === "local" || kind === "aws-profile" ? NO_CATALOG_CREDENTIALS : auth.credentials({
         provider, apiEndpoint: PROVIDERS[provider].api, refreshEndpoint: PROVIDERS[provider].refresh,
       });
-      const credential = await store.read(provider);
-      if (credential?.type !== "oauth") throw new CredentialsUnavailable(`no subscription login for ${provider}`);
+      if (kind === "oauth" || kind === "api_key") {
+        const credential = await store.read(provider);
+        if (credential?.type !== kind || (credential.type === "api_key" && !validApiKey(credential.key))) {
+          throw new CredentialsUnavailable(`no stored credential for ${provider}; run corral-pi login --provider ${provider}`);
+        }
+      }
       stores.set(provider, store);
       availability.push({ provider, available: true });
     } catch (error) {
@@ -31,10 +58,7 @@ export async function providerCapabilities(
     }
   }
   if (!stores.has(initial)) throw new CredentialsUnavailable(`${initial} is outside this session's provider policy`);
-  const storeFor = (provider: string) => {
-    for (const [id, store] of stores) if (id === provider) return store;
-    return undefined;
-  };
+  const storeFor = (provider: string) => isProviderId(provider) ? stores.get(provider) : undefined;
   const credentials: CredentialStore = {
     async read(provider, options) { return storeFor(provider)?.read(provider, options); },
     async list(options) {
@@ -63,7 +87,6 @@ export function providerTransport(auth: AuthModule, providers: readonly Provider
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const transport = transports.find(({ route }) => url === route.refresh || url === route.api ||
       route.apiQueries.some((query) => url === `${route.api}${query}`));
-    if (!transport) throw new CredentialsUnavailable("no session provider owns this destination");
-    return transport.send(input, init);
+    return (transport?.send ?? fallback)(input, init);
   };
 }

@@ -6,16 +6,15 @@ import { PANEL_ERROR } from "./panels-view.ts";
 const base: ErrorInput = { stopReason: "error", partial: false, toolCallsNotRun: 0, retryAttempts: 0 };
 const rows = (input: ErrorInput, width: number) => presentError(input).render(width).map(line => stripTerminalSequences(line));
 
-// Real error texts from session files and the host's spending cap.
-const SPENDING = "spending cap reached; use corral retry --profile <p> to start a new run";
+// Real error texts from session files.
 const CODEX = "Codex error: An error occurred while processing your request. You can retry your request, or contact us through our "
   + "help center at help.openai.com if the error persists. Please include the request ID e8405ef7-bfee-4427-a8ca-d47ff4e35f7c in your message.";
 const cases: readonly { readonly input: ErrorInput; readonly facts: readonly string[] }[] = [
   { input: { ...base, errorMessage: "openai-subscription: unknown (unknown)",
     providerFailure: { version: 1, connection: "openai-subscription", category: "unknown", scope: "unknown", request_ref: "8f3a1c2d9e" } },
   facts: ["OpenAI subscription", "8f3a1c2d", "Nothing was lost"] },
-  { input: { ...base, errorMessage: SPENDING }, facts: ["spending cap", "Nothing was sent", "corral retry --profile"] },
-  { input: { ...base, errorMessage: "openai-api: local_budget (request)" }, facts: ["spending cap", "not sent to the model"] },
+  { input: { ...base, errorMessage: "budget_exhausted: the Claude agent reached its budget" }, facts: ["budget limit", "Nothing was sent", "another model"] },
+  { input: { ...base, errorMessage: "anthropic-api: local_budget (request)" }, facts: ["budget limit", "Nothing was sent"] },
   { input: { ...base, errorMessage: CODEX }, facts: ["e8405ef7", "retry"] },
 ];
 
@@ -33,12 +32,6 @@ test("each known failure is a sentence and a next step, without its raw code", (
   }
 });
 
-test("the spending-cap copy says the request was not sent and names the command that starts a new run", () => {
-  const copy = errorCopy({ ...base, errorMessage: SPENDING });
-  expect(copy.step ?? "").toContain("corral retry --profile");
-  expect(`${copy.sentence} ${copy.step ?? ""}`).not.toMatch(/fixed|will be|automatically/);
-});
-
 test("a reset time from the provider appears as a clock time", () => {
   const now = Date.parse("2026-11-13T10:00:00Z"), reset = Date.parse("2026-11-13T12:30:00Z");
   const copy = errorCopy({ ...base, providerFailure: { version: 1, connection: "openai-subscription", category: "subscription_quota",
@@ -50,12 +43,12 @@ test("a reset time from the provider appears as a clock time", () => {
 });
 
 test("expanding shows the raw text the collapsed rows leave out", () => {
-  const view = new ErrorRows(errorCopy({ ...base, errorMessage: SPENDING }));
+  const view = new ErrorRows(errorCopy({ ...base, errorMessage: CODEX }));
   const collapsed = view.render(100).length;
   view.setExpanded(true);
   const open = view.render(100).map(line => stripTerminalSequences(line));
   expect(open.length).toBeGreaterThan(collapsed);
-  expect(open.join(" ")).toContain("spending cap reached; use corral retry");
+  expect(open.join(" ")).toContain("help.openai.com");
 });
 
 test("expanded shows the whole raw text, however long", () => {
@@ -79,7 +72,7 @@ test("a stopped turn names who stopped it only when the host knows, never in the
   const stop: ErrorInput = { ...base, stopReason: "aborted", errorMessage: "Operation aborted", toolCallsNotRun: 2 };
   const cases: readonly [StopCause | undefined, RegExp][] = [
     ["owner", /^ ○ stopped by you · 2 tool calls did not run/],
-    ["budget", /^ ○ stopped: the spending cap was reached/],
+    ["host", /^ ○ stopped by corral · 2 tool calls did not run/],
     [undefined, /^ ○ stopped · 2 tool calls did not run/],
   ];
   for (const [cause, shape] of cases) {

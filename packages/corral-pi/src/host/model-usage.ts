@@ -1,13 +1,11 @@
 import type { StreamFunction } from "@earendil-works/pi-ai";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
 import type { ModelUsage } from "../tools/corral.ts";
-import type { Spending } from "../capabilities/budget.ts";
 
 /** Report a completed provider response once; bookkeeping cannot invalidate that response. */
 export function observeUsage(stream: StreamFunction, billing: ModelUsage["billing"],
-  report: (usage: ModelUsage) => void, spending?: Spending, physicalCheck = false): StreamFunction {
+  report: (usage: ModelUsage) => void): StreamFunction {
   return (model, context, options) => lazyStream(model, async () => {
-    if (billing === "api" && !physicalCheck) spending?.beforeRequest(model);
     const source = stream(model, context, options);
     return (async function* () {
       for await (const event of source) {
@@ -15,7 +13,6 @@ export function observeUsage(stream: StreamFunction, billing: ModelUsage["billin
           const usage = (event.type === "error" ? event.error : event.message).usage;
           const usd = billing === "api" && Number.isFinite(usage.cost.total) && usage.cost.total >= 0
             ? usage.cost.total : undefined;
-          if (usd !== undefined) spending?.charge(usd);
           if (usage.input || usage.output || usage.cacheRead || usage.cacheWrite) {
             report({ model: `${model.provider}/${model.id}`, input: usage.input, output: usage.output,
               cache_read: usage.cacheRead, cache_write: usage.cacheWrite,

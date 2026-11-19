@@ -12,6 +12,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::error::refuse;
 use crate::model::Task;
 
+mod profile;
+pub use profile::{ModelSelector, Profile};
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -145,15 +148,6 @@ pub struct Harness {
     pub command: String,
     pub model_flag: Option<String>,
     pub effort_flag: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Profile {
-    pub harness: String,
-    pub model: Option<String>,
-    pub effort: Option<String>,
-    pub args: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -301,43 +295,7 @@ impl Config {
             if name.trim().is_empty() {
                 problems.push(problem("profiles", "names must not be empty"));
             }
-            if let Some(harness) = self.harnesses.get(&profile.harness) {
-                if profile.model.is_some() && harness.model_flag.is_none() {
-                    problems.push(problem(
-                        format!("profiles.{name}.model"),
-                        "harness has no model_flag",
-                    ));
-                }
-                if profile.effort.is_some() && harness.effort_flag.is_none() {
-                    problems.push(problem(
-                        format!("profiles.{name}.effort"),
-                        "harness has no effort_flag",
-                    ));
-                }
-            } else {
-                problems.push(problem(
-                    format!("profiles.{name}.harness"),
-                    format!("unknown harness {:?}", profile.harness),
-                ));
-            }
-            for (key, invalid) in [
-                ("args", profile.args.iter().any(|arg| arg.contains('\0'))),
-                (
-                    "model",
-                    profile.model.as_ref().is_some_and(|arg| arg.contains('\0')),
-                ),
-                (
-                    "effort",
-                    profile
-                        .effort
-                        .as_ref()
-                        .is_some_and(|arg| arg.contains('\0')),
-                ),
-            ] {
-                if invalid {
-                    problems.push(problem(format!("profiles.{name}.{key}"), "contains NUL"));
-                }
-            }
+            profile.validate(name, self.harnesses.get(&profile.harness), &mut problems);
         }
         for (name, project) in &self.projects {
             if name.trim().is_empty() {
@@ -628,7 +586,7 @@ fn builtin_profiles() -> BTreeMap<String, Profile> {
             harness: "omp".into(),
             model: Some("gpt-6.2-sol".into()),
             effort: Some("medium".into()),
-            args: Vec::new(),
+            ..Profile::default()
         },
     );
     profiles
@@ -690,6 +648,9 @@ pub fn render_command(
 ) -> Result<String> {
     if harness.command.trim().is_empty() || harness.command.contains('\0') {
         bail!("harness command must be nonempty and contain no NUL");
+    }
+    if let Some(error) = profile.fallback_harness_error() {
+        bail!("{error}");
     }
     let mut output = String::with_capacity(harness.command.len());
     let mut remaining = harness.command.as_str();
@@ -770,6 +731,11 @@ pub fn render_command(
                 _ => quote,
             };
         }
+    }
+    // Pi launch flags apply even when an overridden template omits {model_args}.
+    for argument in profile.fallback_args() {
+        output.push(' ');
+        append_quoted(&mut output, argument, Quote::None)?;
     }
     Ok(output)
 }

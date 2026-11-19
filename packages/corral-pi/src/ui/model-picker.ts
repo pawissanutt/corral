@@ -19,7 +19,7 @@ const ID_MAX = 40, PROVIDER_MAX = 18, LABEL_MAX = 32;
 /** Narrowest id or note column worth drawing; below it the column gives way and the selected item's rows say it. */
 const ID_MIN = 12, NOTE_MIN = 8;
 /** Pi's own note when the session has no model scope. */
-const PROVIDERS_NOTE = "Only showing models from configured providers. Use /login to add providers.";
+const PROVIDERS_NOTE = "Only showing models from configured providers. To add one, run `corral-pi login --provider <id>` in a terminal and start a new session.";
 
 /** The catalog refresh and what it found, one body row of the model card. */
 interface RefreshStatus { readonly text: string; readonly tone: "muted" | "success" | "warning" }

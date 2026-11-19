@@ -3,8 +3,7 @@
 // under the directory's one cross-process lock (auth.json.lock), so Pi's own refresh
 // (Models.getAuth runs it inside modify) rewrites the credential in place. A Codex credential
 // still in the pre-T-479 shared auth.json is read from there and moved into openai-codex.json
-// by its first write, so an existing login keeps working. Explicit API connections use separate
-// <connection>.json files and accept only literal API keys; key presence never admits spending.
+// by its first write. API providers accept only literal keys; OpenAI retains openai-api.json.
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
@@ -13,8 +12,7 @@ import type { Credential, CredentialInfo, CredentialStore, OAuthCredential } fro
 
 import { type LockHooks, withFileLock } from "./lock.ts";
 import { AUTH_FILE, CredentialsUnavailable } from "./paths.ts";
-import type { ProviderId } from "./providers.ts";
-import { type ConnectionId, isApiConnection, resolveConnection, validApiKey } from "./connections.ts";
+import { type ProviderId, isApiProvider, validApiKey } from "./providers.ts";
 
 const FILE_MAX_BYTES = 64 * 1024;
 /** Bounded retained-handle read, also used for protected API-key input files. */
@@ -55,8 +53,8 @@ function missing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
 }
 
-export function credentialFile(dir: string, provider: ProviderId | ConnectionId): string {
-  return join(dir, `${provider}.json`);
+export function credentialFile(dir: string, provider: ProviderId): string {
+  return join(dir, `${provider === "openai" ? "openai-api" : provider}.json`);
 }
 
 export class FileCredentialStore implements CredentialStore {
@@ -65,11 +63,8 @@ export class FileCredentialStore implements CredentialStore {
   private readonly lockFile: string;
   private chain: Promise<unknown> = Promise.resolve();
 
-  readonly connection: ConnectionId;
-
-  constructor(readonly dir: string, readonly provider: ProviderId = "openai-codex", private readonly hooks: LockHooks = {}, connection?: ConnectionId) {
-    this.connection = resolveConnection(provider, connection);
-    this.file = credentialFile(dir, isApiConnection(this.connection) ? this.connection : provider);
+  constructor(readonly dir: string, readonly provider: ProviderId = "openai-codex", private readonly hooks: LockHooks = {}) {
+    this.file = credentialFile(dir, provider);
     this.legacyFile = join(dir, AUTH_FILE);
     this.lockFile = `${this.legacyFile}.lock`;
   }
@@ -117,12 +112,12 @@ export class FileCredentialStore implements CredentialStore {
   }
 
   private legacy(): Record<string, unknown> | undefined {
-    if (this.provider !== LEGACY_PROVIDER || isApiConnection(this.connection)) return undefined;
+    if (this.provider !== LEGACY_PROVIDER) return undefined;
     return this.readJson(this.legacyFile) as Record<string, unknown> | undefined;
   }
 
   private valid(value: unknown): value is Credential {
-    if (!isApiConnection(this.connection)) return isOAuth(value);
+    if (!isApiProvider(this.provider)) return isOAuth(value);
     const key = value as { type?: unknown; key?: unknown } | null;
     return key?.type === "api_key" && typeof key.key === "string" && validApiKey(key.key);
   }
@@ -175,7 +170,7 @@ export class FileCredentialStore implements CredentialStore {
   }
 
   async list(): Promise<readonly CredentialInfo[]> {
-    return this.load() ? [{ providerId: this.provider, type: isApiConnection(this.connection) ? "api_key" as const : "oauth" as const }] : [];
+    return this.load() ? [{ providerId: this.provider, type: isApiProvider(this.provider) ? "api_key" : "oauth" }] : [];
   }
 
   modify(
@@ -188,8 +183,8 @@ export class FileCredentialStore implements CredentialStore {
       const current = this.load();
       const next = await fn(current ? structuredClone(current) : undefined);
       if (next === undefined) return current;
-      if (!this.valid(next)) throw new CredentialsUnavailable(isApiConnection(this.connection)
-        ? "API connection stores only literal platform API keys" : "corral-pi stores only OAuth credentials (no API key fallback)");
+      if (!this.valid(next)) throw new CredentialsUnavailable(isApiProvider(this.provider)
+        ? "API providers store only literal platform API keys" : "corral-pi stores only OAuth credentials (no API key fallback)");
       this.writeAtomically(this.file, next);
       this.retireLegacy();
       return structuredClone(next);

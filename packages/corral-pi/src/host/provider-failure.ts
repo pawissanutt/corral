@@ -2,11 +2,18 @@
 import { createHash } from "node:crypto";
 import { type StreamFunction } from "@earendil-works/pi-ai";
 import { lazyStream } from "@earendil-works/pi-ai/api/lazy";
-import type { ConnectionId } from "../auth/connections.ts";
+import type { ProviderId } from "../auth/providers.ts";
+
+// Keep the version-1 diagnostic vocabulary for existing transcript readers. It does not select auth.
+const FAILURE_CONNECTION = {
+  "openai-codex": "openai-subscription", openai: "openai-api",
+  anthropic: "anthropic-subscription", "anthropic-api": "anthropic-api",
+  "amazon-bedrock": "amazon-bedrock", "llama.cpp": "llama.cpp",
+} as const satisfies Record<ProviderId, string>;
 
 export interface ProviderFailure {
   readonly version: 1;
-  readonly connection: ConnectionId;
+  readonly connection: (typeof FAILURE_CONNECTION)[ProviderId];
   readonly category: "subscription_quota" | "transient" | "auth" | "billing" | "invalid_request" | "unavailable" | "unknown" | "local_budget" | "network_policy";
   readonly scope: "account" | "model" | "request" | "unknown";
   readonly retry_after_secs?: number;
@@ -36,7 +43,7 @@ function reset(v: unknown): string | undefined {
     ? new Date(v * 1000).toISOString() : undefined;
 }
 
-export function normalizeFailure(connection: ConnectionId, input: FailureInput, now = Date.now()): ProviderFailure {
+export function normalizeFailure(provider: ProviderId, input: FailureInput, now = Date.now()): ProviderFailure {
   const error = record(record(input.body).error);
   const codes = [error.code, error.type, input.sdk_error];
   const has = (...values: string[]) => codes.some(code => typeof code === "string" && values.includes(code));
@@ -45,15 +52,15 @@ export function normalizeFailure(connection: ConnectionId, input: FailureInput, 
   let category: ProviderFailure["category"] = "unknown";
   let scope: ProviderFailure["scope"] = "unknown";
   let resetAt: string | undefined;
-  if (input.message?.startsWith("spending cap reached;") || input.message?.startsWith("budget_exhausted:")) category = "local_budget";
+  if (input.message?.startsWith("budget_exhausted:")) category = "local_budget";
   else if (input.message?.startsWith("network_refused:")) category = "network_policy";
   else if (input.message?.startsWith("credentials_unavailable:") || input.status === 401 || input.status === 403
       || has("authentication_failed", "authentication_error", "invalid_api_key", "oauth_org_not_allowed", "cloud_credential_error", "account_on_hold", "verification_required")) {
     category = "auth"; scope = "account";
   } else if (input.status === 402 || has("billing_error", "insufficient_quota", "credit_balance_too_low")
-      || connection === "anthropic-api" && has("invalid_request_error") && typeof error.message === "string"
+      || provider === "anthropic-api" && has("invalid_request_error") && typeof error.message === "string"
         && /credit balance is too low/i.test(error.message)
-      || connection === "anthropic-subscription" && rate.status === "rejected"
+      || provider === "anthropic" && rate.status === "rejected"
         && (rate.rateLimitType === "overage" || rate.isUsingOverage === true || rate.overageInUse === true
           || rate.errorCode === "credits_required" || rate.overageDisabledReason === "out_of_credits" || rate.limitScope === "group_pool")) {
     category = "billing"; scope = "account";
@@ -62,14 +69,14 @@ export function normalizeFailure(connection: ConnectionId, input: FailureInput, 
     category = "invalid_request"; scope = "request";
   } else if (has("model_not_found", "not_found_error", "usage_not_included") || input.status === 404) {
     category = "unavailable"; scope = "model";
-  } else if (connection === "openai-subscription" && has("usage_limit_reached")) {
+  } else if (provider === "openai-codex" && has("usage_limit_reached")) {
     category = "subscription_quota"; scope = "account"; resetAt = reset(error.resets_at);
-  } else if (connection === "anthropic-subscription" && claudeLimitFailure
+  } else if (provider === "anthropic" && claudeLimitFailure
       && rate.status === "rejected" && rate.limitScope === undefined && ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_overage_included"].includes(String(rate.rateLimitType))) {
     category = "subscription_quota";
     scope = rate.rateLimitType === "seven_day_opus" || rate.rateLimitType === "seven_day_sonnet" ? "model" : "account";
     resetAt = reset(rate.resetsAt);
-  } else if (connection === "anthropic-subscription" && rate.status === "rejected" && claudeLimitFailure) {
+  } else if (provider === "anthropic" && rate.status === "rejected" && claudeLimitFailure) {
     // A newly introduced subscription limit shape is not proof of exhaustion.
     category = "unknown";
   } else if (has("rate_limit", "rate_limit_error", "rate_limit_exceeded", "overloaded", "overloaded_error", "server_error")
@@ -82,7 +89,7 @@ export function normalizeFailure(connection: ConnectionId, input: FailureInput, 
     : retry === null || retry === undefined ? undefined : /^\d+$/.test(retry)
       ? seconds(Number(retry)) : seconds(Math.max(0, Math.ceil((Date.parse(retry) - now) / 1000)));
   const request = input.request_id ?? input.headers?.get("x-request-id") ?? input.headers?.get("request-id");
-  return { version: 1, connection, category, scope,
+  return { version: 1, connection: FAILURE_CONNECTION[provider], category, scope,
     ...(retrySeconds !== undefined && (category === "transient" || category === "subscription_quota") ? { retry_after_secs: retrySeconds } : {}),
     ...(resetAt ? { reset_at: resetAt } : {}),
     ...(typeof request === "string" && request.length > 0 && request.length <= 1024
@@ -103,9 +110,9 @@ export class NativeFailure extends Error {
 }
 
 export type FailureMessage = { errorMessage?: string; providerFailure?: ProviderFailure };
-export function messageFailure(message: FailureMessage, connection: ConnectionId): ProviderFailure {
-  return message.providerFailure?.connection === connection ? message.providerFailure
-    : normalizeFailure(connection, { message: message.errorMessage });
+export function messageFailure(message: FailureMessage, provider: ProviderId): ProviderFailure {
+  return message.providerFailure?.connection === FAILURE_CONNECTION[provider] ? message.providerFailure
+    : normalizeFailure(provider, { message: message.errorMessage });
 }
 
 // Parse only bounded error bodies. A successful SSE response is never buffered or inspected.
@@ -129,7 +136,7 @@ async function errorBody(response: Response): Promise<unknown> {
 
 /** Per-stream evidence, before pinned Codex collapses *every* 429 into quota-looking prose.
  * Continuation is decided by the session, never by this provider adapter. */
-export function withProviderFailures(connection: ConnectionId, stream: StreamFunction): StreamFunction {
+export function withProviderFailures(provider: ProviderId, stream: StreamFunction): StreamFunction {
   return (model, context, options) => lazyStream(model, async () => {
     let http: FailureInput | undefined;
     const send = options?.fetch ?? globalThis.fetch;
@@ -143,7 +150,7 @@ export function withProviderFailures(connection: ConnectionId, stream: StreamFun
       for await (const event of source) {
         if (event.type === "error" && event.reason === "error") {
           const message = event.error as typeof event.error & FailureMessage;
-          const failure = message.providerFailure ?? normalizeFailure(connection, http ?? { message: message.errorMessage });
+          const failure = message.providerFailure ?? normalizeFailure(provider, http ?? { message: message.errorMessage });
           message.providerFailure = failure;
           message.errorMessage = failureSummary(failure, message.errorMessage);
         }

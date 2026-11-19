@@ -355,8 +355,6 @@ export function keyGroups(mode: {
   readonly taskBound: boolean; readonly jobs: boolean;
   readonly queueControl: boolean; readonly lifecycle: boolean; readonly build?: boolean; readonly board?: boolean;
   readonly sidebarKey?: KeyId; readonly questionsKey?: KeyId;
-  /** Profile controls are installed (`/profiles`), with `profileKey` when their next-profile key was registered. */
-  readonly profiles?: boolean; readonly profileKey?: KeyId;
 }): KeyGroup[] {
   const row = (binding: string, label: string): KeyRow => {
     const data = keyData(binding);
@@ -401,8 +399,6 @@ export function keyGroups(mode: {
       pi("app.model.select", "Choose the model"),
       pi("app.model.cycleForward", "Next model in the cycle"),
       pi("app.model.cycleBackward", "Previous model in the cycle"),
-      mode.profiles === true && info("/profiles", "Show the session's profile and choose another"),
-      mode.profiles === true && mode.profileKey !== undefined && row(mode.profileKey, "Next available profile"),
       pi("app.thinking.cycle", "Cycle the effort"),
       pi("app.thinking.toggle", "Show or hide thinking"),
       pi("app.tools.expand", "Expand or collapse tool output"),

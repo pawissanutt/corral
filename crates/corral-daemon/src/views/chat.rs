@@ -153,9 +153,12 @@ pub(crate) fn thread(
         return Ok(None);
     }
     if let (Some(session), Some(stamp)) = (session, &stamp) {
-        let (messages, _) = transcript::page(&session.id, &stamp.path, None)?;
         let mut seen = std::collections::BTreeMap::new();
-        for message in messages {
+        for transcript::MessageWithInputId {
+            message,
+            request_id,
+        } in transcript::page_with_input_ids(&session.id, &stamp.path)?
+        {
             let owner = matches!(message.author.as_str(), "user" | "owner");
             let kind = if owner {
                 EntryKind::Message
@@ -176,12 +179,17 @@ pub(crate) fn thread(
             if text.is_empty() {
                 continue;
             }
-            // Source text and timestamp are immutable. Unlike continuation tokens,
-            // this identity doesn't change between subscriptions or daemon restarts.
-            let hash = fingerprint(&(&message.author, &message.at, &text))?;
-            let occurrence = seen.entry(hash.clone()).or_insert(0_u32);
-            let id = format!("{}/replay/{hash}/{occurrence}", session.id);
-            *occurrence += 1;
+            let id = if let Some(request_id) = request_id.filter(|_| owner) {
+                assistant::input_entry_id(&session.id, &request_id)
+            } else {
+                // Unlike continuation tokens, the source text and timestamp make
+                // this identity stable across subscriptions and daemon restarts.
+                let hash = fingerprint(&(&message.author, &message.at, &text))?;
+                let occurrence = seen.entry(hash.clone()).or_insert(0_u32);
+                let id = format!("{}/replay/{hash}/{occurrence}", session.id);
+                *occurrence += 1;
+                id
+            };
             let attachments = if owner {
                 assistant::attachments::facts(&text)
             } else {

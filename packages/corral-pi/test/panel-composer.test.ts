@@ -171,7 +171,7 @@ test("composer pointer uses the native model picker and supported effort cycle w
     h.physical.send("\x0c"); await frame(h, "Only showing models from configured providers");
     type(h, original!.id); h.physical.send("\r");
     await frame(h, "credentials_unavailable");
-    expect(h.screen().text()).toContain("corral agent login");
+    expect(h.screen().text()).toContain("corral-pi login");
     expect(session.model?.id).toBe(target.id);
     expect(session.sessionManager.getLeafId()).toBe(leaf);
     expect(h.host.session).toBe(session);

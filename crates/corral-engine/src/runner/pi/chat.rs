@@ -79,6 +79,7 @@ impl PiRunner<'_> {
             }
         }
         command.args(&profile.args);
+        command.args(profile.fallback_args());
         let inner = self.inner.start_process(command, dir.clone())?;
         let result = self.wait_for_hello(&client, &inner);
         match result {

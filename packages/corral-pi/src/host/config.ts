@@ -1,22 +1,18 @@
 // Flag-based launches read ordinary workspace settings.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { TOML } from "bun";
 
 import type { AwsBinding } from "../auth/aws.ts";
 import type { CapabilityGuidance } from "../capabilities/guidance.ts";
 import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
-import { CONNECTIONS, type ConnectionId, isConnectionId } from "../auth/connections.ts";
-import type { SpendingOptions } from "../capabilities/budget.ts";
-import { paidRoute } from "./continuation.ts";
 import type { CapabilitySet, HostIdentity } from "../roles/types.ts";
 import { WebSettingsSchema } from "../extensions/web/settings.ts";
 import { McpSettingsSchema } from "./mcp-settings.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 import { LlamaCppSettingsSchema, type LlamaCppSettings } from "../auth/local.ts";
-import type { ConnectionBinding } from "./connections.ts";
 import type { SummaryProfile } from "./summary.ts";
 
 export type UiMode = "rich" | "plain";
@@ -25,7 +21,12 @@ export interface HostCapabilities extends CapabilitySet {
   readonly llama_cpp?: LlamaCppSettings;
 }
 
-export interface HostConfig extends SpendingOptions {
+export interface ModelChoice {
+  readonly provider: ProviderId;
+  readonly model: string;
+}
+
+export interface HostConfig {
   readonly identity: HostIdentity;
   readonly pane: string | null;
   /** Flag launches have a run directory and public local socket, not an inherited binding. */
@@ -37,14 +38,15 @@ export interface HostConfig extends SpendingOptions {
   readonly runtimeDir: string;
   readonly sessionDir: string;
   readonly freshSession?: boolean;
+  /** The workspace's own terminal conversation, not a daemon-managed chat. */
+  readonly terminalChat?: true;
   readonly todo?: boolean;
   readonly capabilities?: HostCapabilities;
   /** The snapshot's settings and project-text trust; absent from a corral that predates them. */
   readonly guidance?: CapabilityGuidance;
   readonly model: string;
   readonly provider?: ProviderId;
-  readonly connection?: ConnectionId;
-  readonly binding?: ConnectionBinding;
+  readonly fallback?: readonly ModelChoice[];
   /** The non-secret Amazon Bedrock binding corral read at dispatch; absent means none. */
   readonly aws?: AwsBinding;
   readonly effort?: string;
@@ -58,20 +60,29 @@ type Json = Record<string, unknown>;
 
 export const modelFlags = {
   model: { type: "string" }, provider: { type: "string" }, effort: { type: "string" },
-  connection: { type: "string" }, "max-usd": { type: "string" }, "paid-route": { type: "string" },
+  fallback: { type: "string", multiple: true },
   "aws-profile": { type: "string" }, "aws-region": { type: "string" },
 } as const;
 
-export function modelSettings(values: { model?: string; provider?: string; effort?: string; connection?: string;
-  "aws-profile"?: string; "aws-region"?: string; "max-usd"?: string; "paid-route"?: string }) {
+export class RemovedModelOption extends Error {}
+
+export function rejectRemovedModelOptions(argv: readonly string[]): void {
+  for (const [index, value] of argv.entries()) {
+    const [flag, inline] = value.split("=", 2);
+    if (flag === "--connection") {
+      const provider = (inline ?? argv[index + 1]) === "openai-api" ? "openai" : "anthropic-api";
+      throw new RemovedModelOption(`--connection was removed; use --model ${provider}/<model> or --provider ${provider}`);
+    }
+    if (flag === "--paid-route") throw new RemovedModelOption("--paid-route was removed; use --fallback <provider>/<model>");
+  }
+}
+
+export function modelSettings(values: { model?: string; provider?: string; effort?: string; fallback?: readonly string[];
+  "aws-profile"?: string; "aws-region"?: string }) {
   const prefix = values.model?.split("/", 1)[0];
   const qualified = values.model?.includes("/") && isProviderId(prefix) ? prefix : undefined;
-  const connection = values.connection;
-  if (connection !== undefined && !isConnectionId(connection)) throw new Error("invalid --connection");
-  const provider = values.provider ?? qualified ?? (connection ? CONNECTIONS[connection].provider : "openai-codex");
-  if (!isProviderId(provider) || (qualified && qualified !== provider) || (connection && CONNECTIONS[connection].provider !== provider)) {
-    throw new Error("invalid --provider or conflicting --model/--connection provider");
-  }
+  const provider = values.provider ?? qualified ?? "openai-codex";
+  if (!isProviderId(provider) || (qualified && qualified !== provider)) throw new Error("invalid --provider or conflicting --model provider");
   const model = values.model ?? (provider === "openai-codex" ? "gpt-6.1-sol"
     : provider === "anthropic" ? "claude-opus-4-8" : undefined);
   if (!model || /\s|\0/.test(model) || model === `${provider}/`) throw new Error(`pass --model <${provider}/id>`);
@@ -84,15 +95,15 @@ export function modelSettings(values: { model?: string; provider?: string; effor
     }
     aws = { profile, region };
   }
-  const maxUsd = values["max-usd"] === undefined ? undefined : Number(values["max-usd"]);
-  if (maxUsd !== undefined && (!Number.isFinite(maxUsd) || maxUsd <= 0)) throw new Error("--max-usd must be a positive dollar amount");
-  const continuation = values["paid-route"];
-  if (continuation !== undefined) {
-    paidRoute(continuation);
-    if (maxUsd === undefined) throw new Error("--paid-route requires --max-usd");
-  }
-  return { provider, model, ...(connection ? { connection } : {}), ...(values.effort ? { effort: values.effort } : {}),
-    ...(aws ? { aws } : {}), ...(maxUsd === undefined ? {} : { maxUsd }), ...(continuation ? { paidRoute: continuation } : {}) };
+  const selector = `${provider}/${model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model}`;
+  const fallback = values.fallback?.map(value => {
+    const match = /^([^/]+)\/([^\s\0]+)$/.exec(value);
+    if (!match || !isProviderId(match[1])) throw new Error("--fallback requires a known <provider>/<model>");
+    if (value === selector) throw new Error(`--fallback ${value} matches the launch model`);
+    return { provider: match[1], model: match[2]! };
+  });
+  return { provider, model, ...(values.effort ? { effort: values.effort } : {}),
+    ...(aws ? { aws } : {}), ...(fallback?.length ? { fallback } : {}) };
 }
 
 const COMMON_ABILITIES = ["ask_user", "todo", "queue_control", "context_files", "skills", "compaction", "tool_search"];
@@ -147,15 +158,29 @@ export function sessionSocket(dir: string, env: NodeJS.ProcessEnv): string {
   return join(parent, `${createHash("sha256").update(dir).digest("hex").slice(0, 16)}.sock`);
 }
 
+export function findWorkspaceRoot(env: NodeJS.ProcessEnv, cwd: string): string | undefined {
+  if (env.CORRAL_NEXT_ROOT) return resolve(cwd, env.CORRAL_NEXT_ROOT);
+  for (let cur = cwd; ; cur = dirname(cur)) {
+    if (existsSync(join(cur, ".corral-next", "corral.toml"))) return cur;
+    if (cur === dirname(cur)) return undefined;
+  }
+}
+
 export function parseRunFlags(command: "run" | "chat", argv: readonly string[], assets: string,
   env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): HostConfig {
+  rejectRemovedModelOptions(argv);
   const { values } = parseArgs({ args: [...argv], options: {
     ...modelFlags, dir: { type: "string" }, socket: { type: "string" }, "prompt-file": { type: "string" },
     corral: { type: "string" }, project: { type: "string" }, headless: { type: "boolean" },
+    ...(command === "chat" ? { new: { type: "boolean" } } as const : {}),
   } });
-  if (!values.dir) throw new Error(`corral-pi ${command} requires --dir <session-directory>`);
-  const dir = resolve(cwd, values.dir);
-  const root = resolve(cwd, env.CORRAL_NEXT_ROOT ?? ".");
+  if (!values.dir && (command === "run" || values.dir !== undefined)) {
+    throw new Error(`corral-pi ${command} requires --dir <session-directory>`);
+  }
+  if (values.dir && values.new) throw new Error("--new is only available for terminal chat without --dir");
+  const root = values.dir ? resolve(cwd, env.CORRAL_NEXT_ROOT ?? ".") : findWorkspaceRoot(env, cwd);
+  if (!root) throw new Error("corral-pi chat is outside a Corral workspace");
+  const dir = values.dir ? resolve(cwd, values.dir) : join(root, ".corral-next", "terminal-chat");
   const actor = env.CORRAL_ACTOR;
   if (command === "run" && actor !== undefined && actor !== "agent" && actor !== "reviewer") {
     throw new Error("CORRAL_ACTOR must be agent or reviewer for corral-pi run");
@@ -167,11 +192,12 @@ export function parseRunFlags(command: "run" | "chat", argv: readonly string[], 
   return {
     identity: { store: "local", project: values.project ?? "", role, task, run,
       ...(role === "assistant" ? { assistant: id } : {}) },
-    cwd, root, corral: values.corral ? resolve(cwd, values.corral) : "", assets, pane: null,
+    cwd, root, corral: values.corral ? resolve(cwd, values.corral) : values.dir ? "" : "corral-next", assets, pane: null,
     local: { dir, id, socket: values.socket ? resolve(cwd, values.socket) : sessionSocket(dir, env),
       headless: values.headless === true || !process.stdin.isTTY },
     sessionDir: join(dir, "sessions"), runtimeDir: join(dir, "runtime"),
-    freshSession: env.CORRAL_FRESH === "1",
+    ...(!values.dir ? { terminalChat: true } as const : {}),
+    freshSession: values.new === true || env.CORRAL_FRESH === "1",
     ...(values["prompt-file"] ? { promptFile: resolve(cwd, values["prompt-file"]) } : {}),
     ...workspaceSettings(root, role, run), ...modelSettings(values),
   };
