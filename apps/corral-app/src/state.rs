@@ -48,7 +48,6 @@ pub struct AppState {
     daemon_feed: Signal<daemon::Feed>,
     /// Invalidates a system picker opened before a data-source change.
     source_revision: Signal<u64>,
-    pub ask_draft: Signal<String>,
     /// Grows by one each time Ask opens, so the composer focuses its field.
     pub ask_focus: Signal<u32>,
     /// The test id of a control a direct key asked to take the keyboard focus (`Effect::Focus`),
@@ -158,7 +157,6 @@ impl AppState {
                 preference(THEME_KEY, ThemeChoice::from_slug).unwrap_or(ThemeChoice::System),
             ),
             sidebar: signal(preference(SIDEBAR_KEY, SidebarPref::from_slug).unwrap_or_default()),
-            ask_draft: signal(String::new()),
             ask_focus: signal(0),
             focus_to: signal(None),
             work: source::StateSource::new(
@@ -392,7 +390,7 @@ impl AppState {
 
     /// Sets the draft, then opens Ask with the field focused.
     pub fn open_ask_with(&self, text: &str) {
-        self.ask_draft.set(text.to_owned());
+        self.set_ask_draft(text.to_owned());
         self.open_ask();
     }
 
@@ -451,11 +449,6 @@ impl AppState {
             self.close_attach_field();
             return;
         }
-        let mut closed = false;
-        self.assistant.update(|state| closed = state.close_menu());
-        if closed {
-            return;
-        }
         if let Some(overlay) = self.nav.with_untracked(NavState::newest) {
             self.close(overlay);
             return;
@@ -501,7 +494,6 @@ impl AppState {
                 self.unattach(&upload);
             }
             self.ask_staged.set(Vec::new());
-            self.ask_draft.set(String::new());
             self.ask_context.set(None);
             self.project_context_removed.set(None);
             self.change(|nav| {
@@ -645,6 +637,9 @@ impl AppState {
             Action::Work(press) => self.reduce(self.work, |state, feed, _, env| {
                 state.press(press, feed, env)
             }),
+            Action::Session(action) => {
+                self.reduce(self.session, |state, feed, _, _| state.act(action, feed))
+            }
         }
     }
 

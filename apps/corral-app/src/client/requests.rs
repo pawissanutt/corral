@@ -4,7 +4,7 @@ use corral_protocol::build::{BUILD_START, BuildStart};
 use corral_protocol::config::ConfigDocument;
 use corral_protocol::device::{DeviceRevoke, PushKind};
 use corral_protocol::op::OpSubmit;
-use corral_protocol::session_host::{SESSION_SEND, SessionSend};
+use corral_protocol::session_host::SessionSend;
 use corral_protocol::{app::*, assistant::*, detail::DetailGet};
 
 #[derive(Debug)]
@@ -72,8 +72,9 @@ pub enum ClientRequest {
         request_id: String,
         request: ConfigDocument,
     },
-    AssistantSend(AssistantSend),
-    AssistantCancel(String),
+    /// Owner input to a session (`session.send`), kept in this device's outbox until corrald
+    /// answered it; its command id is its input id and the key its reply is read under.
+    SessionSend(SessionSend),
     Attach(AttachRequest),
     AttachDiscard(String),
     #[cfg(not(target_arch = "wasm32"))]
@@ -94,10 +95,10 @@ pub enum ClientRequest {
         request: AssistantSessionOp,
     },
     /// A session request addressed by the session's public id, read by `request_id`: a control
-    /// (`session.cancel`, `.pause`, `.resume`, `.terminate`, `.relaunch`, `.rewind`), owner
-    /// input (`session.send`), a card's answer (`session.card.answer`), a queue change
-    /// (`session.queue.withdraw`, `.move`), a host action (`session.action`) or a build's start
-    /// or removal (`build.start`, `build.remove`).
+    /// (`session.cancel`, `.pause`, `.resume`, `.terminate`, `.relaunch`, `.rewind`), a card's
+    /// answer (`session.card.answer`), a queue change (`session.queue.withdraw`, `.move`), a
+    /// host action (`session.action`) or a build's start or removal (`build.start`,
+    /// `build.remove`).
     Session {
         request_id: String,
         method: &'static str,
@@ -126,10 +127,6 @@ pub enum ClientRequest {
     RetryTopic(String),
     Terminal {
         session: String,
-        open: bool,
-    },
-    Thread {
-        scope: String,
         open: bool,
     },
     SaveDraft {
@@ -237,26 +234,16 @@ pub fn submit(request_id: String, request: OpSubmit) -> bool {
         request,
     })
 }
-pub fn assistant_send(request: AssistantSend) -> bool {
-    send(ClientRequest::AssistantSend(request))
-}
-pub fn thread(scope: String, open: bool) -> bool {
-    send(ClientRequest::Thread { scope, open })
-}
 pub fn session_item(session: String, token: String) -> bool {
     send(ClientRequest::SessionItem { session, token })
 }
 pub fn watch(session: String, on: bool) -> bool {
     send(ClientRequest::Watch { session, on })
 }
-/// Owner input to a session under `request_id`, which is also the send's command id and so the
-/// input id the host and the transcript keep.
-pub fn session_send(request_id: String, request: SessionSend) -> bool {
-    send(ClientRequest::Session {
-        request_id,
-        method: SESSION_SEND,
-        params: serde_json::to_value(request).unwrap_or(serde_json::Value::Null),
-    })
+/// Owner input to a session under its command id, which is also the input id the host and the
+/// transcript keep and the key its acknowledgement is read under.
+pub fn session_send(request: SessionSend) -> bool {
+    send(ClientRequest::SessionSend(request))
 }
 /// A build session's start under `request_id`; the started row or the host's refusal is read
 /// under it.
@@ -288,9 +275,6 @@ pub fn attach(request: AttachRequest) -> bool {
 }
 pub fn attach_discard(upload: String) -> bool {
     send(ClientRequest::AttachDiscard(upload))
-}
-pub fn assistant_cancel(cmd_id: String) -> bool {
-    send(ClientRequest::AssistantCancel(cmd_id))
 }
 #[cfg(not(target_arch = "wasm32"))]
 pub fn attach_path(request: AttachPath) -> bool {

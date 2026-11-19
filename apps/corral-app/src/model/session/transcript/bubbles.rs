@@ -19,6 +19,7 @@ use crate::model::hue::Hue;
 use crate::model::text::{Rich, span};
 
 use super::items::AnsweredQuestion;
+use super::marks::short_id;
 use super::{Marker, Message, MessageItem, MessageKind, More, Prose};
 
 const CELL_HEAD: &str = "[corral code cell ";
@@ -139,7 +140,8 @@ fn size(bytes: u64) -> String {
     }
 }
 
-/// One job completion: `✓ job j1-4 exited 0 · 1.2 kB output`.
+/// One job completion: `✓ job exited 0 · 1.2 kB output (jade4d5f)`; the whole id is in the
+/// delivered text the row opens to.
 fn job_row(job: &str, fields: &[(&str, &str)]) -> Marker {
     let get = |key: &str| {
         fields
@@ -156,11 +158,12 @@ fn job_row(job: &str, fields: &[(&str, &str)]) -> Marker {
     let killed = get("signal")
         .map(|signal| format!(" ({signal})"))
         .unwrap_or_default();
+    let id = format!(" ({})", short_id(job));
     if get("termination") == Some("deadline") {
         return Marker::quiet(
             "✗",
             Hue::Fail,
-            format!("job {job} stopped at its deadline{killed}{output}"),
+            format!("job stopped at its deadline{killed}{output}{id}"),
         );
     }
     if get("state") == Some("exited")
@@ -171,19 +174,19 @@ fn job_row(job: &str, fields: &[(&str, &str)]) -> Marker {
         } else {
             ("✗", Hue::Fail)
         };
-        return Marker::quiet(glyph, hue, format!("job {job} exited {exit}{output}"));
+        return Marker::quiet(glyph, hue, format!("job exited {exit}{output}{id}"));
     }
     if !killed.is_empty() {
         return Marker::quiet(
             "✗",
             Hue::Fail,
-            format!("job {job} was stopped{killed}{output}"),
+            format!("job was stopped{killed}{output}{id}"),
         );
     }
     Marker::quiet(
         "!",
         Hue::Held,
-        format!("job {job} {}{output}", get("state").unwrap_or("ended")),
+        format!("job {}{output}{id}", get("state").unwrap_or("ended")),
     )
 }
 
@@ -228,38 +231,39 @@ fn monitor(text: &str) -> Option<Vec<Marker>> {
     let (_, rest) = rest.split_once("]\n[command monitor ")?;
     let (job, rest) = rest.split_once("] ")?;
     let (result, _) = rest.split_once('\n')?;
+    let id = format!(" ({})", short_id(job));
     let (glyph, hue, words) = if result.starts_with("job exited; ") {
         (
             "✓",
             Hue::Ok,
-            format!("job {job} exited · its watch fired · output kept for job_output"),
+            format!("job exited · its watch fired · output kept for job_output{id}"),
         )
     } else if let Some(line) = result.strip_prefix("matched: ") {
         (
             "✓",
             Hue::Ok,
-            format!("job {job} printed the watched line: {line}"),
+            format!("job printed the watched line: {line}{id}"),
         )
     } else if result == "job exited without a matching line" {
         (
             "!",
             Hue::Held,
-            format!("job {job} exited without the watched line"),
+            format!("job exited without the watched line{id}"),
         )
     } else if result == "deadline expired" {
         (
             "!",
             Hue::Held,
-            format!("watch on job {job} reached its deadline with no match"),
+            format!("watch on the job reached its deadline with no match{id}"),
         )
     } else if result.contains("monitor interrupted") {
         (
             "!",
             Hue::Held,
-            format!("watch on job {job} was interrupted: the host stopped"),
+            format!("watch on the job was interrupted: the host stopped{id}"),
         )
     } else {
-        ("!", Hue::Held, format!("watch on job {job}: {result}"))
+        ("!", Hue::Held, format!("watch on the job: {result}{id}"))
     };
     Some(vec![Marker::quiet(glyph, hue, words)])
 }
@@ -538,17 +542,23 @@ pub(super) fn source(input: &InputFacts, feed: &Feed) -> (Option<String>, Option
     match input.origin {
         InputOrigin::Pane => (Some("typed in the terminal".to_owned()), None),
         InputOrigin::Auto => (Some("sent automatically".to_owned()), None),
-        InputOrigin::Owner => match input.device.as_deref() {
-            None => (None, None),
-            Some(device) if own_device(device, feed) => (Some("this device".to_owned()), None),
-            Some(device) => match feed.devices.iter().find(|row| row.id == device) {
-                Some(row) if !row.name.trim().is_empty() && row.name != device => {
-                    (Some(format!("from {}", row.name)), None)
-                }
-                _ => (Some("another device".to_owned()), Some(device.to_owned())),
-            },
-        },
+        InputOrigin::Owner => device_tag(input, feed),
         InputOrigin::Other => (None, None),
+    }
+}
+
+/// The device an input names, in words: `this device`, `from <name>`, else `another device`
+/// with its id apart; nothing when the input names none.
+pub(super) fn device_tag(input: &InputFacts, feed: &Feed) -> (Option<String>, Option<String>) {
+    match input.device.as_deref() {
+        None => (None, None),
+        Some(device) if own_device(device, feed) => (Some("this device".to_owned()), None),
+        Some(device) => match feed.devices.iter().find(|row| row.id == device) {
+            Some(row) if !row.name.trim().is_empty() && row.name != device => {
+                (Some(format!("from {}", row.name)), None)
+            }
+            _ => (Some("another device".to_owned()), Some(device.to_owned())),
+        },
     }
 }
 

@@ -1,6 +1,8 @@
 //! Palette rows, their actions and the local confirm sheet's wording. Renderers display these
 //! values and delegate actions to AppState; filtering and command wording stay here. Which keys
-//! each destination answers, and their terminal legend, are in `keys`.
+//! each destination answers, and their terminal legend, are in `keys`. While a session page is
+//! on top, its action catalog leads the palette, every group of it; a row the host cannot run
+//! now stays listed with its reason, dimmed, and choosing it runs nothing.
 
 mod keys;
 #[cfg(test)]
@@ -9,6 +11,7 @@ mod tests;
 pub use keys::{MENU_WALK, Surface, key_legend_live, list_keys_live, menu_step, with_focus};
 
 use crate::model::daemon::Feed;
+use crate::model::session::SessionActions;
 use crate::model::{
     DataState, Destination, Form, Id, Live, Rich, SettingsSection, ThemeChoice, span,
 };
@@ -118,6 +121,8 @@ pub enum Action {
     Share,
     /// Show the phone's encrypted push demo.
     Lock,
+    /// A row of the open session page's catalog, run by the session's reducer.
+    Session(crate::model::session::Action),
 }
 
 /// One palette row in source order. `always` bypasses text matching for the free-text Ask row.
@@ -135,6 +140,8 @@ pub struct Command {
     pub action: Action,
     /// Free-text Ask is kept even when the query also matches another command.
     pub always: bool,
+    /// Listed, dimmed, with why in its label; choosing it runs nothing.
+    pub unavailable: bool,
 }
 
 fn row(
@@ -151,11 +158,31 @@ fn row(
         key,
         action,
         always: false,
+        unavailable: false,
     }
+}
+
+/// The open session page's catalog, group by group, ahead of the app's own rows.
+fn session_rows(catalog: &SessionActions) -> impl Iterator<Item = Command> + '_ {
+    catalog.groups.iter().flat_map(|group| {
+        group.rows.iter().map(move |found| Command {
+            id: format!("session:{}", found.id),
+            group: group.title,
+            label: match &found.unavailable {
+                Some(why) => format!("{} · unavailable: {why}", found.label),
+                None => found.label.clone(),
+            },
+            key: found.key,
+            action: Action::Session(found.action.clone()),
+            always: false,
+            unavailable: found.unavailable.is_some(),
+        })
+    })
 }
 
 /// Commands use the selected canonical feed for records and actions. Only the explicitly
 /// selected preview offers mounted Demo illustrations; disconnected has no sample records.
+/// `session`: the catalog of the session page on top, listed first.
 pub fn commands(
     query: &str,
     socket_configured: bool,
@@ -163,13 +190,14 @@ pub fn commands(
     feed: &Feed,
     record: Option<&crate::model::work::Record>,
     form: Form,
+    session: Option<&SessionActions>,
 ) -> Vec<Command> {
     let query = query.trim();
     let live = data != DataState::Disconnected;
     let preview = data == DataState::Fixture;
     let managed = crate::model::WorkspaceMode::of(feed) == crate::model::WorkspaceMode::Managed;
     let ask = preview || (live && feed.capable(corral_protocol::app::ASSISTANT_V1));
-    let mut rows = Vec::new();
+    let mut rows: Vec<Command> = session.into_iter().flat_map(session_rows).collect();
     if ask {
         rows.extend(ask_with(query));
     }
@@ -538,10 +566,11 @@ pub fn filtered(
     feed: &Feed,
     record: Option<&crate::model::work::Record>,
     form: Form,
+    session: Option<&SessionActions>,
 ) -> Vec<Command> {
     let folded = query.trim().to_lowercase();
     let (ask, mut rows): (Vec<Command>, Vec<Command>) =
-        commands(query, socket_configured, data, feed, record, form)
+        commands(query, socket_configured, data, feed, record, form, session)
             .into_iter()
             .filter(|command| {
                 command.always
@@ -555,7 +584,9 @@ pub fn filtered(
     rows
 }
 
-/// Resolves a selected command without interpreting arbitrary ids as executable commands.
+/// Resolves a selected command without interpreting arbitrary ids as executable commands; an
+/// unavailable session row resolves to nothing.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     id: &str,
     query: &str,
@@ -564,10 +595,11 @@ pub fn run(
     feed: &Feed,
     record: Option<&crate::model::work::Record>,
     form: Form,
+    session: Option<&SessionActions>,
 ) -> Option<Action> {
-    commands(query, socket_configured, data, feed, record, form)
+    commands(query, socket_configured, data, feed, record, form, session)
         .into_iter()
-        .find(|command| command.id == id)
+        .find(|command| command.id == id && !command.unavailable)
         .map(|command| command.action)
 }
 

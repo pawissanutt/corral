@@ -14,7 +14,7 @@
 pub(crate) mod closed;
 mod context;
 pub(crate) mod feed;
-mod inspector;
+pub(crate) mod inspector;
 pub(crate) mod list;
 pub(crate) mod parts;
 mod phone;

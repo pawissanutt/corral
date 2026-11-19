@@ -255,7 +255,7 @@ fn disconnected_state_shows_no_healthy_segment_and_no_count() {
 fn sending_from_ask_appends_to_the_quick_thread_and_clears_the_draft() {
     let mut app = preview(desktop(), &[]);
     app.press("id:ask-open").unwrap();
-    app.wait_for("id:thread-quick-items").unwrap();
+    app.wait_for("id:ask-transcript").unwrap();
     let message = "Why do violet badgers collect moonstones?";
     app.type_text("id:ask-input", message).unwrap();
     assert!(app.screen().enabled("id:btn-send").unwrap());

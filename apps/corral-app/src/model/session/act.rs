@@ -109,6 +109,14 @@ pub enum Action {
     Usage(UsageAction),
     Task(TaskAction),
     Proof(ProofAction),
+    /// The Agents tab: its jobs, conversations, confirmations and model choices.
+    Fleet(super::FleetAction),
+    /// The model and effort pickers.
+    Picker(super::PickerAction),
+    /// The session-wide catalog rows: host actions, the board, the `/` menu.
+    Command(super::CommandAction),
+    /// Return the transcript to its newest rows and follow them again.
+    JumpEnd(Id),
 }
 
 /// Whether a continuation should be fetched: it was never asked for, or its last read failed.
@@ -191,7 +199,7 @@ impl State {
                 let ui = self.ui_mut(&session);
                 match &sub {
                     Some(SubView::Usage) => ui.tab = Tab::Chat,
-                    Some(SubView::Agent(_)) => ui.tab = Tab::Agents,
+                    Some(SubView::Agent(_) | SubView::Job(_)) => ui.tab = Tab::Agents,
                     None => {}
                 }
                 ui.sub = sub;
@@ -250,7 +258,9 @@ impl State {
             }
             Action::Watch { session, on } => vec![Effect::Watch { session, on }],
             Action::Draft { session, text } => {
-                self.ui_mut(&session).draft = text;
+                let ui = self.ui_mut(&session);
+                ui.draft = text;
+                ui.picker.slash_at = 0;
                 Vec::new()
             }
             Action::Send {
@@ -314,6 +324,14 @@ impl State {
             Action::Usage(action) => usage::act(self, action, feed),
             Action::Task(action) => task::act(self, action, feed),
             Action::Proof(action) => proof::act(self, action, feed),
+            Action::Fleet(action) => super::fleet::act(self, action, feed),
+            Action::Picker(action) => super::actions::picker_act(self, action, feed),
+            Action::Command(action) => super::actions::act(self, action, feed),
+            Action::JumpEnd(session) => {
+                let ui = self.ui_mut(&session);
+                ui.jump = ui.jump.wrapping_add(1);
+                Vec::new()
+            }
         }
     }
 
@@ -398,15 +416,18 @@ impl State {
         }
     }
 
-    /// Follows the feed: retires echoes the transcript now serves or the host handled, and tells
-    /// each refusal once: its text goes back above the draft and a notice says why.
+    /// Follows the feed: keys Ask to the chat its sends reached, retires echoes the transcript
+    /// now serves or the host handled, and tells each refusal once: its text goes back above the
+    /// draft and a notice says why.
     pub fn settle(&mut self, feed: &Feed) {
+        self.key_ask(feed);
         for (scope, ui) in &mut self.sessions {
             let page = transcript::page(feed.detail(&DetailRef::Session {
                 id: scope.to_string(),
             }));
             ui.echoes.retain(|sent| !echo::retired(sent, page, feed));
             dock::settle(ui, scope.as_str(), feed);
+            super::fleet::settle(ui, feed);
             let mut refused = Vec::new();
             for sent in ui.echoes.iter_mut().filter(|sent| !sent.told) {
                 match echo::state(sent, scope.as_str(), feed) {
@@ -428,5 +449,49 @@ impl State {
                     .push(Hue::Fail, format!("Not sent: {why}"), feed.now);
             }
         }
+    }
+
+    /// Keys Ask to the chat a send to `quick` was acknowledged under (the first send with no
+    /// quick chat creates one), moving what Ask showed there: its draft and its sends, which the
+    /// chat's transcript then retires by their input ids. Once that chat has ended Ask is back on
+    /// `quick`, so its next send starts a new chat.
+    fn key_ask(&mut self, feed: &Feed) {
+        if let Some(chat) = &self.ask {
+            if crate::model::assistant::row(feed, chat.as_str())
+                .is_some_and(|row| row.state == corral_protocol::rows::AssistantState::Ended)
+            {
+                self.ask = None;
+            }
+            return;
+        }
+        let quick = Id::from(crate::model::assistant::QUICK);
+        let Some(chat) = self
+            .sessions
+            .get(&quick)
+            .and_then(|ui| {
+                ui.echoes
+                    .iter()
+                    .find_map(|sent| echo::ack(feed, sent.key.as_str()))
+            })
+            .map(|ack| ack.session)
+            .filter(|session| !session.is_empty() && *session != quick.as_str())
+        else {
+            return;
+        };
+        let chat = Id::from(chat.as_str());
+        if let Some(moved) = self.sessions.remove(&quick) {
+            match self.sessions.get_mut(&chat) {
+                Some(ui) => {
+                    ui.echoes.extend(moved.echoes);
+                    if ui.draft.is_empty() {
+                        ui.draft = moved.draft;
+                    }
+                }
+                None => {
+                    self.sessions.insert(chat.clone(), moved);
+                }
+            }
+        }
+        self.ask = Some(chat);
     }
 }

@@ -107,8 +107,34 @@ fn tag_facts(app: AppState, message: &Message) -> Option<AnyElement> {
     )
 }
 
-/// A bubble message: its head, then its items.
+/// A bubble message: its head, then its items, then the attachments it carries (each a chip; an
+/// image or file opens its readback under them).
 pub(super) fn bubble(app: AppState, message: &Message, items: Vec<AnyElement>) -> AnyElement {
+    let entry = message.id.clone();
+    let carried = computed(move || {
+        app.feed.with(|feed| {
+            app.assistant
+                .with(|state| crate::model::assistant::message_attachments(state, feed, &entry))
+        })
+    });
+    let files = dynamic(move || {
+        let (chips, opened) = carried.get();
+        (!chips.is_empty()).then(|| {
+            untracked(|| {
+                view()
+                    .gap(px(4.0))
+                    .child(
+                        view()
+                            .flex_row()
+                            .flex_wrap()
+                            .gap(px(6.0))
+                            .children(super::attachments::chips(app, &chips)),
+                    )
+                    .children(opened.map(|opened| super::attachments::readback(app, &opened)))
+                    .into_element()
+            })
+        })
+    });
     if app.form == Form::Terminal {
         return view()
             .child(head(app, message))
@@ -116,7 +142,8 @@ pub(super) fn bubble(app: AppState, message: &Message, items: Vec<AnyElement>) -
                 view()
                     .pl(term::cells(2.0))
                     .children(tag_facts(app, message))
-                    .children(items),
+                    .children(items)
+                    .child(files),
             )
             .into_element();
     }
@@ -125,7 +152,8 @@ pub(super) fn bubble(app: AppState, message: &Message, items: Vec<AnyElement>) -
         view()
             .child(head(app, message).mb(px(3.0)))
             .children(tag_facts(app, message))
-            .children(items),
+            .children(items)
+            .child(files),
     )
 }
 

@@ -10,6 +10,7 @@ fn free_text_ask_survives_even_when_a_command_matches() {
         &feed,
         None,
         Form::Desktop,
+        None,
     );
     assert!(
         rows.iter()
@@ -18,9 +19,17 @@ fn free_text_ask_survives_even_when_a_command_matches() {
     assert!(rows.iter().any(|row| !row.always));
     for query in ["t-894", "go now", "open task"] {
         assert!(
-            !filtered(query, false, DataState::Fixture, &feed, None, Form::Desktop)
-                .iter()
-                .any(|row| row.always)
+            !filtered(
+                query,
+                false,
+                DataState::Fixture,
+                &feed,
+                None,
+                Form::Desktop,
+                None
+            )
+            .iter()
+            .any(|row| row.always)
         );
     }
 }
@@ -34,6 +43,7 @@ fn task_id_search_does_not_turn_navigation_into_a_question() {
         &crate::model::preview::feed(1_794_700_000, "2026-11-15".into(), "12:00".into(), None),
         None,
         Form::Desktop,
+        None,
     );
     assert!(
         rows.iter()
@@ -58,7 +68,15 @@ fn daemon_palette_lists_served_records_only() {
             child_counts: Vec::new(),
         },
     );
-    let rows = filtered("", true, DataState::Daemon, &feed, None, Form::Desktop);
+    let rows = filtered(
+        "",
+        true,
+        DataState::Daemon,
+        &feed,
+        None,
+        Form::Desktop,
+        None,
+    );
     assert!(rows.iter().any(
         |row| row.action == Action::OpenLive(Live::Plan("T-31".into()))
             && row.id == "live:plan:T-31"
@@ -76,16 +94,25 @@ fn daemon_palette_lists_served_records_only() {
             DataState::Daemon,
             &feed,
             None,
-            Form::Desktop
+            Form::Desktop,
+            None,
         ),
         Some(Action::OpenLive(Live::Plan("T-31".into())))
     );
     feed.capabilities
         .insert(corral_protocol::app::ASSISTANT_V1.into());
     assert!(
-        filtered("why", true, DataState::Daemon, &feed, None, Form::Desktop)
-            .iter()
-            .any(|row| matches!(row.action, Action::Ask(Some(_))))
+        filtered(
+            "why",
+            true,
+            DataState::Daemon,
+            &feed,
+            None,
+            Form::Desktop,
+            None
+        )
+        .iter()
+        .any(|row| matches!(row.action, Action::Ask(Some(_))))
     );
 }
 
@@ -100,6 +127,7 @@ fn the_palette_lists_every_operation_of_the_selected_task() {
         &feed,
         Some(&task),
         Form::Desktop,
+        None,
     );
     let actions: Vec<&str> = rows
         .iter()
@@ -114,9 +142,17 @@ fn the_palette_lists_every_operation_of_the_selected_task() {
 fn desktop_and_terminal_never_offer_phone_only_demos() {
     for form in [Form::Desktop, Form::Terminal] {
         assert!(
-            !commands("", false, DataState::Fixture, &Feed::default(), None, form)
-                .iter()
-                .any(|row| matches!(row.action, Action::Share | Action::Lock))
+            !commands(
+                "",
+                false,
+                DataState::Fixture,
+                &Feed::default(),
+                None,
+                form,
+                None
+            )
+            .iter()
+            .any(|row| matches!(row.action, Action::Share | Action::Lock))
         );
     }
 }
@@ -126,10 +162,19 @@ fn palette_offers_a_task_id_the_board_does_not_list() {
     let feed = Feed::default();
     let opens = Action::OpenLive(Live::Task("T-404".into()));
     for data in [DataState::Daemon, DataState::Fixture] {
-        let rows = filtered(" t-404 ", true, data, &feed, None, Form::Desktop);
+        let rows = filtered(" t-404 ", true, data, &feed, None, Form::Desktop, None);
         let row = rows.iter().find(|row| row.action == opens).unwrap();
         assert_eq!(
-            run(&row.id, " t-404 ", true, data, &feed, None, Form::Desktop),
+            run(
+                &row.id,
+                " t-404 ",
+                true,
+                data,
+                &feed,
+                None,
+                Form::Desktop,
+                None
+            ),
             Some(opens.clone())
         );
     }
@@ -140,7 +185,8 @@ fn palette_offers_a_task_id_the_board_does_not_list() {
             DataState::Disconnected,
             &feed,
             None,
-            Form::Desktop
+            Form::Desktop,
+            None,
         )
         .iter()
         .any(|row| row.action == opens)

@@ -9,12 +9,18 @@ use crate::model::id::{Id, IdSupply};
 use crate::model::live::Live;
 
 /// What the one local confirm sheet asks about: an engine operation, a session control that
-/// cannot be taken back by pressing again (Terminate, a rewind), or leaving Configuration with
-/// unsaved edits, which drops them; `Leave` holds where the owner was going.
+/// cannot be taken back by pressing again (Terminate, a rewind), ending a chat for good, or
+/// leaving Configuration with unsaved edits, which drops them; `Leave` holds where the owner
+/// was going.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Confirming {
     Op(Act),
     Control(crate::model::agents::ControlAsk),
+    /// End chat `chat` (`A-n`); `title` is `End thread A-n`.
+    EndThread {
+        chat: String,
+        title: String,
+    },
     Leave(Box<crate::model::nav::NavState>),
 }
 
@@ -22,10 +28,19 @@ pub enum Confirming {
 pub const LEAVE_TITLE: &str = "Discard unsaved changes to corral.toml";
 
 impl Confirming {
+    /// Ending chat `chat` for good.
+    pub fn end_thread(chat: String) -> Confirming {
+        Confirming::EndThread {
+            title: format!("End thread {chat}"),
+            chat,
+        }
+    }
+
     pub fn title(&self) -> &str {
         match self {
             Self::Op(act) => &act.title,
             Self::Control(ask) => &ask.title,
+            Self::EndThread { title, .. } => title,
             Self::Leave(_) => LEAVE_TITLE,
         }
     }
@@ -33,7 +48,9 @@ impl Confirming {
     /// The heading over the rows.
     pub fn heading(&self) -> &'static str {
         match self {
-            Self::Op(_) | Self::Control(_) => crate::model::commands::CONFIRM_EFFECT_HEADING,
+            Self::Op(_) | Self::Control(_) | Self::EndThread { .. } => {
+                crate::model::commands::CONFIRM_EFFECT_HEADING
+            }
             Self::Leave(_) => "Draft",
         }
     }
@@ -43,6 +60,11 @@ impl Confirming {
         match self {
             Self::Op(act) => act.rows(),
             Self::Control(ask) => ask.rows.clone(),
+            Self::EndThread { chat, .. } => vec![(
+                chat.clone(),
+                "It stops answering and stays readable in Agents under Show All; your next message in Ask starts a new thread."
+                    .into(),
+            )],
             Self::Leave(_) => vec![(
                 "corral.toml".into(),
                 "Your edits are dropped; the file stays as it was last saved. Cancel keeps editing."

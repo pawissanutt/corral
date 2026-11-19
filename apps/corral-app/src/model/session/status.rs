@@ -95,12 +95,15 @@ pub fn role_pill(role: &SessionRole) -> RolePill {
     }
 }
 
-/// `$1.24`, with `+` when a member's cost is unknown; `$–` when nothing is known.
+/// `$1.24`, with `+` when a member's cost is unknown; `<$0.01` for a known cost above zero and
+/// below one cent, so `$0.00` is only a cost of exactly zero; `$–` when nothing is known.
 pub fn cost_text(cost: Option<f64>, partial: bool) -> String {
+    let mark = if partial { "+" } else { "" };
     match cost {
-        Some(value) if value.is_finite() => {
-            format!("${value:.2}{}", if partial { "+" } else { "" })
+        Some(value) if value.is_finite() && value > 0.0 && value < 0.005 => {
+            format!("<$0.01{mark}")
         }
+        Some(value) if value.is_finite() => format!("${value:.2}{mark}"),
         _ => "$–".into(),
     }
 }
@@ -161,8 +164,8 @@ pub fn meter(id: &Id, usage: Option<&UsageBrief>) -> ContextMeter {
 /// The status bar of the session `cx` reads. Without a host state, the row's recorded cost.
 pub fn status(cx: &Cx<'_>) -> StatusBar {
     let usage = cx.state.map(|state| &state.usage);
-    let (cost, partial) = match usage {
-        Some(usage) => (usage.cost_usd, usage.cost_partial),
+    let (cost, partial) = match super::usage::total(cx) {
+        Some(total) => (total.cost_usd, total.partial),
         None => (cx.row.and_then(|row| row.cost_usd), false),
     };
     let mut alerts = Vec::new();

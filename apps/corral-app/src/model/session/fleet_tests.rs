@@ -1,12 +1,15 @@
+use corral_protocol::detail::CardKind;
+use corral_protocol::session_state::{CardBrief, Counts, SessionState};
 use corral_protocol::subscription::{SessionAgentMessage, SessionChild, SessionFleet};
 
-use super::{AgentsTab, agents_tab};
+use super::{AgentsTab, agents_tab, badge};
 use crate::model::Id;
 use crate::model::daemon::{Feed, Link};
 use crate::model::health::daemon_env;
+use crate::model::hue::Hue;
 use crate::model::nav::Form;
 use crate::model::session::transcript::LiveSession;
-use crate::model::session::{Cx, Facts, SessionRole, Ui};
+use crate::model::session::{Action, Cx, DockAction, Facts, SessionRole, State, Ui};
 
 const ID: &str = "B-k3x9";
 
@@ -49,22 +52,33 @@ fn message(seq: u64) -> SessionAgentMessage {
     }
 }
 
-fn shown(fleet: Option<SessionFleet>) -> AgentsTab {
-    let id = Id::from(ID);
+fn feed(fleet: Option<SessionFleet>, state: Option<SessionState>) -> Feed {
     let mut feed = Feed {
         link: Link::Up,
         ..Feed::default()
     };
     let mut live = LiveSession::default();
     live.replace_fleet(fleet);
-    feed.live.insert(id.clone(), live);
+    live.replace_state(state.map(Box::new));
+    feed.live.insert(Id::from(ID), live);
+    feed
+}
+
+fn with<T>(feed: &Feed, ui: &Ui, read: impl FnOnce(&Cx<'_>) -> T) -> T {
+    let id = Id::from(ID);
     let facts = Facts {
         role: SessionRole::Build,
         task: None,
     };
-    let ui = Ui::default();
-    let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &facts);
-    agents_tab(&cx)
+    let cx = Cx::new(feed, ui, &id, daemon_env(feed, Form::Desktop), &facts);
+    read(&cx)
+}
+
+fn shown(fleet: Option<SessionFleet>) -> AgentsTab {
+    let feed = feed(fleet, None);
+    with(&feed, &Ui::default(), |cx| {
+        agents_tab(cx, &State::default())
+    })
 }
 
 #[test]
@@ -106,4 +120,69 @@ fn a_child_with_unknown_cost_is_not_shown_as_costing_nothing() {
     let free = shown(Some(fleet(Some(0.0))));
     assert_ne!(unknown.rows[0].cost, free.rows[0].cost);
     assert!(!unknown.rows[0].cost.contains("$0"));
+}
+
+#[test]
+fn a_child_that_asks_is_counted_as_waiting_and_names_its_card() {
+    let asking = SessionChild {
+        state: "needs".into(),
+        question: Some(true),
+        steerable: true,
+        ended_at: None,
+        ..child("a2", Some(0.04))
+    };
+    let fleet = SessionFleet {
+        children: vec![child("a1", Some(0.21)), asking],
+        messages: vec![],
+        messages_total: 0,
+        max_parallel: 2,
+    };
+    let state = SessionState {
+        cards: vec![CardBrief {
+            id: "card-7".into(),
+            kind: CardKind::ChildQuestion,
+            title: "a2 asks which cache to use".into(),
+            child: Some("a2".into()),
+            expires_at: None,
+        }],
+        children: Counts {
+            live: 1,
+            waiting: 1,
+            total: 2,
+        },
+        ..SessionState::default()
+    };
+    let feed = feed(Some(fleet), Some(state));
+    let ui = Ui {
+        agent: Some("a2".into()),
+        ..Ui::default()
+    };
+    let (tab, count) = with(&feed, &ui, |cx| {
+        (agents_tab(cx, &State::default()), badge(cx))
+    });
+    let count = count.expect("the tab counts the agents at work");
+    assert_eq!(count.hue, Hue::You, "{count:?}");
+    assert!(count.text.contains("▲1"), "{count:?}");
+    let row = tab
+        .rows
+        .iter()
+        .find(|row| row.child == "a2")
+        .expect("the asking child is listed");
+    assert!(row.asks);
+    assert_eq!(row.hue, Hue::You);
+    assert_eq!(row.card.as_deref(), Some("card-7"));
+    let detail = tab.detail.expect("the selected child shows its detail");
+    let answer = detail
+        .buttons
+        .iter()
+        .find(|button| button.id == "btn-child-answer")
+        .expect("an asking child offers Answer");
+    assert!(answer.unavailable.is_none(), "{answer:?}");
+    assert_eq!(
+        answer.action,
+        Action::Dock(DockAction::Bring {
+            session: Id::from(ID),
+            card: "card-7".into(),
+        })
+    );
 }

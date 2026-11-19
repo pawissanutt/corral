@@ -198,6 +198,21 @@ impl AppState {
                 {
                     return Ok(self.restart_detail(feed, &key, id, request.target, message));
                 }
+                // `quick` with no chat that has not ended is a new thread, not a missing one:
+                // its page is empty and takes the message that starts the chat.
+                if code == corral_protocol::rpc::ErrorCode::NotFound
+                    && matches!(&request.target, DetailRef::Session { id } if id == QUICK_THREAD)
+                {
+                    let empty = DetailReply {
+                        etag: String::new(),
+                        as_of: String::new(),
+                        seq: 0,
+                        next: None,
+                        body: Some(DetailBody::Session(empty_quick_page())),
+                    };
+                    self.publish(feed, &key, &id, &request.target, vec![empty]);
+                    return Ok(vec![]);
+                }
                 let error = ClientError {
                     code: value(code).as_str().unwrap_or("unknown").into(),
                     message,
@@ -589,6 +604,29 @@ fn merge_pages(pages: &[DetailReply]) -> Result<Option<DetailBody>, String> {
         }
         return Ok(Some(DetailBody::Artifact(artifact)));
     }
+    // A job's output is read newest page first, each further page older: the pages' words join
+    // oldest first, and the output starts where the oldest page read starts.
+    if let Some(DetailBody::SessionJobOutput(newest)) =
+        pages.first().and_then(|page| page.body.as_ref())
+    {
+        let mut output = newest.clone();
+        output.text.clear();
+        for page in pages.iter().rev() {
+            let Some(DetailBody::SessionJobOutput(part)) = &page.body else {
+                return Err("Job output page kind changed.".into());
+            };
+            output.text.push_str(&part.text);
+            if output.text.len() > MAX_DETAIL_BYTES {
+                return Err("Job output exceeds this device's bounded byte cache.".into());
+            }
+        }
+        if let Some(DetailBody::SessionJobOutput(oldest)) =
+            pages.last().and_then(|page| page.body.as_ref())
+        {
+            output.offset = oldest.offset;
+        }
+        return Ok(Some(DetailBody::SessionJobOutput(output)));
+    }
     let mut merged: Option<Value> = None;
     for page in pages {
         if let Some(body) = &page.body {
@@ -664,9 +702,13 @@ fn item_key(item: &Value) -> Option<&str> {
     item.get("id").or_else(|| item.get("day"))?.as_str()
 }
 
-/// Whether the detail is a list the owner walks a page at a time: the artifact finder's.
+/// Whether the detail is read a page at a time, each further page only when the owner asks for
+/// it: the artifact finder's list and a job's output (newest first, older on request).
 fn walked(target: &DetailRef) -> bool {
-    matches!(target, DetailRef::Artifacts { .. })
+    matches!(
+        target,
+        DetailRef::Artifacts { .. } | DetailRef::SessionJobOutput { .. }
+    )
 }
 
 #[cfg(test)]

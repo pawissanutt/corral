@@ -302,7 +302,7 @@ fn sub_reset_reopens_without_since_and_delivers_a_complete_replacement() {
 }
 
 #[test]
-fn reopened_thread_does_not_ack_or_publish_the_retired_live_page() {
+fn a_reopened_scope_does_not_ack_or_publish_the_retired_page() {
     let dir = SocketDir::new();
     let path = dir.socket();
     let listener = UnixListener::bind(&path).unwrap();
@@ -314,9 +314,8 @@ fn reopened_thread_does_not_ack_or_publish_the_retired_live_page() {
         notification(
             &mut stream,
             wire::SUB_DELTA,
-            json!({"topic":"thread","scope":"quick","epoch":1,"rows":[],"left":[],
-                "cursor":{"rev":155,"after":"live:1"},"more":false,
-                "live":{"entry":"old","turn":1,"offset":0,"text":"retired","done":false}}),
+            json!({"topic":"session","scope":"quick","epoch":1,"generation":1,"events":[],
+                "cursor":{"rev":155,"after":"live:1"},"more":false,"gap":null}),
         );
         queued.send(()).unwrap();
         let close = request(&mut stream);
@@ -328,32 +327,32 @@ fn reopened_thread_does_not_ack_or_publish_the_retired_live_page() {
         notification(
             &mut stream,
             wire::SUB_DELTA,
-            json!({"topic":"thread","scope":"quick","epoch":1,"rows":[],"left":[],
-                "cursor":{"rev":156,"after":null},"more":false,"live":null}),
+            json!({"topic":"session","scope":"quick","epoch":1,"generation":2,"events":[],
+                "cursor":{"rev":156,"after":null},"more":false,"gap":null}),
         );
-        let accepted = ack(&mut stream, Topic::Thread, 156, None);
+        let accepted = ack(&mut stream, Topic::Session, 156, None);
         assert_eq!(accepted.params["scope"], "quick");
         respond(&mut stream, &accepted, Value::Null);
     });
     let (mut session, _) = Session::connect(&path).unwrap();
     session.open(Topic::Health).unwrap();
     session.open(Topic::Tasks).unwrap();
-    let scope = json!({"topic":"thread","scope":"quick","since":null});
+    let scope = json!({"topic":"session","scope":"quick","since":null});
     session.request(wire::SUB_OPEN, scope.clone()).unwrap();
     ready.recv_timeout(Duration::from_secs(3)).unwrap();
     session
-        .request(wire::SUB_CLOSE, json!({"topic":"thread","scope":"quick"}))
+        .request(wire::SUB_CLOSE, json!({"topic":"session","scope":"quick"}))
         .unwrap();
     session.request(wire::SUB_OPEN, scope).unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(3);
     loop {
         match session.next() {
             Event::Rows {
-                delta: wire::subscription::SubDelta::Thread { scope, delta, .. },
+                delta: wire::subscription::SubDelta::Session { scope, cursor, .. },
                 replacement,
             } => {
                 assert_eq!(scope, "quick");
-                assert_eq!(delta.cursor.rev, 156);
+                assert_eq!(cursor.rev, 156);
                 assert!(replacement);
                 break;
             }

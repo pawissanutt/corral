@@ -10,8 +10,8 @@ use crate::model::Form;
 use crate::model::hue::Hue;
 use crate::model::session::Action;
 use crate::model::session::transcript::{
-    BuildCard, ExitLine, FinishCard, GateRow, PlanCard, ReviewRow, SliceBack, SliceRow, TaskCard,
-    ToolState,
+    BuildCard, ExitEntry, ExitLine, FiledEntry, FinishCard, GateRow, PlanCard, ReviewRow,
+    SliceBack, SliceRow, TaskCard, Told, ToolState,
 };
 use crate::state::AppState;
 use crate::ui::kit::marks::hue_ink;
@@ -19,7 +19,7 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::super::run;
-use super::parts::{glyph, small, tinted};
+use super::parts::{disclosure, glyph, pressable, sections, small, tinted};
 
 /// The widest a card is drawn (the terminal's 108 cells, in points).
 const CARD_MAX: f32 = 760.0;
@@ -31,7 +31,104 @@ pub(super) fn card(app: AppState, card: &BuildCard, id: &str) -> AnyElement {
         BuildCard::Task(task) => task_card(app, task, id),
         BuildCard::Finish(finish) => finish_card(app, finish, id),
         BuildCard::Plan(plan) => plan_row(app, plan),
+        BuildCard::Exit(exit) => exit_entry(app, exit, id),
+        BuildCard::Filed(filed) => filed_entry(app, filed, id),
     }
+}
+
+/// `you chose <label>` muted then bold, pressable to show what the agent was told.
+fn chose_row(app: AppState, label: &str, told: &Told, id: &str) -> AnyElement {
+    let row = view()
+        .flex_row()
+        .items_center()
+        .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
+        .min_w(px(0.0))
+        .child(small(app, "you chose ", Token::Ink3).flex_shrink_0())
+        .child(
+            words(app, label.to_owned(), Token::Ink)
+                .font_weight(if app.form == Form::Terminal {
+                    FontWeight::BOLD
+                } else {
+                    FontWeight::SEMIBOLD
+                })
+                .flex_shrink(1.0)
+                .min_w(px(0.0))
+                .truncate(),
+        )
+        .when(app.form == Form::Terminal, |row| {
+            row.child(term::space(1.0))
+        })
+        .child(disclosure(app, told.open));
+    pressable(
+        app,
+        row,
+        Some(&told.action),
+        format!("You chose {label}"),
+        told.open,
+        id,
+    )
+    .into_element()
+}
+
+/// What the host told the agent with an entry, while opened.
+fn told_body(app: AppState, told: &Told) -> Option<AnyElement> {
+    told.open.then(|| {
+        view()
+            .when(app.form == Form::Terminal, |block| {
+                block.pl(term::cells(2.0))
+            })
+            .when(app.form != Form::Terminal, |block| {
+                block.pl(px(18.0)).py(px(4.0))
+            })
+            .child(sections(app, &told.body))
+            .into_element()
+    })
+}
+
+/// The owner's exit choice (`you chose Keep iterating`) and the host's one-line result.
+fn exit_entry(app: AppState, exit: &ExitEntry, id: &str) -> AnyElement {
+    view()
+        .min_w(px(0.0))
+        .when(app.form != Form::Terminal, |block| {
+            block.my(px(4.0)).px(px(4.0))
+        })
+        .child(chose_row(app, &exit.chose, &exit.told, id))
+        .child(exit_line(app, &exit.outcome))
+        .children(
+            exit.reason
+                .clone()
+                .map(|reason| small(app, reason, Token::Ink3)),
+        )
+        .children(told_body(app, &exit.told))
+        .into_element()
+}
+
+/// The owner's filing (`you chose File and start`) and the tasks filed.
+fn filed_entry(app: AppState, filed: &FiledEntry, id: &str) -> AnyElement {
+    view()
+        .min_w(px(0.0))
+        .when(app.form != Form::Terminal, |block| {
+            block.my(px(4.0)).px(px(4.0))
+        })
+        .child(chose_row(app, filed.chose, &filed.told, id))
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
+                .min_w(px(0.0))
+                .child(glyph(app, ToolState::Ok))
+                .when(app.form == Form::Terminal, |row| {
+                    row.child(term::space(1.0))
+                })
+                .child(
+                    tinted(app, filed.filed.clone(), Hue::Ok)
+                        .flex_1()
+                        .min_w(px(0.0)),
+                ),
+        )
+        .children(told_body(app, &filed.told))
+        .into_element()
 }
 
 /// A mono word in ink, bold: an agent's id.
@@ -357,6 +454,27 @@ fn finish_card(app: AppState, finish: &FinishCard, id: &str) -> AnyElement {
                 .into_element()
         }));
         body.extend(finish.exit.as_ref().map(|exit| exit_line(app, exit)));
+    }
+    if let Some(told) = &finish.told {
+        let id = format!("{id}-told");
+        let row = view()
+            .flex_row()
+            .items_center()
+            .gap(px(4.0))
+            .child(small(app, "what the agent was told", Token::Ink3))
+            .child(disclosure(app, told.open));
+        body.push(
+            pressable(
+                app,
+                row,
+                Some(&told.action),
+                "What the agent was told".into(),
+                told.open,
+                &id,
+            )
+            .into_element(),
+        );
+        body.extend(told_body(app, told));
     }
     frame(app, head, Some(&finish.action), id, body)
 }

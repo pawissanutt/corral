@@ -1,7 +1,7 @@
 //! Owned daemon snapshots, independent of the transport and the UI runtime. Rows hold the
 //! `corral_types` values the daemon serves; the app derives groups and rails from them.
 use crate::model::Id;
-use corral_protocol::{Health, app::*, assistant::ThreadEntry, detail::*, rows::*};
+use corral_protocol::{Health, app::*, detail::*, rows::*};
 use corral_types::{Event, Refusal, UsageSummary};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -51,13 +51,6 @@ pub struct TopicState {
     pub error: Option<ClientError>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct ThreadSnapshot {
-    pub entries: BTreeMap<Id, ThreadEntry>,
-    pub stale: bool,
-    pub loading: bool,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct DetailCache {
     pub target: DetailRef,
@@ -95,7 +88,7 @@ pub enum CommandStatus {
     Abandoned,
 }
 
-/// A chat send or prompt answer this device made, kept until its echo or outcome.
+/// A message this device sent through its outbox (`session.send`), kept until its outcome.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandState {
     pub device: Option<String>,
@@ -103,9 +96,6 @@ pub struct CommandState {
     pub request: serde_json::Value,
     pub status: CommandStatus,
     pub error: Option<ClientError>,
-    /// The thread entry corrald acknowledged for an assistant send; kept with the command, never
-    /// in the bounded reply cache, so the local copy stays merged into it.
-    pub entry: Option<Id>,
 }
 
 /// One request answered on the connection: its reply value, or its error. An `op.submit` the
@@ -123,13 +113,6 @@ impl Operation {
     pub fn decode<T: serde::de::DeserializeOwned>(&self) -> Option<T> {
         serde_json::from_value(self.value.as_ref()?.clone()).ok()
     }
-}
-
-/// Local ownership transfer, published only after the outbox write succeeds.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SendAcceptance {
-    Accepted,
-    Refused(ClientError),
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -159,7 +142,6 @@ pub struct Feed {
     pub usage: Option<UsageSummary>,
     /// Parsed `corral.toml`, the listener and the devices.
     pub settings: Option<SettingsSnapshot>,
-    pub threads: BTreeMap<Id, ThreadSnapshot>,
     pub topics: BTreeMap<String, TopicState>,
     pub details: BTreeMap<String, DetailCache>,
     /// Transcript item continuations, by continuation token.
@@ -168,12 +150,9 @@ pub struct Feed {
     /// admissions), by session scope.
     pub live: BTreeMap<Id, crate::model::session::transcript::LiveSession>,
     pub commands: BTreeMap<Id, CommandState>,
-    pub send_acceptance: BTreeMap<Id, SendAcceptance>,
     pub operations: BTreeMap<Id, Operation>,
     /// Upload metadata only; file bytes never enter the model or persistent storage.
     pub uploads: BTreeMap<Id, UploadState>,
-    pub cancelling: BTreeSet<Id>,
-    pub not_withdrawn: BTreeSet<Id>,
     pub changes: BTreeMap<u64, Event>,
     pub changes_head: u64,
     /// Canonical owner-relevant count, tied to the seen cursor used by the reader.
@@ -254,10 +233,6 @@ impl Feed {
             detail.stale = true;
             detail.loading = false;
         }
-        for thread in self.threads.values_mut() {
-            thread.stale = true;
-            thread.loading = false;
-        }
         for session in self.live.values_mut() {
             session.reset();
         }
@@ -272,9 +247,16 @@ impl Feed {
         for operation in self.operations.values_mut() {
             if operation.loading {
                 operation.loading = false;
+                // A message may have reached the host before the link dropped; the host takes
+                // an input id once, so it is never sent again on its own.
+                let message = if operation.method == corral_protocol::session_host::SESSION_SEND {
+                    SEND_LOST
+                } else {
+                    "Connection lost before a reply was received."
+                };
                 operation.error = Some(ClientError {
                     code: "disconnected".into(),
-                    message: "Connection lost before a reply was received.".into(),
+                    message: message.into(),
                 });
             }
         }
@@ -355,14 +337,11 @@ impl Feed {
         self.assistants.clear();
         self.usage = None;
         self.settings = None;
-        self.threads.clear();
         self.details.clear();
         // A watched session's turn and child agents are daemon facts this device may no
         // longer read.
         self.live.clear();
         self.uploads.clear();
-        self.cancelling.clear();
-        self.not_withdrawn.clear();
         self.changes.clear();
         self.changes_unseen = None;
         self.capabilities.clear();
@@ -375,37 +354,66 @@ impl Feed {
         self.registry = crate::model::devices::Registry::Current;
     }
 
-    /// Retires delivered sends whose acknowledged entry this device has seen in their thread:
-    /// the canonical echo owns the message from then on, so a later page without it (a bounded
-    /// window or a reopened scope) cannot revive the local copy.
-    pub fn retire_echoed_sends(&mut self) {
-        let threads = &self.threads;
-        let echoed: Vec<Id> = self
-            .commands
-            .iter()
-            .filter(|(_, command)| {
-                command.method == corral_protocol::assistant::ASSISTANT_SEND
-                    && command.status == CommandStatus::Done
-                    && command.entry.as_ref().is_some_and(|entry| {
-                        command.request["thread"]
-                            .as_str()
-                            .and_then(|thread| threads.get(thread))
-                            .is_some_and(|thread| thread.entries.contains_key(entry))
-                    })
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
-        for id in echoed {
-            self.commands.remove(&id);
-            self.not_withdrawn.remove(&id);
-        }
-    }
-
     pub fn tick(&mut self, now: u64, clock: String) {
         self.now = now;
         self.clock = clock;
     }
+
+    /// `quick` names the newest quick chat that has not ended. Once the chat its page was read
+    /// for has ended, that transcript and its live turn are the chat's own (`A-n`), not
+    /// `quick`'s: they give way to the empty page of a new thread.
+    pub fn forget_ended_quick(&mut self) {
+        let quick = corral_protocol::assistant::QUICK_THREAD;
+        let target = DetailRef::Session { id: quick.into() };
+        let key = detail_key(&target);
+        let ended = self
+            .details
+            .get(&key)
+            .and_then(|cache| match cache.body() {
+                Some(DetailBody::Session(page)) if page.id != quick => Some(page.id.as_str()),
+                _ => None,
+            })
+            .and_then(|chat| self.assistants.get(chat))
+            .is_some_and(|row| row.state == AssistantState::Ended);
+        if !ended {
+            return;
+        }
+        self.details.insert(
+            key,
+            DetailCache {
+                target,
+                pages: Vec::new(),
+                loading: false,
+                stale: false,
+                error: None,
+                merged: Some(DetailBody::Session(empty_quick_page())),
+            },
+        );
+        if let Some(live) = self.live.get_mut(quick) {
+            live.reset();
+        }
+    }
 }
+
+/// The page of `quick` while no quick chat is current: no messages, taking the message that
+/// starts one, its host not started.
+pub fn empty_quick_page() -> SessionPage {
+    SessionPage {
+        id: corral_protocol::assistant::QUICK_THREAD.into(),
+        role: "assistant".into(),
+        task: None,
+        run: None,
+        machine: None,
+        messages: Vec::new(),
+        older: None,
+        replyable: true,
+        reply_refusal: None,
+        host: HostPresence::NotRunning,
+    }
+}
+
+/// Why a message whose connection dropped before corrald answered was not sent again.
+pub const SEND_LOST: &str = "the connection dropped before corrald answered; it may have arrived, so check the conversation before sending it again";
 
 /// The shared task-card age formatter.
 pub fn age(since: Option<u64>, now: u64) -> String {
@@ -438,5 +446,63 @@ mod tests {
         assert!(feed.board.task("T-9").is_none());
         assert!(feed.board.task("T-10").is_some());
         assert!(!feed.ready());
+    }
+
+    /// Ending the quick chat leaves its page cached under `quick`; Ask, back on `quick`, must
+    /// then show a new, empty thread rather than the ended thread's transcript.
+    #[test]
+    fn an_ended_threads_transcript_is_not_shown_as_the_new_thread() {
+        use crate::model::effect::{Conn, Env};
+        use crate::model::session::{self, Body};
+        let mut feed = Feed::default();
+        let target = DetailRef::Session { id: "quick".into() };
+        let mut page = empty_quick_page();
+        page.id = "A-1".into();
+        page.host = HostPresence::Running;
+        page.messages.push(SessionMessage {
+            id: "A-1/entry/1".into(),
+            author: "user".into(),
+            at: Some("2026-11-19T10:00:00Z".into()),
+            items: vec![SessionItem::Text {
+                text: "the ended thread's question".into(),
+            }],
+            model: None,
+            stop_reason: None,
+            usage: None,
+            input: None,
+            attachments: Vec::new(),
+        });
+        feed.details.insert(
+            detail_key(&target),
+            DetailCache {
+                target,
+                pages: Vec::new(),
+                loading: false,
+                stale: false,
+                error: None,
+                merged: Some(DetailBody::Session(page)),
+            },
+        );
+        let ended: AssistantRow = serde_json::from_value(serde_json::json!({
+            "id": "A-1", "kind": "quick", "title": "Quick thread", "state": "ended",
+            "live_in": "none", "profile": null, "connection": null, "focus": null, "pending": 0,
+            "turn": 1, "cost_usd": null, "cost_basis": null, "wait": null, "rev": 2,
+        }))
+        .expect("an ended quick chat row");
+        feed.assistants.insert(Id::from("A-1"), ended);
+        feed.forget_ended_quick();
+        let env = Env {
+            conn: Conn::Healthy,
+            form: crate::model::Form::Desktop,
+        };
+        let shown = session::page(&feed, &session::State::default(), &Id::from("quick"), env);
+        let Body::Chat(chat) = shown.body else {
+            panic!("Ask on quick shows its chat");
+        };
+        assert!(chat.transcript.messages.is_empty());
+        assert!(
+            chat.empty.is_some(),
+            "a new thread says what the first message does"
+        );
     }
 }

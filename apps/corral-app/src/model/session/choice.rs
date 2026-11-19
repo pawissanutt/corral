@@ -61,7 +61,11 @@ pub(super) fn options(
             label: option.label.clone(),
             detail: option.detail.clone(),
             unavailable: option.unavailable.clone(),
-            needs_text: option.needs_text.clone(),
+            // Only a choice that can be made asks for a reason; an unavailable one says why not.
+            needs_text: option
+                .needs_text
+                .clone()
+                .filter(|_| option.unavailable.is_none()),
             destructive: option.destructive,
             chosen: picks.contains(&option.id),
             action: (enabled && option.unavailable.is_none()).then(|| action(&option.id)),

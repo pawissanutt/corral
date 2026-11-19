@@ -146,7 +146,6 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         "assistant",
         "usage",
         "settings",
-        "thread:quick",
     ] {
         feed.topics.insert(topic.into(), TopicState::default());
     }

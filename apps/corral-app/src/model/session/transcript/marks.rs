@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::model::hue::Hue;
 
-use super::journal::FACT_ENTRIES;
+use super::journal::{FACT_ENTRIES, Journal};
 use super::replay::{Cx, Rest, first_line, lines, size};
 use super::tool::{elapsed, pretty};
 use super::{Card, Divider, Footer, Marker, MessageItem, More, Picture, Section};
@@ -565,13 +565,17 @@ pub(super) fn card(
         data.filter(|_| matches!(rest, Rest::Whole))
             .and_then(|data| serde_json::from_str::<Value>(data).ok())
     };
+    // The build session's decision entries read as their terminal cards.
+    if let Some(card) =
+        parsed().and_then(|data| super::build_entries::entry(title, said, &data, key, rest, cx))
+    {
+        return Some(MessageItem::Build(card));
+    }
     Some(match title.as_str() {
         "corral_mark" => {
-            let (glyph, hue, words) = parsed().and_then(|mark| run_mark(&mark)).unwrap_or((
-                "○",
-                Hue::Neutral,
-                "run mark".to_owned(),
-            ));
+            let (glyph, hue, words) = parsed()
+                .and_then(|mark| run_mark(&mark, cx.journal))
+                .unwrap_or(("○", Hue::Neutral, "run mark".to_owned()));
             row(glyph, hue, words)
         }
         "corral_code_cell" => {
@@ -642,8 +646,44 @@ pub(super) fn card(
     })
 }
 
+/// The first eight characters of an id: rows name a job or watch by it, the opened row by the
+/// whole id.
+pub(super) fn short_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+/// What a finished run waits on, in words: the question's title rather than its id, a job's
+/// command with its id shortened.
+fn wait_words(wait: &Value, journal: &Journal) -> Option<String> {
+    let field = |name: &str| wait.get(name).and_then(Value::as_str);
+    let label = field("label").unwrap_or_default();
+    let id = field("id").unwrap_or_default();
+    Some(match field("kind")? {
+        "owner" => match journal.questions.get(id) {
+            Some(title) => format!("your answer to “{title}”"),
+            None => "your answer".to_owned(),
+        },
+        "job" => {
+            let command = journal
+                .commands
+                .get(id)
+                .map(String::as_str)
+                .or_else(|| label.split_once(": ").map(|(_, command)| command));
+            match command {
+                Some(command) => format!("job · {} ({})", first_line(command).0, short_id(id)),
+                None => format!("job ({})", short_id(id)),
+            }
+        }
+        "event" => match label.rsplit_once(" on ") {
+            Some((_, job)) => format!("a watch on job ({})", short_id(job)),
+            None => "a watch on a job".to_owned(),
+        },
+        _ => label.to_owned(),
+    })
+}
+
 /// A run mark's row, as `mark-rows.ts` words it (`✓ done · 3m 12s · 14 tool calls · $0.42`).
-fn run_mark(mark: &Value) -> Option<(&'static str, Hue, String)> {
+fn run_mark(mark: &Value, journal: &Journal) -> Option<(&'static str, Hue, String)> {
     let field = |name: &str| mark.get(name).and_then(Value::as_str);
     match field("kind")? {
         "turn_end" => {
@@ -675,13 +715,13 @@ fn run_mark(mark: &Value) -> Option<(&'static str, Hue, String)> {
                     .filter(|n| *n > 0.0)
                     .map(|n| format!("{} tokens re-billed", tokens(n))),
             );
-            let waits: Vec<&str> = mark
+            let waits: Vec<String> = mark
                 .get("waits")
                 .and_then(Value::as_array)
                 .map(|waits| {
                     waits
                         .iter()
-                        .filter_map(|wait| wait.get("label").and_then(Value::as_str))
+                        .filter_map(|wait| wait_words(wait, journal))
                         .collect()
                 })
                 .unwrap_or_default();

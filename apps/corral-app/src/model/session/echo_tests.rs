@@ -151,3 +151,87 @@ fn a_handled_send_is_retired_by_its_acknowledgement() {
     );
     assert!(echoes(&state, &feed).is_empty());
 }
+
+/// Ask's first send goes to `quick` with no chat yet; corrald creates one and acknowledges the
+/// send under it. Ask must follow that chat (its draft and the echo with it), retire the echo
+/// once the chat's transcript serves the input id, and go back to `quick` once the chat ended,
+/// so the next send starts a new one rather than reaching the ended chat.
+#[test]
+fn a_quick_send_with_no_session_keys_ask_to_the_returned_id() {
+    let mut feed = Feed::default();
+    let mut state = State::default();
+    assert_eq!(state.ask_id().as_str(), "quick");
+    let effects = state.act(
+        Action::Send {
+            session: state.ask_id(),
+            text: "what blocks T-12?".into(),
+            policy: SendPolicy::Steer,
+            attachments: Vec::new(),
+        },
+        &feed,
+    );
+    let key = match effects.as_slice() {
+        [Effect::SessionSend { key, send }] => {
+            assert_eq!(send.id, "quick");
+            key.to_string()
+        }
+        other => panic!("one send to quick: {other:?}"),
+    };
+    state.act(
+        Action::Draft {
+            session: state.ask_id(),
+            text: "and T-14?".into(),
+        },
+        &feed,
+    );
+    feed.operations.insert(
+        Id::from(key.as_str()),
+        Operation {
+            method: "session.send".into(),
+            loading: false,
+            value: serde_json::to_value(SessionSent {
+                session: SCOPE.into(),
+                entry: format!("{SCOPE}/input/{key}"),
+                disposition: InputDisposition::Started,
+                turn: Some(1),
+            })
+            .ok(),
+            error: None,
+            refusal: None,
+        },
+    );
+    state.settle(&feed);
+    assert_eq!(state.ask_id().as_str(), SCOPE);
+    assert_eq!(state.ui(SCOPE).draft, "and T-14?");
+    assert!(state.ui("quick").echoes.is_empty());
+    assert_eq!(
+        echoes(&state, &feed),
+        [key.clone()],
+        "the echo stays until the chat's transcript serves its input id"
+    );
+
+    serve(
+        &mut feed,
+        vec![owner(
+            &format!("{SCOPE}/input/{key}"),
+            "what blocks T-12?",
+            Some(&key),
+        )],
+    );
+    state.settle(&feed);
+    assert!(echoes(&state, &feed).is_empty());
+
+    let ended: corral_protocol::rows::AssistantRow = serde_json::from_value(serde_json::json!({
+        "id": SCOPE, "kind": "quick", "title": "Quick thread", "state": "ended",
+        "live_in": "none", "profile": null, "connection": null, "focus": null, "pending": 0,
+        "turn": 1, "cost_usd": null, "cost_basis": null, "wait": null, "rev": 2,
+    }))
+    .expect("an ended quick chat row");
+    feed.assistants.insert(Id::from(SCOPE), ended);
+    state.settle(&feed);
+    assert_eq!(
+        state.ask_id().as_str(),
+        "quick",
+        "an ended chat takes no more messages; Ask's next send starts a new one"
+    );
+}

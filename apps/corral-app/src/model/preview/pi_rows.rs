@@ -1,10 +1,10 @@
 //! What corrald serves from the sample's pi hosts: a session's transcript page, read on request
-//! as corrald reads the file, a chat's thread projected from its transcript, the rows that
-//! follow each host (a chat's or a build's state and turn, a worker's pause and quiet time), and
-//! the host's state on the live session stream of every scope that watches it.
+//! as corrald reads the file (the quick scope with no current chat an empty page a send starts
+//! one from), the rows that follow each host (a chat's or a build's state and turn, a worker's
+//! pause and quiet time), and the host's state on the live session stream of every scope that
+//! watches it.
 
-use corral_protocol::assistant::{EntryKind, MessageState, TurnCompletion};
-use corral_protocol::detail::{DetailBody, DetailRef, HostPresence, SessionItem, SessionPage};
+use corral_protocol::detail::{DetailBody, DetailRef, HostPresence, SessionPage};
 use corral_protocol::rows::{AssistantLocation, AssistantState, WaitReason};
 use corral_protocol::session_state::{
     Activity, Capability, CardBrief, InputOrigin, QueuedInput, SendPolicy, SessionMode,
@@ -20,7 +20,16 @@ use crate::model::daemon::Feed;
 /// input is served under its input id; any other under its entry.
 pub(super) fn page(feed: &mut Feed, scope: &str) -> bool {
     let Some(id) = resolve(feed, scope) else {
-        return false;
+        if scope != crate::model::assistant::QUICK {
+            return false;
+        }
+        // No quick chat is current: an empty page that takes a message, which starts one.
+        let target = DetailRef::Session {
+            id: scope.to_owned(),
+        };
+        let body = DetailBody::Session(crate::model::daemon::empty_quick_page());
+        put(feed, target, body);
+        return true;
     };
     let Some(host) = feed.hosts.get(id.as_str()) else {
         return false;
@@ -69,68 +78,6 @@ pub(super) fn page(feed: &mut Feed, scope: &str) -> bool {
     let reread = feed.live.get(scope).map(|live| live.reread);
     feed.settle_session(&target, reread);
     true
-}
-
-/// A chat's thread as corrald projects it from the transcript: the owner's messages and the
-/// assistant's answers. The quick thread shows its current session's.
-pub(super) fn thread(feed: &mut Feed, id: &str) {
-    let Some(host) = feed.hosts.get(id).filter(|host| host.role == Role::Chat) else {
-        return;
-    };
-    let mut entries = std::collections::BTreeMap::new();
-    for (index, recorded) in host.transcript.iter().enumerate() {
-        let message = &recorded.message;
-        let owner = message.author == "user";
-        if !owner && message.author != "assistant" {
-            continue;
-        }
-        let text = message
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                SessionItem::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        if text.is_empty() || text.starts_with("[ask_user answer") {
-            continue;
-        }
-        let entry = recorded
-            .entry
-            .clone()
-            .unwrap_or_else(|| format!("{id}/replay/{index:04}"));
-        let at = message.at.clone().unwrap_or_default();
-        let mut row = super::sessions::entry(
-            &entry,
-            &at,
-            if owner {
-                EntryKind::Message
-            } else {
-                EntryKind::Answer
-            },
-            &text,
-        );
-        row.device = owner.then(|| "preview-device".into());
-        row.via = None;
-        row.state = owner.then_some(MessageState::Delivered);
-        row.model = message.model.clone();
-        row.completion = (!owner).then_some(match message.stop_reason.as_deref() {
-            Some("aborted") => TurnCompletion::Aborted,
-            _ => TurnCompletion::Completed,
-        });
-        entries.insert(Id::from(entry), row);
-    }
-    let quick = crate::model::assistant::quick_id(feed).is_some_and(|quick| quick == id);
-    let mut scopes = vec![Id::from(id)];
-    if quick {
-        scopes.push(Id::from(crate::model::assistant::QUICK));
-    }
-    for scope in scopes {
-        let thread = feed.threads.entry(scope).or_default();
-        thread.entries = entries.clone();
-    }
-    feed.retire_echoed_sends();
 }
 
 /// What the rows report follows the hosts: a chat's or a build's state, turn, first waiting card

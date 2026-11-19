@@ -397,7 +397,6 @@ pub(super) fn chat(feed: &mut Feed, id: &str, at: &str, asked: &str, answered: &
     if let Some(host) = feed.hosts.get_mut(id) {
         host.record_turn(at, &[asked], vec![text(answered)]);
     }
-    super::pi_rows::thread(feed, id);
 }
 
 /// The turn the streaming worker is in when the preview opens: long enough to watch, cancel

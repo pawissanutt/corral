@@ -9,7 +9,7 @@ use corral_types::Origin;
 use serde_json::{Value, json};
 
 use super::pi::{Input, finish, publish, start};
-use super::pi_rows::{settle, thread};
+use super::pi_rows::settle;
 use super::sample::sha;
 use super::stamp;
 use crate::model::daemon::Feed;
@@ -78,7 +78,6 @@ pub(super) fn control(
         }
     };
     settle(feed, id);
-    thread(feed, id);
     Ok(reply)
 }
 

@@ -275,7 +275,7 @@ impl AppState {
         outgoing.extend(self.pump_uploads());
         outgoing
     }
-    pub(super) fn ready_uploads(&self, feed: Signal<Feed>, request: &AssistantSend) -> bool {
+    pub(super) fn ready_uploads(&self, feed: Signal<Feed>, request: &SessionSend) -> bool {
         feed.with_untracked(|feed| {
             request.attachments.iter().all(|item| match item {
                 SendAttachment::Upload { upload, sha256 } => {
@@ -288,7 +288,7 @@ impl AppState {
             })
         })
     }
-    pub(super) fn release_upload_bytes(&mut self, feed: Signal<Feed>, request: &AssistantSend) {
+    pub(super) fn release_upload_bytes(&mut self, feed: Signal<Feed>, request: &SessionSend) {
         feed.update(|feed| {
             for item in &request.attachments {
                 if let SendAttachment::Upload { upload, .. } = item {

@@ -17,9 +17,11 @@ mod changes;
 mod command_menu;
 mod decision;
 mod dock;
+mod events;
 mod exit;
 mod header;
 mod pager;
+mod plan;
 mod proof;
 mod questions;
 mod sidebar;
@@ -44,7 +46,7 @@ use crate::model::work::{session_task, task_ref};
 use crate::model::{Form, Id};
 use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
-use crate::ui::composer::session_composer;
+use crate::ui::composer::{ask_composer, session_composer};
 use crate::ui::kit::marks::{hue_ink, mark};
 use crate::ui::kit::notice::notice;
 use crate::ui::term;
@@ -106,8 +108,9 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
                 })),
         )
         .child(dock::dock(app, page, rail))
-        .child(command_menu::menu(app, id.clone(), commands))
-        .child(bottom(app, page, id, commands))
+        .child(command_menu::menu(app, page, commands))
+        .child(sidebar::sheets(app, id.clone()))
+        .child(bottom(app, page, id, commands, false))
         .child(status::bar(app, page))
         .into_element()
 }
@@ -148,14 +151,15 @@ pub fn phone(app: AppState, id: Id) -> PhonePage {
         .child(banner(app, page))
         .child(tabs::strip(app, page))
         .child(main(app, page))
+        .child(sidebar::sheets(app, id.clone()))
         .into_element();
     let bar = view()
         .bg(color(Token::Bg))
         .border_t_1()
         .border_color(color(Token::Rule))
         .child(dock::dock(app, page, computed(|| false)))
-        .child(command_menu::menu(app, id.clone(), commands))
-        .child(bottom(app, page, id, commands))
+        .child(command_menu::menu(app, page, commands))
+        .child(bottom(app, page, id, commands, false))
         .child(status::bar(app, page))
         .into_element();
     PhonePage {
@@ -166,6 +170,129 @@ pub fn phone(app: AppState, id: Id) -> PhonePage {
         ask: false,
         scroll: false,
     }
+}
+
+/// What Ask shows of a session: in the drawer and the terminal pane the transcript, the dock,
+/// the composer and the status row; on the phone sheet the newest reply, the dock and the
+/// composer; in the hotkey window the composer alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compact {
+    Drawer,
+    Sheet,
+    Composer,
+}
+
+/// Session `id` in Ask (screens §11): the same model, transcript, dock and composer as its page,
+/// with no head, tabs or sidebar, which Ask's own head stands in for. `page` is
+/// `session_view(app, id)`, which Ask's head reads too. `quick` is read again as Ask opens on
+/// it: the chat it named may have ended since.
+pub fn compact(app: AppState, id: Id, page: Memo<SessionPage>, form: Compact) -> AnyElement {
+    follow(app, id.clone(), page);
+    if id.as_str() == crate::model::assistant::QUICK {
+        let quick = DetailRef::Session { id: id.to_string() };
+        untracked(|| app.scope().refresh(quick));
+    }
+    let commands = command_menu::matches(page);
+    let tail = view()
+        .flex_none()
+        .child(dock::dock(app, page, computed(|| false)))
+        .child(command_menu::menu(app, page, commands))
+        .child(bottom(app, page, id.clone(), commands, true))
+        .when(form != Compact::Composer, |tail| {
+            tail.child(status::bar(app, page))
+        });
+    match form {
+        Compact::Drawer => view()
+            .flex_1()
+            .min_h(px(0.0))
+            .flex_col()
+            .child(banner(app, page))
+            .child(
+                view()
+                    .test_id("ask-transcript")
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .flex_col()
+                    .child(chat(app, page)),
+            )
+            .child(tail)
+            .into_element(),
+        Compact::Sheet => view()
+            .flex_col()
+            .child(latest(app, id, page))
+            .child(tail)
+            .into_element(),
+        Compact::Composer => tail.into_element(),
+    }
+}
+
+/// The phone sheet's newest reply, its first three lines; pressing it opens the session page,
+/// where the whole transcript is. Nothing before the agent has said anything.
+fn latest(app: AppState, id: Id, page: Memo<SessionPage>) -> AnyElement {
+    use crate::model::session::transcript::{MessageItem, MessageKind};
+    let words = computed(move || {
+        page.with(|p| {
+            let Body::Chat(chat) = &p.body else {
+                return None;
+            };
+            let reply = chat
+                .transcript
+                .messages
+                .iter()
+                .chain(chat.transcript.live.iter())
+                .rev()
+                .find(|message| message.kind == MessageKind::Agent)?;
+            reply.items.iter().find_map(|item| match item {
+                MessageItem::Prose(prose) => Some(
+                    prose
+                        .markdown
+                        .lines()
+                        .filter(|line| !line.trim().is_empty())
+                        .take(3)
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                ),
+                _ => None,
+            })
+        })
+    });
+    dynamic(move || {
+        words.get().map(|words| {
+            let id = id.clone();
+            untracked(|| {
+                view()
+                    .test_id("ask-latest")
+                    .role(AccessibilityRole::Button)
+                    .label("Open the conversation")
+                    .on_press(move || {
+                        run(
+                            app,
+                            session::Action::OpenLive(crate::model::Live::Session(id.clone())),
+                        )
+                    })
+                    .cursor_pointer()
+                    .px(px(18.0))
+                    .py(px(8.0))
+                    .border_b(px(1.0))
+                    .border_color(color(Token::Rule))
+                    .child(
+                        text(words)
+                            .number_of_lines(3u32)
+                            .font_family(FONT_TEXT)
+                            .text_size(px(14.0))
+                            .line_height(px(20.0))
+                            .text_color(color(Token::Ink2)),
+                    )
+                    .into_element()
+            })
+        })
+    })
+    .into_element()
+}
+
+/// The page as the model builds it now (tracked): the session page's, and Ask's.
+pub fn session_view(app: AppState, id: Id) -> Memo<SessionPage> {
+    view_of(app, id)
 }
 
 /// The page as the model builds it now (tracked).
@@ -216,20 +343,29 @@ fn follow(app: AppState, id: Id, page: Memo<SessionPage>) {
     });
 }
 
-/// The session's keys while its page is open (desktop and terminal): the tabs by their terminal
-/// key and position, thinking and the receiver. Escape is the app's (it returns to Chat, then
+/// The session's chords while its page is open (desktop and terminal): the tabs by their
+/// terminal key and position, thinking, expand all, the jump to the latest rows, effort and model
+/// steps and the receiver, in the composer's field too. A view's bare keys are the app's key
+/// router's (`state/keys.rs`), taken only while no field is edited; Ctrl+Shift+M is bound there
+/// app-wide. Escape is the app's (it closes a picker or the `/` menu, returns to Chat, then
 /// stops the turn, before it leaves the page) and Enter the composer's; nothing here acts while
-/// a sheet or overlay is up.
+/// a sheet or overlay is up. End also reaches the field, where it moves the caret.
 fn bind_keys(app: AppState, id: Id) {
     let web = cfg!(target_arch = "wasm32");
-    let options = KeyOptions {
-        when: When::Always,
-        ..KeyOptions::default()
-    };
     for binding in session::bound(app.form, web) {
-        if matches!(binding.action, KeyAction::Escape | KeyAction::Send(_)) {
+        if !binding.typing()
+            || matches!(
+                binding.action,
+                KeyAction::Escape | KeyAction::Send(_) | KeyAction::Model
+            )
+        {
             continue;
         }
+        let options = KeyOptions {
+            when: When::Always,
+            pass_through: binding.pass_through(),
+            ..KeyOptions::default()
+        };
         let id = id.clone();
         let key = binding.key;
         on_key_with(key, options, move |_| {
@@ -344,6 +480,7 @@ fn chat(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             .min_h(px(0.0))
             .child(content),
         move || chat.with(|c| c.as_ref().map_or(0, |c| c.transcript.rows())),
+        move || page.with(|p| p.jump),
     )
 }
 
@@ -417,7 +554,8 @@ fn bottom(
     app: AppState,
     page: Memo<SessionPage>,
     id: Id,
-    commands: Memo<Vec<session::ActionRow>>,
+    commands: Memo<Option<session::SlashMenu>>,
+    ask: bool,
 ) -> AnyElement {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Place {
@@ -444,7 +582,7 @@ fn bottom(
     });
     let composer = computed(move || page.with(|p| p.composer.clone()));
     let focused = computed(move || page.with(|p| p.focus == Focus::Composer));
-    let command = command_menu::chosen(id.clone(), commands);
+    let command = command_menu::chosen(commands);
     let bar = computed(move || page.with(|p| p.bar.clone()));
     dynamic(move || {
         let place = place.get();
@@ -453,6 +591,7 @@ fn bottom(
             Place::Confirm => decision::confirm(app, page),
             Place::Decision => decision::decision(app, page),
             Place::Answer => questions::answer(app, page),
+            Place::Composer if ask => ask_composer(app, id, composer, command, focused),
             Place::Composer => session_composer(app, id, composer, command, focused),
             Place::Bar => dock::host_bar(app, bar),
         })

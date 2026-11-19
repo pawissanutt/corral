@@ -3,7 +3,7 @@
 //! preview locally; a preview intent never enters the real client's queue. Engine operations
 //! go through `ops`.
 
-use corral_protocol::assistant::{AssistantSend, ContextRef};
+use corral_protocol::assistant::ContextRef;
 use corral_protocol::detail::{DetailGet, DetailRef};
 
 use nsh_core::prelude::*;
@@ -53,9 +53,28 @@ impl AppState {
     pub fn ask_about(&self, context: Option<ContextRef>, text: Option<String>) {
         self.ask_context.set(context);
         if let Some(text) = text {
-            self.ask_draft.set(text);
+            self.set_ask_draft(text);
         }
         self.open_ask();
+    }
+
+    /// Tracked: the session Ask reads and sends to (`quick` until its first send is answered).
+    pub fn ask_id(&self) -> Id {
+        self.session.with(|state| state.ask_id())
+    }
+
+    /// Tracked: Ask's draft, which is its session's, the same the session page shows.
+    pub fn ask_draft(&self) -> String {
+        self.session
+            .with(|state| state.ui(state.ask_id().as_str()).draft.clone())
+    }
+
+    /// Replaces Ask's draft with `text`.
+    pub fn set_ask_draft(&self, text: String) {
+        self.reduce(self.session, move |state, feed, _, _| {
+            let session = state.ask_id();
+            state.act(crate::model::session::Action::Draft { session, text }, feed)
+        });
     }
 
     /// Tracked: whether corrald serves the destination to this session.
@@ -67,22 +86,6 @@ impl AppState {
     /// Tracked: whether the session negotiated the capability.
     pub fn capable(&self, capability: &str) -> bool {
         self.feed.with(|feed| feed.capable(capability))
-    }
-
-    /// Enqueues an intent for client admission, not an ownership transfer. The composer
-    /// retains its words and attachments until the matching persisted acceptance arrives.
-    pub fn send_message(&self, mut message: AssistantSend) -> bool {
-        let project = untracked(|| self.composer_project());
-        crate::model::assistant::attach_default_project(&mut message, project.as_ref());
-        if self.fixture() {
-            return self.preview_send(message);
-        }
-        if requests::assistant_send(message) {
-            true
-        } else {
-            self.toast("Not sent: the app's connection to corrald is not running. Your words and attachments stay here.");
-            false
-        }
     }
 
     /// Tracked: the authenticated name of this device.
@@ -234,9 +237,9 @@ impl AppState {
                     | Effect::AskAbout { .. }
                     | Effect::VerbMenu(_)
                     | Effect::Unattach(_)
+                    | Effect::EndThread(_)
                     | Effect::Act(_)
                     | Effect::Device(_)
-                    | Effect::Send(_)
                     | Effect::Control { .. }
                     | Effect::Config { .. }
                     | Effect::Refused(_)
@@ -272,16 +275,12 @@ impl AppState {
             }
             Effect::Changes(query) => _ = requests::changes_page(query),
             Effect::Seen(seen) => _ = requests::seen_advance(seen),
-            Effect::Send(message) => _ = self.send_message(message),
             Effect::Unattach(key) => self.unattach(&key),
-            Effect::CancelSend(key) => {
-                // The client owns whether it ever left: it drops a never-sent or refused one
-                // here and asks corrald for the rest, now or on reconnect.
-                if !requests::assistant_cancel(key.to_string()) {
-                    self.toast("Not withdrawn: the app's connection to corrald is not running. Nothing changed.");
-                }
+            Effect::EndThread(chat) => {
+                self.refusal.set(None);
+                self.confirm
+                    .set(Some(crate::model::act::Confirming::end_thread(chat)));
             }
-            Effect::Thread { scope, open } => _ = requests::thread(scope, open),
             Effect::Control {
                 session,
                 key,
@@ -327,14 +326,12 @@ impl AppState {
                     self.toast(why);
                 }
             }
+            // A message waits in this device's outbox while corrald is unreachable and goes on
+            // the next connection; only a client that is not running leaves it unsent.
             Effect::SessionSend { key, send } => {
                 let session = Id::from(send.id.as_str());
-                let unsent = match self.link_refusal() {
-                    Some(refusal) => Some(refusal.to_owned()),
-                    None => (!requests::session_send(key.to_string(), send))
-                        .then(|| "the app's connection task is not running".to_owned()),
-                };
-                if let Some(why) = unsent {
+                if !requests::session_send(send) {
+                    let why = "the app's connection task is not running".to_owned();
                     self.session
                         .update(|state| state.unsent(&session, &key, why));
                 }
@@ -368,6 +365,15 @@ impl AppState {
             }
             Effect::SessionAction { key, request } => {
                 self.session_request(key, corral_protocol::session_host::SESSION_ACTION, request);
+            }
+            Effect::SessionModel { key, request } => {
+                self.session_request(key, corral_protocol::session_host::SESSION_MODEL, request);
+            }
+            Effect::SessionChild { key, act } => {
+                self.session_request(key, corral_protocol::session_host::SESSION_CHILD, act);
+            }
+            Effect::SessionJob { key, act } => {
+                self.session_request(key, corral_protocol::session_host::SESSION_JOB, act);
             }
             Effect::BuildRemove { key, remove } => {
                 self.session_request(key, corral_protocol::build::BUILD_REMOVE, remove);

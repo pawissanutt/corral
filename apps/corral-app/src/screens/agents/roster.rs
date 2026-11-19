@@ -8,14 +8,13 @@
 
 use nsh_core::prelude::*;
 
+use crate::model::Form;
 use crate::model::agents::{Roster, Show};
-use crate::model::assistant::QUICK;
 use crate::model::glance::Stat;
 use crate::model::hue::Hue;
 use crate::model::projects::FilterScreen;
 use crate::model::session::Fill;
 use crate::model::text::span;
-use crate::model::{Form, Id};
 use crate::screens::assistant;
 use crate::state::AppState;
 use crate::ui::kit::glance::page_head;
@@ -31,12 +30,10 @@ use super::{roster_view, run_agents, segs, start};
 /// Roster width (pt) that holds every column.
 const WIDE: f32 = 1040.0;
 
-/// The page for the form. With the daemon, the page holds the quick chat's subscription (the
-/// pinned row says what it last answered) and settles new assistant sessions, which open their
-/// page, for as long as it stays open.
+/// The page for the form. With the daemon, the page settles new assistant sessions, which open
+/// their page, for as long as it stays open.
 pub(super) fn screen(app: AppState) -> AnyElement {
     if untracked(|| app.daemon()) {
-        assistant::open_scope(app, Id::from(QUICK), false);
         assistant::watch_ops(app);
     }
     let roster = computed(move || roster_view(app));

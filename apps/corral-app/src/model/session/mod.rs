@@ -28,17 +28,20 @@ mod actions;
 mod activity;
 mod board;
 mod changes;
+mod changes_diff;
 mod choice;
 mod composer;
 mod dialog;
 mod dock;
 mod echo;
+mod events;
 mod exit;
 mod fleet;
 mod header;
 mod keys;
 mod log;
 mod notices;
+mod plan;
 mod proof;
 mod questions;
 mod queue;
@@ -51,21 +54,49 @@ pub mod transcript;
 mod usage;
 
 #[cfg(test)]
+mod actions_tests;
+#[cfg(test)]
+mod board_tests;
+#[cfg(test)]
+mod changes_tests;
+#[cfg(test)]
 mod echo_tests;
 #[cfg(test)]
 mod exit_tests;
+#[cfg(test)]
+mod keys_tests;
+#[cfg(test)]
+mod picker_tests;
+#[cfg(test)]
+mod plan_tests;
 #[cfg(test)]
 mod questions_tests;
 #[cfg(test)]
 mod queue_tests;
 #[cfg(test)]
+mod sidebar_tests;
+#[cfg(test)]
 mod tabs_tests;
+#[cfg(test)]
+mod task_tests;
+#[cfg(test)]
+mod usage_tests;
 
 pub use act::Action;
-pub use actions::{ActionGroup, ActionRow, SessionActions, actions};
+pub use actions::{
+    ActionGroup, ActionRow, CommandAction, PickRow, Picker, PickerAction, PickerKind, PickerUi,
+    ScopeSwitch, SessionActions, SlashMenu, SlashRow, actions, model_picker, slash,
+};
 pub use activity::{ActivityLine, duration};
-pub use board::{BoardAction, BoardTab, BoardUi, board_tab};
-pub use changes::{ChangesAction, ChangesTab, ChangesUi, changes_tab};
+pub use board::{
+    BoardAction, BoardControl, BoardRow, BoardTab, BoardUi, PlanCard, PlanTask, RecordLine,
+    RecordPager, RecordSection, RecordView, board_tab,
+};
+pub use changes::{
+    Author, AuthorChip, ChangesAction, ChangesTab, ChangesUi, ComparisonChip, ComparisonLine,
+    FILTER_FIELD, FileRow, ScopeChip, Status, changes_tab,
+};
+pub use changes_diff::{FileDiff, HunkView, Pinned};
 pub use choice::{ChoiceCard, ChoiceOption};
 pub use composer::{
     ComposerTitle, EffortControl, HostBar, ModelPill, ReceiverChoice, ReceiverPill, SendButton,
@@ -77,15 +108,22 @@ pub use dock::{
     Pending, dock,
 };
 pub use echo::{Echo, EchoState, Sent};
+pub use events::{EventsAction, EventsUi, HostEvents, host_events};
 pub use exit::{ExitOutcome, ExitProgress, ExitStep, ExitSummary, StepState, progress};
 pub use fleet::{
-    AgentDetail, AgentRowView, AgentsTab, MessageLine, MessageList, Timeline, TimelineRow,
-    agents_tab,
+    AgentDetail, AgentRowView, AgentsTab, Asking, Clipped, ConfirmView, Conversation, EditLine,
+    EditList, EndLine, FleetAction, FleetButton, FleetRequest, FleetUi, JobDetail, JobList,
+    JobOutputView, JobRowView, MessageLine, MessageList, ModelChoiceRow, ModelPicker, Opened,
+    Timeline, TimelineRow, agents_tab,
 };
 pub use header::{DecisionsChip, ExitStatus, Header, NeedsChip, StateWord, exit_status, header};
-pub use keys::{KeyAction, KeyBinding, bound, keys, legend, press};
+pub use keys::{KeyAction, KeyBinding, WEB_RESERVED, bound, keys, legend, legend_of, press};
 pub use log::{SessionLog, ended_run, log};
 pub use notices::{Notice, RecentNotices, Ring, recent};
+pub use plan::{
+    HistoryLine, Ledger, LedgerStep, PlanAction, PlanTab, PlanUi, StepRow,
+    StepState as PlanStepState, ledger, plan_tab,
+};
 pub use proof::{ProofAction, ProofTab, ProofUi, proof_tab};
 pub use questions::{
     AnswerCard, AnswerTab, QuestionDock, QuestionLine, QuestionView, Review, ReviewRow,
@@ -94,14 +132,15 @@ pub use questions::{
 pub use queue::{QueueControl, QueueDock, QueueItem};
 pub use read_state::ReadState;
 pub use sidebar::{
-    SideTab, SideTabItem, Sidebar, SidebarAction, SidebarSummary, SidebarUi, SummarySegment,
-    sidebar,
+    ContextFact, ContextList, ContextTab, FilesTab, McpRow, SideAgent, SideContent, SideFile,
+    SideJob, SideTab, SideTabItem, Sidebar, SidebarAction, SidebarSummary, SidebarUi,
+    SummarySegment, sidebar,
 };
 pub use status::{Alert, ContextMeter, Cost, RolePill, StatusBar, cost_text, status};
 pub use tabs::{Badge, PartBody, TabItem, tabs_for};
-pub use task::{TaskAction, TaskTab, TaskUi, task_tab};
+pub use task::{Attempt, TaskAction, TaskLink, TaskTab, TaskUi, task_tab};
 pub use transcript::{Fill, Transcript};
-pub use usage::{UsageAction, UsageUi, UsageView, usage_view};
+pub use usage::{UsageAction, UsageLine, UsageTotalLine, UsageUi, UsageView, usage_view};
 
 /// A session's role, as its page or row says it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +246,8 @@ pub enum SubView {
     Usage,
     /// A child agent's conversation.
     Agent(String),
+    /// A background job's output.
+    Job(String),
 }
 
 /// The surface that has the keys.
@@ -253,6 +294,13 @@ pub struct Ui {
     pub usage: UsageUi,
     pub task: TaskUi,
     pub proof: ProofUi,
+    /// The Agents tab: the selected job, a confirmation, the model choices, opened texts and
+    /// the requests whose replies are read back.
+    pub fleet: FleetUi,
+    /// The model and effort pickers and the `/` menu.
+    pub picker: PickerUi,
+    /// Bumped each time the transcript is asked back to its newest rows (End, Ctrl+End).
+    pub jump: u32,
 }
 
 impl Ui {
@@ -276,6 +324,9 @@ impl Ui {
         usage: UsageUi::EMPTY,
         task: TaskUi::EMPTY,
         proof: ProofUi::EMPTY,
+        fleet: FleetUi::EMPTY,
+        picker: PickerUi::EMPTY,
+        jump: 0,
     };
 }
 
@@ -287,11 +338,23 @@ impl Default for Ui {
 
 static EMPTY_UI: Ui = Ui::EMPTY;
 
-/// Every session page's UI state, by session id.
+/// Every session page's UI state, by session id, and the session Ask is keyed to.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct State {
     pub ids: IdSupply,
     pub sessions: BTreeMap<Id, Ui>,
+    /// The concrete chat Ask shows (`A-n`), once a send to `quick` was acknowledged under it;
+    /// none while Ask is on `quick` (before its first send, and again once that chat ended).
+    pub ask: Option<Id>,
+}
+
+impl State {
+    /// The session Ask reads and sends to: its chat once known, else `quick`.
+    pub fn ask_id(&self) -> Id {
+        self.ask
+            .clone()
+            .unwrap_or_else(|| Id::from(crate::model::assistant::QUICK))
+    }
 }
 
 /// Whether the session's host runs, as the served page or the session's row says.
@@ -545,12 +608,23 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// `<provider>/<model>`: the host's current one, else the row's.
+    /// `<provider>/<model>`: the host's current one, else the row's; for a new quick thread, the
+    /// model the assistant is configured to answer with.
     pub fn model(&self) -> Option<String> {
         self.state
             .and_then(|state| state.model.clone())
             .or_else(|| self.row.and_then(|row| row.model.clone()))
             .or_else(|| self.run.and_then(|row| row.run.model.clone()))
+            .or_else(|| {
+                self.new_thread()
+                    .then(|| crate::model::assistant::configured_model(self.feed))
+                    .flatten()
+            })
+    }
+
+    /// `quick` with no current chat: the next message starts one.
+    pub fn new_thread(&self) -> bool {
+        self.id.as_str() == crate::model::assistant::QUICK && self.row.is_none()
     }
 
     pub fn effort(&self) -> Option<String> {
@@ -628,6 +702,12 @@ pub struct SessionPage {
     /// The rail beside the main view, or its summary row; none for a child or a log.
     pub sidebar: Option<Sidebar>,
     pub actions: SessionActions,
+    /// The open model or effort list over the composer.
+    pub picker: Option<Picker>,
+    /// The `/` menu over the composer while the draft is a `/` command.
+    pub slash: Option<SlashMenu>,
+    /// Changes each time the transcript is asked back to its newest rows.
+    pub jump: u32,
     /// The terminal key line for the focused surface.
     pub legend: Vec<(&'static str, &'static str)>,
     /// `! corrald unreachable · last update 14:02`.
@@ -655,6 +735,9 @@ fn empty_chat(cx: &Cx<'_>) -> EmptyChat {
                 "Build {} works in {worktree} on {branch}. What you send goes to the parent agent, which can start child agents. Choose Finish to keep, land or keep iterating.",
                 cx.title()
             )
+        }
+        SessionRole::Assistant if cx.new_thread() => {
+            "Ask the assistant about this workspace. Your first message starts a thread.".into()
         }
         SessionRole::Assistant => format!(
             "Assistant {}. What you send goes to this assistant.",
@@ -703,7 +786,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
     let body = match (cx.log_only().then(|| log(id, feed)).flatten(), tab) {
         (Some(log), _) => Body::Log(log),
         (None, Tab::Chat) if sub == Some(SubView::Usage) => Body::Usage(usage_view(&cx)),
-        (None, Tab::Agents) => Body::Agents(agents_tab(&cx)),
+        (None, Tab::Agents) => Body::Agents(agents_tab(&cx, state)),
         (None, Tab::Changes) => Body::Changes(changes_tab(&cx)),
         (None, Tab::Board) => Body::Board(board_tab(&cx)),
         (None, Tab::Task) => Body::Task(task_tab(&cx)),
@@ -719,15 +802,18 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         })
         .collect();
     fetches.extend(dock::fetch(&cx));
+    fetches.extend(actions::fetches(&cx));
+    fetches.extend(board::record_fetches(&cx));
     fetches.extend(match &body {
         Body::Usage(_) => usage::fetches(&cx),
         Body::Changes(_) => changes::fetches(&cx),
         Body::Board(_) => board::fetches(&cx),
         Body::Task(_) => task::fetches(&cx),
         Body::Proof(_) => proof::fetches(&cx),
-        Body::Chat(_) | Body::Agents(_) | Body::Log(_) => Vec::new(),
+        Body::Agents(_) => fleet::fetches(&cx),
+        Body::Chat(_) | Body::Log(_) => Vec::new(),
     });
-    if sidebar.as_ref().is_some_and(|sidebar| !sidebar.hidden) {
+    if sidebar.is_some() {
         fetches.extend(sidebar::fetches(&cx));
     }
     let streams = *cx.role != SessionRole::Child && !cx.log_only() && feed.capable(SESSION_V1);
@@ -735,7 +821,8 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         .page
         .map(|page| page.id.clone())
         .or_else(|| cx.row.map(|row| row.id.clone()));
-    let working = composer::working(&cx);
+    let catalog = actions(&cx);
+    let slash = slash(&cx, &catalog);
     SessionPage {
         id: id.clone(),
         concrete,
@@ -744,14 +831,17 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         header: header(&cx),
         sub,
         focus: ui.focus,
-        legend: legend(ui.focus, tab, working),
+        legend: legend_of(&cx, tab, slash.is_some()),
         dock: dock(&cx),
         exit: progress(&cx),
         composer: composer(&cx),
         bar: host_bar(&cx),
         status: status(&cx),
         sidebar,
-        actions: actions(&cx),
+        picker: model_picker(&cx),
+        slash,
+        jump: ui.jump,
+        actions: catalog,
         banner: (feed.link != Link::Up).then(|| {
             (
                 Hue::Held,
