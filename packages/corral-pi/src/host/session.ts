@@ -294,6 +294,8 @@ export class HostSession {
   runtime!: AgentSessionRuntime;
   /** Interactive host API only; deliberately absent from extension/model registries. */
   readonly queue: HostQueue;
+  private readonly inputRequestIds = new WeakMap<object, string>();
+  private startedInputRequestId: string | undefined;
   readonly liveEvents: LiveEvents;
   readonly panels: NativePanels | undefined;
   private readonly unsubscribePanels: (() => void) | undefined;
@@ -1157,12 +1159,31 @@ export class HostSession {
 
   private watch(session: AgentSession): void {
     this.unsubscribe?.();
+    this.startedInputRequestId = undefined;
     session.setQueueObserver({
       ...this.queue.observer,
+      lifecycle: event => {
+        this.queue.observer.lifecycle(event);
+        const { tag } = event;
+        const requestId = typeof tag === "object" && tag !== null ? this.inputRequestIds.get(tag) : undefined;
+        // Pi reports "started" just before prompting with the prepared user message,
+        // which it emits before draining any queued inputs.
+        if (event.event === "started") this.startedInputRequestId = requestId;
+        else if (event.event === "rejected" && this.startedInputRequestId === requestId) {
+          this.startedInputRequestId = undefined;
+        }
+      },
       queue: change => {
         this.queue.observer.queue(change);
-        // Wake waits only after the synchronous queue mutation has returned.
-        if (change.action === "enqueue" && change.mode === "steer") queueMicrotask(() => this.inputWake.notify());
+        if (change.action === "enqueue") {
+          for (const { message, tag } of change.entries) {
+            if (typeof tag !== "object" || tag === null) continue;
+            const requestId = this.inputRequestIds.get(tag);
+            if (requestId !== undefined) this.inputRequestIds.set(message, requestId);
+          }
+          // Wake waits only after the synchronous queue mutation has returned.
+          if (change.mode === "steer") queueMicrotask(() => this.inputWake.notify());
+        }
       },
     });
     this.terminalInputSequence = 0;
@@ -1194,6 +1215,10 @@ export class HostSession {
             miss && (miss.missedTokens >= 20_000 || miss.missedCost >= 0.1) ? miss.missedTokens : 0);
         }
         if (event.message.role === "user") {
+          // Pi persists this exact message immediately after notifying its listeners.
+          const requestId = this.inputRequestIds.get(event.message) ?? this.startedInputRequestId;
+          this.startedInputRequestId = undefined;
+          if (requestId !== undefined) Object.assign(event.message, { corralRequestId: requestId });
           const content = event.message.content;
           this.ownerQuestions?.observeUser(typeof content === "string" ? content
             : content.map(p => p.type === "text" ? p.text : "").join(""));
@@ -1393,10 +1418,12 @@ export class HostSession {
     return this.options.automatedInput?.(input) ?? this.submitLocal(input);
   }
 
-  submitLocal(input: SessionInput, images?: ImageContent[]): Promise<SubmitResult> {
+  submitLocal(input: SessionInput, images?: ImageContent[], requestId?: string): Promise<SubmitResult> {
     if (!this.bound || this.closing) return Promise.resolve({ disposition: "rejected", reason: "host_not_ready" });
     if (this.rewinding) return Promise.resolve({ disposition: "rejected", reason: "rewind_in_progress" });
-    return this.promptInput(input, this.queue.bridgeInput(input), images);
+    const tag = this.queue.bridgeInput(input);
+    if (requestId !== undefined && typeof tag === "object" && tag !== null) this.inputRequestIds.set(tag, requestId);
+    return this.promptInput(input, tag, images);
   }
 
   private promptInput(input: SessionInput,
