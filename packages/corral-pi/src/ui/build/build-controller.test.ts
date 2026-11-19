@@ -1,18 +1,22 @@
 import { expect, test } from "bun:test";
+import { BridgeRefusal } from "../../bridge/protocol.ts";
+import type { BuildExitControl } from "../../build/exit.ts";
 import type { BuildRecord } from "../../build/record-types.ts";
 import type {
-  BoardPlan, BoardPreview, BoardTaskStatus, BuildPanelState, BuildSummary, BuildUi, ChildSnapshot, ChildState, ExitChoice,
-  ExitControl, ExitOption, ExitState,
+  BoardControl, BoardPlan, BoardPreview, BoardTaskStatus, BuildPanelState, BuildSummary, BuildUi, ChildSnapshot, ChildState, ExitChoice,
+  ExitOption, ExitState,
 } from "../../build/types.ts";
+import { RemoteBuild } from "../../host/remote/build.ts";
+import { RemoteDialogs } from "../../host/remote/dialogs.ts";
 import { BuildController } from "./build-controller.ts";
 import { BUILD_BOARD_ENTRY, BUILD_EXIT_ENTRY, BUILD_FINISH_ENTRY } from "./build-entries.ts";
 import type { TranscriptMark } from "../../host/transcript-marks.ts";
 import type { BuildEntry } from "./build-entries.ts";
 
 const ENTER = "\r", ESC = "\x1b";
-/** Detached host calls settle within a fixed number of microtask turns. */
+/** Detached host calls, and the registry's answers through the host's cards, settle within a fixed number of microtask turns. */
 async function settle(): Promise<void> {
-  for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+  for (let turn = 0; turn < 100; turn++) await Promise.resolve();
 }
 
 const child = (id: string, state: ChildState, extra: Partial<ChildSnapshot> = {}): ChildSnapshot => ({
@@ -42,18 +46,29 @@ const PLAN: BoardPlan = {
   ],
 };
 
-function harness() {
+/**
+ * `remote`: the controller decides through a dialog registry over the host's own build cards (`RemoteBuild`), as in
+ * an attached session; what the host posts and records lands in `hostPosts` and `marks`.
+ */
+function harness(options: { readonly remote?: boolean } = {}) {
   const s = {
     children: [] as ChildSnapshot[], target: "parent", exit: { phase: "none" } as ExitState, proposed: undefined as BoardPlan | undefined,
     tasks: [] as BoardTaskStatus[], steer: true, answer: true, draft: "", focus: "composer", calls: [] as string[], options: OPTIONS,
     notices: [] as { text: string; tone: string }[], posts: [] as BuildEntry<unknown>[], marks: [] as TranscriptMark[],
+    hostPosts: [] as BuildEntry<unknown>[],
     preview: Promise.withResolvers<BoardPreview>(),
     /** Called where the host notifies exit subscribers and where the panels post an entry. */
     changed: undefined as (() => void) | undefined, posted: undefined as (() => void) | undefined,
   };
   const live = (id: string) => s.children.some(entry => entry.id === id && ["queued", "running", "needs"].includes(entry.state));
   const summary: BuildSummary = { branch: "build/x", base: "a", head: "b", commits: 2, files: 3, added: 10, removed: 1, dirty: false, slices: [], outside: [] };
-  const exit: ExitControl & { open(): void } = {
+  const exitListeners = new Set<() => void>();
+  /** The exit's state changed: its subscribers hear it, as the host's exit control tells them. */
+  const emit = () => {
+    for (const listener of [...exitListeners]) listener();
+    s.changed?.();
+  };
+  const exit: BuildExitControl = {
     options: () => s.options,
     summary: async () => summary,
     state: () => s.exit,
@@ -61,11 +76,31 @@ function harness() {
       s.calls.push(`choose ${choice}` + (options?.overrideReason === undefined ? "" : ` ${options.overrideReason}`));
       s.exit = choice === "iterate" ? { phase: "none" } : choice === "land" ? { phase: "landed", record: { choice, at: "now", landed: "abc1234" } }
         : { phase: "kept", record: { choice, at: "now" }, detail: "kept" };
-      s.changed?.();
+      emit();
       return s.exit;
     },
+    subscribe: listener => { exitListeners.add(listener); return () => { exitListeners.delete(listener); }; },
+    open: () => { s.exit = { phase: "pending" }; emit(); },
+    close: () => {},
+    busy: () => false,
+    summarySnapshot: () => summary,
+  };
+  const board: BoardControl & { propose(plan: BoardPlan): void; close(): void } = {
+    tasks: () => s.tasks,
+    proposed: () => s.proposed,
+    preview: () => { s.calls.push("preview"); return s.preview.promise; },
+    file: async (_plan, start) => {
+      s.calls.push(`file ${start}`);
+      await Promise.resolve();
+      s.proposed = undefined;
+      s.tasks = [{ id: "T-1", title: "Slot manifest", status: "Ready", phase: "queued", depends: [], updatedAt: 0 }];
+      return s.tasks;
+    },
+    dismiss: () => { s.calls.push("dismiss"); s.proposed = undefined; },
+    refresh: async () => {},
     subscribe: () => () => {},
-    open: () => { s.exit = { phase: "pending" }; s.changed?.(); },
+    propose: plan => { s.proposed = plan; },
+    close: () => {},
   };
   const ui: BuildUi = {
     fleet: {
@@ -83,21 +118,7 @@ function harness() {
     },
     exit,
     record: () => RECORD,
-    board: {
-      tasks: () => s.tasks,
-      proposed: () => s.proposed,
-      preview: () => { s.calls.push("preview"); return s.preview.promise; },
-      file: async (_plan, start) => {
-        s.calls.push(`file ${start}`);
-        await Promise.resolve();
-        s.proposed = undefined;
-        s.tasks = [{ id: "T-1", title: "Slot manifest", status: "Ready", phase: "queued", depends: [], updatedAt: 0 }];
-        return s.tasks;
-      },
-      dismiss: () => { s.calls.push("dismiss"); s.proposed = undefined; },
-      refresh: async () => {},
-      subscribe: () => () => {},
-    },
+    board,
     target: () => s.target,
     setTarget: target => { s.target = target === "parent" || live(target) ? target : "parent"; },
   };
@@ -107,6 +128,14 @@ function harness() {
     settings: { exitPolicy: "gate", maxParallel: 3, profiles: [] },
     fleet: { children: s.children, mail: [], maxParallel: 3 }, target: s.target, exit: s.exit, record: RECORD, board: s.tasks,
   });
+  // The host's own cards for the exit, the plan and each child's question, listed as an attached session lists them.
+  const build = options.remote ? new RemoteBuild({ exit, board, panelState: state }, {
+    fleet: () => ui.fleet, children: () => s.children, ready: () => true, headless: () => false, working: () => false, changed: () => {},
+    mark: mark => { s.marks.push(mark); },
+    post: async entry => { s.hostPosts.push(entry); },
+    error: text => { s.calls.push(`error ${text}`); },
+  }) : undefined;
+  const dialogs = build ? new RemoteDialogs(() => {}, { entries: () => build.entries(), absent: () => "missing", shared: () => true }) : undefined;
   const controller = new BuildController({
     ui, state, streaming: () => false, overlay: () => false,
     draft: () => s.draft, setDraft: text => { s.draft = text; },
@@ -116,9 +145,9 @@ function harness() {
     marks: { add: mark => { s.marks.push(mark); return true; } },
     showBoard: () => { s.calls.push("board"); },
     openChild: id => { s.calls.push(`open ${id}`); },
-    color: () => "", now: () => 1000, changed: () => {},
+    color: () => "", now: () => 1000, changed: () => {}, ...(dialogs ? { dialogs } : {}),
   });
-  return { s, controller, key: (data: string) => controller.dock.handleKey(data) };
+  return { s, controller, dialogs, emit, key: (data: string) => controller.dock.handleKey(data) };
 }
 
 test("a question that arrives while the composer holds a draft does not take focus", () => {
@@ -205,8 +234,8 @@ test("a Land that needs a reason shows it, takes the reason in the composer and 
   expect(controller.target()).toBeUndefined();
 });
 
-test("filing waits for the preview and runs once even on a double pick", async () => {
-  const { s, controller, key } = harness();
+test("filing waits for the preview and runs once even on a double pick; the host posts the filed tasks", async () => {
+  const { s, controller, key } = harness({ remote: true });
   s.proposed = PLAN;
   controller.sync();
   expect(s.calls).toEqual(["preview"]);
@@ -220,7 +249,8 @@ test("filing waits for the preview and runs once even on a double pick", async (
   await settle();
   controller.sync();
   expect(s.calls.filter(call => call.startsWith("file"))).toEqual(["file true"]);
-  expect(s.posts.filter(entry => entry.customType === BUILD_BOARD_ENTRY)).toHaveLength(1);
+  expect(s.hostPosts.filter(entry => entry.customType === BUILD_BOARD_ENTRY)).toHaveLength(1);
+  expect(s.posts).toEqual([]);
   expect(s.calls).toContain("board");
   expect(controller.dialog()).toBeUndefined();
 });
@@ -284,20 +314,8 @@ test("answer mode routes Enter to the child's answer", async () => {
   expect(s.calls.some(call => call.startsWith("steer"))).toBeFalse();
 });
 
-test("a settled exit posts one conversation entry", async () => {
-  const { s, controller, key } = harness();
-  s.exit = { phase: "pending" };
-  controller.sync();
-  controller.dock.guard(0);
-  key("1");
-  await settle();
-  expect(s.calls).toEqual(["choose keep"]);
-  controller.sync(); controller.sync();
-  expect(s.posts.filter(entry => entry.customType === BUILD_EXIT_ENTRY)).toHaveLength(1);
-});
-
-test("one choice posts one exit entry, after earlier dismissals and with syncs from every host callback", async () => {
-  const { s, controller, key } = harness();
+test("one choice is recorded once, by the host, after earlier dismissals and with syncs from every host callback", async () => {
+  const { s, controller, key } = harness({ remote: true });
   s.children = [child("alpha", "done"), child("beta", "done")];
   // The panels sync on every exit change and may sync again while an entry is posted.
   s.changed = () => controller.sync();
@@ -316,8 +334,94 @@ test("one choice posts one exit entry, after earlier dismissals and with syncs f
   await settle();
   controller.sync(); controller.sync();
   expect(s.calls.filter(call => call.startsWith("choose"))).toEqual(["choose keep"]);
-  expect(s.posts.filter(entry => entry.customType === BUILD_EXIT_ENTRY)).toHaveLength(1);
+  expect(s.hostPosts.filter(entry => entry.customType === BUILD_EXIT_ENTRY)).toHaveLength(1);
+  expect(s.posts.filter(entry => entry.customType === BUILD_EXIT_ENTRY)).toEqual([]);
   expect(s.posts.filter(entry => entry.customType === BUILD_FINISH_ENTRY)).toHaveLength(1);
+});
+
+test("a keyboard decision on a watched card goes through the registry and is not applied twice", async () => {
+  const { s, controller, dialogs, emit, key } = harness({ remote: true });
+  const answered = () => s.marks.flatMap(mark => mark.kind === "child" && mark.act === "answered" ? [mark.text] : []);
+
+  // The exit choice: one choose, one outcome entry (the host's), and the app's late answer is refused.
+  s.exit = { phase: "pending" };
+  emit();
+  controller.sync();
+  const exitCard = dialogs!.entries().find(entry => entry.card.kind === "exit")!.card.id;
+  controller.dock.guard(0);
+  key("1"); key("1"); key(ENTER);
+  await settle();
+  expect(s.calls).toEqual(["choose keep"]);
+  let refusal = "";
+  try { await dialogs!.resolve(exitCard, [{ options: ["keep"] }], false, { source: "remote" }); } catch (error) { refusal = error instanceof BridgeRefusal ? error.code : String(error); }
+  expect(refusal).toBe("invalid_card_answer");
+  expect(s.calls).toEqual(["choose keep"]);
+
+  // A child's question, by its option and then in writing: each delivered and recorded once, by the host.
+  s.children = [asking("picker-ui", 10)];
+  controller.sync();
+  controller.dock.guard(0);
+  key("1"); key("1");
+  await settle();
+  s.children = [asking("picker-ui", 30)];
+  controller.sync();
+  controller.dock.guard(0);
+  key("3");
+  s.draft = "Show both";
+  expect(await controller.submit("Show both")).toBeTrue();
+  expect(s.draft).toBe("");
+  expect(s.calls.filter(call => call.startsWith("answer"))).toEqual(["answer picker-ui Show a new game action", "answer picker-ui Show both"]);
+  expect(answered()).toEqual(["Show a new game action", "Show both"]);
+
+  // The board plan: filed once; the host posts the outcomes, the controller posts none.
+  s.proposed = PLAN;
+  controller.sync();
+  s.preview.resolve({ tracker: "T-0", tasks: [{ key: "manifest", id: "T-1", title: "Slot manifest", depends: [] }] });
+  await settle();
+  controller.dock.guard(0);
+  key("2"); key("2");
+  await settle();
+  expect(s.calls.filter(call => call.startsWith("file") || call === "dismiss")).toEqual(["file false"]);
+  expect(s.hostPosts.map(entry => entry.customType)).toEqual([BUILD_EXIT_ENTRY, BUILD_BOARD_ENTRY]);
+  expect(s.posts).toEqual([]);
+});
+
+test("hiding the dock with Esc leaves the decision pending", async () => {
+  const { s, controller, dialogs, emit, key } = harness({ remote: true });
+  s.exit = { phase: "pending" };
+  emit();
+  s.children = [asking("picker-ui", 10)];
+  s.proposed = PLAN;
+  controller.sync();
+  for (const kind of ["exit", "question", "plan"] as const) {
+    expect(controller.open(kind)).toBeTrue();
+    key(ESC);
+    expect(controller.dialog()).toBeUndefined();
+  }
+  await settle();
+  expect(s.calls).toEqual(["preview"]);
+  expect(dialogs!.entries().map(entry => entry.card.kind).sort()).toEqual(["board_plan", "child_question", "exit"]);
+  // Still the app's to answer, once, and the hidden dock has nothing to say about it.
+  const exitCard = dialogs!.entries().find(entry => entry.card.kind === "exit")!.card.id;
+  expect(await dialogs!.resolve(exitCard, [{ options: ["keep"] }], false, { source: "remote", device: "phone" })).toBe("started");
+  expect(s.calls).toEqual(["preview", "choose keep"]);
+  expect(s.notices.some(notice => notice.text.includes("another device"))).toBeFalse();
+});
+
+test("an answer from the app closes the docked card with one quiet notice, and a later key press does nothing", async () => {
+  const { s, controller, dialogs, key } = harness({ remote: true });
+  s.children = [asking("picker-ui", 10)];
+  controller.sync();
+  expect(s.focus).toBe("choice");
+  const card = dialogs!.entries().find(entry => entry.card.kind === "child_question")!.card;
+  expect(await dialogs!.resolve(card.id, [{ options: [], text: "Show both" }], false, { source: "remote", device: "phone" })).toBe("delivered");
+  expect(controller.dialog()).toBeUndefined();
+  expect(s.focus).toBe("composer");
+  expect(s.notices.filter(notice => notice.text.includes("another device"))).toEqual([{ text: "Answered from another device", tone: "text" }]);
+  controller.dock.guard(0);
+  key("1");
+  await settle();
+  expect(s.calls).toEqual(["answer picker-ui Show both"]);
 });
 
 test("a child's question, each answer and a delivered steer leave one transcript mark each", async () => {
