@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::session_feed::ItemFetch;
+use crate::model::session::transcript::ItemFetch;
 
 const MAX_ITEM_BYTES: u64 = 4 * 1024 * 1024;
 

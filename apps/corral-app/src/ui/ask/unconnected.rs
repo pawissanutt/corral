@@ -81,8 +81,8 @@ fn field(app: AppState) -> AnyElement {
             .label(UNCONNECTED.placeholder)
             .placeholder(UNCONNECTED.placeholder.to_owned())
             .multiline(true)
-            .value(move || app.ask_draft.get())
-            .on_change(move |text: &str| app.ask_draft.set(text.to_owned())),
+            .value(move || app.ask_draft())
+            .on_change(move |text: &str| app.set_ask_draft(text.to_owned())),
     )
 }
 

@@ -160,7 +160,7 @@ fn restart_restores_complete_wire_deltas_as_stale_without_fixture_or_readiness()
             assert!(!state.loading);
         }
         assert!(feed.agents.is_empty());
-        assert!(feed.threads.is_empty());
+        assert!(feed.live.is_empty());
     });
     let wrong_device = signal(Feed::default());
     assert!(restore_device(wrong_device, "different-device").is_none());

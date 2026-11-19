@@ -2,30 +2,35 @@
 //! session's transcript, streams the running turn on the live session stream one beat per clock
 //! tick, holds automated input while paused and delivers it on Resume or before the owner's
 //! next message, and records its turn checkpoints. Its controls (cancel, pause, resume, the
-//! rewinds) and the answers to its questions are in `pi_control.rs`. A session's transcript
-//! detail is read from its host on request, as corrald reads the file, so a recorded turn
-//! shows only once the app re-reads it.
+//! rewinds) are in `pi_control.rs`; the cards it waits on, its queue and a build's exit are
+//! answered in `build_ops.rs`. A session's transcript detail is read from its host on request,
+//! as corrald reads the file, so a recorded turn shows only once the app re-reads it.
 
 use std::collections::VecDeque;
 
-use corral_protocol::detail::{SessionItem, SessionMessage, SessionToolState};
+use corral_protocol::detail::{
+    InputFacts, SessionCard, SessionItem, SessionMessage, SessionToolState,
+};
 use corral_protocol::session::{RewindCheckpoint, Rewound};
+use corral_protocol::session_state::{ExitBrief, InputOrigin};
 use corral_protocol::subscription::{
     SessionLiveEvent, SessionLiveKind, SessionLiveToolState, SessionLiveTurnState,
 };
 use corral_types::Origin;
 use serde_json::{Value, json};
 
-use super::pi_rows::{settle, thread};
+use super::pi_rows::settle;
 use super::pi_script::{self, Beat, Question};
 use super::sample::sha;
 use super::stamp;
 use crate::model::Id;
-use crate::model::agents::QUESTION_CARD;
 use crate::model::daemon::Feed;
 
 /// Words streamed per clock tick.
 const WORDS_PER_TICK: usize = 3;
+
+/// The card title the transcript gives each snapshot of an owner question.
+const QUESTION_CARD: &str = "corral_owner_question";
 
 /// Which session a host runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -33,13 +38,14 @@ pub(super) enum Role {
     #[default]
     Worker,
     Chat,
+    Build,
 }
 
 /// One sample pi host.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Host {
     pub(super) role: Role,
-    /// The recorded transcript, each message with the thread entry it is for a chat.
+    /// The recorded transcript, each message with the input id it was sent under, if any.
     pub(super) transcript: Vec<Recorded>,
     /// Where each turn starts in `transcript`: turn n at `starts[n - 1]`.
     pub(super) starts: Vec<usize>,
@@ -55,8 +61,10 @@ pub struct Host {
     seq: u64,
     pub(super) checkpoints: Vec<RewindCheckpoint>,
     pub(super) rewinds: Vec<Rewound>,
-    /// Questions waiting for the owner.
-    pub(super) pending: Vec<Question>,
+    /// Cards waiting for the owner, oldest first.
+    pub(super) pending: Vec<SessionCard>,
+    /// A build's exit, once one was asked for.
+    pub(super) exit: Option<ExitBrief>,
     /// Terminated or lost: no process answers.
     pub(super) gone: bool,
 }
@@ -71,8 +79,18 @@ pub(super) struct Recorded {
 pub(super) struct Input {
     pub(super) text: String,
     pub(super) origin: Origin,
-    /// The thread entry a chat message is recorded as.
+    /// `<session>/input/<id>` for a message sent through the socket.
     pub(super) entry: Option<String>,
+}
+
+impl Input {
+    /// The queue key of an input sent through the socket: its input id.
+    pub(super) fn key(&self) -> Option<&str> {
+        self.entry
+            .as_deref()
+            .and_then(|entry| entry.split_once("/input/"))
+            .map(|(_, key)| key)
+    }
 }
 
 /// The running turn.
@@ -156,71 +174,96 @@ impl Host {
     }
 }
 
-/// A recorded owner or automated input; corrald shows automated input as a host notice.
+/// A recorded owner or automated input; corrald shows automated input as a host notice. An
+/// input sent through the socket is served under its input id (`<session>/input/<id>`).
 fn input(at: &str, text: &str, entry: Option<String>) -> Recorded {
-    let item = match text.strip_prefix("[corral] ") {
-        Some(notice) => SessionItem::Card {
-            title: "Host notice".into(),
-            text: notice.into(),
-            data: None,
-        },
-        None => SessionItem::Text { text: text.into() },
+    let (item, origin) = match text.strip_prefix("[corral] ") {
+        Some(notice) => (
+            SessionItem::Card {
+                title: "Host notice".into(),
+                text: notice.into(),
+                data: None,
+            },
+            InputOrigin::Auto,
+        ),
+        None => (SessionItem::Text { text: text.into() }, InputOrigin::Owner),
     };
+    let input = entry
+        .as_deref()
+        .and_then(|entry| entry.split_once("/input/"))
+        .map(|(_, id)| id.to_owned());
     Recorded {
-        entry,
         message: SessionMessage {
+            id: entry.clone().unwrap_or_default(),
             author: "user".into(),
             at: Some(at.into()),
             items: vec![item],
             model: None,
             stop_reason: None,
             usage: None,
+            input: Some(InputFacts {
+                id: input,
+                origin,
+                typed_at: None,
+                device: None,
+                to: None,
+            }),
+            attachments: Vec::new(),
         },
+        entry,
     }
 }
 
 fn assistant(at: &str, items: Vec<SessionItem>, stop: Option<&str>) -> SessionMessage {
     SessionMessage {
+        id: String::new(),
         author: "assistant".into(),
         at: Some(at.into()),
         items,
         model: Some("preview · sol".into()),
         stop_reason: stop.map(str::to_owned),
         usage: None,
+        input: None,
+        attachments: Vec::new(),
     }
 }
 
 /// A question snapshot, as the transcript records each change of one.
-pub(super) fn question_card(
-    at: &str,
-    question: &Question,
-    status: &str,
-    answer: Value,
-) -> Recorded {
+pub(super) fn question_card(at: &str, card: &SessionCard, status: &str, answer: Value) -> Recorded {
+    let questions: Vec<Value> = card
+        .questions
+        .iter()
+        .map(|question| {
+            json!({
+                "question": question.text,
+                "options": question.options.iter().map(|option| &option.label).collect::<Vec<_>>(),
+                "freeText": question.free_text,
+            })
+        })
+        .collect();
     let data = json!({
         "version": 1,
-        "id": question.id,
-        "questions": [{
-            "question": question.text,
-            "options": question.options,
-            "freeText": true,
-        }],
+        "id": card.id,
+        "questions": questions,
         "status": status,
         "answers": answer,
     });
     Recorded {
         entry: None,
         message: SessionMessage {
+            id: String::new(),
             author: "custom".into(),
             at: Some(at.into()),
             items: vec![SessionItem::Card {
                 title: QUESTION_CARD.into(),
-                text: question.text.clone(),
+                text: card.title.clone(),
                 data: Some(data.to_string()),
             }],
             model: None,
             stop_reason: None,
             usage: None,
+            input: None,
+            attachments: Vec::new(),
         },
     }
 }
@@ -236,7 +279,7 @@ pub(super) fn resolve(feed: &Feed, scope: &str) -> Option<Id> {
 }
 
 /// The watched scopes that show host `id`.
-fn scopes(feed: &Feed, id: &str) -> Vec<Id> {
+pub(super) fn scopes(feed: &Feed, id: &str) -> Vec<Id> {
     feed.topics
         .keys()
         .filter_map(|topic| topic.strip_prefix("session:"))
@@ -256,6 +299,17 @@ pub(super) fn publish(feed: &mut Feed, id: &str, events: Vec<SessionLiveEvent>, 
             .or_default()
             .apply_page(Some(generation), events.clone(), gap);
     }
+}
+
+/// The host recorded a message: every watcher reads the transcript again, as corrald's
+/// `live_entry` tells it.
+pub(super) fn recorded(feed: &mut Feed, id: &str) {
+    let at = stamp(feed.now);
+    let Some(host) = feed.hosts.get_mut(id) else {
+        return;
+    };
+    let event = host.event(&at, SessionLiveKind::LiveEntry {});
+    publish(feed, id, vec![event], false);
 }
 
 /// A new watcher gets the running turn so far, as a page from the present does.
@@ -291,7 +345,8 @@ pub(super) fn watch(feed: &mut Feed, scope: &str) {
         .apply_page(Some(generation), events, false);
 }
 
-/// One clock tick: every running turn takes its next beat.
+/// One clock tick: every running turn takes its next beat, and a landing build's exit its next
+/// phase.
 pub fn tick(feed: &mut Feed) {
     let running: Vec<Id> = feed
         .hosts
@@ -302,6 +357,7 @@ pub fn tick(feed: &mut Feed) {
     for id in running {
         step(feed, &id);
     }
+    super::build_ops::tick(feed);
 }
 
 /// What a beat left to do once its events are out.
@@ -402,10 +458,10 @@ fn step(feed: &mut Feed, id: &str) {
     publish(feed, id, events, false);
     match after {
         After::Nothing => {}
-        After::Recorded => thread(feed, id),
+        After::Recorded => recorded(feed, id),
         After::End(_) => {
-            // The turn's last words are recorded now; a chat's thread shows them.
-            thread(feed, id);
+            // The turn's last words are recorded now.
+            recorded(feed, id);
             let queued = feed
                 .hosts
                 .get_mut(id)
@@ -500,9 +556,10 @@ pub(super) fn finish(
         });
     }
     if let Some(question) = question {
+        let card = question.card(at);
         host.transcript
-            .push(question_card(at, &question, "pending", Value::Null));
-        host.pending.push(question);
+            .push(question_card(at, &card, "pending", Value::Null));
+        host.pending.push(card);
     }
 }
 
@@ -578,12 +635,12 @@ pub(super) fn deliver(
     });
     if host.open.is_some() {
         host.queued.extend(inputs);
-        thread(feed, id);
+        // A steer waits in the host's queue; its acknowledgement says so until it starts.
         settle(feed, id);
         return "steered";
     }
     start(feed, id, inputs);
-    thread(feed, id);
+    recorded(feed, id);
     "delivered"
 }
 
@@ -625,7 +682,7 @@ pub(super) fn sync(feed: &mut Feed) {
     super::pi_rows::settle_all(feed);
 }
 
-/// The thread entry id corrald acknowledges a chat message with.
+/// The id corrald acknowledges a message with and serves it under.
 pub(super) fn input_entry(session: &str, cmd_id: &str) -> String {
     format!("{session}/input/{cmd_id}")
 }

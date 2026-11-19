@@ -6,8 +6,10 @@ import { corralPiDirectory } from "../auth/paths.ts";
 import { findWorkspaceRoot, modelFlags, modelSettings, rejectRemovedModelOptions } from "../host/config.ts";
 import { DEFAULT_MAX_PARALLEL, type BuildLaunch } from "./types.ts";
 import { buildProfileArgs, readBuildProfiles, readWorkspaceToml } from "./profiles.ts";
+import { validateBuildId } from "./session-store.ts";
 
 export interface LocalBuildOptions {
+  readonly id?: string;
   readonly socket?: string;
   readonly headless: boolean;
 }
@@ -20,13 +22,17 @@ function buildDataRoot(value: string | undefined, env: NodeJS.ProcessEnv, cwd: s
 }
 
 export function parsePruneFlags(argv: readonly string[], env = process.env, cwd = process.cwd()):
-  { dataRoot: string; dryRun: boolean } | undefined {
-  if (!argv.some(arg => /^--(?:prune|dry-run)(?:=|$)/.test(arg))) return undefined;
+  { dataRoot: string; dryRun: boolean; session?: string; json?: true } | undefined {
+  if (!argv.some(arg => /^--(?:prune|dry-run|session|json)(?:=|$)/.test(arg))) return undefined;
   const { values } = parseArgs({ args: [...argv], options: {
     prune: { type: "boolean" }, "dry-run": { type: "boolean" }, "data-dir": { type: "string" },
+    session: { type: "string" }, json: { type: "boolean" },
   } });
-  if (!values.prune) throw new Error("--dry-run requires --prune");
-  return { dataRoot: buildDataRoot(values["data-dir"], env, cwd), dryRun: values["dry-run"] === true };
+  if (!values.prune) throw new Error("--dry-run, --session and --json require --prune");
+  if (values.session !== undefined) validateBuildId(values.session);
+  if (values.json && !values.session) throw new Error("--json requires --session");
+  return { dataRoot: buildDataRoot(values["data-dir"], env, cwd), dryRun: values["dry-run"] === true,
+    ...(values.session ? { session: values.session } : {}), ...(values.json ? { json: true as const } : {}) };
 }
 
 export function parseBuildFlags(argv: readonly string[], assets: string, env = process.env,
@@ -35,9 +41,14 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
   const options = {
     ...modelFlags, "data-dir": { type: "string" }, socket: { type: "string" }, corral: { type: "string" },
     project: { type: "string" }, profile: { type: "string" }, name: { type: "string" }, resume: { type: "string" },
+    id: { type: "string" },
     here: { type: "boolean" }, headless: { type: "boolean" },
   } as const;
   const { values } = parseArgs({ args: [...argv], options });
+  if (values.id !== undefined) {
+    validateBuildId(values.id);
+    if (values.resume !== undefined) throw new Error("--id and --resume are mutually exclusive");
+  }
   const workspaceRoot = findWorkspaceRoot(env, cwd);
   const git = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" });
   const repoRoot = git.status === 0 ? git.stdout.trim() : cwd;
@@ -57,6 +68,7 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
       settings: { exitPolicy: workspaceRoot ? "review" : "none", maxParallel: DEFAULT_MAX_PARALLEL,
         profiles: readBuildProfiles(workspaceRoot ?? cwd) } },
     local: { headless: values.headless === true || !process.stdin.isTTY,
+      ...(values.id !== undefined ? { id: values.id } : {}),
       ...(values.socket ? { socket: resolve(cwd, values.socket) } : {}) },
   };
 }

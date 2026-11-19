@@ -22,6 +22,8 @@ use serde_json::{Value, json};
 
 use crate::{server, state::Shared};
 
+mod fake_host;
+mod pi_build;
 mod pi_chat;
 
 pub(super) struct Fixture {
@@ -116,6 +118,10 @@ fn git(repo: &Path, args: &[&str]) {
 struct Client(UnixStream);
 impl Client {
     fn connect(path: &Path) -> Self {
+        Self::connect_with(path, vec![wire::TASKS_V1.into()])
+    }
+
+    fn connect_with(path: &Path, caps: Vec<String>) -> Self {
         let stream = UnixStream::connect(path).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(8)))
@@ -131,7 +137,7 @@ impl Client {
                     major: wire::PROTO_MAJOR,
                     minor: wire::PROTO_MINOR,
                 },
-                caps: vec![wire::TASKS_V1.into()],
+                caps,
                 client: wire::ClientInfo {
                     kind: "cli".into(),
                     version: "test".into(),

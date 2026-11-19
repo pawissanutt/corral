@@ -255,7 +255,7 @@ fn disconnected_state_shows_no_healthy_segment_and_no_count() {
 fn sending_from_ask_appends_to_the_quick_thread_and_clears_the_draft() {
     let mut app = preview(desktop(), &[]);
     app.press("id:ask-open").unwrap();
-    app.wait_for("id:thread-quick-items").unwrap();
+    app.wait_for("id:ask-transcript").unwrap();
     let message = "Why do violet badgers collect moonstones?";
     app.type_text("id:ask-input", message).unwrap();
     assert!(app.screen().enabled("id:btn-send").unwrap());
@@ -452,15 +452,20 @@ fn approving_onto_a_missing_branch_offers_each_existing_branch() {
         .unwrap();
 }
 
-/// Escape closes the roster's panel first: the page stays Agents rather than navigating back.
+/// Escape steps back before it leaves: on a session page it returns a view (the Agents tab) to
+/// Chat, and the page and the Agents destination stay. The sample's build serves its children,
+/// so its page has the Agents tab.
 #[test]
-fn escape_clears_the_roster_selection_before_leaving_agents() {
+fn escape_returns_a_session_view_to_chat_before_leaving_the_page() {
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.press("id:agent-T-14_R1").unwrap();
-    app.wait_for("id:seg-agent-panel-summary").unwrap();
+    app.press("id:agent-B-k3x9").unwrap();
+    app.wait_for("id:tab-agents").unwrap();
+    app.press("id:tab-agents").unwrap();
+    app.wait_for("id:session-agents").unwrap();
     app.press_key("escape").unwrap();
-    app.wait_for_gone("id:seg-agent-panel-summary", Duration::from_secs(5))
+    app.wait_for_gone("id:session-agents", Duration::from_secs(5))
         .unwrap();
+    app.wait_for("id:session-transcript").unwrap();
     assert!(
         app.screen()
             .accessibility_state("id:nav-agents")
@@ -486,15 +491,15 @@ fn terminate_from_a_session_row_asks_once_and_ends_the_run() {
 }
 
 /// A menu the pointer opened lost the arrows to the roster under it, which moved its selection:
-/// they go into the menu (End to its last item, Task ›, then Up past Focus pane and Reply…), and
-/// Enter runs the item reached, Terminate.
+/// they go into the menu (End to its last item, Task ›, then Up past Reply…), and Enter runs the
+/// item reached, Terminate.
 #[test]
 fn arrow_keys_walk_a_menu_the_pointer_opened() {
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
     app.wait_for("id:agent-T-14_R1").unwrap();
     app.right_click("id:agent-T-14_R1").unwrap();
     app.wait_for("id:btn-terminate").unwrap();
-    for key in ["end", "up", "up", "up"] {
+    for key in ["end", "up", "up"] {
         app.press_key(key).unwrap();
     }
     app.press_key("enter").unwrap();
@@ -513,48 +518,47 @@ fn pause_on_a_session_without_a_pi_host_shows_the_refusal_reason() {
     app.wait_for("text:/no Pi socket/").unwrap();
 }
 
-/// In a terminal, a control chosen in the selected run's Session menu changes the run's state
-/// under the menu; the closing menu puts the keyboard back on its trigger, which must still be
-/// there: Return opens the menu again, and after it Ctrl+K opens the palette and Escape closes
-/// it with the sample preview still shown.
+/// In a terminal, a control chosen in the session page's ⋯ menu changes the run's state under
+/// the menu, and the menu's trigger must still be there and open the menu again (the page opens
+/// with the keyboard in its composer, so the closing menu hands the keys back there rather than
+/// to the trigger); then Ctrl+K opens the palette and Escape closes it with the sample preview
+/// still shown.
 #[test]
 fn the_keyboard_stays_with_the_app_after_a_session_menu_control_in_a_terminal() {
     let mut app = preview(terminal_80(), &[("corral.destination", "agents")]);
     app.press("id:agent-T-14_R1").unwrap();
-    app.press("id:btn-session-menu").unwrap();
-    app.wait_for("id:btn-cancel-turn").unwrap();
-    app.press_key("down").unwrap();
-    app.press_key("enter").unwrap();
-    app.wait_for_gone("id:btn-cancel-turn", Duration::from_secs(5))
+    app.press("id:btn-session-actions").unwrap();
+    app.wait_for("id:act-cancel-turn").unwrap();
+    app.press("id:act-cancel-turn").unwrap();
+    app.wait_for_gone("id:act-cancel-turn", Duration::from_secs(5))
         .unwrap();
-    app.press_key("enter").unwrap();
-    app.wait_for("id:btn-terminate").unwrap();
+    app.press("id:btn-session-actions").unwrap();
+    app.wait_for("id:act-terminate").unwrap();
     app.press_key("escape").unwrap();
-    app.wait_for_gone("id:btn-terminate", Duration::from_secs(5))
+    app.wait_for_gone("id:act-terminate", Duration::from_secs(5))
         .unwrap();
     app.press_key("ctrl+k").unwrap();
     app.wait_for("id:palette-input").unwrap();
     app.press_key("escape").unwrap();
     app.wait_for_gone("id:palette-input", Duration::from_secs(5))
         .unwrap();
-    app.wait_for("id:btn-session-menu").unwrap();
+    app.wait_for("id:btn-session-actions").unwrap();
     assert_eq!(app.screen().count("text:/not reachable/").unwrap(), 0);
 }
 
-/// Review's live reviewer opens its session page: the reviewer run's terminal.
+/// Review's live reviewer opens its session page, named as the reviewer of T-13.
 #[test]
 fn the_reviewer_session_opens_from_review() {
     let mut app = preview(desktop(), &[("corral.destination", "review")]);
     app.press("id:task-T-13").unwrap();
     app.press("id:btn-open-reviewer").unwrap();
-    app.wait_for("id:session-terminal").unwrap();
-    app.wait_for("id:btn-session-menu").unwrap();
-    app.wait_for("text:/T-13-R2/").unwrap();
+    app.wait_for("id:btn-session-actions").unwrap();
+    app.wait_for("text:/^T-13 review/").unwrap();
 }
 
 /// The grouping switch asks the feed for the other grouping and redraws the lanes from its
 /// answer: By run draws one lane per run, which By task does not have, and a live run's lane
-/// opens its session terminal (T-15's headless run, which has no pi transcript to open on).
+/// opens its session page: T-15's headless run has no Pi host, so the page is its read-only log.
 #[test]
 fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     let mut app = preview(terminal_80(), &[("corral.destination", "timeline")]);
@@ -563,7 +567,7 @@ fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     app.press("id:seg-group-1").unwrap();
     app.wait_for("id:lane-T-15/R1").unwrap();
     app.press("id:lane-T-15/R1").unwrap();
-    app.wait_for("id:session-terminal").unwrap();
+    app.wait_for("id:session-log").unwrap();
 }
 
 /// A rewind leaves a gap in the live stream, so the session page reads the transcript again:
@@ -572,15 +576,31 @@ fn timeline_grouping_redraws_the_lanes_from_the_feed() {
 fn rewinding_a_session_reloads_its_transcript() {
     let mut app = preview(desktop(), &[("corral.destination", "agents")]);
     app.press("id:agent-T-14_R1").unwrap();
-    app.press("id:btn-open-session").unwrap();
     app.wait_for("text:/A run that crossed midnight/").unwrap();
-    app.press("id:btn-session-menu").unwrap();
-    app.press("id:btn-rewind").unwrap();
+    app.press("id:btn-session-actions").unwrap();
+    app.press("id:act-rewind").unwrap();
     app.press("id:btn-rewind-turn-3").unwrap();
     app.wait_for("id:confirm").unwrap();
     app.press("id:confirm-confirm").unwrap();
     app.wait_for_gone("text:/A run that crossed midnight/", Duration::from_secs(5))
         .unwrap();
+}
+
+/// Agents › New › New build session: the sheet starts the build in the chosen project under the
+/// typed name, closes, and the new build's session page opens.
+#[test]
+fn starting_a_build_opens_its_session_page() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.press("id:btn-new").unwrap();
+    app.press("id:btn-new-build").unwrap();
+    app.wait_for("id:field-build-name").unwrap();
+    app.press("id:seg-build-project-corral").unwrap();
+    app.type_text("id:field-build-name", "walk").unwrap();
+    app.press("id:btn-start-build").unwrap();
+    app.wait_for_gone("id:field-build-name", Duration::from_secs(5))
+        .unwrap();
+    app.wait_for("id:btn-session-actions").unwrap();
+    app.wait_for("text:build · walk").unwrap();
 }
 
 /// Opening a task from the palette shows it, also after Now's inspector was closed.
@@ -593,4 +613,73 @@ fn opening_a_task_from_the_palette_reopens_a_closed_inspector() {
         .unwrap();
     select(&mut app, "T-12 Timeline zoom presets");
     app.wait_for("id:now-task").unwrap();
+}
+
+/// The sample build waits on a two-question card: its answer card takes one answer per
+/// question and sends them once both are answered. Two follow-ups queued while it works are
+/// reordered and one is taken back into the draft. `/fin` runs Finish…, which docks the exit
+/// choice; Land asks once on this device, then for the reason, and the exit walks rebase, gate
+/// and land to its outcome.
+#[test]
+fn a_build_session_is_answered_and_landed() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.press("id:agent-B-k3x9").unwrap();
+
+    app.wait_for("id:dock-q-b1").unwrap();
+    app.press("id:dock-q-b1").unwrap();
+    app.wait_for("id:opt-q-b1-0").unwrap();
+    app.press("id:opt-q-b1-0").unwrap();
+    app.wait_for("id:question-1").unwrap();
+    app.press("id:opt-q-b1-1").unwrap();
+    app.wait_for("id:review-1").unwrap();
+    app.press("id:btn-send-answers").unwrap();
+    app.wait_for_gone("id:btn-send-answers", Duration::from_secs(5))
+        .unwrap();
+
+    app.wait_for("id:btn-queue").unwrap();
+    for text in ["first follow-up", "second follow-up"] {
+        app.clear("id:field-message").unwrap();
+        app.type_text("id:field-message", text).unwrap();
+        app.press("id:btn-queue").unwrap();
+    }
+    app.wait_for("id:queue-1").unwrap();
+    app.press("id:btn-queue-down-0").unwrap();
+    app.wait_for("id:btn-queue-edit-0").unwrap();
+    app.press("id:btn-queue-edit-0").unwrap();
+    app.wait_for_gone("id:queue-1", Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(
+        app.screen().input_text("id:field-message").unwrap(),
+        Some("second follow-up")
+    );
+
+    app.clear("id:field-message").unwrap();
+    app.type_text("id:field-message", "/fin").unwrap();
+    app.wait_for("id:cmd-finish").unwrap();
+    app.submit("id:field-message").unwrap();
+    app.wait_for("id:opt-exit-B-k3x9-1").unwrap();
+    app.press("id:opt-exit-B-k3x9-1").unwrap();
+    app.wait_for("id:btn-card-confirm").unwrap();
+    app.press("id:btn-card-confirm").unwrap();
+    app.wait_for("id:field-message").unwrap();
+    app.type_text("id:field-message", "The open finding is accepted for now.")
+        .unwrap();
+    app.submit("id:field-message").unwrap();
+    app.wait_for_within("text:/^✓ Landed/", Duration::from_secs(30))
+        .unwrap();
+}
+
+/// A stopped build's row offers Remove…; its sheet shows prune's dry run before anything goes,
+/// and confirming removes the build from the roster.
+#[test]
+fn a_stopped_build_is_removed_after_its_dry_run() {
+    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
+    app.press("id:seg-show-all").unwrap();
+    app.wait_for("id:btn-remove-B-k2a1").unwrap();
+    app.press("id:btn-remove-B-k2a1").unwrap();
+    app.wait_for("id:remove-lines").unwrap();
+    app.wait_for("text:/would remove worktree/").unwrap();
+    app.press("id:btn-remove-confirm").unwrap();
+    app.wait_for_gone("id:agent-B-k2a1", Duration::from_secs(5))
+        .unwrap();
 }

@@ -71,7 +71,14 @@ export class OwnerCard implements PresentedDialog {
     this.spec.changed();
   }
 
-  dispose(): void { this.settled = true; }
+  /** Pi removed the card. */
+  dispose(): void {
+    this.settled = true;
+    this.spec.closed?.();
+  }
+
+  /** The answer came from elsewhere (another device): the card settles without answering; later keys and clicks do nothing. */
+  close(): void { this.settled = true; }
 
   invalidate(): void { this.input?.invalidate(); }
 

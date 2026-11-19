@@ -3,6 +3,8 @@ import { Type } from "typebox";
 import { ASK_USER_GUIDELINES } from "../roles/common/ask-user.ts";
 import { AskDialog, type Choice, type DialogAnswer, type DialogOptions, type DialogQuestion, type DialogResult } from "./ask-user-dialog.ts";
 import { ANSWER_MAX_BYTES, Choice as PendingChoice, type ChoiceQuestion, type PendingQuestions } from "./pending-questions.ts";
+import { cardOptions, invalidAnswer, optionId, type CardAnswer } from "./remote/cards.ts";
+import type { OpenDialog, RemoteDialogs } from "./remote/dialogs.ts";
 
 const choice = Type.Union([
   Type.String({ minLength: 1, maxLength: 300 }),
@@ -43,19 +45,68 @@ type DialogUi = Pick<ExtensionToolContext["ui"], "custom" | "select" | "input">;
  * escape, completion and drafts stay authoritative. */
 export type DialogPresentationSource = () => Pick<DialogOptions, "surface" | "rows">;
 
+function remoteAnswers(questions: readonly DialogQuestion[], answers: readonly CardAnswer[]): DialogAnswer[] {
+  if (answers.length !== questions.length) invalidAnswer("answer each question");
+  const decoded = answers.map(({ options, text = "" }, i) => {
+    const question = questions[i]!;
+    if ((!question.multiSelect && options.length > 1) || new Set(options).size !== options.length ||
+        (options.length ? text && question.freeText !== true : question.freeText === false || !text.trim())) {
+      invalidAnswer("choose listed options or use free text if allowed");
+    }
+    const selected = options.map(id => {
+      const option = question.options.find(({ label }, index) => optionId(label, index) === id);
+      if (!option) invalidAnswer("choose a listed option");
+      return option.label;
+    });
+    return { selected, text };
+  });
+  const recorded = decoded.map(({ selected, text }, i) =>
+    `${questions[i]!.question}: ${selected.length ? selected.join(", ") + (text ? `\n${text}` : "") : text}`).join("\n");
+  if (Buffer.byteLength(recorded) > ANSWER_MAX_BYTES) invalidAnswer("the completed answer is too large");
+  return decoded;
+}
+
 /** One dialog for the whole batch; Escape, abort or timeout keeps what was answered. Undefined when the
  * host shows no custom component (a select-only or no-op UI context, or RPC mode). */
 export async function askDialog(ui: DialogUi, questions: DialogQuestion[], signal?: AbortSignal,
-  options?: DialogOptions): Promise<DialogResult | undefined> {
+  options?: DialogOptions, dialogs?: RemoteDialogs): Promise<DialogResult | undefined> {
   if (typeof ui.custom !== "function") return undefined;
   let current: AskDialog | undefined;
+  const shared: { dialog?: OpenDialog; active: boolean } = { active: true };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stop = () => current?.finish(false);
   signal?.addEventListener("abort", stop, { once: true });
   try {
     const result = await ui.custom<DialogResult | undefined>((tui, _theme, _keys, done) => {
       const arm = () => { clearTimeout(timer); timer = setTimeout(stop, TIMEOUT_MS); };
-      current = new AskDialog(questions, done, () => { arm(); tui.requestRender(); }, options);
+      if (dialogs) {
+        let terminalResult: DialogResult | undefined;
+        let wireAnswers: DialogAnswer[] | undefined;
+        const opened = dialogs.open({
+          kind: "question", title: questions[0]?.question ?? "Owner question", tool: "ask_user",
+          questions: questions.map(q => ({ text: q.question, header: q.header, multi: q.multiSelect === true,
+            free_text: q.freeText !== false, options: cardOptions(q.options.map(({ label, description }) => ({ label, detail: description }))) })),
+        }, { signal, validate: (answers, by) => {
+          if (by.source === "remote") wireAnswers = remoteAnswers(questions, answers);
+        } });
+        shared.dialog = opened;
+        current = new AskDialog(questions, result => {
+          if (opened.settled) return;
+          terminalResult = result;
+          if (result.submitted) opened.answer(result.answers.map((a, i) => ({
+            options: a?.selected.map(label => optionId(label, questions[i]!.options.findIndex(option => option.label === label))) ?? [],
+            ...(a?.text ? { text: a.text } : {}),
+          })));
+          else opened.cancel();
+        }, () => { arm(); tui.requestRender(); }, options);
+        void opened.result.then(resolution => {
+          if (!shared.active) return;
+          current?.finish(false);
+          done(resolution.kind === "answered" && resolution.by.source === "remote"
+            ? { submitted: true, answers: wireAnswers! }
+            : terminalResult ?? { submitted: false, answers: questions.map(() => undefined) });
+        });
+      } else current = new AskDialog(questions, done, () => { arm(); tui.requestRender(); }, options);
       arm();
       if (signal?.aborted) stop();
       return current;
@@ -67,6 +118,8 @@ export async function askDialog(ui: DialogUi, questions: DialogQuestion[], signa
     if (current === undefined) return undefined;
     throw error;
   } finally {
+    shared.active = false;
+    shared.dialog?.cancel();
     clearTimeout(timer);
     signal?.removeEventListener("abort", stop);
   }
@@ -132,15 +185,16 @@ export function localQuestionAsk(pending: PendingQuestions): DeferredAsk {
       const normalized = normalize(q);
       return PendingChoice.parse({ ...q, options: normalized.options.map(option => option.label) });
     });
-    const ids = questions.map((question, index) => pending.ask(`${id}:${index}`, [question]).id);
-    return { content: [{ type: "text", text: `Waiting for the owner: ${ids.join(", ")}. Continue only independent work.` }],
-      details: { status: "pending", questions: ids, ...(ids.length === 1 ? { id: ids[0] } : {}) } };
+    const question = pending.ask(questions.length === 1 ? `${id}:0` : id, questions, "ask_user");
+    return { content: [{ type: "text", text: `Waiting for the owner: ${question.id}. Continue only independent work.` }],
+      details: { status: "pending", questions: [question.id], id: question.id } };
   };
 }
 
 /** Interactive panes keep synchronous dialogs; deferred and headless asks use the pending store. */
 export function askUserTool(record: (answer: string) => Promise<string>, pending?: Pick<PendingQuestions, "ask" | "withdraw">,
-  dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource, deferred?: DeferredAsk): ToolDefinition {
+  dialogBusy: () => boolean = () => false, presentation?: DialogPresentationSource, deferred?: DeferredAsk,
+  headless: () => boolean = () => false, dialogs?: () => RemoteDialogs | undefined): ToolDefinition {
   return {
     name: "ask_user", label: "Ask the owner", exposure: "model-only", executionMode: "sequential",
     description: "Ask the owner 1-4 focused choice questions instead of asking only in chat. "
@@ -170,18 +224,18 @@ export function askUserTool(record: (answer: string) => Promise<string>, pending
         return { content: [{ type: "text", text: `${params.withdraw}: ${status}; no owner answer` }], details: { id: params.withdraw, status } };
       }
       if (signal?.aborted) return noAnswer();
-      if (deferred && (!ctx.hasUI || params.nonBlocking)) return deferred(id, params, signal);
-      if (!ctx.hasUI) return noAnswer();
+      if (deferred && (headless() || !ctx.hasUI || params.nonBlocking)) return deferred(id, params, signal);
+      if (headless() || !ctx.hasUI) return noAnswer();
       if (params.nonBlocking) {
         if (ctx.mode !== "tui" || !pending) return { ...noAnswer(), details: { status: "no answer", reason: "pending UI unavailable" } };
         validateDeferredQuestions(params.questions);
-        const q = pending.ask(id, params.questions);
+        const q = pending.ask(id, params.questions, "ask_user");
         return { content: [{ type: "text", text: `${q.id}: ${q.status}. Owner UI: /questions. Continue only independent work; no answer authorizes anything.` }],
           details: { id: q.id, status: q.status, expires: q.expires } };
       }
       if (dialogBusy()) return { ...noAnswer(), details: { status: "no answer", reason: "another owner dialog is open" } };
       const questions = params.questions.map(normalize);
-      const shown = (await askDialog(ctx.ui, questions, signal, presentation?.()))?.answers;
+      const shown = (await askDialog(ctx.ui, questions, signal, presentation?.(), dialogs?.()))?.answers;
       const raw = shown ?? (signal?.aborted ? [] : await sequential(ctx.ui, questions, signal));
       const answers: Answer[] = [];
       const unanswered: string[] = [];

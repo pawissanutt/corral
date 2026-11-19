@@ -4,6 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub use crate::build::BuildFacts;
 use crate::device::DeviceInfo;
 
 /// One task in the open board or a plan. Checks are for its current HEAD and review round.
@@ -137,6 +138,17 @@ pub struct AssistantRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_id: Option<String>,
     pub rev: u64,
+    /// `<provider>/<model>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<BuildFacts>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -144,6 +156,7 @@ pub struct AssistantRow {
 pub enum AssistantKind {
     Quick,
     Session,
+    Build,
     #[serde(other)]
     Other,
 }

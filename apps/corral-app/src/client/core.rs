@@ -715,7 +715,11 @@ fn request_deadline(method: &str, params: &Value) -> u64 {
             .unwrap_or(0)
             .min(APP_READ_WAIT_MS)
             .saturating_add(APP_REQUEST_MARGIN_MS),
-        wire::op::OP_SUBMIT | wire::assistant::PROMPT_ANSWER => APP_COMMAND_DEADLINE_MS,
+        // A card answer, a host action and a build's removal wait on the host or on prune.
+        wire::op::OP_SUBMIT
+        | wire::session_host::SESSION_CARD_ANSWER
+        | wire::session_host::SESSION_ACTION
+        | wire::build::BUILD_REMOVE => APP_COMMAND_DEADLINE_MS,
         _ => APP_REQUEST_DEADLINE_MS,
     }
 }

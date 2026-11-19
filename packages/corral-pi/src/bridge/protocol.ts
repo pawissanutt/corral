@@ -1,9 +1,11 @@
 // Session socket v2: one JSON request and reply per line, with the Unix socket as the boundary.
 import { parseOwnerAttachments, type OwnerAttachment } from "../host/owner-attachments.ts";
+import { parseInputTag, type InputTag } from "../host/remote/input.ts";
 export type BusyPolicy = "prompt" | "steer" | "follow_up";
 
 export const BRIDGE_VERSION = 2;
 export const FRAME_MAX_BYTES = 64 * 1024;
+export const SESSION_PART_MAX = 48 * 1024;
 export const INPUT_MAX_BYTES = FRAME_MAX_BYTES;
 export const MAX_IN_FLIGHT = 4;
 /** How long a submit_input reply waits for upstream's preflight before answering `pending`. */
@@ -17,6 +19,10 @@ export const COMMANDS = [
 ] as const;
 export type Command = typeof COMMANDS[number];
 
+export function isBuiltinCommand(name: string): name is Command {
+  return COMMANDS.includes(name as Command);
+}
+
 /** `pending`: admitted, upstream has not answered yet; the outcome follows as `input_settled`. */
 export type Disposition = "started" | "queued" | "handled" | "rejected" | "pending";
 
@@ -26,14 +32,14 @@ export class BridgeRefusal extends Error {
   }
 }
 
-export interface RequestFrame {
+export interface RequestFrame<C = Command> {
   readonly id: string;
-  readonly command: Command;
+  readonly command: C;
   readonly args: Record<string, unknown>;
 }
 
 /** Session socket input, also used for automated input saved while paused. */
-export interface SessionInput {
+export interface SessionInput extends InputTag {
   readonly text: string;
   readonly busyPolicy: BusyPolicy;
   readonly origin: "owner" | "auto";
@@ -58,29 +64,32 @@ export function frameId(value: unknown): string | null {
   return record(value) && typeof value.id === "string" && ID.test(value.id) ? value.id : null;
 }
 
-export function parseFrame(value: unknown): RequestFrame {
+export function parseFrame<C>(value: unknown, resolveCommand: (name: string) => C | undefined): RequestFrame<C> {
   if (!record(value)) throw new BridgeRefusal("bad_frame", "a request is one JSON object");
   if (value.version !== BRIDGE_VERSION) throw new BridgeRefusal("bad_frame", `version must be ${BRIDGE_VERSION}`);
   const id = frameId(value);
   if (id === null) throw new BridgeRefusal("bad_frame", "id must be 1-80 characters of [A-Za-z0-9._:-]");
-  if (typeof value.command !== "string" || !COMMANDS.includes(value.command as Command)) {
+  const command = typeof value.command === "string" ? resolveCommand(value.command) : undefined;
+  if (command === undefined) {
     throw new BridgeRefusal("unknown_command", "command is not a session socket command");
   }
   const args = value.args ?? {};
   if (!record(args)) throw new BridgeRefusal("bad_frame", "args must be an object");
-  return { id, command: value.command as Command, args };
+  return { id, command, args };
 }
 
 export function parseSubmitInput(args: Record<string, unknown>): SessionInput {
   const { text, busy_policy: busyPolicy = "steer", origin, attachments } = args;
-  if (typeof text !== "string" || !text.trim() || Buffer.byteLength(text) > INPUT_MAX_BYTES) {
+  if (typeof text !== "string" || Buffer.byteLength(text) > INPUT_MAX_BYTES ||
+      (!text.trim() && (attachments === undefined || Array.isArray(attachments) && attachments.length === 0))) {
     throw new BridgeRefusal("bad_input", `text must be nonblank and fit in the ${FRAME_MAX_BYTES}-byte frame`);
   }
   if (busyPolicy !== "steer" && busyPolicy !== "follow_up" && busyPolicy !== "prompt") {
     throw new BridgeRefusal("bad_input", "busy_policy must be steer, follow_up or prompt");
   }
   if (origin !== "owner" && origin !== "auto") throw new BridgeRefusal("bad_input", "origin must be owner or auto");
-  return { text, busyPolicy, origin, ...(attachments !== undefined ? { attachments: parseOwnerAttachments(attachments) } : {}) };
+  return { text, busyPolicy, origin, ...parseInputTag(args),
+    ...(attachments !== undefined ? { attachments: parseOwnerAttachments(attachments) } : {}) };
 }
 
 export function parseQueueLimit(args: Record<string, unknown>): number {

@@ -258,8 +258,6 @@ pub enum Press {
     CloseMenu,
     /// Show another record's menu in the keyboard menu's place: a Session menu's Task entry.
     Menu(Record),
-    /// Bring run session `<task>_<run>`'s herdr pane forward on corrald's machine.
-    Focus(Id),
     /// Send a session control to session `session`.
     Control {
         session: Id,
@@ -401,10 +399,6 @@ impl State {
                 Vec::new()
             }
             // A chosen menu entry closes its menu, as a verb's does.
-            Press::Focus(session) => {
-                self.menu = None;
-                vec![crate::model::agents::focus(&mut self.ids, feed, session)]
-            }
             Press::Control { session, control } => {
                 self.menu = None;
                 vec![Effect::Control {

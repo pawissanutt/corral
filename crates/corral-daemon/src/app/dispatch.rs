@@ -7,19 +7,20 @@ use std::{
 use anyhow::Result;
 use corral_engine::{Runner, refuse};
 use corral_protocol::{
-    self as wire, app, assistant as chat, attachment, config as settings, device, op, pane,
+    self as wire, app, assistant as chat, attachment, build, config as settings, device, op, pane,
     rpc::{self, ErrorCode},
-    session as control,
+    session as control, session_host as host,
 };
 use corral_types::{Refusal, SessionRef};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::{
-    assistant, config,
+    assistant, builds, config,
     conn::{self, Conn, Peer},
     devices::{DeviceError, SessionGuard},
-    health, ops, sessions,
+    health, ops,
+    sessions::{self, forward},
     state::Shared,
     topics::Subscriptions,
     views,
@@ -53,6 +54,8 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::AGENTS_V1
                         | app::SESSION_V1
                         | app::SESSION_FLEET_V1
+                        | app::SESSION_STATE_V1
+                        | app::BUILD_V1
                         | wire::detail::STREAM_TERMINAL_V1
                         | wire::REVIEW_V1
                         | wire::TIMELINE_V1
@@ -130,16 +133,15 @@ pub(crate) fn serve(
             Ok(())
         }),
         op::OP_SUBMIT => answer!(Ok(ops::submit(shared, decode(params)?)?)),
-        chat::ASSISTANT_SEND => answer!(Ok(assistant::send(
+        chat::ASSISTANT_WARM => answer!(Ok(assistant::warm(shared, decode(params)?)?)),
+        chat::ASSISTANT_SESSION => answer!(Ok(assistant::session(shared, decode(params)?)?)),
+        build::BUILD_START => answer!(Ok(builds::start(shared, decode(params)?)?)),
+        build::BUILD_REMOVE => answer!(Ok(builds::remove(shared, decode(params)?)?)),
+        host::SESSION_SEND => answer!(Ok(sessions::send(
             shared,
             device.as_ref().map_or("local", |device| device.id.as_str()),
             decode(params)?,
         )?)),
-        chat::ASSISTANT_CANCEL => answer!(Ok(assistant::cancel(shared, decode(params)?)?)),
-        chat::ASSISTANT_WARM => answer!(Ok(assistant::warm(shared, decode(params)?)?)),
-        chat::ASSISTANT_STOP => answer!(Ok(assistant::stop(shared, decode(params)?)?)),
-        chat::ASSISTANT_SESSION => answer!(Ok(assistant::session(shared, decode(params)?)?)),
-        chat::PROMPT_ANSWER => answer!(Ok(sessions::answer(shared, decode(params)?)?)),
         attachment::ATTACHMENT_BEGIN => answer!(Ok(assistant::attach_begin(
             shared,
             device.as_ref().map_or("local", |device| device.id.as_str()),
@@ -173,6 +175,19 @@ pub(crate) fn serve(
             Ok(sessions::relaunch(shared, &target.id)?)
         }),
         control::SESSION_REWIND => answer!(Ok(sessions::rewind(shared, decode(params)?)?)),
+        host::SESSION_QUEUE_WITHDRAW => {
+            answer!(Ok(forward::queue_withdraw(shared, decode(params)?)?))
+        }
+        host::SESSION_QUEUE_MOVE => answer!(Ok(forward::queue_move(shared, decode(params)?)?)),
+        host::SESSION_MODEL => answer!(Ok(forward::model(shared, decode(params)?)?)),
+        host::SESSION_CARD_ANSWER => answer!(Ok(forward::card_answer(
+            shared,
+            device.as_ref().map_or("local", |device| device.id.as_str()),
+            decode(params)?,
+        )?)),
+        host::SESSION_CHILD => answer!(Ok(forward::child(shared, decode(params)?)?)),
+        host::SESSION_JOB => answer!(Ok(forward::job(shared, decode(params)?)?)),
+        host::SESSION_ACTION => answer!(Ok(forward::action(shared, decode(params)?)?)),
         settings::CONFIG_GET => answer!({
             let _: settings::ConfigGet = decode(params)?;
             Ok(config::get(shared)?)
@@ -373,9 +388,11 @@ impl From<anyhow::Error> for Failure {
             ErrorCode::Busy
         } else if error.is::<views::NotFound>() {
             ErrorCode::NotFound
+        } else if error.is::<views::StaleTranscriptCursor>() {
+            ErrorCode::Conflict
         } else if message.starts_with("invalid:") {
             ErrorCode::InvalidParams
-        } else if message.starts_with("too_large:") {
+        } else if error.is::<forward::PartTooLarge>() || message.starts_with("too_large:") {
             ErrorCode::TooLarge
         } else {
             ErrorCode::Internal

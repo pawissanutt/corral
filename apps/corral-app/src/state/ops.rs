@@ -64,6 +64,12 @@ impl AppState {
                 self.confirm.set(None);
                 self.send_control(ask.session, ask.key, ask.control);
             }
+            Some(Confirming::EndThread { chat, .. }) => {
+                self.confirm.set(None);
+                self.reduce(self.assistant, move |state, feed, _, _| {
+                    state.act_live(crate::model::assistant::Action::ConfirmEnd(chat), feed)
+                });
+            }
             Some(Confirming::Leave(nav)) => {
                 self.confirm.set(None);
                 self.act(self.settings, |state, _| state.discard_config());

@@ -167,12 +167,7 @@ pub(super) fn serve(
                     if pair.is_some() {
                         hello.caps.clear();
                     }
-                    topics.set_session_fleet(
-                        hello
-                            .caps
-                            .iter()
-                            .any(|cap| cap == wire::app::SESSION_FLEET_V1),
-                    );
+                    topics.set_capabilities(&hello.caps);
                     reply(&mut conn, id, dispatch::welcome(&shared, hello))?;
                     welcomed = true;
                 }

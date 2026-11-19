@@ -88,8 +88,17 @@ fn document() -> Value {
     ];
     use device::*;
     use rpc::ErrorCode::{
-        Busy, Conflict, Expired, Internal, InvalidParams, NotFound, Refused, Revoked, Unavailable,
+        Busy, Conflict, Expired, Internal, InvalidParams, NotFound, Refused, Revoked, TooLarge,
+        Unavailable,
     };
+    let session_host_errors = [
+        InvalidParams,
+        NotFound,
+        Refused,
+        TooLarge,
+        Unavailable,
+        Internal,
+    ];
     let mut op_submit = method::<op::OpSubmit, op::OpReply>(
         &mut generator,
         op::OP_SUBMIT,
@@ -238,6 +247,7 @@ fn document() -> Value {
                 NotFound,
                 Refused,
                 Expired,
+                TooLarge,
                 Unavailable,
                 Internal,
             ],
@@ -261,32 +271,6 @@ fn document() -> Value {
             PUSH_UNSUBSCRIBE,
             false,
             &common,
-        ),
-        method::<assistant::AssistantSend, assistant::SendAck>(
-            &mut generator,
-            assistant::ASSISTANT_SEND,
-            false,
-            &[
-                InvalidParams,
-                Refused,
-                Conflict,
-                Busy,
-                Unavailable,
-                Internal,
-            ],
-        ),
-        method::<session::AssistantCancelRequest, assistant::CancelAck>(
-            &mut generator,
-            assistant::ASSISTANT_CANCEL,
-            false,
-            &[
-                InvalidParams,
-                Refused,
-                Conflict,
-                Busy,
-                Unavailable,
-                Internal,
-            ],
         ),
         method::<attachment::AttachmentBegin, attachment::UploadAck>(
             &mut generator,
@@ -326,19 +310,6 @@ fn document() -> Value {
             false,
             &[InvalidParams, Refused, Busy, Unavailable, Internal],
         ),
-        method::<assistant::AssistantStop, assistant::StopAck>(
-            &mut generator,
-            assistant::ASSISTANT_STOP,
-            false,
-            &[
-                InvalidParams,
-                NotFound,
-                Refused,
-                Conflict,
-                Unavailable,
-                Internal,
-            ],
-        ),
         method::<assistant::AssistantSessionOp, rows::AssistantRow>(
             &mut generator,
             assistant::ASSISTANT_SESSION,
@@ -349,20 +320,6 @@ fn document() -> Value {
                 Refused,
                 Conflict,
                 Busy,
-                Unavailable,
-                Internal,
-            ],
-        ),
-        method::<session::PromptAnswerRequest, session::SessionPromptAnswered>(
-            &mut generator,
-            assistant::PROMPT_ANSWER,
-            false,
-            &[
-                InvalidParams,
-                NotFound,
-                Refused,
-                Conflict,
-                Expired,
                 Unavailable,
                 Internal,
             ],
@@ -403,6 +360,80 @@ fn document() -> Value {
             false,
             &common,
         ),
+        method::<session_host::SessionSend, session_host::SessionSent>(
+            &mut generator,
+            session_host::SESSION_SEND,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Refused,
+                Busy,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<session_host::SessionQueueKey, session_host::QueueWithdrawn>(
+            &mut generator,
+            session_host::SESSION_QUEUE_WITHDRAW,
+            false,
+            &session_host_errors,
+        ),
+        method::<session_host::SessionQueueMove, session_host::QueueMoved>(
+            &mut generator,
+            session_host::SESSION_QUEUE_MOVE,
+            false,
+            &session_host_errors,
+        ),
+        method::<session_host::SessionModel, session_host::SessionModelSet>(
+            &mut generator,
+            session_host::SESSION_MODEL,
+            false,
+            &session_host_errors,
+        ),
+        method::<session_host::SessionCardAnswer, session_host::SessionCardAnswered>(
+            &mut generator,
+            session_host::SESSION_CARD_ANSWER,
+            false,
+            &session_host_errors,
+        ),
+        method::<session_host::SessionChildAct, session_host::SessionActed>(
+            &mut generator,
+            session_host::SESSION_CHILD,
+            false,
+            &session_host_errors,
+        ),
+        method::<session_host::SessionJobAct, session_host::SessionJobActed>(
+            &mut generator,
+            session_host::SESSION_JOB,
+            false,
+            &session_host_errors,
+        ),
+        method::<session_host::SessionActionRequest, session_host::SessionActionDone>(
+            &mut generator,
+            session_host::SESSION_ACTION,
+            false,
+            &session_host_errors,
+        ),
+        method::<build::BuildStart, rows::AssistantRow>(
+            &mut generator,
+            build::BUILD_START,
+            false,
+            &[
+                InvalidParams,
+                NotFound,
+                Refused,
+                Busy,
+                Unavailable,
+                Internal,
+            ],
+        ),
+        method::<build::BuildRemove, build::BuildRemoved>(
+            &mut generator,
+            build::BUILD_REMOVE,
+            false,
+            &[InvalidParams, NotFound, Refused, Unavailable, Internal],
+        ),
         method::<DevicePageQuery, DevicePage>(
             &mut generator,
             DEVICE_PAGE,
@@ -422,7 +453,14 @@ fn document() -> Value {
         "methods": methods,
         "components": {"schemas": generator.take_definitions(true)},
         "x-error-code-schema": {"$ref": "#/components/schemas/ErrorCode"},
-        "x-framing": {"control_max": frame::CONTROL_MAX, "data_max": frame::DATA_MAX, "app_control_max": app::APP_CONTROL_MAX},
+        "x-framing": {
+            "control_max": frame::CONTROL_MAX,
+            "data_max": frame::DATA_MAX,
+            "app_control_max": app::APP_CONTROL_MAX,
+            "session_part_max": app::SESSION_PART_MAX,
+            "live_fleet_bytes": LIVE_FLEET_BYTES,
+            "live_state_bytes": LIVE_STATE_BYTES,
+        },
     })
 }
 

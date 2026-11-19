@@ -14,7 +14,7 @@ use crate::ui::kit::overlay::{self, Modal};
 use crate::ui::kit::text::{h3, mono, plain};
 use crate::ui::tokens::{Token, color};
 
-use super::run;
+use super::run_agents as run;
 
 /// The sheet, mounted once by each shell beside the confirm and refusal sheets.
 pub fn sheet(app: AppState) -> AnyElement {

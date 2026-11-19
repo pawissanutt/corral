@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog } from "../bridge/events.ts";
 import { startBridge } from "../bridge/server.ts";
-import { inspectBuildCleanup, pruneBuilds } from "./cleanup.ts";
+import { inspectBuildCleanup, pruneBuildSession, pruneBuilds } from "./cleanup.ts";
 import { parseBuildFlags, parsePruneFlags } from "./launch.ts";
 import { createSession, loadSession, saveSession, sessionDir } from "./session-store.ts";
 import { prepareWorktree } from "./worktree.ts";
@@ -127,4 +127,35 @@ test("prune accepts its own flags but not launch flags", () => {
   expect(() => parsePruneFlags(["--prune", "--resume", "B-1"])).toThrow();
   expect(() => parsePruneFlags(["--prune", "--here"])).toThrow();
   expect(() => parsePruneFlags(["--dry-run"])).toThrow();
+});
+
+test("prune --session leaves every other session alone", async () => {
+  await fixture(async ({ data, build, branchExists }) => {
+    const selected = build("selected"), other = build("other");
+    const transcript = join(sessionDir(data, selected.id), "parent.jsonl");
+    writeFileSync(transcript, `${JSON.stringify({ type: "message", message: { role: "user", content: "Keep until explicitly removed" } })}\n`);
+    saveSession(data, { ...selected, sessionFile: transcript });
+    const otherRecord = join(sessionDir(data, other.id), "session.json"), before = readFileSync(otherRecord, "utf8");
+    const prune = parsePruneFlags(["--prune", "--session", selected.id, "--json", "--dry-run", "--data-dir", data])!;
+    expect(prune).toEqual({ dataRoot: data, session: selected.id, json: true, dryRun: true });
+    const dry = await pruneBuildSession(prune.dataRoot, prune.session!, prune.dryRun);
+    expect(dry).toMatchObject({ worktree: true, branch: true, record: true });
+    expect(dry.kept).toBeUndefined();
+    expect(dry.lines).toHaveLength(2);
+    expect(existsSync(transcript)).toBeTrue();
+    expect(existsSync(selected.worktree)).toBeTrue();
+    const removed = await pruneBuildSession(prune.dataRoot, prune.session!, false);
+    expect(removed).toMatchObject({ worktree: true, branch: true, record: true });
+    expect(existsSync(selected.worktree)).toBeFalse();
+    expect(existsSync(transcript)).toBeFalse();
+    expect(branchExists(selected.branch!)).toBeFalse();
+    expect(existsSync(other.worktree)).toBeTrue();
+    expect(branchExists(other.branch!)).toBeTrue();
+    expect(readFileSync(otherRecord, "utf8")).toBe(before);
+    writeFileSync(join(other.worktree, "untracked"), "not part of any commit");
+    const kept = await pruneBuildSession(data, other.id, false);
+    expect(kept).toMatchObject({ worktree: false, branch: false, record: false });
+    expect(kept.kept).toBeDefined();
+    expect(readFileSync(otherRecord, "utf8")).toBe(before);
+  });
 });

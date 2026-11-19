@@ -323,17 +323,6 @@ pub fn send_refs(staged: &[Staged], feed: &Feed) -> Result<Vec<SendAttachment>, 
         .collect()
 }
 
-/// The staged keys a send carries, so the app drops them once the client took the send.
-pub fn carried(refs: &[SendAttachment]) -> Vec<String> {
-    refs.iter()
-        .filter_map(|item| match item {
-            SendAttachment::Upload { upload, .. } => Some(upload.clone()),
-            SendAttachment::Link { url, .. } => Some(url.clone()),
-            SendAttachment::Other => None,
-        })
-        .collect()
-}
-
 /// A typed link, trimmed and otherwise kept as typed: http(s) only, no user name or password,
 /// no spaces or control characters, within the wire bound. It is never fetched.
 pub fn check_link(text: &str) -> Result<String, String> {
@@ -559,27 +548,25 @@ pub fn fact_chips(
     (chips, view)
 }
 
-/// The chips of a send still in this device's outbox, from its refs and the client's names.
-pub fn send_chips(feed: &Feed, refs: &[SendAttachment]) -> Vec<FileChip> {
-    refs.iter()
-        .map(|item| FileChip {
-            label: match item {
-                SendAttachment::Upload { upload, .. } => match feed.uploads.get(upload.as_str()) {
-                    Some(state) => format!(
-                        "{} {} · {}",
-                        kind_word(&state.kind),
-                        state.name,
-                        byte_size(state.bytes)
-                    ),
-                    None => "uploaded attachment".into(),
-                },
-                SendAttachment::Link { url, .. } => format!("link {}", short_link(url)),
-                SendAttachment::Other => "attachment".into(),
-            },
-            open: None,
-            opened: false,
+/// The chips of transcript message `entry` (its served id) and the open one's readback, read
+/// from whichever session page this device holds it in; none while it carries nothing.
+pub fn message_attachments(
+    state: &State,
+    feed: &Feed,
+    entry: &str,
+) -> (Vec<FileChip>, Option<AttachmentView>) {
+    let facts = feed
+        .details
+        .values()
+        .filter_map(|cache| match cache.body() {
+            Some(DetailBody::Session(page)) => Some(page),
+            _ => None,
         })
-        .collect()
+        .flat_map(|page| page.messages.iter())
+        .find(|message| !message.id.is_empty() && message.id == entry)
+        .map(|message| message.attachments.as_slice())
+        .unwrap_or_default();
+    fact_chips(state, feed, entry, facts)
 }
 
 /// Removes escape sequences' introducer and every control character except line breaks and

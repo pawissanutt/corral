@@ -7,11 +7,11 @@
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
-use crate::model::assistant::{KeyHint, ThreadRef};
+use crate::model::assistant::KeyHint;
 use crate::model::{Form, Tone};
 use crate::state::AppState;
+use crate::ui::ask::drawer::composer_only;
 use crate::ui::atoms::key_hint;
-use crate::ui::composer::{Host, ListAt, field};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::overlay::{Modal, modal};
@@ -65,29 +65,20 @@ pub(super) fn hotkey(app: AppState) -> AnyElement {
     when(move || app.hotkey.get(), move || untracked(|| desktop(app))).into_element()
 }
 
-/// Hides the window, closing its model list with it.
+/// Hides the window.
 fn hide(app: AppState) {
-    app.assistant.update(|state| {
-        state.close_menu();
-    });
     app.hotkey.set(false);
 }
 
 /// The desktop: the dimmed backdrop standing in for the desktop, the window horizontally
-/// centred near the top. Esc closes the model list first, then the window.
+/// centred near the top. Esc hides the window.
 fn desktop(app: AppState) -> AnyElement {
     let anywhere = KeyOptions {
         when: When::Always,
         ..KeyOptions::default()
     };
     // Bound while the window shows; the newest binding wins over the app's own Escape.
-    on_key_with("escape", anywhere, move |_| {
-        let mut closed = false;
-        app.assistant.update(|state| closed = state.close_menu());
-        if !closed {
-            hide(app);
-        }
-    });
+    on_key_with("escape", anywhere, move |_| hide(app));
     let panel = view()
         .test_id("hotkey")
         .role(AccessibilityRole::Region)
@@ -232,19 +223,12 @@ fn segment_view(
         .into_element()
 }
 
-/// Ask's composer on the quick thread, its model list opening below the field, then the way to
-/// the thread in the main window.
+/// Ask's composer on the session Ask is keyed to, then the way to its conversation in the main
+/// window.
 fn content(app: AppState) -> AnyElement {
     view()
         .gap(px(10.0))
-        .child(field(
-            app,
-            Host {
-                thread: ThreadRef::quick(),
-                list: ListAt::Below,
-                docked: false,
-            },
-        ))
+        .child(composer_only(app))
         .child(
             view()
                 .flex_row()

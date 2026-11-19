@@ -39,7 +39,7 @@ fn latest(detail: &TaskDetail, kind: CheckKind) -> Option<Check> {
 
 /// The detail's task as a served row would carry it: its latest run, gate and review checks.
 /// No `ready` event is known off the board, so it is never claimed.
-fn detail_task(detail: &TaskDetail) -> daemon::Task {
+pub fn detail_task(detail: &TaskDetail) -> daemon::Task {
     daemon::Task::new(TaskRow {
         task: detail.task.clone(),
         run: detail.runs.iter().max_by_key(|run| run.started).cloned(),

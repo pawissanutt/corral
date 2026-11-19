@@ -1,5 +1,5 @@
 use super::*;
-use corral_protocol::{assistant::ThreadEntry, rows::*};
+use corral_protocol::rows::*;
 
 /// A topic row's identity, as `RowsDelta.left` names it.
 trait Keyed {
@@ -21,11 +21,6 @@ impl Keyed for AgentRow {
     }
 }
 impl Keyed for AssistantRow {
-    fn key(&self) -> String {
-        self.id.clone()
-    }
-}
-impl Keyed for ThreadEntry {
     fn key(&self) -> String {
         self.id.clone()
     }
@@ -69,6 +64,7 @@ impl AppState {
     ) -> Result<Vec<Outgoing>, String> {
         let mut changed = BTreeSet::new();
         let mut scope_key = None;
+        let mut parts = BTreeSet::new();
         let topic = match delta {
             SubDelta::Tasks { delta } => {
                 return Ok(self.tasks(feed, delta.epoch, delta.rows, delta.left, replacement));
@@ -93,7 +89,8 @@ impl AppState {
             }
             SubDelta::Assistant { delta } => {
                 feed.update(|feed| {
-                    changed = apply(&mut feed.assistants, delta.rows, delta.left, replacement)
+                    changed = apply(&mut feed.assistants, delta.rows, delta.left, replacement);
+                    feed.forget_ended_quick();
                 });
                 Topic::Assistant
             }
@@ -114,39 +111,47 @@ impl AppState {
                 });
                 Topic::Settings
             }
-            // An answer streams on the chat's session stream; a thread page's own `live` text
-            // is the older wire's and is not read.
-            SubDelta::Thread { scope, delta, .. } => {
-                scope_key = Some(scope.clone());
-                feed.update(|feed| {
-                    let thread = feed.threads.entry(Id::from(&scope)).or_default();
-                    changed = apply(&mut thread.entries, delta.rows, delta.left, replacement);
-                    thread.stale = false;
-                    thread.loading = false;
-                    feed.retire_echoed_sends();
-                });
-                self.touch_thread(feed, &scope);
-                Topic::Thread
-            }
             SubDelta::Session {
                 scope,
                 generation,
                 events,
                 gap,
                 fleet,
+                state,
                 ..
             } => {
                 if !self.session_scopes.contains_key(&scope) {
                     return Ok(vec![]);
                 }
                 scope_key = Some(scope.clone());
-                // Without the capability nothing is said about children, whatever the page holds.
+                // Without the capability nothing is said about children or the host's state,
+                // whatever the page holds.
                 let fleet =
                     fleet.filter(|_| feed.with_untracked(|feed| feed.capable(SESSION_FLEET_V1)));
+                let state =
+                    state.filter(|_| feed.with_untracked(|feed| feed.capable(SESSION_STATE_V1)));
+                let reset = gap.is_some();
                 feed.update(|feed| {
                     let live = feed.live.entry(Id::from(&scope)).or_default();
-                    live.apply_page(generation, events, gap.is_some());
+                    let before = live.parts.clone();
+                    let generation_changed = live.generation != generation;
+                    live.apply_page(generation, events, reset);
                     live.replace_fleet(fleet);
+                    live.replace_state(state);
+                    // After a gap or a new generation no part event can be trusted to have
+                    // arrived, so every part is read again.
+                    parts = if reset || generation_changed {
+                        super::details::PART_NAMES
+                            .iter()
+                            .map(|part| (*part).to_owned())
+                            .collect()
+                    } else {
+                        live.parts
+                            .iter()
+                            .filter(|(part, count)| before.get(*part) != Some(*count))
+                            .map(|(part, _)| part.clone())
+                            .collect()
+                    };
                 });
                 self.touch_session(feed, &scope);
                 Topic::Session
@@ -175,7 +180,10 @@ impl AppState {
             );
             feed.synced = Some(feed.clock.clone());
         });
-        let outgoing = self.invalidate(feed, topic, &changed);
+        let mut outgoing = self.invalidate(feed, topic, &changed);
+        if let Some(scope) = scope_key.as_deref().filter(|_| !parts.is_empty()) {
+            outgoing.extend(self.session_parts(feed, scope, &parts));
+        }
         self.trim_retained(feed);
         Ok(outgoing)
     }
@@ -259,7 +267,6 @@ impl AppState {
 fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> bool {
     match target {
         DetailRef::Closed { .. } | DetailRef::Artifacts { .. } => topic == Topic::Tasks,
-        DetailRef::Attachment { entry, .. } => topic == Topic::Thread && changed.contains(entry),
         DetailRef::Task { id } => topic == Topic::Tasks && changed.contains(id),
         DetailRef::Plan { id } => {
             matches!(topic, Topic::Plans | Topic::Tasks) && changed.contains(id)
@@ -268,7 +275,7 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
             topic == Topic::Tasks && changed.contains(task)
         }
         DetailRef::Session { id } | DetailRef::Terminal { id } => {
-            topic == Topic::Agents && changed.contains(id)
+            matches!(topic, Topic::Agents | Topic::Assistant) && changed.contains(id)
         }
         DetailRef::Timeline { .. } | DetailRef::Burnup { .. } => {
             matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
@@ -281,12 +288,13 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
 pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
     match target {
         DetailRef::Closed { .. } | DetailRef::Artifacts { .. } => topic == Topic::Tasks,
-        DetailRef::Attachment { .. } => topic == Topic::Thread,
         DetailRef::Task { .. } | DetailRef::Review { .. } | DetailRef::ReviewFile { .. } => {
             topic == Topic::Tasks
         }
         DetailRef::Plan { .. } => matches!(topic, Topic::Plans | Topic::Tasks),
-        DetailRef::Session { .. } | DetailRef::Terminal { .. } => topic == Topic::Agents,
+        DetailRef::Session { .. } | DetailRef::Terminal { .. } => {
+            matches!(topic, Topic::Agents | Topic::Assistant)
+        }
         DetailRef::Timeline { .. } | DetailRef::Burnup { .. } => {
             matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
         }

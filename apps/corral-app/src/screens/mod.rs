@@ -121,7 +121,6 @@ pub fn content(app: AppState) -> AnyElement {
             }
             match top {
                 Some(Route::Live(Live::Session(id))) => agents::live_session(app, id),
-                Some(Route::Live(Live::Thread(id))) => assistant::live_thread(app, id),
                 Some(Route::Project(id)) => projects::page(app, id),
                 _ => screen(app, destination),
             }

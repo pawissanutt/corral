@@ -61,6 +61,8 @@ struct StoreFilters {
     agents: ProjectFilter,
     #[serde(rename = "now.group")]
     now_group: NowGroup,
+    #[serde(rename = "agents.show")]
+    agents_show: crate::model::agents::Show,
 }
 impl StoreFilters {
     fn get_mut(&mut self, screen: FilterScreen) -> &mut ProjectFilter {
@@ -110,5 +112,15 @@ impl Filters {
     }
     pub fn set_now_group(&mut self, store: &str, group: NowGroup) {
         self.0.entry(store.to_owned()).or_default().now_group = group;
+    }
+    /// Whether Agents lists only live sessions or all of them, per store.
+    pub fn agents_show(&self, store: &str) -> crate::model::agents::Show {
+        self.0
+            .get(store)
+            .map(|filters| filters.agents_show)
+            .unwrap_or_default()
+    }
+    pub fn set_agents_show(&mut self, store: &str, show: crate::model::agents::Show) {
+        self.0.entry(store.to_owned()).or_default().agents_show = show;
     }
 }

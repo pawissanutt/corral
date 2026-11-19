@@ -26,14 +26,17 @@ use serde_json::{Value, json};
 #[cfg(unix)]
 use sha2::{Digest, Sha256};
 
-use super::{LaunchSpec, Origin, Runner, SessionRef, SessionStatus};
+use super::{InputTag, LaunchSpec, Origin, Runner, SessionRef, SessionStatus};
 use crate::{config::shell_quote, refuse};
+
+mod build;
+pub use build::{BuildLaunch, build_session, build_socket, is_build_id, pi_data_root};
 
 mod chat;
 pub use chat::{ChatLaunch, chat_session};
 
 const VERSION: u32 = 2;
-const FRAME_MAX: usize = 64 * 1024;
+pub(super) const FRAME_MAX: usize = 64 * 1024;
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -56,21 +59,10 @@ pub struct Hello {
     pub pid: u32,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum Answer<'a> {
-    Option(&'a str),
-    Text(&'a str),
-    OptionWithNote { option: &'a str, text: &'a str },
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AnswerReply {
-    pub status: String,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct SubmitReply {
     pub request_id: String,
+    pub input: Option<String>,
     pub disposition: Disposition,
     pub turn: Option<u64>,
     pub reason: Option<String>,
@@ -91,6 +83,16 @@ struct Submit<'a> {
     text: &'a str,
     origin: Origin,
     busy_policy: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    typed_at: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device: Option<&'a str>,
+    #[serde(skip_serializing_if = "<[Value]>::is_empty")]
+    attachments: &'a [Value],
 }
 
 impl<'a> Client<'a> {
@@ -157,10 +159,36 @@ impl<'a> Client<'a> {
     }
 
     pub fn submit_input(&self, text: &str, origin: Origin) -> Result<SubmitReply> {
+        self.submit(text, origin, None)
+    }
+
+    pub fn submit_input_tagged(
+        &self,
+        text: &str,
+        origin: Origin,
+        tag: InputTag<'_>,
+    ) -> Result<SubmitReply> {
+        let reply = self.submit(text, origin, Some(tag))?;
+        if reply.disposition == Disposition::Rejected {
+            return Err(refuse(
+                reply.reason.unwrap_or_else(|| "Pi rejected input".into()),
+                Vec::new(),
+            ));
+        }
+        if reply.input.as_deref() != Some(tag.input_id) {
+            return Err(refuse(
+                "the Pi host did not acknowledge this input id; stop it and resume it on the current corral-pi",
+                Vec::new(),
+            ));
+        }
+        Ok(reply)
+    }
+
+    fn submit(&self, text: &str, origin: Origin, tag: Option<InputTag<'_>>) -> Result<SubmitReply> {
         const COMMAND: &str = "submit_input";
         let id = request_id();
         let mut frame = if text.len() < FRAME_MAX {
-            encode_body(COMMAND, &id, submit(text, origin))?
+            encode_body(COMMAND, &id, submit(text, origin, tag))?
         } else {
             Vec::new()
         };
@@ -169,7 +197,7 @@ impl<'a> Client<'a> {
                 .dir
                 .context("oversized Pi input needs a session directory")?;
             let message = spill(dir, text)?;
-            frame = encode(COMMAND, &id, submit(&message, origin))?;
+            frame = encode(COMMAND, &id, submit(&message, origin, tag))?;
         } else {
             frame.push(b'\n');
         }
@@ -186,17 +214,6 @@ impl<'a> Client<'a> {
 
     pub fn resume(&self) -> Result<Value> {
         self.request("resume", json!({}))
-    }
-
-    pub fn answer(&self, question: &str, answer: Answer<'_>) -> Result<AnswerReply> {
-        let args = match answer {
-            Answer::Option(option) => json!({"question": question, "option": option}),
-            Answer::Text(text) => json!({"question": question, "text": text}),
-            Answer::OptionWithNote { option, text } => {
-                json!({"question": question, "option": option, "text": text})
-            }
-        };
-        self.request("answer", args)
     }
 
     #[cfg(unix)]
@@ -361,11 +378,20 @@ fn check_version(version: u64) -> Result<()> {
     Ok(())
 }
 
-fn submit(text: &str, origin: Origin) -> Submit<'_> {
+fn submit<'a>(text: &'a str, origin: Origin, tag: Option<InputTag<'a>>) -> Submit<'a> {
     Submit {
         text,
         origin,
-        busy_policy: "steer",
+        busy_policy: if tag.is_some_and(|tag| tag.follow_up) {
+            "follow_up"
+        } else {
+            "steer"
+        },
+        input_id: tag.map(|tag| tag.input_id),
+        to: tag.and_then(|tag| tag.to),
+        typed_at: tag.and_then(|tag| tag.typed_at),
+        device: tag.and_then(|tag| tag.device),
+        attachments: tag.map_or(&[], |tag| tag.attachments),
     }
 }
 
@@ -443,6 +469,12 @@ impl<'a> PiRunner<'a> {
             #[cfg(test)]
             socket_dir: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn in_test_socket_dir(mut self, dir: &'a Path) -> Self {
+        self.socket_dir = Some(dir);
+        self
     }
 
     /// Read status and the pause flag from the same observation of the Pi host.
@@ -588,6 +620,30 @@ impl Runner for PiRunner<'_> {
         Ok(())
     }
 
+    fn send_tagged(
+        &self,
+        session: &SessionRef,
+        text: &str,
+        origin: Origin,
+        tag: InputTag<'_>,
+    ) -> Result<SubmitReply> {
+        let SessionRef::Pi { socket, dir, .. } = session else {
+            return self.inner.send_tagged(session, text, origin, tag);
+        };
+        Client::with_dir(socket, dir)
+            .submit_input_tagged(text, origin, tag)
+            .map_err(|error| {
+                if unavailable(&error) {
+                    refuse(
+                        "session has no running Pi host; relaunch it first",
+                        Vec::new(),
+                    )
+                } else {
+                    error
+                }
+            })
+    }
+
     fn stop(&self, session: &SessionRef) -> Result<()> {
         let SessionRef::Pi { socket, inner, .. } = session else {
             return self.inner.stop(session);
@@ -619,7 +675,7 @@ impl Runner for PiRunner<'_> {
     }
 }
 
-fn quoted_path(path: &Path) -> Result<String> {
+pub(super) fn quoted_path(path: &Path) -> Result<String> {
     shell_quote(
         path.to_str()
             .with_context(|| format!("Pi path is not UTF-8: {}", path.display()))?,
@@ -702,7 +758,3 @@ pub(crate) fn private_dir(dir: &Path, reuse: bool) -> Result<()> {
 pub(crate) fn private_dir(_: &Path, _: bool) -> Result<()> {
     bail!("Pi sessions require Unix sockets")
 }
-
-#[cfg(all(test, unix))]
-#[path = "pi_tests.rs"]
-mod tests;

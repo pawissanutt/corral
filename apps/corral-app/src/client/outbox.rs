@@ -1,7 +1,10 @@
-//! Device-scoped owner text and recovery identities; never keys, tokens or proofs.
+//! Device-scoped owner text and recovery identities; never keys, tokens or proofs: the unsent
+//! drafts by session, and the messages (`session.send`) corrald has not answered yet.
 use super::durable;
-use corral_protocol::assistant::{AssistantSend, MESSAGE_TEXT_MAX};
-use serde::{Deserialize, Serialize};
+use corral_protocol::assistant::{MESSAGE_TEXT_MAX, SendAttachment};
+use corral_protocol::session_host::SessionSend;
+use corral_protocol::session_state::SendPolicy;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -11,38 +14,47 @@ const MAX_DRAFTS: usize = 32;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Message {
-    pub request: AssistantSend,
+    #[serde(deserialize_with = "stored_send")]
+    pub request: SessionSend,
+    /// It left this device at least once: its reply may have been lost, so it is never sent
+    /// again (the host does not know an input id twice).
     pub attempted: bool,
-    #[serde(default)]
-    pub cancel: bool,
-    /// Set only for a definitive RPC refusal, never a timeout or transport failure.
-    #[serde(default)]
-    pub refused: bool,
-    #[serde(default)]
-    pub error: Option<(String, String)>,
 }
 
-impl Message {
-    pub(super) fn can_remove_locally(&self) -> bool {
-        !self.attempted || self.refused
+/// A kept message: a `session.send`, or the `assistant.send` an earlier version kept for the
+/// chat named by its `thread`, which the owner's words must survive into.
+fn stored_send<'de, D: Deserializer<'de>>(stored: D) -> Result<SessionSend, D::Error> {
+    use serde::de::Error;
+    #[derive(Deserialize)]
+    struct Earlier {
+        cmd_id: String,
+        thread: String,
+        text: String,
+        #[serde(default)]
+        typed_at: Option<String>,
+        #[serde(default)]
+        attachments: Vec<SendAttachment>,
     }
-    pub(super) fn replay_request(&self) -> Option<super::requests::ClientRequest> {
-        use super::requests::ClientRequest;
-        if self.cancel {
-            Some(ClientRequest::AssistantCancel(self.request.cmd_id.clone()))
-        } else if self.refused {
-            None
-        } else {
-            Some(ClientRequest::AssistantSend(self.request.clone()))
-        }
+    let value = Value::deserialize(stored)?;
+    if value.get("thread").is_none() {
+        return serde_json::from_value(value).map_err(D::Error::custom);
     }
+    let earlier: Earlier = serde_json::from_value(value).map_err(D::Error::custom)?;
+    Ok(SessionSend {
+        id: earlier.thread,
+        cmd_id: earlier.cmd_id,
+        text: earlier.text,
+        policy: SendPolicy::FollowUp,
+        to: None,
+        typed_at: earlier.typed_at,
+        attachments: earlier.attachments,
+    })
 }
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(super) struct Saved {
     pub drafts: BTreeMap<String, String>,
     pub messages: BTreeMap<String, Message>,
-    #[serde(default)]
-    pub cancelled: std::collections::BTreeSet<String>,
 }
 pub(super) struct Outbox {
     key: String,
@@ -170,7 +182,6 @@ fn decode_records(records: &durable::Records, key: &str) -> Result<Saved, String
             serde_json::to_value(read("message")?).map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
-        cancelled: read("cancelled")?.into_keys().collect(),
     })
 }
 
@@ -184,9 +195,6 @@ fn encode_records(saved: &Saved, key: &str) -> Result<durable::Records, String> 
             format!("{key}message/{id}"),
             serde_json::to_value(message).map_err(|e| e.to_string())?,
         );
-    }
-    for id in &saved.cancelled {
-        records.insert(format!("{key}cancelled/{id}"), Value::Bool(true));
     }
     let bytes = serde_json::to_vec(saved)
         .map_err(|error| error.to_string())?
@@ -262,9 +270,17 @@ fn prune_settled(records: &mut durable::Records, active: &str) -> Result<(), Str
     Ok(())
 }
 
-pub(super) fn valid_message(request: &AssistantSend) -> bool {
-    use corral_protocol::{assistant::SendAttachment, attachment::*};
-    !request.text.trim().is_empty()
+/// A message corrald would take: words or an attachment within the bounds, an input id in its
+/// grammar, a session to send to.
+pub(super) fn valid_message(request: &SessionSend) -> bool {
+    use corral_protocol::attachment::*;
+    (!request.text.trim().is_empty() || !request.attachments.is_empty())
+        && !request.id.is_empty()
+        && (1..=80).contains(&request.cmd_id.len())
+        && request
+            .cmd_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
         && request.text.len() <= MESSAGE_TEXT_MAX
         && request.attachments.len() <= ATTACHMENTS_PER_MESSAGE
         && request.attachments.iter().all(|item| match item {
@@ -301,42 +317,27 @@ fn valid_link(url: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::requests::ClientRequest;
     use super::*;
+
+    /// An earlier version kept unanswered chat messages as `assistant.send`; loading them as
+    /// anything but a send to the same chat under the same id would lose the owner's words.
     #[test]
-    fn persisted_uncertain_cancel_selects_cancel_not_resend() {
-        let request: AssistantSend = serde_json::from_value(serde_json::json!({
-            "cmd_id": "same-id", "thread": "quick", "target": "assistant", "text": "owner words",
-            "typed_at": "2026-11-14T00:00:00Z", "context": []
-        }))
-        .unwrap();
-        let mut message = Message {
-            request,
-            attempted: true,
-            cancel: true,
-            refused: false,
-            error: Some(("unavailable".into(), "lost reply".into())),
-        };
-        let recovered: Message =
+    fn a_message_kept_by_an_earlier_version_loads_as_a_send_to_its_chat() {
+        let kept = serde_json::json!({
+            "request": {
+                "cmd_id": "same-id", "thread": "quick", "target": "assistant",
+                "text": "owner words", "typed_at": "2026-11-14T00:00:00Z", "context": []
+            },
+            "attempted": false, "cancel": false, "refused": false, "error": null
+        });
+        let message: Message = serde_json::from_value(kept).unwrap();
+        assert_eq!(message.request.id, "quick");
+        assert_eq!(message.request.cmd_id, "same-id");
+        assert_eq!(message.request.text, "owner words");
+        assert!(valid_message(&message.request));
+        let again: Message =
             serde_json::from_str(&serde_json::to_string(&message).unwrap()).unwrap();
-        assert!(!recovered.can_remove_locally());
-        assert!(
-            matches!(recovered.replay_request(), Some(ClientRequest::AssistantCancel(id)) if id == "same-id")
-        );
-        message.cancel = false;
-        assert!(matches!(
-            message.replay_request(),
-            Some(ClientRequest::AssistantSend(_))
-        ));
-        message.refused = true;
-        assert!(message.can_remove_locally());
-        assert!(message.replay_request().is_none());
-        assert!(
-            serde_json::to_value(&message.request)
-                .unwrap()
-                .get("attachments")
-                .is_none()
-        );
+        assert_eq!(again.request, message.request);
     }
 }
 

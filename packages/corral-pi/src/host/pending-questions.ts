@@ -21,6 +21,7 @@ export function validAnswer(q: ChoiceQuestion, a: ChoiceAnswer): boolean {
 }
 const Record = z.object({ version: z.literal(1), id: z.string(), session: z.string(),
   questions: z.array(Choice).min(1).max(4), expires: z.number(),
+  tool: z.enum(["ask_user", "bash"]).optional(),
   status: z.enum(["pending", "answered", "cancelled", "expired", "withdrawn", "ended"]),
   answers: z.array(Answer).optional(), message: z.string().optional(),
 });
@@ -51,6 +52,7 @@ export class PendingQuestions {
   private readonly sending = new Map<string, Promise<void>>();
   private readonly queued = new Map<string, symbol>();
   private closed = false;
+  private expiry: ReturnType<typeof setTimeout> | undefined;
   private readonly now: () => number;
   constructor(private readonly host: QuestionHost) { this.now = host.now ?? Date.now; }
 
@@ -75,14 +77,30 @@ export class PendingQuestions {
       if (q.message && userTexts.has(q.message)) this.consumed.add(q.id);
     }
     this.expire();
+    this.scheduleExpiry();
     for (const q of this.questions.values()) if (q.status === "pending") this.host.changed(q);
     this.host.changed();
   }
 
   private save(q: PendingQuestion): void {
     this.host.append(q); // Append first: a disk failure cannot create a live undurable choice.
-    this.questions.set(q.id, q); this.host.changed(q);
+    this.questions.set(q.id, q);
+    this.scheduleExpiry();
+    this.host.changed(q);
   }
+
+  private scheduleExpiry(): void {
+    clearTimeout(this.expiry);
+    if (this.closed) return;
+    let deadline = Infinity;
+    for (const q of this.questions.values()) if (q.status === "pending") deadline = Math.min(deadline, q.expires);
+    if (Number.isFinite(deadline)) {
+      this.expiry = setTimeout(() => { this.expire(); this.scheduleExpiry(); },
+        Math.min(QUESTION_TTL, Math.max(1, deadline - this.now())));
+      this.expiry.unref();
+    }
+  }
+
   list(): readonly PendingQuestion[] { return [...this.questions.values()]; }
   observeUser(text: string): void {
     for (const q of this.questions.values()) if (q.message === text) this.consumed.add(q.id);
@@ -92,7 +110,7 @@ export class PendingQuestions {
   get(id: string): PendingQuestion | undefined { this.expire(); return this.questions.get(id); }
   status(id: string): string { return this.consumed.has(id) ? "delivered" : this.questions.get(id)?.status ?? "missing"; }
 
-  ask(call: string, questions: ChoiceQuestion[]): PendingQuestion {
+  ask(call: string, questions: ChoiceQuestion[], tool?: PendingQuestion["tool"]): PendingQuestion {
     if (this.closed) throw new Error("question_session_closed");
     const pendingCount = this.pending().length;
     const session = this.host.session();
@@ -105,7 +123,7 @@ export class PendingQuestions {
     if (this.questions.size >= QUESTION_MAX) throw new Error("question_session_limit: resume does not reset the limit");
     if (pendingCount >= PENDING_MAX) throw new Error("pending_question_limit");
     const q: PendingQuestion = { version: 1, id, session,
-      questions, expires: this.now() + QUESTION_TTL, status: "pending" };
+      questions, ...(tool ? { tool } : {}), expires: this.now() + QUESTION_TTL, status: "pending" };
     this.save(q);
     return q;
   }
@@ -125,7 +143,7 @@ export class PendingQuestions {
       if (q.status === "pending" && q.expires <= this.now()) this.save({ ...q, status: "expired" });
     }
   }
-  async answer(id: string, answers: ChoiceAnswer[]): Promise<string> {
+  async answer(id: string, answers: ChoiceAnswer[], before?: () => Promise<unknown>): Promise<string> {
     if (this.closed) return "session_closed";
     const q = this.get(id);
     if (!q || q.status !== "pending") return q?.status ?? "missing";
@@ -134,6 +152,11 @@ export class PendingQuestions {
     }
     const text = answerText(q.questions, answers);
     if (Buffer.byteLength(text) > ANSWER_MAX_BYTES) throw new Error("question_answer_too_large");
+    if (before) {
+      await before();
+      if (this.closed) return "session_closed";
+      if (this.get(id) !== q) return this.status(id);
+    }
     // Only actual answers, never a cancelled or withdrawn status, become owner input.
     this.save({ ...q, status: "answered", answers, message: `${answerMarker(id)}\n${text}` });
     await this.send(id);
@@ -170,6 +193,7 @@ export class PendingQuestions {
       if (q.status === "pending" || (q.status === "answered" && !this.consumed.has(q.id))) this.save({ ...q, status: "ended" });
     }
     this.closed = true;
+    clearTimeout(this.expiry);
     this.queued.clear();
   }
 }

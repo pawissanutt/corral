@@ -148,7 +148,7 @@ pub(super) fn caption(
 
 /// `.ready`: each link's mark in its hue on a rule-2 line down to the next, the title (its
 /// hint the receipt), the candidate's SHA, a count of older results, the quoted note.
-pub(super) fn chain(app: AppState, links: &[ReadyLink]) -> AnyElement {
+pub(crate) fn chain(app: AppState, links: &[ReadyLink]) -> AnyElement {
     view()
         .role(AccessibilityRole::List)
         .children(

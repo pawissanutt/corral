@@ -132,4 +132,6 @@ export interface CardSpec {
   choose(index: number): void;
   submit(text: string): void;
   cancel(): void;
+  /** Pi removed the card (an answer, its timeout, an abort); called once. */
+  closed?(): void;
 }

@@ -1,0 +1,363 @@
+{
+  "state": {
+    "turn": 7,
+    "model": "openai-codex/gpt-6.1-sol",
+    "effort": "medium",
+    "effort_levels": ["low", "medium", "high", "xhigh"],
+    "usage": { "tokens": 12000, "cost_usd": 0.09, "cost_partial": true, "context_tokens": 28000, "context_window": 200000, "context_percent": 14 },
+    "queue": [
+      { "key": "notes", "policy": "follow_up", "origin": "owner", "text": "Check the migration notes.", "bytes": 26, "actions": ["withdraw", "move_down"] },
+      { "key": "recap", "policy": "follow_up", "origin": "owner", "text": "Send a short status recap.", "bytes": 26, "actions": ["withdraw", "move_up"] }
+    ],
+    "queue_total": 2,
+    "cards": [
+      { "id": "child-question-docs", "kind": "child_question", "title": "Keep the old guide as a redirect?", "child": "docs" },
+      { "id": "board-plan-followup", "kind": "board_plan", "title": "Follow up on the parity guide" }
+    ],
+    "exit": { "phase": "none", "base_branch": "trunk" },
+    "children": { "live": 2, "waiting": 1, "total": 3 },
+    "jobs": { "live": 1, "waiting": 0, "total": 2 },
+    "changes": 3,
+    "board": { "open": 3, "blocked": 1, "failed": 1, "proposed": true },
+    "plan": { "done": 1, "total": 5, "current": "Update the parity guide", "stale": false },
+    "can": [
+      { "id": "send" }, { "id": "steer" }, { "id": "follow_up" }, { "id": "queue" }, { "id": "model" },
+      { "id": "cards" }, { "id": "children" }, { "id": "child_control" }, { "id": "jobs" }, { "id": "job_control" },
+      { "id": "changes" }, { "id": "usage" }, { "id": "plan" }, { "id": "context" }, { "id": "commands" },
+      { "id": "board" }, { "id": "record" }, { "id": "exit" }, { "id": "compact" }, { "id": "export" }
+    ]
+  },
+  "fleet": {
+    "children": [
+      { "id": "migration", "kind": "slice", "title": "Write migration notes", "state": "running", "model": "openai-codex/gpt-6.1-sol",
+        "started_at": 1795082400000, "activity": "edit", "tokens": 3150, "cost_usd": 0.03, "profile": "default", "effort": "medium",
+        "pending_model": "anthropic/claude-opus-4-8", "turns": 2, "context_percent": 7, "files": 1, "outside": 1, "owns": 1, "steerable": true },
+      { "id": "docs", "kind": "slice", "title": "Update the parity guide", "state": "needs", "model": "anthropic/claude-opus-4-8",
+        "started_at": 1795082460000, "tokens": 2500, "question": true, "profile": "review-subscription", "effort": "high", "turns": 3,
+        "context_percent": 9, "files": 1, "owns": 1, "steerable": true },
+      { "id": "review", "kind": "review", "title": "Review the guide and migration", "state": "done", "model": "anthropic/claude-opus-4-8",
+        "started_at": 1795082520000, "ended_at": 1795082700000, "tokens": 1800, "cost_usd": 0.02, "verdict": "changes",
+        "profile": "review-subscription", "effort": "high", "turns": 1 }
+    ],
+    "messages": [
+      { "seq": 1, "at": 1795082560000, "from": "parent", "to": "migration", "text": "Keep the compatibility note in the first section.", "delivery": "delivered" },
+      { "seq": 2, "at": 1795082620000, "from": "migration", "to": "parent", "text": "The note is ready; it touches a path outside my brief.", "delivery": "delivered" },
+      { "seq": 3, "at": 1795082700000, "from": "review", "to": "parent", "text": "Review complete. Add a compatibility note before publishing.", "delivery": "delivered" }
+    ],
+    "messages_total": 3,
+    "max_parallel": 3
+  },
+  "events": [
+    { "kind": "ready" },
+    { "kind": "turn_ended", "data": { "turn": 7, "aborted": false } },
+    { "kind": "job_control", "data": { "job": "j1-1", "action": "background", "state": "running" } }
+  ],
+  "methods": {
+    "cards": {
+      "cards": [
+        {
+          "id": "child-question-docs", "kind": "child_question", "title": "Keep the old guide as a redirect?", "child": "docs",
+          "meta": "review-subscription · anthropic/claude-opus-4-8", "opened_at": "2026-11-19T10:08:00Z", "body_more": false,
+          "questions": [{ "text": "Keep the old guide as a redirect?", "multi": false, "free_text": true, "options": [
+            { "id": "redirect", "label": "Keep a redirect", "detail": "Preserve existing links", "destructive": false },
+            { "id": "rename", "label": "Use only the new name", "destructive": false }
+          ] }]
+        },
+        {
+          "id": "board-plan-followup", "kind": "board_plan", "title": "Follow up on the parity guide", "tool": "board_plan",
+          "meta": "demo · 2 tasks", "body": "Publish the updated guide, then audit links to it.", "body_more": false, "opened_at": "2026-11-19T10:09:00Z",
+          "questions": [{ "text": "File this plan on the board?", "multi": false, "free_text": false, "options": [
+            { "id": "file_start", "label": "File and start", "detail": "File these tasks and queue them", "destructive": false },
+            { "id": "file", "label": "File only", "detail": "File these tasks without starting them", "destructive": false },
+            { "id": "dismiss", "label": "Dismiss", "detail": "Discard the proposal without filing", "destructive": false }
+          ] }]
+        }
+      ]
+    },
+    "child": [
+      { "when": { "child": "migration" }, "reply": {
+        "id": "migration", "kind": "slice", "title": "Write migration notes", "state": "running",
+        "brief": "Write the compatibility and migration notes. Cover the original label, the new label, and how existing projects can update without losing context. Start by reading line.txt and the draft guide. Keep the compatibility note near the start, cite which examples still use the old name, and tell the parent when the notes are ready for review. The supplied brief continues with the full compatibility matrix and example commands.",
+        "brief_more": true, "owns": ["docs/migrations/"], "profile": "default", "model": "openai-codex/gpt-6.1-sol",
+        "pending_model": "anthropic/claude-opus-4-8", "effort": "medium", "created_at": 1795082390000, "started_at": 1795082400000,
+        "activity": "edit docs/compatibility.md", "edits": [{ "path": "docs/compatibility.md", "outside": true, "at": "2026-11-19T10:04:00Z" }],
+        "usage": { "input": 2900, "output": 250, "cost_usd": 0.03, "context_percent": 7, "turns": 2 },
+        "steers": [
+          { "at": "2026-11-19T10:01:00Z", "text": "Use the new label throughout the examples." },
+          { "at": "2026-11-19T10:03:00Z", "text": "Mention who still needs the old name." }
+        ],
+        "report_more": false, "pulse": [0, 1, 2, 2, 1], "history": "read · edit · running", "transcript": false,
+        "models": ["openai-codex/gpt-6.1-sol", "anthropic/claude-opus-4-8"],
+        "profiles": [
+          { "name": "default", "model": "openai-codex/gpt-6.1-sol", "effort": "medium", "description": "Parent's model" },
+          { "name": "review-subscription", "model": "anthropic/claude-opus-4-8", "effort": "high", "description": "Subscription review" },
+          { "name": "docs-api", "model": "anthropic-api/claude-opus-4-8", "effort": "high", "description": "API profile; not approved for additional agents" }
+        ]
+      } },
+      { "when": { "child": "docs" }, "reply": {
+        "id": "docs", "kind": "slice", "title": "Update the parity guide", "state": "needs",
+        "brief": "Rename the draft guide and refresh the opening example. Ask before removing the old path.", "brief_more": false,
+        "owns": ["docs/parity-guide.md"], "profile": "review-subscription", "model": "anthropic/claude-opus-4-8", "effort": "high",
+        "created_at": 1795082390000, "started_at": 1795082460000,
+        "edits": [{ "path": "docs/parity-guide.md", "outside": false, "at": "2026-11-19T10:06:00Z" }],
+        "usage": { "input": 2200, "output": 300, "context_percent": 9, "turns": 3 },
+        "steers": [{ "at": "2026-11-19T10:05:00Z", "text": "Keep existing links working if practical." }],
+        "question": { "question": "Keep the old guide as a redirect?", "asked_at": "2026-11-19T10:08:00Z", "options": [
+          { "label": "Keep a redirect", "detail": "Preserve existing links" }, { "label": "Use only the new name" }
+        ] },
+        "report_more": false, "pulse": [0, 1, 2, 0], "history": "read · edit · asks owner", "transcript": false,
+        "models": ["openai-codex/gpt-6.1-sol", "anthropic/claude-opus-4-8"],
+        "profiles": [
+          { "name": "review-subscription", "model": "anthropic/claude-opus-4-8", "effort": "high", "description": "Subscription review" },
+          { "name": "default", "model": "openai-codex/gpt-6.1-sol", "effort": "medium", "description": "Parent's model" },
+          { "name": "docs-api", "model": "anthropic-api/claude-opus-4-8", "effort": "high", "description": "API profile; not approved for additional agents" }
+        ]
+      } },
+      { "when": { "child": "review" }, "reply": {
+        "id": "review", "kind": "review", "title": "Review the guide and migration", "state": "done",
+        "brief": "Review the label migration for broken links and stale examples. Do not edit files.", "brief_more": false,
+        "profile": "review-subscription", "model": "anthropic/claude-opus-4-8", "effort": "high",
+        "created_at": 1795082520000, "started_at": 1795082520000, "ended_at": 1795082700000,
+        "usage": { "input": 1600, "output": 200, "cost_usd": 0.02, "turns": 1 },
+        "steers": [{ "at": "2026-11-19T10:03:00Z", "text": "Include a check for the old guide's URL." }],
+        "report": "The new label is consistent. The guide needs a compatibility note and a decision on preserving the old link.", "report_more": false,
+        "verdict": { "verdict": "changes", "summary": "Resolve the compatibility gaps before publishing.",
+          "head": "e4a5e12001a3b45678c0ffee1677a12bae340000", "at": "2026-11-19T10:05:00Z", "findings": [
+            { "severity": "major", "path": "docs/parity-guide.md", "line": 4, "text": "The guide does not say where old links should redirect." },
+            { "severity": "minor", "path": "line.txt", "line": 12, "text": "The old label has no migration note." }
+          ] },
+        "pulse": [1, 2, 1, 0], "history": "read · changes requested", "transcript": false
+      } },
+      { "refuse": { "code": "child_missing", "reason": "no such child in this session" } }
+    ],
+    "jobs": {
+      "jobs": [
+        { "id": "j1-1", "command": "watch parity snapshot", "dir": "$worktree", "state": "running", "started_at": "2026-11-19T10:02:00Z",
+          "output_bytes": 67, "tail": ["Snapshot 1 ready.", "Waiting for changes."], "monitors": ["Snapshot"], "actions": ["stop", "background"] },
+        { "id": "j1-2", "command": "test -f docs/compatibility.md", "dir": "$worktree", "state": "exited", "started_at": "2026-11-19T10:01:00Z",
+          "ended_at": "2026-11-19T10:01:01Z", "exit_code": 1, "output_bytes": 28, "tail": ["Check failed: missing note."] }
+      ]
+    },
+    "job_output": [
+      { "when": { "job": "j1-1", "after": "watch:28" }, "reply": { "text": "Starting the fixture watch.\n", "offset": 0, "bytes": 67, "live": true } },
+      { "when": { "job": "j1-1" }, "reply": { "text": "Snapshot 1 ready.\nWaiting for changes.\n", "offset": 28, "bytes": 67, "live": true, "next": "watch:28" } },
+      { "when": { "job": "j1-2" }, "reply": { "text": "Check failed: missing note.\n", "offset": 0, "bytes": 28, "live": false } }
+    ],
+    "changes": {
+      "comparison": "session",
+      "comparisons": [
+        { "id": "session", "label": "This session" },
+        { "id": "candidate", "label": "Task candidate", "unavailable": "This build session has no bound task candidate" }
+      ],
+      "scopes": [{ "id": "bound", "label": "Session worktree" }],
+      "root": "$worktree", "base": "7d0d2cf004a3b45678c0ffee1677a12bae340000", "head": "19bc52d002a3b45678c0ffee1677a12bae340000",
+      "files": [
+        { "path": "line.txt", "status": "M", "added": 2, "removed": 2, "authors": [], "outside": false },
+        { "path": "docs/parity-guide.md", "original_path": "docs/draft-guide.md", "status": "R", "added": 1, "removed": 1, "authors": ["docs"], "outside": false },
+        { "path": "docs/compatibility.md", "status": "A", "added": 20, "removed": 0, "authors": ["migration"], "outside": true }
+      ],
+      "total": 3, "added": 23, "removed": 3, "truncated": false
+    },
+    "change_file": [
+      { "when": { "path": "line.txt" }, "reply": { "path": "line.txt", "truncated": false,
+        "patch": "diff --git a/line.txt b/line.txt\n--- a/line.txt\n+++ b/line.txt\n@@ -1,2 +1,2 @@\n-original\n+parity\n   first example\n@@ -11,2 +11,2 @@\n   final example\n-original label\n+parity label\n" } },
+      { "when": { "path": "docs/parity-guide.md" }, "reply": { "path": "docs/parity-guide.md", "truncated": false,
+        "patch": "diff --git a/docs/draft-guide.md b/docs/parity-guide.md\nsimilarity index 95%\nrename from docs/draft-guide.md\nrename to docs/parity-guide.md\n--- a/docs/draft-guide.md\n+++ b/docs/parity-guide.md\n@@ -1 +1 @@\n-# Draft guide\n+# Parity guide\n" } },
+      { "when": { "path": "docs/compatibility.md" }, "reply": { "path": "docs/compatibility.md", "truncated": true,
+        "patch": "diff --git a/docs/compatibility.md b/docs/compatibility.md\nnew file mode 100644\n--- /dev/null\n+++ b/docs/compatibility.md\n@@ -0,0 +1,20 @@\n+# Compatibility\n+\n+Use the parity label in new projects.\n" } }
+    ],
+    "usage": {
+      "model": "openai-codex/gpt-6.1-sol", "effort": "medium", "context": { "tokens": 28000, "context_window": 200000, "percent": 14 },
+      "rows": [
+        { "key": "pane", "name": "Pane", "kind": "session", "tokens": 12000, "input": 11100, "output": 900, "cost_usd": 0.09, "context_percent": 14, "turns": 7 },
+        { "key": "child:review", "name": "Review the guide and migration", "kind": "review", "tokens": 1800, "input": 1600, "output": 200, "cost_usd": 0.02, "turns": 1 },
+        { "key": "child:docs", "name": "Update the parity guide", "kind": "slice", "tokens": 2500, "input": 2200, "output": 300, "context_percent": 9, "turns": 3 },
+        { "key": "child:migration", "name": "Write migration notes", "kind": "slice", "tokens": 3150, "input": 2900, "output": 250, "cost_usd": 0.03, "context_percent": 7, "turns": 2 },
+        { "key": "child:oracle-guide", "name": "oracle", "kind": "helper:oracle", "tokens": 0, "input": 0, "output": 0, "turns": 0 }
+      ],
+      "total": { "tokens": 19450, "cost_usd": 0.14, "partial": true }
+    },
+    "context": {
+      "cwd": "$worktree", "worktree": "$worktree", "branch": "build/parity-ready",
+      "context_files": ["$worktree/AGENTS.md", "$worktree/docs/CONTRIBUTING.md"],
+      "skills": ["migration-guide", "review-notes"], "prompts": ["parity-summary"],
+      "tools": ["read", "edit", "bash", "ask_user", "task", "build_verify", "board_plan"],
+      "mcp": [{ "name": "project-index", "state": "connected" }, { "name": "docs-index", "state": "unavailable" }]
+    },
+    "plan": [
+      { "after_call": "compact", "reply": {
+        "stale": true,
+        "plan": { "title": "Guide and migration", "revision": 12, "steps": [
+          { "id": "baseline", "text": "Capture the starting label", "state": "done", "detail": "Original label recorded" },
+          { "id": "guide", "text": "Update the parity guide", "state": "in_progress" },
+          { "id": "redirect", "text": "Decide where old links go", "state": "waiting", "wait": "child-question-docs" },
+          { "id": "rerun", "text": "Rerun the link check", "state": "pending" },
+          { "id": "publish", "text": "Publish the guide", "state": "blocked", "detail": "Needs the redirect decision and a passing link check" }
+        ] },
+        "history": [
+          { "at": "2026-11-19T09:58:00Z", "revision": 9, "summary": "P-2: 2/2 done, 0 dropped" },
+          { "at": "2026-11-19T09:41:00Z", "revision": 6, "summary": "P-1: 3/4 done, 1 dropped" }
+        ]
+      } },
+      { "reply": {
+        "stale": false,
+        "plan": { "title": "Guide and migration", "revision": 12, "steps": [
+          { "id": "baseline", "text": "Capture the starting label", "state": "done", "detail": "Original label recorded" },
+          { "id": "guide", "text": "Update the parity guide", "state": "in_progress" },
+          { "id": "redirect", "text": "Decide where old links go", "state": "waiting", "wait": "child-question-docs" },
+          { "id": "rerun", "text": "Rerun the link check", "state": "pending" },
+          { "id": "publish", "text": "Publish the guide", "state": "blocked", "detail": "Needs the redirect decision and a passing link check" }
+        ] },
+        "history": [
+          { "at": "2026-11-19T09:58:00Z", "revision": 9, "summary": "P-2: 2/2 done, 0 dropped" },
+          { "at": "2026-11-19T09:41:00Z", "revision": 6, "summary": "P-1: 3/4 done, 1 dropped" }
+        ]
+      } }
+    ],
+    "models": {
+      "current": "openai-codex/gpt-6.1-sol", "default": "openai-codex/gpt-6.1-sol", "effort": "medium", "refreshing": false,
+      "refreshed_at": "2026-11-19T10:00:00Z",
+      "models": [
+        { "id": "anthropic/claude-opus-4-8", "provider": "anthropic", "name": "Claude Opus 4.8 (subscription)",
+          "context_window": 200000, "effort_levels": ["low", "medium", "high"], "scoped": true },
+        { "id": "anthropic-api/claude-opus-4-8", "provider": "anthropic-api", "name": "Claude Opus 4.8 (API)",
+          "context_window": 200000, "effort_levels": ["low", "medium", "high"], "scoped": false, "note": "API access, not a subscription fallback" },
+        { "id": "openai-codex/gpt-6.1-sol", "provider": "openai-codex", "name": "GPT-6.1 Sol", "context_window": 200000,
+          "effort_levels": ["low", "medium", "high", "xhigh"], "scoped": true }
+      ]
+    },
+    "commands": {
+      "commands": [
+        { "name": "release-note", "description": "Format a release note for a named change", "source": "extension", "args_hint": "<change>" },
+        { "name": "parity-summary", "description": "Summarize the build and its remaining work", "source": "prompt" },
+        { "name": "skill:migration-guide", "description": "Load the migration guide checklist", "source": "skill" },
+        { "name": "compact", "description": "Compact session context", "source": "host", "args_hint": "[instructions]" },
+        { "name": "corral-export", "description": "Export this session", "source": "host" },
+        { "name": "board", "description": "Refresh the build board", "source": "host" }
+      ]
+    },
+    "board": {
+      "tasks": [
+        { "id": "T-004", "title": "Publish the guide", "status": "blocked", "phase": "blocked", "depends": ["T-003"],
+          "detail": "Waiting for the link check", "updated_at": "2026-11-19T10:09:00Z" },
+        { "id": "T-003", "title": "Check legacy links", "status": "dropped", "phase": "failed", "depends": ["T-001"],
+          "detail": "The old guide URL did not resolve", "updated_at": "2026-11-19T10:08:00Z" },
+        { "id": "T-002", "title": "Draft migration notes", "status": "running", "phase": "running", "depends": ["T-001"], "updated_at": "2026-11-19T10:06:00Z" },
+        { "id": "T-001", "title": "Record the baseline", "status": "done", "phase": "landed", "updated_at": "2026-11-19T10:01:00Z" }
+      ],
+      "proposed": {
+        "title": "Follow up on the parity guide", "project": "demo", "why": "Publish after choosing a redirect, then verify old links against the published guide.",
+        "tasks": [
+          { "key": "publish", "title": "Publish the updated guide", "kind": "task", "size": "small", "profile": "parity",
+            "body": "Publish the updated guide after the owner confirms the redirect policy. Keep the migration example synchronized with line.txt. Check the old and new URLs in the published preview, then attach the output of the link check and record which URL is canonical. The original task body continues with examples and a release checklist.", "body_bytes": 3312 },
+          { "key": "audit", "title": "Audit legacy links", "depends": ["publish"], "body": "Audit links to the guide.", "body_bytes": 25 }
+        ]
+      }
+    },
+    "record": {
+      "title": "Guide and migration", "outcome": { "state": "open", "head": "19bc52d002a3b45678c0ffee1677a12bae340000", "base_branch": "trunk" },
+      "diff": { "commits": 2, "files": 3, "added": 23, "removed": 3 },
+      "commits": [
+        { "sha": "e4a5e12001a3b45678c0ffee1677a12bae340000", "subject": "Rename the parity guide", "slice": "docs" },
+        { "sha": "19bc52d002a3b45678c0ffee1677a12bae340000", "subject": "Add the compatibility note", "slice": "migration" }
+      ],
+      "commits_total": 2,
+      "verification": [
+        { "attempt": "G1", "tier": "full", "head": "e4a5e12001a3b45678c0ffee1677a12bae340000", "result": "fail", "failed_command": "test -f docs/compatibility.md",
+          "started": "2026-11-19T10:01:00Z", "ended": "2026-11-19T10:01:01Z" },
+        { "attempt": "G2", "tier": "full", "head": "19bc52d002a3b45678c0ffee1677a12bae340000", "result": "pass",
+          "started": "2026-11-19T10:07:00Z", "ended": "2026-11-19T10:07:02Z" }
+      ],
+      "reviews": [{
+        "round": 1, "reviewer": "review", "model": "anthropic/claude-opus-4-8", "head": "e4a5e12001a3b45678c0ffee1677a12bae340000",
+        "verdict": "changes", "summary": "Resolve the compatibility gaps before publishing.", "at": "2026-11-19T10:05:00Z",
+        "findings": [
+          { "id": "F1", "severity": "major", "path": "docs/parity-guide.md", "line": 4, "text": "The old URL needs a redirect decision." },
+          { "id": "F2", "severity": "minor", "path": "line.txt", "line": 12, "text": "The old label needs a migration note.",
+            "resolution": { "state": "fixed", "commit": "19bc52d002a3b45678c0ffee1677a12bae340000", "reason": "Added docs/compatibility.md" } }
+        ]
+      }],
+      "decisions": [{ "at": "2026-11-19T10:06:00Z", "kind": "question", "text": "Publish before the compatibility review?", "answer": "Wait for the review" }],
+      "timeline": [
+        { "at": "2026-11-19T10:00:00Z", "phase": "started" },
+        { "at": "2026-11-19T10:01:01Z", "phase": "verify", "detail": "G1 failed" },
+        { "at": "2026-11-19T10:05:00Z", "phase": "review", "detail": "Changes requested" },
+        { "at": "2026-11-19T10:07:02Z", "phase": "verify", "detail": "G2 passed" }
+      ],
+      "usage": {
+        "parent": { "input": 11100, "output": 900, "cost_usd": 0.09 },
+        "children": { "input": 5100, "output": 550, "cost_usd": 0.03 },
+        "reviewers": { "input": 1600, "output": 200, "cost_usd": 0.02 },
+        "total": { "input": 17800, "output": 1650, "cost_usd": 0.14 }
+      }
+    },
+    "child_act": [
+      { "when": { "child": "review" }, "reply": { "ok": false, "reason": "Child is not live" } },
+      { "when": { "action": "set_model", "model": "anthropic-api/claude-opus-4-8" },
+        "reply": { "ok": false, "reason": "Model is not approved for this fleet" } },
+      { "when": { "child": "migration" }, "reply": { "ok": true } },
+      { "when": { "child": "docs" }, "reply": { "ok": true } }
+    ],
+    "job_act": [
+      { "when": { "job": "j1-1", "action": "stop" }, "reply": { "state": "exited" } },
+      { "when": { "job": "j1-1", "action": "background" }, "reply": { "state": "running" } },
+      { "when": { "job": "j1-2" }, "reply": { "state": "exited", "reason": "already completed" } }
+    ],
+    "board_refresh": {
+      "tasks": [
+        { "id": "T-004", "title": "Publish the guide", "status": "blocked", "phase": "blocked", "depends": ["T-003"], "detail": "Waiting for the link check", "updated_at": "2026-11-19T10:09:00Z" },
+        { "id": "T-003", "title": "Check legacy links", "status": "dropped", "phase": "failed", "depends": ["T-001"], "detail": "The old guide URL did not resolve", "updated_at": "2026-11-19T10:08:00Z" },
+        { "id": "T-002", "title": "Draft migration notes", "status": "running", "phase": "running", "depends": ["T-001"], "updated_at": "2026-11-19T10:06:00Z" },
+        { "id": "T-001", "title": "Record the baseline", "status": "done", "phase": "landed", "updated_at": "2026-11-19T10:01:00Z" }
+      ],
+      "proposed": {
+        "title": "Follow up on the parity guide", "project": "demo", "why": "Publish after choosing a redirect, then verify old links against the published guide.",
+        "tasks": [
+          { "key": "publish", "title": "Publish the updated guide", "kind": "task", "size": "small", "profile": "parity",
+            "body": "Publish the updated guide after the owner confirms the redirect policy. Keep the migration example synchronized with line.txt. Check the old and new URLs in the published preview, then attach the output of the link check and record which URL is canonical. The original task body continues with examples and a release checklist.", "body_bytes": 3312 },
+          { "key": "audit", "title": "Audit legacy links", "depends": ["publish"], "body": "Audit links to the guide.", "body_bytes": 25 }
+        ]
+      }
+    },
+    "card_answer": [
+      { "when": { "dismiss": true }, "reply": { "status": "dismissed" } },
+      { "when": { "card": "board-plan-followup", "answers": [{ "options": ["dismiss"] }] }, "reply": { "status": "dismissed" } },
+      { "when": { "card": "child-question-docs" }, "reply": { "status": "delivered" } },
+      { "when": { "card": "board-plan-followup" }, "reply": { "status": "started" } },
+      { "reply": { "status": "missing" } }
+    ],
+    "queue_move": { "moved": true },
+    "exit_open": { "phase": "none" },
+    "compact": [
+      { "reply": { "text": "Compacted session context (28000 tokens before compaction)" }, "live": [{ "kind": "live_part", "data": { "part": "plan" } }] }
+    ],
+    "export": [
+      { "refuse": { "code": "export_unavailable", "reason": "this session's host does not export sessions" } }
+    ]
+  },
+  "builtins": {
+    "submit_input": { "disposition": "handled" },
+    "queue_state": {
+      "available": true, "more": false,
+      "items": [
+        { "item": "notes", "mode": "follow_up", "origin": "owner", "state": "queued", "position": 1,
+          "text": "Check the migration notes.", "bytes": 26, "actions": ["withdraw", "move_down"] },
+        { "item": "recap", "mode": "follow_up", "origin": "owner", "state": "queued", "position": 2,
+          "text": "Send a short status recap.", "bytes": 26, "actions": ["withdraw", "move_up"] }
+      ]
+    },
+    "queue_withdraw": [
+      { "when": { "key": "notes" }, "reply": { "outcome": "withdrawn", "item": "notes", "text": "Check the migration notes." } },
+      { "when": { "key": "recap" }, "reply": { "outcome": "withdrawn", "item": "recap", "text": "Send a short status recap." } },
+      { "reply": { "outcome": "unknown_item" } }
+    ],
+    "set_model": [
+      { "when": { "model": "anthropic/claude-opus-4-8" }, "reply": { "model": "anthropic/claude-opus-4-8", "effort": "medium" } },
+      { "when": { "model": "anthropic-api/claude-opus-4-8" }, "reply": { "model": "anthropic-api/claude-opus-4-8", "effort": "medium" } },
+      { "when": { "model": "openai-codex/gpt-6.1-sol", "effort": "low" }, "reply": { "model": "openai-codex/gpt-6.1-sol", "effort": "low" } },
+      { "when": { "model": "openai-codex/gpt-6.1-sol", "effort": "high" }, "reply": { "model": "openai-codex/gpt-6.1-sol", "effort": "high" } },
+      { "when": { "model": "openai-codex/gpt-6.1-sol", "effort": "xhigh" }, "reply": { "model": "openai-codex/gpt-6.1-sol", "effort": "xhigh" } },
+      { "when": { "model": "openai-codex/gpt-6.1-sol" }, "reply": { "model": "openai-codex/gpt-6.1-sol", "effort": "medium" } }
+    ]
+  }
+}

@@ -1,15 +1,15 @@
-//! What a sample pi host does when its session is controlled or asked: Cancel, Pause, Resume and
-//! the rewinds, which save the work under a rescue ref and cut the transcript back, and the
-//! owner's answer to a question the host asked. The streaming and delivery they act on are in
-//! `pi.rs`.
+//! What a sample pi host does when its session is controlled: Cancel, Pause, Resume and the
+//! rewinds, which save the work under a rescue ref and cut the transcript back. The streaming
+//! and delivery they act on are in `pi.rs`; the cards the host waits on are answered in
+//! `build_ops.rs`.
 
 use corral_protocol::session::{RewindReply, Rewound};
 use corral_protocol::subscription::{SessionLiveKind, SessionLiveTurnState};
 use corral_types::Origin;
 use serde_json::{Value, json};
 
-use super::pi::{Input, deliver, finish, publish, question_card, resolve, start};
-use super::pi_rows::{settle, thread};
+use super::pi::{Input, finish, publish, start};
+use super::pi_rows::settle;
 use super::sample::sha;
 use super::stamp;
 use crate::model::daemon::Feed;
@@ -78,7 +78,6 @@ pub(super) fn control(
         }
     };
     settle(feed, id);
-    thread(feed, id);
     Ok(reply)
 }
 
@@ -145,42 +144,4 @@ fn rewind(feed: &mut Feed, id: &str, turn: u64, at: &str) -> Result<Value, Strin
 
 fn cut_turns(turn: u64) -> usize {
     usize::try_from(turn.saturating_sub(1)).unwrap_or(usize::MAX)
-}
-
-/// Answers a question the host asked: the transcript records it answered, a pause lifts and
-/// the next turn starts on the answer.
-pub(super) fn answer(
-    feed: &mut Feed,
-    answer: &corral_protocol::session::SessionPromptAnswer,
-) -> Result<Value, String> {
-    let id = resolve(feed, &answer.session)
-        .ok_or_else(|| format!("{} has no Pi host", answer.session))?;
-    let at = stamp(feed.now);
-    let host = feed
-        .hosts
-        .get_mut(id.as_str())
-        .ok_or_else(|| format!("{} has no Pi host", answer.session))?;
-    let index = host
-        .pending
-        .iter()
-        .position(|question| question.id == answer.question)
-        .ok_or_else(|| format!("no pending question {}", answer.question))?;
-    let question = host.pending.remove(index);
-    let given = json!([{"option": answer.option, "text": answer.text}]);
-    host.transcript
-        .push(question_card(&at, &question, "answered", given));
-    let words = match (&answer.option, &answer.text) {
-        (Some(option), Some(text)) => format!("{option} — {text}"),
-        (Some(option), None) => option.clone(),
-        (None, Some(text)) => text.clone(),
-        (None, None) => String::new(),
-    };
-    deliver(
-        feed,
-        id.as_str(),
-        &format!("[ask_user answer {}] {words}", question.id),
-        Origin::Owner,
-        None,
-    );
-    Ok(json!({"status": "delivered"}))
 }

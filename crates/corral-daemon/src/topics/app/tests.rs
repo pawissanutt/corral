@@ -53,6 +53,18 @@ fn ack(subs: &mut Subscriptions<'_>, topic: Topic, cursor: BoardCursor) {
 }
 
 #[test]
+fn the_retired_thread_topic_is_not_accepted() {
+    let fixture = Fixture::new();
+    let mut subs = Subscriptions::new(&fixture.shared);
+    let open: SubOpen = serde_json::from_value(serde_json::json!({
+        "topic": "thread", "scope": "quick",
+    }))
+    .unwrap();
+    assert_eq!(open.topic, Topic::Other);
+    assert!(subs.open(open).is_err());
+}
+
+#[test]
 fn health_delta_tracks_sync_result() {
     let fixture = Fixture::new();
     let (mut subs, SubDelta::Health { cursor, rows, .. }) = start(&fixture, Topic::Health) else {

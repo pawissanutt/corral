@@ -1,5 +1,6 @@
 //! Bounded transcript pages and terminal stream replacement windows.
 use super::question::{QuestionAnswer, QuestionOption};
+use crate::{attachment::AttachmentFact, session_state::InputOrigin};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,7 @@ pub const TERMINAL_ARRAYS_MAX: usize = 52 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionPage {
     pub id: String,
+    /// Session role, including `build` and read-only `child` transcripts.
     pub role: String,
     pub task: Option<String>,
     pub run: Option<String>,
@@ -21,10 +23,26 @@ pub struct SessionPage {
     pub older: Option<String>,
     pub replyable: bool,
     pub reply_refusal: Option<String>,
+    #[serde(default)]
+    pub host: HostPresence,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostPresence {
+    Running,
+    #[default]
+    NotRunning,
+    Unreachable,
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionMessage {
+    /// Stable message ID within its concrete session; empty only on older pages.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub author: String,
     pub at: Option<String>,
     pub items: Vec<SessionItem>,
@@ -34,6 +52,24 @@ pub struct SessionMessage {
     pub stop_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<InputFacts>,
+    /// Attachment selectors use this message's ID as their `entry`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct InputFacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub origin: InputOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -1,255 +1,16 @@
+use super::fake_host::{AT, Host, PID, Placement, Script};
 use super::*;
-use corral_engine::{LaunchSpec, Runner};
 use corral_protocol::{
     assistant::*,
-    detail::{DetailBody, DetailReply, SessionItem},
+    detail::{DetailBody, DetailReply, HostPresence, SessionItem, SessionPage},
     session::*,
+    session_host::{
+        InputDisposition, SESSION_CARD_ANSWER, SESSION_SEND, SendPolicy, SessionCardAnswered,
+        SessionSend, SessionSent,
+    },
     subscription::SubDelta,
 };
-use corral_types::{Origin, SessionRef, SessionStatus};
-use std::{
-    collections::BTreeMap,
-    io::{BufRead, BufReader, Write},
-    sync::Mutex,
-    thread::{self, JoinHandle},
-};
-
-#[derive(Default)]
-struct HostState {
-    requests: Vec<(String, Value)>,
-    text: Vec<String>,
-    held: Vec<String>,
-    transcript_tail: Option<String>,
-    events: Vec<Value>,
-    paused: bool,
-    open: bool,
-    stopped: bool,
-    questions: Vec<Value>,
-}
-
-impl HostState {
-    fn emit(&mut self, text: &str) {
-        self.events.push(json!({"seq": self.events.len() + 1, "at": "2026-11-18T12:00:00Z", "kind": "live_text", "turn": 1, "message": 1, "offset": 0, "text": text}));
-    }
-}
-
-struct Host {
-    socket: PathBuf,
-    state: Arc<Mutex<HostState>>,
-    handle: Option<JoinHandle<()>>,
-}
-
-impl Host {
-    fn start(socket: PathBuf, id: String, role: &'static str, dir: &Path, record: bool) -> Self {
-        let transcript = dir.join("pi.jsonl");
-        fs::write(&transcript, concat!(
-            "{\"type\":\"session\",\"id\":\"fixture\",\"version\":3}\n",
-            "{\"type\":\"message\",\"id\":\"terminal\",\"parentId\":null,\"timestamp\":\"2026-11-18T12:00:00Z\",\"message\":{\"role\":\"user\",\"content\":\"terminal input\"}}\n",
-            "{\"type\":\"message\",\"id\":\"first\",\"parentId\":\"terminal\",\"timestamp\":\"2026-11-18T12:00:01Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"recorded **Pi** text\"}]}}\n",
-        )).unwrap();
-        if record {
-            fs::write(
-                dir.join("session.json"),
-                json!({"pid": 1234, "sessionFile": transcript}).to_string(),
-            )
-            .unwrap();
-        }
-        let listener = UnixListener::bind(&socket).unwrap();
-        let state = Arc::new(Mutex::new(HostState::default()));
-        let worker = Arc::clone(&state);
-        let handle = thread::spawn(move || {
-            for stream in listener.incoming() {
-                let mut stream = stream.unwrap();
-                let mut line = String::new();
-                BufReader::new(&stream).read_line(&mut line).unwrap();
-                if line.is_empty() {
-                    if worker.lock().unwrap().stopped {
-                        break;
-                    }
-                    continue;
-                }
-                let request: Value = serde_json::from_str(&line).unwrap();
-                assert_eq!(request["version"], 2);
-                let command = request["command"].as_str().unwrap();
-                let args = &request["args"];
-                let mut state = worker.lock().unwrap();
-                if !matches!(
-                    command,
-                    "hello" | "live_since" | "events_since" | "get_state"
-                ) {
-                    state.requests.push((command.into(), args.clone()));
-                }
-                let result = match command {
-                    "hello" => {
-                        json!({"protocol": 2, "role": role, "session_id": id, "session_file": transcript, "pid": 1234})
-                    }
-                    "get_state" => {
-                        json!({"paused": state.paused, "turn": {"current": 1, "open": state.open}, "owner_questions": state.questions, "last_error": null})
-                    }
-                    "events_since" => {
-                        json!({"last": 0, "next": 0, "events": [], "more": false, "gap": null})
-                    }
-                    "live_since" => {
-                        let last = state.events.len();
-                        let seq = args["seq"].as_u64().unwrap() as usize;
-                        json!({"last": last, "next": last, "events": state.events.get(seq..).unwrap_or(&[]), "more": false, "gap": null})
-                    }
-                    "submit_input" => {
-                        let text = args["text"].as_str().unwrap().to_owned();
-                        if state.paused && args["origin"] == "auto" {
-                            state.held.push(text);
-                            json!({"request_id":request["id"], "disposition":"queued"})
-                        } else {
-                            assert_eq!(args["origin"], "owner");
-                            if record {
-                                let request_id = request["id"].as_str().unwrap();
-                                let input_id = format!("owner-{request_id}");
-                                let answer_id = format!("answer-{request_id}");
-                                let mut file = fs::OpenOptions::new()
-                                    .append(true)
-                                    .open(&transcript)
-                                    .unwrap();
-                                let input = json!({
-                                    "type": "message", "id": input_id,
-                                    "parentId": state.transcript_tail.as_deref().unwrap_or("first"),
-                                    "timestamp": "2026-11-18T12:00:02Z",
-                                    "message": {"role": "user", "content": [{"type": "text", "text": text}],
-                                        "corralRequestId": request_id}
-                                });
-                                let answer = json!({
-                                    "type": "message", "id": answer_id, "parentId": input_id,
-                                    "timestamp": "2026-11-18T12:00:03Z",
-                                    "message": {"role": "assistant", "content": "assistant live text"}
-                                });
-                                writeln!(file, "{input}\n{answer}").unwrap();
-                                state.transcript_tail = Some(answer_id);
-                            }
-                            state.open = true;
-                            state.text.push(text);
-                            state.emit("assistant live text");
-                            json!({"request_id":request["id"], "disposition":"started", "turn":1})
-                        }
-                    }
-                    "cancel" => {
-                        let cancelled = std::mem::replace(&mut state.open, false);
-                        json!({"cancelled": cancelled, "turn": 1})
-                    }
-                    "pause" => {
-                        state.paused = true;
-                        let cancelled = std::mem::replace(&mut state.open, false);
-                        json!({"paused": true, "cancelled": cancelled})
-                    }
-                    "resume" => {
-                        state.paused = false;
-                        let held = std::mem::take(&mut state.held);
-                        state.text.extend(held);
-                        json!({"paused": false})
-                    }
-                    "answer" => {
-                        state
-                            .questions
-                            .retain(|question| question["id"] != args["question"]);
-                        json!({"status":"delivered"})
-                    }
-                    "rewind" if args["list"] == true => {
-                        json!({"checkpoints": [{"id": "turn-1", "phase": "start", "turn": 1}], "rewinds": []})
-                    }
-                    "rewind" => {
-                        json!({"turn": args["turn"], "checkpoint":"turn-1", "rescue_ref":"refs/worktree/corral/rescue/1", "from_head":"new", "head":"old", "at":"2026-11-18T12:00:00Z"})
-                    }
-                    "shutdown" => {
-                        state.stopped = true;
-                        json!({"stopping": true})
-                    }
-                    _ => panic!("unexpected Pi method: {command}"),
-                };
-                let reply = json!({"id":request["id"], "version":2, "ok":true, "result":result});
-                let _ = writeln!(stream, "{reply}");
-                if state.stopped {
-                    break;
-                }
-            }
-        });
-        Self {
-            socket,
-            state,
-            handle: Some(handle),
-        }
-    }
-}
-
-impl Drop for Host {
-    fn drop(&mut self) {
-        self.state
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .stopped = true;
-        let _ = UnixStream::connect(&self.socket);
-        self.handle.take().unwrap().join().unwrap();
-    }
-}
-
-#[derive(Clone, Default)]
-struct Placement {
-    tasks: FakeRunner,
-    hosts: Arc<Mutex<BTreeMap<String, Host>>>,
-}
-
-impl Runner for Placement {
-    fn start(&self, spec: &LaunchSpec) -> anyhow::Result<SessionRef> {
-        self.tasks.start(spec)
-    }
-    fn status(&self, session: &SessionRef) -> anyhow::Result<SessionStatus> {
-        self.tasks.status(session)
-    }
-    fn send(&self, session: &SessionRef, text: &str, origin: Origin) -> anyhow::Result<()> {
-        self.tasks.send(session, text, origin)
-    }
-    fn stop(&self, session: &SessionRef) -> anyhow::Result<()> {
-        if let SessionRef::Process { dir, .. } = session {
-            let key = dir.file_name().unwrap().to_str().unwrap();
-            let host = self.hosts.lock().unwrap().remove(key).unwrap();
-            fs::remove_file(&host.socket).unwrap();
-            drop(host);
-            Ok(())
-        } else {
-            self.tasks.stop(session)
-        }
-    }
-    fn focus(&self, session: &SessionRef) -> anyhow::Result<()> {
-        self.tasks.focus(session)
-    }
-    fn start_process(&self, command: Command, dir: PathBuf) -> anyhow::Result<SessionRef> {
-        assert_eq!(command.get_program(), "corral-pi");
-        let args: Vec<_> = command.get_args().collect();
-        assert_eq!(args[0], "chat");
-        assert_eq!(args[1], "--dir");
-        assert_eq!(Path::new(args[2]), dir);
-        assert_eq!(args[3], "--socket");
-        let fallback = [
-            "--fallback",
-            "anthropic-api/claude-sonnet-4-6",
-            "--fallback",
-            "openai/gpt-5.4",
-        ];
-        assert!(args.ends_with(&fallback.map(std::ffi::OsStr::new)));
-        assert!(
-            args.windows(2)
-                .any(|args| args[0] == "--model" && args[1] == "anthropic-api/claude-opus-5-5")
-        );
-        assert!(
-            command.get_envs().any(|(key, value)| key == "CORRAL_ACTOR"
-                && value.is_some_and(|value| value == "assistant"))
-        );
-        let socket = PathBuf::from(args[4]);
-        let id = dir.file_name().unwrap().to_str().unwrap().to_owned();
-        self.hosts
-            .lock()
-            .unwrap()
-            .insert(id.clone(), Host::start(socket, id, "assistant", &dir, true));
-        Ok(SessionRef::Process { pid: 1234, dir })
-    }
-}
+use corral_types::SessionRef;
 
 fn watch(path: &Path, id: &str) -> Client {
     let mut subscriber = Client::connect(path);
@@ -257,27 +18,27 @@ fn watch(path: &Path, id: &str) -> Client {
     subscriber
 }
 
+fn live_page(subscriber: &mut Client) -> SubDelta {
+    let frame = read_frame(&mut subscriber.0).unwrap().unwrap();
+    let notification: rpc::Notification<SubDelta> = serde_json::from_slice(&frame.payload).unwrap();
+    let SubDelta::Session { scope, cursor, .. } = &notification.params else {
+        panic!("expected session page");
+    };
+    subscriber.ok::<()>(
+        wire::SUB_ACK,
+        json!({"topic":"session", "scope":scope, "cursor":cursor}),
+    );
+    notification.params
+}
+
 fn text(subscriber: &mut Client, expected: &str) {
     loop {
-        let frame = read_frame(&mut subscriber.0).unwrap().unwrap();
-        let notification: rpc::Notification<SubDelta> =
-            serde_json::from_slice(&frame.payload).unwrap();
-        let SubDelta::Session {
-            events,
-            scope,
-            cursor,
-            ..
-        } = notification.params
-        else {
-            panic!("expected session page")
+        let SubDelta::Session { events, .. } = live_page(subscriber) else {
+            panic!("expected session page");
         };
         if events.iter().any(|event| matches!(&event.kind, wire::subscription::SessionLiveKind::LiveText { text, .. } if text == expected)) {
             return;
         }
-        subscriber.ok::<()>(
-            wire::SUB_ACK,
-            json!({"topic":"session", "scope":scope, "cursor":cursor}),
-        );
     }
 }
 
@@ -318,7 +79,7 @@ fn worker_live_replay_cancel_and_paused_engine_send_back_share_the_session() {
         id.clone(),
         "worker",
         &run_dir,
-        false,
+        Script::default(),
     );
     run.session = Some(SessionRef::Pi {
         socket: host.socket.clone(),
@@ -374,7 +135,41 @@ fn worker_live_replay_cancel_and_paused_engine_send_back_share_the_session() {
 }
 
 fn chat_fixture() -> (Fixture, Placement) {
-    let placement = Placement::default();
+    let placement = Placement::new(|command, dir| {
+        assert_eq!(command.get_program(), "corral-pi");
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args[0], "chat");
+        assert_eq!(args[1], "--dir");
+        assert_eq!(Path::new(args[2]), dir);
+        assert_eq!(args[3], "--socket");
+        let fallback = [
+            "--fallback",
+            "anthropic-api/claude-sonnet-4-6",
+            "--fallback",
+            "openai/gpt-5.4",
+        ];
+        assert!(args.ends_with(&fallback.map(std::ffi::OsStr::new)));
+        assert!(
+            args.windows(2)
+                .any(|args| { args[0] == "--model" && args[1] == "anthropic-api/claude-opus-5-5" })
+        );
+        assert!(command.get_envs().any(|(key, value)| {
+            key == "CORRAL_ACTOR" && value.is_some_and(|value| value == "assistant")
+        }));
+        let host = Host::start(
+            PathBuf::from(args[4]),
+            dir.file_name().unwrap().to_str().unwrap().into(),
+            "assistant",
+            dir,
+            Script::default(),
+        );
+        fs::write(
+            dir.join("session.json"),
+            json!({"pid": PID, "sessionFile": host.transcript}).to_string(),
+        )
+        .unwrap();
+        Some(host)
+    });
     let runner = placement.clone();
     let fixture = Fixture::with_runner(Arc::new(move || Box::new(runner.clone())));
     fs::write(
@@ -395,51 +190,118 @@ auto_land = false
     (fixture, placement)
 }
 
-fn quick_send(cmd: &str, text: &str) -> AssistantSend {
-    AssistantSend {
+fn quick_send(cmd: &str, text: &str) -> SessionSend {
+    SessionSend {
+        id: QUICK_THREAD.into(),
         cmd_id: cmd.into(),
-        thread: QUICK_THREAD.into(),
-        target: AskTarget::Assistant,
         text: text.into(),
-        typed_at: "2026-11-18T12:00:00Z".into(),
-        context: Vec::new(),
+        policy: SendPolicy::Steer,
+        to: None,
+        typed_at: Some(AT.into()),
         attachments: Vec::new(),
     }
 }
 
+fn session_page(owner: &mut Client, id: &str) -> SessionPage {
+    let detail: DetailReply = owner.ok(wire::app::DETAIL_GET, json!({"kind": "session", "id": id}));
+    let Some(DetailBody::Session(page)) = detail.body else {
+        panic!("expected session detail");
+    };
+    page
+}
+
 #[test]
-fn assistant_thread_replays_owner_input_with_acknowledged_id() {
+fn an_empty_quick_scope_serves_an_empty_page_and_the_first_send_creates_the_chat() {
     let (fixture, _placement) = chat_fixture();
     let path = fixture.unix_server();
+    crate::topics::start_session_live(fixture.shared()).unwrap();
     let mut owner = Client::connect(&path);
-    let ack: SendAck = owner.ok(ASSISTANT_SEND, quick_send("send", "app input"));
-    let read_thread = || {
-        let mut subscriber = Client::connect(&path);
-        subscriber.ok::<()>(wire::SUB_OPEN, json!({"topic":"thread", "scope":"A-1"}));
-        let frame = read_frame(&mut subscriber.0).unwrap().unwrap();
-        let notification: rpc::Notification<SubDelta> =
-            serde_json::from_slice(&frame.payload).unwrap();
-        let SubDelta::Thread { delta, .. } = notification.params else {
-            panic!("expected thread page");
-        };
-        delta.rows
-    };
+    for method in [
+        "assistant.send",
+        "assistant.cancel",
+        "assistant.stop",
+        "prompt.answer",
+    ] {
+        let error = owner.call(method, json!({})).unwrap_err();
+        assert_eq!(error.code, rpc::ErrorCode::MethodNotFound);
+    }
+    let mut live = watch(&path, QUICK_THREAD);
 
-    let rows = read_thread();
-    let texts: Vec<_> = rows.iter().map(|row| row.text.as_deref()).collect();
+    let empty = |page: SessionPage, delta| {
+        assert_eq!(page.id, QUICK_THREAD);
+        assert_eq!(page.role, "assistant");
+        assert_eq!(page.host, HostPresence::NotRunning);
+        assert!(page.replyable);
+        assert!(page.reply_refusal.is_none());
+        assert!(page.messages.is_empty());
+        assert!(page.older.is_none());
+        assert!(matches!(
+            delta,
+            SubDelta::Session {
+                scope, generation: None, events, more: false, gap: None, fleet: None,
+                state: None, cursor, ..
+            } if scope == QUICK_THREAD && events.is_empty() && cursor.rev == 0
+        ));
+    };
+    empty(session_page(&mut owner, QUICK_THREAD), live_page(&mut live));
+    assert!(
+        crate::assistant::rows(fixture.shared(), false)
+            .unwrap()
+            .is_empty()
+    );
+
+    let sent: SessionSent = owner.ok(SESSION_SEND, quick_send("send", "app input"));
+    assert_eq!(sent.session, "A-1");
+    assert_eq!(sent.entry, "A-1/input/send");
+    assert_eq!(sent.disposition, InputDisposition::Started);
+    text(&mut live, "assistant live text");
+    let page = session_page(&mut owner, QUICK_THREAD);
+    assert_eq!(page.id, sent.session);
+    let texts: Vec<_> = page
+        .messages
+        .iter()
+        .flat_map(|row| &row.items)
+        .filter_map(|item| match item {
+            SessionItem::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
         texts,
         [
-            Some("terminal input"),
-            Some("recorded **Pi** text"),
-            Some("app input"),
-            Some("assistant live text"),
+            "terminal input",
+            "recorded **Pi** text",
+            "app input",
+            "assistant live text",
         ],
     );
-    assert!(rows[0].id.starts_with("A-1/replay/"));
-    assert_eq!(rows[2].id, ack.entry);
-    assert_eq!(rows[2].state, Some(MessageState::Delivered));
-    assert_eq!(read_thread(), rows);
+    assert_eq!(page.messages[0].id, "A-1/entry/terminal");
+    assert_eq!(page.messages[2].id, sent.entry);
+
+    owner.ok::<Value>(
+        ASSISTANT_SESSION,
+        AssistantSessionOp::End {
+            session: sent.session.clone(),
+        },
+    );
+    let ended = session_page(&mut owner, &sent.session);
+    assert!(!ended.replyable);
+    assert_eq!(ended.messages, page.messages);
+    let reset = live_page(&mut live);
+    // The poller can observe socket shutdown before End persists the record.
+    let reset = if matches!(
+        &reset,
+        SubDelta::Session {
+            generation: None,
+            gap: Some(_),
+            ..
+        }
+    ) {
+        live_page(&mut live)
+    } else {
+        reset
+    };
+    empty(session_page(&mut owner, QUICK_THREAD), reset);
 }
 
 #[test]
@@ -463,33 +325,43 @@ fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
         },
     );
     assert_eq!(welcome.caps, [wire::ASSISTANT_V1]);
-    let first: SendAck = owner.ok(ASSISTANT_SEND, quick_send("first", "first chat"));
-    assert!(first.entry.starts_with("A-1/"));
+    let first: SessionSent = owner.ok(SESSION_SEND, quick_send("first", "first chat"));
+    assert_eq!(first.session, "A-1");
+    assert_eq!(first.entry, "A-1/input/first");
     text(&mut watch(&path, "A-1"), "assistant live text");
-    let state = Arc::clone(&placement.hosts.lock().unwrap()["A-1"].state);
+    let state = placement.state("A-1");
     state.lock().unwrap().questions = vec![
         json!({"id": "question-1", "question": "Which change?"}),
         json!({"id": "question-2", "question": "Next question"}),
     ];
-    let rows = crate::assistant::rows(fixture.shared()).unwrap();
+    let rows = crate::assistant::rows(fixture.shared(), false).unwrap();
     assert_eq!(rows[0].state, wire::rows::AssistantState::Waiting);
     assert_eq!(rows[0].question_id.as_deref(), Some("question-1"));
     assert_eq!(rows[0].wait.as_ref().unwrap().text, "Which change?");
-    let reply: SessionPromptAnswered = owner.ok(PROMPT_ANSWER, json!({"session":"A-1", "question":"question-1", "option":"Fix", "text":"in this worktree"}));
+    let reply: SessionCardAnswered = owner.ok(
+        SESSION_CARD_ANSWER,
+        json!({
+            "id":"A-1", "card":"question-1", "answers":[{"options":["Fix"], "text":"in this worktree"}],
+        }),
+    );
     assert_eq!(reply.status, "delivered");
     assert_eq!(
         state.lock().unwrap().requests.last().unwrap(),
         &(
-            "answer".into(),
-            json!({"question":"question-1", "option":"Fix", "text":"in this worktree"})
+            "card_answer".to_owned(),
+            json!({
+                "card":"question-1", "answers":[{"options":["Fix"], "text":"in this worktree"}],
+                "dismiss":false, "device":"local",
+            })
         )
     );
-    let rows = crate::assistant::rows(fixture.shared()).unwrap();
+    let rows = crate::assistant::rows(fixture.shared(), false).unwrap();
     assert_eq!(rows[0].question_id.as_deref(), Some("question-2"));
-    let cancelled: CancelAck = owner.ok(
-        ASSISTANT_CANCEL,
-        AssistantCancel {
-            cmd_id: "first".into(),
+    let cancelled: SessionCancelReply = owner.ok(
+        SESSION_CANCEL,
+        SessionCancel {
+            id: first.session,
+            turn: first.turn,
         },
     );
     assert!(cancelled.cancelled);
@@ -501,16 +373,10 @@ fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
         },
     );
     assert!(state.lock().unwrap().stopped);
-    let second: SendAck = owner.ok(ASSISTANT_SEND, quick_send("next", "next chat"));
-    assert!(second.entry.starts_with("A-2/"));
-    assert_eq!(
-        placement.hosts.lock().unwrap()["A-2"]
-            .state
-            .lock()
-            .unwrap()
-            .text,
-        ["next chat"]
-    );
+    let second: SessionSent = owner.ok(SESSION_SEND, quick_send("next", "next chat"));
+    assert_eq!(second.session, "A-2");
+    assert_eq!(second.entry, "A-2/input/next");
+    assert_eq!(placement.state("A-2").lock().unwrap().text, ["next chat"]);
     assert!(
         fixture
             .root()
@@ -521,4 +387,21 @@ fn quick_chat_lifecycle_answers_and_restarts_without_automation() {
     let relaunched: SessionRelaunched = owner.ok(SESSION_RELAUNCH, json!({"id":"A-2"}));
     assert_eq!(relaunched.id, "A-2");
     owner.ok::<()>(SESSION_TERMINATE, json!({"id":"A-2"}));
+
+    let sent: wire::session_host::SessionSent = owner.ok(
+        wire::session_host::SESSION_SEND,
+        json!({"id": "quick", "cmd_id": "app-chat:1", "text": "tagged cold chat", "policy": "steer"}),
+    );
+    assert_eq!(sent.session, "A-2");
+    assert_eq!(sent.entry, "A-2/input/app-chat:1");
+    let detail: DetailReply = owner.ok(
+        wire::app::DETAIL_GET,
+        json!({"kind": "session", "id": "quick"}),
+    );
+    let Some(DetailBody::Session(page)) = detail.body else {
+        panic!("expected quick session detail")
+    };
+    assert_eq!(page.id, sent.session);
+    assert!(page.messages.iter().any(|message| message.id == sent.entry));
+    owner.ok::<()>(SESSION_TERMINATE, json!({"id": "A-2"}));
 }

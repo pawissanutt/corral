@@ -18,8 +18,6 @@ impl AppState {
             feed.health = None;
             feed.drafts.clear();
             feed.commands.clear();
-            feed.cancelling.clear();
-            feed.threads.clear();
             feed.details.clear();
         });
     }
@@ -68,6 +66,9 @@ impl AppState {
         }
     }
 
+    /// The drafts and the kept messages of this device's outbox, as the feed shows them: a
+    /// message not sent yet is queued, one that left without an answer is unknown until the
+    /// next connection settles it.
     pub(super) fn project_local(&self, feed: Signal<Feed>) {
         let Some(outbox) = &self.outbox else {
             return;
@@ -80,14 +81,14 @@ impl AppState {
                 .map(|(key, value)| (Id::from(key), value.clone()))
                 .collect();
             feed.commands.retain(|id, state| {
-                state.method != ASSISTANT_SEND
+                state.method != SESSION_SEND
                     || outbox.saved.messages.contains_key(id.as_str())
-                    || matches!(state.status, CommandStatus::Done | CommandStatus::Abandoned)
+                    || state.status != CommandStatus::Queued
             });
             for (id, message) in &outbox.saved.messages {
-                let mut state = command_state(
+                let state = command_state(
                     feed,
-                    ASSISTANT_SEND,
+                    SESSION_SEND,
                     value(&message.request),
                     if message.attempted {
                         CommandStatus::Unknown
@@ -95,28 +96,7 @@ impl AppState {
                         CommandStatus::Queued
                     },
                 );
-                if let Some((code, explanation)) = &message.error {
-                    state.error = Some(ClientError {
-                        code: code.clone(),
-                        message: explanation.clone(),
-                    });
-                    state.status = if message.refused {
-                        CommandStatus::Refused
-                    } else {
-                        CommandStatus::Unknown
-                    };
-                }
-                let state = feed.commands.entry(Id::from(id)).or_insert(state);
-                if message.cancel {
-                    feed.cancelling.insert(Id::from(id));
-                    state.status = CommandStatus::Unknown;
-                }
-            }
-            for id in &outbox.saved.cancelled {
-                feed.cancelling.remove(id.as_str());
-                if let Some(state) = feed.commands.get_mut(id.as_str()) {
-                    state.status = CommandStatus::Abandoned;
-                }
+                feed.commands.entry(Id::from(id)).or_insert(state);
             }
         });
     }

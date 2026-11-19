@@ -20,7 +20,7 @@ impl Record {
         match live {
             Live::Task(id) | Live::Plan(id) | Live::Review(id) => Self::Task(id.clone()),
             Live::Session(id) if session_task(id).is_some() => Self::Session(id.clone()),
-            Live::Session(_) | Live::Thread(_) => Self::Workspace,
+            Live::Session(_) => Self::Workspace,
         }
     }
     pub fn live(&self) -> Option<Live> {
