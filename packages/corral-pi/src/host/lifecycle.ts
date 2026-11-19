@@ -3,6 +3,8 @@ import { basename, dirname, join } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { readSessionRecord } from "./session-record.ts";
+import { isProviderId } from "../auth/providers.ts";
+import type { ModelChoice } from "./config.ts";
 
 export type SessionSdk = Pick<typeof Sdk, "SessionManager" | "CURRENT_SESSION_VERSION">;
 
@@ -82,4 +84,21 @@ export function openSession(
   } catch (error) {
     throw new SessionResumeRefused(transcript, error);
   }
+}
+
+/** Assistant messages name the physical model, not necessarily the owner's selection. */
+export function restoreModelChoice(session: SessionManager, interactive: boolean,
+  fallbacks: readonly ModelChoice[] = [], legacyAnthropicApi = false): ModelChoice | undefined {
+  const branch = session.getBranch();
+  const saved = branch.findLast(entry => entry.type === "model_change");
+  if (!saved || !isProviderId(saved.provider)) return undefined;
+  if (legacyAnthropicApi && saved.provider === "anthropic") {
+    // Old API transcripts used the upstream provider name. Record the disambiguated choice once.
+    session.appendModelChange("anthropic-api", saved.modelId);
+    return { provider: "anthropic-api", model: saved.modelId };
+  }
+  if (interactive || fallbacks.some(entry => entry.provider === saved.provider && entry.model === saved.modelId)) {
+    return { provider: saved.provider, model: saved.modelId };
+  }
+  return undefined;
 }

@@ -3,7 +3,6 @@ import { chmodSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, wr
 import { isAbsolute, join } from "node:path";
 import type { BuildLaunch, BuildSessionRecord } from "./types.ts";
 import { isProviderId } from "../auth/providers.ts";
-import { resolveConnection } from "../auth/connections.ts";
 
 export function sessionDir(dataRoot: string, id: string): string {
   if (!/^B-[a-z0-9]+$/.test(id)) throw new Error("Invalid build session id");
@@ -16,7 +15,7 @@ export function createSession(launch: BuildLaunch, worktree: Pick<BuildSessionRe
   const name = launch.name?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || suffix;
   return { version: 1, id: `B-${suffix}`, name, created: now.toISOString(), updated: now.toISOString(),
     repoRoot: launch.repoRoot, ...worktree, here: launch.here, ...(launch.bare ? { bare: true } : {}),
-    route: { provider: launch.provider, model: launch.model, effort: launch.effort, connection: launch.connection, aws: launch.aws },
+    route: { provider: launch.provider, model: launch.model, effort: launch.effort, aws: launch.aws, fallback: launch.fallback },
     ...(launch.project ? { project: launch.project } : {}), ...(launch.workspaceRoot ? { workspaceRoot: launch.workspaceRoot } : {}) };
 }
 
@@ -27,15 +26,30 @@ export function loadSession(dataRoot: string, id: string): BuildSessionRecord {
     || typeof record.updated !== "string" || !Number.isFinite(Date.parse(record.updated))
     || typeof record.here !== "boolean" || ![record.repoRoot, record.worktree].every(value => typeof value === "string" && isAbsolute(value))
     || !(record.branch === null || typeof record.branch === "string") || !(record.base === null || typeof record.base === "string")
-    || [record.workspaceRoot, record.sessionFile].some(value => value !== undefined && (typeof value !== "string" || !isAbsolute(value)))
+    || [record.workspaceRoot, record.sessionFile, record.socket].some(value => value !== undefined && (typeof value !== "string" || !isAbsolute(value)))
     || (record.bare !== undefined && typeof record.bare !== "boolean")
     || (record.repository !== undefined && typeof record.repository !== "boolean")
     || (record.baseBranch !== undefined && record.baseBranch !== null && typeof record.baseBranch !== "string")
+    || (record.pid !== undefined && (!Number.isSafeInteger(record.pid) || record.pid <= 0))
+    || (record.cleaned !== undefined && record.cleaned !== true)
     || (record.bare === true && (record.workspaceRoot !== undefined || record.project !== undefined))
     || (record.project !== undefined && typeof record.project !== "string")) throw new Error(`Invalid build session record: ${id}`);
   if (record.route) {
-    if (!isProviderId(record.route.provider) || typeof record.route.model !== "string") throw new Error(`Invalid Build model route: ${id}`);
-    resolveConnection(record.route.provider, record.route.connection);
+    if (!isProviderId(record.route.provider) || typeof record.route.model !== "string" ||
+        (record.route.fallback !== undefined && (!Array.isArray(record.route.fallback) ||
+          record.route.fallback.some(choice => !choice || !isProviderId(choice.provider) || typeof choice.model !== "string" ||
+            !choice.model || /[\s\0]/.test(choice.model))))) throw new Error(`Invalid Build model route: ${id}`);
+    const { connection, ...route } = record.route as typeof record.route & { connection?: unknown };
+    // Historical Anthropic API builds stored the upstream name, never the subscription.
+    if (connection === "anthropic-api" && route.provider === "anthropic") {
+      return { ...record, route: { ...route, provider: "anthropic-api", model: route.model.replace(/^anthropic\//, "") } };
+    }
+    if (connection !== undefined) {
+      const historical = { "openai-codex": "openai-subscription", anthropic: "anthropic-subscription", openai: "openai-api",
+        "anthropic-api": undefined, "amazon-bedrock": "amazon-bedrock", "llama.cpp": "llama.cpp" };
+      if (connection !== historical[route.provider]) throw new Error(`Invalid Build model route: ${id}`);
+      return { ...record, route };
+    }
   }
   return record;
 }
@@ -58,7 +72,7 @@ export function saveSession(dataRoot: string, record: BuildSessionRecord): void 
   let socketState = {};
   try {
     const { role, pid, paused, held_input } = JSON.parse(readFileSync(path, "utf8"));
-    if (role === "build") socketState = { role, pid, paused, held_input };
+    if (role === "build") socketState = { role, pid: record.pid ?? pid, paused, held_input };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }

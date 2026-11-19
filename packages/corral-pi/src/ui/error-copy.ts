@@ -2,8 +2,7 @@
 // error or a stop, and the end of automatic retrying, to `presentError` (the `errorPresentation` option of the patched
 // InteractiveMode). A failure becomes one `✗` sentence saying what happened and whether anything was lost, then one
 // muted next step; the raw text and the typed failure facts are one click or Ctrl+O away. A stopped turn is one muted
-// `○ stopped` row that names who stopped it when the host knows (`stopped by you`, `stopped: the spending cap was
-// reached`). Presentation only: the model and the journal receive what they did before.
+// `○ stopped` row that names who stopped it when the host knows (`stopped by you`, `stopped by corral`). Presentation only: the model and the journal receive what they did before.
 import type { InteractiveModeOptions } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, wrapTextWithAnsi, type Component, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { ProviderFailure } from "../host/provider-failure.ts";
@@ -40,7 +39,6 @@ const STOP_TEXTS: Readonly<Record<string, true>> = {
 const SUMMARY = /^(?:(claude_compaction_conflict|claude_query_incomplete|search turn limit): )?([a-z0-9.-]+): ([a-z_]+) \(([a-z]+)\)$/;
 const RETRY_STEP = "Send a message to retry.";
 const RETRY_OR_MODEL = "Send a message to retry, or choose another model.";
-const SPENDING_STEP = "Start a new run on another profile with corral retry --profile <name>.";
 const SENTENCE_ROWS = 4;
 const VERBATIM_ROWS = 2;
 const STEP_ROWS = 3;
@@ -100,20 +98,13 @@ function providerCopy(failure: ProviderFailure, input: ErrorInput, now: number, 
     case "unavailable":
       return failed(`This model is not available on the ${name}. ${lostClause(input, true)}`, "Choose another model.");
     case "local_budget":
-      return failed(`This session reached its spending cap, so ${input.partial ? "the reply above stopped early" : "the request was not sent to the model"}.`,
-        SPENDING_STEP);
+      return failed(`The request stopped because a budget limit was reached. ${lostClause(input, false)}`, "Choose another model.");
     case "network_policy":
       return failed(`This session's network policy blocked the request. ${lostClause(input, false)}`,
         "The destination is not allowed here; retrying is blocked the same way.");
     case "unknown":
       return failed(`The ${name} request failed and gave no reason${ref}. ${lostClause(input, true)}`, RETRY_OR_MODEL);
   }
-}
-
-/** The host's refusal once `spend.json` reaches `--max-usd` (capabilities/budget.ts). */
-function hostCopy(text: string, input: ErrorInput, raw: readonly string[]): ErrorCopy | undefined {
-  if (!/^spending cap reached\b/.test(text)) return undefined;
-  return { kind: "failed", sentence: `This session reached its spending cap. ${lostClause(input, false)}`, step: SPENDING_STEP, raw };
 }
 
 function transportCopy(text: string, input: ErrorInput, raw: readonly string[]): ErrorCopy | undefined {
@@ -137,8 +128,7 @@ function transportCopy(text: string, input: ErrorInput, raw: readonly string[]):
       Number.isFinite(at) ? `Sign in again, or wait for the re-check at ${clockTime(at, Date.now())}.` : "Sign in again, or choose another model.");
   }
   if (text.startsWith("budget_exhausted:")) {
-    return failed(`This session reached its spending cap, so ${input.partial ? "the reply above stopped early" : "the request was not sent to the model"}.`,
-      SPENDING_STEP);
+    return failed(`The request stopped because a budget limit was reached. ${lostClause(input, false)}`, "Choose another model.");
   }
   if (text.startsWith("network_refused:")) {
     return failed(`This session's network policy blocked the request. ${lostClause(input, false)}`, "The destination is not allowed here; retrying is blocked the same way.");
@@ -172,7 +162,7 @@ function factsLine(failure: ProviderFailure): string {
 }
 
 /** Who stopped a turn, as the host knows it for its latest run. */
-export type StopCause = "owner" | "budget" | "host";
+export type StopCause = "owner" | "host";
 
 /** The copy for one failed or stopped turn. `now` is for clock times; `cause` says who stopped it, when known. */
 export function errorCopy(input: ErrorInput, now = Date.now(), cause?: StopCause): ErrorCopy {
@@ -183,7 +173,7 @@ export function errorCopy(input: ErrorInput, now = Date.now(), cause?: StopCause
   if (input.stopReason === "aborted") {
     // Only the host's word makes it the owner's stop; a stop of an earlier run (resume, rebuild) has no known cause.
     const stopped = cause === "owner" ? "stopped by you"
-      : cause === "budget" || /^budget_exhausted|^spending cap reached/.test(text) ? "stopped: the spending cap was reached"
+      : /^budget_exhausted/.test(text) ? "stopped: a budget limit was reached"
         : cause === "host" ? "stopped by corral" : "stopped";
     if (input.retryEnded) return { kind: "stopped", sentence: `${stopped}${retried}`, raw: [] };
     const notRun = input.toolCallsNotRun > 0
@@ -198,7 +188,7 @@ export function errorCopy(input: ErrorInput, now = Date.now(), cause?: StopCause
     : undefined;
   const typed = failure ?? (summarized as ProviderFailure | undefined);
   if (typed) return providerCopy(typed, input, now, raw);
-  const known = hostCopy(text, input, raw) ?? transportCopy(text, input, raw);
+  const known = transportCopy(text, input, raw);
   if (known) return known;
   return { kind: "failed", sentence: text ? plainLabel(text) : "The turn failed and gave no reason.", step: RETRY_OR_MODEL, raw, verbatim: text !== "" };
 }

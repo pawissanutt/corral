@@ -10,11 +10,26 @@ package's locked dependencies (`bun install --frozen-lockfile`).
 |---|---|
 | A worker on a task | `corral-next dispatch <task> --profile <pi-profile>` |
 | An independent reviewer | Set the project's `reviewer` profile. Corral asks for review after a green gate. |
-| Chat without a task | `corral-pi chat --dir <session-dir>`, or send to the daemon's quick thread. |
+| Chat without a task | `corral-pi chat` in a workspace, or send to the daemon's quick thread. |
 | Work directly in Git without a task | `corral-pi build`; see [Build sessions](build-sessions.md). |
 
-Use `corral-pi login` to set up the provider connection. An API key is a separate
-connection, for example `corral-pi login --connection anthropic-api`.
+Each model is named `<provider>/<model>`. The provider decides how you pay:
+
+| Provider | Login and billing |
+|---|---|
+| `openai-codex` | ChatGPT subscription; `corral-pi login --provider openai-codex` |
+| `anthropic` | Claude Pro/Max subscription via the Claude Agent SDK; `corral-pi login --provider anthropic` |
+| `openai` | Metered OpenAI API; `corral-pi login --provider openai` |
+| `anthropic-api` | Metered Anthropic API; `corral-pi login --provider anthropic-api` |
+| `amazon-bedrock` | Metered AWS profile; pass `--aws-profile` and `--aws-region` |
+| `llama.cpp` | Local inference; configure `[llama_cpp]` in `.corral-next/pi.toml` |
+
+API login prompts for a hidden key, or you can pass `--key-file <path>` with an
+owner-only `0600` file. Existing API keys keep working. In Build and chat, `/model`
+lists the providers you signed in to and switches without starting a conversation.
+For example, `anthropic/claude-opus-5-5` uses the subscription, while
+`anthropic-api/claude-opus-5-5` spends on the API. Ctrl+P cycles within the current
+billing kind. Resuming a Build or restarting a chat restores its last selection.
 
 To use Pi for tasks, give Corral a profile in `.corral-next/corral.toml`:
 
@@ -28,10 +43,32 @@ effort = "high"
 The Pi harness runs `corral-pi run`. Corral supplies the working directory, task and
 run, `--dir` for the session state, `--socket` for control, `--prompt-file` for the
 assignment and `--corral` for the engine executable. Direct launches can select a
-model with `--model`, a provider with `--provider`, a login route with `--connection`,
-and reasoning effort with `--effort`. Use `--headless` for socket input without a terminal.
+model with `--model <provider>/<model>` and reasoning effort with `--effort`.
+Use `--headless` for socket input without a terminal.
 For daemon chat, configure a Pi profile or harness and put `corral-pi` on the daemon's
 `PATH`; chat does not require automatic dispatch or landing.
+
+### Terminal chat
+
+Run `corral-pi chat` from any directory inside your workspace. It looks for the
+nearest `.corral-next/corral.toml` unless `CORRAL_NEXT_ROOT` is set, works in the
+directory you launched it from, and uses `corral-next` from `PATH` by default.
+It reopens the conversation in `.corral-next/terminal-chat`; use `corral-pi chat
+--new` to start a fresh conversation there. The daemon's quick thread is separate.
+
+### Build cleanup
+
+On normal quit, Build removes its own clean worktree and branch if every patch
+is already on the landing branch and you either never sent a message or landed
+the session. Choosing **Keep** skips this automatic cleanup.
+
+Run `corral-pi build --prune --dry-run` to preview cleanup of stopped builds,
+then `corral-pi build --prune` to apply it. Use `--data-dir` to select a different
+record store. Prune skips running sessions and checkouts you worked in directly
+with `--here`. It keeps worktrees with uncommitted changes or patches not on the
+landing branch. Removing a worktree also removes ignored build output inside it
+(such as `target/`); kept worktrees and their output are untouched. Cleanup keeps
+conversation records and never forces Git to delete a worktree or branch.
 
 ## What each role does
 
@@ -71,21 +108,22 @@ The `/rewind --list` output and the daemon's `session.rewind` list reply include
 an ISO 8601 `at` string for each checkpoint and prior rewind when its time is
 available.
 
-## API spending and paid continuation
+## Quota fallback and API usage
 
-An API model runs without a spending cap: the host reports its usage and nothing
-stops it. `--max-usd <amount>` sets a cap; you can put it in a profile's `args`.
-With a cap the host adds up priced API responses in `spend.json` and refuses the
-next API request once the total reaches it. Requests already in progress can put
-the total over the cap; restarting the same session does not replenish it.
-
-To continue on an API key after a subscription quota error, explicitly opt in, with a cap:
+By default, an exhausted subscription quota stops the request. Repeat
+`--fallback <provider>/<model>` on `run`, `chat` or `build` to name alternatives
+in order, or put them in a Pi profile:
 
 ```toml
-args = ["--max-usd", "5", "--paid-route", "openai/gpt-5.4"]
+[profiles.pi-worker]
+harness = "pi"
+model = "openai-codex/gpt-6.1-sol"
+fallback = ["openai-codex/gpt-6.2-sol", "anthropic-api/claude-opus-5-5"]
 ```
 
-The continuation uses the same conversation and counts toward the same cap. When
-a worker needs a new run after reaching its cap, use
-`corral-next retry <task> --profile <profile>`. Engine Usage totals only requests
-hosts actually reported.
+If the provider refuses a request for subscription quota before any output, Pi
+skips unavailable entries, announces the switch, and answers the same request
+on the next usable model. The session stays on that model; chat and Build owners
+can switch again with `/model`. Any API model you select or list as a fallback
+incurs metered charges. Corral reports API usage and cost; it does not impose a
+spending cap. Engine Usage totals only requests hosts actually reported.

@@ -16,7 +16,6 @@ import { buildShellRefusal } from "../roles/build/guard.ts";
 export interface BuildControlsOptions extends Omit<FleetOptions, "models" | "approved" | "localTools" | "context"> {
   readonly context: BuildContext;
   readonly models: () => ModelRuntime;
-  readonly apiModels?: Parameters<typeof createSdkRunner>[0]["apiModels"];
   readonly approved: () => readonly string[];
   readonly localTools: () => readonly ToolDefinition[];
   readonly run?: Run;

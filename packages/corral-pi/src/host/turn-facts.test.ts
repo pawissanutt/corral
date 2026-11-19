@@ -82,15 +82,15 @@ test("an unbound interactive build records run, model, child and note facts, but
   expect(marks.length).toBe(4);
 });
 
-test("a budget cancellation is not an owner stop and carries its cause on the single run mark", () => {
+test("a host cancellation is not an owner stop and carries its cause on the single run mark", () => {
   const marks: TranscriptMark[] = [];
   const facts = new TurnFacts({ add: mark => { marks.push(mark); return true; } });
   facts.start(1, 10, 0);
   facts.assistant(1, "aborted", []);
-  facts.end(1, 20, 0, [], { ownerStopped: true, error: true, stopCause: "budget" });
+  facts.end(1, 20, 0, [], { ownerStopped: true, error: true, stopCause: "host" });
   expect(facts.finish(1)).toBe(true);
   const mark = marks[0];
   expect(mark?.kind === "turn_end" && mark.reason).toBe("error");
-  expect(mark?.kind === "turn_end" && mark.note).toContain("budget");
+  expect(mark?.kind === "turn_end" && mark.note).toContain("host");
   expect(marks.length).toBe(1);
 });

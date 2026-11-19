@@ -173,8 +173,7 @@ describe("shared model catalog", () => {
 
 describe("supplemental models", () => {
   for (const provider of ["openai-codex", "openai"] as const) test(`resolves and lists GPT-6.2 metadata for ${provider} offline`, async () => {
-    const policy = { providers: [provider], modelsPath: null,
-      ...(provider === "openai" ? { apiConnection: "openai-api" as const } : {}) };
+    const policy = { providers: [provider], modelsPath: null };
     const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, policy);
     const listed = await listModels([provider], policy);
     for (const [id, input, output, cacheRead, cacheWrite] of [
@@ -195,18 +194,20 @@ describe("supplemental models", () => {
     expect(await runtime.getAvailable()).toEqual([]);
   });
 
-  test("GPT-6.2 model overrides compose before refresh and full entries win", async () => {
+  test("configured overrides compose for subscriptions but cannot replace native paid prices or metadata", async () => {
     const modelsPath = config([]);
     for (const provider of ["openai-codex", "openai"] as const) {
       writeFileSync(modelsPath, JSON.stringify({ providers: { [provider]: {
         modelOverrides: { "gpt-6.2-astra": { contextWindow: 400000, cost: { input: 7 } } },
       } } }));
       const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, { providers: [provider], modelsPath });
-      expect(runtime.getModel(provider, "gpt-6.2-astra")).toMatchObject({ contextWindow: 400000, cost: { input: 7, output: 40 } });
+      expect(runtime.getModel(provider, "gpt-6.2-astra")).toMatchObject(provider === "openai-codex"
+        ? { contextWindow: 400000, cost: { input: 7, output: 40 } }
+        : { contextWindow: 272000, cost: { input: 8, output: 40 } });
       writeFileSync(modelsPath, JSON.stringify({ providers: { [provider]: { models: [{ id: "gpt-6.2-sol" }] } } }));
       await runtime.refresh();
       expect(runtime.getModels(provider).filter(model => model.id === "gpt-6.2-sol")).toHaveLength(1);
-      expect(runtime.getModel(provider, "gpt-6.2-sol")?.contextWindow).toBe(128000);
+      expect(runtime.getModel(provider, "gpt-6.2-sol")?.contextWindow).toBe(provider === "openai-codex" ? 128000 : 272000);
       expect(runtime.getModel(provider, "gpt-6.2-astra")?.contextWindow).toBe(provider === "openai-codex" ? 600000 : 272000);
     }
   });

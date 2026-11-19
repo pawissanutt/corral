@@ -219,6 +219,7 @@ harness = "missing-harness"
 harness = "generic"
 model = "model"
 effort = "effort"
+fallback = []
 [projects.app]
 path = "missing-directory"
 running = 0
@@ -243,6 +244,7 @@ title_regex = "["
         "profiles.bad.harness",
         "profiles.no-flags.model",
         "profiles.no-flags.effort",
+        "profiles.no-flags.fallback",
         "projects.app.path",
         "projects.app.running",
         "projects.app.profile",
@@ -280,7 +282,11 @@ fn load_reports_file_context_and_rejects_unknown_or_mistyped_fields() {
             .to_string()
             .contains("corral.toml")
     );
-    for text in ["[defaults]\nauto_lnad = true", "[projects.app]\ngate = 3"] {
+    for text in [
+        "[defaults]\nauto_lnad = true",
+        "[projects.app]\ngate = 3",
+        "[profiles.pi]\nharness = 'pi'\nfallback = ['unqualified']",
+    ] {
         std::fs::write(&path, text).unwrap();
         assert!(
             Config::load(&path)
@@ -313,6 +319,74 @@ fn argv(command: &str) -> Vec<String> {
 
 #[cfg(unix)]
 #[test]
+fn pi_profile_fallback_renders_ordered_flags_even_without_model_args() {
+    let config = Config::check(
+        Path::new("."),
+        r#"
+[profiles.pi]
+harness = "pi"
+fallback = ["anthropic-api/claude-sonnet-4-6", "openai/gpt-5.4"]
+"#,
+    )
+    .unwrap();
+    let config: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+    let harness = Harness {
+        command: "printf '%s\\0' run".into(),
+        ..Harness::default()
+    };
+    let context = CommandContext {
+        prompt_file: Path::new("prompt.md"),
+        name: "T-042",
+        task: "T-042",
+        worktree: Path::new("."),
+        corral: Path::new("corral-next"),
+    };
+    let rendered = render_command(&harness, &config.profiles["pi"], &context).unwrap();
+    assert_eq!(
+        argv(&rendered),
+        [
+            "run",
+            "--fallback",
+            "anthropic-api/claude-sonnet-4-6",
+            "--fallback",
+            "openai/gpt-5.4",
+        ]
+    );
+}
+
+#[test]
+fn pi_api_dispatch_uses_the_provider_qualified_model_without_args() {
+    let context = CommandContext {
+        prompt_file: Path::new("prompt.md"),
+        name: "T-042",
+        task: "T-042",
+        worktree: Path::new("."),
+        corral: Path::new("corral-next"),
+    };
+
+    let api = Config::check(
+        Path::new("."),
+        r#"
+[profiles.pi-api]
+harness = "pi"
+model = "anthropic-api/claude-opus-5-5"
+"#,
+    )
+    .unwrap();
+    let harness = Harness {
+        command: "printf '%s\\0' run {model_args}".into(),
+        model_flag: Some("--model".into()),
+        ..Harness::default()
+    };
+    let rendered = render_command(&harness, &api.profiles["pi-api"], &context).unwrap();
+    assert_eq!(
+        argv(&rendered),
+        ["run", "--model", "anthropic-api/claude-opus-5-5"]
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn rendering_preserves_every_argument_in_unquoted_and_legacy_quoted_templates() {
     let context = CommandContext {
         prompt_file: Path::new("/tmp/prompt ' \" $(printf injected) {task}.md"),
@@ -331,6 +405,7 @@ fn rendering_preserves_every_argument_in_unquoted_and_legacy_quoted_templates() 
             "'; printf injected; '".into(),
             "{name}".into(),
         ],
+        ..Profile::default()
     };
     for quote in ["", "'", "\""] {
         let placeholders = [

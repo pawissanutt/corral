@@ -27,7 +27,7 @@ test("quick rollover uses the configured summary profile for exactly one observe
     request = await createSummaryRequest({ ...base, summary: {
       profile: "cheap-summary", model: "gpt-6.1-terra", provider: "openai-codex", effort: "low",
       network, rules: [],
-    } }, undefined, usage => usageRows.push(usage));
+    } }, usage => usageRows.push(usage));
   } finally {
     if (previousData === undefined) delete process.env.XDG_DATA_HOME;
     else process.env.XDG_DATA_HOME = previousData;

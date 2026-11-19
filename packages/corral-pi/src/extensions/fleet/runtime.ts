@@ -25,7 +25,7 @@ export interface FleetOptions {
   readonly sdk: typeof Sdk;
   readonly models: ModelRuntime;
   readonly approved: readonly string[];
-  readonly parent: { provider: string; model: string; effort?: string; connection?: BuildProfile["connection"] };
+  readonly parent: { provider: string; model: string; effort?: string };
   readonly context: FleetContext;
   readonly agentDir: string;
   readonly localTools: readonly ToolDefinition[];
@@ -585,7 +585,6 @@ export class FleetRuntime implements FleetControl {
     if (!entry || !live(entry)) return;
     const choice = resolveModel(model, this.choices, this.options.approved);
     if (!entry.handle && entry.value.state === "queued") { this.adopt(entry, choice); this.touch(entry); return; }
-    if (entry.model.connection || choice.connection) throw new Error("API routes must be selected before the child starts");
     if (!entry.handle) return;
     const version = ++entry.modelVersion;
     entry.pending = choice; entry.value.pendingModel = `${choice.provider}/${choice.model}`; this.touch(entry);

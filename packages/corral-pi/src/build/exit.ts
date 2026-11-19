@@ -1,6 +1,6 @@
 import { checked, type Run } from "./corral-cli.ts";
-import { buildProject, verifyBuild } from "./gate.ts";
-import { patchDigest, summarize } from "./git.ts";
+import { verifyBuild } from "./gate.ts";
+import { landingBaseFromRef, landingBaseLookups, landingBaseName, patchDigest, summarize } from "./git.ts";
 import type { BuildJournal } from "./record.ts";
 import type { BuildGateResult } from "./record-types.ts";
 import { LIVE_CHILD_STATES, type BuildContext, type BuildSummary, type ExitChoice, type ExitControl, type ExitOption, type ExitRecord, type ExitState, type FleetSnapshot } from "./types.ts";
@@ -63,18 +63,15 @@ export function createExit(options: {
       : await summarize(git, session, options.fleet());
     integrationError = undefined;
     if (session.bare) {
-      integration = session.baseBranch ?? undefined;
+      integration = landingBaseName(session);
       if (session.repository !== false && !integration) integrationError = "The session started without a base branch.";
     } else if (session.workspaceRoot && session.project) {
       try {
-        integration = buildProject(context).base;
-        if (!integration) {
-          const remote = await git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], { cwd: session.repoRoot });
-          integration = remote.code === 0 ? remote.stdout.trim().replace(/^origin\//, "") : undefined;
-        }
-        if (!integration) {
-          const current = await git(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: session.repoRoot });
-          if (current.code === 0) integration = current.stdout.trim();
+        integration = landingBaseName(session);
+        for (const lookup of landingBaseLookups) {
+          if (integration) break;
+          const result = await git(lookup, { cwd: session.repoRoot });
+          if (result.code === 0) integration = landingBaseFromRef(result.stdout, lookup);
         }
         if (!integration) integrationError = "The project's base branch is not configured.";
       } catch (error) { integrationError = `Cannot read the project's base branch: ${error instanceof Error ? error.message : String(error)}`; }

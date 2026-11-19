@@ -1,5 +1,20 @@
 import { checked, type Run } from "./corral-cli.ts";
 import type { BuildSessionRecord, BuildSummary, FleetSnapshot } from "./types.ts";
+import { buildProject } from "./gate.ts";
+
+/** Land and cleanup resolve an unconfigured project base in the same order. */
+export const landingBaseLookups = [
+  ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+  ["symbolic-ref", "--quiet", "--short", "HEAD"],
+] as const;
+
+export function landingBaseName(session: BuildSessionRecord): string | undefined {
+  return (session.bare ? session.baseBranch : buildProject(session).base) || undefined;
+}
+
+export function landingBaseFromRef(stdout: string, lookup: (typeof landingBaseLookups)[number]): string {
+  return lookup === landingBaseLookups[0] ? stdout.trim().replace(/^origin\//, "") : stdout.trim();
+}
 
 export async function summarize(run: Run, session: BuildSessionRecord, fleet: FleetSnapshot): Promise<BuildSummary> {
   const cwd = session.worktree;

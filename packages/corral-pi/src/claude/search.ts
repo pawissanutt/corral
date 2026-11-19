@@ -71,7 +71,7 @@ export function streamClaudeSearch(
       stream.push({ type: "done", reason: "stop", message: output });
     } catch (error) {
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-      const failure = error instanceof NativeFailure ? error.failure : normalizeFailure("anthropic-subscription", {
+      const failure = error instanceof NativeFailure ? error.failure : normalizeFailure("anthropic", {
         message: error instanceof Error ? error.message : undefined,
       });
       (output as typeof output & { providerFailure: ProviderFailure }).providerFailure = failure;
