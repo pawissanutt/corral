@@ -11,12 +11,12 @@ use std::collections::BTreeMap;
 
 /// Approval recorded for a mixed Build whose mappings were derived instead of configured.
 pub(crate) const DEFAULT_MIXED_APPROVAL: &str = "default-mixed-build";
-/// The largest allowance `build.api.maximum_micros` accepts: the derived default sets no lower cap.
+/// The largest allowance `build.api.maximum_micros` accepts; recorded but not enforced.
 const DEFAULT_MIXED_MAXIMUM_MICROS: u64 = 9_007_199_254_740;
 
 /// The owner's `[build.api]`, or by default every child preset mapped to the one API profile
 /// that is approved for assistant API start and runs the preset's exact vendor and model.
-/// Pure in `config`, so launch, resume and every budget request derive the same approval.
+/// Launch and ledger opening derive the same mappings from configuration.
 pub(crate) fn mixed_api(config: &Config) -> Option<Cow<'_, BuildApiCfg>> {
     if let Some(api) = &config.build.api {
         return Some(Cow::Borrowed(api));
@@ -26,7 +26,7 @@ pub(crate) fn mixed_api(config: &Config) -> Option<Cow<'_, BuildApiCfg>> {
     }
     let mut approved: BTreeMap<(&str, String), Vec<&String>> = BTreeMap::new();
     for name in config.profiles.keys() {
-        let Ok(route) = resolve(config, name, &BuildArgs::default(), false) else {
+        let Ok(route) = resolve(config, name, &BuildArgs::default()) else {
             continue;
         };
         let Some(binding) = route.binding.as_ref().filter(|_| route.paid.is_some()) else {

@@ -64,28 +64,23 @@ fallback policy is required. See [API-first profiles](api-first-profiles.md).
 The Rust-owned ledger reserves a conservative priced bound before every physical request.
 Paid startup authenticates that ledger's current capability, session and exact binding;
 it does not use the separate bound-role continuation-notice protocol.
+
 New workspace Builds use mixed API child routes by default, whether the parent runs on a
 subscription or an API route. Without a `[build.api]` section, each child preset is mapped
 to the one workspace API profile that runs the preset's exact vendor and model and carries
 API-start approval for the assistant role. A preset with no such profile, or with several,
 keeps its configured model. A mapped preset runs at the API profile's exact model and
 effort, not the preset's configured effort. The derived default records the approval
-`default-mixed-build` and uses the largest allowance `maximum_micros` accepts, so it does
-not cap the Build below that and does not apply each profile's own `api_start` spending
-limit. There is no setting that turns the default off; with no matching API profile it
-maps nothing and paid children use the parent's exact route. A change to the presets or
-API profiles that alters the derived mappings is a changed approval for Builds already
-running on it: their metered requests and resume refuse. Start a new Build, or restore the
-earlier presets and API profiles so the same mappings are derived again.
+`default-mixed-build`. With no matching API profile it maps nothing and paid children
+use the parent's exact route.
 
 If the installed host does not support mixed routes, or a mapped profile's credential or
 model is unavailable, a new Build with the derived default starts without it and prints
 the reason; children then keep their configured routes. A configured `[build.api]` and a
 resumed mixed Build refuse instead.
 
-A workspace owner can write the mappings and one shared USD cap explicitly; that section
-replaces the derived default. For example, with the named presets and API profiles
-already configured:
+A workspace owner can explicitly map presets instead. For example, with the named
+API profiles already configured:
 
 ```toml
 [build.profiles]
@@ -95,7 +90,7 @@ architect = { model = "anthropic/claude-fable-5-2" }
 
 [build.api]
 approval = "owner-approved-mixed-build"
-maximum_micros = 5_000_000 # USD 5 per Build
+maximum_micros = 5_000_000 # recorded; not enforced
 
 [build.api.profiles]
 ui-easy = "pi-sonnet-api"
@@ -105,16 +100,18 @@ architect = "pi-fable-api"
 
 The mapped presets use the API profile's exact model and effort. Other presets keep their
 configured model; the parent keeps its own route and can stay on subscription. Each API
-profile must already carry API-start approval for the assistant role. All metered requests
-in the Build share the cap, including the parent's requests if it uses the API. API routes
-must be chosen before a child starts. Failed or uncertain requests retain their reservation;
-resume requires the same approval and mappings and never replenishes the allowance.
-A new approval requires a new Build, not a retry.
+profile must already carry API-start approval for the assistant role. Spending caps are
+disabled: the ledger records usage, but neither the profile allowance nor `maximum_micros`
+blocks requests. API routes must be chosen before a child starts. Failed or uncertain
+requests retain their reservation. Requests from the current host use the recorded
+bindings. Resume retains usage and requires the same profile, exact routes and preset
+mappings, but allows changes to the approval identifier or allowance. If mappings change,
+start a new Build or restore the original mappings before resuming.
 An established paid build cannot switch profiles, even back to subscription.
 
-Bare and non-workspace sessions cannot use metered API profiles. Missing credentials,
-unsupported model/effort, changed approval or insufficient allowance refuse rather than
-silently choosing a subscription route.
+Bare sessions can use API profiles without the workspace ledger. Non-workspace `--build`
+sessions refuse API profiles. Missing credentials or unsupported model or effort refuse
+rather than silently choosing a subscription route.
 
 
 ## Local state and capabilities

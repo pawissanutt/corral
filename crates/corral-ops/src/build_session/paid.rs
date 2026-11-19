@@ -113,7 +113,7 @@ pub fn open_mixed(
                 let approval = approved_config(config, profile, binding)?;
                 ensure!(
                     approved_routes.get(profile) == Some(&approval),
-                    "paid Build parent not admitted to shared cap"
+                    "paid Build parent missing from mixed routes"
                 );
                 approval
             }
@@ -158,12 +158,12 @@ fn open_with(
         let (approval, mixed) = policy(&store.config_layers()?.config()?)?;
         let ledger = match store.build_paid_ledger(&session)? {
             Some(mut ledger) => {
-                // Spending caps are disabled: a changed approval or allowance keeps the
-                // recorded ledger; only the profile and its exact routes must still match.
+                // Approval and allowance edits keep recorded usage. The exact routes and
+                // their preset mappings must still match.
                 ensure!(
                     ledger.profile == profile
                         && ledger.approval.candidates == approval.candidates
-                        && ledger.mixed.as_ref().map(routes) == mixed.as_ref().map(routes),
+                        && same_mixed_routes(ledger.mixed.as_ref(), mixed.as_ref()),
                     "paid Build route is sticky; another profile or route cannot resume it"
                 );
                 ledger.generation = ledger
@@ -200,8 +200,23 @@ fn open_with(
         })
     })
 }
-fn routes(mixed: &MixedBuildApproval) -> Vec<(&String, &Vec<ConnectionBinding>)> {
-    mixed.routes.iter().map(|(name, approval)| (name, &approval.candidates)).collect()
+fn same_mixed_routes(
+    before: Option<&MixedBuildApproval>,
+    after: Option<&MixedBuildApproval>,
+) -> bool {
+    match (before, after) {
+        (None, None) => true,
+        (Some(before), Some(after)) => {
+            before.presets == after.presets
+                && before.routes.len() == after.routes.len()
+                && before.routes.iter().zip(&after.routes).all(
+                    |((name, route), (next_name, next_route))| {
+                        name == next_name && route.candidates == next_route.candidates
+                    },
+                )
+        }
+        _ => false,
+    }
 }
 pub fn sticky(store: &Store, session: &str) -> Result<Option<String>> {
     super::validate_session_id(session)?;
