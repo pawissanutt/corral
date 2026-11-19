@@ -1,6 +1,6 @@
 use std::{fs, path::Path, process::Command};
 
-use corral_engine::{Engine, EventKind, Priority, Status};
+use corral_engine::{Actor, Engine, EventKind, Priority, Status, events::EventFilter};
 use serde_json::{Value, json};
 
 fn write_task(dir: &Path, id: &str, status: &str, metadata: &str) {
@@ -159,4 +159,103 @@ fn previews_and_imports_a_legacy_export_without_replacing_tasks_or_reusing_ids()
     let dropped = engine.store.require_task("T-051").unwrap();
     assert_eq!(dropped.status, Status::Dropped);
     assert_eq!(dropped.parent.as_deref(), Some("T-012"));
+}
+
+#[test]
+fn history_keeps_the_times_it_happened_at_and_a_held_task_is_not_ready() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let export = root.join("export");
+    fs::create_dir(&export).unwrap();
+    let engine = Engine::init(root, None).unwrap();
+    // Landed: the event log's time and commit win over the task's own.
+    write_task(
+        &export,
+        "T-001",
+        "done",
+        "  origin: pm\n  status_since: 2026-01-05T00:00:00Z\n  landed:\n    run: R1\n    sha: aaaa\n  result:\n    text: Shipped it.\n  comments:\n  - author: pm\n    at: 2026-01-03T04:05:00Z\n    text: Looks right.\n",
+    );
+    // Moved to Done by hand: no commit, dated by the log.
+    write_task(&export, "T-002", "done", "");
+    // Nothing but the last update records this drop.
+    write_task(&export, "T-003", "dropped", "");
+    write_task(
+        &export,
+        "T-004",
+        "ready",
+        "  hold:\n    reason: Wait for the owner.\n    at: 2026-01-01T00:00:00Z\n",
+    );
+    let log = root.join("events.jsonl");
+    // The second line reuses `to` with another shape, as other kinds in a real log do.
+    fs::write(
+        &log,
+        concat!(
+            r#"{"seq":1,"ts":"2026-01-01T00:00:01Z","kind":"pm_opened","detail":{"pane":"w1"}}"#,
+            "\n",
+            r#"{"seq":2,"ts":"2026-01-02T12:00:00Z","task":"T-002","kind":"message_posted","detail":{"to":{"pane":"w1"}}}"#,
+            "\n",
+            r#"{"seq":3,"ts":"2026-01-03T00:00:00Z","task":"T-002","kind":"moved","actor":"owner","detail":{"from":"needs_me","to":"done","force":true}}"#,
+            "\n",
+            r#"{"seq":4,"ts":"2026-01-04T00:00:00Z","task":"T-001","kind":"approved","actor":"autopilot","detail":{"sha":"bbbb","base":"main","run":"R1"}}"#,
+            "\n",
+        ),
+    )
+    .unwrap();
+
+    let report = import(root, &export, &["--all", "--events", log.to_str().unwrap()]);
+    assert_eq!(
+        report["closing_dates"],
+        json!({"event_log": 2, "status_time": 0, "last_update": 1})
+    );
+
+    let events = engine
+        .store
+        .events_after(&EventFilter::default(), 0)
+        .unwrap();
+    let seen: Vec<_> = events
+        .iter()
+        .map(|event| {
+            (
+                event.ts.to_string(),
+                event.task.clone().unwrap(),
+                event.kind.as_str(),
+            )
+        })
+        .collect();
+    let at =
+        |day: &str, task: &str, kind| (format!("2026-01-{day}T00:00:00Z"), task.to_owned(), kind);
+    assert_eq!(
+        seen,
+        [
+            at("01", "T-001", "created"),
+            at("01", "T-002", "created"),
+            at("01", "T-003", "created"),
+            at("01", "T-004", "created"),
+            at("02", "T-003", "dropped"),
+            at("03", "T-002", "moved"),
+            at("04", "T-001", "landed"),
+        ]
+    );
+    assert_eq!(events[0].actor, Actor::Assistant);
+    assert_eq!(
+        events[5].detail,
+        json!({"from": "blocked", "to": "done", "imported": true})
+    );
+    assert_eq!(events[6].actor, Actor::Auto);
+    assert_eq!(
+        events[6].detail,
+        json!({"sha": "bbbb", "base": "main", "imported": true})
+    );
+
+    let landed = engine.store.require_task("T-001").unwrap();
+    assert_eq!(landed.updated.to_string(), "2026-01-04T00:00:00Z");
+    assert!(landed.body.contains("Shipped it."), "{}", landed.body);
+    assert!(
+        landed.body.contains("2026-01-03 04:05") && landed.body.contains("Looks right."),
+        "{}",
+        landed.body
+    );
+    let held = engine.store.require_task("T-004").unwrap();
+    assert_eq!(held.status, Status::Backlog);
+    assert!(held.body.contains("Wait for the owner."), "{}", held.body);
 }

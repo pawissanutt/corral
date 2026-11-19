@@ -72,11 +72,16 @@ impl Store {
 
     /// Requires the caller's transaction; prevents a row/event split commit.
     pub fn append_event(&self, event: &NewEvent) -> Result<Event> {
+        self.append_event_at(event, Timestamp::now())
+    }
+
+    /// Records an event that happened at `ts`, for history brought in from another store.
+    /// Sequence order stays insertion order, so append such events oldest first.
+    pub fn append_event_at(&self, event: &NewEvent, ts: Timestamp) -> Result<Event> {
         ensure!(
             !self.connection.is_autocommit(),
             "append_event requires an engine transaction"
         );
-        let ts = Timestamp::now();
         self.connection
             .execute(
                 "INSERT INTO events(ts,task,run,kind,actor,detail) VALUES(?1,?2,?3,?4,?5,?6)",
