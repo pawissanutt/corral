@@ -3,6 +3,7 @@
 //! The live bridge to corrald (`live`) dispatches details and assistant calls, `ops` submits
 //! engine operations; `keys` routes the keyboard.
 
+mod address;
 mod attach;
 mod config;
 mod devices;
@@ -129,13 +130,17 @@ impl AppState {
         if let Some(section) = preference(SETTINGS_KEY, SettingsSection::from_slug) {
             nav.settings = section;
         }
+        // The address a browser was opened at names the place over the stored destination.
+        if let Some(place) = address::launched() {
+            place.open(&mut nav, form);
+        }
         let (data, feed) = startup(
             &mut nav,
             crate::client::pairing_supported(),
             crate::client::configured(),
             pairing_link,
         );
-        let open_pairing = nav.section_opens > 0;
+        let open_section = (nav.section_opens > 0).then_some(nav.settings);
         let identity = crate::client::requests::new_id();
         let namespace = identity
             .strip_prefix("app-")
@@ -264,13 +269,14 @@ impl AppState {
             key_focus: signal(keys::KeyFocus::default()),
         };
         app.follow_browser_pairing();
-        if open_pairing {
+        if let Some(section) = open_section {
             // Phone sections are pushed by a navigation intent after the shell starts.
             set_timeout(Duration::ZERO, move || {
-                app.go_settings(SettingsSection::Connection);
+                app.go_settings(section);
             });
         }
         app.persist();
+        app.follow_address();
         app.follow_source();
         crate::client::start(app.daemon_feed);
         app.install_toast_timer();

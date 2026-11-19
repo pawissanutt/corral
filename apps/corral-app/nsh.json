@@ -7,5 +7,6 @@
   "root": "App",
   "theme": "theme.json",
   "appearance": "system",
-  "singleInstance": true
+  "singleInstance": true,
+  "web": { "base": "/" }
 }

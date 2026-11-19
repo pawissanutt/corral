@@ -67,6 +67,15 @@ that has the same names fails with E0659. Import app items by name (`use crate::
 | Web Storage uses `localStorage`, with keys prefixed `nsh:<app id>:`. This app's destination key is `nsh:com.example.corral:corral.destination`. | read, `nsh-platform-web/src/storage.rs`, `nsh-engine/src/local_storage.rs`, `nsh.json`, `src/state.rs` |
 | **Durable client state:** NSH Storage is not the outbox/cache transaction boundary. Browser `corral-local-state` v1 uses `records`/`meta` stores and acknowledges transaction completion; native `durable.json` uses a retained lock, file/directory sync and atomic replacement. Pairing is separately encrypted in `corral-app` v1, `credentials`. | read, `src/client/{durable,durable_web,durable_native}.rs`, `web/keystore.rs` |
 
+## Web address
+
+| Finding | Checked |
+|---|---|
+| `set_app_url_with(url, HistoryBehavior::Push)` makes a history entry of its own; plain `set_app_url` rewrites the current one. A push in the turn that closes a dialog (the palette's command) still lands as one entry after the dialog's is gone back over. | observed in headless Chromium (`history.length`, Back and Forward), `nsh-platform-web/web/nsh.js` `syncHistory` |
+| Back or Forward between this load's entries arrives as `next_app_url_change()`. After a reload the entries of the earlier load are kept by the browser, and going back to one arrives as `next_url_scheme_open()` instead (a link handed to the app), so an app that follows its address awaits both. Each takes one waiter: one task per call. | read, `nsh.js` `popState`, `nsh-core/src/url_scheme.rs`; observed (Back after a reload) |
+| `app_url()` is an answer to await, so the place a page was opened at is read from `location.pathname` through `web-sys` before the first screen is built. | read, `nsh-core/src/element/ambient.rs`, `src/state/address.rs` |
+| A page opened at a path of several segments loads its files only when `nsh.json` names the site's path (`web.base`); the dev server always serves them from `/`. | read, nsh.dev `docs/web` "Links into the app"; observed on the dev server |
+
 ## Terminal
 
 | Finding | Checked |
