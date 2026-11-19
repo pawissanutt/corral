@@ -267,8 +267,9 @@ steps for the new engine; `just` alone lists them:
 The stop, start, logs and service recipes drive the systemd user service
 `corrald-next.service`. Recipes address the workspace found above the checkout, which a
 worktree under the workspace finds too; from a checkout elsewhere, pass `root=<workspace>`
-first: `just root=/path/to/workspace daemon-status`. Restarting the daemon stops the
-assistant hosts it runs.
+first: `just root=/path/to/workspace daemon-status`. The service sets `KillMode=process`:
+stopping or restarting the daemon leaves the session hosts it started running.
+`systemctl --user kill corrald-next.service` stops the daemon and those hosts together.
 
 See the [release runbook](../releases/README.md) for native CI evidence,
 artifact names, version selection, and owner-controlled publication.

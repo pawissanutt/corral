@@ -4,9 +4,15 @@
 
 `corrald-next` connects the app to the workspace and forwards session reads and
 actions to each running Pi host. A session without a running host is read-only
-until it is resumed. Restarting the daemon stops its assistant hosts; an assistant
-host resumes on the next message. Stopped build sessions must be resumed explicitly;
-see [Build sessions](build-sessions.md).
+until it is resumed.
+
+The hosts the daemon starts (assistant threads and builds started from the app) are
+separate processes. Under the service that `just daemon-service` writes they keep
+running while the daemon stops or restarts, a turn in progress included, and the
+restarted daemon finds them again by their sockets. That depends on the service's
+`KillMode=process`: with systemd's default, stopping the service also ends every host
+it started. An assistant host that was ended starts again on the next message; a
+build must be resumed explicitly; see [Build sessions](build-sessions.md).
 
 Run `corrald-next run` in the workspace. It listens locally on
 `.corral-next/daemon.sock`. To allow a browser or device to connect, configure

@@ -31,8 +31,8 @@ install:
     set -euo pipefail
     cargo install --path crates/corral-next --locked
     cargo install --path crates/corral-daemon --locked
-    # A running daemon keeps the executable it started with. Restarting it also stops the
-    # assistant hosts it runs.
+    # A running daemon keeps the executable it started with. The session hosts it started run
+    # on through the restart (`KillMode=process` in its service).
     if systemctl --user is-active --quiet {{ quote(unit) }}; then
         {{ just }} daemon-restart
     else
@@ -109,6 +109,8 @@ daemon-service:
     mkdir -p "$dir"
     # The daemon starts git, herdr, bun and corral-pi, so it needs this shell's PATH and herdr
     # server: a service inherits neither. systemd reads `%` as a specifier.
+    # `KillMode=process` ends the daemon alone on a stop or restart. systemd's default kills
+    # every process the service started, which are the session hosts, in the middle of a turn.
     {
         printf '[Unit]\nDescription=Corral workspace daemon (corrald-next) for %s\n\n' "${root//%/%%}"
         printf '[Service]\nExecStart="%s" --root "%s" run\n' "${bin//%/%%}" "${root//%/%%}"
@@ -116,7 +118,7 @@ daemon-service:
         if [ -n "${HERDR_SOCKET_PATH:-}" ]; then
             printf 'Environment="HERDR_SOCKET_PATH=%s"\n' "${HERDR_SOCKET_PATH//%/%%}"
         fi
-        printf 'Restart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n'
+        printf 'KillMode=process\nRestart=on-failure\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n'
     } > "$dir/{{ unit }}"
     systemctl --user daemon-reload
     systemctl --user enable --now {{ quote(unit) }}
