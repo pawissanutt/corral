@@ -10,7 +10,7 @@ use crate::model::daemon::{self, DetailCache, Feed, Link};
 use crate::model::health::daemon_env;
 use crate::model::nav::Form;
 use crate::model::session::transcript::{LiveSession, MessageKind};
-use crate::model::session::{Cx, Facts, SessionRole, Ui};
+use crate::model::session::{Cx, Facts, SessionRole, SubView, Tab, Ui, composer, status};
 
 const ID: &str = "B-k3x9";
 const SCOPE: &str = "B-k3x9/child/a1";
@@ -193,4 +193,66 @@ fn steers_and_agent_messages_interleave_by_time() {
         })
         .collect();
     assert_eq!(order, ["reply", "steer", "reply", "message"]);
+}
+
+#[test]
+fn an_opened_conversation_gives_the_composer_and_status_bar_its_agent() {
+    let mut feed = Feed {
+        link: Link::Up,
+        ..Feed::default()
+    };
+    let mut live = LiveSession::default();
+    live.replace_fleet(Some(SessionFleet {
+        children: vec![SessionChild {
+            model: "child/model".into(),
+            effort: Some("low".into()),
+            cost_usd: Some(0.21),
+            context_percent: Some(42.0),
+            ..row()
+        }],
+        messages: Vec::new(),
+        messages_total: 0,
+        max_parallel: 2,
+    }));
+    feed.live.insert(Id::from(ID), live);
+    let id = Id::from(ID);
+    let facts = Facts {
+        role: SessionRole::Build,
+        task: None,
+    };
+    let ui = Ui {
+        tab: Tab::Agents,
+        sub: Some(SubView::Agent("a1".into())),
+        ..Ui::default()
+    };
+    let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Terminal), &facts);
+    let shown = composer(&cx).expect("a build takes messages");
+    let model = shown.model.expect("the agent's model");
+    assert_eq!(model.label, "child/model");
+    assert!(model.opens.is_some());
+    let effort = shown.effort.expect("the agent's effort");
+    assert_eq!((effort.level.as_deref(), effort.fixed), (Some("low"), true));
+    let bar = status(&cx);
+    assert_eq!(bar.role.full, "AGENT a1");
+    assert_eq!(bar.cost.text, "$0.21");
+    assert_eq!(bar.meter.short, "ctx 42%");
+    assert_eq!(
+        bar.model_effort.as_deref(),
+        Some("child/model · effort low")
+    );
+
+    let parent = Ui::default();
+    let cx = Cx::new(
+        &feed,
+        &parent,
+        &id,
+        daemon_env(&feed, Form::Terminal),
+        &facts,
+    );
+    assert_eq!(status(&cx).role.full, "BUILD");
+    assert!(
+        composer(&cx)
+            .and_then(|c| c.model)
+            .is_none_or(|m| m.opens.is_none())
+    );
 }

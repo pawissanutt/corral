@@ -335,6 +335,16 @@ pub fn press(key: &str, cx: &Cx<'_>, web: bool) -> Option<Action> {
             (cx.ui.tab == Tab::Chat && !cx.log_only() && (key != "end" || draft_empty))
                 .then_some(Action::JumpEnd(session))
         }
+        // While an agent's conversation is open the model keys are that agent's: the model key
+        // opens its model choices, and its effort is not changed from here.
+        KeyAction::Model | KeyAction::Effort | KeyAction::NextModel(_)
+            if talks(cx) && super::fleet::opened_agent(cx).is_some() =>
+        {
+            let model = super::fleet::opened_agent(cx)?.model;
+            (matches!(binding.action, KeyAction::Model) && model.unavailable.is_none())
+                .then_some(model.opens)
+                .flatten()
+        }
         KeyAction::Model => talks(cx).then(|| {
             if cx.ui.picker.open == Some(PickerKind::Model) {
                 Action::Picker(PickerAction::Close(session))

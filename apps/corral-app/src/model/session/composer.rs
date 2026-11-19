@@ -68,6 +68,10 @@ pub struct ModelPill {
     pub pending: Option<String>,
     /// The host serves model changes but cannot change it now.
     pub unavailable: Option<String>,
+    /// While an agent's conversation is open, the pill is that agent's: pressing runs this
+    /// (its model choices) instead of opening the session's model list, and nothing while
+    /// `unavailable`. None for the session's own agent.
+    pub opens: Option<Action>,
 }
 
 /// `· effort high`, with the levels the model reports.
@@ -75,6 +79,8 @@ pub struct ModelPill {
 pub struct EffortControl {
     pub level: Option<String>,
     pub levels: Vec<String>,
+    /// An opened agent's effort, as reported: shown, not changed from the composer.
+    pub fixed: bool,
 }
 
 /// `→ parent ▾`: who the message goes to; the parent or a child that can take a message.
@@ -338,18 +344,32 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
             control: Control::Cancel,
         },
     });
-    let model = cx.model().map(|label| ModelPill {
-        label,
-        pending: cx.state.and_then(|state| state.pending_model.clone()),
-        unavailable: unavailable(cx.can("model")),
-    });
-    let effort = cx
-        .state
-        .filter(|state| !state.effort_levels.is_empty())
-        .map(|state| EffortControl {
-            level: state.effort.clone(),
-            levels: state.effort_levels.clone(),
-        });
+    // An open agent conversation shows that agent's model and effort, not the parent's.
+    let (model, effort) = match super::fleet::opened_agent(cx) {
+        Some(agent) => (
+            Some(agent.model),
+            agent.effort.map(|level| EffortControl {
+                level: Some(level),
+                levels: Vec::new(),
+                fixed: true,
+            }),
+        ),
+        None => (
+            cx.model().map(|label| ModelPill {
+                label,
+                pending: cx.state.and_then(|state| state.pending_model.clone()),
+                unavailable: unavailable(cx.can("model")),
+                opens: None,
+            }),
+            cx.state
+                .filter(|state| !state.effort_levels.is_empty())
+                .map(|state| EffortControl {
+                    level: state.effort.clone(),
+                    levels: state.effort_levels.clone(),
+                    fixed: false,
+                }),
+        ),
+    };
     let attachments = match cx.can("attachments") {
         Can::Yes => Some(None),
         Can::Unavailable(why) => Some(Some(why)),
