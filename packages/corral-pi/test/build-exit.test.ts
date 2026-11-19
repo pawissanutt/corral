@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { engineRun, gitRun, checked, json, type Run } from "../src/build/corral-cli.ts";
@@ -26,7 +26,7 @@ function git(dirty = false, commits = 2, calls: string[][] = [], branch: string 
     calls.push([...argv]);
     const stdout = argv[0] === "rev-parse" ? (argv.includes("--abbrev-ref") ? branch ?? "HEAD" : argv[1] === "HEAD" ? head : base)
       : argv[0] === "merge-base" ? base : argv[0] === "rev-list" ? String(commits)
-      : argv[0] === "diff" ? argv.includes("--numstat") ? "4\t2\tsrc/parser.ts\n-\t-\timage.png\n" : "patch"
+      : argv[0] === "diff" ? argv.includes("--numstat") ? "4\t2\tsrc/parser.ts\n-\t-\timage.png\n" : argv.includes("--name-only") ? "" : "patch"
       : argv[0] === "status" ? (dirty ? " M src/parser.ts\n" : "") : "";
     return { code: 0, stdout, stderr: "" };
   };
@@ -35,14 +35,15 @@ function gateResult(): BuildGateResult {
   return { attempt: "G1", head, result: "pass", commands: ["check"], started: "2026-01-01T00:00:00Z", ended: "2026-01-01T00:01:00Z", log: "/logs/G1.log" };
 }
 type Repair = (prompt: string, f: { commit(): void; approve(): void }) => { aborted: boolean } | Promise<{ aborted: boolean }>;
-/** `failGate` fails every gate; `failGates` fails only the first that many. */
-function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; failGates?: number; repair?: Repair; stale?: boolean; conflict?: boolean; patchChanged?: boolean } = {}) {
+/** `failGate` fails every gate; `failGates` fails only the first that many; `gate` is the passing gate's shell line. */
+function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; failGates?: number; repair?: Repair; stale?: boolean; conflict?: boolean; patchChanged?: boolean;
+  gate?: string; watchMs?: number; dirtyBase?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "build-exit-"));
   const start = context(settings.policy);
   const ctx = { ...start, dir, session: { ...start.session, workspaceRoot: dir, worktree: dir } };
   mkdirSync(join(dir, ".corral-next"));
   const setGate = (fail: boolean) => writeFileSync(join(dir, ".corral-next", "corral.toml"),
-    `[projects.app]\nbase = \"main\"\ngate = [\"${fail ? "echo failing-check; exit 1" : "true"}\"]\n`);
+    `[projects.app]\nbase = \"main\"\ngate = [${JSON.stringify(fail ? "echo failing-check; exit 1" : settings.gate ?? "true")}]\n`);
   setGate(settings.failGate === true);
   const events: string[] = [], records: ExitRecord[] = [], calls: string[][] = [];
   let gates = 0, rebased = false, current = head;
@@ -55,6 +56,7 @@ function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; failGates?
       return { code: settings.conflict && !argv.includes("--abort") ? 1 : 0, stdout: "", stderr: "conflict" };
     }
     if (argv.includes("--diff-filter=U")) return { code: 0, stdout: "src/parser.ts\n", stderr: "" };
+    if (argv.includes("--name-only") && settings.dirtyBase) return { code: 0, stdout: "src/parser.ts\n", stderr: "" };
     if (argv.includes("--binary") && settings.patchChanged && rebased) return { code: 0, stdout: "changed patch", stderr: "" };
     if (argv.includes("--verify") && settings.stale && rebased) return { code: 0, stdout: "c".repeat(40), stderr: "" };
     if (argv[0] === "worktree") return { code: 0, stdout: "worktree /primary\0branch refs/heads/main\0\0", stderr: "" };
@@ -70,7 +72,7 @@ function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; failGates?
       // The gate reads the project's commands after this save, so each attempt can be made to pass or fail.
       events.push("gate"); gates++;
       setGate(settings.failGate === true || gates <= (settings.failGates ?? 0));
-    }, changed() {},
+    }, changed() {}, ...(settings.watchMs === undefined ? {} : { watchMs: settings.watchMs }),
     ...(repair ? { repair: async (prompt: string) => {
       events.push("repair"); prompts.push(prompt);
       return repair(prompt, {
@@ -78,7 +80,7 @@ function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; failGates?
         approve() { journal.review({ ...child(`review-${prompts.length}`, "review"), verdict: { verdict: "approve", summary: "Approved", findings: [], head: current, at: 1000 } }, current); },
       });
     } } : {}) });
-  return { ctx, journal, control, events, records, calls, prompts, close() { control.close(); rmSync(dir, { recursive: true, force: true }); } };
+  return { ctx, journal, control, gitRun, events, records, calls, prompts, close() { control.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 function child(id = "parser", kind: ChildSnapshot["kind"] = "slice"): ChildSnapshot {
   return { id, kind, call: "call", title: "Parser", brief: "Build parser", owns: ["src/parser.ts"], after: [], profile: "default", model: "provider/model",
@@ -135,6 +137,8 @@ describe("build exits", () => {
       const state = await f.control.choose("land");
       expect(state.phase).toBe("failed"); expect(state.detail).toContain("failing-check");
       expect(readFileSync(f.journal.latestGate()!.log!, "utf8")).toContain("failing-check");
+      expect(state.land?.steps.map(step => step.state)).toEqual(["done", "failed", "waiting"]);
+      expect(state.land?.gate).toMatchObject({ attempt: "G1", log: f.journal.latestGate()!.log!, tail: ["$ echo failing-check; exit 1", "failing-check"] });
       expect(f.events).not.toContain("land");
       expect(f.journal.record().outcome.state).toBe("open");
       expect((await f.control.choose("iterate")).phase).toBe("none");
@@ -196,6 +200,43 @@ describe("build exits", () => {
       expect(result.phase).toBe("failed");
       expect(result.detail).toContain("base main moved");
       expect(f.events).toEqual(["rebase", "gate"]);
+    } finally { f.close(); }
+  });
+  test("a base move while the gate runs stops the gate and what it started at once", async () => {
+    const pidFile = join(tmpdir(), `build-exit-gate-${process.pid}-${Date.now()}.pid`);
+    const f = fixture({ stale: true, watchMs: 5, gate: `sleep 30 & echo $! > ${pidFile}; wait` });
+    try {
+      const started = Date.now();
+      const state = await f.control.choose("land");
+      expect(Date.now() - started < 10_000).toBe(true);
+      expect(state.phase).toBe("failed"); expect(state.detail).toContain("while the gate ran");
+      expect(state.land?.steps.find(step => step.id === "gate")).toMatchObject({ state: "failed", note: "stopped: main moved" });
+      expect(f.events).toEqual(["rebase", "gate"]);
+      // A stopped gate has no result, and the process it left in the background went with it.
+      expect(f.journal.latestGate()).toBeUndefined();
+      const pid = Number(readFileSync(pidFile, "utf8"));
+      for (let waited = 0; waited < 2_000 && existsSync(`/proc/${pid}`); waited += 20) await new Promise(resolve => setTimeout(resolve, 20));
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally { f.close(); rmSync(pidFile, { force: true }); }
+  });
+  test("Land does not run the gate again on a commit it already passed on", async () => {
+    const f = fixture();
+    try {
+      await verifyBuild(f.ctx, f.gitRun, f.journal);
+      const state = await f.control.choose("land");
+      expect(state.phase).toBe("landed");
+      expect(f.events).toEqual(["rebase", "land"]);
+      expect(state.record?.gateAttempt).toBe("G1");
+      expect(f.journal.record().verification).toHaveLength(1);
+      expect(state.land?.steps.find(step => step.id === "gate")).toMatchObject({ state: "done", note: "G1 passed earlier on this commit" });
+    } finally { f.close(); }
+  });
+  test("uncommitted changes in the base checkout to files the branch changes stop Land before the gate", async () => {
+    const f = fixture({ dirtyBase: true });
+    try {
+      const state = await f.control.choose("land");
+      expect(state.phase).toBe("failed"); expect(state.detail).toContain("/primary has uncommitted changes");
+      expect(f.events).toEqual(["rebase"]);
     } finally { f.close(); }
   });
   test("review policy requires an approving round or an owner's recorded override", async () => {

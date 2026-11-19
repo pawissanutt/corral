@@ -1,8 +1,8 @@
 // The build result card: a rounded card headed `Build finished · d/n slices · time`, then one row per slice (name,
 // state and time, cost), the branch figures, edits outside a child's files and uncommitted changes in warning, the
 // session's gate attempts and review rounds from its build record, and the parent's own note muted. On the latest
-// exit card only, a running exit shows the owner's choice and its live progress; older exit cards say they were
-// superseded. A pending exit choice is drawn by the header and the dock, not by the card; the card's header row opens it.
+// exit card only, a running exit shows the owner's choice and its live progress, for Land its steps with the gate's
+// log under the gate step; older exit cards say they were superseded. A pending exit choice is drawn by the header and the dock, not by the card; the card's header row opens it.
 import type { BuildRecord, RecordReview } from "../../build/record-types.ts";
 import type { BuildSummary, ChildState, ExitChoice, ExitOption, ExitRecord, ExitState, FleetSnapshot } from "../../build/types.ts";
 import { agentStatus, duration, money, toneColor } from "../agents-model.ts";
@@ -10,6 +10,7 @@ import type { Tone } from "../agents-model.ts";
 import { spinner } from "../frame.ts";
 import { plainLabel, PANEL_ERROR, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING } from "../panels-view.ts";
 import { childHue } from "./contract.ts";
+import { landLines } from "./land-steps.ts";
 import { BOLD, CARD_BODY, cardCell, cardInner, cardLine, cardWrap, conversationCard, UNBOLD } from "./task-card.ts";
 
 /** The mock's `.sres` columns: name (11), state and time (9), cost, two cells apart. */
@@ -196,6 +197,11 @@ export function resultCardLines(input: {
     if (choice) {
       const label = input.options.find(option => option.choice === choice)?.label ?? EXIT_LABELS[choice];
       body.push(cardLine(PANEL_MUTED + "you chose " + PANEL_TEXT + plainLabel(label), inner));
+    }
+    // Land reports its steps; the single progress line is for a host state without them.
+    if (exit.land && choice === "land") {
+      body.push(...landLines(exit.land, inner, now, exit.phase === "repairing" ? exit.repair : undefined));
+      return { lines: conversationCard(header, body, width), hits };
     }
     const progress = choice || exit.phase !== "none" ? exitProgress(exit) : undefined;
     // While verifying, the card names the full gate and how long it has run.

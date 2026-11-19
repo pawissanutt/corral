@@ -351,12 +351,45 @@ export interface ExitRecord {
  */
 export type ExitPhase = "none" | "pending" | "rebasing" | "verifying" | "repairing" | "landing" | "kept" | "landed" | "failed";
 
+/** One step of `land` as the owner follows it. Times are milliseconds since the epoch. */
+export interface LandStep {
+  readonly id: "rebase" | "gate" | "land";
+  readonly state: "waiting" | "running" | "done" | "failed";
+  /** A short fact: the rebased head, the gate attempt, what stopped it. */
+  readonly note?: string;
+  readonly startedAt?: number;
+  readonly endedAt?: number;
+}
+
+/** The gate `land` is running or last ran. */
+export interface LandGate {
+  /** `G3`, once the attempt is recorded. */
+  readonly attempt?: string;
+  /** Absolute path of the combined command log. */
+  readonly log?: string;
+  /** The command running, or the one that failed, and its 1-based place among the gate's commands. */
+  readonly command?: string;
+  readonly index?: number;
+  readonly of?: number;
+  /** The log's last lines without terminal sequences; empty once the gate passed. */
+  readonly tail: readonly string[];
+}
+
+/** The current round of `land`: its steps in order and the gate's log. A repair starts a new round. */
+export interface LandProgress {
+  readonly base: string;
+  readonly steps: readonly LandStep[];
+  readonly gate?: LandGate;
+}
+
 export interface ExitState {
   readonly phase: ExitPhase;
   readonly record?: ExitRecord;
   /** Progress or failure text for the conversation. */
   readonly detail?: string;
   readonly repair?: { readonly round: number; readonly of: number };
+  /** Present from the first step of `land` until the next exit choice opens. */
+  readonly land?: LandProgress;
 }
 
 export interface ExitControl {

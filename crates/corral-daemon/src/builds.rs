@@ -297,6 +297,7 @@ impl Build {
                     landed: exit.landed,
                     base_branch: exit.base_branch,
                     repair: None,
+                    land: None,
                 }
             })
         });

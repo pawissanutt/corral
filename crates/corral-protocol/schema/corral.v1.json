@@ -3426,6 +3426,17 @@
               "null"
             ]
           },
+          "land": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LandBrief"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The current round of Land, from its first step until the next exit choice opens.\nAbsent from a host that does not report it."
+          },
           "landed": {
             "type": [
               "string",
@@ -3734,6 +3745,135 @@
           "live"
         ],
         "type": "object"
+      },
+      "LandBrief": {
+        "description": "One round of Land as its host runs it. A repair starts a new round.",
+        "properties": {
+          "gate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LandGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The gate this round runs or last ran."
+          },
+          "steps": {
+            "description": "In the order they run: rebase, gate (absent when the session has no gate), land.",
+            "items": {
+              "$ref": "#/components/schemas/LandStep"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LandGate": {
+        "properties": {
+          "attempt": {
+            "description": "`G3`, once the attempt is recorded.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command": {
+            "description": "The command running, or the one that failed. At most 240 bytes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "description": "1-based place of `command` among the gate's `of` commands.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "log": {
+            "description": "Absolute path of the gate's log on the host. At most 512 bytes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "of": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tail": {
+            "description": "The log's last lines, oldest first, without terminal sequences: at most 8 lines of at\nmost 200 bytes. Empty once the gate passed.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "LandStep": {
+        "properties": {
+          "ended_at": {
+            "description": "RFC 3339.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/LandStepId"
+          },
+          "note": {
+            "description": "A short fact: the rebased head, the gate attempt, what stopped it. At most 160 bytes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "description": "RFC 3339.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/LandStepState"
+          }
+        },
+        "required": [
+          "id",
+          "state"
+        ],
+        "type": "object"
+      },
+      "LandStepId": {
+        "enum": [
+          "rebase",
+          "gate",
+          "land",
+          "other"
+        ],
+        "type": "string"
+      },
+      "LandStepState": {
+        "enum": [
+          "waiting",
+          "running",
+          "done",
+          "failed",
+          "other"
+        ],
+        "type": "string"
       },
       "ListenerInfo": {
         "properties": {

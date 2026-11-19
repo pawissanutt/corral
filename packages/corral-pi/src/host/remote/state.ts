@@ -17,10 +17,16 @@ export interface UsageBrief {
   tokens: number; cost_usd?: number; cost_partial: boolean;
   context_tokens: number; context_window: number; context_percent?: number;
 }
+interface LandBrief {
+  steps: { id: string; state: string; note?: string; started_at?: string; ended_at?: string }[];
+  gate?: { attempt?: string; log?: string; command?: string; index?: number; of?: number; tail: string[] };
+}
 interface ExitBrief {
   phase: ExitState["phase"]; detail?: string; choice?: "keep" | "land" | "iterate"; landed?: string; base_branch?: string;
-  repair?: { round: number; of: number };
+  repair?: { round: number; of: number }; land?: LandBrief;
 }
+/** The wire's bounds on a gate log tail: its last lines, each clipped. */
+const LAND_TAIL_LINES = 8, LAND_TAIL_BYTES = 200;
 interface BoardBrief { open: number; blocked: number; failed: number; proposed: boolean }
 interface PlanBrief { done: number; total: number; current?: string; stale: boolean }
 interface Capability { id: string; unavailable?: string }
@@ -115,6 +121,12 @@ export function boundState(state: SessionState): BoundedSessionState {
   while (bytes > LIVE_STATE_BYTES && clipped.cards.length) {
     bytes -= Buffer.byteLength(JSON.stringify(clipped.cards.pop())) + Number(clipped.cards.length > 0);
   }
+  // A gate log tail is the largest optional detail of an exit: it goes before the exit itself does.
+  if (bytes > LIVE_STATE_BYTES && clipped.exit?.land?.gate?.tail.length) {
+    const gate = { ...clipped.exit.land.gate, tail: [] };
+    bytes -= jsonBytes(clipped.exit.land.gate) - jsonBytes(gate);
+    clipped.exit = { ...clipped.exit, land: { ...clipped.exit.land, gate } };
+  }
   for (const field of ["last_error", "pending_model", "activity", "plan", "exit"] as const) {
     if (bytes <= LIVE_STATE_BYTES) break;
     if (clipped[field] !== undefined) bytes -= Buffer.byteLength(JSON.stringify({ [field]: clipped[field] })) - 1;
@@ -150,10 +162,21 @@ export function capabilities(registry: RemoteRegistry, options: { open: boolean;
   return can;
 }
 
+function landBrief(land: NonNullable<ExitState["land"]>): LandBrief {
+  const gate = land.gate;
+  return {
+    steps: land.steps.map(step => ({ id: step.id, state: step.state, note: optionalText(step.note, 160),
+      started_at: optionalTime(step.startedAt), ended_at: optionalTime(step.endedAt) })),
+    gate: gate && { attempt: gate.attempt, log: optionalText(gate.log, 512), command: optionalText(gate.command, 240),
+      index: gate.index, of: gate.of, tail: gate.tail.slice(-LAND_TAIL_LINES).map(line => clipText(line, LAND_TAIL_BYTES)) },
+  };
+}
+
 export function exitBrief(exit: ExitState): ExitBrief {
   return { phase: exit.phase, detail: exit.detail === undefined ? undefined : utf8Prefix(exit.detail, 512),
     choice: exit.record?.choice, landed: exit.record?.landed,
-    base_branch: exit.record?.baseBranch === undefined ? undefined : utf8Prefix(exit.record.baseBranch, 256), repair: exit.repair };
+    base_branch: exit.record?.baseBranch === undefined ? undefined : utf8Prefix(exit.record.baseBranch, 256), repair: exit.repair,
+    land: exit.land && landBrief(exit.land) };
 }
 
 export function boardBrief(board: BoardControl): BoardBrief {

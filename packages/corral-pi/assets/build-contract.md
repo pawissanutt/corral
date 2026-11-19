@@ -106,8 +106,11 @@ a slug or ID; optionally include a summary. Explain the candidate and evidence f
 <!-- corral-only -->
 The owner alone chooses Keep, Iterate or Land. Keep records the result and retains the
 branch; Iterate returns to this session; Land rebases, runs the project's configured
-gate on the rebased worktree, and locally fast-forwards the base branch. Follow the
-in-session review policy for the candidate.
+gate on the rebased worktree, and locally fast-forwards the base branch. A gate that
+already passed on that exact commit is not run again, so a build_verify pass on the
+final head counts when the rebase changes nothing. Land stops at once if the base branch
+moves while the gate runs; the owner chooses Land again. Follow the in-session review
+policy for the candidate.
 
 When the gate fails during the owner's Land, the host sends a `[corral build] Land
 stopped` message naming the failed command and log. It is a host message for the Land the

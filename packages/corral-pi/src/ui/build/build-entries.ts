@@ -5,10 +5,11 @@
 import type { MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import type { BoardTaskStatus, ExitChoice, ExitOption, ExitPhase, ExitRecord, ExitState } from "../../build/types.ts";
+import type { BoardTaskStatus, ExitChoice, ExitOption, ExitPhase, ExitRecord, ExitState, LandProgress } from "../../build/types.ts";
 import { onSurface } from "../frame.ts";
 import { plainLabel, PANEL_BG, PANEL_BUBBLE, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT } from "../panels-view.ts";
 import type { BuildCardSource } from "./contract.ts";
+import { landLines } from "./land-steps.ts";
 import { EXIT_LABELS, exitLines, exitProgress, resultCardLines, shortSha } from "./result-card.ts";
 import type { ResultHit } from "./result-card.ts";
 import { cardCell, cardLine, cardWrap } from "./task-card.ts";
@@ -21,7 +22,9 @@ export const BUILD_BOARD_ENTRY = "corral_build_board";
 export const BUILD_FINISH_ENTRY = "corral_build_finish";
 
 export interface BuildEntry<T> { readonly customType: string; readonly content: string; readonly display: true; readonly details: T }
-export type ExitEntryDetails = { readonly choice: ExitChoice; readonly label: string; readonly phase: ExitPhase; readonly detail?: string }
+export type ExitEntryDetails = { readonly choice: ExitChoice; readonly label: string; readonly phase: ExitPhase; readonly detail?: string;
+  /** Land's steps as they ended, with a failed gate's last log lines. */
+  readonly land?: LandProgress }
   & Pick<ExitRecord, "landed" | "baseBranch" | "gateAttempt" | "overrideReason">;
 export interface BoardEntryDetails { readonly filed: readonly { readonly id: string; readonly title: string; readonly depends: readonly string[] }[]; readonly started: boolean }
 export interface FinishEntryDetails { readonly id: string }
@@ -101,6 +104,7 @@ export function exitEntry(option: ExitOption, state: ExitState): BuildEntry<Exit
     ...(record?.landed ? { landed: plainLabel(record.landed) } : {}), ...(record?.baseBranch ? { baseBranch: plainLabel(record.baseBranch) } : {}),
     ...(record?.gateAttempt ? { gateAttempt: plainLabel(record.gateAttempt) } : {}),
     ...(record?.overrideReason ? { overrideReason: plainLabel(record.overrideReason) } : {}),
+    ...(option.choice === "land" && state.land ? { land: state.land } : {}),
   };
   const sentences = [
     `The owner chose "${label}" for this build branch.`, outcome(details),
@@ -138,10 +142,17 @@ function bubble(who: string, text: string, width: number): string[] {
 function exitEntryLines(details: ExitEntryDetails, width: number): string[] {
   // A stored entry may name a choice or a phase this build does not know; its own words are shown then.
   const label = details.label || (EXIT_LABELS[details.choice] ?? details.choice);
-  const shown = exitProgress({ phase: details.phase, ...(details.detail ? { detail: details.detail } : {}), record: details });
+  // A stored entry is drawn as it was written: only steps of the shape this build knows are drawn.
+  const land = details.land && Array.isArray(details.land.steps) && typeof details.land.base === "string" ? details.land : undefined;
+  // The steps name the gate's log, so the outcome under them does not repeat its path.
+  const log = typeof land?.gate?.log === "string" ? `; log: ${plainLabel(land.gate.log)}` : undefined;
+  const detail = log ? details.detail?.replace(log, "") : details.detail;
+  const shown = exitProgress({ phase: details.phase, ...(detail ? { detail } : {}), record: details });
   return [
     ...bubble("you chose", plainLabel(label), width),
+    ...(land ? landLines(land, width) : []),
     ...(shown ? exitLines(shown, width) : cardWrap(PANEL_MUTED + "· " + outcome(details), "", width)),
+    ...(details.choice === "land" && details.phase === "failed" ? cardWrap("/finish to choose an exit again", PANEL_MUTED, width, 2) : []),
     ...(details.overrideReason ? cardWrap(PANEL_MUTED + "landed over open findings: " + PANEL_TEXT + details.overrideReason, "", width, 2) : []),
   ];
 }

@@ -1,5 +1,6 @@
 import { checked, type Run } from "./corral-cli.ts";
-import { verifyBuild } from "./gate.ts";
+import { buildProject, verifyBuild } from "./gate.ts";
+import { LandTracker, TAIL_FAILED } from "./land-progress.ts";
 import { landingBaseFromRef, landingBaseLookups, landingBaseName, patchDigest, summarize } from "./git.ts";
 import type { BuildJournal } from "./record.ts";
 import type { BuildGateResult } from "./record-types.ts";
@@ -21,11 +22,18 @@ export interface BuildExitControl extends ExitControl {
 /** How many times one Land choice hands a failing gate back to the session before it stops. */
 export const LAND_REPAIR_ROUNDS = 3;
 
+/** How often the running gate's log tail is read again; the base branch is checked every other time. */
+const GATE_WATCH_MS = 1_000;
+
 class GateFailed extends Error {
   constructor(readonly gate: BuildGateResult) {
-    super(`Gate failed${gate.failed_command ? `: ${gate.failed_command}` : ""}${gate.log ? `; log: ${gate.log}` : ""}`);
+    super(`Gate ${gate.attempt} failed${gate.failed_command ? `: ${gate.failed_command}` : ""}${gate.log ? `; log: ${gate.log}` : ""}`);
   }
 }
+/** The base branch moved under a running Land: its rebase and gate no longer describe what would land. */
+class BaseMoved extends Error {}
+
+const short = (sha: string) => sha.slice(0, 7);
 
 function repairPrompt(gate: BuildGateResult, round: number, review: boolean): string {
   return [
@@ -45,6 +53,8 @@ export function createExit(options: {
   save: (record: ExitRecord) => void; changed: () => void; now?: () => number;
   /** Gives the parent a failed landing gate to fix; settles when the turn it starts ends. Absent: a failed gate ends Land. */
   repair?: (prompt: string) => Promise<{ readonly aborted: boolean }>;
+  /** Overrides `GATE_WATCH_MS`. */
+  watchMs?: number;
 }): BuildExitControl {
   const { context, git, journal } = options;
   const session = context.session;
@@ -58,12 +68,21 @@ export function createExit(options: {
   let integrationError: string | undefined;
   let inFlight: Promise<ExitState> | undefined;
   let closed = false;
+  /** The steps of the Land the owner last chose, and what stops its running gate. */
+  let steps: LandTracker | undefined;
+  let gateStop: AbortController | undefined;
   function changed() {
     for (const listener of [options.changed, ...listeners]) { try { listener(); } catch { /* Observers do not own exit execution. */ } }
   }
   function update(phase: ExitState["phase"], detail: string, record = state.record, repair?: ExitState["repair"]) {
-    state = { phase, detail, ...(record ? { record } : {}), ...(repair ? { repair } : {}) };
+    state = { phase, detail, ...(record ? { record } : {}), ...(repair ? { repair } : {}), ...(steps ? { land: steps.view() } : {}) };
     if (record) options.save({ ...record, progress: { phase, detail } } as ExitProgressRecord);
+    changed();
+  }
+  /** A step or its log moved within the phase: shown, not saved. */
+  function stepped() {
+    if (!steps) return;
+    state = { ...state, land: steps.view() };
     changed();
   }
   async function getSummary() {
@@ -134,10 +153,66 @@ export function createExit(options: {
     const abort = await git(["rebase", "--abort"], { cwd: session.worktree });
     throw new Error(`Rebase failed${conflicts.stdout.trim() ? `; conflicted paths: ${conflicts.stdout.trim().split("\n").join(", ")}` : `: ${result.stderr.trim() || result.stdout.trim()}`}.${abort.code ? ` Rebase abort failed: ${abort.stderr.trim()}` : " The rebase was aborted; the branch is unchanged."}`);
   }
+  /** A fast-forward refuses to overwrite uncommitted changes; found here, that costs no gate run. */
+  async function checkBaseCheckout(progress: LandTracker, checkout: string, tip: string, head: string): Promise<void> {
+    let overlap: string[];
+    try {
+      const dirty = (await checked(git, ["diff", "--name-only", "HEAD", "--"], checkout)).split("\n").filter(Boolean);
+      if (!dirty.length) return;
+      const incoming = new Set((await checked(git, ["diff", "--name-only", `${tip}..${head}`, "--"], session.worktree)).split("\n").filter(Boolean));
+      overlap = dirty.filter(path => incoming.has(path));
+    } catch { return; /* The fast-forward reports what this could not read. */ }
+    if (!overlap.length) return;
+    progress.fail("its checkout has uncommitted changes", "land");
+    throw new Error(`The checkout of ${integration} at ${checkout} has uncommitted changes to ${overlap.length === 1 ? "a file" : "files"} this branch changes: `
+      + `${overlap.slice(0, 5).join(", ")}${overlap.length > 5 ? ` and ${overlap.length - 5} more` : ""}. Commit or stash them, then choose Land again.`);
+  }
+  /**
+   * The project's gate on `head`. While it runs its log tail is read again and the base branch is watched: a gate
+   * whose base moved cannot land, so it is stopped at once. Throws `GateFailed` when the gate fails.
+   */
+  async function runGate(progress: LandTracker, head: string, ref: string, tip: string): Promise<BuildGateResult> {
+    const stop = gateStop = new AbortController();
+    let commands: readonly string[] = [], checking = false, ticks = 0;
+    const timer = setInterval(() => {
+      if (progress.refreshTail()) stepped();
+      if (checking || ++ticks % 2) return;
+      checking = true;
+      void git(["rev-parse", "--verify", ref], { cwd: session.worktree }).then(result => {
+        const now = result.stdout.trim();
+        if (result.code === 0 && now && now !== tip) {
+          stop.abort(new BaseMoved(`The base ${integration} moved to ${short(now)} while the gate ran, so the gate was stopped. Choose Land again to rebase onto the new tip.`));
+        }
+      }, () => { /* The check after the gate still decides. */ }).finally(() => { checking = false; });
+    }, options.watchMs ?? GATE_WATCH_MS);
+    let gate: BuildGateResult;
+    try {
+      gate = await verifyBuild(context, git, journal, stop.signal, {
+        started(log, lines) { commands = lines; progress.setGate({ log, of: lines.length }); stepped(); },
+        command(index) { progress.setGate({ command: commands[index], index: index + 1 }); stepped(); },
+      });
+    } catch (error) { throw stop.signal.aborted ? stop.signal.reason : error; }
+    finally { clearInterval(timer); gateStop = undefined; }
+    progress.setGate({ attempt: gate.attempt });
+    if (gate.result === "fail") {
+      if (gate.failed_command) progress.setGate({ command: gate.failed_command });
+      progress.refreshTail(TAIL_FAILED);
+      progress.fail(`${gate.attempt} failed`);
+      throw new GateFailed(gate);
+    }
+    if (gate.head !== head || (await checked(git, ["rev-parse", "HEAD"], session.worktree)).trim() !== head) {
+      throw new Error("Build HEAD changed during verification. Choose Land again to verify the new head.");
+    }
+    progress.clearTail();
+    progress.done("gate", gate.result === "skipped" ? "no gate commands" : `${gate.attempt} passed`);
+    return gate;
+  }
   /** One Land attempt: rebase, the project's gate, local fast-forward. Throws `GateFailed` when the gate fails. */
-  async function land(record: ExitRecord): Promise<void> {
+  async function land(record: ExitRecord, progress: LandTracker): Promise<void> {
     const primary = session.bare ? await primaryCheckout() : undefined;
     if (primary) await checkPrimary(primary);
+    progress.round();
+    progress.begin("rebase");
     update("rebasing", `Rebasing onto ${integration}.`);
     journal.timeline("land", `Rebasing onto ${integration}.`);
     const ref = `refs/heads/${integration}`;
@@ -149,34 +224,41 @@ export function createExit(options: {
       throw new Error("The rebase changed the patch. Review the rebased head again with build_review, then choose Land.");
     }
     const head = (await checked(git, ["rev-parse", "HEAD"], session.worktree)).trim();
-    let gateAttempt: string | undefined;
-    if (!session.bare) {
-      update("verifying", "Running the project's gate on the rebased head.");
-      const gate = await verifyBuild(context, git, journal);
-      gateAttempt = gate.attempt;
-      if (gate.result === "fail") throw new GateFailed(gate);
-      if (gate.head !== head || (await checked(git, ["rev-parse", "HEAD"], session.worktree)).trim() !== head) {
-        throw new Error("Build HEAD changed during verification. Choose Land again to verify the new head.");
-      }
-    }
-    if ((await checked(git, ["rev-parse", "--verify", ref], session.worktree)).trim() !== tip) {
-      throw new Error(`The base ${integration} moved. Choose Land again to rebase onto its new tip.`);
-    }
-    if (primary) await checkPrimary(primary);
+    progress.done("rebase", short(head));
     const baseCheckout = primary ?? (await checked(git, ["worktree", "list", "--porcelain", "-z"], session.worktree))
       .split("\0\0").map(entry => entry.split("\0")).find(entry => entry.includes(`branch ${ref}`))?.[0]?.slice("worktree ".length);
-    update("landing", `Locally fast-forwarding ${integration} to ${head}.`);
+    if (baseCheckout && !primary) await checkBaseCheckout(progress, baseCheckout, tip, head);
+    let gateAttempt: string | undefined;
+    if (!session.bare) {
+      progress.begin("gate");
+      // The same commit under the same commands gives the same gate: a pass already recorded for it is not run again.
+      const passed = journal.passedGate(head, buildProject(session).gate ?? []);
+      if (passed) {
+        progress.done("gate", `${passed.attempt} passed earlier on this commit`);
+        journal.timeline("land", `Gate ${passed.attempt} already passed on ${head}; it was not run again.`);
+        stepped();
+      } else update("verifying", `Running the project's gate on ${short(head)}.`);
+      gateAttempt = (passed ?? await runGate(progress, head, ref, tip)).attempt;
+    }
+    if ((await checked(git, ["rev-parse", "--verify", ref], session.worktree)).trim() !== tip) {
+      progress.fail(`${integration} moved`, "land");
+      throw new BaseMoved(`The base ${integration} moved. Choose Land again to rebase onto its new tip.`);
+    }
+    if (primary) await checkPrimary(primary);
+    progress.begin("land");
+    update("landing", `Fast-forwarding ${integration} to ${short(head)}.`);
     if (baseCheckout) await checked(git, ["merge", "--ff-only", head], baseCheckout);
     else await checked(git, ["fetch", ".", `${head}:${ref}`], session.worktree);
+    progress.done("land");
     journal.outcome({ state: "landed", at: new Date(now()).toISOString(), head, landed: head, base_branch: integration, override_reason: record.overrideReason });
     journal.timeline("land", `${integration}: ${head}`);
-    update("landed", `Landed at ${head} on ${integration}.`, { ...record, landed: head, baseBranch: integration, gateAttempt });
+    update("landed", "Landed.", { ...record, landed: head, baseBranch: integration, gateAttempt });
   }
   /** Hands a failed landing gate to the session; returns once Land may run again and throws when it may not. */
   async function repaired(failure: GateFailed, round: number, record: ExitRecord): Promise<void> {
     const stopped = (why: string) => new Error(`${failure.message}. Land did not resume after repair ${round}: ${why}`);
-    update("repairing", `${failure.message}. Repair ${round} of ${LAND_REPAIR_ROUNDS}: the session is fixing it and Land resumes when it finishes.`,
-      record, { round, of: LAND_REPAIR_ROUNDS });
+    // The round is `repair`'s to say; the detail is the failure alone.
+    update("repairing", `${failure.message}.`, record, { round, of: LAND_REPAIR_ROUNDS });
     journal.timeline("land", `Repair ${round} of ${LAND_REPAIR_ROUNDS}: ${failure.message}`);
     let turn: { readonly aborted: boolean };
     try { turn = await options.repair!(repairPrompt(failure.gate, round, context.settings.exitPolicy === "review" && !record.overrideReason)); }
@@ -194,6 +276,8 @@ export function createExit(options: {
     journal.decision("exit", choice);
     journal.timeline("exit", choice);
     try {
+      // The steps shown belong to the Land that ran; any new choice starts without them.
+      steps = undefined;
       if (choice === "iterate") { update("none", "The build session remains open for iteration."); return; }
       if (choice === "keep") {
         try { summary = session.bare && session.repository === false ? await getSummary() : await summarize(git, session, options.fleet()); } catch { /* Keeping an unborn or unavailable worktree does not require a Git head. */ }
@@ -211,15 +295,20 @@ export function createExit(options: {
         return;
       }
       if (record.overrideReason) journal.decision("override", record.overrideReason);
+      const progress = steps = new LandTracker(integration!, !session.bare, now);
       for (let round = 1; ; round++) {
-        try { await land(record); return; }
+        try { await land(record, progress); return; }
         catch (error) {
-          if (!(error instanceof GateFailed) || !options.repair || round > LAND_REPAIR_ROUNDS) throw error;
+          if (!(error instanceof GateFailed) || !options.repair) throw error;
+          if (round > LAND_REPAIR_ROUNDS) throw new Error(`${error.message}. All ${LAND_REPAIR_ROUNDS} automatic repairs are used.`);
           await repaired(error, round, record);
         }
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      // A gate stopped for a moved base did not fail: its last lines explain nothing.
+      if (error instanceof BaseMoved) steps?.clearTail();
+      steps?.fail(error instanceof BaseMoved ? `stopped: ${integration} moved` : undefined);
       journal.timeline("exit", `failed: ${detail}`);
       update("failed", detail);
     } finally {
@@ -243,12 +332,17 @@ export function createExit(options: {
     open() {
       if (closed || inFlight) return;
       summary = undefined;
+      steps = undefined;
       update("pending", "Choose Keep, Land or Iterate.");
       const opened = state;
       void getSummary().catch(error => {
         if (!closed && state === opened && !inFlight) update("failed", String(error));
       });
     },
-    close() { closed = true; listeners.clear(); },
+    close() {
+      closed = true;
+      listeners.clear();
+      gateStop?.abort(new Error("The session closed while the gate ran; the gate was stopped."));
+    },
   };
 }
