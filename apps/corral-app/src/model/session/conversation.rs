@@ -12,12 +12,13 @@ use crate::model::Id;
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
 
+use super::super::composer::ModelPill;
 use super::super::status::cost_text;
 use super::super::transcript::{self, Transcript};
-use super::super::{Action, Cx, DockAction, Ui};
+use super::super::{Action, Cx, DockAction, SubView, Tab, Ui};
 use super::{
-    FleetAction, FleetButton, asks, card_of, child, child_detail, ctx, profile_model, scope,
-    shown_state,
+    CHILD_CONTROL, FleetAction, FleetButton, asks, card_of, child, child_detail, control, ctx,
+    fleet, helper, live, ops, profile_model, scope, shown_id, shown_state,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +104,66 @@ fn end(cx: &Cx<'_>, child: &SessionChild) -> Option<EndLine> {
         "done" => line(Hue::Ok, "✓ Done.".into(), None),
         _ => None,
     }
+}
+
+/// What the bottom of the page reports while an agent's conversation is open, in place of the
+/// session's own agent: the agent's model and effort in the composer, its id, cost and context
+/// share in the status bar. Each is what the fleet (or the agent's served detail) reports; a
+/// fact neither reports stays absent, never the parent's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenedAgent {
+    /// `a2`, a helper call's id shortened.
+    pub id: String,
+    pub model: ModelPill,
+    pub effort: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub context_percent: Option<f32>,
+}
+
+/// The agent whose conversation the Agents tab shows, while the fleet still lists it.
+pub(in crate::model::session) fn opened_agent(cx: &Cx<'_>) -> Option<OpenedAgent> {
+    if cx.ui.tab != Tab::Agents {
+        return None;
+    }
+    let Some(SubView::Agent(id)) = cx.ui.sub.as_ref() else {
+        return None;
+    };
+    let row = fleet(cx)?.children.iter().find(|child| child.id == *id)?;
+    let served = child_detail(cx.feed, cx.id, id);
+    let unavailable = if helper(row) {
+        Some("a helper call keeps the model it was started with".to_owned())
+    } else if !live(row) {
+        Some("it has finished".to_owned())
+    } else {
+        control(cx, CHILD_CONTROL)
+            .or_else(|| ops::sending(cx, id).then(|| "your last request is on its way".into()))
+    };
+    let picking = cx.ui.fleet.picking.as_deref() == Some(id.as_str());
+    Some(OpenedAgent {
+        id: shown_id(row),
+        model: ModelPill {
+            label: row.model.clone(),
+            pending: row
+                .pending_model
+                .clone()
+                .or_else(|| served.and_then(|detail| detail.pending_model.clone())),
+            unavailable,
+            opens: Some(Action::Fleet(FleetAction::Models {
+                session: cx.id.clone(),
+                child: (!picking).then(|| id.clone()),
+            })),
+        },
+        effort: row
+            .effort
+            .clone()
+            .or_else(|| served.and_then(|detail| detail.effort.clone())),
+        cost_usd: row
+            .cost_usd
+            .or_else(|| served.and_then(|detail| detail.usage.cost_usd)),
+        context_percent: row
+            .context_percent
+            .or_else(|| served.and_then(|detail| detail.usage.context_percent)),
+    })
 }
 
 /// The conversation of agent `id`; `row` is its fleet row (none once the fleet no longer lists

@@ -40,6 +40,7 @@ mod ops;
 
 pub use child::{AgentDetail, Clipped, EditLine, EditList, ModelChoiceRow, ModelPicker};
 pub use clock::AgentsClock;
+pub(super) use conversation::opened_agent;
 pub use conversation::{Conversation, EndLine};
 pub(super) use jobs::short_id;
 pub use jobs::{JobDetail, JobList, JobOutputView, JobRowView};

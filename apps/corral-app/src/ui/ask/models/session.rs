@@ -124,6 +124,21 @@ pub(crate) fn session_pill(
     let toggle = {
         let id = id.clone();
         move || {
+            // An opened agent's pill opens that agent's model choices, or nothing while it
+            // cannot change.
+            let agent = model.with_untracked(|m| {
+                m.as_ref().and_then(|m| {
+                    m.opens
+                        .clone()
+                        .map(|opens| (opens, m.unavailable.is_none()))
+                })
+            });
+            if let Some((opens, changeable)) = agent {
+                if changeable {
+                    act(app, opens);
+                }
+                return;
+            }
             let action = if open.get_untracked() == Some(PickerKind::Model) {
                 PickerAction::Close(id.clone())
             } else {
@@ -177,14 +192,18 @@ pub(crate) fn session_pill(
             .min_w(px(0.0)),
         );
     let effort_control = dynamic(move || {
-        let level = effort.with(|effort| {
+        let (level, fixed) = effort.with(|effort| {
             effort.as_ref().map(|effort| {
-                effort
+                let level = effort
                     .level
                     .clone()
-                    .unwrap_or_else(|| "not reported".into())
+                    .unwrap_or_else(|| "not reported".into());
+                (level, effort.fixed)
             })
         })?;
+        if fixed {
+            return Some(untracked(|| effort_words(app, level)));
+        }
         let id = id.clone();
         Some(untracked(|| effort_button(app, id, level)))
     });
@@ -201,6 +220,32 @@ pub(crate) fn session_pill(
         .child(face(form, pill))
         .child(effort_control)
         .into_element()
+}
+
+/// `effort high`: an opened agent's effort, as reported; nothing to press.
+fn effort_words(app: AppState, level: String) -> AnyElement {
+    let form = app.form;
+    let words = view()
+        .test_id("btn-effort")
+        .label(format!("Effort {level}"))
+        .flex_row()
+        .items_center()
+        .flex_shrink_0()
+        .child(small(
+            form,
+            text(if form == Form::Phone {
+                level.clone()
+            } else {
+                format!("effort {level}")
+            })
+            .number_of_lines(1u32)
+            .text_color(color(Token::Ink3)),
+            false,
+        ));
+    match form {
+        Form::Terminal => words.px(term::cells(1.0)).into_element(),
+        Form::Desktop | Form::Phone => words.into_element(),
+    }
 }
 
 /// `effort high ↻`: a press cycles, a long or secondary press opens the effort list.

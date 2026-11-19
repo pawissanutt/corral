@@ -126,8 +126,18 @@ pub fn meter(id: &Id, usage: Option<&UsageBrief>) -> ContextMeter {
             .context_percent
             .or_else(|| Some(usage.context_tokens as f32 * 100.0 / usage.context_window as f32))
     });
+    meter_of(
+        id,
+        percent,
+        usage.map(|usage| (usage.context_tokens, usage.context_window)),
+    )
+}
+
+/// The meter of a context share, with its tokens and window when they are known
+/// (`ctx ▰▰▰▱▱▱▱▱▱▱▱▱ 24% · 48.0k / 200k`, else `ctx ▰▰▰▱▱▱▱▱▱▱▱▱ 24%`).
+fn meter_of(id: &Id, percent: Option<f32>, window: Option<(u64, u64)>) -> ContextMeter {
     let action = usage_view(id);
-    let (Some(usage), Some(percent)) = (usage, percent.filter(|value| value.is_finite())) else {
+    let Some(percent) = percent.filter(|value| value.is_finite()) else {
         return ContextMeter {
             filled: None,
             full: "ctx –".into(),
@@ -144,11 +154,12 @@ pub fn meter(id: &Id, usage: Option<&UsageBrief>) -> ContextMeter {
     let shown = clamped.round() as u32;
     ContextMeter {
         filled: Some(filled),
-        full: format!(
-            "ctx {bar} {shown}% · {} / {}",
-            tokens(usage.context_tokens),
-            tokens(usage.context_window)
-        ),
+        full: match window {
+            Some((used, window)) => {
+                format!("ctx {bar} {shown}% · {} / {}", tokens(used), tokens(window))
+            }
+            None => format!("ctx {bar} {shown}%"),
+        },
         short: format!("ctx {shown}%"),
         hue: if clamped >= 95.0 {
             Hue::Fail
@@ -183,18 +194,39 @@ pub fn status(cx: &Cx<'_>) -> StatusBar {
         },
         text: notice.text,
     }));
+    let with_effort = |model: String, effort: Option<String>| match effort {
+        Some(effort) => format!("{model} · effort {effort}"),
+        None => model,
+    };
+    // An open agent conversation reports that agent's facts; the host's alerts stay.
+    let (role, cost, partial, meter, model_effort) = match super::fleet::opened_agent(cx) {
+        Some(agent) => (
+            RolePill {
+                full: format!("AGENT {}", agent.id),
+                short: "AGT".into(),
+            },
+            agent.cost_usd,
+            false,
+            meter_of(cx.id, agent.context_percent, None),
+            Some(with_effort(agent.model.label, agent.effort)),
+        ),
+        None => (
+            role_pill(cx.role),
+            cost,
+            partial,
+            meter(cx.id, usage),
+            cx.model().map(|model| with_effort(model, cx.effort())),
+        ),
+    };
     StatusBar {
-        role: role_pill(&cx.role),
+        role,
         cost: Cost {
             text: cost_text(cost, partial),
             partial,
             action: usage_view(cx.id),
         },
-        meter: meter(cx.id, usage),
-        model_effort: cx.model().map(|model| match cx.effort() {
-            Some(effort) => format!("{model} · effort {effort}"),
-            None => model,
-        }),
+        meter,
+        model_effort,
         alerts,
         stale: cx.feed.link != crate::model::daemon::Link::Up,
     }
