@@ -24,7 +24,7 @@
       { "id": "send" }, { "id": "steer" }, { "id": "follow_up" }, { "id": "queue" }, { "id": "model" },
       { "id": "cards" }, { "id": "children" }, { "id": "child_control" }, { "id": "jobs" }, { "id": "job_control" },
       { "id": "changes" }, { "id": "usage" }, { "id": "plan" }, { "id": "context" }, { "id": "commands" },
-      { "id": "board" }, { "id": "record" }, { "id": "exit" }, { "id": "compact" }, { "id": "export" }
+      { "id": "board" }, { "id": "board_plan_task" }, { "id": "record" }, { "id": "exit" }, { "id": "compact" }, { "id": "export" }
     ]
   },
   "fleet": {
@@ -254,6 +254,19 @@
         ]
       }
     },
+    "board_plan_task": [
+      { "when": { "key": "publish" }, "absent": ["after"], "reply": {
+        "key": "publish", "bytes": 3312, "offset": 0, "next": "fixture-publish-brief1.1827",
+        "body": "Publish the updated guide after the owner confirms the redirect policy. Keep the migration example synchronized with line.txt. Check the old and new URLs in the published preview, then attach the output of the link check and record which URL is canonical. The original task body continues with examples and a release checklist.\n\nRelease plan:\n- [ ] Confirm old-link-1 in the preview. Expected: record the observed result and attach evidence.\n- [ ] Confirm new-link-1 in the browser. Expected: record the observed result and attach evidence.\n- [ ] Confirm redirect-1 in the console. Expected: record the observed result and attach evidence.\n- [ ] Confirm link-audit in the reports. Expected: record the observed result and attach evidence.\n- [ ] Confirm title-text in the preview. Expected: record the observed result and attach evidence.\n- [ ] Confirm guide-name in the staging. Expected: record the observed result and attach evidence.\n- [ ] Confirm guide-path in the summary. Expected: record the observed result and attach evidence.\n- [ ] Confirm index-link in the browser. Expected: record the observed result and attach evidence.\n- [ ] Confirm docs-index in the preview. Expected: record the observed result and attach evidence.\n- [ ] Confirm cli-sample in the preview. Expected: record the observed result and attach evidence.\n- [ ] Confirm first-line in the console. Expected: record the observed result and attach evidence.\n- [ ] Confirm last-label in the summary. Expected: record the observed result and attach evidence.\n- [ ] Confirm code-fence in the browser. Expected: record the observed result and attach evidence.\n- [ ] Confirm anchor-map in the archive. Expected: record the observed result and attach evidence.\n- [ ] Confirm small-view in the browser. Expected: record the observed result and attach evidence."
+      } },
+      { "when": { "key": "publish", "after": "fixture-publish-brief1.1827" }, "reply": {
+        "key": "publish", "bytes": 3312, "offset": 1827,
+        "body": "\n- [ ] Confirm wide-views in the browser. Expected: record the observed result and attach evidence.\n- [ ] Confirm print-view in the browser. Expected: record the observed result and attach evidence.\n- [ ] Confirm page-title in the preview. Expected: record the observed result and attach evidence.\n- [ ] Confirm nav-labels in the preview. Expected: record the observed result and attach evidence.\n- [ ] Confirm link-color in the browser. Expected: record the observed result and attach evidence.\n- [ ] Confirm focus-ring in the browser. Expected: record the observed result and attach evidence.\n- [ ] Confirm guide-diff in the reports. Expected: record the observed result and attach evidence.\n- [ ] Confirm proof-link in the summary. Expected: record the observed result and attach evidence.\n- [ ] Confirm owner-note in the summary. Expected: record the observed result and attach evidence.\n- [ ] Confirm full-check in the console. Expected: record the observed result and attach evidence.\n- [ ] Confirm build-logs in the archive. Expected: record the observed result and attach evidence.\n- [ ] Confirm check-code in the console. Expected: record the observed result and attach evidence.\n- [ ] Confirm commit-ref in the summary. Expected: record the observed result and attach evidence.\n- [ ] Confirm final-link in the release. Expected: record the observed result and attach evidence.\n- [ ] Confirm audit-copy in the archive. Expected: record the observed result and attach evidence."
+      } },
+      { "absent": ["after"], "refuse": { "code": "board_plan_task_missing", "reason": "no proposed board task has this key" } },
+      { "when": { "key": "publish" }, "refuse": { "code": "stale_page", "reason": "this part changed; read it again from the first page" } },
+      { "refuse": { "code": "stale_page", "reason": "the proposed board task changed or was dismissed" } }
+    ],
     "record": {
       "title": "Guide and migration", "outcome": { "state": "open", "head": "19bc52d002a3b45678c0ffee1677a12bae340000", "base_branch": "trunk" },
       "diff": { "commits": 2, "files": 3, "added": 23, "removed": 3 },
