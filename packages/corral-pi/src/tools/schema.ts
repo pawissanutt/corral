@@ -23,11 +23,14 @@ function variantsOf(schema: JsonSchema): JsonSchema[] | undefined {
   return schema.properties || !variants || variants.length === 0 ? undefined : variants;
 }
 
-/** The key every variant requires with one constant value, such as `op`. */
+/** The key every variant requires with its own distinct string constant, such as `op`. */
 function discriminator(objects: readonly JsonSchema[]): string | undefined {
   const [first] = objects;
-  return Object.keys(first?.properties ?? {}).find((key) => objects.every((variant) =>
-    variant.required?.includes(key) && variant.properties?.[key]?.const !== undefined));
+  return Object.keys(first?.properties ?? {}).find((key) => {
+    const values = objects.map((variant) =>
+      variant.required?.includes(key) ? variant.properties?.[key]?.const : undefined);
+    return values.every((value) => typeof value === "string") && new Set(values).size === values.length;
+  });
 }
 
 function plain(schema: JsonSchema): JsonSchema {
