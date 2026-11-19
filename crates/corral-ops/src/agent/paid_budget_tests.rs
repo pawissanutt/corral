@@ -148,7 +148,10 @@ fn paid_budget_native_lineage_preserves_sdk_estimates_and_crash_reservations() {
         let answer = committed(&send(&fx, &input, "event"));
         assert_eq!(answer.result["admitted"], true);
         assert_eq!(answer.result["subscription_estimate_nanos"], 999);
-        assert_eq!(answer.result["paid"]["consumed_or_reserved_nanos"], reserved);
+        assert_eq!(
+            answer.result["paid"]["consumed_or_reserved_nanos"],
+            reserved
+        );
         assert!(matches!(
             send(&fx, &input, "event"),
             CallResponse::Receipt { replayed: true, .. }
