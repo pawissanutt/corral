@@ -142,3 +142,15 @@ fn a_two_question_card_is_not_sent_until_both_are_answered() {
         .collect();
     assert_eq!(chosen, [vec!["rest".to_owned()], vec!["disk".to_owned()]]);
 }
+
+/// The dock of `SESSION` as a build's page on desktop builds it.
+pub(super) fn dock_of(feed: &Feed, state: &State) -> super::Dock {
+    let id = Id::from(SESSION);
+    let facts = super::Facts {
+        role: super::SessionRole::Build,
+        task: None,
+    };
+    let env = crate::model::health::daemon_env(feed, crate::model::nav::Form::Desktop);
+    let cx = super::Cx::new(feed, state.ui(SESSION), &id, env, &facts);
+    super::dock(&cx)
+}

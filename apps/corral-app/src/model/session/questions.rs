@@ -483,11 +483,12 @@ pub(super) fn submit(state: &mut State, session: &Id, card_id: &str, feed: &Feed
     dock::send(state, session, card_id, answers, false)
 }
 
+/// The oldest card Alt+A opens: an owner question or a docked choice.
 fn first_question<'a>(cx: &Cx<'a>) -> Option<&'a CardBrief> {
     cx.state?
         .cards
         .iter()
-        .find(|brief| brief.kind == CardKind::Question)
+        .find(|brief| brief.kind == CardKind::Question || dock::docked(brief.kind))
 }
 
 /// The Message group's row: answer the waiting questions.

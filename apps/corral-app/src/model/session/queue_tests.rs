@@ -72,3 +72,52 @@ fn withdrawing_puts_the_text_back_in_the_draft() {
     assert!(draft.starts_with(whole), "draft: {draft}");
     assert!(draft.ends_with("and the changelog"), "draft: {draft}");
 }
+
+fn queued(key: &str) -> QueuedInput {
+    QueuedInput {
+        key: key.into(),
+        policy: SendPolicy::FollowUp,
+        origin: InputOrigin::Owner,
+        text: format!("follow-up {key}"),
+        bytes: 12,
+        to: None,
+        actions: vec!["withdraw".into()],
+    }
+}
+
+/// Two queued rows under a docked card pushed the page's content out of sight: while a card
+/// waits the queue is its one header line, and pressing it shows the rows.
+#[test]
+fn the_queue_folds_when_a_card_is_waiting() {
+    use super::questions_tests::{SESSION, card, dock_of, feed_with, option, question};
+    use corral_protocol::detail::CardKind;
+
+    let waiting = SessionState {
+        queue: vec![queued("app-1"), queued("app-2")],
+        queue_total: 2,
+        ..SessionState::default()
+    };
+    let child = card(
+        "c-1",
+        CardKind::ChildQuestion,
+        vec![question(vec![option("yes")], false)],
+    );
+    let feed = feed_with(child, waiting.clone());
+    let mut state = State::default();
+    let shown = dock_of(&feed, &state).queue.expect("the queue shows");
+    assert!(!shown.open);
+
+    state.act(shown.toggle, &feed);
+    assert!(dock_of(&feed, &state).queue.is_some_and(|queue| queue.open));
+
+    // With no card waiting, a short queue shows its rows by itself.
+    let mut quiet = Feed::default();
+    let mut live = LiveSession::default();
+    live.replace_state(Some(Box::new(waiting)));
+    quiet.live.insert(Id::from(SESSION), live);
+    assert!(
+        dock_of(&quiet, &State::default())
+            .queue
+            .is_some_and(|queue| queue.open)
+    );
+}

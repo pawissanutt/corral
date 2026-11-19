@@ -1,9 +1,10 @@
 //! Docked choices: the build's exit choice, a child agent's question and a proposed board
-//! plan, with the host's options in its order. An option the host marks unavailable keeps its
-//! row and number, muted with the reason, and cannot be chosen. A destructive option asks once
-//! on this device; one that needs the owner's reason puts the composer in reason mode, whose
-//! Enter chooses it with the text. A child's question that takes words offers Write my own
-//! answer, which puts the composer in answer mode.
+//! plan, with the host's options in its order. Each is one line in the dock until the owner
+//! opens it. An option the host marks unavailable keeps its row and number, muted with the
+//! reason, and cannot be chosen. A destructive option asks once on this device; one that needs
+//! the owner's reason puts the composer in reason mode, whose Enter chooses it with the text. A
+//! child's question that takes words offers Write my own answer, which puts the composer in
+//! answer mode.
 
 use corral_protocol::detail::{CardKind, CardQuestion, SessionCard};
 use corral_protocol::session_host::CardAnswer;
@@ -15,7 +16,7 @@ use crate::model::effect::Effect;
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
 
-use super::dock::{self, Compose, Confirming, DockAction};
+use super::dock::{self, AsideLine, Compose, Confirming, DockAction};
 use super::exit::{self, ExitSummary};
 use super::{Action, Cx, Focus, State};
 
@@ -122,10 +123,7 @@ pub(super) fn card(
             })
         })
     });
-    let title = match (brief.kind, &brief.child) {
-        (CardKind::ChildQuestion, Some(child)) => format!("{child} asks: {}", brief.title),
-        _ => brief.title.clone(),
-    };
+    let title = title(brief);
     let own = (brief.kind == CardKind::ChildQuestion
         && question.is_some_and(|question| question.free_text)
         && enabled)
@@ -174,6 +172,35 @@ pub(super) fn card(
         sending,
         inert,
         reading: card.is_none(),
+    }
+}
+
+/// `docs asks: Keep the old guide as a redirect?`, or the card's own title.
+fn title(brief: &CardBrief) -> String {
+    match (brief.kind, &brief.child) {
+        (CardKind::ChildQuestion, Some(child)) => format!("{child} asks: {}", brief.title),
+        _ => brief.title.clone(),
+    }
+}
+
+/// The one line a docked choice is until the owner opens it:
+/// `▲ docs asks: Keep the old guide as a redirect? · Alt+A to answer`. The key is named on the
+/// `oldest` card, the one Alt+A opens, where keys show; pressing the line opens it.
+pub(super) fn line(cx: &Cx<'_>, brief: &CardBrief, oldest: bool) -> AsideLine {
+    let mut text = format!("▲ {}", title(brief));
+    if oldest && cx.env.form != Form::Phone {
+        text.push_str(match brief.kind {
+            CardKind::ChildQuestion => " · Alt+A to answer",
+            _ => " · Alt+A to choose",
+        });
+    }
+    AsideLine {
+        id: format!("dock-{}", brief.id),
+        text,
+        action: Action::Dock(DockAction::Bring {
+            session: cx.id.clone(),
+            card: brief.id.clone(),
+        }),
     }
 }
 
