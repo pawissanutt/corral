@@ -564,8 +564,17 @@ fn control(
 
 /// The open link or path field: `link › [Paste a link] Attach Cancel`, Enter attaches and Esc
 /// cancels; the reason under it when what was typed is not attached. Nothing while closed or
-/// open in another session's composer.
+/// open in another session's composer. Leaving the composer closes its open field, so a field
+/// out of sight never takes the next Esc.
 pub(crate) fn field_row(app: AppState, session: Id) -> AnyElement {
+    let owner = session.clone();
+    cleanup(move || {
+        // App signals outlive the page; a disposed one is let go of quietly.
+        let open = app.ask_field.try_get().flatten();
+        if open.is_some_and(|(at, _)| at == owner) {
+            app.close_attach_field();
+        }
+    });
     let field = computed(move || {
         app.ask_field.with(|open| {
             open.as_ref()
