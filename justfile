@@ -162,6 +162,18 @@ pi-test *args:
     bun install --frozen-lockfile
     bun test {{ args }}
 
+# Stage a private workspace and daemon with the real Pi host and a scripted provider
+[group('parity')]
+[working-directory('packages/corral-pi')]
+stage-parity listen='127.0.0.1:7843' origin='http://127.0.0.1:8893':
+    exec bun --no-env-file test/support/stage.ts --listen {{ quote(listen) }} --origin {{ quote(origin) }}
+
+# Stage the same daemon with a scripted Pi host; script paths are relative to packages/corral-pi
+[group('parity')]
+[working-directory('packages/corral-pi')]
+stage-parity-fake script='test/fixtures/sessions/verifying.json' listen='127.0.0.1:7843' origin='http://127.0.0.1:8893':
+    exec bun --no-env-file test/support/stage.ts --script {{ quote(script) }} --listen {{ quote(listen) }} --origin {{ quote(origin) }}
+
 # Run the app in this terminal against the workspace daemon (dev port 8891; 8890 serves the web app)
 [group('app')]
 [working-directory('apps/corral-app')]

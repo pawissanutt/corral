@@ -1,0 +1,22 @@
+{
+  "state": {
+    "turn": 1,
+    "last_error": "Project gate exited 1: line.txt does not contain the expected label",
+    "exit": { "phase": "failed", "choice": "land", "detail": "Project gate exited 1: line.txt does not contain the expected label", "base_branch": "trunk" },
+    "cards": [{ "id": "fixture-exit", "kind": "exit", "title": "Project gate failed" }],
+    "can": [{ "id": "cards" }, { "id": "exit" }]
+  },
+  "live": [{ "kind": "live_part", "data": { "part": "cards" } }],
+  "methods": {
+    "exit_open": { "phase": "failed" },
+    "cards": {
+      "cards": [{
+        "id": "fixture-exit", "kind": "exit", "title": "Project gate failed",
+        "body": "Project gate exited 1: line.txt does not contain the expected label", "body_more": false,
+        "questions": [{ "text": "What should happen to the failed build?", "multi": false, "free_text": false,
+          "options": [{ "id": "iterate", "label": "Iterate", "destructive": false }, { "id": "keep", "label": "Keep", "destructive": false }] }],
+        "opened_at": "2026-01-01T00:00:00Z"
+      }]
+    }
+  }
+}
