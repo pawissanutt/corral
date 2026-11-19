@@ -146,12 +146,14 @@ reviewer = "generic"
     let missing = "T-999";
     let mut stored = engine.store.require_task(&id).unwrap();
     stored.depends_on.push(missing.into());
-    // Two children fit the Tasks topic but need separate pages when sent with legacy rows.
-    stored.body = "a".repeat(16 * 1024);
+    // Long titles keep the two children on separate plan pages. The member's document is as
+    // long again, more than a page holds beside them: the plan serves no child's document.
+    let filler = "a".repeat(16 * 1024);
+    stored.title = filler.clone();
+    stored.body = filler.clone();
     engine.store.update_task(&stored).unwrap();
     let sibling = fixture.task(NewTask {
-        title: "Sibling".into(),
-        body: "b".repeat(16 * 1024),
+        title: "b".repeat(16 * 1024),
         parent: Some(parent.clone()),
         priority: Priority::P3,
         ..Default::default()
@@ -218,10 +220,11 @@ reviewer = "generic"
         panic!("expected tasks")
     };
     assert_eq!(delta.rows.len(), 3);
-    assert_eq!(
-        delta.rows.iter().find(|row| row.task.id == id),
-        Some(member)
-    );
+    let served = delta.rows.iter().find(|row| row.task.id == id).unwrap();
+    assert_eq!(served.task.body, filler);
+    let mut without_document = served.clone();
+    without_document.task.body.clear();
+    assert_eq!(&without_document, member);
     let parent = delta.rows.iter().find(|row| row.task.id == parent).unwrap();
     assert_eq!(parent.max_rounds, Some(4));
     assert!(parent.dependencies.as_ref().unwrap().is_empty());
