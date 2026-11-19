@@ -32,22 +32,34 @@ export interface GateWatch {
   command?(index: number): void;
 }
 
-/** How long a stopped gate line gets to end after SIGTERM before its group is killed. */
-const STOP_GRACE_MS = 2_000;
+/** How long what a stopped gate line started gets to end after SIGTERM before its group is killed. */
+const STOP_GRACE_S = 1;
+
+/**
+ * The group's leader. It runs the gate line (`$1`) in the foreground, with the signal dispositions the line always
+ * had, and ends with its status. SIGTERM stops the line, not the leader: a shell runs its trap once the foreground
+ * command has ended, so the leader then gives what the line started the grace and kills its own group. A process
+ * that ignores SIGTERM does not outlive a stopped gate; a line that ends by itself leaves its group alone.
+ */
+const LEADER = [
+  "stop=", "trap 'stop=1' TERM", 'sh -c "$1"', "s=$?",
+  `[ -n "$stop" ] && { sleep ${STOP_GRACE_S}; kill -KILL 0; }`, 'exit "$s"',
+].join("\n");
 
 /**
  * Runs one gate line in its own process group, so stopping it also stops what it started. The group is
- * signalled only while its leader runs: a group ID whose leader is gone may belong to someone else.
+ * signalled only while its leader runs: a group ID whose leader is gone may belong to someone else. The leader
+ * outlives a stop, so the kill after the grace reaches a line that ignores SIGTERM itself.
  */
 async function runLine(command: string, options: { cwd: string; env: NodeJS.ProcessEnv; fd: number; signal?: AbortSignal }): Promise<number | null> {
   const { promise, resolve, reject } = Promise.withResolvers<number | null>();
-  const child = spawn("sh", ["-c", command], { cwd: options.cwd, env: options.env, stdio: ["ignore", options.fd, options.fd], detached: true });
+  const child = spawn("sh", ["-c", LEADER, "sh", command], { cwd: options.cwd, env: options.env, stdio: ["ignore", options.fd, options.fd], detached: true });
   let running = true, grace: ReturnType<typeof setTimeout> | undefined;
   const kill = (signal: NodeJS.Signals) => {
     if (!running || child.pid === undefined) return;
     try { process.kill(-child.pid, signal); } catch { /* The group already ended. */ }
   };
-  const stop = () => { kill("SIGTERM"); grace = setTimeout(() => kill("SIGKILL"), STOP_GRACE_MS); };
+  const stop = () => { kill("SIGTERM"); grace = setTimeout(() => kill("SIGKILL"), STOP_GRACE_S * 1000 + 500); };
   const hostExit = () => kill("SIGKILL");
   child.once("error", reject);
   child.once("exit", () => { running = false; });
