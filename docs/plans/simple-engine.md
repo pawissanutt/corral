@@ -516,7 +516,18 @@ Direction:
 
 ## Cutover
 
-1. Import open tasks from the old store's export, keeping their ids.
+1. Import tasks from the old store's exports, keeping their ids:
+   `corral-next import <tasks dir> [--all] [--events <events.jsonl>]`.
+   - Open tasks come over as they are. A task that was running, waiting on the owner or in
+     review becomes Backlog with a note naming its last run; a held task becomes Backlog with
+     the hold's reason. Old runs, sessions, gate and review records are not adopted.
+   - `--all` also brings Done and Dropped tasks.
+   - History is a summary at the times it happened: one `created` event per task and one
+     closing event (`landed` with its commit, `moved` to done, or `dropped`). `--events` takes
+     the closing time, commit and actor from the old event log; without it the task's status
+     time is used, then its last update, which the old board kept touching.
+   - The old result and comments go into the task's body.
+   - Done on the owner's workspace on 2026-11-18: 977 tasks, 1,783 events.
 2. Rename `corral-next` to `corral` and `.corral-next/` to `.corral/`; archive the old
    store read-only.
 3. Delete `crates/corral-ops`, `crates/corral-core`, `crates/corral-tui`, the old
