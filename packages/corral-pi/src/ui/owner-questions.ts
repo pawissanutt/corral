@@ -6,6 +6,8 @@ import type { ExtensionAPI, ExtensionContext, ExtensionUIContext, SessionProject
 import { decodeKittyPrintable, matchesKey, type Component, type KeyId, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { askDialog, sequential, type DialogPresentationSource } from "../host/ask-user.ts";
 import type { ChoiceAnswer, PendingQuestion, PendingQuestions } from "../host/pending-questions.ts";
+import { optionId, type CardAnswer } from "../host/remote/cards.ts";
+import type { RemoteDialogs } from "../host/remote/dialogs.ts";
 import { choiceLines, PASTE_START } from "./build/choice-dock.ts";
 import { freeKey, keyLabel } from "./keymap.ts";
 
@@ -57,6 +59,11 @@ export interface QuestionSource {
   open(id?: string): void;
   /** `listener` runs whenever the waiting questions change; returns its removal. */
   subscribe(listener: () => void): () => void;
+  /**
+   * The session's dialog registry while a terminal is attached (read at each open): the answer dialog watches its
+   * question's card there, answers through it, and closes when the app answers first.
+   */
+  useDialogs?(dialogs: () => RemoteDialogs | undefined): void;
 }
 
 export interface QuestionDockHost {
@@ -168,6 +175,14 @@ function questionStateMessage(questions: PendingQuestions, messages: SessionProj
   return { customType: OWNER_QUESTION_STATE, content, display: false };
 }
 
+/** The owner's answers as the question's card takes them: each chosen option by its card ID, the text as typed. */
+function cardAnswers(q: PendingQuestion, answers: readonly ChoiceAnswer[]): CardAnswer[] {
+  return answers.map(({ option, text }, i) => ({
+    options: option === undefined ? [] : [optionId(option, q.questions[i]?.options.indexOf(option) ?? -1)],
+    ...(text ? { text } : {}),
+  }));
+}
+
 export class OwnerQuestionUi {
   private ctx: ExtensionContext | undefined;
   private ui: ExtensionUIContext | undefined;
@@ -181,6 +196,8 @@ export class OwnerQuestionUi {
   /** True once the panels took the card into their dock: no widget of its own. */
   private docked = false;
   private readonly listeners = new Set<() => void>();
+  /** The session's dialog registry while a terminal is attached; see `QuestionSource.useDialogs`. */
+  private dialogs: () => RemoteDialogs | undefined = () => undefined;
   constructor(private readonly questions: PendingQuestions, private readonly eligible: () => boolean,
     private readonly persist: (message: { customType: string; content: string; display: boolean }) => void,
     private readonly claudeRoute: () => boolean = () => false, private readonly presentation?: DialogPresentationSource) {}
@@ -195,6 +212,7 @@ export class OwnerQuestionUi {
         if (ctx) void this.open(ctx, id).catch(error => ctx.ui.notify(String(error), "error"));
       },
       subscribe: listener => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; },
+      useDialogs: dialogs => { this.dialogs = dialogs; },
     };
   }
 
@@ -326,14 +344,26 @@ export class OwnerQuestionUi {
       const q = this.questions.get(id);
       if (!q || q.status !== "pending") { ctx.ui.notify(`${id}: no longer pending; no answer sent.`, "warning"); return; }
       this.active = { id, abort };
-      const answers = await this.collect(ctx.ui, q, abort.signal);
-      if (this.epoch !== epoch) return;
-      if (!answers || !this.eligible()) {
-        ctx.ui.notify(`${id}: no answer sent. Reopen with /questions if still pending.`, "info"); return;
-      }
-      const status = await this.questions.answer(id, answers);
-      this.drafts.delete(id);
-      if (this.epoch === epoch) ctx.ui.notify(`${id}: ${status}`, "info");
+      // The app lists this question as a card under the same ID: an answer there closes this dialog.
+      const questionId = id;
+      const card = this.dialogs()?.watch(entry => entry.id === questionId, result => {
+        // A dismissal in the app is its "not now": the question stays pending, and so does this dialog.
+        if (result.by?.source !== "remote" || result.kind !== "answered") return;
+        abort.abort();
+        ctx.ui.notify("Answered from another device", "info");
+      });
+      try {
+        const answers = await this.collect(ctx.ui, q, abort.signal);
+        if (this.epoch !== epoch) return;
+        if (!answers || !this.eligible()) {
+          // Answered elsewhere: that answer's own notice says so.
+          if (this.questions.get(id)?.status === "pending") ctx.ui.notify(`${id}: no answer sent. Reopen with /questions if still pending.`, "info");
+          return;
+        }
+        const status = card ? await card.answer(cardAnswers(q, answers)) : await this.questions.answer(id, answers);
+        this.drafts.delete(id);
+        if (this.epoch === epoch) ctx.ui.notify(`${id}: ${status}`, "info");
+      } finally { card?.dispose(); }
     } catch (error) {
       if (this.epoch === epoch) ctx.ui.notify(`Owner answer unresolved: ${String(error)}. Inspect /questions before retrying; no missing answer is consent.`, "error");
     } finally {

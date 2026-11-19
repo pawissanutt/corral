@@ -3,13 +3,14 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SESSION_PART_MAX } from "../src/bridge/protocol.ts";
+import { BridgeRefusal, SESSION_PART_MAX } from "../src/bridge/protocol.ts";
 import { gitRun } from "../src/build/corral-cli.ts";
 import { createJournal } from "../src/build/record.ts";
 import type { BuildRecord } from "../src/build/record-types.ts";
 import type { BoardPlan, BuildContext } from "../src/build/types.ts";
 import { boardPart, recordPart, registerBoard } from "../src/host/remote/board.ts";
 import { RemoteRegistry } from "../src/host/remote/registry.ts";
+import { capabilities } from "../src/host/remote/state.ts";
 
 const at = "2026-01-01T00:00:00Z";
 
@@ -24,6 +25,85 @@ test("a clipped waiting board plan keeps every task key and its original body le
   expect(part.proposed?.tasks.every(task => task.body_bytes === Buffer.byteLength(body) && Buffer.byteLength(task.body) <= 2048)).toBeTrue();
   expect(part.tasks[0]).toMatchObject({ id: "T-123", phase: "blocked", depends: ["T-122"], updated_at: new Date(at).toISOString() });
   expect(Buffer.byteLength(JSON.stringify(part))).toBeLessThanOrEqual(SESSION_PART_MAX);
+});
+
+function proposedBoard(initial: BoardPlan) {
+  const registry = new RemoteRegistry();
+  let proposed: BoardPlan | undefined = initial;
+  registerBoard(registry, {
+    board: { proposed: () => proposed, tasks: () => [], refresh: async () => {} },
+    record: async () => { throw new Error("unexpected record read"); }, ready: () => true,
+  });
+  return { registry, replace(plan?: BoardPlan) { proposed = plan; } };
+}
+
+interface BriefPage { key: string; body: string; bytes: number; offset: number; next?: string }
+
+test("a proposed task's brief longer than one page is served whole across pages, in order, on character boundaries", async () => {
+  const body = "x".repeat(40 * 1024 - 1) + "😀" + "\0\"漢🙂\n".repeat(9000) + "last";
+  const longKey = "task".repeat(60);
+  const plan = { title: "Follow-up", why: "", tasks: [
+    { key: longKey, title: "Implement", depends: [], body },
+    { key: "@1", title: "Review", depends: [longKey], body: "Read the whole brief" },
+  ] };
+  const { registry } = proposedBoard(plan);
+  const board = await registry.get("board")!({}) as { proposed: { tasks: { key: string; depends: string[]; body_bytes: number }[] } };
+  const [first, second] = board.proposed.tasks;
+  const key = first!.key, bytes = Buffer.byteLength(body);
+  expect(first!.body_bytes).toBe(bytes);
+  expect(key).not.toBe(second!.key);
+  expect(second!.depends).toEqual([key]);
+  expect(capabilities(registry, { open: false, closing: false, rewind: false }).some(capability => capability.id === "board_plan_task")).toBe(true);
+  const parts: string[] = [];
+  let after: string | undefined, offset = 0;
+  do {
+    const page = await registry.get("board_plan_task")!({ key, after }) as BriefPage;
+    const size = Buffer.byteLength(page.body);
+    expect(page).toMatchObject({ key, bytes, offset });
+    expect(size).toBeGreaterThan(0);
+    expect(size).toBeLessThanOrEqual(40 * 1024);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(SESSION_PART_MAX);
+    expect(Buffer.byteLength(page.next ?? "")).toBeLessThanOrEqual(128);
+    expect(page.body).not.toContain("\uFFFD");
+    parts.push(page.body);
+    offset += size;
+    expect(offset).toBeLessThanOrEqual(bytes);
+    after = page.next;
+  } while (after !== undefined);
+  expect(parts.length).toBeGreaterThan(1);
+  expect(parts.join("")).toBe(body);
+});
+
+test("a missing proposed task key or dismissed plan refuses a fresh brief read", () => {
+  const { registry, replace } = proposedBoard({ title: "Follow-up", why: "", tasks: [{ key: "found", title: "Read", depends: [], body: "" }] });
+  const read = registry.get("board_plan_task")!;
+  expect(() => read({ key: "missing" })).toThrow(BridgeRefusal);
+  for (const key of ["missing", "found"]) {
+    if (key === "found") replace();
+    try { read({ key }); }
+    catch (error) {
+      expect((error as BridgeRefusal).code).toBe("board_plan_task_missing");
+      continue;
+    }
+    throw new Error("the absent task was served");
+  }
+});
+
+test("a brief cursor cannot continue after the board proposal is replaced or dismissed", async () => {
+  const plan = { title: "Follow-up", why: "", tasks: [{ key: "task", title: "Read", depends: [], body: "界".repeat(20_000) }] };
+  const { registry, replace } = proposedBoard(plan);
+  const read = registry.get("board_plan_task")!;
+  const page = await read({ key: "task" }) as BriefPage;
+  expect(page.next).toBeDefined();
+  for (const replacement of [{ ...plan, title: "New proposal" }, undefined]) {
+    replace(replacement);
+    try { read({ key: "task", after: page.next }); }
+    catch (error) {
+      expect((error as BridgeRefusal).code).toBe("stale_page");
+      continue;
+    }
+    throw new Error("the stale cursor was accepted");
+  }
 });
 
 test("a build record keeps failed verification, resolved findings, decisions, and timeline in the wire projection", () => {

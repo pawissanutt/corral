@@ -29,7 +29,7 @@ import { QueueDock } from "./queue-dock.ts";
 import { Sidebar, type SideHit, type SideTarget } from "./sidebar.ts";
 import { runRewind, type RewindCall, type TranscriptBranch } from "./rewind-picker.ts";
 import { openPager, type PagerLine } from "./pager.ts";
-import { ownerDialogPresentation, type OwnerDialogHost } from "./owner-dialog.ts";
+import { DialogAdoption, ownerDialogPresentation, type OwnerDialogHost } from "./owner-dialog.ts";
 import { statusPresenter } from "./notice-route.ts";
 import { quietNote } from "./mark-rows.ts";
 import { effortPicker, modelPicker, optionPicker } from "./model-picker.ts";
@@ -39,7 +39,7 @@ import { planLedger } from "./plan-detail.ts";
 import type { PlanSurface } from "./todo.ts";
 import { plainLabel, setPanelAppearance, type PanelSnapshot } from "./panels-view.ts";
 import { sessionCost } from "./usage-model.ts";
-import { BuildController } from "./build/build-controller.ts";
+import { BuildController, childQuestionCard } from "./build/build-controller.ts";
 import { BUILD_BOARD_ENTRY, BUILD_EXIT_ENTRY, BUILD_FINISH_ENTRY, buildEntryRenderer, type BuildEntry } from "./build/build-entries.ts";
 import { choiceRows, PASTE_START } from "./build/choice-dock.ts";
 import { childIdOf, type BuildCardSource } from "./build/contract.ts";
@@ -189,6 +189,8 @@ export class NativePanels implements PanelSurface {
   private sessionManager: TranscriptBranch | undefined;
   /** Entries the controller posted before Pi was installed. */
   private readonly posts: BuildEntry<unknown>[] = [];
+  /** The next owner dialog answers a card the app already shows (a fleet child's question) instead of registering one. */
+  private readonly adoption = new DialogAdoption();
   /** `/todo`'s hold on the sidebar's Plan tab; see `planSurface`. */
   private readonly planView: PlanSurface = {
     show: () => this.showPlan(),
@@ -217,9 +219,7 @@ export class NativePanels implements PanelSurface {
       notice: (text, tone) => this.workbench.notice(text, tone), post: entry => this.post(entry),
       showBoard: () => { this.workbench.setView("board"); }, openChild: id => this.workbench.openChild(id),
       color: agentColor, now: () => Date.now(), changed: () => this.refresh(), ...(options.marks ? { marks: options.marks } : {}),
-      // Only a terminal the panels draw on is a second surface to race the app: a headless session (panels with no
-      // terminal) never watches or answers its cards, so the app's repeated answers keep their headless replies.
-      get dialogs() { return panels.terminal ? options.dialogs : undefined; },
+      get dialogs() { return panels.attachedDialogs(); },
     }) : undefined;
     this.queue = new QueueDock({
       items: () => this.snapshot()?.queue ?? [], control: () => this.options.queueControl,
@@ -230,6 +230,10 @@ export class NativePanels implements PanelSurface {
       ...(build ? { receiver: () => "parent" } : {}),
     });
     this.workbench = new NativeWorkbench({ ...options, ...(build && this.build ? { build, buildController: this.build } : {}), fleet: () => this.options.fleetControl,
+      childCards: {
+        watch: (id, askedAt, settled) => this.attachedDialogs()?.watch(childQuestionCard(id, askedAt), settled),
+        adopt: <T>(bind: (close: () => void) => void, open: () => T): T => this.adoption.with(bind, open),
+      },
       snapshot: () => this.snapshot(),
       terminal: () => this.terminal ? { columns: this.terminal.physical.columns, rows: this.terminal.rows } : undefined,
       onFocusMain: () => { this.sidebar.focused = false; this.queue.focused = false; this.blurDocks(); this.closeKeyDrawer(); },
@@ -261,7 +265,7 @@ export class NativePanels implements PanelSurface {
    */
   presentation(): Pick<InteractiveModeOptions, "dialogPresentation" | "statusPresentation" | "selectorPresentation" | "bashPresentation"> {
     const host: OwnerDialogHost = {
-      rows: () => this.terminal?.rows ?? 24, chromeRows: rows => this.cardChrome(rows), changed: () => this.refresh(),
+      rows: () => this.terminal?.rows ?? 24, chromeRows: rows => this.cardChrome(rows), changed: () => this.refresh(), adoption: this.adoption,
       ...(this.options.dialogs ? { dialogs: this.options.dialogs, notice: (text: string) => this.workbench.notice(text, "text") } : {}),
     };
     return {
@@ -329,9 +333,15 @@ export class NativePanels implements PanelSurface {
   attachQuestions(source: QuestionSource): void {
     this.unsubscribeQuestions?.();
     this.questions = source;
+    source.useDialogs?.(() => this.attachedDialogs());
     this.unsubscribeQuestions = source.subscribe(() => this.refresh());
     this.refresh();
   }
+  /**
+   * The session's dialog registry while the panels draw on a terminal. Only then is there a second surface to race the
+   * app: a headless session (panels without a terminal) never watches or answers its cards, so its replies stay its own.
+   */
+  private attachedDialogs(): RemoteDialogs | undefined { return this.terminal ? this.options.dialogs : undefined; }
   layoutChanged(): void { this.refresh(); }
   refresh(): void {
     // State changed: later reads in this job rebuild the snapshot.

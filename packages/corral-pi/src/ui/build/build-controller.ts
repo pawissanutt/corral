@@ -68,12 +68,17 @@ const questionKey = (id: string, askedAt: number) => `${id}:${askedAt}`;
 /** An error's words for a notice; a registry refusal gives its reason without its code. */
 const message = (error: unknown) => error instanceof BridgeRefusal ? error.reason : error instanceof Error ? error.message : String(error);
 
+/** The host's card for child `child`'s question asked at `askedAt`: kind, child and the time it was asked. */
+export function childQuestionCard(child: string, askedAt: number): (card: Readonly<CardEntry["card"]>) => boolean {
+  const opened = new Date(askedAt).toISOString();
+  return card => card.kind === "child_question" && card.child === child && card.opened_at === opened;
+}
+
 /** Which registry card is `shown`'s decision: the exit, the board plan, or this child's question at its `askedAt`. */
 function cardOf(shown: Shown): (card: Readonly<CardEntry["card"]>) => boolean {
   if (shown.kind === "exit") return card => card.kind === "exit";
   if (shown.kind === "plan") return card => card.kind === "board_plan";
-  const child = shown.id, opened = new Date(shown.askedAt).toISOString();
-  return card => card.kind === "child_question" && card.child === child && card.opened_at === opened;
+  return childQuestionCard(shown.id, shown.askedAt);
 }
 
 export class BuildController implements BuildCardSource {
