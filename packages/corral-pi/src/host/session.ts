@@ -500,13 +500,16 @@ export class HostSession {
       paidModels: async binding => {
         const record = options.build?.paidRecord;
         const fetch = options.buildApiFetch;
-        if (!record || !fetch || !isApiConnection(binding.connection)) throw new Error("paid_admission_required: child has no Build allowance");
+        const bare = options.build?.session.bare === true;
+        if ((!record && !bare) || !fetch || !isApiConnection(binding.connection)) throw new Error("paid_admission_required: child has no Build allowance");
         const provider = CONNECTIONS[binding.connection].provider;
+        const credentials = options.modules.auth.credentials(authContext(provider, binding.connection));
+        // Bare sessions have no corral ledger; spending caps are disabled, so children run unmetered.
+        if (!record) return (await createApiCatalog(credentials, binding, fetch, async () => undefined)).models;
         const budget = new RunBudget({ sessionId: () => this.sessionId(),
           record: payload => record({ ...payload, binding_digest: binding.digest }),
           onStop: () => {}, cancel: () => {},
         });
-        const credentials = options.modules.auth.credentials(authContext(provider, binding.connection));
         return (await createApiCatalog(credentials, binding, fetch, budget.physical)).models;
       },
       parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
@@ -1159,11 +1162,13 @@ export class HostSession {
     }
     const localModels = local ? await createLocalModels(local, options.model, options.network.fetch) : undefined;
     const apiBinding = isApiConnection(connection) ? options.binding : undefined;
-    const subscriptions = options.build?.session.bare ? await bareProviders(options.modules.auth, route.id) : apiBinding
+    const subscriptions = options.build?.session.bare && !apiBinding ? await bareProviders(options.modules.auth, route.id) : apiBinding
       ? { providers: [route.id], credentials: options.modules.auth.credentials(authContext(route.id, connection)) }
       : await subscriptionRoutes(options.modules.auth, route.id, options.binding ? "worker" : options.identity.role);
+    // Bare sessions have no corral ledger; spending caps are disabled, so their API calls are unmetered.
+    const bareApi = options.build?.session.bare === true && !options.build.paidRecord;
     const apiModels = apiBinding ? await createApiCatalog(subscriptions.credentials, apiBinding, options.network.fetch,
-      request => host.budget.physical(request)) : undefined;
+      bareApi ? async () => undefined : request => host.budget.physical(request)) : undefined;
     const models = apiModels?.models ?? localModels?.models ?? await createModelCatalog(subscriptions.credentials, {
       providers: subscriptions.providers,
       ...(options.build?.session.bare ? { modelsPath: join(options.build.dir, "..", "..", "models.json") } : {}),

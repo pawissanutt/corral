@@ -115,10 +115,6 @@ impl BuildPaidLedger {
             "invalid Build paid identity"
         );
         ensure!(
-            self.ledger.totals().1 <= self.allowance_nanos(),
-            "Build allowance exceeded"
-        );
-        ensure!(
             self.bounds.len() == self.ledger.requests.len(),
             "Build original reservation bounds missing"
         );
@@ -175,14 +171,8 @@ impl BuildPaidLedger {
             return Ok(true);
         }
         let bound = (request.tokens, request.usd_nanos);
-        let allowance = self.allowance_nanos();
-        let admitted = self.ledger.reserve(
-            request,
-            BudgetLimits {
-                max_tokens: None,
-                max_usd_nanos: Some(allowance),
-            },
-        );
+        // Spending caps are disabled: reservations are recorded for usage reporting only.
+        let admitted = self.ledger.reserve(request, BudgetLimits::default());
         if admitted {
             self.bounds.push(bound);
             self.reservation_routes.extend(pinned);

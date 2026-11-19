@@ -66,8 +66,10 @@ export async function runHost(config: HostConfig, overrides: {
   build?: BuildContext;
 } = {}): Promise<void> {
   const provider = config.provider ?? "openai-codex";
-  if (overrides.build?.session.bare) requireBareProvider(provider);
   const connection = admitConnection(provider, config.binding, true);
+  const api = isApiConnection(connection);
+  // A bare API session uses its exact API connection, not the bare subscription providers.
+  if (overrides.build?.session.bare && !api) requireBareProvider(provider);
   restrictEnvironment(process.env, provider);
   if (config.summary?.provider === "amazon-bedrock") restrictEnvironment(process.env, "amazon-bedrock");
   exportAssistantSession(process.env, config.identity);
@@ -77,8 +79,7 @@ export async function runHost(config: HostConfig, overrides: {
   const modules = withRecoveryContext(await loadModules(config.assets, config.identity.role, provider));
   const events = new EventLog(config.identity.generation);
   const rawFetch = globalThis.fetch.bind(globalThis);
-  const api = isApiConnection(connection);
-  const bare = overrides.build?.session.bare ? await bareProviders(modules.auth, provider) : undefined;
+  const bare = overrides.build?.session.bare && !api ? await bareProviders(modules.auth, provider) : undefined;
   const providers = bare?.providers ?? (api ? [provider] : (await subscriptionRoutes(modules.auth, provider, config.identity.role)).providers);
   const send = bare ? providerTransport(modules.auth, bare.providers, rawFetch)
     : modules.auth.transport?.(authContext(provider, connection)) ?? rawFetch;

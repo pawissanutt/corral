@@ -4,6 +4,7 @@ import { realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ProviderId } from "../auth/providers.ts";
+import { isApiConnection } from "../auth/connections.ts";
 import type { CapabilityGuidance } from "../capabilities/guidance.ts";
 import { LocalControlPlane } from "../build/control-plane.ts";
 import { readBuildLaunch } from "../build/launch.ts";
@@ -150,7 +151,7 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
     if (!Number.isSafeInteger(fd) || fd < 3) throw new LaunchMessageInvalid("invalid launch descriptor");
     const launch = readBuildLaunch(fd);
     resume = launch.resume;
-    if (launch.bare) requireBareProvider(launch.provider as ProviderId);
+    if (launch.bare && !(launch.binding && isApiConnection(launch.binding.connection))) requireBareProvider(launch.provider as ProviderId);
     if (launch.provider === "llama.cpp") {
       throw new LaunchRefused("Local inference is unavailable in a build session", "Local inference (llama.cpp) is unavailable in a build session.",
         "Choose another provider with `corral pi --build --provider <provider>`.");
@@ -171,9 +172,9 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
           "Start a new build with `corral pi --build`.");
       }
       if (launch.paid && launch.paid.session !== record.id) throw new LaunchMessageInvalid("paid Build session differs from saved lineage");
-      if (record.route?.paid && (!launch.route?.paid || record.route.binding?.digest !== launch.route.binding?.digest
-          || JSON.stringify(record.route.paid) !== JSON.stringify(launch.route.paid))) {
-        throw new LaunchMessageInvalid("paid Build route cannot change or refresh its allowance");
+      // Spending caps are disabled: an approval/allowance edit does not block resume.
+      if (record.route?.paid && (!launch.route?.paid || record.route.binding?.digest !== launch.route.binding?.digest)) {
+        throw new LaunchMessageInvalid("paid Build route cannot change");
       }
       record = { ...record, ...(launch.route ? { route: launch.route } : {}) };
       saveSession(launch.dataRoot, record);
