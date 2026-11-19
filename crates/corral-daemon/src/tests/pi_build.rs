@@ -1,5 +1,6 @@
 use std::{
     ffi::OsStr,
+    io::Write,
     os::unix::{fs::symlink, process::ExitStatusExt},
     process::{ExitStatus, Output},
 };
@@ -131,6 +132,68 @@ fn page(client: &mut Client, id: &str) -> SessionPage {
         panic!("expected session transcript")
     };
     page
+}
+
+#[test]
+fn every_page_of_an_unchanged_transcript_carries_the_first_pages_etag_and_an_append_changes_it() {
+    let fixture = Fixture::new();
+    let id = "B-paged";
+    let host = terminal(&fixture, id, Script::default());
+    let mut transcript = fs::File::create(&host.transcript).unwrap();
+    let text = "x".repeat(1600);
+    let mut parent = None;
+    for index in 0..20 {
+        let entry = format!("entry-{index}");
+        let message = json!({
+            "type": "message", "id": entry, "parentId": parent,
+            "message": {"role": "assistant", "content": text},
+        });
+        writeln!(transcript, "{message}").unwrap();
+        parent = Some(entry);
+    }
+    let mut owner = Client::connect_with(&fixture.unix_server(), vec![wire::BUILD_V1.into()]);
+    let first: DetailReply = owner.ok(wire::app::DETAIL_GET, json!({"kind": "session", "id": id}));
+    let cursor = first
+        .next
+        .as_deref()
+        .expect("expected a second transcript page");
+    let second: DetailReply = owner.ok(
+        wire::app::DETAIL_GET,
+        json!({"kind": "session", "id": id, "page": cursor}),
+    );
+    assert!(second.next.is_none());
+    assert!(matches!(second.body, Some(DetailBody::Session(page)) if !page.messages.is_empty()));
+    assert_eq!(first.etag, second.etag);
+
+    let conditional = json!({"kind": "session", "id": id, "etag": first.etag});
+    let unchanged: DetailReply = owner.ok(wire::app::DETAIL_GET, &conditional);
+    assert_eq!(unchanged.etag, first.etag);
+    assert!(unchanged.body.is_none());
+    assert!(unchanged.next.is_none());
+
+    let entry = json!({
+        "type": "message", "id": "appended", "parentId": parent,
+        "message": {"role": "assistant", "content": "appended entry"},
+    });
+    writeln!(transcript, "{entry}").unwrap();
+    let changed: DetailReply = owner.ok(wire::app::DETAIL_GET, conditional);
+    assert!(changed.body.is_some());
+    assert_ne!(changed.etag, first.etag);
+
+    let stale = owner
+        .call(
+            wire::app::DETAIL_GET,
+            json!({"kind": "session", "id": id, "page": cursor}),
+        )
+        .unwrap_err();
+    assert_eq!(stale.code, rpc::ErrorCode::Conflict);
+    let malformed = owner
+        .call(
+            wire::app::DETAIL_GET,
+            json!({"kind": "session", "id": id, "page": "transcript:not-a-stamp"}),
+        )
+        .unwrap_err();
+    assert_eq!(malformed.code, rpc::ErrorCode::InvalidParams);
 }
 
 #[test]

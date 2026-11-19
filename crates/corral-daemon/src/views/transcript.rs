@@ -4,8 +4,9 @@ mod entries;
 mod tokens;
 
 use std::collections::BTreeMap;
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
@@ -14,7 +15,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use self::tokens::{Source, Token};
-use super::json_len;
+use super::{fingerprint, json_len};
 
 const WINDOW: usize = 128 * 1024;
 const RECORDS: usize = 32;
@@ -24,7 +25,7 @@ const CONTINUED_BYTES: usize = 4096;
 
 struct Transcript {
     file: File,
-    len: u64,
+    metadata: Metadata,
 }
 
 impl Transcript {
@@ -59,10 +60,7 @@ impl Transcript {
             metadata.is_file(),
             "recorded transcript is not a regular file"
         );
-        Ok(Self {
-            file,
-            len: metadata.len(),
-        })
+        Ok(Self { file, metadata })
     }
 
     fn ends_line(&mut self, offset: u64) -> Result<bool> {
@@ -77,7 +75,10 @@ impl Transcript {
     }
 
     fn record(&mut self, start: u64, end: u64) -> Result<Value> {
-        ensure!(start < end && end <= self.len, "transcript entry is stale");
+        ensure!(
+            start < end && end <= self.metadata.len(),
+            "transcript entry is stale"
+        );
         self.file
             .seek(SeekFrom::Start(start))
             .context("seeking transcript entry")?;
@@ -87,7 +88,7 @@ impl Transcript {
 
     fn load_item(&mut self, source: Source) -> Result<SessionItem> {
         ensure!(
-            source.start < source.end && source.end <= self.len,
+            source.start < source.end && source.end <= self.metadata.len(),
             "transcript item is stale"
         );
         ensure!(
@@ -146,42 +147,61 @@ fn branch_key(id: &str) -> u128 {
 }
 
 impl Branch {
-    fn cursor(self, end: u64, skip: usize) -> Option<String> {
+    fn cursor(self, stamp: &str, end: u64, skip: usize) -> Option<String> {
         if end == 0 {
             return None;
         }
         match self {
-            Self::Latest => Some(format!("transcript:{end}:{skip}:*")),
-            Self::Parent(key) => Some(format!("transcript:{end}:{skip}:{key:032x}")),
+            Self::Latest => Some(format!("transcript:{stamp}:{end}:{skip}:*")),
+            Self::Parent(key) => Some(format!("transcript:{stamp}:{end}:{skip}:{key:032x}")),
             Self::Root => None,
         }
     }
 }
 
-fn position(page: &str) -> Result<(u64, usize, Branch)> {
+#[derive(Debug)]
+pub(crate) struct StaleTranscriptCursor;
+
+impl std::fmt::Display for StaleTranscriptCursor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("transcript changed; reload the session")
+    }
+}
+
+impl std::error::Error for StaleTranscriptCursor {}
+
+fn position(page: &str, stamp: &str) -> Result<(u64, usize, Branch)> {
     let mut parts = page.split(':');
     ensure!(
         parts.next() == Some("transcript"),
-        "invalid transcript cursor"
+        "invalid: expected a transcript cursor"
     );
+    let tagged = parts
+        .next()
+        .filter(|tag| tag.len() == stamp.len() && tag.bytes().all(|b| b.is_ascii_hexdigit()))
+        .context("invalid: malformed transcript stamp")?;
     let end = parts
         .next()
-        .context("missing transcript position")?
+        .context("invalid: missing transcript position")?
         .parse()
-        .context("invalid transcript position")?;
+        .context("invalid: malformed transcript position")?;
     let skip = parts
         .next()
-        .context("missing transcript item position")?
+        .context("invalid: missing transcript item position")?
         .parse()
-        .context("invalid transcript item position")?;
+        .context("invalid: malformed transcript item position")?;
     let branch = match parts.next() {
         Some("*") => Branch::Latest,
         Some(key) if key.len() == 32 => Branch::Parent(
-            u128::from_str_radix(key, 16).context("invalid transcript branch cursor")?,
+            u128::from_str_radix(key, 16).context("invalid: malformed transcript branch")?,
         ),
-        _ => anyhow::bail!("invalid transcript branch cursor"),
+        _ => anyhow::bail!("invalid: malformed transcript branch"),
     };
-    ensure!(parts.next().is_none(), "invalid transcript cursor");
+    ensure!(
+        end > 0 && parts.next().is_none(),
+        "invalid: malformed transcript cursor"
+    );
+    ensure!(tagged == stamp, StaleTranscriptCursor);
     Ok((end, skip, branch))
 }
 
@@ -194,6 +214,12 @@ struct SelectedItem {
 
 type Selection = (SessionMessage, Vec<SelectedItem>);
 
+pub(super) struct Page {
+    pub(super) messages: Vec<SessionMessage>,
+    pub(super) older: Option<String>,
+    pub(super) stamp: String,
+}
+
 /// Return a newest-first slice of records in chronological display order. The cursor
 /// skips already-returned items at the newer end of a split record.
 pub(super) fn page(
@@ -201,26 +227,39 @@ pub(super) fn page(
     path: &Path,
     scope: Option<&Path>,
     page: Option<&str>,
-) -> Result<(Vec<SessionMessage>, Option<String>)> {
+) -> Result<Page> {
     let mut transcript = Transcript::open(path, scope)?;
+    // The same open handle supplies the snapshot stamp, byte limit and records.
+    let meta = &transcript.metadata;
+    let len = meta.len();
+    let stamp = fingerprint(&(
+        id,
+        len,
+        meta.dev(),
+        meta.ino(),
+        meta.mtime(),
+        meta.mtime_nsec(),
+        meta.ctime(),
+        meta.ctime_nsec(),
+    ))?;
     let mut boundaries = Boundaries {
         bytes: [0; WINDOW],
         start: 0,
         end: 0,
     };
     let (mut end, mut skip, mut branch) = if let Some(page) = page {
-        let (end, skip, branch) = position(page)?;
+        let (end, skip, branch) = position(page, &stamp)?;
         ensure!(
-            end > 0 && end <= transcript.len,
-            "transcript cursor is stale"
+            end <= len,
+            "invalid: transcript cursor is beyond the snapshot"
         );
         ensure!(
             transcript.ends_line(end)?,
-            "invalid transcript cursor boundary"
+            "invalid: transcript cursor is not at a record boundary"
         );
         (end, skip, branch)
     } else {
-        let end = boundaries.before(&mut transcript.file, transcript.len)?;
+        let end = boundaries.before(&mut transcript.file, len)?;
         (end, 0, Branch::Latest)
     };
     let mut selected = Vec::new();
@@ -236,7 +275,10 @@ pub(super) fn page(
         if let Branch::Parent(expected) = branch
             && entry.is_none_or(|id| branch_key(id) != expected)
         {
-            ensure!(skip == 0, "transcript item cursor is stale");
+            ensure!(
+                skip == 0,
+                "invalid: transcript item cursor does not match the record"
+            );
             end = start;
             continue;
         }
@@ -255,7 +297,10 @@ pub(super) fn page(
         };
         if let Some(mut message) = entries::message(value, Some((id, start)))? {
             let all = std::mem::take(&mut message.items);
-            ensure!(skip <= all.len(), "transcript item cursor is stale");
+            ensure!(
+                skip <= all.len(),
+                "invalid: transcript item cursor is beyond the record"
+            );
             entries::bound_header(&mut message);
             let mut cost = json_len(&message)? + 1;
             let mut items = Vec::new();
@@ -293,7 +338,10 @@ pub(super) fn page(
                 break;
             }
         } else {
-            ensure!(skip == 0, "transcript item cursor is stale");
+            ensure!(
+                skip == 0,
+                "invalid: transcript item cursor does not match the record"
+            );
         }
         branch = parent;
         end = start;
@@ -314,7 +362,12 @@ pub(super) fn page(
         json_len(&messages)? <= PAGE_BYTES,
         "transcript preview exceeds page budget"
     );
-    Ok((messages, branch.cursor(end, skip)))
+    let older = branch.cursor(&stamp, end, skip);
+    Ok(Page {
+        messages,
+        older,
+        stamp,
+    })
 }
 
 /// Pair only tools selected on this page. Images remain independent items.

@@ -392,6 +392,8 @@ impl From<anyhow::Error> for Failure {
             ErrorCode::Busy
         } else if error.is::<views::NotFound>() {
             ErrorCode::NotFound
+        } else if error.is::<views::StaleTranscriptCursor>() {
+            ErrorCode::Conflict
         } else if message.starts_with("invalid:") {
             ErrorCode::InvalidParams
         } else if error.is::<forward::PartTooLarge>() || message.starts_with("too_large:") {
