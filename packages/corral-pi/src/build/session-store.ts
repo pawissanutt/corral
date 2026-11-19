@@ -26,10 +26,12 @@ export function loadSession(dataRoot: string, id: string): BuildSessionRecord {
     || typeof record.updated !== "string" || !Number.isFinite(Date.parse(record.updated))
     || typeof record.here !== "boolean" || ![record.repoRoot, record.worktree].every(value => typeof value === "string" && isAbsolute(value))
     || !(record.branch === null || typeof record.branch === "string") || !(record.base === null || typeof record.base === "string")
-    || [record.workspaceRoot, record.sessionFile].some(value => value !== undefined && (typeof value !== "string" || !isAbsolute(value)))
+    || [record.workspaceRoot, record.sessionFile, record.socket].some(value => value !== undefined && (typeof value !== "string" || !isAbsolute(value)))
     || (record.bare !== undefined && typeof record.bare !== "boolean")
     || (record.repository !== undefined && typeof record.repository !== "boolean")
     || (record.baseBranch !== undefined && record.baseBranch !== null && typeof record.baseBranch !== "string")
+    || (record.pid !== undefined && (!Number.isSafeInteger(record.pid) || record.pid <= 0))
+    || (record.cleaned !== undefined && record.cleaned !== true)
     || (record.bare === true && (record.workspaceRoot !== undefined || record.project !== undefined))
     || (record.project !== undefined && typeof record.project !== "string")) throw new Error(`Invalid build session record: ${id}`);
   if (record.route) {
@@ -70,7 +72,7 @@ export function saveSession(dataRoot: string, record: BuildSessionRecord): void 
   let socketState = {};
   try {
     const { role, pid, paused, held_input } = JSON.parse(readFileSync(path, "utf8"));
-    if (role === "build") socketState = { role, pid, paused, held_input };
+    if (role === "build") socketState = { role, pid: record.pid ?? pid, paused, held_input };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }

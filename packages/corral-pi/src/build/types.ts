@@ -87,6 +87,12 @@ export interface BuildSessionRecord {
   readonly workspaceRoot?: string;
   /** Frozen route identity; resume does not consult mutable profile defaults. */
   readonly route?: BuildRoute;
+  /** Actual bridge address, including any explicit --socket. */
+  readonly socket?: string;
+  /** Written before binding, so cleanup also sees a host in startup. */
+  readonly pid?: number;
+  /** A retained record no longer owns its old worktree or branch name. */
+  readonly cleaned?: true;
   /** The Pi transcript of the parent conversation. */
   readonly sessionFile?: string;
   readonly exit?: ExitRecord;

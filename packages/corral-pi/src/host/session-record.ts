@@ -19,9 +19,9 @@ export class SessionRecord {
   held: SessionInput[];
 
   constructor(private readonly dir: string, private readonly id: string,
-    private readonly role: string, private readonly worktree: string) {
+    private readonly role: string, private readonly worktree: string, fresh = false) {
     this.path = join(dir, "session.json");
-    const saved = readSessionRecord(dir);
+    const saved = fresh ? {} : readSessionRecord(dir);
     this.transcript = typeof saved.sessionFile === "string" ? saved.sessionFile : undefined;
     const route = saved.route as { provider?: unknown; connection?: unknown } | undefined;
     this.legacyAnthropicApi = role === "build" && route?.provider === "anthropic" && route.connection === "anthropic-api";

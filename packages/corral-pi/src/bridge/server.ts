@@ -62,7 +62,7 @@ function socketStat(path: string) {
   }
 }
 
-function canConnect(path: string): Promise<boolean> {
+export function canConnect(path: string): Promise<boolean> {
   const { promise, resolve, reject } = Promise.withResolvers<boolean>();
   const socket = createConnection(path);
   socket.once("connect", () => { socket.destroy(); resolve(true); });

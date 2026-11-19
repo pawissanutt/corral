@@ -6,7 +6,7 @@ import { checked, type Run } from "./corral-cli.ts";
 import { readWorkspaceToml } from "./profiles.ts";
 import type { BuildJournal } from "./record.ts";
 import type { BuildGateResult } from "./record-types.ts";
-import type { BuildContext } from "./types.ts";
+import type { BuildContext, BuildSessionRecord } from "./types.ts";
 
 interface BuildProject {
   readonly base?: string;
@@ -14,8 +14,7 @@ interface BuildProject {
   readonly env?: Record<string, string>;
 }
 
-export function buildProject(context: BuildContext): BuildProject {
-  const { workspaceRoot, project } = context.session;
+export function buildProject({ workspaceRoot, project }: Pick<BuildSessionRecord, "workspaceRoot" | "project">): BuildProject {
   if (!workspaceRoot || !project) return {};
   const config = readWorkspaceToml(workspaceRoot, "corral.toml") as {
     defaults?: { base?: string }; projects?: Record<string, BuildProject>;
@@ -29,7 +28,7 @@ export async function verifyBuild(context: BuildContext, git: Run, journal: Buil
   const { worktree } = context.session;
   if ((await checked(git, ["status", "--porcelain"], worktree)).trim()) throw new Error("Commit your changes first, then run build_verify again.");
   const head = (await checked(git, ["rev-parse", "HEAD"], worktree)).trim();
-  const { gate: commands = [], env } = buildProject(context);
+  const { gate: commands = [], env } = buildProject(context.session);
   const started = new Date().toISOString();
   let failed: string | undefined;
   let log: string | undefined;

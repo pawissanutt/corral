@@ -1,7 +1,7 @@
 // Flag-based launches read ordinary workspace settings.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { TOML } from "bun";
 
@@ -38,6 +38,8 @@ export interface HostConfig {
   readonly runtimeDir: string;
   readonly sessionDir: string;
   readonly freshSession?: boolean;
+  /** The workspace's own terminal conversation, not a daemon-managed chat. */
+  readonly terminalChat?: true;
   readonly todo?: boolean;
   readonly capabilities?: HostCapabilities;
   /** The snapshot's settings and project-text trust; absent from a corral that predates them. */
@@ -156,16 +158,29 @@ export function sessionSocket(dir: string, env: NodeJS.ProcessEnv): string {
   return join(parent, `${createHash("sha256").update(dir).digest("hex").slice(0, 16)}.sock`);
 }
 
+export function findWorkspaceRoot(env: NodeJS.ProcessEnv, cwd: string): string | undefined {
+  if (env.CORRAL_NEXT_ROOT) return resolve(cwd, env.CORRAL_NEXT_ROOT);
+  for (let cur = cwd; ; cur = dirname(cur)) {
+    if (existsSync(join(cur, ".corral-next", "corral.toml"))) return cur;
+    if (cur === dirname(cur)) return undefined;
+  }
+}
+
 export function parseRunFlags(command: "run" | "chat", argv: readonly string[], assets: string,
   env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): HostConfig {
   rejectRemovedModelOptions(argv);
   const { values } = parseArgs({ args: [...argv], options: {
     ...modelFlags, dir: { type: "string" }, socket: { type: "string" }, "prompt-file": { type: "string" },
     corral: { type: "string" }, project: { type: "string" }, headless: { type: "boolean" },
+    ...(command === "chat" ? { new: { type: "boolean" } } as const : {}),
   } });
-  if (!values.dir) throw new Error(`corral-pi ${command} requires --dir <session-directory>`);
-  const dir = resolve(cwd, values.dir);
-  const root = resolve(cwd, env.CORRAL_NEXT_ROOT ?? ".");
+  if (!values.dir && (command === "run" || values.dir !== undefined)) {
+    throw new Error(`corral-pi ${command} requires --dir <session-directory>`);
+  }
+  if (values.dir && values.new) throw new Error("--new is only available for terminal chat without --dir");
+  const root = values.dir ? resolve(cwd, env.CORRAL_NEXT_ROOT ?? ".") : findWorkspaceRoot(env, cwd);
+  if (!root) throw new Error("corral-pi chat is outside a Corral workspace");
+  const dir = values.dir ? resolve(cwd, values.dir) : join(root, ".corral-next", "terminal-chat");
   const actor = env.CORRAL_ACTOR;
   if (command === "run" && actor !== undefined && actor !== "agent" && actor !== "reviewer") {
     throw new Error("CORRAL_ACTOR must be agent or reviewer for corral-pi run");
@@ -177,11 +192,12 @@ export function parseRunFlags(command: "run" | "chat", argv: readonly string[], 
   return {
     identity: { store: "local", project: values.project ?? "", role, task, run,
       ...(role === "assistant" ? { assistant: id } : {}) },
-    cwd, root, corral: values.corral ? resolve(cwd, values.corral) : "", assets, pane: null,
+    cwd, root, corral: values.corral ? resolve(cwd, values.corral) : values.dir ? "" : "corral-next", assets, pane: null,
     local: { dir, id, socket: values.socket ? resolve(cwd, values.socket) : sessionSocket(dir, env),
       headless: values.headless === true || !process.stdin.isTTY },
     sessionDir: join(dir, "sessions"), runtimeDir: join(dir, "runtime"),
-    freshSession: env.CORRAL_FRESH === "1",
+    ...(!values.dir ? { terminalChat: true } as const : {}),
+    freshSession: values.new === true || env.CORRAL_FRESH === "1",
     ...(values["prompt-file"] ? { promptFile: resolve(cwd, values["prompt-file"]) } : {}),
     ...workspaceSettings(root, role, run), ...modelSettings(values),
   };

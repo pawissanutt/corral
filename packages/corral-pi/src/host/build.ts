@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { parseBuildFlags, type LocalBuildOptions } from "../build/launch.ts";
+import { buildIsRunning, errorMessage, hasOwnerMessage, inspectBuildCleanup, pruneBuilds, removeBuild } from "../build/cleanup.ts";
+import { parseBuildFlags, parsePruneFlags, type LocalBuildOptions } from "../build/launch.ts";
 import { createSession, loadSession, saveSession, sessionDir } from "../build/session-store.ts";
 import { prepareWorktree } from "../build/worktree.ts";
 import type { BuildContext, BuildLaunch, BuildSessionRecord } from "../build/types.ts";
@@ -92,12 +93,27 @@ function refusalLines(error: unknown, resume: string | undefined): readonly [str
     : "See `corral-pi build --help`."];
 }
 
-/** What an ordinary quit leaves behind when no exit took the work elsewhere: where it is and how to come back to it. */
+/** Ordinary quit runs after the TUI restores the terminal, possibly from inside the worktree. */
 function quitLines(dataRoot: string, fallback: BuildSessionRecord): readonly string[] {
-  let record = fallback;
-  try { record = loadSession(dataRoot, fallback.id); } catch { /* The record read at launch still names the work. */ }
+  let record: BuildSessionRecord;
+  try { record = loadSession(dataRoot, fallback.id); }
+  catch (error) {
+    return [`Build ${fallback.name} cleanup refused: ${errorMessage(error)}`];
+  }
+  if (!record.here && record.repository !== false && record.exit?.choice !== "keep") {
+    try {
+      const landed = !!record.exit?.landed;
+      const hasMessage = hasOwnerMessage(dataRoot, record);
+      if (!hasMessage || landed) {
+        const plan = inspectBuildCleanup(record);
+        if (!("reason" in plan) && plan.worktree) return [`Build ${record.name}: ${removeBuild(dataRoot, record, plan, !hasMessage)}`];
+      }
+    } catch (error) {
+      return [`Build ${record.name} cleanup refused: ${errorMessage(error)}`];
+    }
+  }
   const where = `${record.worktree}${record.repository === false ? " (outside Git)" : ` on ${record.branch ? `branch ${record.branch}` : "a detached HEAD"}`}`;
-  if (!record.exit) {
+  if (!record.exit || record.exit.choice !== "keep" && !record.exit.landed) {
     return [`Build ${record.name} stopped without an exit; its work stays in ${where}.`,
       `Resume it with ${resumeCommand(record.id)}, then choose an exit with /finish.`];
   }
@@ -108,6 +124,11 @@ function quitLines(dataRoot: string, fallback: BuildSessionRecord): readonly str
 export async function buildCommand(argv: readonly string[], assets: string): Promise<void> {
   let resume: string | undefined;
   try {
+    const prune = parsePruneFlags(argv);
+    if (prune) {
+      await pruneBuilds(prune.dataRoot, prune.dryRun, line => process.stdout.write(`${line}\n`));
+      return;
+    }
     const { launch, local } = parseBuildFlags(argv, assets);
     resume = launch.resume;
     if (launch.provider === "llama.cpp") {
@@ -124,6 +145,8 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
           `Use a recorded session id with ${resumeCommand("<id>")}, or start a new one with \`${startCommand}\`.`);
       }
       if ((record.bare === true) !== (launch.bare === true)) throw new Error("Resume must use the same workspace association as the saved build session");
+      if (await buildIsRunning(launch.dataRoot, record)) throw new Error(`Build ${id} is already running`);
+      if (record.cleaned) throw new Error(`Build ${id} no longer has a worktree; its conversation is retained`);
       validateBuildResume(record);
       if (!record.sessionFile) {
         throw new LaunchRefused("The build session has no recorded transcript to resume", `Build ${id} has no recorded conversation to resume.`,
@@ -152,17 +175,18 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
           taken ? `Choose another name with \`${startCommand} --name <name>\`, or resume the existing build.`
             : `Fix that Git error, or work in the checkout itself with \`${startCommand} --here\`.`);
       }
-      saveSession(launch.dataRoot, record);
     }
     const dir = sessionDir(launch.dataRoot, record.id);
-    const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral ?? "" };
     const config = buildHostConfig(launch, record, assets, local);
+    record = { ...record, socket: config.local.socket, pid: process.pid };
+    saveSession(launch.dataRoot, record);
+    const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral ?? "" };
     // Pi ends an ordinary quit with process.exit(0); this prints after the terminal is restored.
     const session = record;
     process.on("exit", code => {
       if (code !== 0) return;
       const lines = quitLines(launch.dataRoot, session);
-      if (lines.length) process.stdout.write(`${lines.join("\n")}\n`);
+      if (lines.length) writeSync(process.stdout.fd, `${lines.join("\n")}\n`);
     });
     await runHost(config, { build });
   } catch (error) {

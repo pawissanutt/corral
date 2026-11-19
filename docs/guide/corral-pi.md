@@ -10,7 +10,7 @@ package's locked dependencies (`bun install --frozen-lockfile`).
 |---|---|
 | A worker on a task | `corral-next dispatch <task> --profile <pi-profile>` |
 | An independent reviewer | Set the project's `reviewer` profile. Corral asks for review after a green gate. |
-| Chat without a task | `corral-pi chat --dir <session-dir>`, or send to the daemon's quick thread. |
+| Chat without a task | `corral-pi chat` in a workspace, or send to the daemon's quick thread. |
 | Work directly in Git without a task | `corral-pi build`; see [Build sessions](build-sessions.md). |
 
 Each model is named `<provider>/<model>`. The provider decides how you pay:
@@ -47,6 +47,28 @@ model with `--model <provider>/<model>` and reasoning effort with `--effort`.
 Use `--headless` for socket input without a terminal.
 For daemon chat, configure a Pi profile or harness and put `corral-pi` on the daemon's
 `PATH`; chat does not require automatic dispatch or landing.
+
+### Terminal chat
+
+Run `corral-pi chat` from any directory inside your workspace. It looks for the
+nearest `.corral-next/corral.toml` unless `CORRAL_NEXT_ROOT` is set, works in the
+directory you launched it from, and uses `corral-next` from `PATH` by default.
+It reopens the conversation in `.corral-next/terminal-chat`; use `corral-pi chat
+--new` to start a fresh conversation there. The daemon's quick thread is separate.
+
+### Build cleanup
+
+On normal quit, Build removes its own clean worktree and branch if every patch
+is already on the landing branch and you either never sent a message or landed
+the session. Choosing **Keep** skips this automatic cleanup.
+
+Run `corral-pi build --prune --dry-run` to preview cleanup of stopped builds,
+then `corral-pi build --prune` to apply it. Use `--data-dir` to select a different
+record store. Prune skips running sessions and checkouts you worked in directly
+with `--here`. It keeps worktrees with uncommitted changes or patches not on the
+landing branch. Removing a worktree also removes ignored build output inside it
+(such as `target/`); kept worktrees and their output are untouched. Cleanup keeps
+conversation records and never forces Git to delete a worktree or branch.
 
 ## What each role does
 

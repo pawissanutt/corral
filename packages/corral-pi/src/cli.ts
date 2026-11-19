@@ -5,8 +5,9 @@ import { restrictEnvironment } from "./host/restrict.ts";
 
 const usage = `Usage:
   corral-pi run --dir <run-dir> [--socket <path>] [--prompt-file <path>] [--corral <path>] [model flags]
-  corral-pi chat --dir <chat-dir> [--socket <path>] [--corral <path>] [model flags]
+  corral-pi chat [--new | --dir <chat-dir>] [--socket <path>] [--corral <path>] [model flags]
   corral-pi build [--data-dir <path>] [--name <name> | --resume <id>] [--profile <name>] [--here] [--socket <path>] [--corral <path>] [model flags]
+  corral-pi build --prune [--dry-run] [--data-dir <path>]
   corral-pi login [--provider <id>] [--auth-dir <path>]
   corral-pi models [--provider <id>]
 Model flags: --model [<provider>/]<id>, --provider <id>, --effort <level>, --aws-profile <name>, --aws-region <region>.
@@ -41,7 +42,8 @@ export async function main(argv = process.argv.slice(2), compiled = fileURLToPat
     case "build": await (await import("./host/build.ts")).buildCommand(args, assets); return;
     case "run": case "chat": {
       const { parseRunFlags } = await import("./host/config.ts");
-      await (await import("./host/main.ts")).runHost(parseRunFlags(command, args, assets));
+      const config = parseRunFlags(command, args, assets);
+      await (await import("./host/main.ts")).runHost(config);
       return;
     }
     default: throw new Error(`unknown command ${command}; see corral-pi --help`);
