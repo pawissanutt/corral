@@ -17,7 +17,7 @@ use nsh_core::prelude::*;
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::model::session::{
-    Action, PickRow, Picker, PickerAction, PickerKind, ReadState, SessionComposer,
+    Action, FleetAction, PickRow, Picker, PickerAction, PickerKind, ReadState, SessionComposer,
 };
 use crate::model::{Form, Id};
 use crate::state::AppState;
@@ -162,7 +162,17 @@ pub(crate) fn session_pill(
             SharedString::from(label)
         })
         .accessibility_state(move || AccessibilityState {
-            expanded: Some(open.get() == Some(PickerKind::Model)),
+            // An opened agent's pill is expanded while its own choices are open (pressing
+            // would close them).
+            expanded: Some(
+                model.with(|m| match m.as_ref().and_then(|m| m.opens.as_ref()) {
+                    Some(opens) => matches!(
+                        opens,
+                        Action::Fleet(FleetAction::Models { child: None, .. })
+                    ),
+                    None => open.get() == Some(PickerKind::Model),
+                }),
+            ),
             has_popup: true,
             ..AccessibilityState::default()
         })

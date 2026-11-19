@@ -245,6 +245,8 @@ pub(in crate::model::session) fn act(
             ui.sub = Some(SubView::Agent(child.clone()));
             ui.agent = Some(child.clone());
             ui.focus = Focus::Main;
+            // The composer's model and effort become the agent's: the session's list closes.
+            ui.picker.open = None;
             if steerable(feed, &session, &child) {
                 return state.act(
                     Action::Receiver {
