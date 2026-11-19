@@ -33,11 +33,11 @@ test("a waiting run names what it waits for and counts the rest", () => {
 
 test("a stopped or failed run's mark names no cause: the assistant message above does", () => {
   for (const reason of ["stopped", "error"] as const) {
-    const row = drawn([{ kind: "turn_end", reason, at: AT, durationMs: 12_000, toolCalls: 3, notRun: 2, note: "the run budget was reached", waits: [] }], 100, true)[0]!.join("\n");
+    const row = drawn([{ kind: "turn_end", reason, at: AT, durationMs: 12_000, toolCalls: 3, notRun: 2, note: "the host stopped the run", waits: [] }], 100, true)[0]!.join("\n");
     expect(row).toContain("3 tool calls");
     expect(row).not.toContain("by you");
     expect(row).not.toContain("did not run");
-    expect(row).not.toContain("budget");
+    expect(row).not.toContain("stopped the run");
   }
 });
 

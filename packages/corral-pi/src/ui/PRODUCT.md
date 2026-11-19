@@ -8,4 +8,4 @@ Primary action: compose and inspect live work. Information priorities: conversat
 
 Task-bound sessions (worker, reviewer) read their task, runs, checks and artifacts from the engine's `corral show --json` and `corral artifact list --json`: a committed comparison of the run (base → head), exact identities, file diffstats and real hunks, and F10 Proof with the newest gate and review checks and the task's artifacts. No acceptance is synthesized. Sessions without a task (assistant chat, build) have no Task or Proof; alternate repository inspection never rebinds the session.
 
-The owner can rewind a worker to the start of an earlier turn from F2, with the current work saved under a rescue ref, and see what the session spent against its `--max-usd` limit on Usage. Authoritative data stays engine- and Pi-owned. No simulated completion, role switching or permission controls.
+The owner can rewind a worker to the start of an earlier turn from F2, with the current work saved under a rescue ref, and see what the session used on Usage. Authoritative data stays engine- and Pi-owned. No simulated completion, role switching or permission controls.

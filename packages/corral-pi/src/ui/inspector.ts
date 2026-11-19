@@ -17,6 +17,5 @@ export interface InspectorSnapshot {
     readonly skills: readonly string[];
   };
   readonly settings: readonly string[];
-  readonly budget: readonly string[];
   readonly events: EventPage;
 }
