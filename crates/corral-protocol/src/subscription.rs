@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use crate::Health;
 use corral_types::UsageSummary;
 
-use crate::assistant::ThreadEntry;
 use crate::rows::{AgentRow, AssistantRow, PlanRow, ProjectRow, SettingsSnapshot, TaskRow};
 use crate::session_state::{SendPolicy, SessionState};
 
@@ -25,7 +24,6 @@ pub enum Topic {
     Assistant,
     Usage,
     Settings,
-    Thread,
     Session,
     Terminal,
     #[serde(other)]
@@ -94,12 +92,6 @@ pub enum SubDelta {
         #[serde(flatten)]
         delta: RowsDelta<SettingsSnapshot>,
     },
-    Thread {
-        scope: String,
-        #[serde(flatten)]
-        delta: RowsDelta<ThreadEntry>,
-        live: Option<LiveText>,
-    },
     Session {
         scope: String,
         epoch: u64,
@@ -162,17 +154,6 @@ pub struct RowsDelta<T> {
     pub left: Vec<String>,
     pub cursor: BoardCursor,
     pub more: bool,
-}
-
-/// UTF-8 text offset in bytes; acknowledged pages advance the running turn.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct LiveText {
-    pub entry: String,
-    pub turn: u64,
-    pub offset: u64,
-    /// At most 32 KiB per page.
-    pub text: String,
-    pub done: bool,
 }
 
 /// Bounded app projection; no child instructions, transcripts, reports or paths.

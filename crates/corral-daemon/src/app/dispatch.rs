@@ -133,16 +133,8 @@ pub(crate) fn serve(
             Ok(())
         }),
         op::OP_SUBMIT => answer!(Ok(ops::submit(shared, decode(params)?)?)),
-        chat::ASSISTANT_SEND => answer!(Ok(assistant::send(
-            shared,
-            device.as_ref().map_or("local", |device| device.id.as_str()),
-            decode(params)?,
-        )?)),
-        chat::ASSISTANT_CANCEL => answer!(Ok(assistant::cancel(shared, decode(params)?)?)),
         chat::ASSISTANT_WARM => answer!(Ok(assistant::warm(shared, decode(params)?)?)),
-        chat::ASSISTANT_STOP => answer!(Ok(assistant::stop(shared, decode(params)?)?)),
         chat::ASSISTANT_SESSION => answer!(Ok(assistant::session(shared, decode(params)?)?)),
-        chat::PROMPT_ANSWER => answer!(Ok(sessions::answer(shared, decode(params)?)?)),
         build::BUILD_START => answer!(Ok(builds::start(shared, decode(params)?)?)),
         build::BUILD_REMOVE => answer!(Ok(builds::remove(shared, decode(params)?)?)),
         host::SESSION_SEND => answer!(Ok(sessions::send(

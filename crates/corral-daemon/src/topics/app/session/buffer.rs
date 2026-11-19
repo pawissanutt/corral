@@ -72,7 +72,7 @@ impl Buffer {
     }
 
     pub(super) fn unavailable(&mut self) {
-        if !self.ready || self.generation.is_some() {
+        if !self.ready || self.generation.is_some() || self.gap.is_none() {
             self.fleet = None;
             self.state = None;
             self.clear(
@@ -88,14 +88,16 @@ impl Buffer {
     }
 
     pub(super) fn publish(&mut self, page: LivePage) {
-        let changed = self.generation != Some(page.generation);
+        let changed = !self.ready
+            || self.generation != page.generation
+            || (page.generation.is_none() && self.gap.is_some());
         if changed {
             self.fleet = None;
             self.state = None;
         }
         if changed || page.gap.is_some() {
             let gap = page.gap.or_else(|| {
-                self.ready.then(|| SessionLiveGap {
+                (self.ready && page.generation.is_some()).then(|| SessionLiveGap {
                     after: self.next,
                     resumed: page
                         .events
@@ -105,7 +107,7 @@ impl Buffer {
                     reconcile: true,
                 })
             });
-            self.clear(Some(page.generation), gap);
+            self.clear(page.generation, gap);
         }
         if let Some(fleet) = page.fleet {
             // A present empty replacement clears the cache; omission leaves it untouched.

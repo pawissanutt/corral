@@ -46,7 +46,7 @@ fn event(generation: u32, seq: u64, text: bool) -> SessionLiveEvent {
 
 fn page(generation: u32, start: u64, end: u64, text: bool) -> LivePage {
     LivePage {
-        generation,
+        generation: Some(generation),
         events: (start..=end)
             .map(|seq| {
                 let event = event(generation, seq, text);
@@ -571,7 +571,7 @@ fn regression_in_either_host_ring_resets_both_cursors() {
                 false,
             )
             .unwrap();
-        assert_eq!(first.generation, 1);
+        assert_eq!(first.generation, Some(1));
         assert_eq!(reader.cursors, expected);
         let page = reader
             .advance(
@@ -581,7 +581,7 @@ fn regression_in_either_host_ring_resets_both_cursors() {
                 false,
             )
             .unwrap();
-        assert_eq!(page.generation, 2);
+        assert_eq!(page.generation, Some(2));
         assert_eq!(page.next, 0);
         assert!(page.events.is_empty());
         assert_eq!(reader.cursors, Cursors::default());

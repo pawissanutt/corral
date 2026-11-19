@@ -189,13 +189,17 @@ impl Subscriber {
             || self
                 .version
                 .is_some_and(|version| version != buffer.version);
+        let empty_quick = buffer.generation.is_none() && buffer.gap.is_none();
+        let send_empty_quick = empty_quick && (changed || self.version.is_none());
         let first = buffer
             .events
             .front()
             .map_or(buffer.next.saturating_add(1), |(event, _)| event.seq);
         let mut start = self.seq;
         let mut gap = None;
-        if changed || self.version.is_none() && buffer.gap.is_some() {
+        if empty_quick {
+            start = 0;
+        } else if changed || self.version.is_none() && buffer.gap.is_some() {
             start = first.saturating_sub(1);
             gap = Some(SessionLiveGap {
                 after: self.seq,
@@ -222,6 +226,7 @@ impl Subscriber {
             None
         };
         if !initial_fleet
+            && !send_empty_quick
             && state.is_none()
             && gap.is_none()
             && buffer
@@ -256,7 +261,7 @@ impl Subscriber {
                 visible.then(|| event.clone())
             })
             .collect();
-        if seq == start && gap.is_none() && !initial_fleet && state.is_none() {
+        if seq == start && !send_empty_quick && gap.is_none() && !initial_fleet && state.is_none() {
             return Ok(None);
         }
         let version = buffer.version;

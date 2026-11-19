@@ -12,7 +12,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::pi::{Answer, BuildLaunch, Client, Disposition, FRAME_MAX, PiRunner, quoted_path};
+use super::pi::{BuildLaunch, Client, Disposition, FRAME_MAX, PiRunner, quoted_path};
 use super::{InputTag, LaunchSpec, Origin, Runner, SessionRef, SessionStatus};
 use crate::runner::{FakeRunner, tests::spec};
 
@@ -172,11 +172,6 @@ fn pi_worker_lifecycle_and_controls_use_the_socket() {
             state(true, false, None, None),
             submit("gate failure", "auto", "queued"),
             submit("continue", "owner", "handled"),
-            expect(
-                "answer",
-                json!({"question": "Q1", "option": "A"}),
-                json!({"status": "delivered"}),
-            ),
             expect("cancel", json!({}), json!({"cancelled": true})),
             expect("resume", json!({}), json!({"paused": false})),
             Box::new(move |request| {
@@ -214,10 +209,6 @@ fn pi_worker_lifecycle_and_controls_use_the_socket() {
     assert_eq!(runner.status(&session).unwrap(), SessionStatus::Idle);
     runner.send(&session, "gate failure", Origin::Auto).unwrap();
     runner.send(&session, "continue", Origin::Owner).unwrap();
-    assert_eq!(
-        client.answer("Q1", Answer::Option("A")).unwrap().status,
-        "delivered"
-    );
     assert_eq!(client.cancel().unwrap()["cancelled"], true);
     assert_eq!(client.resume().unwrap()["paused"], false);
     runner.focus(&session).unwrap();

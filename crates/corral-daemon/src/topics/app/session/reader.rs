@@ -82,7 +82,7 @@ struct HostEvent {
 }
 
 pub(super) struct LivePage {
-    pub(super) generation: u32,
+    pub(super) generation: Option<u32>,
     pub(super) events: Vec<(SessionLiveEvent, usize)>,
     pub(super) next: u64,
     pub(super) more: bool,
@@ -114,6 +114,25 @@ impl Default for LiveReader {
 impl LiveReader {
     pub(super) fn read(&mut self, shared: &Shared, scope: &str) -> Result<LivePage> {
         let resolved = crate::sessions::resolve(shared, scope)?;
+        if resolved.is_empty_quick() {
+            if self.socket.take().is_some() {
+                self.generation = self
+                    .generation
+                    .checked_add(1)
+                    .context("live generation exhausted")?;
+            }
+            self.cursors = Cursors::default();
+            self.replay = false;
+            return Ok(LivePage {
+                generation: None,
+                events: Vec::new(),
+                next: 0,
+                more: false,
+                gap: None,
+                fleet: None,
+                state: None,
+            });
+        }
         ensure!(!resolved.ended, "session ended");
         let Some(SessionRef::Pi { socket, .. }) = resolved.session else {
             anyhow::bail!("session has no Pi socket");
@@ -154,7 +173,7 @@ impl LiveReader {
             self.cursors = Cursors::default();
             self.generation = generation;
             return Ok(LivePage {
-                generation,
+                generation: Some(generation),
                 events: Vec::new(),
                 next: 0,
                 more: live.ring.last != 0,
@@ -213,7 +232,7 @@ impl LiveReader {
         self.replay = false;
         self.generation = generation;
         Ok(LivePage {
-            generation,
+            generation: Some(generation),
             events,
             next: live.ring.next,
             more: live.more,

@@ -50,23 +50,7 @@ impl<'a> Subscriptions<'a> {
         if open.topic == Topic::Session {
             return self.sessions.open(self.shared, open);
         }
-        if open.topic == Topic::Thread {
-            let scope = open.scope.as_deref().context("thread scope is required")?;
-            ensure!(
-                crate::sessions::is_chat(scope) && scope.len() <= 32,
-                "invalid thread scope"
-            );
-            ensure!(
-                self.rows.len() < 32
-                    || self
-                        .rows
-                        .iter()
-                        .any(|sub| sub.topic == open.topic && sub.scope == open.scope),
-                "too many row subscriptions"
-            );
-        } else {
-            ensure!(open.scope.is_none(), "topic does not take a scope");
-        }
+        ensure!(open.scope.is_none(), "topic does not take a scope");
         ensure!(
             matches!(
                 open.topic,
@@ -76,14 +60,12 @@ impl<'a> Subscriptions<'a> {
                     | Topic::Projects
                     | Topic::Agents
                     | Topic::Assistant
-                    | Topic::Thread
                     | Topic::Usage
                     | Topic::Settings
             ),
             "unsupported topic"
         );
-        self.rows
-            .retain(|sub| sub.topic != open.topic || sub.scope != open.scope);
+        self.rows.retain(|sub| sub.topic != open.topic);
         self.rows
             .push(app::Subscriber::new(self.shared.epoch(), open));
         Ok(())
@@ -96,9 +78,10 @@ impl<'a> Subscriptions<'a> {
         if ack.topic == Topic::Session {
             return self.sessions.ack(ack);
         }
+        ensure!(ack.scope.is_none(), "topic does not take a scope");
         self.rows
             .iter_mut()
-            .find(|sub| sub.topic == ack.topic && sub.scope == ack.scope)
+            .find(|sub| sub.topic == ack.topic)
             .context("topic is not open")?
             .ack(ack.cursor)
     }
@@ -108,9 +91,8 @@ impl<'a> Subscriptions<'a> {
             self.terminals.close(close.scope);
         } else if close.topic == Topic::Session {
             self.sessions.close(close.scope);
-        } else {
-            self.rows
-                .retain(|sub| sub.topic != close.topic || sub.scope != close.scope);
+        } else if close.scope.is_none() {
+            self.rows.retain(|sub| sub.topic != close.topic);
         }
     }
 
@@ -126,7 +108,7 @@ impl<'a> Subscriptions<'a> {
                 }
                 Ok(None) => false,
                 Err(error) => {
-                    conn.send_frame(&reset(sub.topic, self.shared.epoch(), sub.scope.clone())?)?;
+                    conn.send_frame(&reset(sub.topic, self.shared.epoch())?)?;
                     let mut message = format!("{error:#}");
                     message.truncate(message.floor_char_boundary(1024));
                     crate::conn::error(
@@ -150,13 +132,13 @@ impl<'a> Subscriptions<'a> {
     }
 }
 
-fn reset(topic: Topic, epoch: u64, scope: Option<String>) -> Result<Frame> {
+fn reset(topic: Topic, epoch: u64) -> Result<Frame> {
     notification(
         wire::SUB_RESET,
         SubReset {
             topic,
             epoch,
-            scope,
+            scope: None,
         },
     )
 }

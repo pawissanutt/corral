@@ -335,19 +335,20 @@ gate = ["test -s line.txt && ! grep -qx 'paused candidate' line.txt"]
     assert.deepEqual(record(pausedRun).held_input, []);
     await owner.rpc("sub.close", { topic: "session", scope });
 
-    const chat = await owner.rpc<{ entry: string; state: { state: string } }>("assistant.send", {
-      cmd_id: "fixture-chat", thread: "quick", target: "assistant", text: chatInput,
-      typed_at: new Date().toISOString(), context: [], attachments: [],
+    const chat = await owner.rpc<{ session: string; entry: string; disposition: string }>("session.send", {
+      id: "quick", cmd_id: "fixture-chat", text: chatInput, policy: "steer",
+      typed_at: new Date().toISOString(),
     });
-    assert.equal(chat.state.state, "sent");
-    assert(chat.entry.startsWith("A-1/input/"));
-    await owner.rpc("sub.open", { topic: "session", scope: "A-1" });
-    await owner.liveThrough("A-1", chatText);
-    const chatRecord = record(join(state, "chat", "A-1"));
-    assert.equal(chatRecord.id, "A-1");
+    assert.equal(chat.disposition, "started");
+    assert.equal(chat.session, "A-1");
+    assert.equal(chat.entry, `${chat.session}/input/fixture-chat`);
+    await owner.rpc("sub.open", { topic: "session", scope: chat.session });
+    await owner.liveThrough(chat.session, chatText);
+    const chatRecord = record(join(state, "chat", chat.session));
+    assert.equal(chatRecord.id, chat.session);
     assert(userText(chatRecord.sessionFile).includes(chatInput));
     assert(readFileSync(chatRecord.sessionFile, "utf8").includes(chatText));
-    await owner.rpc("session.terminate", { id: "A-1" });
+    await owner.rpc("session.terminate", { id: chat.session });
     await owner.rpc("session.terminate", { id: scope });
     tasks.delete(second);
     await owner.rpc("daemon.stop", { drain: true });
