@@ -3,6 +3,7 @@ use std::{
     io::Write,
     os::unix::{fs::symlink, process::ExitStatusExt},
     process::{ExitStatus, Output},
+    time::Instant,
 };
 
 use corral_protocol::{
@@ -16,6 +17,8 @@ use corral_protocol::{
     session_state::InputOrigin,
 };
 use corral_types::SessionRef;
+
+use crate::{app::dispatch as app_dispatch, conn::Peer, topics::Subscriptions};
 
 use super::{
     fake_host::{AT, Host, PID, Placement, Script},
@@ -292,7 +295,10 @@ fn a_card_answer_reaches_the_host_and_its_brief_leaves_the_state() {
         "usage": {"tokens": 0, "cost_partial": false, "context_tokens": 0, "context_window": 0},
         "children": {"live": 0, "waiting": 0, "total": 0},
         "jobs": {"live": 0, "waiting": 0, "total": 0},
-        "cards": [{"id": "question-1", "kind": "question", "title": "Which option?"}],
+        "cards": [
+            {"id": "question-1", "kind": "question", "title": "Which option?"},
+            {"id": "question-2", "kind": "question", "title": "Which other option?"},
+        ],
     }));
     let host = terminal(&fixture, id, script);
     let socket = fixture.unix_server();
@@ -320,7 +326,7 @@ fn a_card_answer_reaches_the_host_and_its_brief_leaves_the_state() {
         state
     };
     let before = snapshot();
-    assert_eq!(before.cards.len(), 1);
+    assert_eq!(before.cards.len(), 2);
     assert_eq!(before.cards[0].id, "question-1");
 
     let answers = json!([{"options": ["first"], "text": "the selected option"}]);
@@ -330,12 +336,67 @@ fn a_card_answer_reaches_the_host_and_its_brief_leaves_the_state() {
         json!({"id": id, "card": "question-1", "answers": answers, "dismiss": false}),
     );
     assert_eq!(reply.status, "delivered");
+    let remaining = snapshot();
+    assert_eq!(remaining.cards.len(), 1);
+    assert_eq!(remaining.cards[0].id, "question-2");
+
+    let shared = fixture.shared();
+    let devices = shared.devices();
+    let addr = "127.0.0.1:7841".parse().unwrap();
+    devices.set_listener(addr, &[], None);
+    let now = Instant::now();
+    let key = [7; 32];
+    let offer = devices.pair_begin(now).unwrap();
+    devices
+        .pairings
+        .handshaken(&offer.pair_id, key, "123456".into(), now)
+        .unwrap();
+    devices
+        .pairings
+        .claim(&offer.pair_id, "Browser".into(), "test".into(), now)
+        .unwrap();
+    let paired = devices.pair_confirm(&offer.pair_id).unwrap();
+    let (_, guard) = devices
+        .attach_key(&key, wire::device::DeviceReach::Loopback)
+        .unwrap();
+
+    let (mut reply_stream, mut paired_client) = UnixStream::pair().unwrap();
+    app_dispatch::serve(
+        &mut reply_stream,
+        &Peer::Tcp(addr),
+        shared,
+        rpc::Request {
+            jsonrpc: rpc::JSONRPC.into(),
+            id: json!(1),
+            method: SESSION_CARD_ANSWER.into(),
+            params: json!({"id": id, "card": "question-2", "answers": answers, "dismiss": false}),
+        },
+        Some(&guard),
+        &mut Subscriptions::new(shared),
+    )
+    .unwrap();
+    let frame = read_frame(&mut paired_client).unwrap().unwrap();
+    let reply: rpc::Response<SessionCardAnswered> = serde_json::from_slice(&frame.payload).unwrap();
+    assert!(matches!(
+        reply.outcome,
+        rpc::ResponseOutcome::Result { result } if result.status == "delivered"
+    ));
     assert_eq!(
         host.state.lock().unwrap().requests.as_slice(),
-        &[(
-            "card_answer".to_owned(),
-            json!({"card": "question-1", "answers": answers, "dismiss": false}),
-        )],
+        &[
+            (
+                "card_answer".to_owned(),
+                json!({
+                    "card": "question-1", "answers": answers, "dismiss": false, "device": "local",
+                }),
+            ),
+            (
+                "card_answer".to_owned(),
+                json!({
+                    "card": "question-2", "answers": answers, "dismiss": false, "device": paired.id,
+                }),
+            ),
+        ],
     );
     assert!(snapshot().cards.is_empty());
 }

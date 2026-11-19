@@ -188,7 +188,11 @@ pub(crate) fn serve(
         }
         host::SESSION_QUEUE_MOVE => answer!(Ok(forward::queue_move(shared, decode(params)?)?)),
         host::SESSION_MODEL => answer!(Ok(forward::model(shared, decode(params)?)?)),
-        host::SESSION_CARD_ANSWER => answer!(Ok(forward::card_answer(shared, decode(params)?)?)),
+        host::SESSION_CARD_ANSWER => answer!(Ok(forward::card_answer(
+            shared,
+            device.as_ref().map_or("local", |device| device.id.as_str()),
+            decode(params)?,
+        )?)),
         host::SESSION_CHILD => answer!(Ok(forward::child(shared, decode(params)?)?)),
         host::SESSION_JOB => answer!(Ok(forward::job(shared, decode(params)?)?)),
         host::SESSION_ACTION => answer!(Ok(forward::action(shared, decode(params)?)?)),
