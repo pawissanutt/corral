@@ -28,6 +28,8 @@ pub(super) struct Journal {
     pub jobs: BTreeMap<String, Value>,
     /// The command each job of the page runs, by job id: job tools name it beside the id.
     pub commands: BTreeMap<String, String>,
+    /// Each owner question's first question, by its id: rows name a question by its words.
+    pub questions: BTreeMap<String, String>,
     /// Each detached Code Mode cell's settlement, by the call that started the cell.
     pub cells: BTreeMap<String, Value>,
     /// The Code Mode calls on this page.
@@ -121,6 +123,26 @@ impl Journal {
                             && let Some(call) = data.get("tool_call_id").and_then(Value::as_str)
                         {
                             self.cells.insert(call.to_owned(), data.clone());
+                        }
+                    }
+                    "corral_owner_question" => {
+                        let title = data
+                            .get("questions")
+                            .and_then(Value::as_array)
+                            .and_then(|questions| questions.first())
+                            .and_then(|question| question.get("question"))
+                            .and_then(Value::as_str)
+                            .and_then(|question| question.lines().next());
+                        if let (Some(id), Some(title)) =
+                            (data.get("id").and_then(Value::as_str), title)
+                        {
+                            self.questions.insert(id.to_owned(), title.to_owned());
+                        }
+                    }
+                    // A finish card the owner opened is the latest exit card too.
+                    super::build_entries::FINISH_ENTRY => {
+                        if let Some(id) = data.pointer("/details/id").and_then(Value::as_str) {
+                            self.finish = Some(id.to_owned());
                         }
                     }
                     "corral_mark" => {

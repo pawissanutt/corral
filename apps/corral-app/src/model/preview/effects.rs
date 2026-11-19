@@ -1,8 +1,8 @@
-//! Chat, device and subscription effects against the sample, on the unchanged chat wire. A chat
-//! message goes to the thread's pi host, as corrald submits it; the thread shows it once the
-//! host recorded it.
+//! Chat, device and subscription effects against the sample. A message goes to its session's
+//! pi host as corrald submits it (`session_ops`); the session's page shows it once the host
+//! recorded it.
 
-use super::{act, detail, fleet, pi, pi_control, sessions, stamp};
+use super::{act, detail, fleet, pi, sessions, stamp};
 use crate::model::{
     Id,
     daemon::*,
@@ -10,7 +10,6 @@ use crate::model::{
     effect::{Effect, QueueRequest},
 };
 use corral_protocol::{app::*, assistant::*, rows::*};
-use corral_types::Origin;
 use serde_json::{Value, json};
 
 pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
@@ -18,7 +17,6 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
         Effect::Act(command) => act(feed, command),
         Effect::Detail(request) => detail(feed, &request.target, request.page.as_deref()),
         Effect::Draft { thread, text } => {
-            require_thread(feed, thread)?;
             if text.is_empty() {
                 feed.drafts.remove(thread.as_str());
             } else {
@@ -26,7 +24,6 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
             }
             Ok(())
         }
-        Effect::Send(request) => send(feed, request),
         Effect::Session { key, .. }
         | Effect::SessionSend { key, .. }
         | Effect::BuildStart { key, .. }
@@ -39,16 +36,11 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
             DeviceOp::Revoke { key, .. } => operation(feed, key, effect),
             _ => device(feed, op).map(|_| ()),
         },
-        Effect::Thread { scope, open } => {
-            require_thread(feed, scope)?;
-            if *open {
-                feed.topics
-                    .insert(format!("thread:{scope}"), TopicState::default());
-            }
-            Ok(())
-        }
         Effect::Watch { session, on } => {
-            if pi::resolve(feed, session).is_none() && !feed.agents.contains_key(session.as_str()) {
+            let unknown = pi::resolve(feed, session).is_none()
+                && !feed.agents.contains_key(session.as_str())
+                && session.as_str() != QUICK_THREAD;
+            if unknown {
                 return Err(format!("Unknown preview session {session}"));
             }
             // Several views can watch one scope and the sample does not count them, so a scope
@@ -98,25 +90,6 @@ pub fn effect(feed: &mut Feed, effect: &Effect) -> Result<(), String> {
             *state = TopicState::default();
             Ok(())
         }
-        Effect::CancelSend(key) => {
-            if feed
-                .commands
-                .get(key)
-                .is_some_and(|command| command.status == CommandStatus::Done)
-                || feed.threads.values().any(|thread| {
-                    thread
-                        .entries
-                        .values()
-                        .any(|entry| entry.id == format!("preview-message:{key}"))
-                })
-            {
-                feed.not_withdrawn.insert(key.clone());
-                return Err("Preview message already delivered; it was not withdrawn".into());
-            }
-            feed.commands.remove(key);
-            feed.cancelling.remove(key);
-            Ok(())
-        }
         Effect::SessionItem { session, token } => Err(format!(
             "Preview transcript {session} has no continuation {token}; all seeded items are complete"
         )),
@@ -164,60 +137,6 @@ pub fn operation(feed: &mut Feed, key: &Id, effect: &Effect) -> Result<(), Strin
     result.map(|_| ())
 }
 
-fn require_thread(feed: &Feed, scope: &str) -> Result<(), String> {
-    if feed.threads.contains_key(scope) {
-        Ok(())
-    } else {
-        Err(format!("Preview thread {scope} does not exist"))
-    }
-}
-
-fn send(feed: &mut Feed, request: &AssistantSend) -> Result<(), String> {
-    if feed.send_acceptance.get(request.cmd_id.as_str()) == Some(&SendAcceptance::Accepted) {
-        return Ok(());
-    }
-    let result = send_inner(feed, request);
-    let acceptance = match &result {
-        Ok(()) => SendAcceptance::Accepted,
-        Err(message) => SendAcceptance::Refused(ClientError {
-            code: "preview_refused".into(),
-            message: message.clone(),
-        }),
-    };
-    feed.send_acceptance
-        .insert(request.cmd_id.clone().into(), acceptance);
-    result
-}
-
-fn send_inner(feed: &mut Feed, request: &AssistantSend) -> Result<(), String> {
-    require_thread(feed, &request.thread)?;
-    if request.text.trim().is_empty() {
-        return Err("Preview message is empty".into());
-    }
-    if !request.attachments.is_empty() {
-        return Err("Preview sends do not upload or deliver attachments; remove them first".into());
-    }
-    let id = chat_for(feed, &request.thread)?;
-    let entry = pi::input_entry(&id, &request.cmd_id);
-    feed.drafts.remove(request.thread.as_str());
-    feed.commands.insert(
-        request.cmd_id.clone().into(),
-        CommandState {
-            device: Some("preview-device".into()),
-            method: ASSISTANT_SEND.into(),
-            request: serde_json::to_value(request).map_err(|error| error.to_string())?,
-            status: CommandStatus::Done,
-            error: None,
-            entry: Some(entry.clone().into()),
-        },
-    );
-    // As corrald starts a stopped chat host before it submits the message.
-    pi::revive(feed, &id);
-    pi::deliver(feed, &id, &request.text, Origin::Owner, Some(entry));
-    feed.retire_echoed_sends();
-    Ok(())
-}
-
 /// The chat a message to `thread` reaches: a named session, or the quick thread's current one;
 /// once the quick thread has ended, the next message starts a new session.
 pub(super) fn chat_for(feed: &mut Feed, thread: &str) -> Result<String, String> {
@@ -238,8 +157,16 @@ pub(super) fn chat_for(feed: &mut Feed, thread: &str) -> Result<String, String> 
     if let Some(id) = current {
         return Ok(id);
     }
-    let profile = crate::model::assistant::quick_id(feed)
-        .and_then(|id| feed.assistants.get(id.as_str()))
+    // A new quick chat answers with the profile the last one had.
+    let profile = feed
+        .assistants
+        .values()
+        .filter(|row| row.kind == AssistantKind::Quick)
+        .max_by_key(|row| {
+            row.id
+                .strip_prefix("A-")
+                .and_then(|number| number.parse::<u64>().ok())
+        })
         .and_then(|row| row.profile.clone());
     let id = next_chat(feed);
     sessions::assistant(feed, &id, "Quick thread", None, profile, true);
@@ -273,7 +200,6 @@ fn execute_operation(feed: &mut Feed, effect: &Effect) -> Result<Value, String> 
         Effect::SessionAction { request, .. } => super::build_ops::action(feed, request),
         Effect::BuildRemove { remove, .. } => super::build_ops::remove(feed, remove),
         Effect::Warm(request) => {
-            require_thread(feed, &request.thread)?;
             let id = pi::resolve(feed, &request.thread)
                 .ok_or("Preview assistant session does not exist")?;
             if feed
@@ -314,18 +240,15 @@ fn assistant_session(feed: &mut Feed, op: &AssistantSessionOp) -> Result<Value, 
             );
             id
         }
-        AssistantSessionOp::End { session }
-        | AssistantSessionOp::Pause { session }
-        | AssistantSessionOp::Resume { session } => pi::resolve(feed, session)
+        AssistantSessionOp::End { session } => pi::resolve(feed, session)
             .map(|id| id.to_string())
             .ok_or("Preview assistant session does not exist")?,
         AssistantSessionOp::SetProfile { thread, .. } => pi::resolve(feed, thread)
             .map(|id| id.to_string())
             .ok_or("Preview assistant session does not exist")?,
-        AssistantSessionOp::TakeOver { .. } | AssistantSessionOp::Other => {
-            return Err(
-                "invalid: chat has no take-over operation; use the same session directly".into(),
-            );
+        // Pause, resume and stop are session controls (`session.*`), answered by `control`.
+        AssistantSessionOp::Other => {
+            return Err("invalid: unknown chat session operation".into());
         }
     };
     match op {
@@ -348,12 +271,7 @@ fn assistant_session(feed: &mut Feed, op: &AssistantSessionOp) -> Result<Value, 
                 row.state = AssistantState::Ended;
                 row.live_in = AssistantLocation::None;
             }
-        }
-        AssistantSessionOp::Pause { .. } => {
-            pi_control::control(feed, &id, crate::model::agents::Control::Pause)?;
-        }
-        AssistantSessionOp::Resume { .. } => {
-            pi_control::control(feed, &id, crate::model::agents::Control::Resume)?;
+            feed.forget_ended_quick();
         }
         _ => {}
     }

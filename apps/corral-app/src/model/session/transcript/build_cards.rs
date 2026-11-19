@@ -18,6 +18,7 @@ use crate::model::hue::Hue;
 use crate::model::session::Tab;
 
 use super::Action;
+use super::build_entries::{ExitEntry, FiledEntry, Told};
 use super::replay::Cx;
 use super::tool::{Call, CallState, ToolState, head, list_of, plural, str_of};
 
@@ -26,6 +27,10 @@ pub enum BuildCard {
     Task(TaskCard),
     Finish(FinishCard),
     Plan(PlanCard),
+    /// The owner's exit choice and how it ended (`corral_build_exit`).
+    Exit(ExitEntry),
+    /// The tasks the owner filed on the board (`corral_build_board`).
+    Filed(FiledEntry),
 }
 
 /// The `task` card.
@@ -82,6 +87,8 @@ pub struct FinishCard {
     pub steps: Vec<ExitStep>,
     pub superseded: bool,
     pub action: Action,
+    /// The words the host told the agent with an owner-opened finish card, while opened.
+    pub told: Option<Told>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,7 +150,12 @@ pub(super) fn card(call: &Call<'_>, call_id: &str, partial: bool, cx: Cx<'_>) ->
     };
     match call.name {
         "task" => BuildCard::Task(task(call, partial, cx, agents)),
-        "build_finish" => BuildCard::Finish(finish(call, call_id, cx, agents)),
+        "build_finish" => BuildCard::Finish(finish(
+            call_id,
+            call.arg("summary").map(str::to_owned),
+            cx,
+            agents,
+        )),
         _ => BuildCard::Plan(plan(call, cx)),
     }
 }
@@ -610,7 +622,9 @@ fn review_rows(record: &BuildRecord) -> Vec<ReviewRow> {
         .collect()
 }
 
-fn finish(call: &Call<'_>, call_id: &str, cx: Cx<'_>, action: Action) -> FinishCard {
+/// The result card of exit card `id` (a `build_finish` call, or the finish card the owner
+/// opened): it follows the exit only while it is the page's latest exit card.
+pub(super) fn finish(id: &str, note: Option<String>, cx: Cx<'_>, action: Action) -> FinishCard {
     let slices: Vec<SliceRow> = fleet(cx)
         .iter()
         .filter(|child| child.kind == "slice" || child.kind.is_empty())
@@ -665,7 +679,7 @@ fn finish(call: &Call<'_>, call_id: &str, cx: Cx<'_>, action: Action) -> FinishC
             )
         })
         .collect();
-    let latest = cx.journal.finish.as_deref() == Some(call_id);
+    let latest = cx.journal.finish.as_deref() == Some(id);
     let record = latest
         .then(|| {
             cx.feed.detail(&DetailRef::BuildRecord {
@@ -705,12 +719,13 @@ fn finish(call: &Call<'_>, call_id: &str, cx: Cx<'_>, action: Action) -> FinishC
         flags,
         verification: record.map(gate_rows).unwrap_or_default(),
         reviews: record.map(review_rows).unwrap_or_default(),
-        note: call.arg("summary").map(str::to_owned),
+        note,
         chose,
         exit: exit.and_then(|exit| exit_line(exit, worktree, branch)),
         steps: exit.map(steps).unwrap_or_default(),
         superseded: !latest,
         action,
+        told: None,
     }
 }
 

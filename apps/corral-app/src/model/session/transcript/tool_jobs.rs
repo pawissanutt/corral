@@ -12,6 +12,7 @@ use serde_json::Value;
 
 use crate::model::hue::Hue;
 
+use super::marks::short_id;
 use super::replay::{Cx, Rest};
 use super::tool::{
     Call, CallState, Raw, Row, ToolState, View, finish, head, last_rows, plural, rows_of, str_of,
@@ -226,11 +227,12 @@ fn ended(row: Row, exit: Exit, output: &str, failed: bool) -> Row {
     row
 }
 
-/// `j1-4 · cargo test`, or the id alone when the page does not hold the command.
+/// `cargo test (j1-4abcd)`: the command the page holds for the job, its id shortened (the
+/// whole id is in the opened row), or the short id alone.
 fn job_target(id: &str, call: &Call<'_>) -> String {
     match call.journal.commands.get(id) {
-        Some(command) => format!("{id} · {}", command_line(command, call)),
-        None => id.to_owned(),
+        Some(command) => format!("{} ({})", command_line(command, call), short_id(id)),
+        None => format!("job ({})", short_id(id)),
     }
 }
 
@@ -311,7 +313,8 @@ fn bash(call: &Call<'_>) -> Row {
 /// A command still running after its call returned: settled by the job's recorded result,
 /// running while the session's host runs, else continued where the page cannot follow it.
 fn background(mut row: Row, job: &str, call: &Call<'_>) -> Row {
-    row.right = Some(job.to_owned());
+    row.right = Some(short_id(job));
+    row.expanded.extend(text("job", job));
     row.view = Some(call.view(View::Agents));
     match call.journal.jobs.get(job) {
         Some(result) => {
@@ -331,8 +334,9 @@ fn wait(call: &Call<'_>) -> Row {
         Some(id) => job_target(id, call),
         None => "next job to finish".to_owned(),
     });
-    if id.is_some() {
+    if let Some(id) = id {
         row.view = Some(call.view(View::Agents));
+        row.expanded.extend(text("job", id));
     }
     row.expanded.extend(text("output", &output));
     match call.state {
@@ -372,6 +376,7 @@ fn output(call: &Call<'_>) -> Row {
     let mut row = Row::new(call, "output");
     if !id.is_empty() {
         row = row.target(job_target(id, call));
+        row.expanded.extend(text("job", id));
         row.view = Some(call.view(View::Agents));
     }
     row.expanded.extend(text("output", &shown));
@@ -407,6 +412,7 @@ fn kill(call: &Call<'_>) -> Row {
     let mut row = Row::new(call, "stop");
     if !id.is_empty() {
         row = row.target(job_target(id, call));
+        row.expanded.extend(text("job", id));
     }
     match call.state {
         CallState::Done => {}
@@ -443,6 +449,7 @@ fn monitor(call: &Call<'_>) -> Row {
     let mut row = Row::new(call, "watching");
     if !id.is_empty() {
         row = row.target(job_target(id, call));
+        row.expanded.extend(text("job", id));
     }
     match call.state {
         CallState::Done => {}

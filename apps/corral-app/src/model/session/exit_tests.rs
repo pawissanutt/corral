@@ -62,3 +62,25 @@ fn a_land_that_needs_a_reason_is_not_sent_without_one() {
         Some("the finding is a false positive")
     );
 }
+
+/// Land with no commits on the branch is unavailable: its row says why, and does not also ask
+/// for a reason to land over open findings.
+#[test]
+fn an_unavailable_exit_choice_does_not_ask_for_a_reason() {
+    let land = CardOption {
+        unavailable: Some("There are no commits beyond the session base.".into()),
+        needs_text: Some("No approving review covers the current head.".into()),
+        ..option("land")
+    };
+    let asked = question(vec![option("keep"), land], false);
+    let shown = super::choice::options("exit-1", &asked, &[], true, |chosen| {
+        Action::Dock(DockAction::Choose {
+            session: Id::from(SESSION),
+            card: "exit-1".into(),
+            option: chosen.to_owned(),
+        })
+    });
+    assert!(shown[1].unavailable.is_some());
+    assert_eq!(shown[1].needs_text, None);
+    assert_eq!(shown[1].action, None);
+}

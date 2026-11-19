@@ -1,6 +1,5 @@
 //! Shared native/browser application semantics; transports only carry CONTROL frames.
 mod cache;
-mod cancellation;
 mod commands;
 mod details;
 mod devices;
@@ -27,7 +26,8 @@ use corral_protocol::device::{
 use corral_protocol::op::OP_SUBMIT;
 use corral_protocol::session as control;
 use corral_protocol::session_host::{
-    SESSION_ACTION, SESSION_CARD_ANSWER, SESSION_QUEUE_MOVE, SESSION_QUEUE_WITHDRAW, SESSION_SEND,
+    SESSION_ACTION, SESSION_CARD_ANSWER, SESSION_MODEL, SESSION_QUEUE_MOVE, SESSION_QUEUE_WITHDRAW,
+    SESSION_SEND, SessionSend,
 };
 use corral_protocol::{self as wire, Refusal, app::*, assistant::*, detail::*, subscription::*};
 use nsh_core::prelude::*;
@@ -65,11 +65,11 @@ pub(super) fn handles(event: &Event) -> bool {
     ) || matches!(event, Event::Reply { method, .. } if matches!(*method,
             APP_SESSION | OP_SUBMIT | CONFIG_GET | CONFIG_PUT | SESSION_SEND | BUILD_START |
             SESSION_CARD_ANSWER | SESSION_QUEUE_WITHDRAW | SESSION_QUEUE_MOVE | SESSION_ACTION |
-            BUILD_REMOVE | DETAIL_GET | CHANGES_PAGE | SEEN_ADVANCE | DEVICE_REVOKE |
+            SESSION_MODEL | BUILD_REMOVE | DETAIL_GET | CHANGES_PAGE | SEEN_ADVANCE | DEVICE_REVOKE |
             wire::device::PAIR_BEGIN | wire::device::PAIR_STATUS | wire::device::PAIR_CONFIRM | wire::device::PAIR_CANCEL |
-            PUSH_STATUS | PUSH_SUBSCRIBE | PUSH_UNSUBSCRIBE | ASSISTANT_SEND | ASSISTANT_WARM |
+            PUSH_STATUS | PUSH_SUBSCRIBE | PUSH_UNSUBSCRIBE | ASSISTANT_WARM |
             ASSISTANT_SESSION | DEVICE_PAGE |
-            ASSISTANT_CANCEL | ATTACHMENT_BEGIN | ATTACHMENT_PUT | ATTACHMENT_DISCARD |
+            ATTACHMENT_BEGIN | ATTACHMENT_PUT | ATTACHMENT_DISCARD |
             control::SESSION_CANCEL | control::SESSION_PAUSE | control::SESSION_RESUME |
             control::SESSION_TERMINATE | control::SESSION_RELAUNCH | control::SESSION_REWIND))
 }
@@ -84,6 +84,7 @@ fn refusable(method: &str) -> bool {
             | SESSION_QUEUE_WITHDRAW
             | SESSION_QUEUE_MOVE
             | SESSION_ACTION
+            | SESSION_MODEL
             | BUILD_REMOVE
             | control::SESSION_CANCEL
             | control::SESSION_PAUSE
@@ -100,7 +101,6 @@ pub(super) struct AppState {
     ready: bool,
     namespace: Option<(String, String)>,
     outbox: Option<Outbox>,
-    scopes: BTreeSet<String>,
     session_scopes: BTreeMap<String, usize>,
     terminal_scopes: BTreeMap<String, usize>,
     offline: super::offline::Cache,
@@ -117,7 +117,6 @@ pub(super) struct AppState {
     changes_cursor: Option<u64>,
     device_walk: Option<(String, Vec<DeviceInfo>)>,
     uploads: BTreeMap<String, uploads::Upload>,
-    cancel_inflight: BTreeSet<String>,
 }
 impl AppState {
     pub fn new() -> Self {
@@ -125,7 +124,6 @@ impl AppState {
             ready: false,
             namespace: None,
             outbox: None,
-            scopes: BTreeSet::from([QUICK_THREAD.into()]),
             session_scopes: BTreeMap::new(),
             retained: cache::RetainedCache::default(),
             terminal_scopes: BTreeMap::new(),
@@ -140,7 +138,6 @@ impl AppState {
             changes_cursor: None,
             device_walk: None,
             uploads: BTreeMap::new(),
-            cancel_inflight: BTreeSet::new(),
         }
     }
     pub fn welcomed(&mut self, feed: Signal<Feed>, welcome: &wire::Welcome) {
@@ -160,7 +157,6 @@ impl AppState {
         self.detail_bytes.clear();
         self.detail_reread.clear();
         self.detail_restarts.clear();
-        self.cancel_inflight.clear();
         for upload in self.uploads.values_mut() {
             upload.disconnected();
         }
@@ -186,11 +182,9 @@ impl AppState {
         if !same_namespace && self.namespace.is_some() {
             self.session_scopes.clear();
             self.terminal_scopes.clear();
-            self.scopes = BTreeSet::from([QUICK_THREAD.into()]);
             self.uploads.clear();
             self.item_fetches.clear();
             self.retained = cache::RetainedCache::default();
-            self.cancel_inflight.clear();
             feed.update(|feed| {
                 feed.board = Board::default();
                 feed.synced = None;
@@ -200,7 +194,6 @@ impl AppState {
                 feed.assistants.clear();
                 feed.usage = None;
                 feed.settings = None;
-                feed.threads.clear();
                 feed.details.clear();
                 feed.items.clear();
                 feed.live.clear();
@@ -216,8 +209,6 @@ impl AppState {
                 feed.topics.clear();
                 feed.operations.clear();
                 feed.uploads.clear();
-                feed.cancelling.clear();
-                feed.not_withdrawn.clear();
             });
         }
         if !same_namespace || self.outbox.is_none() {
@@ -277,24 +268,6 @@ impl AppState {
                 outgoing.push(open(topic, None));
             }
         }
-        if feed.with_untracked(|feed| feed.capable(ASSISTANT_V1)) {
-            for scope in &self.scopes {
-                feed.update(|feed| {
-                    let thread = feed.threads.entry(Id::from(scope)).or_default();
-                    thread.loading = true;
-                    thread.stale = true;
-                    feed.topics.insert(
-                        topic_key(Topic::Thread, Some(scope)),
-                        TopicState {
-                            loading: true,
-                            stale: true,
-                            error: None,
-                        },
-                    );
-                });
-                outgoing.push(open(Topic::Thread, Some(scope.clone())));
-            }
-        }
         if feed.with_untracked(|feed| feed.capable(SESSION_V1)) {
             for scope in self.session_scopes.keys() {
                 feed.update(|feed| {
@@ -318,18 +291,7 @@ impl AppState {
         self.project_local(feed);
         outgoing.extend(self.resume_items());
         outgoing.extend(self.poll_changes(feed));
-        if let Some(outbox) = &self.outbox {
-            // Message delivery is keyed by the original cmd_id, unlike command journal lookup.
-            let messages: Vec<_> = outbox
-                .saved
-                .messages
-                .values()
-                .filter_map(outbox::Message::replay_request)
-                .collect();
-            for message in messages {
-                outgoing.extend(self.request_async(feed, message).await);
-            }
-        }
+        outgoing.extend(self.recover_messages(feed).await);
         outgoing.extend(self.refresh_details(feed));
         outgoing.extend(self.pump_uploads());
         Ok(outgoing)
@@ -353,51 +315,142 @@ impl AppState {
             }),
         )
     }
+    /// corrald answered message `id` (or refused it): its outcome is the operation's from now
+    /// on, so the outbox lets it go.
     async fn settled(&mut self, feed: Signal<Feed>, id: &str) {
-        let state = feed.with_untracked(|feed| feed.commands.get(id).cloned());
-        if let Some(outbox) = &mut self.outbox {
-            if let Err(problem) = outbox
+        if let Some(outbox) = &mut self.outbox
+            && outbox.saved.messages.contains_key(id)
+            && let Err(problem) = outbox
                 .update_async(|saved| {
-                    if state
-                        .as_ref()
-                        .is_some_and(|state| state.status == CommandStatus::Done)
-                        && !saved.messages.get(id).is_some_and(|message| message.cancel)
-                    {
-                        saved.messages.remove(id);
-                    } else if let (Some(message), Some(state)) =
-                        (saved.messages.get_mut(id), state.as_ref())
-                    {
-                        if !message.cancel
-                            && matches!(
-                                state.status,
-                                CommandStatus::Refused | CommandStatus::Conflict
-                            )
-                        {
-                            message.refused = true;
-                            message.error = state
-                                .error
-                                .as_ref()
-                                .map(|error| (error.code.clone(), error.code.clone()));
+                    saved.messages.remove(id);
+                })
+                .await
+        {
+            feed.update(|feed| feed.problem = Some(problem));
+        }
+        self.trim_retained(feed);
+    }
+    /// On every authenticated connection: a message that never left this device goes now,
+    /// under its own id. One that left without an answer is not sent again, as the host takes
+    /// an input id once and it may have arrived: the outbox lets it go, its words go back to its
+    /// session's saved draft unless one is there, and its send says the connection dropped
+    /// before corrald answered.
+    async fn recover_messages(&mut self, feed: Signal<Feed>) -> Vec<Outgoing> {
+        let Some(outbox) = self.outbox.as_mut() else {
+            return vec![];
+        };
+        let lost: Vec<SessionSend> = outbox
+            .saved
+            .messages
+            .values()
+            .filter(|message| message.attempted)
+            .map(|message| message.request.clone())
+            .collect();
+        let waiting: Vec<String> = outbox
+            .saved
+            .messages
+            .iter()
+            .filter(|(_, message)| !message.attempted)
+            .map(|(id, _)| id.clone())
+            .collect();
+        if !lost.is_empty() {
+            let kept = outbox
+                .update_async(|saved| {
+                    for request in &lost {
+                        saved.messages.remove(&request.cmd_id);
+                        let draft = saved.drafts.entry(request.id.clone()).or_default();
+                        if draft.trim().is_empty() {
+                            *draft = request.text.clone();
                         }
                     }
                 })
-                .await
-            {
-                feed.update(|feed| feed.problem = Some(problem));
-            }
+                .await;
+            let drafts = outbox.saved.drafts.clone();
+            feed.update(|feed| match &kept {
+                Ok(()) => {
+                    for request in &lost {
+                        if let Some(draft) = drafts.get(&request.id) {
+                            feed.drafts
+                                .insert(Id::from(request.id.as_str()), draft.clone());
+                        }
+                        if let Some(state) = feed.commands.get_mut(request.cmd_id.as_str()) {
+                            state.status = CommandStatus::Unknown;
+                        }
+                        let told = feed
+                            .operations
+                            .get(request.cmd_id.as_str())
+                            .is_some_and(|operation| !operation.loading);
+                        if !told {
+                            feed.operations.insert(
+                                Id::from(request.cmd_id.as_str()),
+                                Operation {
+                                    method: SESSION_SEND.into(),
+                                    loading: false,
+                                    value: None,
+                                    error: Some(send_lost()),
+                                    refusal: None,
+                                },
+                            );
+                        }
+                    }
+                }
+                Err(problem) => feed.problem = Some(problem.clone()),
+            });
         }
-        self.trim_retained(feed);
+        let mut outgoing = vec![];
+        for id in waiting {
+            outgoing.extend(self.replay(feed, &id).await);
+        }
+        outgoing
+    }
+    /// Sends kept message `id` for the first time, unless another instance settled or sent it.
+    async fn replay(&mut self, feed: Signal<Feed>, id: &str) -> Vec<Outgoing> {
+        let Some(outbox) = self.outbox.as_mut() else {
+            return vec![];
+        };
+        let mut request = None;
+        let marked = outbox
+            .update_checked(|saved| match saved.messages.get_mut(id) {
+                Some(message) if !message.attempted => {
+                    message.attempted = true;
+                    request = Some(message.request.clone());
+                    Ok(())
+                }
+                _ => Err("settled elsewhere".into()),
+            })
+            .await;
+        let (Ok(()), Some(request)) = (marked, request) else {
+            return vec![];
+        };
+        let params = value(&request);
+        feed.update(|feed| {
+            if let Some(state) = feed.commands.get_mut(id) {
+                state.status = CommandStatus::Pending;
+            }
+            trim_operations(feed);
+            feed.operations.insert(
+                Id::from(id),
+                Operation {
+                    method: SESSION_SEND.into(),
+                    loading: true,
+                    value: None,
+                    error: None,
+                    refusal: None,
+                },
+            );
+        });
+        vec![out(SESSION_SEND, params, Some(id.to_owned()))]
     }
     /// Native drains multiple intents before registration; browser dispatch/flush is synchronous.
     /// Drop prepared sends or uploads retired by a later intent in the batch.
     #[cfg(any(test, not(target_arch = "wasm32")))]
     pub(super) fn filter_outgoing(&self, outgoing: &mut Vec<Outgoing>) {
         outgoing.retain(|(method, params, tag)| match *method {
-            ASSISTANT_SEND => params["cmd_id"].as_str().is_some_and(|id| {
+            SESSION_SEND => params["cmd_id"].as_str().is_some_and(|id| {
                 self.outbox
                     .as_ref()
                     .and_then(|outbox| outbox.saved.messages.get(id))
-                    .is_some_and(|message| !message.cancel)
+                    .is_some()
             }),
             ATTACHMENT_BEGIN | ATTACHMENT_PUT => params["upload"].as_str().is_some_and(|id| {
                 self.uploads
@@ -422,7 +475,6 @@ fn command_state(feed: &Feed, method: &str, request: Value, status: CommandStatu
         request,
         status,
         error: None,
-        entry: None,
     }
 }
 fn trim_operations(feed: &mut Feed) {
@@ -451,6 +503,13 @@ fn local_error(message: String) -> ClientError {
         message,
     }
 }
+/// A send whose connection dropped before corrald answered it.
+fn send_lost() -> ClientError {
+    ClientError {
+        code: "disconnected".into(),
+        message: SEND_LOST.into(),
+    }
+}
 fn value(value: impl Serialize) -> Value {
     serde_json::to_value(value).unwrap_or(Value::Null)
 }
@@ -471,7 +530,7 @@ fn open(topic: Topic, scope: Option<String>) -> Outgoing {
         None,
     )
 }
-/// A chat send or prompt answer refused on the connection; anything else may have run.
+/// A send refused on the connection; anything else may have run.
 fn error_status(error: &ClientError) -> CommandStatus {
     match error.code.as_str() {
         "conflict" => CommandStatus::Conflict,

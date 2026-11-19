@@ -12,9 +12,9 @@
 //! decide bar pinned in place of the tab bar. Terminal: outline | candidate in Cells, the facts
 //! under the Brief, the diffs unified.
 
-mod brief;
+pub(crate) mod brief;
 mod decide;
-mod diff;
+pub(crate) mod diff;
 mod evidence;
 mod head;
 mod list;

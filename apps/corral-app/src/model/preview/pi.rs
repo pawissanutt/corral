@@ -19,7 +19,7 @@ use corral_protocol::subscription::{
 use corral_types::Origin;
 use serde_json::{Value, json};
 
-use super::pi_rows::{settle, thread};
+use super::pi_rows::settle;
 use super::pi_script::{self, Beat, Question};
 use super::sample::sha;
 use super::stamp;
@@ -45,7 +45,7 @@ pub(super) enum Role {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Host {
     pub(super) role: Role,
-    /// The recorded transcript, each message with the thread entry it is for a chat.
+    /// The recorded transcript, each message with the input id it was sent under, if any.
     pub(super) transcript: Vec<Recorded>,
     /// Where each turn starts in `transcript`: turn n at `starts[n - 1]`.
     pub(super) starts: Vec<usize>,
@@ -79,7 +79,7 @@ pub(super) struct Recorded {
 pub(super) struct Input {
     pub(super) text: String,
     pub(super) origin: Origin,
-    /// The thread entry a chat message is recorded as.
+    /// `<session>/input/<id>` for a message sent through the socket.
     pub(super) entry: Option<String>,
 }
 
@@ -301,6 +301,17 @@ pub(super) fn publish(feed: &mut Feed, id: &str, events: Vec<SessionLiveEvent>, 
     }
 }
 
+/// The host recorded a message: every watcher reads the transcript again, as corrald's
+/// `live_entry` tells it.
+pub(super) fn recorded(feed: &mut Feed, id: &str) {
+    let at = stamp(feed.now);
+    let Some(host) = feed.hosts.get_mut(id) else {
+        return;
+    };
+    let event = host.event(&at, SessionLiveKind::LiveEntry {});
+    publish(feed, id, vec![event], false);
+}
+
 /// A new watcher gets the running turn so far, as a page from the present does.
 pub(super) fn watch(feed: &mut Feed, scope: &str) {
     let Some(id) = resolve(feed, scope) else {
@@ -447,10 +458,10 @@ fn step(feed: &mut Feed, id: &str) {
     publish(feed, id, events, false);
     match after {
         After::Nothing => {}
-        After::Recorded => thread(feed, id),
+        After::Recorded => recorded(feed, id),
         After::End(_) => {
-            // The turn's last words are recorded now; a chat's thread shows them.
-            thread(feed, id);
+            // The turn's last words are recorded now.
+            recorded(feed, id);
             let queued = feed
                 .hosts
                 .get_mut(id)
@@ -624,12 +635,12 @@ pub(super) fn deliver(
     });
     if host.open.is_some() {
         host.queued.extend(inputs);
-        thread(feed, id);
+        // A steer waits in the host's queue; its acknowledgement says so until it starts.
         settle(feed, id);
         return "steered";
     }
     start(feed, id, inputs);
-    thread(feed, id);
+    recorded(feed, id);
     "delivered"
 }
 
@@ -671,7 +682,7 @@ pub(super) fn sync(feed: &mut Feed) {
     super::pi_rows::settle_all(feed);
 }
 
-/// The thread entry id corrald acknowledges a chat message with.
+/// The id corrald acknowledges a message with and serves it under.
 pub(super) fn input_entry(session: &str, cmd_id: &str) -> String {
     format!("{session}/input/{cmd_id}")
 }

@@ -1,12 +1,12 @@
 //! Canonical reducer effects and the current connection/form environment shared by every feed.
 
 use corral_protocol::app::{ChangesQuery, SeenAdvance};
-use corral_protocol::assistant::{AssistantSend, AssistantSessionOp, AssistantWarm, ContextRef};
+use corral_protocol::assistant::{AssistantSessionOp, AssistantWarm, ContextRef};
 use corral_protocol::build::{BuildRemove, BuildStart};
 use corral_protocol::detail::DetailGet;
 use corral_protocol::session_host::{
     SESSION_QUEUE_MOVE, SESSION_QUEUE_WITHDRAW, SessionActionRequest, SessionCardAnswer,
-    SessionQueueKey, SessionQueueMove, SessionSend,
+    SessionChildAct, SessionJobAct, SessionModel, SessionQueueKey, SessionQueueMove, SessionSend,
 };
 
 use crate::model::act::Act;
@@ -85,18 +85,10 @@ pub enum Effect {
     RetryTopic(String),
     Changes(ChangesQuery),
     Seen(SeenAdvance),
-    /// Send a message in the one chat, with the attachment refs it carries.
-    Send(AssistantSend),
     /// Remove a staged attachment from the next message by its key; an upload is discarded.
     Unattach(Id),
-    /// Withdraw or discard this device's unacknowledged send under its own command id. The
-    /// client removes a never-sent or refused one locally and asks corrald for the rest.
-    CancelSend(Id),
-    /// Open or close a scoped thread subscription ("quick" or A-n).
-    Thread {
-        scope: String,
-        open: bool,
-    },
+    /// Ask once on this device, on the confirm sheet, before ending chat `A-n` for good.
+    EndThread(String),
     /// Send a session control under `key`; one that asks shows the confirm sheet first unless
     /// this press was its confirmation.
     Control {
@@ -146,6 +138,24 @@ pub enum Effect {
     SessionAction {
         key: Id,
         request: SessionActionRequest,
+    },
+    /// Change the session's model or effort (`session.model`); the reply (`SessionModelSet`) or
+    /// the host's refusal is read under `key`.
+    SessionModel {
+        key: Id,
+        request: SessionModel,
+    },
+    /// Cancel a session's child agent or change its model (`session.child`); the reply
+    /// (`SessionActed`) is read under `key`.
+    SessionChild {
+        key: Id,
+        act: SessionChildAct,
+    },
+    /// Stop a session's background job or send it to the background (`session.job`); the reply
+    /// (`SessionJobActed`) is read under `key`.
+    SessionJob {
+        key: Id,
+        act: SessionJobAct,
     },
     /// Remove a stopped build's worktree, branch and record (`build.remove`), or ask what that
     /// would remove (`dry_run`); the reply (`BuildRemoved`) is read under `key`.

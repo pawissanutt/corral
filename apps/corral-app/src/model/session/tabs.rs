@@ -10,7 +10,7 @@ use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 
 use super::read_state::ReadState;
-use super::{Action, Can, Cx, Host, SessionRole, SubView, Tab, board, changes, proof};
+use super::{Action, Can, Cx, Host, SessionRole, SubView, Tab, board, changes, fleet, proof};
 
 /// A tab's count or mark.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,16 +176,7 @@ pub(super) fn count(n: u32) -> Option<Badge> {
 
 fn badge(tab: Tab, cx: &Cx<'_>) -> Option<Badge> {
     match tab {
-        Tab::Agents => {
-            let state = cx.state?;
-            count(
-                state
-                    .children
-                    .live
-                    .saturating_add(state.children.waiting)
-                    .saturating_add(state.jobs.live),
-            )
-        }
+        Tab::Agents => fleet::badge(cx),
         Tab::Changes => changes::badge(cx),
         Tab::Board => board::badge(cx),
         Tab::Proof => proof::badge(cx),
@@ -197,6 +188,9 @@ fn label(tab: Tab, sub: Option<&SubView>) -> String {
     match (tab, sub) {
         (Tab::Chat, Some(SubView::Usage)) => "Chat › Usage".into(),
         (Tab::Agents, Some(SubView::Agent(child))) => format!("Agents › {child}"),
+        (Tab::Agents, Some(SubView::Job(job))) => {
+            format!("Agents › job {}", fleet::short_id(job))
+        }
         _ => tab.label().into(),
     }
 }

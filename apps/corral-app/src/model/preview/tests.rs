@@ -4,8 +4,11 @@ use crate::model::agents::{self, Control};
 use crate::model::assistant::quick_id;
 use crate::model::effect::Effect;
 use crate::model::id::Id;
-use corral_protocol::assistant::{AskTarget, AssistantSend, AssistantSessionOp, QUICK_THREAD};
+use corral_protocol::assistant::{AssistantSessionOp, QUICK_THREAD};
+use corral_protocol::detail::{SessionItem, SessionPage};
 use corral_protocol::rows::{AssistantKind, AssistantState};
+use corral_protocol::session_host::{SessionSend, SessionSent};
+use corral_protocol::session_state::SendPolicy;
 use corral_types::{Op, Status};
 
 #[test]
@@ -95,7 +98,8 @@ fn terminated_run_offers_relaunch() {
     assert!(feed.agents.contains_key("T-14_R2"));
 }
 
-/// Once the quick thread ended, its next message opens a new quick session that holds it.
+/// Once the quick chat ended, the next message to `quick` starts a new quick chat that holds
+/// it, and the acknowledgement names that chat, which Ask then keys itself to.
 #[test]
 fn ended_quick_thread_starts_a_new_session_on_the_next_send() {
     let mut feed = feed(1_800_000_000, "2027-01-15".into(), "08:00".into(), None);
@@ -108,27 +112,47 @@ fn ended_quick_thread_starts_a_new_session_on_the_next_send() {
     };
     effect(&mut feed, &end).unwrap();
     assert_eq!(feed.assistants[old.as_str()].state, AssistantState::Ended);
+    assert!(
+        quick_id(&feed).is_none(),
+        "an ended quick chat is not current"
+    );
 
-    let send = AssistantSend {
-        cmd_id: "again".into(),
-        thread: QUICK_THREAD.into(),
-        target: AskTarget::Assistant,
-        text: "Back again".into(),
-        typed_at: "2027-01-15T08:00:00Z".into(),
-        context: vec![],
-        attachments: vec![],
+    let send = Effect::SessionSend {
+        key: Id::new("again"),
+        send: SessionSend {
+            id: QUICK_THREAD.into(),
+            cmd_id: "again".into(),
+            text: "Back again".into(),
+            policy: SendPolicy::Steer,
+            to: None,
+            typed_at: Some("2027-01-15T08:00:00Z".into()),
+            attachments: vec![],
+        },
     };
-    effect(&mut feed, &Effect::Send(send)).unwrap();
+    effect(&mut feed, &send).unwrap();
     let new = quick_id(&feed).expect("a new quick session");
     assert_ne!(new, old);
     assert_eq!(feed.assistants[new.as_str()].kind, AssistantKind::Quick);
-    assert_ne!(feed.assistants[new.as_str()].state, AssistantState::Ended);
-    assert!(
-        feed.threads[new.as_str()]
-            .entries
-            .values()
-            .any(|entry| entry.text.as_deref() == Some("Back again"))
+    assert_eq!(
+        feed.operations["again"]
+            .decode::<SessionSent>()
+            .map(|ack| ack.session),
+        Some(new.clone())
     );
+    let page = DetailRef::Session { id: new.clone() };
+    detail(&mut feed, &page, None).unwrap();
+    let Some(DetailBody::Session(SessionPage { messages, .. })) =
+        feed.detail(&page).and_then(|cache| cache.body())
+    else {
+        panic!("the new chat's page is served");
+    };
+    assert!(messages.iter().any(|message| {
+        message.id == format!("{new}/input/again")
+            && message
+                .items
+                .iter()
+                .any(|item| matches!(item, SessionItem::Text { text } if text == "Back again"))
+    }));
 }
 
 /// The sample names each event's project, a closed task's too, as the daemon serves events.

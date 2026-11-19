@@ -1,6 +1,8 @@
-//! Panel notices: what the session page says briefly in its header's state-word place (a
-//! refusal, `Removed queued input · not sent`, `Messages now go to a2`, a model change), and the
-//! last 50 kept with their time and exact detail for the Recent notices sheet. The host's own
+//! Panel notices: what the session page says in its header's state-word place (a refusal,
+//! `Removed queued input · not sent`, `Messages now go to a2`, a model change, an export's
+//! result), and the last 50 kept with their time and exact detail for the Recent notices sheet.
+//! A notice holds that place for at least `SHOWN_FOR` seconds whatever the host's state does
+//! meanwhile; a refusal or a warning holds it until the owner dismisses it. The host's own
 //! notices (`SessionState.notices`) are shown beside this device's while their `until` holds.
 
 use std::collections::VecDeque;
@@ -12,8 +14,8 @@ use crate::model::hue::Hue;
 /// How many notices the Recent notices sheet keeps.
 pub const KEPT: usize = 50;
 
-/// Seconds a notice holds the header's state-word place.
-pub const SHOWN_FOR: u64 = 4;
+/// Seconds a notice holds the header's state-word place, at least.
+pub const SHOWN_FOR: u64 = 8;
 
 /// One notice.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,7 +25,8 @@ pub struct Notice {
     pub text: String,
     /// Unix seconds it was raised; zero before the clock's first tick.
     pub at: u64,
-    /// Unix seconds it stops showing in the header; none for a host notice that stays.
+    /// Unix seconds it stops showing in the header. This device's refusals and warnings have
+    /// none: they stay until dismissed. A host notice without one stays in the status bar.
     pub until: Option<u64>,
 }
 
@@ -46,7 +49,8 @@ impl Ring {
         next: 0,
     };
 
-    /// Raises a notice at `now`; the oldest leaves once 50 are kept.
+    /// Raises a notice at `now`; the oldest leaves once 50 are kept. A refusal or a warning
+    /// stays until dismissed; anything else for `SHOWN_FOR` seconds.
     pub fn push(&mut self, hue: Hue, text: impl Into<String>, now: u64) {
         if self.items.len() >= KEPT {
             self.items.pop_front();
@@ -57,8 +61,15 @@ impl Ring {
             hue,
             text: text.into(),
             at: now,
-            until: Some(now + SHOWN_FOR),
+            until: (!matches!(hue, Hue::Fail | Hue::Held)).then_some(now + SHOWN_FOR),
         });
+    }
+
+    /// The owner has read the notice `id`: it leaves the header (the sheet keeps it).
+    pub fn dismiss(&mut self, id: &str) {
+        if let Some(notice) = self.items.iter_mut().find(|notice| notice.id == id) {
+            notice.until = Some(0);
+        }
     }
 
     /// Newest first.
@@ -92,12 +103,11 @@ fn host(notice: &HostNotice) -> Notice {
     }
 }
 
-/// The notice the header shows in its state word's place now: this device's newest one still
-/// within its time, else the host's newest timed one still within its `until`.
+/// The notice the header shows in its state word's place now: this device's newest one not
+/// dismissed and still within its time, else the host's newest timed one within its `until`.
 pub fn current(ring: &Ring, state: Option<&SessionState>, now: u64) -> Option<Notice> {
-    let live = |notice: &Notice| notice.until.is_some_and(|until| now < until);
     ring.recent()
-        .find(|notice| live(notice))
+        .find(|notice| notice.until.is_none_or(|until| now < until))
         .cloned()
         .or_else(|| {
             state?
@@ -105,7 +115,7 @@ pub fn current(ring: &Ring, state: Option<&SessionState>, now: u64) -> Option<No
                 .iter()
                 .rev()
                 .map(host)
-                .find(|notice| live(notice))
+                .find(|notice| notice.until.is_some_and(|until| now < until))
         })
 }
 

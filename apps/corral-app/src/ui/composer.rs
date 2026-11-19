@@ -1,79 +1,112 @@
-//! The composers: Ask's and the session page's (`session`), and the surface Ask opens in.
-//! Ask's is one field and one Send: the model pill and its list, the "answered by" line after a
-//! switch, the removable context chip and the staged attachments, the offline or waiting line,
-//! the Screenshot, Link and File controls. Enter sends and Shift+Enter breaks the line; Send
-//! hands the draft and attachment refs to the assistant model, which stores the message with its
-//! state at once; the draft and the attachments clear once the device outbox accepted it. A
-//! phone folds all of it into one row and one chip above it (`phone`).
+//! The session composer (`session`), the one composer of every session page and of Ask, and
+//! what Ask adds to it: the removable context and project chips, the staged attachments with the
+//! Screenshot, Link and File controls, the line saying why Send waits on them, and the surface
+//! Ask opens in. Ask's draft is its session's own (`draft` keeps it on this device), so the
+//! session page shows the same words. Its message goes out as `session.send`, its chips' ids as
+//! the message's first line and the staged attachments as its refs.
 
+use corral_protocol::session_state::SendPolicy;
 use nsh_base::{SheetEvent, sheet};
-use nsh_core::element::{Input, color as for_appearance, input};
+use nsh_core::element::{Input, color as for_appearance};
 use nsh_core::prelude::*;
 
-use crate::model::assistant::{self, Composer, KeyHint, ModelList, ThreadRef};
+use crate::model::assistant::{self, Composer};
 use crate::model::hue::Hue;
+use crate::model::session::Action as SessionAction;
 use crate::model::text::Rich;
-use crate::model::{Form, Overlay};
+use crate::model::{Form, Id, Overlay};
 use crate::state::AppState;
-use crate::ui::ask::{act, chip_row, drawer, foot_controls, models, tray};
-use crate::ui::atoms::key_hint;
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
+use crate::ui::ask::{act, chip_row, drawer, foot_controls, tray};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::text::rich_small;
-use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 mod draft;
-mod pending;
-mod phone;
-mod send;
 mod session;
 
-use draft::keep_draft;
-use send::send;
+pub(crate) use session::{ask_composer, session_composer};
 
-pub(crate) use session::session_composer;
-
-/// Where a composer's model list opens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ListAt {
-    /// A popup above the control row: the drawer, a thread, a terminal.
-    Above,
-    /// A popup below the control row: the hotkey window.
-    Below,
-    /// In the flow, in the chooser under the who chip: the phone sheet and a phone thread.
-    Inline,
+/// What Ask adds to its session's composer, read through one memo so typing redraws only what
+/// the draft changes.
+#[derive(Clone, Copy)]
+pub(crate) struct Ask {
+    pub(crate) built: Memo<Composer>,
 }
 
-/// What a composer is for.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Host {
-    /// The thread this composer sends to: Ask's quick thread or a named session's own.
-    pub thread: ThreadRef,
-    /// Where the model list opens.
-    pub list: ListAt,
-    /// Under a thread page rather than in Ask: it never takes the focus when Ask opens.
-    pub docked: bool,
+/// Ask's additions for session `id`, whose draft this device keeps meanwhile.
+fn ask(app: AppState, id: &Id) -> Ask {
+    draft::keep_draft(app, id.clone());
+    let built = computed(move || {
+        // The project brief shows as its own chip, so it is not repeated as the record chip.
+        let context = app.composer_record_context();
+        let project = app.composer_project();
+        let text = app.ask_draft();
+        app.ask_staged.with(|staged| {
+            app.feed.with(|feed| {
+                assistant::composer(feed, &text, staged, context.as_ref(), project.as_ref())
+            })
+        })
+    });
+    Ask { built }
 }
 
-/// Ask's composer: the drawer's on desktop, the sheet's on a phone, the pane's in a terminal.
-/// Reads and writes `app.ask_draft`; focuses its field whenever
-/// `app.ask_focus` changes.
-pub fn composer(app: AppState) -> AnyElement {
-    let list = if app.form == Form::Phone {
-        ListAt::Inline
-    } else {
-        ListAt::Above
+/// Sends Ask's draft to session `id` as `session.send`: the chips' line first, the staged
+/// attachments as its refs (every upload ready), under a new command id the session model
+/// allocates. The draft clears at once; a refusal puts the words back with why.
+fn send_ask(app: AppState, ask: Ask, id: &Id, text: String, policy: SendPolicy) {
+    if ask.built.with_untracked(|c| c.holds_send.is_some()) {
+        app.toast("Not sent: an attachment is not ready yet; it is named above the field.");
+        return;
+    }
+    let staged = app.ask_staged.get_untracked();
+    let attachments = match app
+        .feed
+        .with_untracked(|feed| assistant::send_refs(&staged, feed))
+    {
+        Ok(refs) => refs,
+        Err(why) => {
+            app.toast(why);
+            return;
+        }
     };
-    field(
-        app,
-        Host {
-            thread: ThreadRef::quick(),
-            list,
-            docked: false,
-        },
-    )
+    let (context, project) = untracked(|| (app.composer_record_context(), app.composer_project()));
+    let text = assistant::with_context(&text, context.as_ref(), project.as_ref());
+    let session = id.clone();
+    app.reduce(app.session, move |state, feed, _, _| {
+        state.act(
+            SessionAction::Send {
+                session,
+                text,
+                policy,
+                attachments,
+            },
+            feed,
+        )
+    });
+    app.ask_staged.set(Vec::new());
+}
+
+/// Over Ask's composer: why Send waits on the attachments, the project and record chips, the
+/// staged attachments.
+fn above(app: AppState, ask: Ask) -> AnyElement {
+    let status = computed(move || ask.built.with(|c| c.status.clone()));
+    view()
+        .gap(px(if app.form == Form::Terminal { 0.0 } else { 6.0 }))
+        .child(dynamic(move || {
+            status
+                .get()
+                .map(|line| untracked(|| saved_line(app, &line)))
+        }))
+        .child(chip_row(app, ask.built))
+        .child(tray(app, ask.built))
+        .into_element()
+}
+
+/// Under Ask's composer on desktop and in a terminal: Screenshot, Link and File, or the open
+/// link or path field in their place.
+fn attachments(app: AppState, ask: Ask) -> AnyElement {
+    foot_controls(app, ask.built)
 }
 
 /// The surface Ask opens in while `Overlay::Ask` is open: on desktop a drawer docked on the right
@@ -108,105 +141,6 @@ pub fn ask_surface(app: AppState) -> AnyElement {
     }
 }
 
-/// A composer for `host`. Every part reads the model's composer view through its own memo, so
-/// typing redraws only what the draft changes (Send's state), never the field itself.
-pub(crate) fn field(app: AppState, host: Host) -> AnyElement {
-    let form = app.form;
-    let Host {
-        thread,
-        list,
-        docked,
-    } = host;
-    let named = !thread.is_quick();
-    // Ask and the quick thread's docked composer share the app's draft; a named session's
-    // composer keeps its own, owned by the root so its words outlive the composer. Words typed
-    // for one thread are never saved under another.
-    let ThreadRef::Live(scope) = &thread;
-    let draft = if named {
-        pending::named_draft(app, scope)
-    } else {
-        app.ask_draft
-    };
-    let source = thread.clone();
-    let built = computed(move || {
-        let env = app.env();
-        let ThreadRef::Live(scope) = &source;
-        // The project brief shows as its own chip, so it is not repeated as the record chip.
-        let context = app.composer_record_context();
-        let project = app.composer_project();
-        draft.with(|text| {
-            app.ask_staged.with(|staged| {
-                app.feed.with(|feed| {
-                    app.assistant.with(|state| {
-                        assistant::composer_with_project(
-                            state,
-                            feed,
-                            assistant::Draft {
-                                scope: scope.as_str(),
-                                text,
-                                context: context.as_ref(),
-                                staged,
-                            },
-                            project.as_ref(),
-                            env,
-                        )
-                    })
-                })
-            })
-        })
-    });
-    let entry = element_ref();
-    let row = element_ref();
-    if !docked {
-        focus_on_open(app, entry);
-    }
-    keep_draft(app, scope.clone(), draft);
-    let menu = computed(move || built.with(|c| c.model_menu.clone()));
-    let status = computed(move || built.with(|c| c.status.clone()));
-    let next = computed(move || built.with(|c| c.next_message.clone()));
-    let terminal = form == Form::Terminal;
-    let to = To {
-        thread,
-        docked,
-        draft,
-    };
-    let status = dynamic(move || {
-        status
-            .get()
-            .map(|line| untracked(|| saved_line(app, &line)))
-    });
-    if form == Form::Phone {
-        return phone::composer(app, built, entry, to, status, next, menu);
-    }
-    let shell = view().gap(px(if terminal { 0.0 } else { 8.0 }));
-    let shell = if terminal {
-        shell.px(term::cells(1.0))
-    } else {
-        shell
-            .px(px(14.0))
-            .pt(px(10.0))
-            .pb(px(12.0))
-            .bg(color(Token::Bg))
-            .border_t(px(1.0))
-            .border_color(color(Token::Rule))
-    };
-    shell
-        .when(terminal, |s| s.child(term::blank()))
-        .child(status)
-        .child(dynamic(move || {
-            next.get().map(|line| untracked(|| saved_line(app, &line)))
-        }))
-        .child(controls(app, built, list, row, menu, docked))
-        .child(chip_row(app, built))
-        .child(tray(app, built))
-        .when(terminal, |s| s.child(term::blank()))
-        .child(entry_field(app, built, entry, to.clone()))
-        .when(terminal, |s| s.child(term::blank()))
-        .child(foot(app, built, to))
-        .when(terminal, |s| s.child(term::blank()))
-        .into_element()
-}
-
 /// Each opening of Ask bumps `app.ask_focus`. The field is made before it is mounted, so a focus
 /// sent from this run would reach nothing: `after_answer` waits for the commit after the one that
 /// mounts it, which is also after a closing dialog (the palette running Ask) hands its focus
@@ -215,9 +149,7 @@ pub(crate) fn focus_on_open(app: AppState, entry: ElementRef) {
     effect(move || {
         app.ask_focus.with(|_| ());
         after_answer(move || {
-            let end = app
-                .ask_draft
-                .with_untracked(|draft| draft.encode_utf16().count());
+            let end = untracked(|| app.ask_draft()).encode_utf16().count();
             let end = u32::try_from(end).unwrap_or(u32::MAX);
             entry.focus();
             entry.set_selection(end, end);
@@ -225,17 +157,8 @@ pub(crate) fn focus_on_open(app: AppState, entry: ElementRef) {
     });
 }
 
-/// Where Send delivers: the composer's thread, whether it is docked under a thread page, and the
-/// draft it sends from.
-#[derive(Debug, Clone)]
-struct To {
-    thread: ThreadRef,
-    docked: bool,
-    draft: Signal<String>,
-}
-
-/// A status line above the composer (`.savedline`): its first run as a chip in its colour
-/// ("offline", "waiting for assistant · host down", the new model's name), the sentence after it.
+/// A status line above the composer (`.savedline`): its first run as a chip in its colour, the
+/// sentence after it.
 fn saved_line(app: AppState, line: &Rich) -> AnyElement {
     let Some((lead, rest)) = line.split_first() else {
         return view().into_element();
@@ -252,63 +175,6 @@ fn saved_line(app: AppState, line: &Rich) -> AnyElement {
                 .child(rich_small(app, &rest.to_vec())),
         )
         .into_element()
-}
-
-/// The control row (`.crow`): the model pill or the session's profile note, and on
-/// desktop the keys, right-aligned, wrapping under the rest when the row is narrow. Absent for a
-/// pane session's composer, which has none of them. Ask's own pane in a terminal shows no keys:
-/// the shell's key line names them while its field has the focus.
-fn controls(
-    app: AppState,
-    built: Memo<Composer>,
-    list: ListAt,
-    row: ElementRef,
-    menu: Memo<Option<ModelList>>,
-    docked: bool,
-) -> AnyElement {
-    let form = app.form;
-    let pill = computed(move || {
-        built.with(|c| {
-            c.model_pill
-                .as_ref()
-                .map(|b| b.label)
-                .zip(c.model_name.clone())
-        })
-    });
-    let note = computed(move || built.with(|c| c.profile_note.clone()));
-    let own_keys = form != Form::Terminal || docked;
-    let keys = computed(move || built.with(|c| c.key_hints.filter(|_| own_keys)));
-    // Ask always has its pill or profile note, a pane session neither. A thread page can mount
-    // before its row or the configured profiles arrive, so the row follows them instead of
-    // being fixed at mount.
-    let shown = move || pill.with(Option::is_some) || note.with(Option::is_some);
-    when(shown, move || {
-        untracked(|| {
-            view()
-                .element_ref(&row)
-                .flex_row()
-                .flex_wrap()
-                .items_center()
-                .gap(px(8.0))
-                .child(dynamic(move || {
-                    pill.get().map(|(label, name)| {
-                        untracked(|| models::pill(app, label, name, list, row, menu))
-                    })
-                }))
-                .child(dynamic(move || {
-                    note.get().map(|note| {
-                        small(form, note)
-                            .text_color(color(Token::Ink3))
-                            .into_element()
-                    })
-                }))
-                .child(dynamic(move || {
-                    keys.get().map(|keys| untracked(|| key_hints(app, keys)))
-                }))
-                .into_element()
-        })
-    })
-    .into_element()
 }
 
 /// A state beside its name: a dot in the state's colour, the words quiet. A terminal draws the
@@ -345,69 +211,11 @@ pub(crate) fn state_mark(app: AppState, label: &str, hue: Hue) -> AnyElement {
         .into_element()
 }
 
-/// The desktop keys (`.ckeys`): each key as a cap and what it does, quiet, at the row's end.
-fn key_hints(app: AppState, keys: &'static [KeyHint]) -> AnyElement {
-    let form = app.form;
-    let hints = view()
-        .flex_auto()
-        .flex_row()
-        .flex_wrap()
-        .items_center()
-        .justify_end()
-        .gap(px(8.0));
-    if form == Form::Terminal {
-        return hints
-            .children(keys.iter().map(|hint| term::legend(hint.keys, hint.action)))
-            .into_element();
-    }
-    hints
-        .children(keys.iter().map(|hint| {
-            view()
-                .flex_row()
-                .items_center()
-                .gap(px(4.0))
-                .child(key_hint(hint.keys))
-                .child(
-                    text(hint.action)
-                        .number_of_lines(1u32)
-                        .font_family(FONT_TEXT)
-                        .text_size(px(11.0))
-                        .text_color(color(Token::Ink3)),
-                )
-        }))
-        .into_element()
-}
+/// The phone's least touch target and the tallest its field grows before it scrolls.
+const TARGET: f32 = 44.0;
+const FIELD_MAX: f32 = 132.0;
 
-/// The field: multiline, Enter sends, Shift+Enter breaks the line; always ringed in the focus
-/// colour as the mockup draws it, the placeholder naming what it talks to. A phone's starts one
-/// line high and grows with the draft to five lines, then scrolls.
-fn entry_field(app: AppState, built: Memo<Composer>, entry: ElementRef, to: To) -> AnyElement {
-    let form = app.form;
-    let placeholder = computed(move || built.with(|c| c.placeholder.clone()));
-    let draft = to.draft;
-    app.focus_when_asked(assistant::COMPOSER_FIELD, entry);
-    let field = input()
-        .element_ref(&entry)
-        .test_id(assistant::COMPOSER_FIELD)
-        .label(move || SharedString::from(placeholder.get()))
-        .multiline(true)
-        .submit_behavior(SubmitBehavior::Submit)
-        .return_key_type(ReturnKeyType::Send)
-        .on_submit(move |_: &str| {
-            // Enter does what Send does: a served thread that takes no message (ended, ending,
-            // over the limit, uploads not ready) sends nothing; the status line says why.
-            if built.with_untracked(|c| c.send.enabled) {
-                send(app, &to);
-            }
-        })
-        .placeholder(move || placeholder.get())
-        .value(move || draft.get())
-        .on_change(move |text: &str| draft.set(text.to_owned()));
-    field_look(form, field)
-}
-
-/// The composer field's look for the form: its inks, size and focus ring. Shared with the field
-/// Ask keeps while it has no connection.
+/// The look of the field Ask keeps while it has no connection: its inks, size and focus ring.
 pub(crate) fn field_look(form: Form, field: Input) -> AnyElement {
     let field = field
         .text_color(color(Token::Ink))
@@ -434,8 +242,8 @@ pub(crate) fn field_look(form: Form, field: Input) -> AnyElement {
             .border_color(color(Token::Focus))
             .into_element(),
         Form::Phone => field
-            .min_h(px(phone::TARGET))
-            .max_h(px(phone::FIELD_MAX))
+            .min_h(px(TARGET))
+            .max_h(px(FIELD_MAX))
             .px(px(12.0))
             .py(px(9.0))
             .font_family(FONT_TEXT)
@@ -453,50 +261,5 @@ pub(crate) fn field_look(form: Form, field: Input) -> AnyElement {
             .px(px(8.0))
             .bg(AdaptiveColor::TRANSPARENT)
             .into_element(),
-    }
-}
-
-/// The attachment controls, or the open link or path field, and Send, enabled once the draft
-/// has words and every staged attachment is ready.
-fn foot(app: AppState, built: Memo<Composer>, to: To) -> AnyElement {
-    let form = app.form;
-    let send_state = computed(move || built.with(|c| (c.send.label, c.send.enabled)));
-    view()
-        .flex_row()
-        .items_center()
-        .gap(px(if form == Form::Terminal { 16.0 } else { 4.0 }))
-        .child(
-            view()
-                .flex_1()
-                .min_w(px(0.0))
-                .child(foot_controls(app, built)),
-        )
-        .child(dynamic(move || {
-            let (label, enabled) = send_state.get();
-            let to = to.clone();
-            untracked(|| {
-                button_with(
-                    app,
-                    label,
-                    ButtonKind::Primary,
-                    ButtonOptions {
-                        disabled: !enabled,
-                        ..ButtonOptions::default()
-                    },
-                    "btn-send",
-                    move || send(app, &to),
-                )
-            })
-        }))
-        .into_element()
-}
-
-/// Secondary words at the composer's note size (`11.5px`; 13 on a phone; the terminal's own).
-fn small(form: Form, words: impl Into<String>) -> Text {
-    let words = text(words.into()).number_of_lines(1u32);
-    match form {
-        Form::Terminal => words,
-        Form::Desktop => words.font_family(FONT_TEXT).text_size(px(11.5)),
-        Form::Phone => words.font_family(FONT_TEXT).text_size(px(13.0)),
     }
 }

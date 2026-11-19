@@ -40,13 +40,6 @@ impl AppState {
                     });
                     state.stale = true;
                     state.loading = false;
-                    if topic == Topic::Thread
-                        && let Some(scope) = scope
-                    {
-                        let thread = feed.threads.entry(scope.into()).or_default();
-                        thread.stale = true;
-                        thread.loading = false;
-                    }
                 });
                 Ok(vec![])
             }
@@ -83,14 +76,8 @@ impl AppState {
                                 cache.loading = true;
                             }
                         }
-                        if topic == Topic::Session {
-                            if self.session_scopes.contains_key(&scope) {
-                                feed.live.entry(scope.into()).or_default().reset();
-                            }
-                        } else if topic == Topic::Thread {
-                            let thread = feed.threads.entry(scope.into()).or_default();
-                            thread.stale = true;
-                            thread.loading = true;
+                        if topic == Topic::Session && self.session_scopes.contains_key(&scope) {
+                            feed.live.entry(scope.into()).or_default().reset();
                         }
                     }
                 });
@@ -127,26 +114,10 @@ impl AppState {
         ) {
             return self.upload_reply(feed, method, tag, params, outcome, error_data);
         }
-        if method == ASSISTANT_CANCEL {
-            return self
-                .cancel_reply(feed, tag, params, outcome, error_data)
-                .await;
-        }
         if method == CHANGES_PAGE {
             self.changes_inflight = false;
         }
         let id = tag.or_else(|| params["cmd_id"].as_str().map(str::to_owned));
-        if method == ASSISTANT_SEND
-            && id.as_ref().is_some_and(|id| {
-                feed.with_untracked(|feed| {
-                    feed.commands.get(id.as_str()).is_some_and(|state| {
-                        matches!(state.status, CommandStatus::Done | CommandStatus::Abandoned)
-                    })
-                })
-            })
-        {
-            return Ok(vec![]);
-        }
         let result = match outcome {
             Ok(value) => value,
             Err((code, message)) => {
@@ -189,31 +160,7 @@ impl AppState {
                 feed.update(|feed| {
                     if let Some(id) = &id {
                         if let Some(state) = feed.commands.get_mut(id.as_str()) {
-                            state.status = if method == ASSISTANT_SEND {
-                                if self
-                                    .outbox
-                                    .as_ref()
-                                    .and_then(|outbox| outbox.saved.messages.get(id))
-                                    .is_some_and(|message| message.cancel)
-                                {
-                                    CommandStatus::Unknown
-                                } else if matches!(
-                                    code,
-                                    corral_protocol::rpc::ErrorCode::Refused
-                                        | corral_protocol::rpc::ErrorCode::Conflict
-                                        | corral_protocol::rpc::ErrorCode::InvalidParams
-                                ) {
-                                    if code == corral_protocol::rpc::ErrorCode::Conflict {
-                                        CommandStatus::Conflict
-                                    } else {
-                                        CommandStatus::Refused
-                                    }
-                                } else {
-                                    CommandStatus::Unknown
-                                }
-                            } else {
-                                error_status(&error)
-                            };
+                            state.status = error_status(&error);
                             conflict = state.status == CommandStatus::Conflict;
                             state.error = Some(error.clone());
                         }
@@ -263,35 +210,15 @@ impl AppState {
         match method {
             APP_SESSION => self.session(feed, decode(result)?).await,
             OP_SUBMIT => Ok(self.refresh_details(feed)),
-            ASSISTANT_SEND => {
-                let ack: SendAck = decode(result)?;
+            SESSION_SEND => {
                 if let Some(id) = id {
-                    if feed.with_untracked(|feed| {
-                        feed.commands
-                            .get(id.as_str())
-                            .is_some_and(|state| state.status == CommandStatus::Abandoned)
-                    }) {
-                        return Ok(vec![]);
-                    }
-                    let cancelling = self
-                        .outbox
-                        .as_ref()
-                        .and_then(|outbox| outbox.saved.messages.get(&id))
-                        .is_some_and(|message| message.cancel);
                     feed.update(|feed| {
                         if let Some(state) = feed.commands.get_mut(id.as_str()) {
-                            state.status = if cancelling {
-                                CommandStatus::Unknown
-                            } else {
-                                CommandStatus::Done
-                            };
+                            state.status = CommandStatus::Done;
                             state.error = None;
-                            state.entry = Some(Id::from(&ack.entry));
                         }
                     });
-                    // Settle first: retiring a Done send must never skip clearing its saved copy.
                     self.settled(feed, &id).await;
-                    feed.update(Feed::retire_echoed_sends);
                 }
                 Ok(vec![])
             }
@@ -411,102 +338,78 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::assistant::{State, ThreadItem, live_items};
+    use corral_protocol::session_host::SessionSent;
+    use corral_protocol::session_state::SendPolicy;
 
-    fn reply(app: &mut AppState, feed: Signal<Feed>, (method, params, tag): Outgoing, ok: Value) {
+    fn send(id: &str) -> ClientRequest {
+        ClientRequest::SessionSend(SessionSend {
+            id: "A-3".into(),
+            cmd_id: id.into(),
+            text: format!("words {id}"),
+            policy: SendPolicy::Steer,
+            to: None,
+            typed_at: None,
+            attachments: Vec::new(),
+        })
+    }
+
+    /// An answered message leaves the outbox and its acknowledgement is read under its own id.
+    /// One whose connection dropped before corrald answered may have reached the host, which
+    /// takes an input id once: the reconnect must not send it again, and its words must go back
+    /// to its session's draft rather than vanish.
+    #[test]
+    fn a_send_cut_off_by_a_reconnect_is_not_sent_twice_and_keeps_its_words() {
+        let runtime = nsh_core::element::Runtime::default();
+        let _entered = runtime.enter();
+        let feed = signal(Feed::default());
+        let mut app = AppState::new();
+        app.outbox = Some(Outbox::load("send-reconnect-store", "dev-4c").unwrap());
+        app.ready = true;
+        let mut sent = app.request(feed, send("app-answered"));
+        assert_eq!(sent.len(), 1);
+        let (method, params, tag) = sent.remove(0);
+        let ack = json!({
+            "session": "A-3", "entry": "A-3/input/app-answered",
+            "disposition": "started", "turn": 1
+        });
         let event = Event::Reply {
             method,
             tag,
             params,
-            outcome: Ok(ok),
+            outcome: Ok(ack),
             error_data: None,
         };
         assert!(app.event(feed, event).unwrap().is_empty());
-    }
-
-    fn thread_page(app: &mut AppState, feed: Signal<Feed>, rows: Vec<ThreadEntry>) {
-        let delta = SubDelta::Thread {
-            scope: "A-3".into(),
-            delta: RowsDelta {
-                epoch: 1,
-                rows,
-                left: Vec::new(),
-                cursor: corral_protocol::subscription::BoardCursor::default(),
-                more: false,
-            },
-            live: None,
+        assert!(feed.with_untracked(|feed| {
+            feed.operations["app-answered"]
+                .decode::<SessionSent>()
+                .is_some_and(|ack| ack.session == "A-3")
+        }));
+        let kept = |app: &AppState, id: &str| {
+            app.outbox
+                .as_ref()
+                .is_some_and(|outbox| outbox.saved.messages.contains_key(id))
         };
-        let event = Event::Rows {
-            delta,
-            replacement: true,
-        };
-        app.event(feed, event).unwrap();
-    }
+        assert!(!kept(&app, "app-answered"));
 
-    fn owners(feed: Signal<Feed>) -> Vec<String> {
-        feed.with_untracked(|feed| live_items(&State::default(), feed, "A-3"))
-            .into_iter()
-            .filter_map(|item| match item {
-                ThreadItem::Owner(message) => Some(message.text),
-                _ => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn delivered_send_stays_retired_by_its_entry_after_minutes_of_change_polls() {
-        let runtime = nsh_core::element::Runtime::default();
-        let _entered = runtime.enter();
-        let feed = signal(Feed::default());
-        feed.update(|feed| {
-            feed.capabilities.insert(CHANGES_V1.into());
-        });
-        let mut app = AppState::new();
-        app.outbox = Some(Outbox::load("send-echo-store", "dev-4c").unwrap());
-        let send = |cmd_id: &str, text: &str| {
-            ClientRequest::AssistantSend(AssistantSend {
-                cmd_id: cmd_id.into(),
-                thread: "A-3".into(),
-                target: AskTarget::Assistant,
-                text: text.into(),
-                typed_at: "2026-11-14T10:10:00Z".into(),
-                context: Vec::new(),
-                attachments: vec![SendAttachment::Link {
-                    url: "https://example.invalid/opaque".into(),
-                    title: None,
-                }],
-            })
-        };
-        assert!(
-            app.request(feed, send("app-1-offline", "queued words"))
-                .is_empty()
-        );
+        assert_eq!(app.request(feed, send("app-cut")).len(), 1);
+        app.disconnected(feed);
         app.ready = true;
-        // An identity ordered before every generated one, so the earliest eviction reaches it.
-        let mut sent = app.request(feed, send("app-0-sent", "inspect the evidence"));
-        assert_eq!(sent.len(), 1);
-        let ack = json!({"entry": "M-7", "state": {"state": "sent"}, "replayed": false});
-        reply(&mut app, feed, sent.remove(0), ack);
-        // Every corrald sync pass republishes health, and each one polls the change feed.
-        let page =
-            json!({"events": [], "head": 0, "older": null, "seen": {"through": 0, "at": null}});
-        for _ in 0..600 {
-            for poll in app.poll_changes(feed) {
-                reply(&mut app, feed, poll, page.clone());
-            }
-        }
-        let echo: ThreadEntry = serde_json::from_value(json!({
-            "id": "M-7", "rev": 2, "at": "2026-11-14T10:10:01Z", "kind": "message",
-            "device": "dev-4c", "via": null, "text": "inspect the evidence",
-            "state": {"state": "delivered"}, "model": null, "cost_usd": null,
-            "tools": [], "links": [], "card": null
-        }))
-        .unwrap();
-        thread_page(&mut app, feed, vec![echo]);
-        assert_eq!(owners(feed), ["inspect the evidence", "queued words"]);
-        // A reopened bounded page that no longer holds the echo cannot revive the local copy.
-        thread_page(&mut app, feed, Vec::new());
-        assert_eq!(owners(feed), ["queued words"]);
+        let again = crate::client::durable::wait(app.recover_messages(feed));
+        assert!(
+            again.is_empty(),
+            "a send that may have arrived is never sent twice"
+        );
+        assert!(!kept(&app, "app-cut"));
+        assert_eq!(
+            feed.with_untracked(|feed| feed.drafts["A-3"].clone()),
+            "words app-cut"
+        );
+        assert_eq!(
+            feed.with_untracked(|feed| feed.operations["app-cut"].error.clone())
+                .map(|error| error.message),
+            Some(SEND_LOST.to_owned())
+        );
     }
 }
 

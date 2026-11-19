@@ -1,9 +1,9 @@
 //! Sample chat and build sessions: each is a row of the assistant topic and a pi host whose
-//! transcript its page is read from; a chat also has its thread. Engine runs are not here: they
-//! are the live runs the agents topic serves.
+//! transcript its page is read from. Engine runs are not here: they are the live runs the
+//! agents topic serves.
 
+use corral_protocol::rows::*;
 use corral_protocol::session_state::Counts;
-use corral_protocol::{assistant::*, rows::*};
 
 use super::pi::{Host, Role};
 use super::stamp;
@@ -48,29 +48,6 @@ pub(super) fn populate(feed: &mut Feed) {
     build(feed, STOPPED_BUILD, "docs-sweep", Some("site"), true);
 }
 
-pub(super) fn entry(id: &str, at: &str, kind: EntryKind, text: &str) -> ThreadEntry {
-    ThreadEntry {
-        id: id.into(),
-        rev: 1,
-        at: at.into(),
-        typed_at: None,
-        kind,
-        device: Some("preview-device".into()),
-        via: Some("preview:local-only".into()),
-        text: Some(text.into()),
-        state: Some(MessageState::Delivered),
-        model: None,
-        cost_usd: None,
-        tools: vec![],
-        part: None,
-        completion: None,
-        cost_basis: None,
-        links: vec![],
-        card: None,
-        attachments: vec![],
-    }
-}
-
 fn row(
     feed: &Feed,
     id: &str,
@@ -102,7 +79,7 @@ fn row(
     }
 }
 
-/// A chat `id`, quick or named, with an empty thread and a host that has said nothing yet.
+/// A chat `id`, quick or named, with a host that has said nothing yet.
 pub(super) fn assistant(
     feed: &mut Feed,
     id: &str,
@@ -120,11 +97,6 @@ pub(super) fn assistant(
     chat.focus = focus.map(str::to_owned);
     feed.assistants.insert(id.into(), chat);
     feed.hosts.insert(id.into(), Host::new(Role::Chat));
-    feed.threads.insert(id.into(), ThreadSnapshot::default());
-    if quick {
-        feed.threads
-            .insert(QUICK_THREAD.into(), ThreadSnapshot::default());
-    }
 }
 
 /// A build `id` named `name` in `project`, in a new worktree and branch `build/<name>`; a

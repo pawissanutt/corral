@@ -26,8 +26,15 @@ fn words(form: Form, arrived: usize) -> String {
 
 /// `surface` (the transcript's scroll) kept at its newest rows while the reader is at the end,
 /// with the jump control over it while they are not. `rows` counts the transcript's rows
-/// (`Transcript::rows`), tracked: each change scrolls to the end while following.
-pub fn follow(app: AppState, surface: Scroll, rows: impl Fn() -> usize + 'static) -> AnyElement {
+/// (`Transcript::rows`), tracked: each change scrolls to the end while following. `jump` is the
+/// page's jump request (End, Ctrl+End, the catalog's Jump to latest), tracked: each change does
+/// what pressing the control does.
+pub fn follow(
+    app: AppState,
+    surface: Scroll,
+    rows: impl Fn() -> usize + 'static,
+    jump: impl Fn() -> u32 + 'static,
+) -> AnyElement {
     let form = app.form;
     let scroller = element_ref();
     let at_end = signal(true);
@@ -41,6 +48,16 @@ pub fn follow(app: AppState, surface: Scroll, rows: impl Fn() -> usize + 'static
             after_answer(move || scroller.scroll_to_end(false));
         } else if left_at.get().is_none() {
             left_at.replace(Some(now));
+        }
+    });
+    let asked = computed(jump);
+    let answered = stored(asked.get_untracked());
+    effect(move || {
+        let now = asked.get();
+        if answered.replace(now) != now {
+            at_end.set(true);
+            left_at.replace(None);
+            after_answer(move || scroller.scroll_to_end(true));
         }
     });
     let surface = surface

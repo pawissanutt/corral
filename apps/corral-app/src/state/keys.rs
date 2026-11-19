@@ -2,7 +2,9 @@
 //! domain's letter commands) are bound for the app's life. A destination's list keys (moves,
 //! Enter, digits) are bound only while its list has the keyboard focus, or nothing has: a
 //! focused control keeps Tab, Enter, Space and the arrows, as the platform gives them to it.
-//! The domain reducers stay pure; this layer routes a key to the one serving the destination.
+//! While a session page is on top its views' bare keys (`session::keys`, those that are not
+//! chords) come first, and only while no field is edited; a destination letter does not leave
+//! the page. The domain reducers stay pure; this layer routes a key to the one serving it.
 
 use std::collections::BTreeSet;
 
@@ -11,7 +13,8 @@ use nsh_core::prelude::*;
 
 use super::AppState;
 use crate::model::projects::{FilterScreen, NowScope, WorkspaceMode};
-use crate::model::{DataState, Destination, Effect, Overlay, commands, plans, review, work};
+use crate::model::session::{self, Cx, Facts, Focus, KeyAction};
+use crate::model::{DataState, Destination, Effect, Live, Overlay, commands, plans, review, work};
 
 /// Where the keyboard focus is, as far as key routing needs it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -29,18 +32,31 @@ impl KeyFocus {
     }
 }
 
-/// NSH names a shifted character by its unshifted key: `?` is Shift+/ and the reducers'
-/// capitals (`J`/`K`, Now's `R`, Review's `A`) are Shift+letter (a bare "J" would bind `j`).
-fn stroke(key: &'static str) -> &'static str {
+/// NSH names a shifted character by its unshifted key: `?` is Shift+/ and a reducer's capital
+/// (`J`/`K`, Now's `R`, Review's `A`, a session view's `N`) is Shift+letter (a bare "J" would
+/// bind `j`).
+fn stroke(key: &str) -> String {
     match key {
-        "?" => "shift+/",
-        "J" => "shift+j",
-        "K" => "shift+k",
-        "R" => "shift+r",
-        "A" => "shift+a",
-        "N" => "shift+n",
-        key => key,
+        "?" => "shift+/".to_owned(),
+        key if key.len() == 1 && key.bytes().all(|byte| byte.is_ascii_uppercase()) => {
+            format!("shift+{}", key.to_ascii_lowercase())
+        }
+        key => key.to_owned(),
     }
+}
+
+/// The bare keys a session view declares (`j`, `r`, `enter`, `down`): its letters and its moves.
+fn session_view_keys(form: crate::model::Form) -> impl Iterator<Item = &'static str> {
+    let web = cfg!(target_arch = "wasm32");
+    session::bound(form, web)
+        .into_iter()
+        .filter(|binding| binding.action == KeyAction::Part && !binding.typing())
+        .map(|binding| binding.key)
+}
+
+/// One character (`j`, `N`, `?`): a key no focused control uses for itself.
+fn is_letter(key: &str) -> bool {
+    key.chars().count() == 1
 }
 
 impl AppState {
@@ -76,16 +92,43 @@ impl AppState {
             keys.extend(domain.iter().copied());
         }
         for &key in &keys {
-            on_key_with(stroke(key), typing, move |_| self.press_key(key));
+            on_key_with(&stroke(key), typing, move |_| self.press_key(key));
+        }
+        // A session view's letters the global set does not bind already: they answer only while
+        // a session page is on top, then fall back to the destination's list.
+        let views: BTreeSet<&'static str> = session_view_keys(self.form)
+            .filter(|key| is_letter(key) && !keys.contains(key))
+            .collect();
+        for &key in &views {
+            on_key_with(&stroke(key), typing, move |_| {
+                if !self.press_session(key) && untracked(|| self.list_keys_now().contains(&key)) {
+                    self.press_key(key);
+                }
+            });
         }
         // Bound again whenever the focus or the page changes what the list keys reach; each run
         // drops the bindings of the one before.
         let list = computed(move || self.list_keys_now());
+        let taken = keys.clone();
+        let letters = views.clone();
         effect(move || {
             for &key in list.get() {
                 // Destination/list collisions share one router, never two active bindings.
-                if !keys.contains(key) {
-                    on_key_with(stroke(key), typing, move |_| self.press_key(key));
+                if !taken.contains(key) && !letters.contains(key) {
+                    on_key_with(&stroke(key), typing, move |_| self.press_key(key));
+                }
+            }
+        });
+        // A session view's moves and Enter, as a list's: only while the view has the keys and
+        // no control has the focus, which keeps its own Enter and arrows.
+        let moves = computed(move || self.session_moves_now());
+        effect(move || {
+            let listed = list.get();
+            for key in moves.get() {
+                if !keys.contains(key) && !views.contains(key) && !listed.contains(&key) {
+                    on_key_with(&stroke(key), typing, move |_| {
+                        self.press_session(key);
+                    });
                 }
             }
         });
@@ -98,8 +141,12 @@ impl AppState {
                 self.act(self.settings, |state, _| state.save_config());
             }
         });
+        // On a session page the session's model picker; elsewhere the next profile for Ask.
         on_key_with("mod+shift+m", anywhere, move |_| {
             if self.data.get_untracked() == DataState::Disconnected {
+                return;
+            }
+            if self.press_session("mod+shift+m") {
                 return;
             }
             let top = self.nav.with_untracked(|nav| nav.live().cloned());
@@ -108,6 +155,66 @@ impl AppState {
                 state.cycle_model_live(top.as_ref(), ask_open, feed, env)
             });
         });
+    }
+
+    /// Runs `key` on the session page on top, when one is and the key does something there
+    /// now; whether it did. Nothing runs while a sheet, an overlay or a menu stands over it.
+    fn press_session(&self, key: &str) -> bool {
+        if untracked(|| self.sheet_open())
+            || self.nav.with_untracked(|nav| nav.newest().is_some())
+            || self.menus.get_untracked() > 0
+        {
+            return false;
+        }
+        let Some(Live::Session(id)) = self.nav.with_untracked(|nav| nav.live().cloned()) else {
+            return false;
+        };
+        let env = untracked(|| self.env());
+        let web = cfg!(target_arch = "wasm32");
+        let action = self.feed.with_untracked(|feed| {
+            self.session.with_untracked(|state| {
+                let facts = Facts::of(feed, &id);
+                let cx = Cx::new(feed, state.ui(id.as_str()), &id, env, &facts);
+                session::press(key, &cx, web)
+            })
+        });
+        let Some(action) = action else {
+            return false;
+        };
+        self.reduce(self.session, |state, feed, _, _| state.act(action, feed));
+        true
+    }
+
+    /// Whether a session page is on top.
+    fn on_session(&self) -> bool {
+        self.nav
+            .with_untracked(|nav| matches!(nav.live(), Some(Live::Session(_))))
+    }
+
+    /// Tracked: the session view's moves and Enter to bind now: none unless a session page is
+    /// on top with a view (not the composer) holding its keys, no control has the focus, and no
+    /// sheet, overlay or menu stands over it.
+    fn session_moves_now(&self) -> Vec<&'static str> {
+        if !self.key_focus.get().takes_list_keys()
+            || self.sheet_open()
+            || self.nav.with(|nav| nav.newest().is_some())
+            || self.menus.get() > 0
+        {
+            return Vec::new();
+        }
+        let Some(Live::Session(id)) = self.nav.with(|nav| nav.live().cloned()) else {
+            return Vec::new();
+        };
+        if self
+            .session
+            .with(|state| state.ui(id.as_str()).focus == Focus::Composer)
+        {
+            return Vec::new();
+        }
+        let moves: BTreeSet<&'static str> = session_view_keys(self.form)
+            .filter(|key| !is_letter(key))
+            .collect();
+        moves.into_iter().collect()
     }
 
     /// The phone form with a hardware keyboard: Ctrl+K (⌘K) opens and closes the palette, as the
@@ -203,6 +310,9 @@ impl AppState {
         {
             return;
         }
+        if self.press_session(key) {
+            return;
+        }
         match key {
             "/" => {
                 self.open_ask();
@@ -229,6 +339,7 @@ impl AppState {
         if let Some(effects) = effects {
             self.run(effects);
         } else if !scoped_menu
+            && !self.on_session()
             && let Some(destination) = Destination::ALL
                 .into_iter()
                 .find(|destination| commands::destination_key(*destination) == Some(key))

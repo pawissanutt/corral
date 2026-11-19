@@ -8,9 +8,10 @@
 use serde_json::Value;
 
 use crate::model::hue::Hue;
+use crate::model::session::{Action, ChangesAction};
 
 use super::tool::{
-    Call, CallState, Row, View, count_of, diff, plural, rows_of, str_of, text, written,
+    Call, CallState, Row, ToolView, View, count_of, diff, plural, rows_of, str_of, text, written,
 };
 
 /// Rows a streaming `write` keeps.
@@ -35,6 +36,25 @@ fn path_of(call: &Call<'_>) -> String {
         .or_else(|| call.arg("file_path"))
         .map(|path| call.path(path))
         .unwrap_or_default()
+}
+
+/// The Changes link of an edit or write row: the tab opened at the file the call names (the
+/// tab resolves the path against its list), else the tab alone.
+fn changes_at(call: &Call<'_>) -> ToolView {
+    match call
+        .arg("path")
+        .or_else(|| call.arg("file_path"))
+        .filter(|path| !path.is_empty())
+    {
+        Some(path) => ToolView {
+            label: "Changes",
+            action: Action::Changes(ChangesAction::Open {
+                session: call.session.clone(),
+                path: path.to_owned(),
+            }),
+        },
+        None => call.view(View::Changes),
+    }
 }
 
 /// A byte count as the file rows say it: `820 B`, `1.2 KB`, `3.4 MB`.
@@ -200,7 +220,7 @@ fn edit(call: &Call<'_>) -> Row {
         .and_then(Value::as_array)
         .map_or(1, Vec::len) as u64;
     let mut row = Row::new(call, "edit").target(path_of(call));
-    row.view = Some(call.view(View::Changes));
+    row.view = Some(changes_at(call));
     match call.state {
         CallState::Failed => failure(row, call.text),
         CallState::Done => {
@@ -228,7 +248,7 @@ fn write(call: &Call<'_>) -> Row {
         size(content.len())
     );
     let mut row = Row::new(call, "write").target(path_of(call));
-    row.view = Some(call.view(View::Changes));
+    row.view = Some(changes_at(call));
     match call.state {
         CallState::Failed => failure(row, call.text),
         CallState::Writing | CallState::Running if all.len() >= 2 => {

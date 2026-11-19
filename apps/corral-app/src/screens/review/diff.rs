@@ -211,8 +211,9 @@ fn split_rows(app: AppState, rows: &[SplitRow]) -> Vec<AnyElement> {
 }
 
 /// A unified row: old and new numbers (the phone keeps only the new, as the mockup hides the
-/// first column), the sign and the code on the line's tint.
-fn unified_line(app: AppState, line: &NumberedLine) -> AnyElement {
+/// first column), the sign and the code on the line's tint. The session's Changes tab draws its
+/// hunks with it too.
+pub(crate) fn unified_line(app: AppState, line: &NumberedLine) -> AnyElement {
     let form = app.form;
     if form == Form::Terminal {
         return view().child(terminal_line(line)).into_element();

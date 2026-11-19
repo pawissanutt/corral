@@ -277,6 +277,14 @@ fn open_surface(app: AppState) -> Option<Surface> {
     }
 }
 
+/// A session legend without its Ctrl+K: the line ends with its own Go to (`^K`).
+fn without_go_to(legend: Vec<(&'static str, &'static str)>) -> Vec<(&'static str, &'static str)> {
+    legend
+        .into_iter()
+        .filter(|&(keys, _)| chord(keys) != PALETTE_CHORD)
+        .collect()
+}
+
 /// The last row, a legend: each key as a cap and the name it goes to, the keys in focus first.
 /// When the grid is short of room the names give way one by one, then whole groups, as
 /// [`fits`] orders them; a key's cap is never cut.
@@ -299,7 +307,9 @@ pub(super) fn key_line(
         )
     });
     let surface = computed(move || open_surface(app));
-    // The session page on top gives its own legend, unless Ask's field stands over it.
+    // The session page on top gives the legend of what has its keys (a picker, the `/` menu, the
+    // transcript, a view, a card, the composer), unless Ask's field stands over it. Its Ctrl+K
+    // is the line's own Go to, so it is not listed twice.
     let session = computed(move || {
         let Some(Live::Session(id)) = app.live_page() else {
             return None;
@@ -307,15 +317,24 @@ pub(super) fn key_line(
         if app.is_open(Overlay::Ask) {
             return None;
         }
-        let working = app.feed.with(|feed| {
-            feed.live.get(id.as_str()).is_some_and(|live| {
-                live.open || live.state.as_ref().is_some_and(|state| state.open)
+        let env = app.env();
+        let legend = app.feed.with(|feed| {
+            app.session.with(|state| {
+                use crate::model::session::{self, Cx, Facts, Tab};
+                let facts = Facts::of(feed, &id);
+                let ui = state.ui(id.as_str());
+                let cx = Cx::new(feed, ui, &id, env, &facts);
+                let tab = if session::shown_tabs(&cx).contains(&ui.tab) {
+                    ui.tab
+                } else {
+                    Tab::Chat
+                };
+                let slash = ui.draft.starts_with('/')
+                    && session::slash(&cx, &session::actions(&cx)).is_some();
+                session::legend_of(&cx, tab, slash)
             })
         });
-        Some(app.session.with(|state| {
-            let ui = state.ui(id.as_str());
-            crate::model::session::legend(ui.focus, ui.tab, working)
-        }))
+        Some(without_go_to(legend))
     });
     dynamic(move || {
         let room = term::columns();
@@ -397,7 +416,7 @@ mod tests {
                     &Destination::ALL,
                     live.as_ref().map(|_| {
                         use crate::model::session::{Focus, Tab, legend};
-                        legend(Focus::Composer, Tab::Chat, true)
+                        without_go_to(legend(Focus::Composer, Tab::Chat, true))
                     }),
                 );
                 for room in 20..=240 {

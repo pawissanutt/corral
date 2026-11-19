@@ -8,7 +8,8 @@ use nsh_core::prelude::*;
 use crate::model::commands::{
     self as palette_model, Action, PALETTE_PLACEHOLDER, palette_empty, palette_hints,
 };
-use crate::model::{Destination, Form, Overlay, work};
+use crate::model::session::{self, Cx, Facts, SessionActions};
+use crate::model::{Destination, Form, Live, Overlay, work};
 use crate::state::AppState;
 use crate::ui::atoms::key_hint;
 use crate::ui::icons::{Icon, icon};
@@ -238,7 +239,11 @@ fn row(
                 .truncate()
                 .font_family(FONT_TEXT)
                 .text_size(px(size))
-                .text_color(color(Token::Ink)),
+                .text_color(color(if entry.disabled {
+                    Token::Ink3
+                } else {
+                    Token::Ink
+                })),
         )
         .when_some(key_of(&entry.id), |v, keys| match form {
             // Plain and bold: a cap on every row would stack into a column of fills that the
@@ -388,6 +393,7 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
     let theme = app.theme.get();
     let data = app.data.get();
     let record = palette_record(app);
+    let catalog = session_catalog(app);
     let rows = app.feed.with(|feed| {
         palette_model::filtered(
             query,
@@ -396,6 +402,7 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
             feed,
             record.as_ref(),
             app.form,
+            catalog.as_ref(),
         )
     });
     rows.into_iter()
@@ -411,6 +418,7 @@ fn commands(app: AppState, query: &str) -> Vec<CommandItem> {
             CommandItem::new(command.id, command.label)
                 .group(command.group)
                 .checked(checked)
+                .disabled(command.unavailable)
                 .keywords([query.to_owned()])
         })
         .collect()
@@ -425,6 +433,7 @@ fn run(app: AppState, id: &str, query: &str) {
         return;
     }
     let record = untracked(|| palette_record(app));
+    let catalog = untracked(|| session_catalog(app));
     let action = app.feed.with_untracked(|feed| {
         palette_model::run(
             id,
@@ -434,6 +443,7 @@ fn run(app: AppState, id: &str, query: &str) {
             feed,
             record.as_ref(),
             app.form,
+            catalog.as_ref(),
         )
     });
     if let Some(action) = action {
@@ -446,6 +456,21 @@ fn run(app: AppState, id: &str, query: &str) {
 fn palette_record(app: AppState) -> Option<work::Record> {
     app.nav
         .with(|nav| work::palette_record(nav.destination, &nav.selection, nav.live()))
+}
+
+/// The action catalog of the session page on top, which leads the palette while it is there.
+fn session_catalog(app: AppState) -> Option<SessionActions> {
+    let Some(Live::Session(id)) = app.nav.with(|nav| nav.live().cloned()) else {
+        return None;
+    };
+    let env = app.env();
+    Some(app.feed.with(|feed| {
+        app.session.with(|state| {
+            let facts = Facts::of(feed, &id);
+            let cx = Cx::new(feed, state.ui(id.as_str()), &id, env, &facts);
+            session::actions(&cx)
+        })
+    }))
 }
 
 /// The key cap of the model row, without duplicating shortcut decisions in the renderer.

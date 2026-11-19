@@ -526,10 +526,15 @@ fn message(
         match forwarded {
             Some(id) => shown.tag = Some(id),
             None => {
-                let (tag, device) = message
-                    .input
-                    .as_ref()
-                    .map_or((None, None), |input| bubbles::source(input, cx.feed));
+                // An answer the owner gave on its card names at most the device it came
+                // from; the host delivering it is not the owner sending it automatically.
+                let (tag, device) = message.input.as_ref().map_or((None, None), |input| {
+                    if lead.is_some() {
+                        bubbles::device_tag(input, cx.feed)
+                    } else {
+                        bubbles::source(input, cx.feed)
+                    }
+                });
                 shown.tag = tag;
                 shown.tag_facts = device.map(|device| {
                     let key = format!("{base}|device");

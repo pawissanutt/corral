@@ -1,5 +1,5 @@
 use super::*;
-use corral_protocol::{assistant::ThreadEntry, rows::*};
+use corral_protocol::rows::*;
 
 /// A topic row's identity, as `RowsDelta.left` names it.
 trait Keyed {
@@ -21,11 +21,6 @@ impl Keyed for AgentRow {
     }
 }
 impl Keyed for AssistantRow {
-    fn key(&self) -> String {
-        self.id.clone()
-    }
-}
-impl Keyed for ThreadEntry {
     fn key(&self) -> String {
         self.id.clone()
     }
@@ -94,7 +89,8 @@ impl AppState {
             }
             SubDelta::Assistant { delta } => {
                 feed.update(|feed| {
-                    changed = apply(&mut feed.assistants, delta.rows, delta.left, replacement)
+                    changed = apply(&mut feed.assistants, delta.rows, delta.left, replacement);
+                    feed.forget_ended_quick();
                 });
                 Topic::Assistant
             }
@@ -114,20 +110,6 @@ impl AppState {
                     }
                 });
                 Topic::Settings
-            }
-            // An answer streams on the chat's session stream; a thread page's own `live` text
-            // is the older wire's and is not read.
-            SubDelta::Thread { scope, delta, .. } => {
-                scope_key = Some(scope.clone());
-                feed.update(|feed| {
-                    let thread = feed.threads.entry(Id::from(&scope)).or_default();
-                    changed = apply(&mut thread.entries, delta.rows, delta.left, replacement);
-                    thread.stale = false;
-                    thread.loading = false;
-                    feed.retire_echoed_sends();
-                });
-                self.touch_thread(feed, &scope);
-                Topic::Thread
             }
             SubDelta::Session {
                 scope,
@@ -285,7 +267,6 @@ impl AppState {
 fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> bool {
     match target {
         DetailRef::Closed { .. } | DetailRef::Artifacts { .. } => topic == Topic::Tasks,
-        DetailRef::Attachment { entry, .. } => topic == Topic::Thread && changed.contains(entry),
         DetailRef::Task { id } => topic == Topic::Tasks && changed.contains(id),
         DetailRef::Plan { id } => {
             matches!(topic, Topic::Plans | Topic::Tasks) && changed.contains(id)
@@ -307,7 +288,6 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
 pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
     match target {
         DetailRef::Closed { .. } | DetailRef::Artifacts { .. } => topic == Topic::Tasks,
-        DetailRef::Attachment { .. } => topic == Topic::Thread,
         DetailRef::Task { .. } | DetailRef::Review { .. } | DetailRef::ReviewFile { .. } => {
             topic == Topic::Tasks
         }

@@ -1,12 +1,16 @@
 //! The sidebar beside the main view (a rail when the page is wide, else a summary row above the
-//! composer that opens a drawer): Context (agents and jobs at work), Files (what changed) and
-//! Plan (the plan ledger). Until the owner picks a tab, it shows Context while an agent or job
-//! is live, else Plan when the plan has steps, else Context; a pick stays. Alt+B hides the rail.
-//! This module holds the summary row from the host's state, each tab's summary and its
-//! unavailable, reading and failed states; the tabs' rows are this module's to add, with their
-//! state in `SidebarUi` and their actions in `SidebarAction`.
+//! composer that opens a drawer): Context (the agents and jobs at work and what the session
+//! works with), Files (what changed) and Plan (the plan ledger). Until the owner picks a tab, it
+//! shows Context while an agent or job is live, else Plan when the plan has steps, else Context,
+//! so it moves to what just became relevant; once the owner picks a tab, it never moves again in
+//! this session. Alt+B hides the rail, F6 shows the next tab. This module holds the summary row
+//! from the host's state, the shown tab's body (its summary, its unavailable, reading and failed
+//! states, and its rows) and the sheets the sidebar opens: the Plan ledger and the Host events.
 
-use corral_protocol::detail::{ChangesComparison, DetailRef};
+mod context;
+mod files;
+
+use corral_protocol::detail::DetailRef;
 
 use crate::model::Id;
 use crate::model::daemon::Feed;
@@ -15,9 +19,14 @@ use crate::model::hue::Hue;
 use crate::model::nav::Form;
 
 use super::actions::{ActionGroup, row};
+use super::events::{EventsAction, EventsUi};
 use super::keys::{KeyAction, KeyBinding, bind};
+use super::plan::{PlanAction, PlanTab, PlanUi};
 use super::tabs::{PartBody, load, part};
-use super::{Action, Can, Cx, SessionRole, State};
+use super::{Action, Can, Cx, SessionRole, State, changes, events, plan};
+
+pub use context::{ContextFact, ContextList, ContextTab, McpRow, SideAgent, SideJob};
+pub use files::{FilesTab, SideFile};
 
 /// A sidebar tab.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -58,16 +67,20 @@ impl SideTab {
 /// The sidebar's state on this device, per session.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SidebarUi {
-    /// The owner's pick; none follows the automatic rule.
+    /// The owner's pick; none follows the automatic rule. Once set it stays for the session.
     pub picked: Option<SideTab>,
     /// Alt+B hid the rail; the summary row stands for it.
     pub hidden: bool,
+    pub plan: PlanUi,
+    pub events: EventsUi,
 }
 
 impl SidebarUi {
     pub const EMPTY: Self = Self {
         picked: None,
         hidden: false,
+        plan: PlanUi::EMPTY,
+        events: EventsUi::EMPTY,
     };
 }
 
@@ -75,9 +88,24 @@ impl SidebarUi {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SidebarAction {
     /// Show a tab; the pick stays.
-    Pick { session: Id, tab: SideTab },
+    Pick {
+        session: Id,
+        tab: SideTab,
+    },
     /// Hide or show the rail.
     Toggle(Id),
+    /// Open a child agent in the Agents tab.
+    Agent {
+        session: Id,
+        child: String,
+    },
+    /// Open a background job in the Agents tab.
+    Job {
+        session: Id,
+        job: String,
+    },
+    Plan(PlanAction),
+    Events(EventsAction),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -89,11 +117,21 @@ pub struct Sidebar {
     pub hidden: bool,
     /// `side-<tab>`, the tabs the host serves.
     pub tabs: Vec<SideTabItem>,
-    /// The shown tab's body.
+    /// The shown tab's frame: its summary and where its read stands.
     pub body: PartBody,
+    /// The shown tab's rows.
+    pub content: SideContent,
     pub summary: SidebarSummary,
     /// Alt+B.
     pub toggle: Action,
+}
+
+/// The rows of the shown tab.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SideContent {
+    Context(ContextTab),
+    Files(FilesTab),
+    Plan(PlanTab),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,15 +162,12 @@ pub struct SummarySegment {
 }
 
 fn target(cx: &Cx<'_>, tab: SideTab) -> DetailRef {
-    let id = cx.id.to_string();
     match tab {
-        SideTab::Context => DetailRef::SessionContext { id },
-        SideTab::Files => DetailRef::SessionChanges {
-            id,
-            comparison: ChangesComparison::Session,
-            scope: None,
+        SideTab::Context => DetailRef::SessionContext {
+            id: cx.id.to_string(),
         },
-        SideTab::Plan => DetailRef::SessionPlan { id },
+        SideTab::Files => changes::target(cx),
+        SideTab::Plan => plan::target(cx),
     }
 }
 
@@ -147,15 +182,18 @@ fn tabs(cx: &Cx<'_>) -> Vec<SideTab> {
         .collect()
 }
 
+fn working(cx: &Cx<'_>) -> bool {
+    cx.state
+        .is_some_and(|state| state.children.live.saturating_add(state.jobs.live) > 0)
+}
+
 /// The automatic tab: Context while anything works, else Plan when it has steps, else Context.
 fn auto(cx: &Cx<'_>, offered: &[SideTab]) -> SideTab {
-    let state = cx.state;
-    let working =
-        state.is_some_and(|state| state.children.live.saturating_add(state.jobs.live) > 0);
-    let planned = state
+    let planned = cx
+        .state
         .and_then(|state| state.plan.as_ref())
         .is_some_and(|plan| plan.total > 0);
-    let wanted = if !working && planned {
+    let wanted = if !working(cx) && planned {
         SideTab::Plan
     } else {
         SideTab::Context
@@ -165,6 +203,15 @@ fn auto(cx: &Cx<'_>, offered: &[SideTab]) -> SideTab {
     } else {
         offered.first().copied().unwrap_or_default()
     }
+}
+
+/// The tab shown: the owner's pick while the host serves it, else the automatic one.
+fn shown(cx: &Cx<'_>, offered: &[SideTab]) -> SideTab {
+    cx.ui
+        .sidebar
+        .picked
+        .filter(|picked| offered.contains(picked))
+        .unwrap_or_else(|| auto(cx, offered))
 }
 
 fn summary_of(cx: &Cx<'_>, tab: SideTab) -> (String, Hue) {
@@ -222,21 +269,15 @@ pub fn sidebar(cx: &Cx<'_>) -> Option<Sidebar> {
         return None;
     }
     let ui = &cx.ui.sidebar;
-    let tab = ui
-        .picked
-        .filter(|picked| offered.contains(picked))
-        .unwrap_or_else(|| auto(cx, &offered));
+    let tab = shown(cx, &offered);
     let (summary, hue) = summary_of(cx, tab);
-    let body = part(
-        cx,
-        Ok(target(cx, tab)),
-        Some(tab.capability()),
-        summary,
-        hue,
-    );
-    let working = cx
-        .state
-        .is_some_and(|state| state.children.live.saturating_add(state.jobs.live) > 0);
+    let read = target(cx, tab);
+    let body = part(cx, Ok(read.clone()), Some(tab.capability()), summary, hue);
+    let content = match tab {
+        SideTab::Context => SideContent::Context(context::context_tab(cx, &read)),
+        SideTab::Files => SideContent::Files(files::files_tab(cx, &read)),
+        SideTab::Plan => SideContent::Plan(plan::plan_tab(cx)),
+    };
     Some(Sidebar {
         tab,
         picked: ui.picked.is_some(),
@@ -252,8 +293,9 @@ pub fn sidebar(cx: &Cx<'_>) -> Option<Sidebar> {
             })
             .collect(),
         body,
+        content,
         summary: SidebarSummary {
-            working,
+            working: working(cx),
             segments: offered
                 .iter()
                 .map(|side| {
@@ -271,31 +313,42 @@ pub fn sidebar(cx: &Cx<'_>) -> Option<Sidebar> {
     })
 }
 
-/// What the shown tab reads.
+/// What the shown tab reads: its part, and on Context the jobs while the host lists one.
 pub fn fetches(cx: &Cx<'_>) -> Vec<Action> {
-    let Some(sidebar) = sidebar(cx) else {
+    let offered = tabs(cx);
+    if offered.is_empty() {
         return Vec::new();
-    };
-    load(
-        cx,
-        Ok(target(cx, sidebar.tab)),
-        Some(sidebar.tab.capability()),
-    )
-    .into_iter()
-    .collect()
+    }
+    let tab = shown(cx, &offered);
+    let mut reads: Vec<Action> = load(cx, Ok(target(cx, tab)), Some(tab.capability()))
+        .into_iter()
+        .collect();
+    if tab == SideTab::Context && cx.state.is_some_and(|state| state.jobs.total > 0) {
+        reads.extend(load(cx, Ok(context::jobs_target(cx)), Some("jobs")));
+    }
+    reads
 }
 
-pub(super) fn act(state: &mut State, action: SidebarAction, _: &Feed) -> Vec<Effect> {
-    match action {
+pub(super) fn act(state: &mut State, action: SidebarAction, feed: &Feed) -> Vec<Effect> {
+    let opened = match action {
         SidebarAction::Pick { session, tab } => {
             state.ui_mut(&session).sidebar.picked = Some(tab);
+            return Vec::new();
         }
         SidebarAction::Toggle(session) => {
             let sidebar = &mut state.ui_mut(&session).sidebar;
             sidebar.hidden = !sidebar.hidden;
+            return Vec::new();
         }
-    }
-    Vec::new()
+        SidebarAction::Plan(action) => return plan::act(state, action, feed),
+        SidebarAction::Events(action) => return events::act(state, action, feed),
+        SidebarAction::Agent { session, child } => context::open_agent(&session, child),
+        SidebarAction::Job { session, job } => context::open_job(&session, job),
+    };
+    opened
+        .into_iter()
+        .flat_map(|action| state.act(action, feed))
+        .collect()
 }
 
 /// `Hide sidebar` / `Show sidebar` among the display rows.
@@ -319,15 +372,31 @@ pub fn actions(cx: &Cx<'_>) -> Option<ActionGroup> {
 }
 
 pub fn keys() -> Vec<KeyBinding> {
-    vec![bind(
-        "alt+b",
-        "Alt+B",
-        "hide or show the sidebar",
-        KeyAction::Part,
-    )]
+    vec![
+        bind(
+            "alt+b",
+            "Alt+B",
+            "hide or show the sidebar",
+            KeyAction::Part,
+        ),
+        bind("f6", "F6", "next sidebar tab", KeyAction::Part),
+    ]
 }
 
 pub fn press(key: &str, cx: &Cx<'_>) -> Option<Action> {
-    (key == "alt+b" && !tabs(cx).is_empty())
-        .then(|| Action::Sidebar(SidebarAction::Toggle(cx.id.clone())))
+    let offered = tabs(cx);
+    if offered.is_empty() {
+        return None;
+    }
+    match key {
+        "alt+b" => Some(Action::Sidebar(SidebarAction::Toggle(cx.id.clone()))),
+        "f6" => {
+            let at = offered
+                .iter()
+                .position(|tab| *tab == shown(cx, &offered))
+                .map_or(0, |at| (at + 1) % offered.len());
+            offered.get(at).map(|tab| pick(cx, *tab))
+        }
+        _ => None,
+    }
 }

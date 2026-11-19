@@ -31,7 +31,9 @@ use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::{hue_ink, mark};
 use crate::ui::kit::overlay::counted;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_TEXT, Token, color};
+
+use super::Ask;
 
 /// The field's test id.
 const SESSION_FIELD: &str = "field-message";
@@ -46,8 +48,15 @@ fn act(app: AppState, action: Action) {
 }
 
 /// Sends the draft with `policy`, unless the button that sends it is unavailable now. An empty
-/// draft goes out only as a reason or an answer, whose emptiness the model answers.
-fn send(app: AppState, id: &Id, composer: Memo<Option<SessionComposer>>, policy: SendPolicy) {
+/// draft goes out only as a reason or an answer, whose emptiness the model answers. Ask's
+/// message also carries its chips' line and the staged attachments.
+fn send(
+    app: AppState,
+    id: &Id,
+    composer: Memo<Option<SessionComposer>>,
+    policy: SendPolicy,
+    ask: Option<Ask>,
+) {
     let ready = composer.with_untracked(|composer| {
         let composer = composer.as_ref()?;
         let button = [Some(&composer.send), composer.queue.as_ref()]
@@ -60,17 +69,23 @@ fn send(app: AppState, id: &Id, composer: Memo<Option<SessionComposer>>, policy:
             .is_none()
             .then(|| (composer.draft.clone(), giving))
     });
-    if let Some((text, _)) = ready.filter(|(text, giving)| *giving || !text.trim().is_empty()) {
-        act(
-            app,
-            Action::Send {
-                session: id.clone(),
-                text,
-                policy,
-                attachments: Vec::new(),
-            },
-        );
+    let Some((text, giving)) = ready.filter(|(text, giving)| *giving || !text.trim().is_empty())
+    else {
+        return;
+    };
+    if let Some(ask) = ask.filter(|_| !giving) {
+        super::send_ask(app, ask, id, text, policy);
+        return;
     }
+    act(
+        app,
+        Action::Send {
+            session: id.clone(),
+            text,
+            policy,
+            attachments: Vec::new(),
+        },
+    );
 }
 
 /// The session's composer. `command` is what Enter runs instead of sending while the draft is a
@@ -81,6 +96,30 @@ pub(crate) fn session_composer(
     composer: Memo<Option<SessionComposer>>,
     command: Memo<Option<Vec<Action>>>,
     focused: Memo<bool>,
+) -> AnyElement {
+    build(app, id, composer, command, focused, None)
+}
+
+/// The same composer in Ask: its field takes the focus each time Ask opens, and the chips, the
+/// staged attachments and the controls that stage them sit around it.
+pub(crate) fn ask_composer(
+    app: AppState,
+    id: Id,
+    composer: Memo<Option<SessionComposer>>,
+    command: Memo<Option<Vec<Action>>>,
+    focused: Memo<bool>,
+) -> AnyElement {
+    let ask = super::ask(app, &id);
+    build(app, id, composer, command, focused, Some(ask))
+}
+
+fn build(
+    app: AppState,
+    id: Id,
+    composer: Memo<Option<SessionComposer>>,
+    command: Memo<Option<Vec<Action>>>,
+    focused: Memo<bool>,
+    ask: Option<Ask>,
 ) -> AnyElement {
     let form = app.form;
     let entry = element_ref();
@@ -97,13 +136,16 @@ pub(crate) fn session_composer(
                 when: When::Always,
                 ..KeyOptions::default()
             },
-            move |_| send(app, &id, composer, SendPolicy::FollowUp),
+            move |_| send(app, &id, composer, SendPolicy::FollowUp, ask),
         );
     }
-    let field = field(app, id.clone(), composer, command, entry);
+    if ask.is_some() {
+        super::focus_on_open(app, entry);
+    }
+    let field = field(app, id.clone(), composer, command, entry, ask);
     match form {
-        Form::Phone => phone(app, id, composer, field),
-        Form::Desktop | Form::Terminal => frame(app, id, composer, field),
+        Form::Phone => phone(app, id, composer, field, ask),
+        Form::Desktop | Form::Terminal => frame(app, id, composer, field, ask),
     }
 }
 
@@ -115,6 +157,7 @@ fn field(
     composer: Memo<Option<SessionComposer>>,
     command: Memo<Option<Vec<Action>>>,
     entry: ElementRef,
+    ask: Option<Ask>,
 ) -> AnyElement {
     let form = app.form;
     let draft = move || composer.with(|c| c.as_ref().map(|c| c.draft.clone()).unwrap_or_default());
@@ -125,11 +168,16 @@ fn field(
                 .unwrap_or_default()
         })
     };
-    app.focus_when_asked(SESSION_FIELD, entry);
+    let test_id = if ask.is_some() {
+        crate::model::assistant::COMPOSER_FIELD
+    } else {
+        SESSION_FIELD
+    };
+    app.focus_when_asked(test_id, entry);
     let typed = id.clone();
     let field = input()
         .element_ref(&entry)
-        .test_id(SESSION_FIELD)
+        .test_id(test_id)
         .label(move || SharedString::from(placeholder()))
         .multiline(true)
         .submit_behavior(SubmitBehavior::Submit)
@@ -143,7 +191,7 @@ fn field(
             }
             let policy = composer.with_untracked(|c| c.as_ref().map(|c| c.send.policy));
             if let Some(policy) = policy {
-                send(app, &id, composer, policy);
+                send(app, &id, composer, policy, ask);
             }
         })
         .placeholder(placeholder)
@@ -303,48 +351,35 @@ fn stop_button(app: AppState, stop: StopButton) -> AnyElement {
     )
 }
 
-/// The bar under the field: the model and effort the host reports, the receiver, then (except
-/// on the phone, whose one button sits beside the field) Queue and Send or Steer.
-fn bar(app: AppState, id: Id, composer: Memo<Option<SessionComposer>>) -> AnyElement {
+/// The bar under the field: the model and effort as the picker's pill, the receiver, then
+/// (except on the phone, whose one button sits beside the field) Queue and Send or Steer.
+fn bar(
+    app: AppState,
+    id: Id,
+    composer: Memo<Option<SessionComposer>>,
+    ask: Option<Ask>,
+) -> AnyElement {
     let form = app.form;
-    let facts = computed(move || {
-        composer.with(|c| {
-            c.as_ref().map(|c| {
-                let mut words = c
-                    .model
-                    .as_ref()
-                    .map(|model| match &model.pending {
-                        Some(pending) => format!("{} → {pending}", model.label),
-                        None => model.label.clone(),
-                    })
-                    .unwrap_or_else(|| "model not reported".into());
-                if let Some(level) = c.effort.as_ref().and_then(|effort| effort.level.clone()) {
-                    words.push_str(&format!(" · effort {level}"));
-                }
-                words
-            })
-        })
-    });
     let buttons =
         computed(move || composer.with(|c| c.as_ref().map(|c| (c.send.clone(), c.queue.clone()))));
     let receiver = computed(move || composer.with(|c| c.as_ref().and_then(|c| c.receiver.clone())));
     let sends = id.clone();
+    // Ask on a new thread may know no model yet: it shows nothing rather than an absent model.
+    let pill = computed(move || {
+        ask.is_none() || composer.with(|c| c.as_ref().is_some_and(|c| c.model.is_some()))
+    });
+    let picks = id.clone();
     view()
         .flex_row()
         .flex_wrap()
         .items_center()
         .gap(px(if form == Form::Terminal { 16.0 } else { 8.0 }))
-        .child(
-            text(move || facts.get().unwrap_or_default())
-                .number_of_lines(1u32)
-                .truncate()
-                .flex_shrink(1.0)
-                .min_w(px(0.0))
-                .text_color(color(Token::Ink3))
-                .when(form != Form::Terminal, |t| {
-                    t.font_family(FONT_MONO).text_size(px(11.5))
-                }),
-        )
+        .child(dynamic(move || {
+            pill.get().then(|| {
+                let id = picks.clone();
+                untracked(|| crate::ui::ask::models::session_pill(app, id, composer))
+            })
+        }))
         .child(dynamic(move || {
             receiver.get().map(|pill| {
                 untracked(|| receiver_menu(app, pill.label, pill.choices, pill.unavailable))
@@ -363,9 +398,23 @@ fn bar(app: AppState, id: Id, composer: Memo<Option<SessionComposer>>) -> AnyEle
                             .items_center()
                             .gap(px(8.0))
                             .children(queue.map(|queue| {
-                                send_button(app, id.clone(), composer, queue, ButtonKind::Ghost)
+                                send_button(
+                                    app,
+                                    id.clone(),
+                                    composer,
+                                    queue,
+                                    ButtonKind::Ghost,
+                                    ask,
+                                )
                             }))
-                            .child(send_button(app, id, composer, send, ButtonKind::Primary))
+                            .child(send_button(
+                                app,
+                                id,
+                                composer,
+                                send,
+                                ButtonKind::Primary,
+                                ask,
+                            ))
                             .into_element()
                     })
                 })
@@ -379,6 +428,7 @@ fn send_button(
     composer: Memo<Option<SessionComposer>>,
     button: SendButton,
     kind: ButtonKind,
+    ask: Option<Ask>,
 ) -> AnyElement {
     let policy = button.policy;
     button_with(
@@ -391,7 +441,7 @@ fn send_button(
             ..ButtonOptions::default()
         },
         button.id,
-        move || send(app, &id, composer, policy),
+        move || send(app, &id, composer, policy, ask),
     )
 }
 
@@ -538,12 +588,15 @@ fn keys(composer: Memo<Option<SessionComposer>>) -> AnyElement {
     .into_element()
 }
 
-/// Desktop and terminal: the box (rules in a terminal) with the title, the field and the bar.
+/// Desktop and terminal: the box (rules in a terminal) with the title, the field and the bar;
+/// in Ask the chips and the staged attachments over the field and the attachment controls under
+/// the bar.
 fn frame(
     app: AppState,
     id: Id,
     composer: Memo<Option<SessionComposer>>,
     field: AnyElement,
+    ask: Option<Ask>,
 ) -> AnyElement {
     if app.form == Form::Terminal {
         return view()
@@ -553,9 +606,11 @@ fn frame(
             .child(
                 view()
                     .px(term::cells(1.0))
+                    .children(ask.map(|ask| super::above(app, ask)))
                     .child(title(app, composer))
                     .child(field)
-                    .child(bar(app, id, composer))
+                    .child(bar(app, id, composer, ask))
+                    .children(ask.map(|ask| super::attachments(app, ask)))
                     .child(reasons(app, composer)),
             )
             .into_element();
@@ -567,6 +622,7 @@ fn frame(
         .pt(px(8.0))
         .pb(px(8.0))
         .gap(px(6.0))
+        .children(ask.map(|ask| super::above(app, ask)))
         .child(
             view()
                 .rounded(px(10.0))
@@ -579,7 +635,9 @@ fn frame(
                     view()
                         .px(px(12.0))
                         .pb(px(8.0))
-                        .child(bar(app, id, composer)),
+                        .gap(px(6.0))
+                        .child(bar(app, id, composer, ask))
+                        .children(ask.map(|ask| super::attachments(app, ask))),
                 ),
         )
         .child(reasons(app, composer))
@@ -595,6 +653,7 @@ fn phone(
     id: Id,
     composer: Memo<Option<SessionComposer>>,
     field: AnyElement,
+    ask: Option<Ask>,
 ) -> AnyElement {
     let after = signal(false);
     let working = computed(move || {
@@ -659,7 +718,7 @@ fn phone(
                                 .with_untracked(|c| c.as_ref().map(|c| c.send.policy))
                                 .unwrap_or(SendPolicy::Steer)
                         };
-                        send(app, &id, composer, policy);
+                        send(app, &id, composer, policy, ask);
                     },
                 ),
             })
@@ -671,6 +730,7 @@ fn phone(
         .px(px(12.0))
         .pt(px(6.0))
         .gap(px(6.0))
+        .children(ask.map(|ask| super::above(app, ask)))
         .child(title(app, composer))
         .child(choice)
         .child(
@@ -678,10 +738,12 @@ fn phone(
                 .flex_row()
                 .items_end()
                 .gap(px(8.0))
+                .children(ask.map(|ask| crate::ui::ask::plus(app, ask.built)))
                 .child(field)
                 .child(button),
         )
-        .child(bar(app, id, composer))
+        .children(ask.map(|_| crate::ui::ask::field_row(app)))
+        .child(bar(app, id, composer, ask))
         .child(reasons(app, composer))
         .into_element()
 }

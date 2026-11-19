@@ -17,6 +17,7 @@ use super::echo::Echo;
 
 mod bubbles;
 mod build_cards;
+mod build_entries;
 mod code_cell;
 mod group;
 mod items;
@@ -35,6 +36,8 @@ mod tool_local;
 #[cfg(test)]
 mod bubbles_tests;
 #[cfg(test)]
+mod build_entries_tests;
+#[cfg(test)]
 mod code_cell_tests;
 #[cfg(test)]
 mod group_tests;
@@ -47,6 +50,7 @@ pub use build_cards::{
     BuildCard, ExitLine, ExitStep, FinishCard, GateRow, PlanCard, ReviewRow, SliceBack, SliceRow,
     TaskCard,
 };
+pub use build_entries::{ExitEntry, FiledEntry, Told};
 pub use code_cell::{CellOutput, CellRow, CodeCell};
 pub use group::Group;
 pub use items::{
