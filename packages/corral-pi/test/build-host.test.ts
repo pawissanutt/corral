@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { authDir } from "../src/auth/paths.ts";
 import { parseBuildFlags } from "../src/build/launch.ts";
 import { createSession, listSessions, loadSession, saveSession, sessionDir } from "../src/build/session-store.ts";
 import { prepareWorktree } from "../src/build/worktree.ts";
@@ -26,6 +27,15 @@ test("build flags retain paths, AWS settings and launch data", () => {
     settings: { exitPolicy: "review", maxParallel: 3 }, aws: { profile: "sandbox", region: "us-west-2" } });
   expect(local.headless).toBeTrue();
   expect(buildHostConfig(launch, createSession(launch, { worktree: dir, branch: null, base: null }), dir, local).aws).toEqual(launch.aws);
+});
+
+test("a build under a legacy installation leaves its saved logins reachable", () => {
+  const data = directory(), dir = directory();
+  const env = { XDG_DATA_HOME: data };
+  mkdirSync(join(data, "corral", "pi-native", "auth"), { recursive: true });
+  const { launch } = parseBuildFlags(["--name", "A Build"], dir, env, dir);
+  saveSession(launch.dataRoot, createSession(launch, { worktree: dir, branch: null, base: null }));
+  expect(authDir(env)).toBe(join(data, "corral", "pi-native", "auth"));
 });
 
 const fixtureLaunch = (dir: string) => parseBuildFlags(["--name", "A Build"], dir, {}, dir).launch;
