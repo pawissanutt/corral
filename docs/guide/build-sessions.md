@@ -1,7 +1,16 @@
 # Build sessions
 
-A build session is a Pi conversation for working in Git without a Corral task or
-dispatch slot. Start it from the checkout you want to work on:
+A build session is a Pi conversation for working directly in a checkout without a
+Corral task or dispatch slot. The app and terminal use the same kind of session:
+you can watch and drive a terminal-started build from the app, or attach a terminal
+to a stopped app-started build by resuming it.
+
+## Start
+
+In the app, choose **Agents › New › New build session…**. Choose a project,
+name, model and whether to use a new worktree or the checkout.
+
+From a terminal in the checkout, for example:
 
 ```sh
 corral-pi build --name example
@@ -9,45 +18,80 @@ corral-pi build --here
 corral-pi build --resume B-<id>
 ```
 
-By default, Corral creates `.worktrees/build-<name>` on `build/<name>` at the
-current commit. `--here` uses your existing checkout. Resume uses the recorded
-worktree and refuses if a separate build worktree no longer has its recorded
-branch or belongs to another repository.
+By default, a Git build creates `.worktrees/build-<name>` on `build/<name>` at
+the current commit. `--here` works in the existing checkout and branch instead.
+The name is generated if omitted. `--project <name>` chooses a configured project;
+otherwise Pi detects the project from the checkout when possible. `--profile <name>`
+chooses a build profile. `--model [<provider>/]<id>`, `--provider <id>`,
+`--effort <level>`, `--aws-profile <name>`, `--aws-region <region>` and repeated
+`--fallback <provider>/<model>` select the model route; see [corral-pi](corral-pi.md).
+The default model is `openai-codex/gpt-6.1-sol` unless a profile supplies one.
 
-The local record lives in `build/<id>/` under `--data-dir` (default
-`$XDG_DATA_HOME/corral/corral-pi`, or `~/.local/share/corral/corral-pi`).
-Use `--profile <name>` to select a workspace Pi profile. An API model needs no
-spending cap; `--max-usd` sets an optional one, as in other Pi sessions. See
-[corral-pi](corral-pi.md#api-spending-and-paid-continuation).
+`--headless` runs without the terminal interface; non-interactive launches are
+headless by default. `--id <id>` sets the new session ID; it cannot be combined
+with `--resume`. `--socket <path>` chooses the host socket and `--corral <path>`
+chooses the Corral executable. `--data-dir <path>` selects the record store;
+by default it is `$XDG_DATA_HOME/corral/corral-pi`, or
+`~/.local/share/corral/corral-pi` when that variable is not an absolute path.
 
-## Verify and land
+## Work together
 
-Commit the candidate and have the agent run `build_verify`. It runs the project's
-`gate` commands from `.corral-next/corral.toml` in the build worktree, with the
-project's configured environment. The build journal keeps the result and log.
+Send a message to start a turn. While the agent works, send a steer to change its
+direction or queue a follow-up for later; stop the turn without ending the session
+when you need to interrupt it. Answer questions and dialogs in the app or the
+terminal, including dialogs opened in an attached terminal. The first answer wins.
 
-Open the exit choices with `/finish`, or ask the agent to offer them with
-`build_finish`. The agent cannot choose an exit for you.
+**Agents** shows child agents and their activity. Open a child to inspect its
+conversation and, where available, answer, steer, stop or change its model.
 
-| Choice | What happens |
-|---|---|
-| **Iterate** | Stay in the session and keep working. |
-| **Keep** | Record the result locally and leave the branch and worktree in place. |
-| **Land** | Rebase onto the base branch, verify the rebased commit, then fast-forward the base locally. |
+**Changes** lets you inspect changed files and diffs, switch comparisons and
+scopes, and see attribution and changes outside assigned ownership.
 
-Land needs a clean worktree with committed changes and no live child agents.
-With the review policy, it also needs an approving review of the change or an
-override reason you supply. If the rebase conflicts or the base moves during
-verification, the session stays open. A stand-alone Git build can land onto its
-starting branch in a clean primary checkout without a Corral gate.
+**Board** shows workspace tasks and blocked or failed work. Refresh it and review
+proposed plans; you can file a proposal, file and start its tasks, or dismiss it.
 
-When the gate fails during Land, the host hands the failed command and log to the
-session and waits for that turn to end; you do not have to steer it. Land then runs
-again by itself with a fresh rebase and gate, at most three times per Land choice.
-It resumes only if the session committed a fix, the worktree is clean and no child
-is live. Under the review policy the repaired commit also needs an approving review
-with every finding resolved, unless you gave an override reason when choosing Land;
-that reason then covers the repair commits too, and the build record says so.
-Stopping the repair turn, a turn that ends without a new commit, or a gate that
-still fails after the third repair ends Land as a failed exit with the session open.
-Rebase conflicts are not repaired automatically.
+## Finish
+
+Choose **Finish** in the app, or use `/finish` in the terminal. The agent can
+offer the choices, but you decide:
+
+- **Keep** records the outcome and keeps the worktree and branch.
+- **Iterate** returns to the session to continue working.
+- **Land** rebases onto the base branch, runs the project's gate on the rebased
+  commit, and fast-forwards the base branch locally. A standalone Git build
+  instead lands on its starting branch without a Corral gate.
+
+Land is unavailable without a suitable Git branch and base, commits beyond the
+session base, a clean worktree and no live child agents. It is also unavailable
+when the project or its landing base is missing, or project policy disables it.
+In a workspace with review policy, provide a reason if the current commit lacks
+an approving review with every finding resolved. The primary checkout must be
+ready for the fast-forward. If the rebase conflicts or the base moves, Land fails
+and the session stays open. A failed gate can be handed to the agent for repair,
+with up to three repair rounds.
+
+## Stop, resume and remove
+
+Stopping a session stops its host; resume it in the app or with
+`corral-pi build --resume <id>`. Resume uses the recorded checkout and refuses if
+a separate build worktree no longer has its recorded branch or belongs to another
+repository. A stopped build is read-only until resumed.
+
+To remove a finished build, choose **Remove** from its Agents row, or use:
+
+```sh
+corral-pi build --prune --session <id> --dry-run
+corral-pi build --prune --session <id> --json
+```
+
+The preview changes nothing; omit `--dry-run` to remove. Single-session removal
+deletes the eligible worktree, branch and record, including the conversation when
+it is inside the removed directories. A transcript stored elsewhere is retained.
+It refuses a running session, a checkout used with `--here`, uncommitted changes,
+or commits not on the landing base; it never forces Git removal. Removing a
+worktree also removes ignored build output inside it.
+
+`corral-pi build --prune --dry-run` previews global cleanup;
+`corral-pi build --prune` applies it. Global cleanup keeps conversations and
+their records, though it can remove an unused session's record. It skips running
+sessions and in-place checkouts, and retains work that is not safe to remove.
