@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { corralPiDirectory } from "../auth/paths.ts";
 import { modelFlags, modelSettings } from "../host/config.ts";
 import { DEFAULT_MAX_PARALLEL, type BuildLaunch } from "./types.ts";
 import { buildProfileArgs, readBuildProfiles, readWorkspaceToml } from "./profiles.ts";
@@ -31,8 +32,9 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
   const project = values.project ?? (workspaceRoot && projects ? Object.entries(projects).find(([, entry]) =>
     typeof entry.path === "string" && resolve(workspaceRoot, entry.path) === repoRoot)?.[0] : undefined);
   const corral = values.corral ? resolve(cwd, values.corral) : workspaceRoot ? "corral-next" : undefined;
+  // A build must not create the directory whose absence keeps a legacy installation's logins in use.
   const dataRoot = values["data-dir"] ? resolve(cwd, values["data-dir"])
-    : join(env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "corral", "corral-pi");
+    : corralPiDirectory(join(env.XDG_DATA_HOME ?? join(homedir(), ".local", "share"), "corral", "corral-pi"));
   const profile = values.profile ? parseArgs({
     args: buildProfileArgs(workspaceRoot ?? cwd, values.profile), options: modelFlags,
   }).values : {};
