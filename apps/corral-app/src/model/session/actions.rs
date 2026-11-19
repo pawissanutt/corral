@@ -18,8 +18,8 @@ use crate::model::effect::Effect;
 
 use super::transcript::EXPAND_ALL;
 use super::{
-    Action, Can, Cx, Host, Pending, SessionRole, State, Tab, board, changes, events, exit, fleet,
-    plan, proof, questions, sidebar, task, usage,
+    Action, Can, Cx, FleetAction, Host, Pending, SessionRole, State, Tab, board, changes, events,
+    exit, fleet, plan, proof, questions, sidebar, task, usage,
 };
 
 #[path = "picker.rs"]
@@ -158,11 +158,10 @@ fn model(cx: &Cx<'_>) -> Option<ActionGroup> {
     let agent = super::fleet::opened_agent(cx);
     let (choose, choose_blocked) = match &agent {
         Some(agent) => (
-            agent
-                .model
-                .opens
-                .clone()
-                .unwrap_or_else(|| open(PickerKind::Model)),
+            Action::Fleet(FleetAction::Models {
+                session: session.clone(),
+                child: Some(agent.child.clone()),
+            }),
             agent.model.unavailable.clone(),
         ),
         None => (open(PickerKind::Model), blocked.clone()),
@@ -170,7 +169,7 @@ fn model(cx: &Cx<'_>) -> Option<ActionGroup> {
     let blocked = agent
         .map(|agent| {
             format!(
-                "agent {}'s conversation is open; its model changes from its choices",
+                "agent {}'s conversation is open; the composer shows its model and effort as reported",
                 agent.id
             )
         })
