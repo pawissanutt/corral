@@ -1440,7 +1440,7 @@ export class HostSession {
     });
     registerModels(registry, () => modelsPart(this.session, this.remoteDefaultModel, interactiveModels(this.options.identity.role), this.remoteCatalog));
     if (build) registerBoard(registry, {
-      board: build.board, record: build.ui.record, ready: () => this.remoteActionsReady,
+      board: build.board, record: build.liveRecord, ready: () => this.remoteActionsReady,
       unavailable: build.board && this.options.build?.session.workspaceRoot ? undefined : "This build has no board connection",
     });
     registerCommands(registry, {

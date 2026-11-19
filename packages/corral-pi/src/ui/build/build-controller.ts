@@ -331,17 +331,18 @@ export class BuildController implements BuildCardSource {
     return true;
   }
 
-  /** Why F2 Finish cannot run now, or undefined when it can. */
+  /**
+   * Why F2 Finish cannot run now, or undefined when it can: the same refusals as the app's `exit_open`. An empty
+   * branch is no refusal: Keep and Iterate stay the owner's to choose, and the summary known here is the previous
+   * episode's, so refusing on it would let the first Finish open and every Finish after an Iterate fail.
+   */
   finishUnavailable(): string | undefined {
     const ui = this.host.ui, phase = ui.exit.state().phase;
     if (phase === "pending") return undefined;
     const done = DONE_REASON[phase];
     if (done) return done;
-    const children = ui.fleet.snapshot().children;
-    if (children.some(child => LIVE_CHILD_STATES.includes(child.state))) return "agents are still running";
+    if (ui.fleet.snapshot().children.some(child => LIVE_CHILD_STATES.includes(child.state))) return "agents are still running";
     if (this.host.streaming()) return "the parent is still working";
-    const summary = this.summaryValue;
-    if (!children.length && summary && summary.commits === 0 && !summary.dirty) return "nothing was built yet";
     return undefined;
   }
 

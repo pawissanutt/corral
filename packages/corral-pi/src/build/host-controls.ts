@@ -10,6 +10,7 @@ import { createExit, type BuildExitControl } from "./exit.ts";
 import { loadSession, saveSession } from "./session-store.ts";
 import { boardPlanTool, buildEvidenceTools, buildFinishTool } from "./tools.ts";
 import { createJournal, type BuildJournal } from "./record.ts";
+import type { BuildRecord } from "./record-types.ts";
 import { LIVE_CHILD_STATES, type BoardControl, type BoardPlan, type BuildContext, type BuildPanelState, type BuildUi, type FleetControl } from "./types.ts";
 import { buildShellRefusal } from "../roles/build/guard.ts";
 
@@ -32,6 +33,7 @@ export interface BuildControls {
   readonly board?: BoardControl & { propose(plan: BoardPlan): void; close(): void };
   readonly tools: ToolDefinition[];
   readonly ui: BuildUi;
+  liveRecord(): Promise<BuildRecord>;
   panelState(): BuildPanelState;
   noteOwnerInput(text: string): void;
   close(): Promise<void>;
@@ -120,6 +122,7 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
   };
   return {
     fleet, exit, board, tools, ui,
+    liveRecord: buildJournal.liveRecord,
     panelState: () => ({ session, settings: context.settings, fleet: fleet.snapshot(), target, exit: exit.state(), record: buildJournal.record(), board: board?.tasks() ?? [] }),
     noteOwnerInput(text) {
       try { buildJournal.noteOwnerInput(text); }

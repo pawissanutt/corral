@@ -21,7 +21,7 @@ export async function summarize(run: Run, session: BuildSessionRecord, fleet: Fl
   const head = (await checked(run, ["rev-parse", "HEAD"], cwd)).trim();
   const ref = (await checked(run, ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).trim();
   const base = session.base;
-  const commits = base ? Number((await checked(run, ["rev-list", "--count", `${base}..HEAD`], cwd)).trim()) : 0;
+  const commits = base ? Number((await checked(run, ["rev-list", "--count", `${base}..${head}`], cwd)).trim()) : 0;
   const diff = base ? await checked(run, ["diff", "--numstat", base, "--"], cwd) : "";
   let files = 0, added = 0, removed = 0;
   for (const line of diff.split("\n")) {
