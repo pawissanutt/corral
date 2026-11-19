@@ -539,7 +539,7 @@ function phrase(t, bare){
     if (t.ready && !bare) out.unshift(`<span class="good">ready to land onto ${base(t)}</span>`);
     return out.join(" · ");
   }
-  if (t.status==="running") return `worker ${t.run.id} · ${h(t.run.doing||"starting")}${t.run.quiet?` · quiet ${t.run.quiet}`:""}`;
+  if (t.status==="running") return t.run ? `worker ${t.run.id} · ${h(t.run.doing||"starting")}${t.run.quiet?` · quiet ${t.run.quiet}`:""}` : "no worker session";
   if (t.status==="ready"){ const d = t.deps.find(d => T[d].status!=="done"); return d ? `depends on ${d} (${cap(T[d].status)})` : ""; }
   if (t.status==="done") return t.landed ? `landed ${t.landed} onto ${base(t)}` : "";
   if (t.children){ const n = t.children.filter(c => T[c].status==="done").length; return `plan · ${n} of ${t.children.length} children done`; }
@@ -551,7 +551,7 @@ function nextStep(t){
     case "idea": return {op:"move", arg:"backlog", label:"Move to Backlog"};
     case "backlog": return {op:"move", arg:"ready", label:"Move to Ready"};
     case "ready": return {op:"dispatch", label:"Dispatch"};
-    case "running": return {nav:`session/${t.id}/${t.run.id}`, label:"Open session"};
+    case "running": return t.run ? {nav:`session/${t.id}/${t.run.id}`, label:"Open session"} : null;
     case "blocked": { const n = t.blocked.next[0]; return {op:n.op, force:n.force, label:opLabel(n)}; }
     case "review": return t.ready ? {op:"approve", label:"Approve"} : null;
   }
@@ -566,6 +566,9 @@ function toast(s){ S.toast = s; clearTimeout(toast.t); toast.t = setTimeout(() =
 function apply(op, id, o={}){
   const t = T[id]; S.menu = null;
   const refuse = (reason, next) => { S.sheet = {kind:"refusal", id, op, reason, next}; };
+  const is = (...list) => list.includes(t.status);
+  const toReview = [{op:"move", arg:"review", force:true}], start = [{op: t?.run ? "retry" : "dispatch"}];
+  const endSessions = () => { for (const s of Object.values(SS)) if (s.task===id) Object.assign(s, {status:"gone", doing:"stopped"}); };
   if (!t) { toast(`sent: ${op} ${id}`); return; }
   if ((ASKS.has(op) || o.force || (op==="move" && (o.arg==="done"||o.arg==="dropped")) || (op==="retry" && o.fresh)) && !o.sure){
     S.sheet = {kind:"confirm", id, op, o}; return;
@@ -589,21 +592,45 @@ function apply(op, id, o={}){
         if (t.gate?.result!=="pass") return refuse(`The gate has not passed on ${t.gate?.sha||"HEAD"}.`, [{op:"gate"},{op:"approve",force:true}]);
       } else log("forced", id, `approve skipped ${SKIPS.approve}`);
       const sha = t.gate?.sha || "c0ffee1";
-      Object.assign(t, {status:"done", landed:sha, at:"now", age:"now", fresh:true, ready:false, blocked:null});
+      Object.assign(t, {status:"done", landed:sha, at:"now", age:"now", fresh:true, ready:false, blocked:null}); endSessions();
       log("landed", id, `${sha} onto ${o.onto||base(t)}`); break; }
-    case "reply": Object.assign(t, {status:"running", blocked:null, age:"now"}); t.run = Object.assign(t.run||{id:"R1", profile:"pi-terra"}, {doing:"resumed after your reply", quiet:""}); ensureSession(t); log("replied", id, o.text||""); break;
-    case "changes": Object.assign(t, {status:"running", blocked:null, ready:false, round:0, age:"now"}); t.run = {id:t.run?.id||"R1", profile:t.run?.profile||"pi-terra", doing:"reading your note", quiet:""}; ensureSession(t); log("sent_back", id, o.text||"owner note"); break;
-    case "retry": Object.assign(t, {status:"running", blocked:null, age:"now"}); t.run = {id:"R"+(+(t.run?.id||"R0").slice(1)+1), profile:o.profile||t.run?.profile||"pi-terra", doing:o.fresh?"starting over from base":"continuing on the branch", quiet:""}; ensureSession(t); log("dispatched", id, `worker ${t.run.id}${o.fresh?", fresh":""}`); break;
-    case "stop": Object.assign(t, {status:"blocked", age:"now", blocked:{reason:"stopped by owner", next:[{op:"retry"},{op:"drop"}]}}); log("stopped", id, ""); break;
+    case "reply":
+      if (!t.run || !is("running","blocked")) return refuse(`${id} has no live worker session to reply to.`, start);
+      Object.assign(t, {status:"running", blocked:null, age:"now"}); Object.assign(t.run, {doing:"resumed after your reply", quiet:""}); ensureSession(t); log("replied", id, o.text||""); break;
+    case "changes":
+      if (!t.run || !is("review","blocked")) return refuse(`${id} is ${cap(t.status)}; changes needs Review, or Blocked with a run.`, start);
+      Object.assign(t, {status:"running", blocked:null, ready:false, round:0, review:null, age:"now"}); Object.assign(t.run, {doing:"reading your note", quiet:""}); ensureSession(t); log("sent_back", id, o.text||"owner note"); break;
+    case "retry":
+      if (!t.run) return refuse(`${id} has not had a run; retry restarts one.`, start);
+      Object.assign(t, {status:"running", blocked:null, ready:false, round:0, age:"now"}); t.run = {id:"R"+(+t.run.id.slice(1)+1), profile:o.profile||t.run.profile, doing:o.fresh?"starting over from base":"continuing on the branch", quiet:""}; ensureSession(t); log("dispatched", id, `worker ${t.run.id}${o.fresh?", fresh":""}`); break;
+    case "stop":
+      if (!t.run || !is("running","blocked","review")) return refuse(`${id} has no live session to stop.`, []);
+      Object.assign(t, {status:"blocked", ready:false, age:"now", blocked:{reason:"stopped by owner", next:[{op:"retry"},{op:"drop"}]}}); endSessions(); log("stopped", id, ""); break;
+    case "done":
+      if (is("review")) break; // a repeat while in Review succeeds and changes nothing
+      if (!t.run || !is("running","blocked")) return refuse(`${id} is ${cap(t.status)}; done needs Running or Blocked with a worker run.`, toReview);
+      Object.assign(t, {status:"review", blocked:null, ready:false, review:null, age:"now", gate:{sha:"a1b2c3d", result:"running"}}); log("done", id, o.text||""); log("gate", id, "running on a1b2c3d", "auto"); break;
+    case "review":
+      if (!is("review")) return refuse(`${id} is ${cap(t.status)}; review needs Review.`, toReview);
+      t.review = {round:Math.min(2,(t.round||0)+1), result:"running"}; t.ready = false; log("review_started", id, `round ${t.review.round}`); break;
+    case "verdict":
+      if (!is("review")) return refuse(`${id} is ${cap(t.status)}; verdict needs Review.`, toReview);
+      if (o.arg==="changes"){ Object.assign(t, {status:"running", ready:false, round:(t.round||0)+1, review:null, age:"now"}); t.run = Object.assign(t.run||{id:"R1", profile:"pi-terra"}, {doing:"reading the review notes", quiet:""}); ensureSession(t); log("verdict", id, "changes"); log("sent_back", id, o.text||"review notes", "auto"); }
+      else { t.review = {round:t.review?.round||Math.min(2,(t.round||0)+1), result:"pass"}; t.ready = t.gate?.result==="pass"; log("verdict", id, "approve"); if (t.ready) log("ready", id, `gate passed on ${t.gate.sha}, review approved`, "auto"); }
+      break;
     case "move": { if (!o.force && !(["idea","backlog","ready"].includes(t.status) && ["idea","backlog","ready"].includes(o.arg)) && !(["done","dropped"].includes(t.status) && o.arg==="backlog"))
         return refuse(`${id} is ${cap(t.status)}; move goes among Idea, Backlog and Ready.`, [{op:"move",arg:o.arg,force:true}]);
       if (o.force) log("forced", id, `move skipped ${SKIPS.move}`);
-      Object.assign(t, {status:o.arg, age:"now", blocked:o.arg==="blocked"?{reason:"moved by owner",next:[{op:"retry"}]}:null, ready:false}); log("moved", id, `to ${cap(o.arg)}`); break; }
-    case "drop": Object.assign(t, {status:"dropped", at:"now", age:"now", fresh:true, blocked:null}); log("dropped", id, ""); break;
+      Object.assign(t, {status:o.arg, age:"now", blocked:o.arg==="blocked"?{reason:"moved by owner",next:[{op:"move",arg:"backlog",force:true}]}:null, ready:false});
+      if (o.arg==="done" || o.arg==="dropped"){ Object.assign(t, {fresh:true, at:"now"}); endSessions(); }
+      log("moved", id, `to ${cap(o.arg)}`); break; }
+    case "drop": Object.assign(t, {status:"dropped", at:"now", age:"now", fresh:true, ready:false, blocked:null}); endSessions(); log("dropped", id, ""); break;
     case "reopen": Object.assign(t, {status:"backlog", age:"now", fresh:false}); log("reopened", id, ""); break;
-    case "gate": t.gate = {sha:t.gate?.sha||"a1b2c3d", result:"running"}; if (t.status==="blocked") Object.assign(t,{status:"review",blocked:null}); log("gate", id, `running on ${t.gate.sha}`); break;
+    case "gate":
+      if (!t.run) return refuse(`${id} has no worktree; the gate runs on its branch.`, start);
+      t.gate = {sha:t.gate?.sha||"a1b2c3d", result:"running"}; t.ready = false; log("gate", id, `running on ${t.gate.sha}`); break;
+    case "edit": if (o.text) t.title = o.text; log("edited", id, "title"); break;
     case "comment": log("commented", id, o.text||""); break;
-    default: log(op==="edit"?"edited":op, id, o.text||"");
   }
   const extra = (o.arg?` ${o.arg}`:"") + (o.text?` "${o.text.slice(0,28)}${o.text.length>28?"…":""}"`:"") + (o.fresh?" --fresh":"") + (o.force?" --force":"");
   toast(cli(op, id, extra));
@@ -704,7 +731,9 @@ function vTask(id, tab="overview"){
     how = `<div class="how">${phrase(t, true)}${t.gate?` · commit <code>${t.gate.sha}</code>`:""}</div>`;
     btns = t.ready ? btn({op:"approve",label:"Approve"},true) + btn({op:"changes",label:"Changes"}) + `<span class="onto">onto <code>${base(t)}</code> <button class="btn ghost" data-a="say" data-say="onto: pick another branch">change</button></span>` : live ? `<a class="btn lg" href="#session/${live.id}">Open session</a>` : "";
   } else if (t.status==="running"){
-    what = `Running: ${h(t.run.doing||"starting")}`; how = `<div class="how">worker ${t.run.id} · profile ${t.run.profile}${t.run.quiet?` · quiet ${t.run.quiet}`:""}</div>`; btns = btn(n,true);
+    what = t.run ? `Running: ${h(t.run.doing||"starting")}` : `Running, with no worker session`;
+    how = t.run ? `<div class="how">worker ${t.run.id} · profile ${t.run.profile}${t.run.quiet?` · quiet ${t.run.quiet}`:""}</div>` : `<div class="how">Moved here by force. Move it again from More.</div>`;
+    btns = n ? btn(n,true) : "";
   } else if (t.status==="done"){ what = `Done`; how = `<div class="how">${phrase(t)} · ${t.at||""}</div>`;
   } else if (t.status==="dropped"){ what = `Dropped`; btns = btn({op:"reopen",label:"Reopen"});
   } else { what = t.status==="ready" ? `Ready to dispatch` : cap(t.status); how = `<div class="how">${phrase(t) || (t.status==="ready" ? `dependencies done · ${slots()} of ${LIMIT} slots used · resolves to profile ${p.profile}` : "Not started.")}</div>`; btns = btn(n,true); }
@@ -893,7 +922,7 @@ function openMenu(el, kind, id){
   S.menu = {kind, id, x:Math.max(8, Math.min(b.left - a.left, a.width - w - 8)), y:Math.max(8, Math.min(b.bottom - a.top + 4, a.height - hgt - 8))};
 }
 const NEEDS_TEXT = new Set(["reply","changes","comment","edit","verdict","retry","move"]);
-function openForm(op, id){ const t = T[id]; S.menu = null; S.sheet = {kind:"form", op, id, f:{to:op==="new"?"backlog":"ready", project:S.scope==="all"?"corral":S.scope, profile:t?PROJECTS[t.project].profile:"pi-terra", fresh:"same branch", verdict:"approve", text:""}}; }
+function openForm(op, id){ const t = T[id]; S.menu = null; S.sheet = {kind:"form", op, id, f:{to:op==="new"?"backlog":"ready", project:S.scope==="all"?"corral":S.scope, profile:t?PROJECTS[t.project].profile:"pi-terra", fresh:"same branch", verdict:"approve", text:op==="edit"&&t?t.title:""}}; }
 
 const A = {
   nav(el, e){ if (e.target.closest("button,a,textarea,input")) return true; location.hash = el.dataset.to; return true; },
@@ -908,7 +937,7 @@ const A = {
   fset(el){ S.sheet.f[el.dataset.k] = el.dataset.v; },
   fsend(){ const s = S.sheet, f = s.f;
     if (s.op==="new"){ const id = "T-"+(963+Object.keys(T).length-24); task(id, f.to, f.project, f.text||"Untitled task", {age:"now"}); log("created", id, ""); S.sheet = null; toast(`corral new "${(f.text||"Untitled task").slice(0,30)}" -p ${f.project}`); return; }
-    apply(s.op, s.id, {text:f.text, arg:s.op==="move"?f.to:undefined, profile:f.profile, fresh:f.fresh!=="same branch"}); },
+    apply(s.op, s.id, {text:f.text, arg:s.op==="move"?f.to:s.op==="verdict"?f.verdict:undefined, profile:f.profile, fresh:s.op==="retry" && f.fresh!=="same branch"}); },
   send(el){ const id = el.dataset.id; apply("reply", id, {text:S.drafts[id]||"ok"}); S.drafts[id] = ""; },
   comment(el){ const id = el.dataset.id; apply("comment", id, {text:S.drafts["c-"+id]||"noted"}); S.drafts["c-"+id] = ""; },
   answer(el){ const id = el.dataset.id, i = +el.dataset.i; answer(id, i, i<0 ? (S.drafts[id]||"your answer") : ""); S.drafts[id] = ""; },
