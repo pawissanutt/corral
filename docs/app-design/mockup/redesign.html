@@ -175,7 +175,7 @@ svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-widt
 .opt span{font-weight:600}.opt small{color:var(--ink-3);font-size:12.5px}
 .empty{padding:28px 20px;color:var(--ink-3)}
 
-/* desktop: an inspector beside every list, and overview numbers under the page head */
+/* desktop: an inspector beside the Tasks and Sessions lists */
 .withinsp{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 340px}
 .listcol{display:flex;flex-direction:column;min-width:0;min-height:0}
 .insp{border-left:1px solid var(--rule);background:var(--surface);overflow:auto;min-height:0;font-size:12.5px}
@@ -192,11 +192,70 @@ svg.i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-widt
 .fgrid b{font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mini{display:flex;flex-direction:column;gap:6px}
 .mini .you-b{padding:5px 9px}
-.stats{display:flex;align-items:center;gap:6px 14px;flex-wrap:wrap;padding:7px 20px;border-bottom:1px solid var(--rule);font-size:12px;color:var(--ink-3)}
-.tok{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
-.tok b{font:600 12px var(--mono);color:var(--ink)}
-a.tok:hover{color:var(--ink)}
-.sepv{width:1px;height:14px;background:var(--rule-2)}
+/* Home on a wide screen is a dashboard: numbers, decisions as cards, work as lanes, then panels */
+.dash{padding:14px 20px 20px;display:flex;flex-direction:column;gap:12px}
+.tiles{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
+.tile{display:flex;flex-direction:column;gap:1px;padding:9px 12px 10px;border:1px solid var(--rule);border-radius:8px;background:var(--surface);min-width:0}
+a.tile:hover{border-color:var(--rule-2);background:var(--surface-2)}
+.tile .lb{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-4);font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile b{font:600 22px/1.25 var(--mono);letter-spacing:-.02em}
+.tile.you{border-color:var(--you)}
+.tile.you b{color:var(--you)}
+.tile .sub{font-size:12px;color:var(--ink-3);display:flex;align-items:center;gap:2px 5px;flex-wrap:wrap}
+.spark{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
+.spark i{width:4px;background:var(--ink-4);border-radius:1px}
+.dgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start}
+.dside>.wide{grid-column:1/-1}
+.dside{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:12px;min-width:0}
+.panel{border:1px solid var(--rule);border-radius:8px;background:var(--surface);min-width:0;overflow:hidden;font-size:12.5px}
+.panel>header{display:flex;align-items:baseline;gap:10px;padding:8px 12px 7px}
+.panel h2{font-size:12.5px;white-space:nowrap}
+.panel h2 .n{font:400 11.5px var(--mono);color:var(--ink-3);margin-left:4px}
+.panel .note{font-size:12px;color:var(--ink-3);margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.panel .note a{text-decoration:underline dotted;text-underline-offset:3px}
+.panel .note kbd{font:11px var(--mono);border:1px solid var(--rule-2);border-radius:3px;padding:0 3px}
+.panel .kv{padding:3px 12px}
+.panel .empty{padding:10px 12px 14px;border-top:1px solid var(--rule)}
+.panel .legend{margin:0;padding:7px 12px 9px;border-top:1px solid var(--rule);flex-wrap:wrap;gap:4px 14px}
+.panel .burn{margin:0;padding:0 12px;border-top:1px solid var(--rule)}
+.panel .burn svg{height:78px}
+.ncard{border-top:1px solid var(--rule);padding:8px 12px 9px;cursor:pointer;display:flex;flex-direction:column;gap:5px}
+.ncard:hover{background:var(--hover)}
+.ncard.sel,.ncard.sel:hover{background:var(--bg);box-shadow:inset 2px 0 0 var(--you);cursor:default;gap:10px;padding-bottom:12px}
+.nl1,.nl2{display:flex;align-items:center;gap:10px;min-width:0}
+.ncard .id{font:12px var(--mono);color:var(--ink-2);white-space:nowrap}
+.ncard .ti{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ncard.sel .ti{white-space:normal}
+.ncard .ti .tag{font:400 11.5px var(--mono);color:var(--ink-3);margin-left:8px}
+.ncard .ti .tag.pri{color:var(--you);font-weight:700}
+.ncard .age,.nl2 .c5{font:11.5px var(--mono);color:var(--ink-3);white-space:nowrap}
+.nl2 .why{flex:1;min-width:0;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nl2 .why .good{color:var(--ok)}
+.ncard .decide{margin:0;border:0;border-radius:0;background:none;padding:0;max-width:none}
+.ncard .q{font-weight:650;font-size:14px}
+.nfacts{display:flex;align-items:center;gap:4px 14px;flex-wrap:wrap;font-size:12px;color:var(--ink-3)}
+.nfacts span{display:inline-flex;align-items:center;gap:5px}
+.nfacts b{font-weight:500;color:var(--ink-2)}
+.wlane{display:grid;grid-template-columns:14px 62px minmax(0,1fr) minmax(80px,26%) 48px 30px;gap:0 10px;align-items:center;min-height:44px;padding:5px 12px;border-top:1px solid var(--rule)}
+.wlane:hover{background:var(--hover)}
+.wlane .id{font:12px var(--mono);color:var(--ink-2)}
+.wlane .tx{display:flex;flex-direction:column;min-width:0;line-height:1.35}
+.wlane .tx b,.wlane .tx span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wlane .tx b{font-weight:600}
+.wlane .tx span{color:var(--ink-3)}
+.wlane .track{background:var(--sunk);border-radius:2px}
+.wlane .num,.wlane .age{font:11.5px var(--mono);color:var(--ink-3);text-align:right}
+.wlane .num{color:var(--ink-2)}
+.flow{display:grid;grid-template-columns:var(--fc,14px 62px minmax(0,1fr) 26px);gap:0 8px;align-items:center;min-height:26px;padding:0 12px;border-top:1px solid var(--rule);width:100%;color:var(--ink-2)}
+a.flow:hover,button.flow:hover{background:var(--hover)}
+.flow .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.flow .fbar{height:8px;border-radius:2px;background:var(--sunk);overflow:hidden}
+.flow .fbar i{display:block;height:100%;background:currentColor;border-radius:2px}
+.flow b,.flow .num{font:600 12px var(--mono);text-align:right;color:var(--ink)}
+.flow .num{font-weight:400;color:var(--ink-2)}
+.flow.hd{min-height:22px;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-4);font-weight:650}
+.flow.hd span+span{text-align:right}
+.flow .you{color:var(--you)}
 .meter{display:inline-flex;gap:2px}
 .meter i{width:5px;height:11px;border-radius:1px;background:var(--rule-2)}
 .meter i.on{background:var(--worker)}
@@ -385,6 +444,7 @@ td.m{font-family:var(--mono)}
 .phone .tabbar a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-size:11px;position:relative}
 .phone .tabbar a.on{color:oklch(.97 .005 238);font-weight:650}
 .phone .tabbar .cnt{position:absolute;top:6px;left:calc(50% + 8px);font:700 10.5px var(--mono);color:oklch(.76 .15 58)}
+@media (max-width:1180px){.dgrid{grid-template-columns:minmax(0,1fr)}.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}}
 .phone .phead{padding:10px 14px}.phone .phead .field{min-width:0!important;flex:1 1 100%}
 .phone .sec{padding:14px 14px 6px}
 .phone .row,.phone .rows.grouped .row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"ti age" "ph act";gap:2px 10px;padding:9px 14px;min-height:56px}
@@ -857,16 +917,65 @@ function inspector(id){
     ${dsec("Facts", `<div class="fgrid">${fact("project",s.project)}${fact("branch",s.branch)}${fact("model",s.model.split("/").pop())}${fact("effort",s.effort)}${fact("cost",s.cost)}${fact("context",s.status==="gone"?"":s.ctx+"%")}${fact("quiet",s.status==="working"?s.quiet:"")}${fact("age",s.age)}</div>`)}
     ${dsec("Latest", `<div class="mini">${logOf(s).slice(-4).map(logItem).join("")}</div>`)}${detailSections(s)}</aside>`;
 }
-/* Overview numbers: where every task stands, the slots, the sessions, today's cost, what changed. */
-function stats(){
-  const all = tasks(), ss = sessions(), by = s => all.filter(t => t.status===s).length, sby = s => ss.filter(x => x.status===s).length;
-  const today = all.reduce((a,t) => a + costOf(t), 0) + ss.filter(s => !s.task).reduce((a,s) => a + usd(s), 0);
-  const since = k => EVENTS.filter(e => e[1]===k && e[0] >= "09:16" && inScope(T[e[2]]||SS[e[2]]||{project:""})).length;
-  return `<div class="stats hidep">${ORDER.map(s => `<a class="tok" href="#tasks">${mark(s)}<span>${cap(s)}</span><b>${by(s)}</b></a>`).join("")}
-    <span class="sepv"></span><span class="tok"><span>slots</span><span class="meter">${Array.from({length:LIMIT}, (_,i) => `<i class="${i<slots()?"on":""}"></i>`).join("")}</span><b>${slots()}/${LIMIT}</b></span>
-    <span class="sepv"></span><a class="tok" href="#sessions"><span>sessions</span>${["blocked","working","idle"].map(k => `${mark(k)}<b title="${sby(k)} sessions ${cap(k)}">${sby(k)}</b>`).join("")}</a>
-    <span class="sepv"></span><a class="tok" href="#activity/usage"><span>today</span><b>${money(today)}</b></a>
-    <span class="sepv"></span><a class="tok" href="#activity/feed"><span>since 09:16</span><b>${since("landed")}</b>landed <b>${since("dropped")}</b>dropped <b>${since("created")}</b>created <b>${since("forced")}</b>forced</a></div>`;
+/* Home on a wide screen is a dashboard, so it does not read as a second Tasks list: numbers on
+   top, what waits on you as cards with one open to decide in, what is working as lanes over
+   today, and panels for the rest. Every number links to the page that holds its detail. */
+const dashOn = () => !isPhone();
+const selOn = page => LISTS.has(page) && (page==="home" ? dashOn() : inspOn());
+const LANES = {"T-703":[[.02,.5,"run"],[.5,.6,"gate"],[.6,.78,"review"],[.78,.97,"ready"]], "T-944":[[.1,.4,"run"],[.4,.47,"gate"],[.47,.7,"run"],[.7,.76,"gate"],[.76,.97,"blocked"]], "T-705":[[.05,.55,"run"],[.55,.62,"gate"],[.62,.75,"review"],[.75,.86,"run"],[.86,.97,"review"]],
+  "T-704":[[.55,.97,"run"]], "T-254":[[.3,.97,"run"]], "T-859":[[.4,.9,"run"],[.9,.97,"gate"]], "T-887":[[.6,.93,"run"],[.93,.97,"blocked"]], "B-k3x9":[[.8,.94,"run"],[.94,.97,"blocked"]], "B-p8d1":[[.7,.97,"run"]]};
+const track = id => `<span class="track">${(LANES[id]||[]).map(g => `<i class="k-${g[2]}" style="left:${g[0]*100}%;width:${(g[1]-g[0])*100}%"></i>`).join("")}</span>`;
+const LEGEND = `<span><i class="k-run"></i>Running</span><span><i class="k-gate"></i>Review (gate, reviewer)</span><span><i class="k-blocked"></i>Blocked</span><span><i class="k-ready"></i>Ready to land</span>`;
+const BURN = `<svg viewBox="0 0 130 60" preserveAspectRatio="none"><polyline stroke="var(--ink-3)" points="${[4,6,9,9,12,15,17,20,22,22,25,27,29,31].map((v,i) => `${i*10},${58-v*1.7}`).join(" ")}"/><polyline stroke="var(--ok)" points="${[1,2,4,5,7,9,12,14,15,17,19,21,23,24].map((v,i) => `${i*10},${58-v*1.7}`).join(" ")}"/></svg>`;
+const panel = (name, note, body, cls="") => `<section class="panel ${cls}"><header><h2>${name}</h2><span class="note">${note}</span></header>${body}</section>`;
+const tile = (to, label, big, sub, cls="") => `<${to?`a href="#${to}"`:"div"} class="tile ${cls}"><span class="lb">${label}</span><b>${big}</b><span class="sub">${sub}</span></${to?"a":"div"}>`;
+/* One thing that waits on you. The open card holds the decision; the others show their next step. */
+function needCard(x){
+  const isT = T[x.id]===x, to = (isT ? "task/" : "session/") + x.id, open = S.sel.home===x.id, n = isT && nextStep(x);
+  ROWS.push(x.id); KEYS.add(x.id);
+  const title = isT ? h(x.title) + (x.pri!=="P2" ? `<span class="tag pri">${x.pri}</span>` : "") : `${h(x.name)}<span class="tag">${x.role}</span>`;
+  const more = open ? `<a class="btn" href="#${to}">Open page</a><button class="btn ghost" data-a="${isT?"more":"smore"}" data-id="${x.id}" aria-label="More for ${x.id}">${ic("more")}</button>` : "";
+  const head = `<div class="nl1">${st(x.status)}<span class="id">${x.id}</span><span class="ti">${title}</span><span class="age">${x.age}</span>${more}</div>`;
+  if (!open){
+    const btn = !isT ? `<a class="btn" href="#${to}">Open</a>` : !n ? "" : `<button class="btn pri" data-a="op" data-op="${n.op}" data-id="${x.id}" ${n.arg?`data-arg="${n.arg}"`:""} ${n.force?"data-force=1":""}>${n.label}</button>`;
+    return `<div class="ncard" data-a="pick" data-key="${x.id}" data-to="${to}">${head}<div class="nl2"><span class="why">${isT ? phrase(x) : h(x.doing||"")}</span><span class="c5">${h(x.project)} · ${money(costOf(x))}</span>${btn}</div></div>`;
+  }
+  const body = isT ? decision(x, "in") + `<div class="nfacts">${pipeline(x).map(p => `<span title="${h(p[2]||"not started")}">${pm(p[1]==="now" && p[0]==="Run" ? "run" : p[1])}${p[0]}</span>`).join("")}<span class="sp"></span><span>${h(x.project)} · <b>${h(x.run?.profile||"")}</b> · <b>${money(costOf(x))}</b></span></div>`
+    : (x.question ? `<div class="q">${h(x.question.text)}</div>${options(x)}` : "") + `<div class="nfacts"><span>${h(x.project)} · <b class="mono">${h(x.branch||"")}</b> · <b>${h(x.model.split("/").pop())}</b> · ctx <b>${x.ctx}%</b> · <b>${x.cost}</b></span></div>`;
+  return `<div class="ncard sel" data-a="pick" data-key="${x.id}" data-to="${to}">${head}${body}</div>`;
+}
+function dashboard(need, work, fin, p){
+  const all = tasks(), ss = sessions(), lone = ss.filter(s => !s.task), any = {project:""};
+  const by = s => all.filter(t => t.status===s).length, sby = s => ss.filter(x => x.status===s).length;
+  const today = all.reduce((a,t) => a + costOf(t), 0) + lone.reduce((a,s) => a + usd(s), 0);
+  const since = k => EVENTS.filter(e => e[1]===k && e[0] >= "09:16" && inScope(T[e[2]]||SS[e[2]]||any)).length;
+  const nt = need.filter(x => T[x.id]===x).length, free = Math.max(0, LIMIT - slots()), held = all.filter(t => t.status==="ready" && phrase(t)).length;
+  const open = all.filter(t => !["done","dropped"].includes(t.status)).length, max = Math.max(1, ...ORDER.map(by));
+  const spend = {}, add = (k, v) => { if (v) spend[k] = (spend[k]||0) + v; };
+  all.forEach(t => add(t.run?.profile || PROJECTS[t.project].profile, costOf(t))); lone.forEach(s => add(s.model.split("/").pop(), usd(s)));
+  const top = Object.entries(spend).sort((a,b) => b[1] - a[1]);
+  const meter = `<span class="meter">${Array.from({length:LIMIT}, (_,i) => `<i class="${i<slots()?"on":""}"></i>`).join("")}</span>`;
+  const tiles = `<div class="tiles">${tile("", "Needs you", need.length, `${nt} tasks · ${need.length-nt} sessions`, need.length ? "you" : "")}
+    ${tile("activity/timeline", "Working", work.length, `slots ${meter} ${slots()}/${LIMIT}`)}
+    ${tile("tasks", "Ready", by("ready"), `${free ? `${free} slot${free>1?"s":""} free` : "no slot free"}${held ? ` · ${held} held by a dependency` : ""}`)}
+    ${tile("sessions", "Sessions", ss.filter(x => x.status!=="gone").length, ["blocked","working","idle"].map(k => `<span>${sby(k)} ${k}</span>`).join("<span>·</span>"))}
+    ${tile("activity/feed", "Landed since 09:16", since("landed"), `${since("dropped")} dropped · ${since("created")} created · ${since("forced")} forced`)}
+    ${tile("activity/usage", "Cost today", money(today), `<span class="spark">${[38,52,20,64,71,45,58].map(v => `<i style="height:${v}%"></i>`).join("")}</span> last 7 days`)}</div>`;
+  const lane = x => { const isT = T[x.id]===x; return `<a class="wlane" href="#${isT?"task":"session"}/${x.id}">${mark(x.status)}<span class="id">${x.id}</span><span class="tx"><b>${h(isT ? x.title : x.name)}</b><span>${isT ? phrase(x) : h(x.doing||"") + (x.quiet ? ` · quiet ${x.quiet}` : "")}</span></span>${track(x.id)}<span class="num">${money(costOf(x))}</span><span class="age">${x.age}</span></a>`; };
+  const proj = name => { const ts = Object.values(T).filter(t => t.project===name), bs = Object.values(SS).filter(s => s.project===name && !s.task);
+    const you = ts.filter(t => t.status==="blocked" || t.ready).length + bs.filter(s => s.status==="blocked").length, wk = ts.filter(t => t.status==="running" || (t.status==="review" && !t.ready)).length + bs.filter(s => s.status==="working").length;
+    return `<button class="flow" data-a="setscope" data-id="${name}" title="Scope every page to ${h(name)}"><span class="nm">${h(name)}</span><b class="${you?"you":""}">${you||"·"}</b><span class="num">${wk||"·"}</span><span class="num">${ts.filter(t => !["done","dropped"].includes(t.status)).length}</span><span class="num">${money(ts.reduce((a,t) => a + costOf(t), 0) + bs.reduce((a,s) => a + usd(s), 0))}</span></button>`; };
+  const pStatus = panel(`Tasks by status`, `<a href="#tasks">${open} open</a>`, ORDER.map(s => `<a class="flow" href="#tasks">${mark(s)}<span>${cap(s)}</span><span class="fbar s-${s}"><i style="width:${by(s)/max*100}%"></i></span><b>${by(s)}</b></a>`).join(""));
+  const pProj = p ? panel("Project", `<a href="#settings">Edit in Settings</a>`, [["base",p.base],["gate",p.gate],["reviewer",p.reviewer],["profile",p.profile],["auto dispatch","off"],["auto land","off"]].map(f => `<div class="kv"><span class="k">${f[0]}</span><span class="v"></span><span class="t">${h(f[1])}</span></div>`).join(""))
+      : panel("Projects", "press one to scope every page", `<div style="--fc:minmax(0,1fr) 30px 38px 34px 50px"><div class="flow hd"><span>project</span><span>you</span><span>work</span><span>open</span><span>today</span></div>${Object.keys(PROJECTS).map(proj).join("")}</div>`);
+  const pFin = panel(`Just finished <span class="n">${fin.length}</span>`, "since your last visit at 09:16", fin.map(x => { const isT = T[x.id]===x; return `<a class="kv" href="#${isT?"task":"session"}/${x.id}"><span class="k">${mark(x.status)}<span class="mono">${x.id}</span></span><span class="v" title="${h(isT ? x.title : x.name)}">${cap(x.status)} · ${h(isT ? x.title : x.name)}</span><span class="t">${x.at||x.age}</span></a>`; }).join("") || `<div class="empty">Nothing finished.</div>`);
+  const pCost = panel("Cost today", `<a href="#activity/usage">${money(today)} · by profile or model</a>`, `<div style="--fc:104px minmax(0,1fr) 50px">${top.map(([k,v]) => `<a class="flow" href="#activity/usage"><span class="nm">${h(k)}</span><span class="fbar" style="color:var(--ink-3)"><i style="width:${v/top[0][1]*100}%"></i></span><span class="num">${money(v)}</span></a>`).join("") || `<div class="empty">No cost recorded today.</div>`}</div>`);
+  const pBurn = panel("Burn-up", `<a href="#activity/timeline">last 14 days</a>`, `<div class="burn">${BURN}</div><div class="legend" style="border:0"><span><i style="background:var(--ink-3)"></i>created 31</span><span><i style="background:var(--ok)"></i>landed 24</span></div>`);
+  const pEvents = panel("Latest events", `<a href="#activity/feed">all in Feed</a>`, EVENTS.filter(e => inScope(T[e[2]]||SS[e[2]]||any)).slice(0,6).map(e => `<a class="kv" href="#${T[e[2]]?"task":"session"}/${e[2]}"><span class="k mono">${e[0]}</span><span class="v"><b style="color:var(--ink-2)">${e[1]}</b> ${e[2]} ${h(e[3])}</span><span class="t">${e[4]}</span></a>`).join("") || `<div class="empty">No events.</div>`);
+  const pWork = panel(`Working <span class="n">${work.length}</span>`, "today, 06:00 to now", work.map(lane).join("") + (work.length ? `<div class="legend">${LEGEND}</div>` : `<div class="empty">Nothing is working.</div>`), "wide");
+  const pNeed = panel(`Needs you <span class="n">${need.length}</span>`, `Blocked, or ready to land · <kbd>j</kbd> <kbd>k</kbd> next · <kbd>Enter</kbd> opens the page`, need.map(needCard).join("") || `<div class="empty">Nothing waits on you.</div>`);
+  return `<div class="phead"><h1>${p ? h(S.scope) : "Home"}</h1><span class="say">${need.length ? `<span class="you">${need.length} need you</span>` : "nothing needs you"} · since your last visit at 09:16</span></div>
+  <div class="scroll"><div class="dash">${tiles}<div class="dgrid">${pNeed}<div class="dside">${pWork}${pStatus}${pProj}${pCost}${pEvents}${pFin}${pBurn}</div></div></div></div>${composer()}`; // left: what waits on you; right: what Corral is doing
 }
 const inspBtn = () => isPhone() ? "" : `<button class="btn" data-a="insp" aria-pressed="${S.insp}" title="Show or hide the inspector (i)">${ic("panel")}Inspector</button>`;
 /* A list page: the table, and beside it the inspector of the selected row when there is room. */
@@ -879,12 +988,14 @@ function vHome(){
   const need = [...tasks(t => t.status==="blocked" || t.ready), ...sessions(s => s.status==="blocked" && !s.task)];
   const work = [...tasks(t => t.status==="running" || (t.status==="review" && !t.ready)), ...sessions(s => s.status==="working" && !s.task)];
   const fin = [...tasks(t => t.fresh), ...sessions(s => s.fresh)];
-  const p = PROJECTS[S.scope], insp = inspOn();
+  const p = PROJECTS[S.scope];
+  if (dashOn()) return dashboard(need, work, fin, p);
+  /* the phone keeps one list: small things are answered in it, the rest open their page */
   const say = [need.length?`<span class="you">${need.length} need you</span>`:"nothing needs you", `${work.length} working`, `${fin.length} finished since 09:16`].join(" · ");
-  const sec = (name, list, o, why) => `<div class="sec">${name} <span class="n">${list.length}</span><span class="why hidep">${why}</span></div><div class="rows">${list.map(x => row(x,o) + (!insp && x.small && x.status==="blocked" ? inplace(x) : "")).join("") || `<div class="empty">Nothing here.</div>`}</div>`;
-  return `<div class="phead"><h1>${S.scope==="all"?"Home":h(S.scope)}</h1><span class="say">${say}</span><span class="sp"></span>${inspBtn()}</div>
+  const sec = (name, list, o) => `<div class="sec">${name} <span class="n">${list.length}</span></div><div class="rows">${list.map(x => row(x,o) + (x.small && x.status==="blocked" ? inplace(x) : "")).join("") || `<div class="empty">Nothing here.</div>`}</div>`;
+  return `<div class="phead"><h1>${S.scope==="all"?"Home":h(S.scope)}</h1><span class="say">${say}</span></div>
   ${p ? `<div class="facts"><span>base <b>${p.base}</b></span><span>gate <b class="mono">${h(p.gate)}</b></span><span>reviewer <b>${p.reviewer}</b></span><span>profile <b>${p.profile}</b></span><span>auto dispatch <b>off</b></span><span>auto land <b>off</b></span><a href="#settings" class="dim">Edit in Settings</a></div>` : ""}
-  ${stats()}${listPage("home", "home", sec("Needs you", need, {}, "Blocked, or ready to land") + sec("Working", work, {}, "") + sec("Just finished", fin, {quiet:true}, "since your last visit at 09:16"), composer())}`;
+  ${listPage("home", "home", sec("Needs you", need, {}) + sec("Working", work, {}) + sec("Just finished", fin, {quiet:true}), composer())}`;
 }
 function vTasks(){
   const f = (S.drafts.filter||"").toLowerCase();
@@ -961,13 +1072,11 @@ const ASUB = [["feed","Feed"],["timeline","Timeline"],["usage","Usage"],["artifa
 const subnav = cur => `<div class="subnav">${ASUB.map(a => `<a class="${a[0]===cur?"on":""}" href="#activity/${a[0]}">${a[1]}</a>`).join("")}</div>`;
 function vActivity(sub="feed"){
   if (sub==="timeline"){
-    const lanes = [["T-703",[[.02,.5,"run"],[.5,.6,"gate"],[.6,.78,"review"],[.78,.97,"ready"]]],["T-944",[[.1,.4,"run"],[.4,.47,"gate"],[.47,.7,"run"],[.7,.76,"gate"],[.76,.97,"blocked"]]],["T-705",[[.05,.55,"run"],[.55,.62,"gate"],[.62,.75,"review"],[.75,.86,"run"],[.86,.97,"review"]]],
-      ["T-704",[[.55,.97,"run"]]],["T-254",[[.3,.97,"run"]]],["T-859",[[.4,.9,"run"],[.9,.97,"gate"]]],["T-887",[[.6,.93,"run"],[.93,.97,"blocked"]]],["B-k3x9",[[.8,.94,"run"],[.94,.97,"blocked"]]],["B-p8d1",[[.7,.97,"run"]]]]
-      .filter(l => inScope(T[l[0]]||SS[l[0]]));
+    const lanes = Object.keys(LANES).filter(id => inScope(T[id]||SS[id]));
     return `<div class="phead"><h1>Timeline</h1><span class="say">today, 06:00 to now</span></div>${subnav(sub)}<div class="scroll"><div class="tl"><div class="axis"><span></span><div><span>06</span><span>07</span><span>08</span><span>09</span><span>10</span><span>now</span></div></div>
-      ${lanes.map(l => `<a class="lane" href="#${T[l[0]]?"task":"session"}/${l[0]}"><span class="nm">${l[0]}</span><span class="track">${l[1].map(g => `<i class="k-${g[2]}" style="left:${g[0]*100}%;width:${(g[1]-g[0])*100}%"></i>`).join("")}</span></a>`).join("")}
-      <div class="legend"><span><i class="k-run"></i>Running</span><span><i class="k-gate"></i>Review (gate, reviewer)</span><span><i class="k-blocked"></i>Blocked</span><span><i class="k-ready"></i>Ready to land</span></div>
-      <div class="burn"><div class="h">Burn-up · last 14 days</div><svg viewBox="0 0 130 60" preserveAspectRatio="none"><polyline stroke="var(--ink-3)" points="${[4,6,9,9,12,15,17,20,22,22,25,27,29,31].map((v,i) => `${i*10},${58-v*1.7}`).join(" ")}"/><polyline stroke="var(--ok)" points="${[1,2,4,5,7,9,12,14,15,17,19,21,23,24].map((v,i) => `${i*10},${58-v*1.7}`).join(" ")}"/></svg>
+      ${lanes.map(id => `<a class="lane" href="#${T[id]?"task":"session"}/${id}"><span class="nm">${id}</span>${track(id)}</a>`).join("")}
+      <div class="legend">${LEGEND}</div>
+      <div class="burn"><div class="h">Burn-up · last 14 days</div>${BURN}
         <div class="legend" style="margin-top:0"><span><i style="background:var(--ink-3)"></i>created 31</span><span><i style="background:var(--ok)"></i>landed 24</span><span>dropped 3</span><span>reopened 1</span><span>counts events; it does not narrow with the range above</span></div></div></div></div>`;
   }
   if (sub==="usage"){
@@ -1066,7 +1175,7 @@ function render(keep){
   app.className = "app" + (isPhone() ? " phone" : S.fold ? " fold" : "");
   const build = () => { ROWS = []; KEYS = new Set(); return r.page==="tasks" ? vTasks() : r.page==="task" ? vTask(r.rest[0], r.rest[1]) : r.page==="sessions" ? vSessions() : r.page==="session" ? vSession(r.rest.join("/")) : r.page==="activity" ? vActivity(r.rest[0]) : r.page==="settings" ? vSettings() : vHome(); };
   let view = build();
-  if (LISTS.has(r.page) && inspOn() && !KEYS.has(S.sel[r.page])){ S.sel[r.page] = ROWS[0]; view = build(); } // the inspector always has a row
+  if (selOn(r.page) && !KEYS.has(S.sel[r.page])){ S.sel[r.page] = ROWS[0]; view = build(); } // the inspector always has a row, Home always an open card
   app.innerHTML = shell(view) + overlays();
   document.getElementById("mock").innerHTML = `<b>Corral app redesign</b><span>reference · sample data</span><span class="sp"></span>
     <span class="seg"><button data-a="frame" data-id="desktop" aria-pressed="${S.frame==="desktop"}">Desktop</button><button data-a="frame" data-id="phone" aria-pressed="${S.frame==="phone"}">Phone</button></span>
@@ -1078,7 +1187,7 @@ function render(keep){
   if (keep && sc){ const el = app.querySelector(".scroll,.log"); if (el) el.scrollTop = sc; }
   const lg = app.querySelector(".log"); if (lg && !keep) lg.scrollTop = lg.scrollHeight;
   if (S.focusDraft){ app.querySelector(`[data-draft="${S.focusDraft}"]`)?.focus(); S.focusDraft = null; }
-  if (S.reveal){ app.querySelector(".row.sel")?.scrollIntoView({block:"nearest"}); S.reveal = false; }
+  if (S.reveal){ app.querySelector(".sel[data-key]")?.scrollIntoView({block:"nearest"}); S.reveal = false; }
   const pal = document.getElementById("pal"); if (pal){ pal.focus(); pal.setSelectionRange(pal.value.length, pal.value.length); }
 }
 function openMenu(el, kind, id){
@@ -1094,9 +1203,10 @@ const A = {
     const twice = A.nav.key===el.dataset.key && e.timeStamp - A.nav.at < 450; A.nav.key = el.dataset.key; A.nav.at = e.timeStamp;
     if (inspOn() && LISTS.has(route().page) && !twice){ S.sel[route().page] = el.dataset.key; return; } // select; Enter or a second click opens the page
     location.hash = el.dataset.to; return true; },
+  pick(el, e){ if (e.target.closest("button,a,textarea,input")) return true; S.sel.home = el.dataset.key; }, // open this card; the others close
   noop(){ return true; },
   op(el){ const d = el.dataset, page = route().page;
-    if (d.op==="reply" && inspOn() && LISTS.has(page) && T[d.id]?.blocked?.next[0].op==="reply" && !el.closest(".sheet")){ S.sel[page] = d.id; S.focusDraft = d.id; return; }
+    if (d.op==="reply" && selOn(page) && T[d.id]?.blocked?.next[0].op==="reply" && !el.closest(".sheet")){ S.sel[page] = d.id; S.focusDraft = d.id; return; }
     if (NEEDS_TEXT.has(d.op) && !d.arg && !d.force){ openForm(d.op, d.id); return; } apply(d.op, d.id, {arg:d.arg, force:!!d.force, sure:!!d.sure}); },
   menuop(el){ const d = el.dataset; if (NEEDS_TEXT.has(d.op) || d.op==="dispatch") openForm(d.op, d.id); else apply(d.op, d.id); },
   more(el){ openMenu(el, "task", el.dataset.id); }, smore(el){ openMenu(el, "session", el.dataset.id); }, newmenu(el){ openMenu(el, "new"); }, scope(el){ openMenu(el, "scope"); },
@@ -1146,12 +1256,12 @@ document.addEventListener("keydown", e => {
   }
   if (typing || e.ctrlKey || e.metaKey || e.altKey || S.sheet || S.menu) return;
   const page = route().page;
-  if (LISTS.has(page) && inspOn()){
+  if (selOn(page)){
     const d = {j:1, ArrowDown:1, k:-1, ArrowUp:-1}[e.key];
     if (d){ e.preventDefault(); S.sel[page] = ROWS[Math.max(0, Math.min(ROWS.length-1, ROWS.indexOf(S.sel[page])+d))]; S.reveal = true; render(true); return; }
-    if (e.key==="Enter" && !/BUTTON|A/.test(document.activeElement?.tagName||"")){ const el = document.querySelector(".row.sel"); if (el) location.hash = el.dataset.to; return; }
+    if (e.key==="Enter" && !/BUTTON|A/.test(document.activeElement?.tagName||"")){ const el = document.querySelector(".sel[data-key]"); if (el) location.hash = el.dataset.to; return; }
   }
-  if (e.key==="i" && LISTS.has(page)){ S.insp = !S.insp; render(true); return; }
+  if (e.key==="i" && LISTS.has(page) && page!=="home"){ S.insp = !S.insp; render(true); return; }
   const go = {h:"home", t:"tasks", s:"sessions", a:"activity", ",":"settings"}[e.key];
   if (go){ location.hash = go; return; }
   if (e.key==="/"){ e.preventDefault(); if (route().page!=="home") S.sheet = {kind:"ask"}; render(true); document.getElementById("ask")?.focus(); }
@@ -1160,8 +1270,8 @@ addEventListener("hashchange", () => { S.menu = null; S.file = 0; render(); });
 addEventListener("resize", () => render(true));
 
 document.getElementById("notes").innerHTML = `<h2>Design notes</h2><p>Brief: <code>docs/app-design/REDESIGN.md</code>, from the owner interviews of 2026-11-19. This file is a reference for the next step, not the app. Its data is a sample and its actions run on a small local engine.</p>
-<h3>Principles</h3><ol><li><b>Attention first.</b> The first thing on screen is what waits on you.</li><li><b>Four places at rest.</b> Home, Tasks, Sessions, Activity; every other page has exactly one home under them.</li><li><b>One page per thing.</b> A task has one page, a session has one page; lists only open them.</li><li><b>One next step.</b> Each thing shows the one press that moves it; the rest is under More.</li><li><b>Decide where it is cheapest.</b> On a wide screen, in the inspector beside the list. On a phone, small answers in the list and large ones at the top of the page.</li><li><b>One scope.</b> The project in scope applies everywhere and is always visible.</li><li><b>The engine's words, the engine decides.</b> 8 statuses, CLI operation names, progress as a plain phrase; the app suggests but never predicts a refusal.</li><li><b>One list, one panel beside it.</b> No tabs inside pages (the task page excepted). A wide screen keeps the panel open: the inspector beside a list, Details beside a conversation. A phone shows one column and opens the rest.</li><li><b>Dense, and it uses the width.</b> The owner is technical: a row is a table row with a header (status, id, title, now, run, gate, review, land, project, profile, cost, age, next step), and columns give way only when there is no room. Colour only for state.</li><li><b>Same product on every device.</b> The phone has the same places, pages and actions, with less on screen at once.</li></ol>
-<h3>Things to try</h3><ol><li>Any list: click a row, or walk with <code>j</code> <code>k</code>, and read it in the inspector; <code>Enter</code> or a second click opens its page; <code>i</code> hides the inspector and every column comes back; <code>Ctrl B</code> folds the sidebar.</li><li>Home: reply to T-887 and answer B-k3x9 from the inspector. On the phone frame the same answers sit in the list.</li><li>Tasks: press Dispatch on T-707 (refused: no slot) and on T-706 (refused: dependency); each refusal offers its forced form.</li><li>Open T-703: Approve asks once, then the task moves to Just finished. Its Changes tab holds the diff.</li><li>Open T-944: a Blocked task with a log; the engine's next steps are its buttons.</li><li>Any row's ⋯: all 15 operations, the next step marked.</li><li>The scope switcher at the top of the sidebar scopes every page. A scoped Home is the Project page.</li><li>Open B-p8d1: Details are open, a message can be queued or steer the turn, and the status line is under the composer. Open B-m2q7 to choose a build's exit.</li><li>Activity › Timeline ends with the burn-up.</li><li>Keys: <code>h t s a ,</code> places, <code>j k Enter i</code> lists, <code>/</code> composer, <code>Ctrl K</code> go to, <code>Ctrl B</code> sidebar, <code>Esc</code> back.</li></ol>
+<h3>Principles</h3><ol><li><b>Attention first.</b> The first thing on screen is what waits on you. On a wide screen Home is a dashboard that leads with it; it is not a second Tasks list.</li><li><b>Four places at rest.</b> Home, Tasks, Sessions, Activity; every other page has exactly one home under them.</li><li><b>One page per thing.</b> A task has one page, a session has one page; lists only open them.</li><li><b>One next step.</b> Each thing shows the one press that moves it; the rest is under More.</li><li><b>Decide where it is cheapest.</b> On a wide screen, in the open card on Home or in the inspector beside a list. On a phone, small answers in the list and large ones at the top of the page.</li><li><b>One scope.</b> The project in scope applies everywhere and is always visible.</li><li><b>The engine's words, the engine decides.</b> 8 statuses, CLI operation names, progress as a plain phrase; the app suggests but never predicts a refusal.</li><li><b>One list, one panel beside it.</b> No tabs inside pages (the task page excepted). A wide screen keeps the panel open: the inspector beside a list, Details beside a conversation. A phone shows one column and opens the rest.</li><li><b>Dense, and it uses the width.</b> The owner is technical: a row is a table row with a header (status, id, title, now, run, gate, review, land, project, profile, cost, age, next step), and columns give way only when there is no room. Colour only for state.</li><li><b>Same product on every device.</b> The phone has the same places, pages and actions, with less on screen at once.</li></ol>
+<h3>Things to try</h3><ol><li>Home is a dashboard: numbers on top, what waits on you as cards on the left, what Corral is doing on the right. Reply to T-887 in its open card; click B-k3x9, or press <code>j</code>, to open that card and answer it; press a project to scope every page. On the phone frame Home is one list and the same answers sit in it.</li><li>Tasks and Sessions: click a row, or walk with <code>j</code> <code>k</code>, and read it in the inspector; <code>Enter</code> or a second click opens its page; <code>i</code> hides the inspector and every column comes back; <code>Ctrl B</code> folds the sidebar.</li><li>Tasks: press Dispatch on T-707 (refused: no slot) and on T-706 (refused: dependency); each refusal offers its forced form.</li><li>Open T-703: Approve asks once, then the task moves to Just finished. Its Changes tab holds the diff.</li><li>Open T-944: a Blocked task with a log; the engine's next steps are its buttons.</li><li>Any row's ⋯: all 15 operations, the next step marked.</li><li>The scope switcher at the top of the sidebar scopes every page. A scoped Home is the Project page.</li><li>Open B-p8d1: Details are open, a message can be queued or steer the turn, and the status line is under the composer. Open B-m2q7 to choose a build's exit.</li><li>Activity › Timeline ends with the burn-up.</li><li>Keys: <code>h t s a ,</code> places, <code>j k Enter</code> cards and rows, <code>i</code> inspector, <code>/</code> composer, <code>Ctrl K</code> go to, <code>Ctrl B</code> sidebar, <code>Esc</code> back.</li></ol>
 <h3>Where the nine destinations went</h3><table><tr><th>Today</th><th>Here</th></tr><tr><td>Now › Needs you</td><td>Home › Needs you</td></tr><tr><td>Now › Corral, Workers</td><td>Home › Working</td></tr><tr><td>Now › Waiting, Closed</td><td>Tasks</td></tr><tr><td>Changes</td><td>Activity › Feed</td></tr><tr><td>Plans</td><td>A task page with Children; a row in Tasks that unfolds</td></tr><tr><td>Agents</td><td>Sessions</td></tr><tr><td>Review</td><td>The task page: decision band and Changes tab</td></tr><tr><td>Timeline, Usage, Artifacts</td><td>Activity › Timeline, Usage, Artifacts</td></tr><tr><td>Project list, Project page, filter chips</td><td>The scope switcher; scoped Home</td></tr><tr><td>Ask drawer</td><td>The composer on Home; <code>/</code> elsewhere</td></tr><tr><td>Actions menu, Session menu</td><td>One next step plus More</td></tr></table>
 <h3>Deep links</h3><p><code>#home #tasks #task/T-703/changes #sessions #session/B-k3x9 #activity/usage #settings</code>, with <code>?frame=phone&amp;theme=light&amp;scope=corral&amp;sel=T-703&amp;noinsp&amp;fold&amp;details&amp;notes&amp;demo=more|refusal|confirm|scope|form</code> before the hash.</p>`;
 

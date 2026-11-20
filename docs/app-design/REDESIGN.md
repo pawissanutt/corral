@@ -1,7 +1,8 @@
 # Corral app redesign: concept and principles
 
-Owner interviews of 2026-11-19: a first round, then a second after the owner saw the first
-reference. Every row under *Decisions* is an owner answer. The standalone
+Owner interviews of 2026-11-19: a first round, a second after the owner saw the first
+reference, and one remark after the second reference. Every row under *Decisions* is an owner
+answer. The standalone
 reference built from this brief is [mockup/redesign.html](mockup/redesign.html). Once the owner
 accepts that reference, this document and it replace `mockup/DESIGN.md` and
 `mockup/main-loop.html` as the design authority for `apps/corral-app`. Until then they are a
@@ -59,13 +60,21 @@ is drawn is a design choice, listed under *What follows from them*.
 | 18 | **The session workbench.** Changes, child agents, plan, context and cost visible beside the conversation by default, with the queue and a status line. |
 | 19 | **Overview numbers.** Counts per stage, slots in use, what changed since the last visit, and the burn-up. |
 
+Third remark. The second reference drew Home as a table with an inspector, like Tasks. The
+owner: "I feel home and task become almost the same. How about make home feel more like
+dashboard?"
+
+| # | Decision |
+|---|---|
+| 20 | **Home feels like a dashboard,** not like a second Tasks list. |
+
 ## Principles
 
-1. **Attention first.** The first thing on screen is what waits on you.
+1. **Attention first.** The first thing on screen is what waits on you. On a wide screen Home is a dashboard that leads with it; it is not a second Tasks list.
 2. **Four places at rest.** Home, Tasks, Sessions, Activity; every other page has exactly one home under them.
 3. **One page per thing.** A task has one page, a session has one page; lists only open them.
 4. **One next step.** Each thing shows the one press that moves it; the rest is under More.
-5. **Decide where it is cheapest.** On a wide screen, in the inspector beside the list. On a phone, small answers in the list and large ones at the top of the page.
+5. **Decide where it is cheapest.** On a wide screen, in the open card on Home or in the inspector beside a list. On a phone, small answers in the list and large ones at the top of the page.
 6. **One scope.** The project in scope applies everywhere and is always visible.
 7. **The engine's words, the engine decides.** 8 statuses, CLI operation names, progress as a plain phrase; the app suggests but never predicts a refusal.
 8. **One list, one panel beside it.** No tabs inside pages (the task page excepted). A wide screen keeps the panel open: the inspector beside a list, Details beside a conversation. A phone shows one column and opens the rest.
@@ -88,19 +97,29 @@ one; the reference shows each so it can be accepted or changed there.
   once.
 - **A plan in the Tasks list** is a row in its own status group that unfolds its children in
   place. Each child is also listed once in its own status group, with its parent's id.
-- **Home rows.** A task and a session share one row anatomy; the id prefix (`T-`, `B-`, `A-`)
-  and the role word tell them apart.
+- **Home on a wide screen is a dashboard** (decision 20; what it holds is my reading, and it
+  replaces decision 8's three sections there). A row of six numbers: needs you, working with the
+  slots, ready, sessions by state, landed since the last visit, cost today. Under it, two halves.
+  Left, what waits on you, as cards: one card is open and holds the decision (reason, log, reply
+  box or options, the engine's next steps); the others are two lines with their one next step.
+  Right, what Corral is doing: Working as lanes drawn over today, then panels for tasks by
+  status, projects (or the project's facts when one is in scope), cost today by profile or
+  model, the latest events, just finished, and the burn-up. Every number and panel links to the
+  page that holds its detail; a project row sets the scope. The composer stays docked.
+- **Home is not a list there,** so it has no table header, columns or inspector; those belong to
+  Tasks and Sessions. `j`/`k` or a click opens the next card and `Enter` opens its page.
+- **Home on the phone** keeps the three sections of decision 8 as one list. A task and a session
+  share one row anatomy; the id prefix (`T-`, `B-`, `A-`) and the role word tell them apart.
 - **What the second round changes in the first, on a wide screen only.** These three are my
-  reading of decisions 15 to 19, not separate owner answers. Decision 9: the inspector is where
-  things are decided, so a list row stays one line there; the phone still answers small things
-  in the list. Decision 11: a session's Details panel is open by default; on the phone it stays
+  reading of decisions 15 to 19, not separate owner answers. Decision 9: Home's open card and the
+  inspector are where things are decided, including the big ones; the phone still answers small
+  things in the list and opens a page for the rest. Decision 11: a session's Details panel is open by default; on the phone it stays
   closed until opened. Decision 13: the words are still the engine's, and a Tasks row also shows
   run, gate, review and land as four marks under a header that names them, each with its
   sentence as a hint and spelled out in the inspector.
 - **Selecting and opening.** With the inspector shown, a click or `j`/`k` selects a row and
-  `Enter` or a second click opens its page; the first row is selected on arrival, so Home opens
-  on the first thing that needs you. `i` hides the inspector; a row then opens its page on one
-  click, and Home answers small things in the list as on the phone.
+  `Enter` or a second click opens its page; the first row is selected on arrival. `i` hides the
+  inspector; a row then opens its page on one click.
 - **Columns give way in a fixed order** as the list narrows: profile, then project. Both stay in
   the inspector. At 1440 pt with the inspector open a task row shows status, id, title, now, the
   four pipeline marks, cost, age and the next step; hiding the inspector or folding the sidebar
@@ -115,10 +134,9 @@ one; the reference shows each so it can be accepted or changed there.
 - **The session page on a wide screen:** Details open, a queue above the composer (a message to
   a working agent is Queued or Steers the turn), and one status line under it (role, cost,
   context, model, quiet time). The phone form has none of the three, as in the first reference.
-- **Overview numbers** also count sessions by state and today's cost, which decision 19 does not
-  name.
-- **Overview numbers** sit in one band under Home's head, each linking to the page that holds
-  the detail. The burn-up is at the foot of Activity › Timeline.
+- **Overview numbers** are Home's tiles and panels. They also count sessions by state and
+  today's cost, which decision 19 does not name. The burn-up is a panel on Home and, with its
+  full legend, at the foot of Activity › Timeline.
 - **The composer** is docked on Home. `/` from any other page opens the same composer over it.
 - **Sessions** is one list grouped by state (Blocked, Working, Idle, then Gone folded), with New
   for a chat or a build.
@@ -141,9 +159,9 @@ one; the reference shows each so it can be accepted or changed there.
 | Settings | Settings, at the foot of the sidebar |
 | Sidebar project list, Project page, per-screen filter chips | The scope switcher; Home scoped to a project is its Project page |
 | Ask drawer | The composer on Home; `/` opens it elsewhere |
-| Now's side panel (Story, Evidence, Session) | The inspector beside Home, Tasks and Sessions |
+| Now's side panel (Story, Evidence, Session) | The open card on Home; the inspector beside Tasks and Sessions |
 | The rail on each row | Four pipeline marks under a named header, on Tasks rows |
-| Loop bands and glance stats | The overview band under Home's head |
+| Loop bands and glance stats | The tiles and panels of Home |
 | Session tabs, sidebar, dock and status bar | The conversation, the Details panel, the queue and one status line |
 | Row Actions menu, Session menu | One next step plus More |
 
@@ -152,6 +170,9 @@ one; the reference shows each so it can be accepted or changed there.
 - The terminal form.
 - Keyboard bindings beyond the place keys, `j` `k` `Enter` `i` on lists, `/`, `Ctrl K` and `Ctrl B`.
 - Whether the inspector can be resized, and whether Feed gets one.
+- Which panels Home carries, and whether the owner can arrange or hide them.
+- Whether the phone's Home gets any of the dashboard's numbers. Decision 15 keeps the phone as it
+  was, so the reference leaves them out there.
 - Whether the phone gets the queue and the status line. Principle 10 says it should; decision 15
   keeps the phone as it was, so the reference leaves them out there.
 - Whether the wire needs anything new. The reference reads only facts the daemon serves today
