@@ -1,20 +1,10 @@
 //! The default filing project is orthogonal to the record Ask is about.
-use crate::model::{
-    Id, NavState, Route,
-    daemon::Feed,
-    projects::{FilterScreen, Filters, ProjectFilter},
-};
+use crate::model::{Id, projects::Scope};
 use corral_protocol::assistant::ContextRef;
 
-pub fn default_project(nav: &NavState, filters: &Filters, feed: &Feed) -> Option<Id> {
-    if let Some(Route::Project(id)) = nav.pages.last() {
-        return crate::model::projects::contains_project(feed, id).then(|| id.clone());
-    }
-    let screen = FilterScreen::of(nav.destination)?;
-    match filters.get(feed.store.as_deref()?, screen, feed) {
-        ProjectFilter::Project(id) => Some(id),
-        _ => None,
-    }
+/// The project Ask files under by default: the one in scope.
+pub fn default_project(scope: &Scope) -> Option<Id> {
+    scope.project().cloned()
 }
 
 pub fn project_context(id: &Id) -> ContextRef {

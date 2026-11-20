@@ -1,10 +1,16 @@
-//! The app's address: the place the navigation shows, written as path segments (`agents/B-12`)
-//! so a reload, a link or the browser's Back can name it again. Where the segments sit in a
-//! URL is the platform's business (`state::address`).
+//! The app's address: the place the navigation shows, written as path segments (`task/T-12`,
+//! `activity/usage`) so a reload, a link or the browser's Back can name it again. Where the
+//! segments sit in a URL is the platform's business (`state::address`). The paths of the nine
+//! former destinations and of the Project page still parse, each to its new home.
 
+use crate::model::nav::{Area, TaskTab};
 use crate::model::{Destination, Form, Id, Live, NavState, Route, SettingsSection};
 
-/// The first segment of a project page; no destination has this slug.
+/// The first segment of a task's page, a session's page and Activity's pages.
+const TASK: &str = "task";
+const SESSION: &str = "session";
+const ACTIVITY: &str = "activity";
+/// The first segment of the former Project page.
 const PROJECTS: &str = "projects";
 
 /// What an address names.
@@ -14,46 +20,38 @@ pub enum Place {
     Destination(Destination),
     /// A Settings section.
     Settings(SettingsSection),
-    /// A record: a session's page, or a task, plan or review shown in its destination.
-    Live(Live),
-    /// A project's page.
+    /// A task's page at one of its tabs.
+    Task(Id, TaskTab),
+    /// A session's page.
+    Session(Id),
+    /// Home scoped to a project: where the former Project page went. Only an old address
+    /// names it; the scope is not part of the address the app writes.
     Project(Id),
 }
 
 /// What a shell shows that the navigation itself does not hold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shown {
-    /// Whether Now shows its selected task beside the list.
-    pub inspector: bool,
     /// The Settings section the phone's stack has open over its Settings list.
     pub phone_section: Option<SettingsSection>,
 }
 
 impl Place {
-    /// Where the navigation is. Off the phone a task, plan or review is selected beside its
-    /// list rather than pushed, so the selection is part of the place there.
+    /// Where the navigation is: the page on top, else the destination.
     pub fn of(nav: &NavState, form: Form, shown: Shown) -> Place {
         match nav.pages.last() {
-            Some(Route::Live(live)) => return Place::Live(live.clone()),
-            Some(Route::Project(id)) => return Place::Project(id.clone()),
+            Some(Route::Live(Live::Session(id))) => return Place::Session(id.clone()),
+            Some(Route::Live(Live::Task(id) | Live::Plan(id) | Live::Review(id))) => {
+                return Place::Task(id.clone(), nav.task_tab);
+            }
             None => {}
         }
-        let selected = |id: &Option<Id>, live: fn(Id) -> Live| {
-            id.clone()
-                .filter(|_| form != Form::Phone)
-                .map_or(Place::Destination(nav.destination), |id| {
-                    Place::Live(live(id))
-                })
-        };
         match nav.destination {
             // The phone lists the sections first; which one is open is its shell's.
             Destination::Settings if form == Form::Phone => shown
                 .phone_section
                 .map_or(Place::Destination(Destination::Settings), Place::Settings),
             Destination::Settings => Place::Settings(nav.settings),
-            Destination::Now if shown.inspector => selected(&nav.selection.task, Live::Task),
-            Destination::Plans => selected(&nav.selection.plan, Live::Plan),
-            Destination::Review => selected(&nav.selection.review, Live::Review),
             destination => Place::Destination(destination),
         }
     }
@@ -61,11 +59,16 @@ impl Place {
     /// The place as path segments, without a leading slash.
     pub fn path(&self) -> String {
         match self {
+            Place::Destination(destination) if destination.area() == Area::Activity => {
+                format!("{ACTIVITY}/{}", destination.slug())
+            }
             Place::Destination(destination) => destination.slug().to_owned(),
             Place::Settings(section) => {
                 format!("{}/{}", Destination::Settings.slug(), section.slug())
             }
-            Place::Live(live) => format!("{}/{}", live.owner().slug(), escape(live.id().as_str())),
+            Place::Task(id, TaskTab::Overview) => format!("{TASK}/{}", escape(id.as_str())),
+            Place::Task(id, tab) => format!("{TASK}/{}/{}", escape(id.as_str()), tab.slug()),
+            Place::Session(id) => format!("{SESSION}/{}", escape(id.as_str())),
             Place::Project(id) => format!("{PROJECTS}/{}", escape(id.as_str())),
         }
     }
@@ -74,50 +77,63 @@ impl Place {
     pub fn parse(path: &str) -> Option<Place> {
         let path = path.trim_matches('/');
         let (first, rest) = path.split_once('/').unwrap_or((path, ""));
-        let id = || unescape(rest).filter(|id| !id.is_empty()).map(Id::from);
-        if first == PROJECTS {
-            return id().map(Place::Project);
+        let id = |rest: &str| unescape(rest).filter(|id| !id.is_empty()).map(Id::from);
+        match first {
+            TASK => {
+                // A task's id has no slash, so a last segment naming a tab is the tab.
+                let (name, tab) = rest
+                    .rsplit_once('/')
+                    .and_then(|(name, tab)| Some((name, TaskTab::from_slug(tab)?)))
+                    .unwrap_or((rest, TaskTab::Overview));
+                return id(name).map(|id| Place::Task(id, tab));
+            }
+            SESSION => return id(rest).map(Place::Session),
+            PROJECTS => return id(rest).map(Place::Project),
+            ACTIVITY => {
+                let page = Destination::from_slug(rest)
+                    .filter(|page| page.area() == Area::Activity)
+                    .unwrap_or(Destination::Feed);
+                return Some(Place::Destination(page));
+            }
+            _ => {}
         }
         let destination = Destination::from_slug(first)?;
-        let record = match destination {
-            Destination::Settings => SettingsSection::from_slug(rest).map(Place::Settings),
-            Destination::Now => id().map(|id| Place::Live(Live::Task(id))),
-            Destination::Plans => id().map(|id| Place::Live(Live::Plan(id))),
-            Destination::Review => id().map(|id| Place::Live(Live::Review(id))),
-            Destination::Agents => id().map(|id| Place::Live(Live::Session(id))),
+        // The former destinations' record paths: `now/T-1`, `plans/T-1`, `review/T-1`,
+        // `agents/B-1`.
+        let record = match (destination, first) {
+            (Destination::Settings, _) => SettingsSection::from_slug(rest).map(Place::Settings),
+            (Destination::Home, "now") | (Destination::Tasks, "plans" | "review") => {
+                id(rest).map(|id| Place::Task(id, TaskTab::Overview))
+            }
+            (Destination::Sessions, "agents") => id(rest).map(Place::Session),
             _ => None,
         };
         Some(record.unwrap_or(Place::Destination(destination)))
     }
 
-    /// Goes to the place: its page alone over its destination, whatever was open before.
-    pub fn open(self, nav: &mut NavState, form: Form) {
+    /// Goes to the place: its page alone over its destination, whatever was open before. A
+    /// project's address goes Home; setting the scope is the caller's.
+    pub fn open(self, nav: &mut NavState) {
         match self {
             Place::Destination(destination) => nav.go(destination),
             Place::Settings(section) => nav.go_settings(section),
-            Place::Live(live) => {
+            Place::Task(id, tab) => {
                 nav.pages.clear();
-                nav.open_live(live, form);
+                nav.open_live(Live::Task(id));
+                nav.task_tab = tab;
             }
-            Place::Project(id) => {
+            Place::Session(id) => {
                 nav.pages.clear();
-                nav.open_project(id);
+                nav.open_live(Live::Session(id));
             }
+            Place::Project(_) => nav.go(Destination::Home),
         }
     }
 
-    /// Whether moving between the two only changes the record selected beside a list: not a
-    /// step the browser's Back returns to.
+    /// Whether moving between the two only changes the tab of one task's page: not a step the
+    /// browser's Back returns to.
     pub fn same_page(&self, other: &Place) -> bool {
-        self.list().is_some() && self.list() == other.list()
-    }
-
-    fn list(&self) -> Option<Destination> {
-        match self {
-            Place::Destination(destination) => Some(*destination),
-            Place::Live(live) if !matches!(live, Live::Session(_)) => Some(live.owner()),
-            Place::Live(_) | Place::Settings(_) | Place::Project(_) => None,
-        }
+        matches!((self, other), (Place::Task(a, _), Place::Task(b, _)) if a == b)
     }
 }
 
@@ -166,7 +182,6 @@ mod tests {
     use super::*;
 
     const SHOWN: Shown = Shown {
-        inspector: true,
         phone_section: None,
     };
 
@@ -175,14 +190,14 @@ mod tests {
         let mut fresh = NavState::new(form);
         Place::parse(&place.path())
             .unwrap_or_else(|| panic!("{} names nothing", place.path()))
-            .open(&mut fresh, form);
+            .open(&mut fresh);
         assert_eq!(fresh.pages, nav.pages, "{}", place.path());
         assert_eq!(fresh.destination, nav.destination, "{}", place.path());
         Place::of(&fresh, form, SHOWN)
     }
 
     /// A reload lost everything but the destination: each place a form can show has to come
-    /// back from its own path, pages and selection included.
+    /// back from its own path, its page and the task page's tab included.
     #[test]
     fn a_reload_lands_on_the_place_the_path_names() {
         for form in [Form::Desktop, Form::Phone] {
@@ -193,18 +208,20 @@ mod tests {
             }
             for live in [
                 Live::Task(Id::from("T-12")),
-                Live::Plan(Id::from("T-885")),
-                Live::Review(Id::from("T-12")),
                 Live::Session(Id::from("B-k3x9/child/review.1")),
                 Live::Session(Id::from("T-871_R1")),
             ] {
                 nav.go(Destination::Usage);
-                nav.open_live(live.clone(), form);
-                assert_eq!(reloaded(&nav, form), Place::Live(live));
+                nav.open_live(live);
+                assert_eq!(reloaded(&nav, form), Place::of(&nav, form, SHOWN));
             }
             nav.go(Destination::Usage);
-            nav.open_project(Id::from("my site"));
-            assert_eq!(reloaded(&nav, form), Place::Project(Id::from("my site")));
+            nav.open_live(Live::Task(Id::from("T-12")));
+            nav.task_tab = TaskTab::Changes;
+            assert_eq!(
+                reloaded(&nav, form),
+                Place::Task(Id::from("T-12"), TaskTab::Changes)
+            );
         }
         let mut nav = NavState::new(Form::Desktop);
         nav.go_settings(SettingsSection::Config);
@@ -225,14 +242,13 @@ mod tests {
         assert_eq!(list, Place::Destination(Destination::Settings));
         let open = Shown {
             phone_section: Some(SettingsSection::Config),
-            ..SHOWN
         };
         let section = Place::of(&nav, Form::Phone, open);
         assert_ne!(section.path(), list.path());
         let mut fresh = NavState::new(Form::Phone);
         Place::parse(&section.path())
             .unwrap_or_else(|| panic!("{} names nothing", section.path()))
-            .open(&mut fresh, Form::Phone);
+            .open(&mut fresh);
         assert_eq!(
             (fresh.settings, fresh.section_opens),
             (SettingsSection::Config, 1)
@@ -243,38 +259,72 @@ mod tests {
     /// names nothing must leave the stored destination alone rather than land somewhere.
     #[test]
     fn paths_keep_no_dot_and_unknown_ones_name_nothing() {
-        let child = Place::Live(Live::Session(Id::from("B-1/child/gpt-5.2")));
-        assert_eq!(child.path(), "agents/B-1/child/gpt-5%2E2");
-        for path in ["", "/", "nowhere", "projects", "now/%zz", "now/%FF"] {
-            let place = Place::parse(path);
-            assert!(
-                matches!(place, None | Some(Place::Destination(Destination::Now))),
-                "{path}: {place:?}"
-            );
+        let child = Place::Session(Id::from("B-1/child/gpt-5.2"));
+        assert_eq!(child.path(), "session/B-1/child/gpt-5%2E2");
+        for path in [
+            "",
+            "/",
+            "nowhere",
+            "projects",
+            "task",
+            "task/%zz",
+            "session/%FF",
+        ] {
+            assert_eq!(Place::parse(path), None, "{path}");
         }
-        assert_eq!(Place::parse(""), None);
-        assert_eq!(Place::parse("nowhere"), None);
         assert_eq!(url_path("https://corral.test:8790"), "");
         assert_eq!(
-            Place::parse(url_path("https://corral.test:8790/plans/T-7?x=1#y")),
-            Some(Place::Live(Live::Plan(Id::from("T-7"))))
-        );
-        assert_eq!(
-            Place::parse("/builds/"),
-            Some(Place::Destination(Destination::Agents))
+            Place::parse(url_path("https://corral.test:8790/task/T-7/history?x=1#y")),
+            Some(Place::Task(Id::from("T-7"), TaskTab::History))
         );
     }
 
-    /// Walking a list must not fill the browser's history: only a new page is a step back.
+    /// A bookmark or a link from before the four places named a destination, a record under
+    /// one or a project's page: each has to open its new home, never the root.
     #[test]
-    fn selecting_beside_a_list_is_the_same_page() {
-        let now = Place::Destination(Destination::Now);
-        let task = |id: &str| Place::Live(Live::Task(Id::from(id)));
-        assert!(now.same_page(&task("T-1")));
-        assert!(task("T-1").same_page(&task("T-2")));
-        assert!(!task("T-1").same_page(&Place::Live(Live::Plan(Id::from("T-1")))));
-        let session = |id: &str| Place::Live(Live::Session(Id::from(id)));
+    fn the_former_addresses_open_their_new_homes() {
+        let task = |id: &str| Some(Place::Task(Id::from(id), TaskTab::Overview));
+        let page = |destination| Some(Place::Destination(destination));
+        for (path, place) in [
+            ("now", page(Destination::Home)),
+            ("inbox", page(Destination::Home)),
+            ("now/T-1", task("T-1")),
+            ("plans", page(Destination::Tasks)),
+            ("plans/T-885", task("T-885")),
+            ("review/T-12", task("T-12")),
+            ("agents", page(Destination::Sessions)),
+            ("/builds/", page(Destination::Sessions)),
+            (
+                "agents/B-1/child/c2",
+                Some(Place::Session(Id::from("B-1/child/c2"))),
+            ),
+            ("changes", page(Destination::Feed)),
+            ("timeline", page(Destination::Timeline)),
+            ("usage", page(Destination::Usage)),
+            ("artifacts", page(Destination::Artifacts)),
+            ("activity", page(Destination::Feed)),
+            (
+                "projects/my%20site",
+                Some(Place::Project(Id::from("my site"))),
+            ),
+        ] {
+            assert_eq!(Place::parse(path), place, "{path}");
+        }
+        let mut nav = NavState::new(Form::Desktop);
+        nav.go(Destination::Usage);
+        Place::Project(Id::from("site")).open(&mut nav);
+        assert_eq!(nav.destination, Destination::Home);
+    }
+
+    /// Switching a task page's tab must not fill the browser's history: only a new page is a
+    /// step back.
+    #[test]
+    fn a_tab_of_the_same_task_is_the_same_page() {
+        let task = |id: &str, tab| Place::Task(Id::from(id), tab);
+        assert!(task("T-1", TaskTab::Overview).same_page(&task("T-1", TaskTab::Changes)));
+        assert!(!task("T-1", TaskTab::Overview).same_page(&task("T-2", TaskTab::Overview)));
+        assert!(!Place::Destination(Destination::Tasks).same_page(&task("T-1", TaskTab::Overview)));
+        let session = |id: &str| Place::Session(Id::from(id));
         assert!(!session("A-1").same_page(&session("A-2")));
-        assert!(!session("A-1").same_page(&Place::Destination(Destination::Agents)));
     }
 }

@@ -63,6 +63,10 @@ pub struct AppState {
     /// Every session page's UI state (tab, draft, this device's sends), kept for the app's life.
     pub session: source::StateSource<session::State>,
     pub review: source::StateSource<review::State>,
+    /// Home's selected row or card.
+    pub home: Signal<crate::model::home::State>,
+    /// The Tasks list's open folds.
+    pub tasks: Signal<crate::model::tasks::State>,
     pub settings: source::StateSource<settings::State>,
     pub assistant: source::StateSource<assistant::State>,
     /// The destructive or forced operation, or the session control, waiting for its one local
@@ -72,8 +76,13 @@ pub struct AppState {
     pub refusal: Signal<Option<RefusalSheet>>,
     /// The real context "Ask about this" attached to the composer; cleared when Ask closes.
     pub ask_context: Signal<Option<ContextRef>>,
-    /// Independent per-store screen scopes persisted as `corral.filters`.
-    pub filters: Signal<crate::model::projects::Filters>,
+    /// The one project scope per daemon store, persisted as `corral.scope`.
+    pub scopes: Signal<crate::model::projects::Scopes>,
+    /// A scope asked for before the daemon named its store.
+    scope_pending: Signal<Option<crate::model::projects::Scope>>,
+    /// Whether a list page shows its inspector beside the rows (`i`); hidden, a row opens its
+    /// page on one press.
+    pub inspector: Signal<bool>,
     project_context_removed: Signal<Option<Id>>,
     /// What is staged for each session's next message, shared by Ask and the session page like
     /// the draft. In memory only; it outlives a closed Ask so a picker answering late still lands.
@@ -106,12 +115,12 @@ pub struct AppState {
     sidebar_peek: Signal<bool>,
     /// On the app's root view: the keyboard focus being anywhere in the app.
     pub focus_root: ElementRef,
-    /// On the destination's keyboard list (Now's, Inbox's): its keys act while the focus is in
-    /// it, or nowhere.
+    /// On the place's keyboard list (Home's, Tasks', Sessions'): its keys act while the focus is
+    /// in it, or nowhere.
     pub list_keys: ElementRef,
-    /// The Now task row that holds the keyboard focus, or that a reply sent beside the list hands
-    /// it to: the list's Enter opens the selected task only while the focus is on its row (or
-    /// nowhere), so Enter on a focused Waiting toggle or another row presses that control.
+    /// The list row, by its test id, that holds the keyboard focus: the list's Enter opens the
+    /// selected row's page only while the focus is on that row (or nowhere), so Enter on a
+    /// focused fold or another row presses that control.
     pub focused_row: Signal<Option<String>>,
     /// The Settings section open on the phone's stack, which its shell keeps; the address
     /// names it.
@@ -134,8 +143,13 @@ impl AppState {
             nav.settings = section;
         }
         // The address a browser was opened at names the place over the stored destination.
+        // A project's address is Home scoped to it; the scope waits for the daemon's store.
+        let mut launch_scope = None;
         if let Some(place) = address::launched() {
-            place.open(&mut nav, form);
+            if let crate::model::address::Place::Project(id) = &place {
+                launch_scope = Some(crate::model::projects::Scope::Project(id.clone()));
+            }
+            place.open(&mut nav);
         }
         let (data, feed) = startup(
             &mut nav,
@@ -247,10 +261,14 @@ impl AppState {
                     ..Default::default()
                 },
             ),
+            home: signal(Default::default()),
+            tasks: signal(Default::default()),
             confirm: signal(None),
             refusal: signal(None),
             ask_context: signal(None),
-            filters: signal(projects::load_filters()),
+            scopes: signal(projects::load_scopes()),
+            scope_pending: signal(launch_scope),
+            inspector: signal(true),
             project_context_removed: signal(None),
             ask_staged: signal(BTreeMap::new()),
             ask_field: signal(None),
@@ -349,8 +367,23 @@ impl AppState {
 
     /// Changes destination and clears all pushed pages.
     pub fn go(&self, destination: Destination) {
-        let destination = self.workspace_destination(destination);
+        let destination = untracked(|| self.workspace_destination(destination));
         self.change(|nav| nav.go(destination));
+    }
+
+    /// Opens a place: its own page, or for Activity the page last shown there.
+    pub fn go_area(&self, area: crate::model::nav::Area) {
+        self.go(self.nav.with_untracked(|nav| nav.page_of(area)));
+    }
+
+    /// Shows or hides the inspector beside every list page.
+    pub fn toggle_inspector(&self) {
+        self.inspector.update(|shown| *shown = !*shown);
+    }
+
+    /// Shows a tab of the task page on top.
+    pub fn set_task_tab(&self, tab: crate::model::nav::TaskTab) {
+        self.nav.update(|nav| nav.task_tab = tab);
     }
 
     /// Opens a Settings section and clears all pushed pages.
@@ -420,7 +453,7 @@ impl AppState {
     }
 
     /// Escape priority: confirm sheet, refusal sheet, model list, the operation composer, newest
-    /// overlay, the selection on the Agents or Now page in view, the narrow sidebar's labels,
+    /// overlay, the selection on the Sessions page in view, the narrow sidebar's labels,
     /// then top page.
     pub fn close_newest(&self) {
         if self.confirm.get_untracked().is_some() {
@@ -444,8 +477,7 @@ impl AppState {
             return;
         }
         if self.agents.with_untracked(|state| state.start.open) {
-            let filter =
-                untracked(|| self.project_filter(crate::model::projects::FilterScreen::Agents));
+            let filter = untracked(|| self.scope_filter());
             self.reduce(self.agents, |state, feed, _, _| {
                 state.act(
                     agents::Action::Start(agents::StartAction::Close),
@@ -613,15 +645,15 @@ impl AppState {
             Action::Settings(section) => self.go_settings(section),
             Action::OpenLive(live) => self.open_live(live),
             Action::Project(id) => self.open_project(id),
+            Action::AllProjects => self.set_scope(crate::model::projects::Scope::All),
             Action::PreviewNoProjects => self.preview_no_projects(),
             Action::Ask(text) => match text {
                 Some(text) => self.open_ask_with(&text),
                 None => self.open_ask(),
             },
             Action::NewBuild => {
-                self.go(Destination::Agents);
-                let filter =
-                    untracked(|| self.project_filter(crate::model::projects::FilterScreen::Agents));
+                self.go(Destination::Sessions);
+                let filter = untracked(|| self.scope_filter());
                 self.reduce(self.agents, |state, feed, _, _| {
                     state.act(
                         agents::Action::Start(agents::StartAction::Open),
@@ -777,7 +809,7 @@ mod tests {
     fn unpaired_browser_opens_the_pairing_form_and_does_not_call_corrald_unreachable() {
         for form in [Form::Desktop, Form::Phone] {
             let mut nav = NavState::new(form);
-            nav.destination = Destination::Now;
+            nav.destination = Destination::Home;
             let configured = crate::client::saved_pairing(None);
             let (data, feed) = startup(&mut nav, true, configured, Ok(None));
             assert_eq!(nav.destination, Destination::Settings);

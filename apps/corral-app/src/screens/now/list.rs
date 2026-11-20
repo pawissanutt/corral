@@ -21,7 +21,7 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::closed::closed_section;
-use super::parts::{go_scoped, press, pressable, quiet};
+use super::parts::{press, pressable, quiet};
 use super::rows::{self, Fit, more_row, task_row};
 
 const RING: f32 = 2.0;
@@ -76,7 +76,7 @@ pub(super) fn main_column(app: AppState, page: Memo<NowPage>) -> AnyElement {
         band.with(|band| {
             loop_band(app, band, move |stage| {
                 if let Some(to) = stage.to {
-                    go_scoped(app, page, to);
+                    app.go(to);
                 }
             })
         })
@@ -437,7 +437,7 @@ pub(super) fn scope_note(app: AppState, page: Memo<NowPage>) -> AnyElement {
         computed(move || page.with(|page| page.scope_note.clone().zip(page.scope_action.clone())));
     dynamic(move || {
         note.with(|note| {
-            note.clone().map(|(words, action)| {
+            note.clone().map(|(words, _)| {
                 let form = app.form;
                 let line = rows::words(form, words.clone(), 12.5, hue_ink(Hue::You));
                 let link = view()
@@ -448,7 +448,7 @@ pub(super) fn scope_note(app: AppState, page: Memo<NowPage>) -> AnyElement {
                     .role(AccessibilityRole::Link)
                     .label(words)
                     .test_id("btn-scope-all")
-                    .on_press(move || app.set_project_filter(action.screen, action.filter.clone()))
+                    .on_press(move || app.set_scope(crate::model::projects::Scope::All))
                     .focus_visible(|s| {
                         s.outline(px(RING))
                             .outline_color(color(Token::Focus))

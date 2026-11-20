@@ -56,10 +56,8 @@ pub fn palette_record(
     }
     Some(
         match destination {
-            Destination::Now => selected.task.clone().map(Record::Task),
-            Destination::Plans => selected.plan.clone().map(Record::Task),
-            Destination::Review => selected.review.clone().map(Record::Task),
-            Destination::Agents => selected
+            Destination::Home | Destination::Tasks => selected.task.clone().map(Record::Task),
+            Destination::Sessions => selected
                 .session
                 .clone()
                 .filter(|session| session_task(session).is_some())
@@ -152,6 +150,36 @@ impl Verb {
             Self::Reopen => "Reopen",
             Self::NewTask => "New task…",
         }
+    }
+
+    /// What the word does, in a few words beside it in the More menu.
+    pub const fn hint(self) -> &'static str {
+        match self {
+            Self::Edit => "title, body and fields",
+            Self::Comment => "append a note",
+            Self::Move => "to another status",
+            Self::Dispatch => "start a worker",
+            Self::Reply => "send text to the worker",
+            Self::Done => "submit the worker's changes",
+            Self::Gate => "run the gate on HEAD",
+            Self::Review => "start a reviewer",
+            Self::Verdict => "record a review verdict",
+            Self::Changes => "send back with a note",
+            Self::Approve => "land onto the base",
+            Self::Retry => "restart the worker",
+            Self::Stop => "stop the session",
+            Self::Drop => "mark as Dropped",
+            Self::Reopen => "back to Backlog",
+            Self::NewTask => "file a task",
+        }
+    }
+
+    /// The operation of a More menu row, by its slug.
+    pub fn from_slug(slug: &str) -> Option<Verb> {
+        Self::TASK
+            .into_iter()
+            .chain([Verb::NewTask])
+            .find(|verb| verb.slug() == slug)
     }
 
     /// The composer's send button: the label without its ellipsis.

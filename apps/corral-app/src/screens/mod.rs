@@ -1,20 +1,30 @@
-//! The screens over the model, one module per destination, and the routing between them: a
-//! destination's screen, or on desktop and terminal the page above it. Routes corrald does not
-//! serve show a frame that says why; without a connection that frame offers Settings ›
-//! Connection and the labelled sample-data preview, and Settings itself stays available (its
-//! Connection page and this device's own preferences need no connection).
+//! The screens over the model and the routing between them: a place's screen (`home`, `tasks`,
+//! `sessions`, `activity`, `settings`), or the page above it, a task's (`task`) or a session's
+//! (`agents::session`). Routes corrald does not serve show a frame that says why; without a
+//! connection that frame offers Settings › Connection and the labelled sample-data preview, and
+//! Settings itself stays available (its Connection page and this device's own preferences need
+//! no connection).
+//!
+//! `now`, `plans`, `review`, `changes` and `projects` are the former destinations' screens. No
+//! route shows Now's, Plans', Review's or the Project page any more; their parts are what the
+//! task page and the places are built from, and each module goes once its parts have moved.
 
+pub mod activity;
 pub mod agents;
 pub mod artifacts;
 pub mod assistant;
 pub mod changes;
+pub mod home;
 pub mod landing;
 pub(crate) mod markdown;
 pub mod now;
 pub mod plans;
 pub mod projects;
 pub mod review;
+pub mod sessions;
 pub mod settings;
+pub mod task;
+pub mod tasks;
 pub mod timeline;
 pub mod usage;
 
@@ -67,7 +77,7 @@ impl PhoneBar {
 
 /// The destination's screen; the unavailable frame while no daemon serves it. Made again only
 /// when the data state or the destination's availability changes, so a screen keeps its own
-/// state otherwise. In a workspace with no projects, Now (where such a workspace lands) is the
+/// state otherwise. In a workspace with no projects, Home (where such a workspace lands) is the
 /// assistant landing.
 ///
 /// `root` is a phone tab's root: its unavailable frame keeps the head's search button, so a
@@ -94,10 +104,9 @@ pub fn destination(app: AppState, destination: Destination, root: bool) -> AnyEl
     })
 }
 
-/// The content container's page on desktop and terminal: the top page when there is one
-/// (the focused question, a session, a thread, a project), else the destination's screen.
-/// Tasks, plans and reviews are selected in place there, so their destination's screen shows
-/// them. Made again only when the route itself changes; the screens track their own state.
+/// The content container's page on desktop and terminal: the top page when there is one (a
+/// task's or a session's), else the destination's screen. Made again only when the route
+/// itself changes; the screens track their own state.
 pub fn content(app: AppState) -> AnyElement {
     let route = computed(move || {
         let destination = app.destination();
@@ -121,17 +130,19 @@ pub fn content(app: AppState) -> AnyElement {
             }
             match top {
                 Some(Route::Live(Live::Session(id))) => agents::live_session(app, id),
-                Some(Route::Project(id)) => projects::page(app, id),
-                _ => screen(app, destination),
+                Some(Route::Live(Live::Task(id) | Live::Plan(id) | Live::Review(id))) => {
+                    task::page(app, id)
+                }
+                None => screen(app, destination),
             }
         })
     })
 }
 
-/// Tracked: whether the destination shows the assistant landing: Now, in a served workspace
-/// that has no projects (its board destinations are not offered at all).
+/// Tracked: whether the destination shows the assistant landing: Home, in a served workspace
+/// that has no projects (its board places are not offered at all).
 fn lands(app: AppState, destination: Destination) -> bool {
-    destination == Destination::Now
+    destination == Destination::Home
         && app.data.get() != DataState::Disconnected
         && app.workspace_mode() == WorkspaceMode::AssistantOnly
 }
@@ -149,15 +160,22 @@ fn unavailable(app: AppState, destination: Destination) -> bool {
 /// Each destination's own screen.
 fn screen(app: AppState, destination: Destination) -> AnyElement {
     match destination {
-        Destination::Now => now::screen(app),
-        Destination::Changes => changes::screen(app),
-        Destination::Plans => plans::screen(app),
-        Destination::Agents => agents::screen(app),
-        Destination::Review => review::screen(app),
-        Destination::Timeline => timeline::screen(app),
-        Destination::Usage => usage::screen(app),
-        Destination::Artifacts => artifacts::screen(app),
+        Destination::Home => home::screen(app),
+        Destination::Tasks => tasks::screen(app),
+        Destination::Sessions => sessions::screen(app),
+        Destination::Feed | Destination::Timeline | Destination::Usage | Destination::Artifacts => {
+            activity::screen(app, destination)
+        }
         Destination::Settings => settings::screen(app),
+    }
+}
+
+/// A live record's page on a phone: the session's, or the task's for a task, a plan and a
+/// review candidate.
+pub fn live_phone(app: AppState, live: Live) -> PhonePage {
+    match live {
+        Live::Session(id) => agents::live_session_phone(app, id),
+        Live::Task(id) | Live::Plan(id) | Live::Review(id) => task::phone(app, id),
     }
 }
 

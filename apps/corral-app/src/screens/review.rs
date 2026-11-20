@@ -28,7 +28,7 @@ use nsh_core::prelude::*;
 
 use crate::model::act;
 use crate::model::daemon::{Feed, Link, Task};
-use crate::model::projects::{FilterScreen, ProjectFilter};
+use crate::model::projects::ProjectFilter;
 use crate::model::review::{self, Action, Body, ButtonStyle, Layout, LoopContent, LoopPage};
 use crate::model::work::{Press, Record};
 use crate::model::{Form, Hue, Id, Live, Rich, Selection};
@@ -41,7 +41,6 @@ use crate::ui::kit::glance::{page_head, stats};
 use crate::ui::kit::hint::hint_on;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::page::{Width, bar_pane, columns, pane};
-use crate::ui::kit::project_filter::project_filter;
 use crate::ui::kit::text::dim;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
@@ -149,7 +148,7 @@ pub fn live_review_phone(app: AppState, task: Id) -> PhonePage {
 
 /// The Review screen's own project scope, tracked.
 fn scope(app: AppState) -> ProjectFilter {
-    app.project_filter(FilterScreen::Review)
+    app.scope_filter()
 }
 
 /// The model's page at `width` (tracked: state, connection, selection, scope and feed).
@@ -360,7 +359,6 @@ fn desktop(cx: Ctx) -> AnyElement {
         .min_h(px(0.0))
         .opacity(move || if stale.get() { STALE_OPACITY } else { 1.0 })
         .child(page_title(&cx))
-        .child(project_filter(app, FilterScreen::Review))
         .child(
             view()
                 .flex_1()
@@ -401,7 +399,6 @@ fn terminal(cx: Ctx) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(page_title(&cx))
-        .child(project_filter(app, FilterScreen::Review))
         .child(
             view()
                 .flex_1()
@@ -425,10 +422,7 @@ fn phone_list(cx: Ctx) -> AnyElement {
         .child(pane(
             app,
             "review-list",
-            view()
-                .child(project_filter(app, FilterScreen::Review))
-                .child(list::outline(&cx, None))
-                .into_element(),
+            view().child(list::outline(&cx, None)).into_element(),
         ))
         .into_element()
 }

@@ -1,10 +1,12 @@
-//! The record verbs of the model's table (`work::record_verbs`) where a row or a page offers
-//! them: a row's context menu (desktop and terminal: the secondary button, Shift+F10 or the
-//! Menu key; phone: a held finger opens it as the action sheet), a control's press-opened menu,
-//! the reasons under an action row's unavailable commands, and the work state's overlays the
-//! shells host once beside the confirmation: the command menu the keyboard opens (`.`) and the
-//! composer a text verb opens (a comment, a park reason). A run's Session menu opens its task's
-//! Actions menu as a submenu (beside it, or in the sheet's place on the phone).
+//! The More menu: every operation of a record beside its one next step. A task's lists the
+//! fifteen engine operations in the engine's order (`work::record_verbs`), each with a few words
+//! on what it does and all enabled, the next step marked; a session's lists its controls
+//! (Cancel turn, Pause, Resume, Rewind…, Terminate or Stop, Relaunch), then for a run Reply and
+//! its task's menu as a submenu. It opens as a row's context menu (desktop and terminal: the
+//! secondary button, Shift+F10 or the Menu key; phone: a held finger opens it as the action
+//! sheet), from a pressed control ([`more_menu`]), and from the keyboard (`.`). The work
+//! state's overlays the shells host once beside the confirmation are here too ([`overlays`]):
+//! the keyboard's menu and the composer an operation that asks for input opens.
 
 use nsh_base::{button as press_target, context_menu, menu, menu_item, submenu};
 use nsh_core::element::{StyleRefinement, color as for_appearance, input};
@@ -24,7 +26,16 @@ use crate::ui::kit::walk::walk;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-use super::parts::press;
+/// Runs any press: local actions through the work reducer, record presses into root effects
+/// against the feed.
+pub fn press(app: AppState, press: Press) {
+    app.reduce(app.work, move |state, feed, _selection, env| {
+        state.press(press, feed, env)
+    });
+}
+
+/// What marks a row as the record's one next step.
+const NEXT_STEP: &str = "next step";
 
 /// The phone's least touch target.
 const TARGET: f32 = 44.0;
@@ -35,7 +46,7 @@ const MENU_MAX: f32 = 340.0;
 
 /// The record a list row's press is about: a task's select or open. Local presses (a tab, a
 /// group's rows) carry no commands, so they get no menu.
-pub(crate) fn row_record(action: &Press) -> Option<Record> {
+pub fn row_record(action: &Press) -> Option<Record> {
     match action {
         Press::Select(id) | Press::Open(Live::Task(id)) => Some(Record::Task(id.clone())),
         _ => None,
@@ -44,7 +55,7 @@ pub(crate) fn row_record(action: &Press) -> Option<Record> {
 
 /// `row` with the verb menu of `record`. The menu's items are made when it opens, from the feed
 /// as it stands then, so a row costs nothing until the owner asks for its commands.
-pub(crate) fn with_menu(app: AppState, record: Record, row: AnyElement) -> AnyElement {
+pub fn with_menu(app: AppState, record: Record, row: AnyElement) -> AnyElement {
     context_menu()
         .popup_style(popup(app.form))
         .backdrop_style(backdrop)
@@ -60,7 +71,7 @@ pub(crate) fn with_menu(app: AppState, record: Record, row: AnyElement) -> AnyEl
 /// The same verb menu opened by pressing `trigger` (a page head's Actions control): a popup at
 /// the trigger on desktop and terminal, the action sheet on the phone; Return, Space or Down on
 /// the focused trigger open it with the first available verb focused.
-pub(crate) fn verb_menu(app: AppState, record: Record, trigger: AnyElement) -> AnyElement {
+pub fn more_menu(app: AppState, record: Record, trigger: AnyElement) -> AnyElement {
     menu()
         .popup_style(popup(app.form))
         .backdrop_style(backdrop)
@@ -105,20 +116,35 @@ fn backdrop(s: StyleRefinement) -> StyleRefinement {
 /// decides, and a refusal opens its sheet. A Session menu's Task entry is a submenu holding the
 /// task's Actions menu; its Focus pane says why where it cannot work.
 fn items(app: AppState, record: &Record) -> AnyElement {
-    let verbs = app
-        .feed
-        .with_untracked(|feed| work::record_verbs(record, feed));
+    let (verbs, next) = app.feed.with_untracked(|feed| {
+        (
+            work::record_verbs(record, feed),
+            crate::model::next::next_verb(feed, record),
+        )
+    });
     view()
         .children(
             verbs
                 .into_iter()
                 .map(|verb| match &verb.press {
                     Press::Menu(inner) => task_menu(app, inner.clone(), verb.label, verb.slug),
-                    _ => item(app, verb),
+                    _ => {
+                        let next = next == Some(verb.slug);
+                        item(app, verb, next)
+                    }
                 })
                 .collect::<Vec<_>>(),
         )
         .into_element()
+}
+
+/// What a row says after its label: that it is the next step, else what its operation does.
+fn remark(verb: &VerbAction, next: bool) -> Option<&'static str> {
+    if next {
+        Some(NEXT_STEP)
+    } else {
+        work::Verb::from_slug(verb.slug).map(work::Verb::hint)
+    }
 }
 
 /// The Task entry of a Session menu: the task's Actions menu, opened beside the entry on
@@ -188,8 +214,9 @@ fn task_menu(app: AppState, record: Record, label: String, slug: &'static str) -
         .into_element()
 }
 
-fn item(app: AppState, verb: VerbAction) -> AnyElement {
+fn item(app: AppState, verb: VerbAction, next: bool) -> AnyElement {
     let form = app.form;
+    let remark = remark(&verb, next);
     let VerbAction {
         slug,
         label,
@@ -198,20 +225,26 @@ fn item(app: AppState, verb: VerbAction) -> AnyElement {
         press: action,
         ..
     } = verb;
-    let spoken = match (&reason, enabled) {
-        (Some(reason), false) => format!("{label}, {reason}"),
+    let spoken = match (&reason, enabled, remark) {
+        (Some(reason), false, _) => format!("{label}, {reason}"),
+        (_, _, Some(remark)) => format!("{label}, {remark}"),
         _ => label.clone(),
     };
-    // An unavailable verb reads a step quieter, not faded: its reason must stay legible.
+    // An unavailable verb reads a step quieter, not faded: its reason must stay legible. The
+    // next step is marked by weight and its words, never by a colour.
     let words = text(label)
         .number_of_lines(1u32)
         .truncate()
+        .when(next, |words| words.font_weight(FontWeight::BOLD))
         .text_color(color(if enabled { Token::Ink } else { Token::Ink3 }));
-    let why = reason.filter(|_| !enabled).map(|reason| {
+    let said = reason
+        .filter(|_| !enabled)
+        .or_else(|| remark.map(str::to_owned));
+    let why = said.map(|reason| {
         let why = text(reason)
             .number_of_lines(if form == Form::Terminal { 1u32 } else { 2u32 })
             .truncate()
-            .text_color(color(Token::Ink3));
+            .text_color(color(if next { Token::Ink } else { Token::Ink3 }));
         match form {
             Form::Terminal => why.flex_1().min_w(px(0.0)).into_element(),
             Form::Desktop => why
@@ -262,7 +295,7 @@ fn item(app: AppState, verb: VerbAction) -> AnyElement {
 /// Why the commands of `buttons` that cannot run now cannot: the commands sharing a reason
 /// named together, then the model's reason, one wrapping line per reason under the action row,
 /// so a held task's many waiting commands read as one fact. Nothing when every command can run.
-pub(crate) fn reasons(app: AppState, buttons: &[Button]) -> Option<AnyElement> {
+pub fn reasons(app: AppState, buttons: &[Button]) -> Option<AnyElement> {
     let form = app.form;
     let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
     for button in buttons.iter().filter(|button| !button.enabled) {
@@ -332,7 +365,7 @@ fn overlay(state: &work::State) -> Overlay {
 /// host follows the overlay last shown, so a closing sheet leaves with its own exit; a verb
 /// chosen in the menu that needs words replaces it with its composer, and a Session menu's Task
 /// entry replaces it with the task's menu.
-pub fn verb_composer(app: AppState) -> AnyElement {
+pub fn overlays(app: AppState) -> AnyElement {
     let shown = computed(move || app.work.with(overlay));
     let host = signal(Overlay::Composer);
     let listed = signal(None::<Record>);
@@ -384,10 +417,16 @@ pub fn verb_composer(app: AppState) -> AnyElement {
 fn command_menu(app: AppState) -> Modal {
     let form = app.form;
     let record = app.work.with_untracked(|state| state.menu.clone());
-    let verbs = app.feed.with_untracked(|feed| {
-        record
-            .as_ref()
-            .map_or_else(Vec::new, |record| work::record_verbs(record, feed))
+    let (verbs, next) = app.feed.with_untracked(|feed| {
+        record.as_ref().map_or_else(
+            || (Vec::new(), None),
+            |record| {
+                (
+                    work::record_verbs(record, feed),
+                    crate::model::next::next_verb(feed, record),
+                )
+            },
+        )
     });
     let mut walked = Vec::new();
     let rows: Vec<AnyElement> = verbs
@@ -402,7 +441,8 @@ fn command_menu(app: AppState) -> Modal {
                 Press::Menu(_) => format!("{} ›", verb.label),
                 _ => verb.label.clone(),
             };
-            command_row(app, VerbAction { label, ..verb }, focus)
+            let next = next == Some(verb.slug);
+            command_row(app, VerbAction { label, ..verb }, focus, next)
         })
         .collect();
     if let Some(&first) = walked.first() {
@@ -428,8 +468,14 @@ fn command_menu(app: AppState) -> Modal {
 
 /// One verb of the keyboard's menu: its label, and under it (beside it in a terminal) why it
 /// cannot run now; choosing it runs it, or opens its composer.
-fn command_row(app: AppState, verb: VerbAction, focus: Option<ElementRef>) -> AnyElement {
+fn command_row(
+    app: AppState,
+    verb: VerbAction,
+    focus: Option<ElementRef>,
+    next: bool,
+) -> AnyElement {
     let form = app.form;
+    let remark = remark(&verb, next);
     let VerbAction {
         slug,
         label,
@@ -438,16 +484,21 @@ fn command_row(app: AppState, verb: VerbAction, focus: Option<ElementRef>) -> An
         press: action,
         ..
     } = verb;
-    let spoken = match (&reason, enabled) {
-        (Some(reason), false) => format!("{label}, {reason}"),
+    let spoken = match (&reason, enabled, remark) {
+        (Some(reason), false, _) => format!("{label}, {reason}"),
+        (_, _, Some(remark)) => format!("{label}, {remark}"),
         _ => label.clone(),
     };
     let words = text(label)
         .number_of_lines(1u32)
         .truncate()
+        .when(next, |words| words.font_weight(FontWeight::BOLD))
         .text_color(color(if enabled { Token::Ink } else { Token::Ink3 }));
-    let why = reason.filter(|_| !enabled).map(|reason| {
-        let why = text(reason).text_color(color(Token::Ink3));
+    let said = reason
+        .filter(|_| !enabled)
+        .or_else(|| remark.map(str::to_owned));
+    let why = said.map(|reason| {
+        let why = text(reason).text_color(color(if next { Token::Ink } else { Token::Ink3 }));
         match form {
             Form::Terminal => why.flex_1().min_w(px(0.0)).number_of_lines(1u32).truncate(),
             Form::Desktop => why.font_family(FONT_TEXT).text_size(px(11.5)),

@@ -23,7 +23,6 @@ pub(crate) use start::sheet as start_sheet;
 use nsh_core::prelude::*;
 
 use crate::model::agents;
-use crate::model::projects::FilterScreen;
 use crate::state::AppState;
 
 /// The Agents page (`pgAgents`): the page head with its counts, role tabs and New, the project
@@ -42,7 +41,7 @@ fn run(app: AppState, action: crate::model::session::Action) {
 /// Runs one of the roster's, the rewind sheet's, the New build sheet's or the Remove sheet's
 /// actions against the Agents project scope.
 fn run_agents(app: AppState, action: agents::Action) {
-    let filter = untracked(|| app.project_filter(FilterScreen::Agents));
+    let filter = untracked(|| app.scope_filter());
     app.reduce(app.agents, move |state, feed, _, _| {
         state.act(action, feed, &filter)
     });
@@ -50,7 +49,7 @@ fn run_agents(app: AppState, action: agents::Action) {
 
 /// The roster as the model builds it now in the Agents scope (tracked).
 fn roster_view(app: AppState) -> agents::Roster {
-    let filter = app.project_filter(FilterScreen::Agents);
+    let filter = app.scope_filter();
     app.feed.with(|feed| {
         app.agents
             .with(|state| agents::roster(state, feed, &filter))

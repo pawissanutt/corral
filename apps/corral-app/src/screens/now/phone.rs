@@ -17,7 +17,6 @@ use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::glance::{page_head, stat_in};
 use crate::ui::kit::page::{pane, search};
-use crate::ui::kit::project_filter::project_filter_grouped;
 use crate::ui::kit::rows::group_header;
 use crate::ui::kit::text::dim;
 use crate::ui::tokens::{Token, color};
@@ -25,9 +24,7 @@ use crate::ui::tokens::{Token, color};
 use super::context::{plan_body, tail};
 use super::inspector::view_of;
 use super::list::{board_status, list, scope_note};
-use super::parts::{
-    dim_when, go_scoped, keep_loaded, now_page, press, press_id, pressable, stale, wanted_id,
-};
+use super::parts::{dim_when, keep_loaded, now_page, press, press_id, pressable, stale, wanted_id};
 use super::rows::{PHONE_PAD, words};
 
 const RING: f32 = 2.0;
@@ -38,7 +35,6 @@ pub(super) fn root(app: AppState) -> AnyElement {
     let title = untracked(|| page.with(|page| page.title));
     let stats = computed(move || page.with(|page| page.stats.clone()));
     let content = dim_when(view(), stale(app))
-        .child(project_filter_grouped(app))
         .child(scope_note(app, page))
         .child(since(app, page))
         .child(board_status(app, page))
@@ -62,12 +58,10 @@ fn since(app: AppState, page: Memo<NowPage>) -> AnyElement {
             _ => None,
         })
     });
-    dynamic(move || {
-        digest.with(|digest| digest.as_ref().map(|digest| since_row(app, digest, page)))
-    })
+    dynamic(move || digest.with(|digest| digest.as_ref().map(|digest| since_row(app, digest))))
 }
 
-fn since_row(app: AppState, digest: &NowDigest, page: Memo<NowPage>) -> AnyElement {
+fn since_row(app: AppState, digest: &NowDigest) -> AnyElement {
     let form = app.form;
     let spoken = std::iter::once(digest.since.as_str())
         .chain(digest.stats.iter().map(|stat| stat.label()))
@@ -86,7 +80,7 @@ fn since_row(app: AppState, digest: &NowDigest, page: Memo<NowPage>) -> AnyEleme
         .role(AccessibilityRole::Button)
         .label(spoken)
         .test_id("btn-since")
-        .on_press(move || go_scoped(app, page, Destination::Changes))
+        .on_press(move || app.go(Destination::Feed))
         .active(|s| s.bg(color(Token::Hover)))
         .focus_visible(|s| {
             s.outline(px(RING))

@@ -77,7 +77,8 @@ fn assert_text(app: &mut Headless, id: &str, expected: &str) {
     assert_eq!(texts, [expected], "text of id:{id}");
 }
 
-/// Selects a sample task through the palette, as a person who knows its id does.
+/// Runs a palette row: opens a sample task's page by its id, as a person who knows it does,
+/// or runs one of the operations the palette lists for the task in view.
 fn select(app: &mut Headless, row: &str) {
     app.press("id:palette-open").unwrap();
     app.wait_for("id:palette-input").unwrap();
@@ -87,77 +88,83 @@ fn select(app: &mut Headless, row: &str) {
         .unwrap();
 }
 
-/// Selects the sample's T-12, which waits on T-14, and runs Dispatch from its Actions menu,
-/// which the palette also lists for the selected task.
+/// Opens the page of the sample's T-12, which waits on T-14, and runs Dispatch from its More
+/// menu, which the palette also lists for the task in view.
 fn dispatch_t12(app: &mut Headless) {
     select(app, "T-12 Timeline zoom presets");
+    app.wait_for("id:task-page").unwrap();
     select(app, "Dispatch… T-12");
     app.wait_for("id:btn-verb-send").unwrap();
     app.press("id:btn-verb-send").unwrap();
 }
 
 #[test]
-fn both_forms_open_on_now() {
+fn both_forms_open_on_home() {
     let mut app = preview(phone(), &[]);
-    assert_text(&mut app, "page-title", "Now");
+    assert_text(&mut app, "page-title", "Home");
     drop(app);
 
     let mut app = preview(desktop(), &[]);
-    app.wait_for("id:now-main").unwrap();
+    app.wait_for("id:list-home").unwrap();
 }
 
+/// The sidebar lists the four places at rest and Activity's four pages only under Activity
+/// while one of them shows; every one of them, and Settings at the foot, opens a page.
 #[test]
-fn desktop_sidebar_reaches_every_destination() {
+fn desktop_sidebar_reaches_every_place_and_activity_page() {
     let mut app = preview(desktop(), &[]);
-    for (slug, title) in [
-        ("now", "Now"),
-        ("changes", "Changes"),
-        ("plans", "Plans"),
-        ("agents", "Agents"),
-        ("review", "Review"),
-        ("timeline", "Timeline"),
-        ("usage", "Usage"),
-        ("settings", "Settings"),
+    for (slug, shows) in [
+        ("home", "list-home"),
+        ("tasks", "list-tasks"),
+        ("sessions", "page-title"),
     ] {
         app.press(&format!("id:nav-{slug}")).unwrap();
-        if slug == "now" {
-            app.wait_for("id:now-main").unwrap();
-        } else if slug == "settings" {
-            app.wait_for("id:page-title").unwrap();
-        } else {
-            assert_text(&mut app, "page-title", title);
-        }
+        app.wait_for(&format!("id:{shows}")).unwrap();
+        assert_eq!(app.screen().count("id:nav-usage").unwrap(), 0);
     }
+    app.press("id:nav-activity").unwrap();
+    for slug in ["feed", "timeline", "usage", "artifacts"] {
+        app.wait_for(&format!("id:nav-{slug}")).unwrap();
+        app.press(&format!("id:nav-{slug}")).unwrap();
+        app.wait_for("id:page-title").unwrap();
+        assert!(selected(&app, &format!("nav-{slug}")), "{slug} is current");
+        assert!(selected(&app, "nav-activity"));
+    }
+    app.press("id:nav-settings").unwrap();
+    app.wait_for("id:settings-devices").unwrap();
+    assert_eq!(app.screen().count("id:nav-usage").unwrap(), 0);
 }
 
+/// The phone's four tabs are the four places; Activity's root lists its four pages, each a
+/// page pushed over the list.
 #[test]
-fn phone_tabs_and_more_reach_every_destination() {
+fn phone_tabs_reach_every_place_and_activity_page() {
     let mut app = preview(phone(), &[]);
-    for (slug, title) in [("now", "Now"), ("agents", "Agents"), ("plans", "Plans")] {
+    for (slug, title) in [("tasks", "Tasks"), ("home", "Home")] {
         app.press(&format!("id:tab-{slug}")).unwrap();
         assert_text(&mut app, "page-title", title);
     }
+    app.press("id:tab-sessions").unwrap();
+    app.wait_for("id:page-title").unwrap();
 
-    app.press("id:tab-more").unwrap();
-    for (slug, title) in [
-        ("changes", "Changes"),
-        ("review", "Review"),
-        ("timeline", "Timeline"),
-        ("usage", "Usage"),
-        ("settings", "Settings"),
-    ] {
+    app.press("id:tab-activity").unwrap();
+    assert_text(&mut app, "page-title", "Activity");
+    for slug in ["feed", "timeline", "usage", "artifacts"] {
         app.wait_for(&format!("id:nav-{slug}")).unwrap();
         app.press(&format!("id:nav-{slug}")).unwrap();
-        assert_text(&mut app, "page-title", title);
+        app.wait_for_gone("id:nav-feed", Duration::from_secs(5))
+            .unwrap();
         app.back().unwrap();
-        app.wait_for("id:nav-changes").unwrap();
+        app.wait_for("id:nav-feed").unwrap();
     }
 }
 
+/// Settings has no tab: the gear in the head opens it over the tab in view, and its sections
+/// push their pages.
 #[test]
-fn phone_settings_sections_push_their_pages() {
+fn phone_settings_open_from_the_gear_and_their_sections_push_their_pages() {
     let mut app = preview(phone(), &[]);
-    app.press("id:tab-more").unwrap();
+    app.press("id:tab-tasks").unwrap();
     app.press("id:nav-settings").unwrap();
     assert_text(&mut app, "page-title", "Settings");
     app.wait_for("id:settings-devices").unwrap();
@@ -165,20 +172,22 @@ fn phone_settings_sections_push_their_pages() {
     assert_text(&mut app, "page-title", "Configuration");
     app.back().unwrap();
     assert_text(&mut app, "page-title", "Settings");
+    app.back().unwrap();
+    assert_text(&mut app, "page-title", "Tasks");
 }
 
 #[test]
 fn typing_in_ask_does_not_navigate() {
     let mut app = preview(desktop(), &[]);
-    app.press("id:nav-plans").unwrap();
-    app.wait_for("id:plans-list").unwrap();
+    app.press("id:nav-tasks").unwrap();
+    app.wait_for("id:list-tasks").unwrap();
     app.press("id:ask-open").unwrap();
     app.wait_for("id:ask-input").unwrap();
 
-    let draft = "n i p a r t u . , p";
+    let draft = "h s a n p r u f , i j k .";
     app.type_text("id:ask-input", draft).unwrap();
 
-    app.wait_for("id:plans-list").unwrap();
+    app.wait_for("id:list-tasks").unwrap();
     assert_eq!(
         app.screen().input_text("id:ask-input").unwrap(),
         Some(draft)
@@ -247,7 +256,7 @@ fn disconnected_state_shows_no_healthy_segment_and_no_count() {
         for healthy in ["healthy", "reachable"] {
             assert!(!texts.contains(&healthy), "disconnected shows {healthy}");
         }
-        assert_eq!(app.screen().count("id:count-now").unwrap(), 0);
+        assert_eq!(app.screen().count("id:count-home").unwrap(), 0);
     }
 }
 
@@ -267,20 +276,23 @@ fn sending_from_ask_appends_to_the_quick_thread_and_clears_the_draft() {
     app.wait_for(&format!("text:{message}")).unwrap();
 }
 
+/// A restart shows the place stored, and a slug the nine-destination app stored opens the
+/// place that took its content over.
 #[test]
 fn destination_is_restored_from_storage() {
     for (config, phone) in [(desktop(), false), (phone(), true)] {
-        let mut app = preview(config.clone(), &[("corral.destination", "plans")]);
-        app.wait_for("id:plans-list").unwrap();
-        assert_text(&mut app, "page-title", "Plans");
-        drop(app);
-
-        // The retired Inbox opens its new home, Now.
-        let mut app = preview(config, &[("corral.destination", "inbox")]);
-        if phone {
-            assert_text(&mut app, "page-title", "Now");
-        } else {
-            app.wait_for("id:now-main").unwrap();
+        for stored in ["tasks", "plans", "review"] {
+            let mut app = preview(config.clone(), &[("corral.destination", stored)]);
+            app.wait_for("id:list-tasks").unwrap();
+            assert_text(&mut app, "page-title", "Tasks");
+        }
+        for stored in ["inbox", "now"] {
+            let mut app = preview(config.clone(), &[("corral.destination", stored)]);
+            if phone {
+                assert_text(&mut app, "page-title", "Home");
+            } else {
+                app.wait_for("id:list-home").unwrap();
+            }
         }
     }
 }
@@ -291,60 +303,119 @@ fn selected(app: &Headless, id: &str) -> bool {
         .is_ok_and(|state| state.selected)
 }
 
-/// Now opens at what needs you: the sample's first blocked task is selected beside the list
-/// with its reply box, and opening Now again comes back to it from another selection.
-#[test]
-fn now_opens_at_needs_you_each_time_it_is_opened() {
-    let mut app = preview(desktop(), &[("corral.destination", "now")]);
-    app.wait_for("id:field-reply").unwrap();
-    assert!(selected(&app, "task-T-8"));
-    select(&mut app, "T-12 Timeline zoom presets");
-    app.wait_for_gone("id:field-reply", Duration::from_secs(5))
-        .unwrap();
-    app.press("id:nav-plans").unwrap();
-    app.wait_for("id:plans-list").unwrap();
-    app.press("id:nav-now").unwrap();
-    app.wait_for("id:field-reply").unwrap();
-    assert!(selected(&app, "task-T-8"));
+/// The number a count shows.
+fn count_of(app: &mut Headless, id: &str) -> u32 {
+    app.wait_for(&format!("id:{id}")).unwrap();
+    app.screen()
+        .layout_nodes()
+        .iter()
+        .filter(|node| node.test_id.as_deref() == Some(id))
+        .find_map(|node| node.text.as_ref()?.text.text.parse().ok())
+        .unwrap_or_else(|| panic!("id:{id} shows a number"))
 }
 
-/// The successor of answering an Inbox question: the words typed in a Blocked card's reply box
-/// go out as its reply step, the task runs again and leaves Needs you.
+/// Tasks selects its first row on arrival and shows it in the inspector; a press selects
+/// another row without leaving the list, a second press opens the task's page, and Escape
+/// there returns to Tasks with the row still selected.
 #[test]
-fn replying_from_a_blocked_cards_box_sends_the_reply_and_the_task_leaves_needs_you() {
-    let mut app = preview(desktop(), &[("corral.destination", "now")]);
+fn a_task_row_selects_into_the_inspector_and_opens_its_page_on_the_second_press() {
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    app.wait_for("id:inspector").unwrap();
+    assert!(selected(&app, "task-T-8"));
+    app.press("id:task-T-12").unwrap();
+    app.wait_for("id:btn-open-page").unwrap();
+    assert!(selected(&app, "task-T-12"));
+    assert_eq!(app.screen().count("id:task-page").unwrap(), 0);
+    app.press("id:task-T-12").unwrap();
+    app.wait_for("id:task-page").unwrap();
+    assert!(selected(&app, "nav-tasks"));
+    app.press_key("escape").unwrap();
+    app.wait_for("id:list-tasks").unwrap();
+    assert!(selected(&app, "task-T-12"));
+}
+
+/// `j` and `k` walk the rows, Enter opens the selected one's page, and with the inspector
+/// hidden (`i`) one press on a row opens its page.
+#[test]
+fn the_keys_walk_the_tasks_list_and_a_hidden_inspector_opens_rows_on_one_press() {
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    app.wait_for("id:inspector").unwrap();
+    assert!(selected(&app, "task-T-8"));
+    app.press_key("j").unwrap();
+    app.wait_for("id:inspector").unwrap();
+    assert!(!selected(&app, "task-T-8"));
+    app.press_key("k").unwrap();
+    assert!(selected(&app, "task-T-8"));
+    app.press_key("enter").unwrap();
+    app.wait_for("id:task-page").unwrap();
+    app.press_key("escape").unwrap();
+    app.wait_for("id:list-tasks").unwrap();
+    app.press_key("i").unwrap();
+    app.wait_for_gone("id:inspector", Duration::from_secs(5))
+        .unwrap();
+    app.press("id:task-T-12").unwrap();
+    app.wait_for("id:task-page").unwrap();
+}
+
+/// The one project scope narrows every place at once: scoping to a project from the sidebar's
+/// switcher leaves Tasks without the other projects' rows, and All projects brings them back.
+#[test]
+fn the_scope_switcher_scopes_every_place_to_one_project() {
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    // T-8 is the corral project's.
+    app.wait_for("id:task-T-8").unwrap();
+    app.press("id:scope-open").unwrap();
+    app.wait_for("id:scope-all").unwrap();
+    app.press("id:scope-site").unwrap();
+    app.wait_for_gone("id:task-T-8", Duration::from_secs(5))
+        .unwrap();
+    app.press("id:nav-home").unwrap();
+    app.wait_for("id:list-home").unwrap();
+    assert_eq!(app.screen().count("id:task-T-8").unwrap(), 0);
+    app.press("id:scope-open").unwrap();
+    app.wait_for("id:scope-all").unwrap();
+    app.press("id:scope-all").unwrap();
+    app.wait_for("id:task-T-8").unwrap();
+}
+
+/// The successor of answering an Inbox question: the words typed in a Blocked task's reply
+/// box on its page go out as its reply step, the task runs again and leaves Needs you.
+#[test]
+fn replying_from_a_blocked_tasks_page_sends_the_reply_and_the_task_leaves_needs_you() {
+    let mut app = preview(desktop(), &[("corral.destination", "home")]);
+    let waiting = count_of(&mut app, "count-home");
+    app.press("id:task-T-8").unwrap();
     app.wait_for("id:field-reply").unwrap();
-    assert_text(&mut app, "count-now", "3");
     assert!(!app.screen().enabled("id:btn-next-0").unwrap());
     app.type_text("id:field-reply", "Stay paused; never deliver twice.")
         .unwrap();
     app.press("id:btn-next-0").unwrap();
     app.wait_for_gone("id:field-reply", Duration::from_secs(5))
         .unwrap();
-    assert_text(&mut app, "count-now", "2");
+    assert_eq!(count_of(&mut app, "count-home"), waiting - 1);
 }
 
 /// The successor of the phone's question page: a Blocked task's page shows its reply box, and
-/// Back returns to Now's list.
+/// Back returns to Home's list.
 #[test]
-fn phone_blocked_task_page_goes_back_to_nows_list() {
+fn phone_blocked_task_page_goes_back_to_homes_list() {
     let mut app = preview(phone(), &[]);
     app.press("id:task-T-8").unwrap();
     app.wait_for("id:field-reply").unwrap();
     app.press("id:page-back").unwrap();
     app.wait_for("id:task-T-8").unwrap();
     assert_eq!(app.screen().count("id:field-reply").unwrap(), 0);
-    assert_text(&mut app, "page-title", "Now");
+    assert_text(&mut app, "page-title", "Home");
 }
 
-/// The successor of the 80-column Inbox: at 80 × 24 Now keeps what needs you on the page, its
-/// heading and its first row in view, rather than hiding the list behind the side panel.
+/// The successor of the 80-column Inbox: at 80 × 24 Home keeps what needs you on the page, its
+/// heading and its first row in view.
 #[test]
 fn terminal_80_columns_keeps_what_needs_you_in_view() {
     let mut app = preview(terminal_80(), &[]);
-    app.wait_for("id:section-you").unwrap();
+    app.wait_for("id:section-needs-you").unwrap();
     let nodes = app.screen().layout_nodes();
-    for id in ["section-you", "task-T-8"] {
+    for id in ["section-needs-you", "task-T-8"] {
         let node = nodes
             .iter()
             .find(|node| node.test_id.as_deref() == Some(id))
@@ -374,9 +445,9 @@ fn a_refused_dispatch_offers_dispatch_anyway_and_forcing_it_runs_the_task() {
         .unwrap();
     assert_eq!(app.screen().count("id:confirm").unwrap(), 0);
     app.wait_for("text:/^Dispatch anyway T-12 · Done/").unwrap();
-    app.press("id:nav-agents").unwrap();
+    app.press("id:nav-sessions").unwrap();
     app.wait_for("id:agent-T-12_R1").unwrap();
-    app.press("id:nav-changes").unwrap();
+    app.press("id:nav-activity").unwrap();
     app.wait_for("text:/forced dispatch/").unwrap();
 }
 
@@ -415,19 +486,35 @@ fn the_confirm_sheet_takes_the_focus_so_enter_cancels_it() {
         .unwrap();
 }
 
-/// T-10's gate is red, so its decide bar offers Land anyway: one press opens the one local
-/// question, which names what it skips; confirming submits approve with force and the task lands
-/// and leaves Review.
+/// T-10's gate is red, so approving it from More is refused, and the refusal offers Land
+/// anyway, which names what it skips and is the one confirmation: pressing it submits approve
+/// with force and the task lands and leaves Review.
 #[test]
-fn land_anyway_over_a_red_gate_asks_once_and_lands() {
-    let mut app = preview(desktop(), &[("corral.destination", "review")]);
-    app.press("id:task-T-10").unwrap();
-    app.press("id:btn-land-anyway").unwrap();
+fn land_anyway_over_a_red_gate_is_offered_by_the_refusal_and_lands() {
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    select(&mut app, "T-10 Usage page explains missing records");
+    app.wait_for("id:task-page").unwrap();
+    select(&mut app, "Approve and land… T-10");
+    app.wait_for("id:btn-verb-send").unwrap();
+    app.press("id:btn-verb-send").unwrap();
     app.wait_for("id:confirm").unwrap();
-    app.wait_for("text:/the gate check/").unwrap();
     app.press("id:confirm-confirm").unwrap();
+    app.wait_for("id:refused").unwrap();
+    app.wait_for("text:/the gate check/").unwrap();
+    app.press("text:Land anyway").unwrap();
     app.wait_for("text:/^Land anyway T-10 · Done/").unwrap();
-    app.wait_for_gone("id:task-T-10", Duration::from_secs(5))
+}
+
+/// A review the engine marked ready shows Approve as its one next step: one press asks once,
+/// and confirming lands the task.
+#[test]
+fn a_ready_review_lands_from_its_one_next_step() {
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    app.wait_for("id:next-T-11").unwrap();
+    app.press("id:next-T-11").unwrap();
+    app.wait_for("id:confirm").unwrap();
+    app.press("id:confirm-confirm").unwrap();
+    app.wait_for("text:/^Approve and land T-11 · Done/")
         .unwrap();
 }
 
@@ -435,12 +522,14 @@ fn land_anyway_over_a_red_gate_asks_once_and_lands() {
 /// refusal offers one Approve per existing branch; choosing one asks once and lands there.
 #[test]
 fn approving_onto_a_missing_branch_offers_each_existing_branch() {
-    let mut app = preview(desktop(), &[("corral.destination", "review")]);
-    app.press("id:task-T-11").unwrap();
-    app.wait_for("id:field-onto").unwrap();
-    app.clear("id:field-onto").unwrap();
-    app.type_text("id:field-onto", "release/1.0").unwrap();
-    app.press("id:btn-approve").unwrap();
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    select(&mut app, "T-11 Collapse the sidebar on narrow screens");
+    app.wait_for("id:task-page").unwrap();
+    select(&mut app, "Approve and land… T-11");
+    app.wait_for("id:field-verb-0").unwrap();
+    app.clear("id:field-verb-0").unwrap();
+    app.type_text("id:field-verb-0", "release/1.0").unwrap();
+    app.press("id:btn-verb-send").unwrap();
     app.wait_for("text:/--onto release\\/1.0/").unwrap();
     app.press("id:confirm-confirm").unwrap();
     app.wait_for("id:refused").unwrap();
@@ -453,7 +542,7 @@ fn approving_onto_a_missing_branch_offers_each_existing_branch() {
 }
 
 /// Escape steps back before it leaves: on a session page it returns a view (the Agents tab) to
-/// Chat, and the page and the Agents destination stay. The sample's build serves its children,
+/// Chat, and the page and the Sessions place stay. The sample's build serves its children,
 /// so its page has the Agents tab.
 #[test]
 fn escape_returns_a_session_view_to_chat_before_leaving_the_page() {
@@ -466,12 +555,7 @@ fn escape_returns_a_session_view_to_chat_before_leaving_the_page() {
     app.wait_for_gone("id:session-agents", Duration::from_secs(5))
         .unwrap();
     app.wait_for("id:session-transcript").unwrap();
-    assert!(
-        app.screen()
-            .accessibility_state("id:nav-agents")
-            .unwrap()
-            .selected
-    );
+    assert!(selected(&app, "nav-sessions"));
 }
 
 /// A run row's Session menu terminates its session: Terminate asks once, confirming sends it,
@@ -546,16 +630,6 @@ fn the_keyboard_stays_with_the_app_after_a_session_menu_control_in_a_terminal() 
     assert_eq!(app.screen().count("text:/not reachable/").unwrap(), 0);
 }
 
-/// Review's live reviewer opens its session page, named as the reviewer of T-13.
-#[test]
-fn the_reviewer_session_opens_from_review() {
-    let mut app = preview(desktop(), &[("corral.destination", "review")]);
-    app.press("id:task-T-13").unwrap();
-    app.press("id:btn-open-reviewer").unwrap();
-    app.wait_for("id:btn-session-actions").unwrap();
-    app.wait_for("text:/^T-13 review/").unwrap();
-}
-
 /// The grouping switch asks the feed for the other grouping and redraws the lanes from its
 /// answer: By run draws one lane per run, which By task does not have, and a live run's lane
 /// opens its session page: T-15's headless run has no Pi host, so the page is its read-only log.
@@ -601,18 +675,6 @@ fn starting_a_build_opens_its_session_page() {
         .unwrap();
     app.wait_for("id:btn-session-actions").unwrap();
     app.wait_for("text:build · walk").unwrap();
-}
-
-/// Opening a task from the palette shows it, also after Now's inspector was closed.
-#[test]
-fn opening_a_task_from_the_palette_reopens_a_closed_inspector() {
-    let mut app = preview(desktop(), &[("corral.destination", "now")]);
-    app.wait_for("id:now-task").unwrap();
-    app.press("id:btn-clear-selection").unwrap();
-    app.wait_for_gone("id:now-task", Duration::from_secs(5))
-        .unwrap();
-    select(&mut app, "T-12 Timeline zoom presets");
-    app.wait_for("id:now-task").unwrap();
 }
 
 /// The sample build waits on a two-question card: its answer card takes one answer per

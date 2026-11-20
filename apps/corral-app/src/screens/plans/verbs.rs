@@ -10,9 +10,9 @@ use nsh_core::prelude::*;
 
 use crate::model::work::{Record, VERB_MENU_LABEL};
 use crate::model::{Form, Id};
-use crate::screens::now::{verb_menu, with_menu};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::more::{more_menu, with_menu};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -24,7 +24,7 @@ const RING: f32 = 2.0;
 /// items are "btn-<verb slug>".
 pub(super) fn head_menu(app: AppState, plan: Id) -> AnyElement {
     let spoken = format!("{VERB_MENU_LABEL} for {plan}");
-    verb_menu(
+    more_menu(
         app,
         Record::Task(plan),
         menu_trigger(app, VERB_MENU_LABEL, spoken, "btn-plan-actions"),

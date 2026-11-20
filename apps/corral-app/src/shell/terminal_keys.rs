@@ -11,12 +11,11 @@ use nsh_core::prelude::*;
 
 use crate::{
     model::{
-        DataState, Destination, Live, Overlay,
+        Area, DataState, Destination, Live, Overlay, WorkspaceMode,
         assistant::COMPOSER_KEYS,
-        commands::{Surface, key_legend_live},
+        commands::{Surface, area_key, key_legend_live},
         nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, SIDEBAR_LABEL},
     },
-    shell::projects,
     state::AppState,
     ui::term::{self, cells},
 };
@@ -78,20 +77,18 @@ struct Fit {
 /// the line gives the composer's own keys and Go to, the one chord that still reaches past it.
 /// While a surface stands over the page (`surface`) the page's keys do nothing: the line gives
 /// the surface's own. Otherwise the keys of the page in view (when the model gives it any and
-/// the destination is served), the `shown` destinations, then Ask and Go to. A destination whose
-/// key the page takes for itself (`.`, Changes, opens a list's menu) is left out rather than
-/// listed twice with two meanings. `off_board`: Now's selection is off the board.
+/// the destination is served), the `shown` places and Settings, then Ask and Go to. A place
+/// whose key the page takes for itself is left out rather than listed twice with two meanings.
 /// `session`: the legend of the session page on top for its focused surface (its composer's
 /// keys while it has them), which replaces the page's and the composer's.
-#[allow(clippy::too_many_arguments)]
 fn line(
     destination: Destination,
     live: Option<Live>,
     served: bool,
     typing: bool,
     surface: Option<Surface>,
-    off_board: bool,
-    shown: &[Destination],
+
+    shown: &[Area],
     session: Option<Vec<(&'static str, &'static str)>>,
 ) -> Line {
     let go_to = Entry::new(PALETTE_CHORD, PALETTE_LABEL);
@@ -129,7 +126,7 @@ fn line(
     }
     let legend = match session {
         Some(legend) => legend,
-        None if served => key_legend_live(destination, live.as_ref(), off_board),
+        None if served => key_legend_live(destination, live.as_ref()),
         None => Vec::new(),
     };
     let taken = |key: char| {
@@ -140,8 +137,9 @@ fn line(
     let destinations = shown
         .iter()
         .copied()
+        .chain([Area::Settings])
         .filter(|item| !taken(item.key()))
-        .map(|item| Entry::new(item.key(), item.label()))
+        .map(|item| Entry::new(area_key(item), item.label()))
         .collect();
     Line {
         own: legend
@@ -282,23 +280,13 @@ fn without_go_to(legend: Vec<(&'static str, &'static str)>) -> Vec<(&'static str
 /// The last row, a legend: each key as a cap and the name it goes to, the keys in focus first.
 /// When the grid is short of room the names give way one by one, then whole groups, as
 /// [`fits`] orders them; a key's cap is never cut.
-pub(super) fn key_line(
-    app: AppState,
-    typing: Memo<bool>,
-    shown: Memo<Vec<Destination>>,
-) -> AnyElement {
+pub(super) fn key_line(app: AppState, typing: Memo<bool>, shown: Memo<Vec<Area>>) -> AnyElement {
     let route = computed(move || {
-        let selection = app.selection();
-        let off_board = app
-            .feed
-            .with(|feed| crate::model::work::off_board(&selection, feed).is_some());
-        (
-            app.destination(),
-            app.live_page(),
-            app.data.get(),
-            off_board,
-            projects::open_project(app).is_some(),
-        )
+        let destination = app.destination();
+        // The assistant workspace's landing in Home's place is not Home's list.
+        let landing = destination == Destination::Home
+            && app.workspace_mode() == WorkspaceMode::AssistantOnly;
+        (destination, app.live_page(), app.data.get(), landing)
     });
     let surface = computed(move || open_surface(app));
     // The session page on top gives the legend of what has its keys (a picker, the `/` menu, the
@@ -332,13 +320,11 @@ pub(super) fn key_line(
     });
     dynamic(move || {
         let room = term::columns();
-        let (destination, live, data, off_board, project_page) = route.get();
+        let (destination, live, data, landing) = route.get();
         let shown = shown.get();
-        // An unserved destination answers no keys of its own; disconnected, none is served. A
-        // Project page and the assistant workspace's landing are not their owner's list.
+        // An unserved destination answers no keys of its own; disconnected, none is served.
         let served = data != DataState::Disconnected
-            && !project_page
-            && shown.contains(&destination)
+            && !landing
             && app.available(destination) == crate::model::Availability::Ready;
         let line = line(
             destination,
@@ -346,7 +332,6 @@ pub(super) fn key_line(
             served,
             typing.get(),
             surface.get(),
-            off_board,
             &shown,
             session.get(),
         );
@@ -390,13 +375,12 @@ mod tests {
     /// The line of `legend` in focus on a session page.
     fn session_line(typing: bool, legend: Vec<(&'static str, &'static str)>) -> Line {
         line(
-            Destination::Agents,
+            Destination::Sessions,
             Some(Live::Session(crate::model::Id::new("B-k3x9"))),
             true,
             typing,
             None,
-            false,
-            &Destination::ALL,
+            &Area::PLACES,
             Some(legend),
         )
     }
@@ -404,12 +388,16 @@ mod tests {
     #[test]
     fn key_line_never_cuts_a_key_or_shows_a_destination_key_unnamed() {
         let views = [
-            (Destination::Now, None),
-            (Destination::Plans, None),
-            (Destination::Review, None),
+            (Destination::Home, None),
+            (Destination::Tasks, None),
+            (Destination::Sessions, None),
             (Destination::Settings, None),
             (
-                Destination::Agents,
+                Destination::Tasks,
+                Some(Live::Task(crate::model::Id::new("T-14"))),
+            ),
+            (
+                Destination::Sessions,
                 Some(Live::Session(crate::model::Id::new("T-14_R1"))),
             ),
         ];
@@ -421,12 +409,13 @@ mod tests {
                     true,
                     typing,
                     None,
-                    false,
-                    &Destination::ALL,
-                    live.as_ref().map(|_| {
-                        use crate::model::session::{Focus, Tab, legend};
-                        without_go_to(legend(Focus::Composer, Tab::Chat, true))
-                    }),
+                    &Area::PLACES,
+                    live.as_ref()
+                        .filter(|live| matches!(live, Live::Session(_)))
+                        .map(|_| {
+                            use crate::model::session::{Focus, Tab, legend};
+                            without_go_to(legend(Focus::Composer, Tab::Chat, true))
+                        }),
                 );
                 for room in 20..=240 {
                     let fit = line.layout(room);
@@ -515,13 +504,12 @@ mod tests {
     #[test]
     fn an_open_surface_s_keys_replace_the_page_s() {
         let line = line(
-            Destination::Now,
+            Destination::Tasks,
             None,
             true,
             false,
             Some(Surface::Menu),
-            false,
-            &Destination::ALL,
+            &Area::PLACES,
             None,
         );
         let keys: Vec<&str> = line.own.iter().map(|entry| entry.keys.as_str()).collect();

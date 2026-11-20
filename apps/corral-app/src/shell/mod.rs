@@ -5,7 +5,6 @@
 pub mod desktop;
 pub mod lock;
 pub mod phone;
-pub mod projects;
 pub mod terminal;
 mod terminal_bar;
 mod terminal_keys;
@@ -19,8 +18,8 @@ use crate::model::commands::{
     CONFIRM_CANCEL, CONFIRM_CHECK, CONFIRM_EFFECT_HEADING, CONFIRM_SUB, REFUSED_SUB,
     act_confirm_label, act_confirm_word,
 };
-use crate::model::nav::{NavigationTarget, navigation};
-use crate::model::{DataState, Destination, Form, SettingsSection};
+use crate::model::nav;
+use crate::model::{Area, DataState, Destination, Form, SettingsSection};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::overlay::{self, Confirm, Modal};
@@ -33,18 +32,22 @@ pub fn stale(app: AppState) -> bool {
     app.data.get() != DataState::Disconnected && app.env().conn.refuses()
 }
 
-/// Tracked: the destinations the sidebar and the key line list, in order. An assistant-only
-/// workspace has no board, so its board destinations are left out rather than shown unavailable.
-pub fn destinations(app: AppState) -> Vec<Destination> {
-    app.feed.with(|feed| {
-        navigation(feed)
-            .into_iter()
-            .filter_map(|item| match item.target {
-                NavigationTarget::Destination(destination) => Some(destination),
-                NavigationTarget::Ask | NavigationTarget::Tab(_) => None,
-            })
-            .collect()
-    })
+/// Tracked: the places the sidebar and the key line list, in order. An assistant-only
+/// workspace has no board, so its board places are left out rather than shown unavailable.
+pub fn places(app: AppState) -> Vec<Area> {
+    app.feed.with(nav::places)
+}
+
+/// Tracked: Activity's pages in this workspace, which the sidebar lists under Activity while
+/// one of them shows.
+pub fn activity_pages(app: AppState) -> Vec<Destination> {
+    app.feed.with(nav::activity_pages)
+}
+
+/// Tracked: the place whose row is current: the destination's, a page on top included (a
+/// task's page is under Tasks, a session's under Sessions).
+pub fn current_area(app: AppState) -> Area {
+    app.destination().area()
 }
 
 /// A desktop window this narrow or narrower folds the sidebar to its rail of icons, whatever was

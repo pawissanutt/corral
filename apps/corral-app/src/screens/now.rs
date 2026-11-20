@@ -20,7 +20,6 @@ pub(crate) mod parts;
 mod phone;
 pub(crate) mod rows;
 pub(crate) mod side;
-mod verbs;
 
 use nsh_core::prelude::*;
 
@@ -28,13 +27,10 @@ use crate::model::Form;
 use crate::model::work::{NowPage, NowPanel};
 use crate::state::AppState;
 use crate::ui::kit::glance::page_head;
-use crate::ui::kit::project_filter::project_filter_grouped;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
 pub use phone::live_task_phone;
-pub use verbs::verb_composer;
-pub(crate) use verbs::{verb_menu, with_menu};
 
 use list::{main_column, scope_note};
 use parts::{dim_when, keep_loaded, now_page, shown_task, stale};
@@ -79,7 +75,6 @@ fn workspace(app: AppState) -> AnyElement {
         .child(dynamic(move || {
             stats.with(|stats| page_head(app, title, stats, Vec::new()))
         }))
-        .child(project_filter_grouped(app))
         .child(scope_note(app, page))
         .child(body)
         .into_element()

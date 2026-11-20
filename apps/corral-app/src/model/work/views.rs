@@ -3,7 +3,6 @@
 use super::{Action, Button, ChangeFilter, Press, State};
 use crate::model::board::ChangeKind;
 use crate::model::hue::Hue;
-use crate::model::nav::Destination;
 use crate::model::text::Rich;
 
 /// A connection banner with its entire inline emphasis and handled controls.
@@ -121,64 +120,4 @@ pub struct Changes {
     pub notice: Option<String>,
     /// Connection banner and stale flags.
     pub status: Status,
-}
-/// One navigation row on phone More, including its subtitle and structured counts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MoreRow {
-    /// Destination identity, also identifying its common navigation icon.
-    pub destination: Destination,
-    /// Main row label.
-    pub label: &'static str,
-    /// Complete smaller second line.
-    pub subtitle: &'static str,
-    /// Principal count, if the subtitle has one.
-    pub count: Option<u32>,
-    /// Secondary stale-verdict/stall count, if present.
-    pub secondary_count: Option<u32>,
-    /// Provider window percentage, only for Usage.
-    pub percent: Option<u32>,
-    /// Push/navigate to this destination.
-    pub action: Action,
-}
-
-/// The phone More page, with all five navigation rows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct More {
-    /// Large navigation title.
-    pub title: &'static str,
-    /// Destination rows in source order.
-    pub rows: &'static [MoreRow],
-    /// Connection banner and stale flags, supplied by the phone shell in the mockup.
-    pub status: Status,
-}
-
-const fn bare(destination: Destination, label: &'static str) -> MoreRow {
-    MoreRow {
-        destination,
-        label,
-        subtitle: "",
-        count: None,
-        secondary_count: None,
-        percent: None,
-        action: Action::Go(destination),
-    }
-}
-
-/// More destinations; counts and subtitles are omitted when no canonical summary is served.
-const DAEMON_MORE: &[MoreRow] = &[
-    bare(Destination::Changes, "Changes"),
-    bare(Destination::Review, "Review"),
-    bare(Destination::Timeline, "Timeline"),
-    bare(Destination::Usage, "Usage"),
-    bare(Destination::Artifacts, "Artifacts"),
-    bare(Destination::Settings, "Settings"),
-];
-
-/// The phone More list in the Daemon state.
-pub fn daemon_more(feed: &crate::model::daemon::Feed) -> More {
-    More {
-        title: "More",
-        rows: DAEMON_MORE,
-        status: super::daemon_status(feed),
-    }
 }

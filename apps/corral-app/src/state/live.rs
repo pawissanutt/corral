@@ -29,23 +29,17 @@ impl AppState {
         self.nav.with(|nav| nav.selection.clone())
     }
 
-    /// Selects a live record and pushes its page where this form stacks it.
+    /// Selects a live record and pushes its page: the session's, or the task's for a task, a
+    /// plan and a review candidate. A page shows its record whatever the project scope is.
     pub fn open_live(&self, live: Live) {
-        self.reveal_live(&live);
         if matches!(live, Live::Session(_)) {
             self.close(Overlay::Ask);
         }
-        if matches!(live, Live::Task(_)) {
-            // Closing Now's inspector hides the selected task; opening one by name must show it.
-            self.work.update(|state| state.digest_only = false);
-        }
-        let form = self.form;
-        self.change(|nav| nav.open_live(live, form));
+        self.change(|nav| nav.open_live(live));
     }
 
-    /// Selects a live record in place.
+    /// Selects a live record in place: the row a list page's inspector shows.
     pub fn select(&self, live: Live) {
-        self.reveal_live(&live);
         self.nav.update(|nav| nav.selection.set(&live));
     }
 

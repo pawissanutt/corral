@@ -1,10 +1,10 @@
-//! Key routing on desktop and in a terminal. The global keys (destinations, Ask, the palette, a
-//! domain's letter commands) are bound for the app's life. A destination's list keys (moves,
-//! Enter, digits) are bound only while its list has the keyboard focus, or nothing has: a
-//! focused control keeps Tab, Enter, Space and the arrows, as the platform gives them to it.
-//! While a session page is on top its views' bare keys (`session::keys`, those that are not
-//! chords) come first, and only while no field is edited; a destination letter does not leave
-//! the page. The domain reducers stay pure; this layer routes a key to the one serving it.
+//! Key routing on desktop and in a terminal. The global keys (the places, Ask, the palette) are
+//! bound for the app's life. A place's list keys (moves, Enter, the inspector's `i`, More's
+//! `.`) are bound only while its list has the keyboard focus, or nothing has: a focused control
+//! keeps Tab, Enter, Space and the arrows, as the platform gives them to it. While a session
+//! page is on top its views' bare keys (`session::keys`, those that are not chords) come first,
+//! and only while no field is edited; a place's letter does not leave the page. The domain
+//! reducers stay pure; this layer routes a key to the one serving it.
 
 use std::collections::BTreeSet;
 
@@ -12,9 +12,12 @@ use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
 use super::AppState;
-use crate::model::projects::{FilterScreen, NowScope, WorkspaceMode};
+use crate::model::list::{self, ListKey};
+use crate::model::projects::WorkspaceMode;
 use crate::model::session::{self, Cx, Facts, Focus, KeyAction};
-use crate::model::{DataState, Destination, Effect, Live, Overlay, commands, plans, review, work};
+use crate::model::{
+    DataState, Destination, Effect, Live, Overlay, commands, home, nav, tasks, work,
+};
 
 /// Where the keyboard focus is, as far as key routing needs it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -33,7 +36,7 @@ impl KeyFocus {
 }
 
 /// NSH names a shifted character by its unshifted key: `?` is Shift+/ and a reducer's capital
-/// (`J`/`K`, Now's `R`, Review's `A`, a session view's `N`) is Shift+letter (a bare "J" would
+/// (Sessions' `N`, a session view's `N`) is Shift+letter (a bare "J" would
 /// bind `j`).
 fn stroke(key: &str) -> String {
     match key {
@@ -83,14 +86,7 @@ impl AppState {
         };
         self.watch_key_focus();
         let mut keys: BTreeSet<&'static str> = ["/", "?"].into_iter().collect();
-        keys.extend(
-            Destination::ALL
-                .into_iter()
-                .filter_map(commands::destination_key),
-        );
-        for domain in [work::KEYS, plans::KEYS, review::KEYS] {
-            keys.extend(domain.iter().copied());
-        }
+        keys.extend(nav::PLACE_KEYS);
         for &key in &keys {
             on_key_with(&stroke(key), typing, move |_| self.press_key(key));
         }
@@ -261,11 +257,8 @@ impl AppState {
             return &[];
         }
         let destination = self.destination();
-        if self
-            .nav
-            .with(|nav| matches!(nav.pages.last(), Some(crate::model::Route::Project(_))))
-            || (self.workspace_mode() == WorkspaceMode::AssistantOnly
-                && destination == Destination::Now)
+        // The assistant-only landing in Home's place is not a list.
+        if self.workspace_mode() == WorkspaceMode::AssistantOnly && destination == Destination::Home
         {
             return &[];
         }
@@ -279,18 +272,24 @@ impl AppState {
                     .get()
                     .anywhere
                     .then(|| self.focused_row.get());
-                // The selected row as the focused one is named: Now's task id, the roster's
-                // `agent-<session>`.
-                let selected = if destination == Destination::Agents {
-                    self.agents.with(|state| {
+                // The selected row as the focused one is named: its test id.
+                let selected = match destination {
+                    Destination::Sessions => self.agents.with(|state| {
                         state
                             .roster_session
                             .as_ref()
-                            .map(|session| format!("agent-{session}"))
-                    })
-                } else {
-                    self.nav
-                        .with(|nav| nav.selection.task.as_ref().map(ToString::to_string))
+                            .map(|session| list::row_id(&Live::Session(session.clone())))
+                    }),
+                    Destination::Home => self.home.with(|state| state.selected.clone()).map(|id| {
+                        self.feed
+                            .with(|feed| list::row_id(&home::live_of(feed, &id)))
+                    }),
+                    _ => self.nav.with(|nav| {
+                        nav.selection
+                            .task
+                            .as_ref()
+                            .map(|task| list::row_id(&Live::Task(task.clone())))
+                    }),
                 };
                 commands::with_focus(
                     keys,
@@ -324,82 +323,84 @@ impl AppState {
             }
             _ => {}
         }
-        // In Now/Review, '.' belongs to the focused list's selected-row menu. Otherwise it
-        // remains the global Changes shortcut; an empty list still consumes its own key.
-        let scoped_menu = key == "." && untracked(|| self.list_keys_now().contains(&"."));
-        // Without a connection no destination is served, so only destination keys answer.
-        let effects = if key == "." && !scoped_menu {
-            None
-        } else {
-            match self.data.get_untracked() {
-                DataState::Daemon | DataState::Fixture => self.key_live(key),
-                DataState::Disconnected => None,
-            }
+        // Without a connection no place is served, so only the place keys answer. A key the
+        // list in view takes for itself (a page's own letter) never also leaves the page.
+        let effects = match self.data.get_untracked() {
+            DataState::Daemon | DataState::Fixture => self.key_live(key),
+            DataState::Disconnected => None,
         };
         if let Some(effects) = effects {
             self.run(effects);
-        } else if !scoped_menu
-            && !self.on_session()
-            && let Some(destination) = Destination::ALL
-                .into_iter()
-                .find(|destination| commands::destination_key(*destination) == Some(key))
+        } else if !self.on_session()
+            && let Some(key) = key.chars().next().filter(|_| key.chars().count() == 1)
+            && let Some(destination) = self.nav.with_untracked(|nav| nav.key_page(key))
         {
             self.go(destination);
         }
     }
 
-    /// Routes a key to the served destination's live reducer with the feed and selection.
+    /// Routes a list key to the place in view, or to the page on top, with the feed and the
+    /// selection; none for a key the place does not take.
     fn key_live(&self, key: &str) -> Option<Vec<Effect>> {
-        let destination = self.nav.with_untracked(|nav| nav.destination);
-        if self
-            .nav
-            .with_untracked(|nav| matches!(nav.pages.last(), Some(crate::model::Route::Project(_))))
-            || (untracked(|| self.workspace_mode()) == WorkspaceMode::AssistantOnly
-                && destination == Destination::Now)
-        {
+        if !untracked(|| self.list_keys_now().contains(&key)) {
             return None;
         }
+        let destination = self.nav.with_untracked(|nav| nav.destination);
         if untracked(|| self.available(destination)) != crate::model::Availability::Ready {
             return None;
         }
         let (top, selection) = self
             .nav
             .with_untracked(|nav| (nav.live().cloned(), nav.selection.clone()));
-        let top = top.as_ref();
-        let env = self.env_untracked();
-        let filter = untracked(|| {
-            FilterScreen::of(destination)
-                .map(|screen| self.project_filter(screen))
-                .unwrap_or_default()
-        });
-        let grouping = untracked(|| self.now_group());
-        let mut effects = None;
-        self.feed.with_untracked(|feed| match destination {
-            Destination::Now => self.work.update(|state| {
-                effects = state.key_now_page(
-                    key,
-                    top,
-                    &selection,
-                    feed,
-                    env,
-                    NowScope {
-                        filter: &filter,
-                        grouping,
-                    },
-                );
+        let scope = untracked(|| self.project_scope());
+        match (destination, top) {
+            // A task's page: `.` opens its More menu.
+            (_, Some(Live::Task(id) | Live::Plan(id) | Live::Review(id))) => {
+                Some(vec![Effect::VerbMenu(work::Record::Task(id))])
+            }
+            (Destination::Sessions, top) | (_, top @ Some(Live::Session(_))) => {
+                let filter = scope.filter();
+                let mut effects = None;
+                self.feed.with_untracked(|feed| {
+                    self.agents.update(|state| {
+                        effects = state.key(key, top.as_ref(), feed, &filter);
+                    });
+                });
+                effects
+            }
+            (Destination::Tasks, None) => {
+                let order = self.feed.with_untracked(|feed| {
+                    self.tasks
+                        .with_untracked(|state| list::order(&tasks::sections(feed, &scope, state)))
+                });
+                let selected = list::settled(&order, selection.task.as_ref());
+                Some(match list::key(key, &order, selected.as_ref())? {
+                    ListKey::Select(id) => vec![Effect::Select(Live::Task(id))],
+                    ListKey::Open(id) => vec![Effect::OpenLive(Live::Task(id))],
+                    ListKey::More(id) => vec![Effect::VerbMenu(work::Record::Task(id))],
+                    ListKey::Inspector => {
+                        self.toggle_inspector();
+                        Vec::new()
+                    }
+                })
+            }
+            (Destination::Home, None) => self.feed.with_untracked(|feed| {
+                let order = list::order(&home::sections(feed, &scope));
+                let selected = self
+                    .home
+                    .with_untracked(|state| list::settled(&order, state.selected.as_ref()));
+                Some(match list::key(key, &order, selected.as_ref())? {
+                    ListKey::Select(id) => {
+                        self.home.update(|state| state.selected = Some(id));
+                        Vec::new()
+                    }
+                    ListKey::Open(id) => vec![Effect::OpenLive(home::live_of(feed, &id))],
+                    ListKey::More(id) => vec![Effect::VerbMenu(home::record_of(feed, &id))],
+                    ListKey::Inspector => Vec::new(),
+                })
             }),
-            Destination::Plans => self.plans.update(|state| {
-                effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
-            }),
-            Destination::Agents => self.agents.update(|state| {
-                effects = state.key(key, top, feed, &filter);
-            }),
-            Destination::Review => self.review.update(|state| {
-                effects = state.key_live_filtered(key, top, &selection, feed, env, &filter);
-            }),
-            _ => {}
-        });
-        effects
+            _ => None,
+        }
     }
 }
 

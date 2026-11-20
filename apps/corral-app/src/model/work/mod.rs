@@ -274,6 +274,11 @@ pub enum Press {
         index: usize,
         text: String,
     },
+    /// Run the task's one next step for its status, with the engine's defaults.
+    Step {
+        task: Id,
+        step: Step,
+    },
     /// Move this device's seen cursor through the change `seq`.
     Seen(u64),
     /// Fetch the page of changes before `seq`.
@@ -289,6 +294,33 @@ pub enum Press {
 impl From<Action> for Press {
     fn from(action: Action) -> Press {
         Press::Work(action)
+    }
+}
+
+/// A status's own next step: an operation that needs no words, sent on one press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Idea to Backlog, Backlog to Ready.
+    Move(corral_types::Status),
+    /// With the engine's resolved profile and base.
+    Dispatch,
+    /// Onto the run's base; asks once, as every approve does.
+    Approve,
+}
+
+impl Step {
+    /// The operation the step submits for `task`.
+    pub fn op(self, task: &Id) -> Op {
+        let id = task.to_string();
+        match self {
+            Step::Move(status) => Op::Move { id, status },
+            Step::Dispatch => Op::Dispatch {
+                id,
+                profile: None,
+                base: None,
+            },
+            Step::Approve => Op::Approve { id, onto: None },
+        }
     }
 }
 
@@ -426,6 +458,7 @@ impl State {
                 Some(next) => self.next(&next, false),
                 None => vec![no_longer_blocked(&task)],
             },
+            Press::Step { task, step } => self.next(&Next::run(step.op(&task)), false),
             Press::RetryBoard => vec![Effect::RetryTopic("tasks".into())],
             Press::Seen(through) => vec![Effect::Seen(SeenAdvance { through })],
             Press::Older(before) => vec![Effect::Changes(ChangesQuery {

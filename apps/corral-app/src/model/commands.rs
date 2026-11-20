@@ -99,15 +99,17 @@ pub enum Action {
     Settings(SettingsSection),
     /// Select or push a live record.
     OpenLive(Live),
-    /// Open a locally built project page.
+    /// Scope every page to a project and go Home: the project's page.
     Project(Id),
+    /// Scope every page to all projects again.
+    AllProjects,
     /// Launch the explicit assistant-only workspace preview.
     PreviewNoProjects,
     /// Run the same record action offered in the inspector and row menu.
     Work(crate::model::work::Press),
     /// Open Ask, optionally with a free-text draft.
     Ask(Option<String>),
-    /// Open the New build sheet over Agents.
+    /// Open the New build sheet over Sessions.
     NewBuild,
     /// Start a new assistant session and open its page.
     NewAssistant,
@@ -206,43 +208,45 @@ pub fn commands(
         live_verbs(&mut rows, record, feed);
     }
     rows.extend(
-        crate::model::nav::navigation(feed)
+        crate::model::nav::destinations(feed)
             .into_iter()
-            .filter_map(|item| {
-                let crate::model::nav::NavigationTarget::Destination(destination) = item.target
-                else {
-                    return None;
-                };
-                Some(row(
+            .map(|destination| {
+                row(
                     format!("go:{}", destination.slug()),
                     "Go to",
-                    destination.label(),
+                    place_label(destination),
                     destination_key(destination),
                     Action::Go(destination),
-                ))
+                )
             }),
     );
     if live {
         live_open(&mut rows, feed, query);
-        rows.extend(
-            crate::model::projects::known_projects(feed)
-                .into_iter()
-                .map(|id| {
-                    row(
-                        format!("project-{id}"),
-                        "Projects",
-                        format!("Project: {id}"),
-                        None,
-                        Action::Project(id),
-                    )
-                }),
-        );
+        let projects = crate::model::projects::known_projects(feed);
+        if !projects.is_empty() {
+            rows.push(row(
+                "scope-all",
+                "Scope",
+                format!("Scope: {}", crate::model::projects::ALL_PROJECTS),
+                None,
+                Action::AllProjects,
+            ));
+        }
+        rows.extend(projects.into_iter().map(|id| {
+            row(
+                format!("project-{id}"),
+                "Scope",
+                format!("Scope: {id}"),
+                None,
+                Action::Project(id),
+            )
+        }));
     }
     rows.push(pair_row(data));
     if live && (preview || feed.capable(corral_protocol::app::BUILD_V1)) {
         rows.push(row(
             "new-build",
-            "Agents",
+            "Sessions",
             "New build session…",
             Some("N"),
             Action::NewBuild,
@@ -251,7 +255,7 @@ pub fn commands(
     if ask {
         rows.push(row(
             "new-assistant",
-            "Agents",
+            "Sessions",
             "New assistant session",
             None,
             Action::NewAssistant,
@@ -307,18 +311,6 @@ pub fn commands(
         None,
         Action::PreviewNoProjects,
     ));
-    if live && managed {
-        // One row for both directions: the palette reads no Now state, and either word finds it.
-        rows.push(row(
-            "closed:toggle",
-            "Now",
-            "Show or hide closed tasks",
-            None,
-            Action::Work(crate::model::work::Press::Closed(
-                crate::model::work::ClosedPress::Toggle,
-            )),
-        ));
-    }
     if preview {
         rows.extend(demo_rows().into_iter().filter(|row| match form {
             Form::Phone => matches!(row.action, Action::Share | Action::Lock),
@@ -603,19 +595,40 @@ pub fn run(
         .map(|command| command.action)
 }
 
-/// The destination's shortcut as a static key cap for renderers.
+/// The key that opens the page, as a static key cap for renderers: its place's key where the
+/// place opens it, Usage's and Artifacts' own. Timeline has none.
 pub const fn destination_key(destination: Destination) -> Option<&'static str> {
-    Some(match destination {
-        Destination::Now => "n",
-        Destination::Changes => ".",
-        Destination::Plans => "p",
-        Destination::Agents => "a",
-        Destination::Review => "r",
-        Destination::Timeline => "t",
-        Destination::Usage => "u",
-        Destination::Artifacts => "f",
-        Destination::Settings => ",",
-    })
+    match destination {
+        Destination::Home => Some("h"),
+        Destination::Tasks => Some("t"),
+        Destination::Sessions => Some("s"),
+        Destination::Feed => Some("a"),
+        Destination::Timeline => None,
+        Destination::Usage => Some("u"),
+        Destination::Artifacts => Some("f"),
+        Destination::Settings => Some(","),
+    }
+}
+
+/// A place's key as a static key cap.
+pub const fn area_key(area: crate::model::nav::Area) -> &'static str {
+    use crate::model::nav::Area;
+    match area {
+        Area::Home => "h",
+        Area::Tasks => "t",
+        Area::Sessions => "s",
+        Area::Activity => "a",
+        Area::Settings => ",",
+    }
+}
+
+/// A page as the palette names it: Activity's pages under their place.
+fn place_label(destination: Destination) -> String {
+    use crate::model::nav::Area;
+    match destination.area() {
+        Area::Activity => format!("{} › {}", Area::Activity.label(), destination.label()),
+        _ => destination.label().to_owned(),
+    }
 }
 
 /// Looks up a row's shortcut without allocating the command table during row rendering.

@@ -9,7 +9,6 @@ use nsh_core::prelude::*;
 use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 use crate::model::plans::{self, Action, Button, GraphInput, LiveAction};
-use crate::model::projects::FilterScreen;
 use crate::model::text::span;
 use crate::model::{Form, Id};
 use crate::screens::PhonePage;
@@ -94,7 +93,7 @@ fn keep_current(app: AppState, plan: impl Fn() -> Option<Id> + 'static) {
 pub(super) fn keep_selected_loaded(app: AppState) {
     keep_current(app, move || {
         let selection = app.selection();
-        let filter = app.project_filter(FilterScreen::Plans);
+        let filter = app.scope_filter();
         app.feed
             .with(|feed| plans::current_plan_filtered(&selection, feed, &filter))
     });

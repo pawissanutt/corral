@@ -6,7 +6,6 @@ use nsh_core::prelude::*;
 
 use crate::model::hue::Hue;
 use crate::model::plans::{self, Detail, Header};
-use crate::model::projects::FilterScreen;
 use crate::model::text::{flat, span};
 use crate::model::{Form, Id};
 use crate::state::AppState;
@@ -66,7 +65,7 @@ fn memos(app: AppState, plan: Option<Id>) -> (Memo<Detail>, Memo<Kind>) {
         let env = app.env();
         let shown = plan.clone().or_else(|| {
             let selection = app.selection();
-            let filter = app.project_filter(FilterScreen::Plans);
+            let filter = app.scope_filter();
             app.feed
                 .with(|feed| plans::current_plan_filtered(&selection, feed, &filter))
         });

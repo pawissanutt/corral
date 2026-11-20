@@ -26,7 +26,7 @@ use crate::ui::term::{cells, space};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, row_height, text_size};
 
 use super::parts::{press, press_id};
-use super::verbs::{row_record, with_menu};
+use crate::ui::kit::more::{row_record, with_menu};
 
 const RING: f32 = 2.0;
 /// The desktop row (`.row`): 38 pt high, 20 pt in, 10 pt between columns.

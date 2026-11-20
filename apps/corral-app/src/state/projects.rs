@@ -1,32 +1,37 @@
-//! Device-local scopes and project intents. Storage never contains preview facts or credentials.
+//! The device-local project scope and project intents. Storage never contains preview facts
+//! or credentials.
 use super::AppState;
 use crate::model::{
-    DataState, Destination, Id, WorkspaceMode,
+    DataState, Destination, Id, ProjectFilter, WorkspaceMode,
     agents::{self, Show},
     assistant,
-    projects::{FilterScreen, Filters, NowGroup, ProjectFilter},
+    nav::{self, Area},
+    projects::{NowGroup, Scope, Scopes},
 };
 use corral_protocol::assistant::ContextRef;
 use nsh_core::{prelude::*, storage::Storage};
 
-const FILTERS_KEY: &str = "corral.filters";
-pub(super) fn load_filters() -> Filters {
-    Storage::get_item(FILTERS_KEY)
-        .and_then(|value| Filters::parse(&value))
+const SCOPE_KEY: &str = "corral.scope";
+/// The per-screen filters the one scope replaced; dropped so it does not outlive them.
+const FORMER_FILTERS_KEY: &str = "corral.filters";
+
+pub(super) fn load_scopes() -> Scopes {
+    Storage::remove_item(FORMER_FILTERS_KEY);
+    Storage::get_item(SCOPE_KEY)
+        .and_then(|value| Scopes::parse(&value))
         .unwrap_or_default()
 }
 
 impl AppState {
+    /// The page this workspace shows for `destination`: itself, or in an assistant-only
+    /// workspace Usage for Activity's other pages and Home for the board's.
     pub(super) fn workspace_destination(&self, destination: Destination) -> Destination {
-        if self.workspace_mode() == WorkspaceMode::AssistantOnly
-            && !matches!(
-                destination,
-                Destination::Now | Destination::Agents | Destination::Usage | Destination::Settings
-            )
-        {
-            Destination::Now
-        } else {
+        if self.feed.with(|feed| nav::offers(feed, destination)) {
             destination
+        } else if destination.area() == Area::Activity {
+            Destination::Usage
+        } else {
+            Destination::Home
         }
     }
 
@@ -34,72 +39,69 @@ impl AppState {
         self.feed.with(WorkspaceMode::of)
     }
 
-    pub fn project_filter(&self, screen: FilterScreen) -> ProjectFilter {
-        self.feed.with(|feed| {
-            feed.store.as_deref().map_or(ProjectFilter::All, |store| {
-                self.filters
-                    .with(|filters| filters.get(store, screen, feed))
-            })
+    /// Tracked: the project scope of the whole app, for the daemon store in view. Home, Tasks,
+    /// Sessions and Activity all read it; there is no other project filter.
+    pub fn project_scope(&self) -> Scope {
+        self.feed.with(|feed| match feed.store.as_deref() {
+            Some(store) => self.scopes.with(|scopes| scopes.get(store, feed)),
+            None => Scope::All,
         })
     }
 
-    pub fn set_project_filter(&self, screen: FilterScreen, filter: ProjectFilter) {
-        let store = self.feed.with_untracked(|feed| feed.store.clone());
-        if let Some(store) = store {
-            self.filters
-                .update(|filters| filters.set(&store, screen, filter));
-            self.project_context_removed.set(None);
-        }
+    /// Tracked: [`Self::scope`] as the filter the domains' `*_filtered` builders take.
+    pub fn scope_filter(&self) -> ProjectFilter {
+        self.project_scope().filter()
     }
 
-    /// Explicit opens and selections must reveal their target before filtered builders read it.
-    pub(super) fn reveal_live(&self, live: &crate::model::Live) {
-        let scope = self.feed.with_untracked(|feed| {
-            self.filters.with_untracked(|filters| {
-                crate::model::nav::explicit_record_filter(feed, filters, live)
-            })
-        });
-        if let Some((screen, filter)) = scope {
-            self.set_project_filter(screen, filter);
+    /// Scopes every page. A scope set before the daemon names its store (a project's address
+    /// opened cold) waits for the store.
+    pub fn set_scope(&self, scope: Scope) {
+        match self.feed.with_untracked(|feed| feed.store.clone()) {
+            Some(store) => {
+                self.scopes.update(|scopes| scopes.set(&store, scope));
+                self.scope_pending.set(None);
+            }
+            None => self.scope_pending.set(Some(scope)),
         }
+        self.project_context_removed.set(None);
     }
 
     pub fn now_group(&self) -> NowGroup {
         self.feed.with(|feed| {
             feed.store.as_deref().map_or(NowGroup::State, |store| {
-                self.filters.with(|filters| filters.now_group(store))
+                self.scopes.with(|scopes| scopes.now_group(store))
             })
         })
     }
 
     pub fn set_now_group(&self, group: NowGroup) {
         if let Some(store) = self.feed.with_untracked(|feed| feed.store.clone()) {
-            self.filters
-                .update(|filters| filters.set_now_group(&store, group));
+            self.scopes
+                .update(|scopes| scopes.set_now_group(&store, group));
         }
     }
 
     /// Shows the sessions whose host runs or waits, or every one the daemon lists, and keeps
-    /// the choice in `corral.filters` for this workspace.
+    /// the choice in `corral.scope` for this workspace.
     pub fn set_agents_show(&self, show: Show) {
         if let Some(store) = self.feed.with_untracked(|feed| feed.store.clone()) {
-            self.filters
-                .update(|filters| filters.set_agents_show(&store, show));
+            self.scopes
+                .update(|scopes| scopes.set_agents_show(&store, show));
         }
-        let filter = untracked(|| self.project_filter(FilterScreen::Agents));
+        let filter = untracked(|| self.scope_filter());
         self.reduce(self.agents, |state, feed, _, _| {
             state.act(agents::Action::SetShow(show), feed, &filter)
         });
     }
 
     /// Restores the Show choice saved for the workspace whenever the workspace or its saved
-    /// filters change.
+    /// choices change.
     pub(super) fn follow_agents_show(self) {
         let saved = computed(move || {
             self.feed.with(|feed| {
                 feed.store
                     .as_deref()
-                    .map(|store| self.filters.with(|filters| filters.agents_show(store)))
+                    .map(|store| self.scopes.with(|scopes| scopes.agents_show(store)))
             })
         });
         effect(move || {
@@ -111,14 +113,10 @@ impl AppState {
         });
     }
 
+    /// A project's page is Home scoped to it.
     pub fn open_project(&self, id: Id) {
-        self.change(|nav| nav.open_project(id));
-        self.project_context_removed.set(None);
-    }
-
-    pub fn open_project_in_now(&self, id: Id) {
-        self.set_project_filter(FilterScreen::Now, ProjectFilter::Project(id));
-        self.go(Destination::Now);
+        self.set_scope(Scope::Project(id));
+        self.go(Destination::Home);
     }
 
     pub fn ask_project(&self, id: Id) {
@@ -126,7 +124,8 @@ impl AppState {
         self.ask_about(Some(assistant::project_context(&id)), None);
     }
 
-    /// Tracked default project; removing its chip suppresses it until context changes or Ask closes.
+    /// Tracked default project: the one in scope. Removing its chip suppresses it until the
+    /// context changes or Ask closes.
     pub fn composer_project(&self) -> Option<Id> {
         if let Some(project) = self.ask_context.with(|context| {
             context
@@ -136,13 +135,7 @@ impl AppState {
         }) {
             return Some(project);
         }
-        let project = self.feed.with(|feed| {
-            self.nav.with(|nav| {
-                self.filters
-                    .with(|filters| assistant::default_project(nav, filters, feed))
-            })
-        });
-        project.filter(|id| {
+        assistant::default_project(&self.project_scope()).filter(|id| {
             self.project_context_removed
                 .with(|removed| removed.as_ref() != Some(id))
         })
@@ -176,27 +169,33 @@ impl AppState {
                 local.strftime("%H:%M").to_string(),
                 Some(local.time_zone().clone()),
             ));
-        self.go(Destination::Now);
+        self.go(Destination::Home);
     }
 
     pub(super) fn follow_projects(self) {
         effect(move || {
-            let encoded = self.filters.with(Filters::encode);
+            let encoded = self.scopes.with(Scopes::encode);
             if let Ok(encoded) = encoded {
-                let _ = Storage::set_item(FILTERS_KEY, &encoded);
+                let _ = Storage::set_item(SCOPE_KEY, &encoded);
             }
         });
-        let mode = computed(move || self.workspace_mode());
+        // The scope asked for before the store was known lands once it is.
+        let store = computed(move || self.feed.with(|feed| feed.store.clone()));
         effect(move || {
-            if mode.get() == WorkspaceMode::AssistantOnly {
-                untracked(|| {
-                    if !matches!(
-                        self.destination(),
-                        Destination::Agents | Destination::Usage | Destination::Settings
-                    ) {
-                        self.go(Destination::Now);
-                    }
-                });
+            if store.get().is_some()
+                && let Some(scope) = untracked(|| self.scope_pending.get())
+            {
+                untracked(|| self.set_scope(scope));
+            }
+        });
+        // A workspace that turns out to have no projects leaves the pages it does not have.
+        let offered = computed(move || {
+            let destination = self.destination();
+            self.feed.with(|feed| nav::offers(feed, destination))
+        });
+        effect(move || {
+            if !offered.get() {
+                untracked(|| self.go(self.destination()));
             }
         });
     }

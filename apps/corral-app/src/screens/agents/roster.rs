@@ -12,7 +12,6 @@ use crate::model::Form;
 use crate::model::agents::{Roster, Show};
 use crate::model::glance::Stat;
 use crate::model::hue::Hue;
-use crate::model::projects::FilterScreen;
 use crate::model::session::Fill;
 use crate::model::text::span;
 use crate::screens::assistant;
@@ -20,7 +19,6 @@ use crate::state::AppState;
 use crate::ui::kit::glance::page_head;
 use crate::ui::kit::notice::{empty, error, loading, notice};
 use crate::ui::kit::page::{pane, search};
-use crate::ui::kit::project_filter::project_filter;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -98,7 +96,6 @@ fn phone(app: AppState, roster: Memo<Roster>) -> AnyElement {
                     .child(show(app, roster)),
             ),
         )
-        .child(project_filter(app, FilterScreen::Agents))
         .child(pane(app, "agents-roster", content))
         .into_element()
 }
@@ -126,12 +123,7 @@ fn scope_row(app: AppState, roster: Memo<Roster>) -> AnyElement {
         } else {
             12.0
         }))
-        .child(
-            view()
-                .flex_1()
-                .min_w(px(0.0))
-                .child(project_filter(app, FilterScreen::Agents)),
-        )
+        .child(view().flex_1().min_w(px(0.0)))
         .child(
             view()
                 .flex_none()

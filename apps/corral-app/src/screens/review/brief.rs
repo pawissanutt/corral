@@ -10,12 +10,12 @@ use crate::model::review::{Brief, BriefSide, ChangedFile, ReadyLink, ReviewQuote
 use crate::model::work::{Record, VERB_MENU_LABEL};
 use crate::model::{Form, Hue};
 use crate::screens::markdown::{markdown, provide_styles};
-use crate::screens::now::verb_menu;
 use crate::screens::plans::menu_trigger;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::hint::{hinted, tip};
 use crate::ui::kit::marks::{hue_ink, mark};
+use crate::ui::kit::more::more_menu;
 use crate::ui::kit::table::kv;
 use crate::ui::kit::text::{dim, mono};
 use crate::ui::term;
@@ -521,7 +521,7 @@ fn actions(cx: &Ctx) -> AnyElement {
             let spoken = format!("{VERB_MENU_LABEL} for {id}");
             view()
                 .flex_row()
-                .child(verb_menu(
+                .child(more_menu(
                     app,
                     Record::Task(id),
                     menu_trigger(app, VERB_MENU_LABEL, spoken, "btn-review-actions"),

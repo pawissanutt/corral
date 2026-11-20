@@ -11,7 +11,7 @@ use nsh_core::AccessibilityCurrent;
 use nsh_core::element::Idiom;
 use nsh_core::prelude::*;
 
-use crate::model::{Destination, Form};
+use crate::model::{Area, Destination, Form};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::hint::tip;
@@ -74,12 +74,17 @@ pub fn count(app: AppState, destination: Destination) -> AnyElement {
     })
 }
 
-/// What a destination's row says to assistive technology: its name, then its count as the
-/// count reads ("Inbox, 5 wait on you"), as the figure beside the name is part of what it shows.
-pub fn destination_spoken(app: AppState, destination: Destination) -> impl Fn() -> SharedString {
-    move || match app.snapshot().count_words(destination) {
-        Some(words) => format!("{}, {words}", destination.label()).into(),
-        None => destination.label().into(),
+/// What a place's row says to assistive technology: its name, then its count as the count
+/// reads ("Home, 5 wait on you"), as the figure beside the name is part of what it shows.
+pub fn area_spoken(app: AppState, area: Area) -> impl Fn() -> SharedString {
+    move || {
+        let words = area
+            .counted()
+            .and_then(|counted| app.snapshot().count_words(counted));
+        match words {
+            Some(words) => format!("{}, {words}", area.label()).into(),
+            None => area.label().into(),
+        }
     }
 }
 
@@ -298,7 +303,7 @@ pub(crate) fn on_shell(token: Token) -> AdaptiveColor {
 }
 
 /// A count, named by its `words`, which are also its hint on desktop and in a terminal. On the
-/// phone a pill of its own fill: the Inbox count (what needs you) a solid needs-you pill in bold,
+/// phone a pill of its own fill: the Home count (what needs you) a solid needs-you pill in bold,
 /// the others quiet. The desktop sidebar's counts are bare figures on the shell, as the mock's;
 /// a terminal's are figures in a column: a column of small fills reads as one band there.
 fn count_chip(form: Form, n: u32, needs_you: bool, words: String, test_id: &str) -> AnyElement {

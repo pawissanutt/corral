@@ -7,7 +7,7 @@
 use nsh_core::prelude::*;
 
 use crate::model::glance::StatIcon;
-use crate::model::{Destination, PhoneTab};
+use crate::model::{Area, Destination, PhoneTab};
 
 const NOW: ImageAsset = asset!("icons/now.svg");
 const CHANGES: ImageAsset = asset!("icons/changes.svg");
@@ -120,11 +120,10 @@ impl Icon {
     /// The destination's own icon.
     pub const fn destination(destination: Destination) -> Icon {
         match destination {
-            Destination::Now => Icon::Now,
-            Destination::Changes => Icon::Changes,
-            Destination::Plans => Icon::Plans,
-            Destination::Agents => Icon::Agents,
-            Destination::Review => Icon::Review,
+            Destination::Home => Icon::Now,
+            Destination::Tasks => Icon::Plans,
+            Destination::Sessions => Icon::Agents,
+            Destination::Feed => Icon::Changes,
             Destination::Timeline => Icon::Timeline,
             Destination::Usage => Icon::Usage,
             Destination::Artifacts => Icon::Files,
@@ -132,14 +131,20 @@ impl Icon {
         }
     }
 
-    /// The phone tab's icon: its destination's, and the three dots for More.
-    pub const fn phone_tab(tab: PhoneTab) -> Icon {
-        match tab {
-            PhoneTab::Now => Icon::Now,
-            PhoneTab::Agents => Icon::Agents,
-            PhoneTab::Plans => Icon::Plans,
-            PhoneTab::More => Icon::More,
+    /// A place's icon: its own page's, and the feed's for Activity.
+    pub const fn area(area: Area) -> Icon {
+        match area {
+            Area::Home => Icon::Now,
+            Area::Tasks => Icon::Plans,
+            Area::Sessions => Icon::Agents,
+            Area::Activity => Icon::Changes,
+            Area::Settings => Icon::Settings,
         }
+    }
+
+    /// The phone tab's icon: its place's.
+    pub const fn phone_tab(tab: PhoneTab) -> Icon {
+        Icon::area(tab.area())
     }
 
     /// The glyph of a count: the shape of the state it counts. Sessions are the Agents

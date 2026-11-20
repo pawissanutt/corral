@@ -9,9 +9,7 @@ use std::time::Duration;
 
 use nsh_core::{platform::Os, prelude::*};
 
-use crate::model::{
-    Destination, NavState, Overlay, PhoneTab, Route, SettingsSection, work::MoreRow,
-};
+use crate::model::{Destination, NavState, Overlay, PhoneTab, Route, SettingsSection};
 use crate::state::AppState;
 use crate::ui::kit::page_phone::{PageScroll, page_scroll};
 
@@ -21,14 +19,13 @@ const SLIDE: Duration = Duration::from_millis(450);
 /// One page of a tab's stack above its root.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum Entry {
-    /// A page the model knows (`NavState::pages`): a live record.
+    /// A page the model knows (`NavState::pages`): a task's or a session's.
     Page(Route),
-    /// A destination opened from the More list.
+    /// A destination over a tab's root: one of Activity's pages over its list, or Settings
+    /// over whichever tab the gear was pressed on.
     Destination(Destination),
     /// A Settings section opened from the Settings list.
     Section(SettingsSection),
-    /// The project list opened from the More list.
-    Projects,
 }
 
 /// What the shell follows in the model's navigation.
@@ -100,7 +97,7 @@ impl Nav {
             let section = self.stack.with(|s| {
                 s.iter().rev().find_map(|entry| match entry {
                     Entry::Section(section) => Some(*section),
-                    Entry::Page(_) | Entry::Destination(_) | Entry::Projects => None,
+                    Entry::Page(_) | Entry::Destination(_) => None,
                 })
             });
             self.app.phone_section.set(section);
@@ -139,9 +136,11 @@ impl Nav {
 
     /// Brings the shell to what the model changed from `was` to `now`.
     fn reconcile(self, was: &Seen, now: &Seen, global: bool) {
+        // Settings has no tab of its own: it opens over the tab in view.
+        let here = self.tab.get_untracked();
         if now.section_opens != was.section_opens {
             self.land(
-                PhoneTab::More,
+                here,
                 vec![
                     Entry::Destination(Destination::Settings),
                     Entry::Section(now.settings),
@@ -150,7 +149,10 @@ impl Nav {
             return;
         }
         if now.goes != was.goes {
-            self.land(now.destination.phone_tab(), entries_of(now.destination));
+            self.land(
+                now.destination.phone_tab().unwrap_or(here),
+                entries_of(now.destination),
+            );
             return;
         }
         if now.pages == was.pages || now.pages == self.stack.with_untracked(|s| pages_of(s)) {
@@ -174,18 +176,11 @@ impl Nav {
         }
     }
 
-    /// The destination on screen: the More destination in the stack, or the tab's own.
+    /// The destination on screen: the one in the stack, or the tab's own.
     fn shown(self) -> Option<Destination> {
         self.stack
             .with_untracked(|s| stacked(s))
             .or_else(|| self.tab.get_untracked().destination())
-    }
-
-    /// Tracked [`Self::shown`]: what an assistant workspace's tab, a destination, marks.
-    pub fn showing(self) -> Option<Destination> {
-        self.stack
-            .with(|s| stacked(s))
-            .or_else(|| self.tab.get().destination())
     }
 
     /// The user chose `tab`: its root, with nothing over it, as the mock's tab bar does.
@@ -204,17 +199,10 @@ impl Nav {
         }
     }
 
-    /// A More row: its destination over the list, through the model's own action.
-    pub fn open_more(self, row: MoreRow) {
-        self.stack.set(vec![Entry::Destination(row.destination)]);
-        let action = row.action;
-        self.app
-            .act(self.app.work, move |state, _| state.act(action));
-    }
-
-    /// More's Projects row: the project list over More.
-    pub fn open_projects(self) {
-        self.stack.set(vec![Entry::Projects]);
+    /// A row of Activity's list: its page over the list.
+    pub fn open_page(self, page: Destination) {
+        self.stack.set(vec![Entry::Destination(page)]);
+        self.app.go(page);
     }
 
     /// Leaves the page at `depth` and those above it (the header's back, the swipe, Android's
@@ -354,28 +342,34 @@ impl Nav {
 }
 
 /// Where the shell starts: the tab of the model's first page and its pages, or the tab of the
-/// model's destination (a More destination pushed over the More list).
+/// model's destination (one of Activity's pages pushed over its list; Settings over Home).
 fn start_of(nav: &NavState) -> (PhoneTab, Vec<Entry>) {
     match nav.pages.first() {
         Some(first) => (
             home(first),
             nav.pages.iter().cloned().map(Entry::Page).collect(),
         ),
-        None => (nav.destination.phone_tab(), entries_of(nav.destination)),
+        None => (
+            nav.destination.phone_tab().unwrap_or(PhoneTab::Home),
+            entries_of(nav.destination),
+        ),
     }
 }
 
 /// The tab a page belongs to.
 fn home(page: &Route) -> PhoneTab {
-    page.owner().phone_tab()
+    page.owner().phone_tab().unwrap_or(PhoneTab::Home)
 }
 
-/// The stack that shows a destination: nothing over a tab's root, the destination over More.
+/// The stack that shows a destination: nothing over the root of the tab that is the
+/// destination, else the destination over its tab's root (Activity's list, or for Settings
+/// the tab in view).
 fn entries_of(destination: Destination) -> Vec<Entry> {
-    if destination.phone_tab() == PhoneTab::More {
-        vec![Entry::Destination(destination)]
-    } else {
+    let root = destination.phone_tab().and_then(PhoneTab::destination);
+    if root == Some(destination) {
         Vec::new()
+    } else {
+        vec![Entry::Destination(destination)]
     }
 }
 
@@ -384,7 +378,7 @@ fn pages_of(entries: &[Entry]) -> Vec<Route> {
         .iter()
         .filter_map(|entry| match entry {
             Entry::Page(page) => Some(page.clone()),
-            Entry::Destination(_) | Entry::Section(_) | Entry::Projects => None,
+            Entry::Destination(_) | Entry::Section(_) => None,
         })
         .collect()
 }
@@ -393,7 +387,7 @@ fn pages_of(entries: &[Entry]) -> Vec<Route> {
 fn stacked(entries: &[Entry]) -> Option<Destination> {
     entries.iter().rev().find_map(|e| match e {
         Entry::Destination(d) => Some(*d),
-        Entry::Page(_) | Entry::Section(_) | Entry::Projects => None,
+        Entry::Page(_) | Entry::Section(_) => None,
     })
 }
 
