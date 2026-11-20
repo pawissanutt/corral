@@ -10,8 +10,8 @@ use nsh_core::prelude::*;
 use nsh_core::url_scheme::HistoryBehavior;
 
 use super::AppState;
+use crate::model::Form;
 use crate::model::address::{Place, Shown, url_path};
-use crate::model::{Form, Live};
 
 /// The place the page was opened at, read before the first screen is built so a reload never
 /// shows another one first.
@@ -41,7 +41,6 @@ impl AppState {
         let form = self.form;
         let place = computed(move || {
             let shown = Shown {
-                inspector: self.work.with(|state| !state.digest_only),
                 phone_section: self.phone_section.get(),
             };
             self.nav.with(|nav| Place::of(nav, form, shown))
@@ -63,6 +62,14 @@ impl AppState {
         let follow = move |url: String| {
             let Some(target) = Place::parse(url_path(&url)) else {
                 return;
+            };
+            // A former address names its new home: the entry takes the home's own path.
+            let target = match target {
+                Place::Project(id) => {
+                    self.open_project(id);
+                    place.get_untracked()
+                }
+                target => target,
             };
             // The entry has this address already: arriving there must not write another.
             named.replace(Some(target.clone()));
@@ -92,17 +99,10 @@ impl AppState {
 
     /// Shows the place an address names, as opening it by name does.
     fn open_place(&self, place: Place) {
-        match &place {
-            Place::Destination(destination) => return self.go(*destination),
-            Place::Live(live) => {
-                self.reveal_live(live);
-                if matches!(live, Live::Task(_)) {
-                    self.work.update(|state| state.digest_only = false);
-                }
-            }
-            Place::Settings(_) | Place::Project(_) => {}
+        match place {
+            Place::Destination(destination) => self.go(destination),
+            Place::Project(id) => self.open_project(id),
+            place => self.change(|nav| place.open(nav)),
         }
-        let form = self.form;
-        self.change(|nav| place.open(nav, form));
     }
 }

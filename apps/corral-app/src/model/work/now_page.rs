@@ -10,12 +10,11 @@ use super::{
 use crate::model::board::TaskLine;
 use crate::model::daemon::{self, Feed};
 use crate::model::glance::{LoopBand, LoopStage, StageRail, Stat, StatIcon};
-use crate::model::projects::{FilterScreen, NowGroup, ProjectFilter, project_chip};
+use crate::model::projects::{NowGroup, ProjectFilter, project_chip};
 use crate::model::{Destination, Form, Hue, Selection};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NowScopeAction {
-    pub screen: FilterScreen,
     pub filter: ProjectFilter,
 }
 
@@ -112,14 +111,6 @@ impl NowPage {
     pub const LIST_LABEL: &'static str = "Who moves next";
     /// What screen readers hear for the placeholder rows while the board loads.
     pub const LOADING: &'static str = "Loading open tasks";
-
-    /// Opening `to` from this page carries Now's scope into that destination's own filter.
-    pub fn scope_for(&self, to: Destination) -> Option<NowScopeAction> {
-        FilterScreen::of(to).map(|screen| NowScopeAction {
-            screen,
-            filter: self.filter.clone(),
-        })
-    }
 }
 
 /// Builds all forms from one project scope. Dispatch `scope_action` through the existing
@@ -236,7 +227,6 @@ pub fn now_page(
         grouping,
         stats,
         scope_action: scope_note.as_ref().map(|_| NowScopeAction {
-            screen: FilterScreen::Now,
             filter: ProjectFilter::All,
         }),
         scope_note,
@@ -552,12 +542,12 @@ fn band(feed: &Feed, filter: &ProjectFilter, landed: Option<&Stat>) -> LoopBand 
         label: "Plan",
         hint: "Plans with blocked or moving children. Opens Plans in this scope.".into(),
         stats: plan_stats,
-        to: Some(Destination::Plans),
+        to: Some(Destination::Tasks),
     }];
     for (index, key, label, to) in [
-        (0, "run", "Run", Destination::Agents),
-        (1, "gate", "Gate", Destination::Review),
-        (2, "review", "Review", Destination::Review),
+        (0, "run", "Run", Destination::Sessions),
+        (1, "gate", "Gate", Destination::Tasks),
+        (2, "review", "Review", Destination::Tasks),
     ] {
         let mut counts = [0_u64; 2];
         for task in scoped_tasks(feed, filter) {

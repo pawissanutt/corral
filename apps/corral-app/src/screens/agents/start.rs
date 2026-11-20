@@ -18,7 +18,6 @@ use crate::model::agents::{
 };
 use crate::model::assistant;
 use crate::model::hue::Hue;
-use crate::model::projects::FilterScreen;
 use crate::screens::plans::menu_trigger;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -111,7 +110,7 @@ fn start(app: AppState, action: StartAction) {
 /// The sheet as the model builds it now (tracked); none once it closed.
 fn view_of(app: AppState) -> Memo<Option<NewBuildForm>> {
     computed(move || {
-        let filter = app.project_filter(FilterScreen::Agents);
+        let filter = app.scope_filter();
         app.feed.with(|feed| {
             app.agents
                 .with(|state| agents::form(&state.start, feed, &filter))

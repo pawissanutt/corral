@@ -124,17 +124,6 @@ fn unassigned_filter_remains_accessible_when_last_open_task_is_assigned() {
     feed.board
         .apply_batch(2, vec![task("T-1", Some("corral"), Status::Ready)], &[]);
     assert_eq!(filter.resolved(&feed), filter);
-    let chips = chips(&feed, &filter, FilterScreen::Now);
-    assert!(
-        chips
-            .iter()
-            .any(|chip| chip.filter == ProjectFilter::All && !chip.selected)
-    );
-    assert!(
-        chips
-            .iter()
-            .any(|chip| chip.filter == ProjectFilter::Unassigned && chip.selected)
-    );
 }
 
 #[test]
@@ -162,76 +151,54 @@ fn empty_loading_or_legacy_projects_do_not_hide_board_navigation() {
     assert_eq!(WorkspaceMode::of(&feed), WorkspaceMode::Managed);
 }
 
+/// One daemon's scope must not scope another's pages, and a project named like the menu's own
+/// words ("all") is still that project after a restart.
 #[test]
-fn persisted_filters_cannot_bleed_across_daemon_stores_or_screens() {
+fn a_persisted_scope_cannot_bleed_across_daemon_stores() {
     let mut feed = Feed::default();
     feed.capabilities
         .insert(corral_protocol::PROJECTS_V1.into());
-    for id in ["corral", "all", "unassigned"] {
+    for id in ["corral", "all"] {
         feed.projects.insert(id.into(), project(id));
     }
-    feed.board
-        .apply_batch(1, vec![task("T-1", None, Status::Ready)], &[]);
-    let mut filters = Filters::default();
-    filters.set(
-        "/one/.corral",
-        FilterScreen::Now,
-        ProjectFilter::Project("corral".into()),
-    );
-    filters.set(
-        "/one/.corral",
-        FilterScreen::Changes,
-        ProjectFilter::Unassigned,
-    );
-    filters.set(
-        "/two/.corral",
-        FilterScreen::Now,
-        ProjectFilter::Project("all".into()),
-    );
-    filters.set(
-        "/two/.corral",
-        FilterScreen::Review,
-        ProjectFilter::Project("unassigned".into()),
-    );
-    filters.set_now_group("/one/.corral", NowGroup::Project);
-    let encoded = filters.encode().expect("filter serialization");
-    let restored = Filters::parse(&encoded).expect("filter deserialization");
-    assert_eq!(restored, filters);
+    let mut scopes = Scopes::default();
+    scopes.set("/one/.corral", Scope::Project("corral".into()));
+    scopes.set("/two/.corral", Scope::Project("all".into()));
+    scopes.set_now_group("/one/.corral", NowGroup::Project);
+    let encoded = scopes.encode().expect("scope serialization");
+    let restored = Scopes::parse(&encoded).expect("scope deserialization");
+    assert_eq!(restored, scopes);
     assert_eq!(
-        restored.get("/one/.corral", FilterScreen::Now, &feed),
-        ProjectFilter::Project("corral".into())
+        restored.get("/one/.corral", &feed),
+        Scope::Project("corral".into())
     );
     assert_eq!(
-        restored.get("/one/.corral", FilterScreen::Changes, &feed),
-        ProjectFilter::Unassigned
+        restored.get("/two/.corral", &feed),
+        Scope::Project("all".into())
     );
-    assert_eq!(
-        restored.get("/two/.corral", FilterScreen::Now, &feed),
-        ProjectFilter::Project("all".into())
-    );
-    assert_eq!(
-        restored.get("/missing/.corral", FilterScreen::Now, &feed),
-        ProjectFilter::All
-    );
+    assert_eq!(restored.get("/missing/.corral", &feed), Scope::All);
     assert_eq!(restored.now_group("/one/.corral"), NowGroup::Project);
     assert_eq!(restored.now_group("/two/.corral"), NowGroup::State);
+    // The project left the daemon's list: every page would stay empty under it.
+    feed.projects.remove("corral");
+    assert_eq!(restored.get("/one/.corral", &feed), Scope::All);
 }
 
 #[test]
-fn a_project_chip_counts_its_blocked_tasks_only_once_the_open_tasks_arrive() {
+fn the_scope_menu_counts_what_waits_only_once_the_open_tasks_arrive() {
     let mut feed = Feed::default();
     feed.capabilities
         .insert(corral_protocol::PROJECTS_V1.into());
     feed.projects.insert("corral".into(), project("corral"));
     feed.projects.insert("site".into(), project("site"));
     let needs = |feed: &Feed| {
-        chips(feed, &ProjectFilter::All, FilterScreen::Now)
+        scope_menu(feed, &Scope::Project("site".into()))
             .into_iter()
-            .map(|chip| chip.needs)
+            .map(|entry| (entry.needs, entry.selected))
             .collect::<Vec<_>>()
     };
     // Before the open tasks arrive nothing is counted: no number, never a zero.
-    assert!(needs(&feed).iter().all(Option::is_none));
+    assert!(needs(&feed).iter().all(|(needs, _)| needs.is_none()));
     feed.board.apply_batch(
         1,
         vec![
@@ -240,6 +207,9 @@ fn a_project_chip_counts_its_blocked_tasks_only_once_the_open_tasks_arrive() {
         ],
         &[],
     );
-    // All, corral, site: only corral has something waiting.
-    assert_eq!(needs(&feed), vec![None, Some("1".into()), None]);
+    // All projects, corral, site: only corral has something waiting; site is in scope.
+    assert_eq!(
+        needs(&feed),
+        vec![(None, false), (Some(1), false), (None, true)]
+    );
 }

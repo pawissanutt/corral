@@ -10,7 +10,7 @@ use corral_protocol::app as wire;
 
 use corral_protocol::DaemonState;
 
-use crate::model::daemon::{Feed, Group, Link};
+use crate::model::daemon::{Feed, Link};
 use crate::model::devices::DeviceLink;
 use crate::model::effect::{Conn, Effect};
 use crate::model::nav::{Destination, Form, SettingsSection};
@@ -185,7 +185,7 @@ impl Snapshot {
     }
     /// Whether the destination has a count requiring the user's attention.
     pub fn needs_you(&self, destination: Destination) -> bool {
-        destination == Destination::Now && self.count(destination).is_some()
+        destination == Destination::Home && self.count(destination).is_some()
     }
     /// The destination body line for this state.
     pub fn body_line(&self, destination: Destination) -> Cow<'static, str> {
@@ -212,14 +212,14 @@ pub enum Availability {
 /// The capability a destination needs; Now (the board) and Settings need none.
 pub const fn capability(destination: Destination) -> Option<&'static str> {
     match destination {
-        Destination::Changes => Some(wire::CHANGES_V1),
-        Destination::Plans => Some(wire::PLANS_V1),
-        Destination::Agents => Some(wire::AGENTS_V1),
-        Destination::Review => Some(wire::REVIEW_V1),
+        Destination::Feed => Some(wire::CHANGES_V1),
+        Destination::Sessions => Some(wire::AGENTS_V1),
         Destination::Timeline => Some(wire::TIMELINE_V1),
         Destination::Usage => Some(wire::USAGE_V1),
         // Artifacts are a detail of the core wire, which every corrald serves.
-        Destination::Now | Destination::Artifacts | Destination::Settings => None,
+        Destination::Home | Destination::Tasks | Destination::Artifacts | Destination::Settings => {
+            None
+        }
     }
 }
 
@@ -259,9 +259,10 @@ pub fn unavailable_line(feed: &Feed, destination: Destination) -> String {
     }
 }
 
-/// Open tasks the owner moves next: Blocked ones and reviews ready to land.
+/// What waits on the owner across the workspace: Blocked tasks, reviews ready to land and
+/// Blocked sessions, as Home lists them.
 pub fn needs_you(feed: &Feed) -> usize {
-    feed.board.count(Group::NeedsYou)
+    crate::model::home::needs_you_count(feed)
 }
 
 /// The authenticated name of this device: the daemon's session, else its enrolment.
@@ -486,7 +487,7 @@ pub fn daemon_snapshot(feed: &Feed, _form: Form) -> Snapshot {
         .as_ref()
         .map(|settings| automation(&settings.config));
     let counts = (count > 0)
-        .then(|| (Destination::Now, u32::try_from(count).unwrap_or(u32::MAX)))
+        .then(|| (Destination::Home, u32::try_from(count).unwrap_or(u32::MAX)))
         .into_iter()
         .collect();
     Snapshot::new(
@@ -715,8 +716,8 @@ mod tests {
             ..Feed::default()
         };
         feed.capabilities.insert(wire::PLANS_V1.into());
-        assert_eq!(availability(&feed, Destination::Plans), Availability::Ready);
-        assert_eq!(availability(&feed, Destination::Now), Availability::Ready);
+        assert_eq!(availability(&feed, Destination::Tasks), Availability::Ready);
+        assert_eq!(availability(&feed, Destination::Home), Availability::Ready);
         assert_eq!(
             availability(&feed, Destination::Usage),
             Availability::Missing(wire::USAGE_V1)

@@ -4,7 +4,7 @@ use corral_protocol::assistant::ContextRef;
 use corral_protocol::detail::DetailRef;
 
 use crate::model::id::Id;
-use crate::model::nav::{Destination, Form};
+use crate::model::nav::Destination;
 
 /// The kind of a live record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -53,19 +53,22 @@ impl Live {
         }
     }
 
-    /// The destination the record belongs to.
+    /// The place the record belongs to: Tasks for a task, a plan and a review candidate,
+    /// Sessions for a session.
     pub fn owner(&self) -> Destination {
         match self {
-            Live::Task(_) => Destination::Now,
-            Live::Plan(_) => Destination::Plans,
-            Live::Session(_) => Destination::Agents,
-            Live::Review(_) => Destination::Review,
+            Live::Task(_) | Live::Plan(_) | Live::Review(_) => Destination::Tasks,
+            Live::Session(_) => Destination::Sessions,
         }
     }
 
-    /// Whether opening it pushes a page on this form; otherwise it is selected in place.
-    pub fn pushes(&self, form: Form) -> bool {
-        form == Form::Phone || matches!(self, Live::Session(_))
+    /// The record whose page shows this one: a plan is a task with children and a review
+    /// candidate a task in Review, so both open the task's page.
+    pub fn page(&self) -> Live {
+        match self {
+            Live::Task(id) | Live::Plan(id) | Live::Review(id) => Live::Task(id.clone()),
+            Live::Session(id) => Live::Session(id.clone()),
+        }
     }
 
     /// The bounded reference Ask attaches for "Ask about this".
@@ -120,28 +123,17 @@ impl Selection {
     }
 }
 
-/// One canonical record above a destination, for real and synthetic feeds.
+/// One page above a destination, for real and synthetic feeds: a task's or a session's.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Route {
     Live(Live),
-    /// A locally assembled project page, not a daemon detail request.
-    Project(Id),
 }
 
 impl Route {
     pub fn owner(&self) -> Destination {
         match self {
             Route::Live(live) => live.owner(),
-            Route::Project(_) => Destination::Now,
         }
-    }
-
-    /// Task, plan and review pages stay on the stack they were opened from on phone.
-    pub fn is_detail(&self) -> bool {
-        matches!(
-            self,
-            Route::Project(_) | Route::Live(Live::Task(_) | Live::Plan(_) | Live::Review(_))
-        )
     }
 }
 
@@ -152,7 +144,8 @@ mod tests {
     #[test]
     fn live_records_name_their_owner_detail_and_context() {
         let plan = Live::Plan(Id::from("T-885"));
-        assert_eq!(plan.owner(), Destination::Plans);
+        assert_eq!(plan.owner(), Destination::Tasks);
+        assert_eq!(plan.page(), Live::Task(Id::from("T-885")));
         assert_eq!(plan.detail(), DetailRef::Plan { id: "T-885".into() });
         let context = plan.context(Some(3));
         assert_eq!(
@@ -160,11 +153,9 @@ mod tests {
             ("plan", "T-885")
         );
         let chat = Live::Session(Id::from("quick"));
-        assert_eq!(chat.owner(), Destination::Agents);
+        assert_eq!(chat.owner(), Destination::Sessions);
         assert_eq!(chat.detail(), DetailRef::Session { id: "quick".into() });
-        assert!(!plan.pushes(Form::Desktop));
-        assert!(plan.pushes(Form::Phone));
-        assert!(Live::Session(Id::from("T-1_R1")).pushes(Form::Terminal));
+        assert_eq!(chat.page(), chat);
     }
 
     #[test]

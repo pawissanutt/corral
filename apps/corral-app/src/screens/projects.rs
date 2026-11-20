@@ -25,14 +25,14 @@ use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
 use crate::model::projects::{
-    self, FACTS_LABEL, FilterScreen, PLANS_HEADING, PLANS_HINT, ProjectEmpty, ProjectEntry,
-    ProjectFact, ProjectPage, ProjectPlan, ProjectSession, SESSIONS_HEADING, SESSIONS_HINT,
+    self, FACTS_LABEL, PLANS_HEADING, PLANS_HINT, ProjectEmpty, ProjectEntry, ProjectFact,
+    ProjectPage, ProjectPlan, ProjectSession, SESSIONS_HEADING, SESSIONS_HINT,
 };
 use crate::model::work::{NowPage, NowSection, Press};
 use crate::model::{Destination, Form, Hue, Id};
 use crate::screens::now::closed::closed_section;
 use crate::screens::now::list::{board_status, loading, section_head, waiting};
-use crate::screens::now::parts::{dim_when, go_scoped, quiet, stale};
+use crate::screens::now::parts::{dim_when, quiet, stale};
 use crate::screens::now::rows::{self, Fit, task_row};
 use crate::screens::now::{BESIDE, LIST_COLUMNS, SIDE, SIDE_COLUMNS, side};
 use crate::screens::{PhonePage, timeline};
@@ -65,8 +65,7 @@ pub fn open_entry(app: AppState, entry: &ProjectEntry) {
     match entry.project() {
         Some(id) => app.open_project(id.clone()),
         None => {
-            app.set_project_filter(FilterScreen::Now, entry.filter.clone());
-            app.go(Destination::Now);
+            app.go(Destination::Home);
         }
     }
 }
@@ -270,7 +269,7 @@ fn band(app: AppState, now: Memo<NowPage>) -> AnyElement {
         shown.with(|band| {
             loop_band(app, band, move |stage| {
                 if let Some(to) = stage.to {
-                    go_scoped(app, now, to);
+                    app.go(to);
                 }
             })
         })
@@ -567,10 +566,10 @@ fn missing(app: AppState, id: &Id) -> AnyElement {
         why,
         Some(button(
             app,
-            format!("Open {}", Destination::Now.label()),
+            format!("Open {}", Destination::Home.label()),
             ButtonKind::Ghost,
             "btn-open-now",
-            move || app.go(Destination::Now),
+            move || app.go(Destination::Home),
         )),
     )
 }
@@ -584,7 +583,7 @@ fn actions(app: AppState, page: &ProjectPage) -> Vec<AnyElement> {
             page.open_now_label,
             ButtonKind::Ghost,
             "btn-open-in-now",
-            move || app.open_project_in_now(now.clone()),
+            move || app.open_project(now.clone()),
         ),
         hinted(
             app,

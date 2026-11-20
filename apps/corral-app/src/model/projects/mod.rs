@@ -1,15 +1,18 @@
-//! Workspace projects and independent, device-local screen scopes. No client or UI runtime.
+//! Workspace projects and the one device-local project scope. No client or UI runtime.
 mod branches;
-mod filters;
 mod page;
+mod scope;
 #[cfg(test)]
 mod tests;
 
 pub use branches::{BRANCHES_CAPTION, branches, suggest};
-pub use filters::{FilterScreen, Filters, NowGroup, NowScope};
 pub use page::{
     FACTS_LABEL, PLANS_HEADING, PLANS_HINT, ProjectEmpty, ProjectFact, ProjectPage, ProjectPlan,
     ProjectSession, SESSIONS_HEADING, SESSIONS_HINT, not_found, page, project_now,
+};
+pub use scope::{
+    ALL_PROJECTS, NowGroup, NowScope, SCOPE_HEADING, Scope, ScopeEntry, Scopes, scope_menu,
+    scope_note,
 };
 
 /// The sidebar section's and the phone list's name.
@@ -255,105 +258,7 @@ impl Projects {
     }
 }
 
-/// One scope of a screen's project bar.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FilterChip {
-    pub id: String,
-    pub label: String,
-    pub filter: ProjectFilter,
-    pub selected: bool,
-    /// What waits on the owner in this project, as figures (`3`): none when nothing does, for
-    /// All and Unassigned, and on daemons that report no project counts.
-    pub needs: Option<String>,
-    /// The sentence the chip stands for: `3 wait on you in corral · 5 open · 2 running`.
-    pub hint: String,
-    /// What a screen reader hears for the toggle: its name, then what waits on the owner.
-    pub spoken: String,
-}
-
-const ALL_HINT: &str = "Every project in this workspace";
 const UNASSIGNED_HINT: &str = "Tasks filed without a project";
-
-impl FilterChip {
-    fn all(selected: bool) -> Self {
-        Self {
-            id: "filter-all".into(),
-            label: "All".into(),
-            filter: ProjectFilter::All,
-            selected,
-            needs: None,
-            hint: ALL_HINT.into(),
-            spoken: "All".into(),
-        }
-    }
-
-    fn of(entry: ProjectEntry) -> Self {
-        let waiting = entry.needs_me.filter(|n| *n > 0);
-        let needs_line =
-            waiting.map(|n| format!("{n} {} on you", if n == 1 { "waits" } else { "wait" }));
-        let hint = match entry.filter {
-            ProjectFilter::Project(_) => {
-                let mut parts = Vec::new();
-                if let Some(line) = &needs_line {
-                    parts.push(format!("{line} in {}", entry.label));
-                }
-                parts.push(match (entry.open, entry.running) {
-                    (None, _) => "Counts not reported by this corrald".to_owned(),
-                    (Some(0), _) => "No open work".to_owned(),
-                    (Some(open), Some(running)) if running > 0 => {
-                        format!("{open} open · {running} running")
-                    }
-                    (Some(open), _) => format!("{open} open"),
-                });
-                parts.join(" · ")
-            }
-            ProjectFilter::All | ProjectFilter::Unassigned => entry.summary(),
-        };
-        let spoken = match &needs_line {
-            Some(line) => format!("{}, {line}", entry.label),
-            None => entry.label.clone(),
-        };
-        Self {
-            id: format!("filter-{}", entry.id),
-            label: entry.label,
-            filter: entry.filter,
-            selected: entry.selected,
-            needs: waiting.map(|n| n.to_string()),
-            hint,
-            spoken,
-        }
-    }
-}
-
-/// Empty means the screen should omit its project chip strip entirely.
-pub fn chips(feed: &Feed, filter: &ProjectFilter, screen: FilterScreen) -> Vec<FilterChip> {
-    // Legacy daemons send no plan projects, so the Plans builders ignore any filter there.
-    if screen == FilterScreen::Plans && !feed.capable(corral_protocol::PROJECTS_V1) {
-        return Vec::new();
-    }
-    if *filter == ProjectFilter::All && !has_multiple_projects(feed) && !has_unassigned(feed) {
-        return Vec::new();
-    }
-    let mut chips = vec![FilterChip::all(filter.resolved(feed) == ProjectFilter::All)];
-    chips.extend(
-        Projects::build(feed, filter)
-            .entries
-            .into_iter()
-            .map(FilterChip::of),
-    );
-    if *filter == ProjectFilter::Unassigned && !has_unassigned(feed) {
-        chips.push(FilterChip {
-            id: "filter-filter-unassigned".into(),
-            label: "Unassigned".into(),
-            filter: ProjectFilter::Unassigned,
-            selected: true,
-            needs: None,
-            hint: UNASSIGNED_HINT.into(),
-            spoken: "Unassigned".into(),
-        });
-    }
-    chips
-}
 
 pub fn project_chip(feed: &Feed, filter: &ProjectFilter, project: Option<&str>) -> Option<String> {
     (filter.resolved(feed) == ProjectFilter::All && has_multiple_projects(feed))

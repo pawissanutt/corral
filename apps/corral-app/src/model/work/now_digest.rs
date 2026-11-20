@@ -177,7 +177,7 @@ pub(super) fn digest(feed: &Feed, filter: &ProjectFilter) -> NowDigest {
             } else {
                 format!("{} loaded events", events.count)
             },
-            Action::Go(Destination::Changes),
+            Action::Go(Destination::Feed),
             ButtonKind::Quiet,
         ),
         notice,

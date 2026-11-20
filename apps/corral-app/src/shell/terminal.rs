@@ -9,20 +9,23 @@ use nsh_core::prelude::*;
 
 use crate::{
     model::{
-        Destination, Overlay, SettingsSection, Workspace,
-        commands::destination_key,
+        Area, Overlay, SettingsSection, Workspace,
+        commands::area_key,
         nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, THIS_DEVICE},
     },
     screens,
     shell::{
-        confirmation, destinations, projects, refusal, section_short, terminal_bar,
+        activity_pages, confirmation, current_area, places, refusal, section_short, terminal_bar,
         terminal_keys::{PALETTE_CHORD, key_line},
         toast,
     },
     state::AppState,
     ui::{
         ask, atoms, composer,
-        kit::notice,
+        kit::{
+            notice,
+            scope::{ScopeFace, scope_switcher},
+        },
         palette,
         term::{self, cells},
         tokens::{Token, color},
@@ -32,13 +35,9 @@ use crate::{
 /// The terminal shell for `Form::Terminal`.
 pub fn shell(app: AppState) -> AnyElement {
     // Overlays opening and closing change the nav state too; the sidebar rows follow the
-    // destination alone, and none is current while a Project page shows.
-    let current = computed(move || {
-        projects::open_project(app)
-            .is_none()
-            .then(|| app.destination())
-    });
-    let shown = computed(move || destinations(app));
+    // place alone.
+    let current = computed(move || current_area(app));
+    let shown = computed(move || places(app));
     let workspace = computed(move || app.snapshot().workspace);
     let collapsed = computed(move || term::sidebar_collapsed(app));
     let focus = Focus::watch();
@@ -155,20 +154,21 @@ fn content(app: AppState, focus: Focus) -> AnyElement {
             .child(screens::agents::start_sheet(app))
             .child(confirmation(app))
             .child(refusal(app))
-            .child(screens::now::verb_composer(app)),
+            .child(crate::ui::kit::more::overlays(app)),
     )
     .flex_1()
     .into_element()
 }
 
-/// The workspace in the top line, its autopilot state under it; the destinations this
-/// workspace has with their counts and keys in columns, the Settings sections under Settings
-/// while it is selected; the PROJECTS section; Ask and Go to under a rule; this device in the
-/// bottom line. The rows scroll, so every one stays reachable on a short grid.
+/// The workspace in the top line, its autopilot state under it; the scope switcher; the
+/// places this workspace has with their counts and keys in columns, Activity's pages under
+/// Activity while one shows; Ask, Go to and Settings (its sections under it while it is
+/// selected) under a rule; this device in the bottom line. The rows scroll, so every one stays
+/// reachable on a short grid.
 fn sidebar(
     app: AppState,
-    current: Memo<Option<Destination>>,
-    shown: Memo<Vec<Destination>>,
+    current: Memo<Area>,
+    shown: Memo<Vec<Area>>,
     workspace: Memo<Option<Workspace>>,
 ) -> AnyElement {
     let rows = dynamic(move || {
@@ -178,7 +178,7 @@ fn sidebar(
                 .children(
                     shown
                         .into_iter()
-                        .map(move |item| destination_row(app, current, item)),
+                        .map(move |item| place_row(app, current, item)),
                 )
                 .into_element()
         })
@@ -192,11 +192,12 @@ fn sidebar(
                 .filter(|ws| !ws.autopilot.is_empty())
                 .map(autopilot)
         }))
+        .child(scope_switcher(app, ScopeFace::Sidebar))
+        .child(term::hrule())
         .child(
             scroll().flex_1().min_h(px(0.0)).child(
                 view()
                     .child(rows)
-                    .child(projects::section(app))
                     .child(term::hrule())
                     .child(atoms::nav_row(
                         app,
@@ -213,7 +214,8 @@ fn sidebar(
                         move || app.is_open(Overlay::Palette),
                         Some(trailing(None, String::from(PALETTE_CHORD))),
                         move || app.open_palette(),
-                    )),
+                    ))
+                    .child(place_row(app, current, Area::Settings)),
             ),
         );
     term::framed(body)
@@ -233,35 +235,33 @@ fn sidebar(
         .into_element()
 }
 
-/// The folded sidebar: each destination as its key, its count beside it, the Settings
-/// sections' short names under Settings while it is selected, then Ask and Go to as their keys.
-/// Projects need their names, so the folded sidebar leaves them to the unfolded one (`^B`).
-fn rail(
-    app: AppState,
-    current: Memo<Option<Destination>>,
-    shown: Memo<Vec<Destination>>,
-) -> AnyElement {
+/// The folded sidebar: the scope's name, each place as its key with its count beside it, then
+/// Ask, Go to and Settings as their keys, the Settings sections' short names under Settings
+/// while it is selected. Activity's pages need their names, so the folded sidebar leaves them
+/// to the unfolded one (`^B`) and to Go to.
+fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElement {
+    let key_row = move |area: Area| {
+        atoms::nav_row(
+            app,
+            area_key(area),
+            format!("nav-{}", area.slug()),
+            move || current.get() == area,
+            Some(
+                view()
+                    .w(cells(3.0))
+                    .flex_row()
+                    .justify_end()
+                    .children(area.counted().map(|counted| atoms::count(app, counted)))
+                    .into_element(),
+            ),
+            move || app.go_area(area),
+        )
+    };
     let rows = dynamic(move || {
         let shown = shown.get();
         untracked(move || {
             view()
-                .children(shown.into_iter().map(move |item| {
-                    atoms::nav_row(
-                        app,
-                        destination_key(item).unwrap_or_default(),
-                        format!("nav-{}", item.slug()),
-                        move || current.get() == Some(item),
-                        Some(
-                            view()
-                                .w(cells(3.0))
-                                .flex_row()
-                                .justify_end()
-                                .child(atoms::count(app, item))
-                                .into_element(),
-                        ),
-                        move || app.go(item),
-                    )
-                }))
+                .children(shown.into_iter().map(key_row))
                 .into_element()
         })
     });
@@ -282,10 +282,6 @@ fn rail(
     let body = scroll().flex_1().min_h(px(0.0)).child(
         view()
             .child(rows)
-            .child(when(
-                move || current.get() == Some(Destination::Settings),
-                sections,
-            ))
             .child(term::hrule())
             .child(atoms::nav_row(
                 app,
@@ -302,42 +298,82 @@ fn rail(
                 move || app.is_open(Overlay::Palette),
                 None,
                 move || app.open_palette(),
-            )),
+            ))
+            .child(key_row(Area::Settings))
+            .child(when(move || current.get() == Area::Settings, sections)),
     );
-    term::framed(view().flex_1().min_h(px(0.0)).child(body))
+    let body = view()
+        .flex_1()
+        .min_h(px(0.0))
+        .child(scope_switcher(app, ScopeFace::Rail))
+        .child(term::hrule())
+        .child(body);
+    term::framed(body)
         .w(move || cells(term::sidebar_columns(app)))
         .flex_shrink_0()
         .into_element()
 }
 
-/// A destination's row: its name, count and key; Settings brings its sections under it while
-/// it is the one shown.
-fn destination_row(
-    app: AppState,
-    current: Memo<Option<Destination>>,
-    item: Destination,
-) -> AnyElement {
+/// A place's row: its name, count and key. Activity brings its pages under it while one of
+/// them shows, Settings its sections while it is the one shown.
+fn place_row(app: AppState, current: Memo<Area>, item: Area) -> AnyElement {
     let row = atoms::nav_row(
         app,
         item.label(),
         format!("nav-{}", item.slug()),
-        move || current.get() == Some(item),
+        move || current.get() == item,
         Some(trailing(
-            Some(atoms::count(app, item)),
-            String::from(item.key()),
+            item.counted().map(|counted| atoms::count(app, counted)),
+            String::from(area_key(item)),
         )),
-        move || app.go(item),
+        move || app.go_area(item),
     );
-    if item != Destination::Settings {
-        return row;
+    match item {
+        Area::Activity => view()
+            .child(row)
+            .child(when(
+                move || current.get() == Area::Activity,
+                move || activity_rows(app),
+            ))
+            .into_element(),
+        Area::Settings => view()
+            .child(row)
+            .child(when(
+                move || current.get() == Area::Settings,
+                move || settings_sections(app),
+            ))
+            .into_element(),
+        Area::Home | Area::Tasks | Area::Sessions => row,
     }
-    view()
-        .child(row)
-        .child(when(
-            move || current.get() == Some(Destination::Settings),
-            move || settings_sections(app),
-        ))
-        .into_element()
+}
+
+/// Activity's pages, two Cells in under Activity, as the Settings sections sit under Settings.
+fn activity_rows(app: AppState) -> AnyElement {
+    let pages = computed(move || activity_pages(app));
+    dynamic(move || {
+        let pages = pages.get();
+        untracked(move || {
+            view()
+                .flex_row()
+                .child(view().w(cells(2.0)).flex_shrink_0())
+                .child(
+                    view()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .children(pages.into_iter().map(move |page| {
+                            atoms::nav_row(
+                                app,
+                                page.label(),
+                                format!("nav-{}", page.slug()),
+                                move || app.destination() == page,
+                                None,
+                                move || app.go(page),
+                            )
+                        })),
+                )
+                .into_element()
+        })
+    })
 }
 
 /// The autopilot state under the workspace's name: its first part as it reads in the line

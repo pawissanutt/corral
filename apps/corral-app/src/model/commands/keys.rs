@@ -1,34 +1,38 @@
-//! Which keys a destination's list or open page answers, and the terminal's legend of them.
+//! Which keys a place's list or open page answers, and the terminal's legend of them.
 //!
-//! List keys (moves, Enter, digits) are the keys a focused control uses for itself: the shell
-//! binds them only while the list has the keyboard focus, or nothing has, so Tab moves the focus,
-//! Enter and Space press the focused control and the arrows scroll where no list wants them. The
-//! legend and the bindings read the same guards as the domain reducers.
+//! List keys (moves, Enter, the inspector's `i`, More's `.`) are the keys a focused control uses
+//! for itself: the shell binds them only while the list has the keyboard focus, or nothing has,
+//! so Tab moves the focus, Enter and Space press the focused control and the arrows scroll
+//! where no list wants them. The legend and the bindings read the same guards as the reducers.
 
 use crate::model::{Destination, Live};
 
-const MOVE_MENU: &[&str] = &["j", "k", "down", "up", "."];
-const LIVE_MOVE_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "."];
+/// Home: move through what waits and what works, Enter opens the selected one's page.
+const HOME_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "."];
+const HOME_MOVE: &[&str] = &["j", "k", "down", "up", "."];
+/// Tasks: as Home, and `i` shows or hides the inspector beside the list.
+const LIST_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "i", "."];
+const LIST_MOVE: &[&str] = &["j", "k", "down", "up", "i", "."];
+/// Sessions: move, Enter opens the selected session, N (Shift+N) the New build sheet.
+const SESSIONS_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "N", "."];
+const SESSIONS_MOVE: &[&str] = &["j", "k", "down", "up", "N", "."];
+/// A task's or a session's page: `.` opens its More menu.
 const MENU: &[&str] = &["."];
-/// The Agents roster: move, Enter opens the selected session, N (Shift+N) the New build sheet.
-const AGENTS_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "N", "."];
-const AGENTS_MOVE: &[&str] = &["j", "k", "down", "up", "N", "."];
 
-/// The daemon's list keys on `destination` under the live page on top.
+/// The list keys on `destination` under the page on top.
 pub fn list_keys_live(destination: Destination, top: Option<&Live>) -> &'static [&'static str] {
     match (destination, top) {
-        (Destination::Now, None | Some(Live::Task(_))) => LIVE_MOVE_OPEN,
-        (Destination::Agents, None) => AGENTS_OPEN,
-        (Destination::Review, None) | (Destination::Plans, _) => MOVE_MENU,
-        (Destination::Review, Some(Live::Review(_)))
-        | (Destination::Agents, Some(Live::Session(_))) => MENU,
+        (_, Some(_)) => MENU,
+        (Destination::Home, None) => HOME_OPEN,
+        (Destination::Tasks, None) => LIST_OPEN,
+        (Destination::Sessions, None) => SESSIONS_OPEN,
         _ => &[],
     }
 }
 
-/// `keys` as the keyboard focus leaves them: Enter opens the selected task or session only
-/// while nothing has the focus or the selected row has it; on any other control of the list (a
-/// toggle, another row, a button beside it) Enter is that control's own press. `focus`: the
+/// `keys` as the keyboard focus leaves them: Enter opens the selected row's page only while
+/// nothing has the focus or the selected row has it; on any other control of the list (a
+/// fold, another row, a button beside it) Enter is that control's own press. `focus`: the
 /// focused control, `None` when nothing has it, `Some(None)` for one that is not a row.
 pub fn with_focus(
     keys: &'static [&'static str],
@@ -37,10 +41,12 @@ pub fn with_focus(
 ) -> &'static [&'static str] {
     match focus {
         Some(row) if row.is_none() || row != selected => {
-            if keys == LIVE_MOVE_OPEN {
-                MOVE_MENU
-            } else if keys == AGENTS_OPEN {
-                AGENTS_MOVE
+            if keys == HOME_OPEN {
+                HOME_MOVE
+            } else if keys == LIST_OPEN {
+                LIST_MOVE
+            } else if keys == SESSIONS_OPEN {
+                SESSIONS_MOVE
             } else {
                 keys
             }
@@ -49,36 +55,26 @@ pub fn with_focus(
     }
 }
 
-/// The daemon-mode terminal key hints of the destination or the live page on top. `off_board`:
-/// Now's selection is a task the board does not list (a closed one), whose detail already shows
-/// beside the list, so Enter has no session to offer.
+/// The terminal key hints of the place's list or of the page on top.
 pub fn key_legend_live(
     destination: Destination,
     top: Option<&Live>,
-    off_board: bool,
 ) -> Vec<(&'static str, &'static str)> {
     match (destination, top) {
-        (_, Some(Live::Session(_))) => vec![(".", "session menu")],
-        (Destination::Now, _) => {
-            let mut legend = vec![("j k", "move")];
-            if !off_board {
-                legend.push(("Enter", "session"));
-            }
-            legend.extend([("]", "next tab"), ("R", "reply"), (".", "actions")]);
-            legend
-        }
-        (Destination::Plans, _) => vec![("j k", "plan"), ("J K", "member"), (".", "actions")],
-        (Destination::Agents, _) => vec![
+        (_, Some(Live::Session(_))) => vec![(".", "more")],
+        (_, Some(_)) => vec![("Esc", "tasks"), (".", "more")],
+        (Destination::Home, None) => vec![("j k", "move"), ("Enter", "open"), (".", "more")],
+        (Destination::Tasks, None) => vec![
+            ("j k", "move"),
+            ("Enter", "open"),
+            ("i", "inspector"),
+            (".", "more"),
+        ],
+        (Destination::Sessions, None) => vec![
             ("j k", "move"),
             ("Enter", "open"),
             ("N", "build"),
-            (".", "menu"),
-        ],
-        (Destination::Review, _) => vec![
-            ("j k", "candidate"),
-            ("A", "approve"),
-            ("s", "split"),
-            (".", "actions"),
+            (".", "more"),
         ],
         _ => Vec::new(),
     }
@@ -90,7 +86,7 @@ pub fn key_legend_live(
 pub enum Surface {
     /// The command palette.
     Palette,
-    /// A list of choices: the keyboard's Actions or Session menu, the rewind sheet's turns.
+    /// A list of choices: the More menu, the scope menu, the rewind sheet's turns.
     Menu,
     /// An operation's form (a comment, a dispatch's profile and base).
     Form,
@@ -128,8 +124,8 @@ impl Surface {
     }
 }
 
-/// The keys that walk a menu the app draws itself (the keyboard's Actions and Session menus),
-/// as NSH's popup menus walk theirs.
+/// The keys that walk a menu the app draws itself (the keyboard's More menu), as NSH's popup
+/// menus walk theirs.
 pub const MENU_WALK: [&str; 4] = ["up", "down", "home", "end"];
 
 /// Where `key` moves the keyboard focus from item `at` of a menu of `len`: Up and Down to the
@@ -153,33 +149,29 @@ mod tests {
 
     #[test]
     fn tab_and_space_are_never_list_keys() {
-        let lists = [
-            list_keys_live(Destination::Now, None),
-            list_keys_live(Destination::Plans, None),
-            list_keys_live(Destination::Agents, None),
-        ];
-        for keys in lists {
+        for destination in Destination::ALL {
+            let keys = list_keys_live(destination, None);
             assert!(!keys.contains(&"tab") && !keys.contains(&"space"));
         }
         assert!(list_keys_live(Destination::Settings, None).is_empty());
     }
 
-    /// Enter in Now opened the selected task whatever had the focus, so a focused button or
-    /// another row could not be pressed with Return.
+    /// Enter on a list opened the selected row's page whatever had the focus, so a focused
+    /// button or another row could not be pressed with Return.
     #[test]
-    fn enter_in_now_presses_what_has_the_focus() {
-        let keys = list_keys_live(Destination::Now, None);
-        let opens =
-            |focus: Option<Option<&str>>| with_focus(keys, focus, Some("T-8")).contains(&"enter");
-        assert!(
-            opens(None),
-            "nothing focused: Enter opens the selected task"
-        );
-        assert!(opens(Some(Some("T-8"))), "the selected row focused");
-        assert!(!opens(Some(None)), "a button beside the list takes Enter");
-        assert!(!opens(Some(Some("T-9"))), "another row takes Enter");
-        assert!(with_focus(keys, Some(None), Some("T-8")).contains(&"j"));
-        // With nothing selected a focused toggle (Now's Waiting line) still takes Enter.
-        assert!(!with_focus(keys, Some(None), None).contains(&"enter"));
+    fn enter_on_a_list_presses_what_has_the_focus() {
+        for destination in [Destination::Home, Destination::Tasks, Destination::Sessions] {
+            let keys = list_keys_live(destination, None);
+            let opens = |focus: Option<Option<&str>>| {
+                with_focus(keys, focus, Some("T-8")).contains(&"enter")
+            };
+            assert!(opens(None), "nothing focused: Enter opens the selected row");
+            assert!(opens(Some(Some("T-8"))), "the selected row focused");
+            assert!(!opens(Some(None)), "a button beside the list takes Enter");
+            assert!(!opens(Some(Some("T-9"))), "another row takes Enter");
+            assert!(with_focus(keys, Some(None), Some("T-8")).contains(&"j"));
+            // With nothing selected a focused fold still takes Enter.
+            assert!(!with_focus(keys, Some(None), None).contains(&"enter"));
+        }
     }
 }

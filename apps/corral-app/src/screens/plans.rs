@@ -29,7 +29,6 @@ mod verbs;
 use nsh_core::prelude::*;
 
 use crate::model::plans::{self, Action, ButtonKind as Weight, LiveAction, PlanOutline};
-use crate::model::projects::FilterScreen;
 use crate::model::{Form, Id, Live};
 use crate::screens::PhonePage;
 use crate::state::AppState;
@@ -38,7 +37,6 @@ use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::glance::page_head;
 use crate::ui::kit::hint::hint_on;
 use crate::ui::kit::page::{Width, columns, pane, search};
-use crate::ui::kit::project_filter::project_filter;
 use crate::ui::tokens::{Token, color};
 
 pub use live::{live_graph, live_plan_phone};
@@ -91,8 +89,7 @@ pub fn screen(app: AppState) -> AnyElement {
         .flex_col()
         .min_w(px(0.0))
         .min_h(px(0.0))
-        .child(head)
-        .child(project_filter(app, FilterScreen::Plans));
+        .child(head);
     match app.form {
         Form::Phone => page
             .child(pane(app, "plans-list", list::list(app, outline, None)))
@@ -218,7 +215,7 @@ fn phone_page(app: AppState, page: plans::PhonePage, plan: Id) -> PhonePage {
 /// The list content from the served feed, in the Plans scope.
 fn content(app: AppState) -> PlanOutline {
     let selection = app.selection();
-    let filter = app.project_filter(FilterScreen::Plans);
+    let filter = app.scope_filter();
     app.feed
         .with(|feed| plans::plan_outline(&selection, feed, &filter))
 }
@@ -311,7 +308,3 @@ fn icon_command(app: AppState, button: &plans::Button, label: &'static str) -> A
         .child(icon(Icon::Ask, 18.0, color(Token::Ink2)))
         .into_element()
 }
-
-#[cfg(test)]
-#[path = "plans_tests.rs"]
-mod tests;

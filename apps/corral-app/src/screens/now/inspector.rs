@@ -28,7 +28,7 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::context::tail;
 use super::parts::{model_button, press, press_id, pressable, quiet};
-use super::verbs::reasons;
+use crate::ui::kit::more::reasons;
 
 /// The phone's least touch target: a dependency id or the plan link is pressed as a button is.
 const TARGET: f32 = 44.0;

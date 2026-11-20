@@ -17,6 +17,8 @@ pub enum Token {
     ShellInk,
     ShellInk2,
     ShellSel,
+    /// The hairline between two parts of the shell.
+    ShellRule,
     Rule,
     Rule2,
     Ink,
@@ -56,6 +58,7 @@ impl Token {
             Token::ShellInk => "shell-ink",
             Token::ShellInk2 => "shell-ink-2",
             Token::ShellSel => "shell-sel",
+            Token::ShellRule => "shell-rule",
             Token::Rule => "rule",
             Token::Rule2 => "rule-2",
             Token::Ink => "foreground",

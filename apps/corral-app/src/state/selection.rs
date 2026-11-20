@@ -3,43 +3,30 @@
 //! session page Escape first returns a view to Chat, then stops the working turn, and only then
 //! leaves the page.
 
-use crate::model::projects::FilterScreen;
 use crate::model::session::{self, Cx, Facts};
-use crate::model::{Destination, Live, agents, work};
+use crate::model::{Destination, Live, agents};
 
 use super::AppState;
 
 impl AppState {
-    /// Clears the Agents roster's selection or the Now page's while that page is in view (no
-    /// page pushed over it), or backs the finder out of full size or its filter; whether there
-    /// was one to clear.
+    /// Clears the Sessions roster's selection while that page is in view (no page pushed over
+    /// it), or backs the finder out of full size or its filter; whether there was one to clear.
     pub(super) fn clear_page_selection(&self) -> bool {
-        let (destination, bare, task) = self.nav.with_untracked(|nav| {
-            (
-                nav.destination,
-                nav.pages.is_empty(),
-                nav.selection.task.is_some(),
-            )
-        });
+        let (destination, bare) = self
+            .nav
+            .with_untracked(|nav| (nav.destination, nav.pages.is_empty()));
         if !bare {
             return false;
         }
         match destination {
-            Destination::Agents
+            Destination::Sessions
                 if self
                     .agents
                     .with_untracked(|state| state.roster_session.is_some()) =>
             {
-                let filter =
-                    nsh_core::prelude::untracked(|| self.project_filter(FilterScreen::Agents));
+                let filter = nsh_core::prelude::untracked(|| self.scope_filter());
                 self.reduce(self.agents, |state, feed, _, _| {
                     state.act(agents::Action::ClearRoster, feed, &filter)
-                });
-                true
-            }
-            Destination::Now if task && self.work.with_untracked(|state| !state.digest_only) => {
-                self.reduce(self.work, |state, feed, _, env| {
-                    state.press(work::Press::ClearSelection, feed, env)
                 });
                 true
             }

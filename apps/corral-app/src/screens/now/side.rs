@@ -19,7 +19,7 @@ use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
 use super::inspector::view_of;
-use super::parts::{act, go_scoped, press};
+use super::parts::{act, press};
 use super::rows::{figures, words};
 
 const RING: f32 = 2.0;
@@ -46,7 +46,7 @@ pub(crate) fn panel(app: AppState, page: Memo<NowPage>) -> AnyElement {
     let panel = computed(move || page.with(|page| page.panel.clone()));
     let close_label = untracked(|| page.with(|page| page.close_label));
     dynamic(move || match kind.get() {
-        Kind::Digest => untracked(|| digest_panel(app, panel, page)),
+        Kind::Digest => untracked(|| digest_panel(app, panel)),
         Kind::Task => untracked(|| {
             let clear = page.with(|page| page.clear_selection.clone());
             task_panel(app, panel, close_label, clear)
@@ -115,19 +115,17 @@ fn spacer() -> View {
 }
 
 /// What changed since the last visit, in Now's scope.
-fn digest_panel(app: AppState, panel: Memo<NowPanel>, page: Memo<NowPage>) -> AnyElement {
+fn digest_panel(app: AppState, panel: Memo<NowPanel>) -> AnyElement {
     let digest = computed(move || {
         panel.with(|panel| match panel {
             NowPanel::Digest(digest) => Some(digest.clone()),
             _ => None,
         })
     });
-    dynamic(move || {
-        digest.with(|digest| digest.as_ref().map(|digest| digest_view(app, digest, page)))
-    })
+    dynamic(move || digest.with(|digest| digest.as_ref().map(|digest| digest_view(app, digest))))
 }
 
-fn digest_view(app: AppState, digest: &NowDigest, page: Memo<NowPage>) -> AnyElement {
+fn digest_view(app: AppState, digest: &NowDigest) -> AnyElement {
     let form = app.form;
     let since = hinted(
         app,
@@ -191,7 +189,7 @@ fn digest_view(app: AppState, digest: &NowDigest, page: Memo<NowPage>) -> AnyEle
                         ..ButtonOptions::default()
                     },
                     "btn-changes",
-                    move || go_scoped(app, page, Destination::Changes),
+                    move || app.go(Destination::Feed),
                 ))
                 .into_element(),
         );

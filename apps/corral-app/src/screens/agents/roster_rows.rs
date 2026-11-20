@@ -22,12 +22,12 @@ use crate::model::Form;
 use crate::model::agents::{Action, Roster, RosterRow};
 use crate::model::hue::Hue;
 use crate::model::work::Record;
-use crate::screens::now::with_menu;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::hint::hint_on_live;
 use crate::ui::kit::marks::hue_ink;
+use crate::ui::kit::more::with_menu;
 use crate::ui::term::{self, cells};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, row_height};
 

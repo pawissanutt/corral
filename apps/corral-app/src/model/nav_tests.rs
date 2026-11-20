@@ -1,17 +1,72 @@
 use super::*;
 
+/// A place's key that did not come back to its place would open the wrong page, and a stored
+/// slug that no longer parsed would drop the owner on Home after every restart.
 #[test]
-fn destination_keys_round_trip() {
+fn place_keys_and_slugs_round_trip() {
+    for area in Area::ALL {
+        assert_eq!(Area::from_key(area.key()), Some(area));
+    }
     for destination in Destination::ALL {
-        assert_eq!(Destination::from_key(destination.key()), Some(destination));
+        assert_eq!(
+            Destination::from_slug(destination.slug()),
+            Some(destination)
+        );
+    }
+    let keys: Vec<String> = Area::ALL.map(|area| area.key().to_string()).to_vec();
+    assert!(keys.iter().all(|key| PLACE_KEYS.contains(&key.as_str())));
+}
+
+/// A destination stored by the nine-destination app, an old link or an old key has to land on
+/// the place that took its content over, never nowhere.
+#[test]
+fn the_former_destinations_open_their_new_homes() {
+    for (slug, home) in [
+        ("now", Destination::Home),
+        ("inbox", Destination::Home),
+        ("changes", Destination::Feed),
+        ("plans", Destination::Tasks),
+        ("review", Destination::Tasks),
+        ("agents", Destination::Sessions),
+        ("builds", Destination::Sessions),
+        ("timeline", Destination::Timeline),
+        ("usage", Destination::Usage),
+        ("artifacts", Destination::Artifacts),
+    ] {
+        assert_eq!(Destination::from_slug(slug), Some(home), "{slug}");
+    }
+    let nav = NavState::new(Form::Desktop);
+    for (key, home) in [
+        ('n', Destination::Home),
+        ('p', Destination::Tasks),
+        ('r', Destination::Tasks),
+        ('u', Destination::Usage),
+        ('f', Destination::Artifacts),
+    ] {
+        assert_eq!(nav.key_page(key), Some(home), "{key}");
     }
 }
+
+/// `a` opened Feed every time, so reading Usage, leaving and coming back meant choosing the
+/// page again: Activity opens at the page it last showed.
+#[test]
+fn activity_opens_at_its_last_page() {
+    let mut nav = NavState::new(Form::Desktop);
+    assert!(nav.press_key('a'));
+    assert_eq!(nav.destination, Destination::Feed);
+    nav.go(Destination::Usage);
+    nav.go(Destination::Tasks);
+    assert!(nav.press_key('a'));
+    assert_eq!(nav.destination, Destination::Usage);
+    assert_eq!(nav.destination.area(), Area::Activity);
+}
+
 #[test]
 fn keys_are_ignored_while_overlay_is_open() {
     let mut nav = NavState::new(Form::Desktop);
     nav.open(Overlay::Ask);
     let before = nav.clone();
-    assert!(!nav.press_key('i'));
+    assert!(!nav.press_key('t'));
     assert!(!nav.press_key('/'));
     assert_eq!(nav, before);
 }
@@ -26,100 +81,69 @@ fn newest_overlay_closes_first() {
     assert_eq!(nav.close_newest(), None);
 }
 
+/// A task had a page only on the phone, and a plan and a review each another screen: every
+/// form opens one page per task, a plan's and a review's being the task's, and leaving it
+/// returns to Tasks, a session's to Sessions.
 #[test]
-fn explicitly_opening_hidden_plans_and_reviews_reveals_their_requested_records() {
-    use crate::model::daemon::{Task, bare_task, task_row};
-    use crate::model::projects::{FilterScreen, Filters, ProjectFilter};
-    use corral_protocol::rows::{PlanRow, ProjectRow};
-    use corral_types::Status;
-
-    let mut feed = crate::model::daemon::Feed {
-        store: Some("store".into()),
-        ..Default::default()
-    };
-    feed.capabilities
-        .insert(corral_protocol::PROJECTS_V1.into());
-    for project in ["A", "B"] {
-        feed.projects.insert(
-            project.into(),
-            ProjectRow {
-                id: project.into(),
-                config: serde_json::Map::new(),
-                open: 1,
-                ..ProjectRow::default()
-            },
-        );
+fn every_record_opens_its_one_page_and_leaves_to_its_place() {
+    use crate::model::id::Id;
+    let task = Live::Task(Id::from("T-9"));
+    for live in [
+        task.clone(),
+        Live::Plan(Id::from("T-9")),
+        Live::Review(Id::from("T-9")),
+    ] {
+        let mut nav = NavState::new(Form::Desktop);
+        nav.go(Destination::Home);
+        nav.task_tab = TaskTab::History;
+        nav.open_live(live);
+        assert_eq!(nav.live(), Some(&task));
+        assert_eq!(nav.selection.task.as_deref(), Some("T-9"));
+        assert_eq!(nav.task_tab, TaskTab::Overview);
+        assert!(nav.back());
+        assert_eq!((nav.destination, nav.pages.len()), (Destination::Tasks, 0));
     }
-    let mut rows = Vec::new();
-    for (id, project, status) in [("T-1", "A", Status::Backlog), ("T-2", "B", Status::Review)] {
-        let mut task = bare_task(id, id, status, jiff::Timestamp::UNIX_EPOCH);
-        task.project = Some(project.into());
-        feed.plans.insert(
-            id.into(),
-            PlanRow {
-                parent: task.clone(),
-                child_counts: Vec::new(),
-            },
-        );
-        rows.push(Task::new(task_row(task)));
-    }
-    feed.board.apply_batch(1, rows, &[]);
-    for form in [Form::Desktop, Form::Terminal, Form::Phone] {
-        let mut filters = Filters::default();
-        filters.set(
-            "store",
-            FilterScreen::Plans,
-            ProjectFilter::Project("A".into()),
-        );
-        let mut nav = NavState::new(form);
-        let live = Live::Plan("T-2".into());
-        let (screen, filter) = explicit_record_filter(&feed, &filters, &live).unwrap();
-        filters.set("store", screen, filter);
-        nav.open_live(live.clone(), form);
-        let filter = filters.get("store", FilterScreen::Plans, &feed);
-        assert_eq!(filter, ProjectFilter::Project("B".into()));
-        assert_eq!(
-            crate::model::plans::current_plan_filtered(&nav.selection, &feed, &filter),
-            Some("T-2".into()),
-        );
-        assert_eq!(explicit_record_filter(&feed, &filters, &live), None);
-        filters.set(
-            "store",
-            FilterScreen::Review,
-            ProjectFilter::Project("A".into()),
-        );
-        let live = Live::Review("T-2".into());
-        let (screen, filter) = explicit_record_filter(&feed, &filters, &live).unwrap();
-        assert_eq!(screen, FilterScreen::Review);
-        filters.set("store", screen, filter);
-        nav.open_live(live.clone(), form);
-        assert_eq!(
-            filters.get("store", FilterScreen::Review, &feed),
-            ProjectFilter::Project("B".into()),
-        );
-        assert_eq!(nav.selection.review.as_deref(), Some("T-2"));
-        assert_eq!(explicit_record_filter(&feed, &filters, &live), None);
-    }
+    let mut nav = NavState::new(Form::Desktop);
+    nav.open_live(task.clone());
+    let session = Live::Session(Id::from("T-9_R1"));
+    nav.open_live(session.clone());
+    nav.open_live(session.clone());
+    assert_eq!(nav.live(), Some(&session));
+    assert_eq!(nav.pages.len(), 2);
+    assert!(nav.back());
+    assert_eq!(nav.live(), Some(&task));
+    assert_eq!(nav.selection.session.as_deref(), Some("T-9_R1"));
+    nav.pages.clear();
+    nav.open_live(session);
+    assert!(nav.back());
+    assert_eq!(nav.destination, Destination::Sessions);
 }
 
+/// A workspace without projects has no board: its board places must not be offered at all,
+/// on the sidebar, the phone's tabs or the palette.
 #[test]
-fn live_records_select_everywhere_and_push_only_where_the_form_stacks_them() {
-    use crate::model::id::Id;
-    for form in [Form::Desktop, Form::Terminal, Form::Phone] {
-        let mut nav = NavState::new(form);
-        let task = Live::Task(Id::from("T-9"));
-        nav.open_live(task.clone(), form);
-        assert_eq!(nav.destination, Destination::Now);
-        assert_eq!(nav.selection.task.as_deref(), Some("T-9"));
-        assert_eq!(nav.live(), (form == Form::Phone).then_some(&task));
-        let session = Live::Session(Id::from("T-9_R1"));
-        nav.open_live(session.clone(), form);
-        nav.open_live(session.clone(), form);
-        assert_eq!(nav.live(), Some(&session));
-        assert_eq!(nav.pages.len(), if form == Form::Phone { 2 } else { 1 });
-        assert!(nav.back());
-        assert_eq!(nav.selection.session.as_deref(), Some("T-9_R1"));
-    }
+fn an_assistant_only_workspace_offers_home_sessions_usage_and_settings() {
+    let mut feed = crate::model::daemon::Feed::default();
+    assert_eq!(places(&feed), Area::PLACES);
+    assert_eq!(phone_tabs(&feed), PhoneTab::ALL);
+    feed.capabilities
+        .insert(corral_protocol::PROJECTS_V1.into());
+    feed.topics.insert("projects".into(), Default::default());
+    assert_eq!(places(&feed), [Area::Home, Area::Sessions, Area::Activity]);
+    assert_eq!(activity_pages(&feed), [Destination::Usage]);
+    assert_eq!(
+        destinations(&feed),
+        [
+            Destination::Home,
+            Destination::Sessions,
+            Destination::Usage,
+            Destination::Settings
+        ]
+    );
+    assert_eq!(
+        phone_tabs(&feed),
+        [PhoneTab::Home, PhoneTab::Sessions, PhoneTab::Activity]
+    );
 }
 
 #[test]

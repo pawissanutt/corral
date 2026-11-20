@@ -4,9 +4,9 @@
 
 use nsh_core::prelude::*;
 
-use crate::model::projects::{FilterScreen, NowGroup, ProjectFilter};
+use crate::model::projects::{NowGroup, ProjectFilter};
 use crate::model::work::{self, Action, Button, NowPage, NowPanel, Press};
-use crate::model::{Destination, Form, Live};
+use crate::model::{Form, Live};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -18,13 +18,7 @@ pub(crate) fn act(app: AppState, action: Action) {
     app.act(app.work, move |state, _| state.act(action));
 }
 
-/// Runs any press: local actions through the work reducer, record presses into root effects
-/// against the feed.
-pub(crate) fn press(app: AppState, press: Press) {
-    app.reduce(app.work, move |state, feed, _selection, env| {
-        state.press(press, feed, env)
-    });
-}
+pub(crate) use crate::ui::kit::more::press;
 
 fn kind(kind: work::ButtonKind) -> ButtonKind {
     match kind {
@@ -102,6 +96,7 @@ pub(crate) fn press_id(press: &Press) -> String {
         Press::Menu(_) => "btn-task-actions".into(),
         Press::Control { control, .. } => format!("btn-{}", control.slug()),
         Press::Next { index, .. } | Press::Answer { index, .. } => format!("btn-next-{index}"),
+        Press::Step { task, .. } => crate::model::next::next_id(task),
         Press::Seen(_) => "btn-mark-seen".into(),
         Press::Older(_) => "btn-older".into(),
         Press::RetryBoard => "btn-retry-board".into(),
@@ -194,7 +189,7 @@ pub(crate) fn wanted_id(feed: &crate::model::daemon::Feed, id: &crate::model::Id
 
 /// Now's own project scope and grouping, tracked: every Now builder reads the list it shows.
 pub(crate) fn scope(app: AppState) -> (ProjectFilter, NowGroup) {
-    (app.project_filter(FilterScreen::Now), app.now_group())
+    (app.scope_filter(), app.now_group())
 }
 
 /// Now's page in its own scope, tracked: one model for the head, the list, the loop band and
@@ -209,14 +204,6 @@ pub(crate) fn now_page(app: AppState) -> Memo<NowPage> {
                 .with(|state| work::now_page(state, feed, &selection, form, &filter, grouping))
         })
     })
-}
-
-/// Opens `to` with Now's scope as that destination's own project filter.
-pub(crate) fn go_scoped(app: AppState, page: Memo<NowPage>, to: Destination) {
-    if let Some(scope) = page.with_untracked(|page| page.scope_for(to)) {
-        app.set_project_filter(scope.screen, scope.filter);
-    }
-    app.go(to);
 }
 
 /// The task the side panel shows, to keep loaded, on the board or off it (tracked); none while

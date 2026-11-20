@@ -1,32 +1,30 @@
-//! The desktop and web shell: a top bar across the window, the sidebar of destinations
-//! (folding to a rail of icons by choice or on a narrow window), and the content container that
-//! holds the connection banner and the current page, with the Ask drawer, the palette, the
-//! confirmation and the toast over it. On a touch tablet every shell control reaches the touch
-//! target ([`control_height`]).
+//! The desktop and web shell: a top bar across the window, the sidebar (the scope switcher,
+//! the four places with Activity's pages under it while one shows, then Ask, Go to and
+//! Settings at its foot; folding to a rail of icons by choice or on a narrow window), and the
+//! content container that holds the connection banner and the current page, with the Ask
+//! drawer, the palette, the confirmation and the toast over it. On a touch tablet every shell
+//! control reaches the touch target ([`control_height`]).
 
 use nsh_core::AccessibilityCurrent;
 use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
-use crate::model::health::waits_on_you;
-use crate::model::nav::{
-    ASK_HINT, ASK_KEY, ASK_LABEL, PALETTE_HINT, PALETTE_KEY, SIGNS_AS, THIS_DEVICE,
-};
-use crate::model::projects::PROJECTS_HEADING;
-use crate::model::{Destination, SettingsSection, Workspace};
+use crate::model::commands::area_key;
+use crate::model::nav::{ASK_KEY, ASK_LABEL, PALETTE_HINT, PALETTE_KEY, SIGNS_AS, THIS_DEVICE};
+use crate::model::{Area, Destination, SettingsSection, Workspace};
 use crate::screens;
 use crate::shell::{
-    confirmation, destinations, projects, section_short, sidebar_collapsed, stale, toast,
+    activity_pages, confirmation, current_area, places, section_short, sidebar_collapsed, stale,
+    toast,
 };
 use crate::state::AppState;
 use crate::ui::ask;
-use crate::ui::atoms::{
-    control_height, count, destination_spoken, key_hint, nav_row, nav_row_icon,
-};
+use crate::ui::atoms::{area_spoken, control_height, count, key_hint, nav_row, nav_row_icon};
 use crate::ui::composer::ask_surface;
 use crate::ui::health_line::{HealthLayout, health_line};
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::notice;
+use crate::ui::kit::scope::{ScopeFace, scope_switcher};
 use crate::ui::palette::palette;
 use crate::ui::tokens::{FONT_MONO, Token, color, row_height, text_size};
 
@@ -51,14 +49,9 @@ const STALE_OPACITY: f32 = 0.78;
 
 pub fn shell(app: AppState) -> AnyElement {
     // Memos so a change elsewhere in the snapshot or the nav state (an overlay
-    // opening) does not rebuild the sidebar rows or the workspace blocks. No destination row is
-    // current while a Project page shows: its row in PROJECTS is.
-    let current = computed(move || {
-        projects::open_project(app)
-            .is_none()
-            .then(|| app.destination())
-    });
-    let shown = computed(move || destinations(app));
+    // opening) does not rebuild the sidebar rows or the workspace blocks.
+    let current = computed(move || current_area(app));
+    let shown = computed(move || places(app));
     let workspace = computed(move || app.snapshot().workspace);
     let collapsed = computed(move || sidebar_collapsed(app));
     view()
@@ -100,7 +93,7 @@ fn top_bar(app: AppState, workspace: Memo<Option<Workspace>>, collapsed: Memo<bo
         .pr(px(10.0))
         .bg(color(Token::Shell))
         .border_b(px(1.0))
-        .border_b_color(color(Token::ShellInk).opacity(0.1))
+        .border_b_color(color(Token::ShellRule))
         .child(
             view()
                 .flex_row()
@@ -117,6 +110,7 @@ fn top_bar(app: AppState, workspace: Memo<Option<Workspace>>, collapsed: Memo<bo
                         .text_color(color(Token::ShellInk)),
                 ),
         )
+        .child(scope_switcher(app, ScopeFace::Bar))
         .child(dynamic(move || {
             workspace.get().map(|ws| workspace_path(app, ws))
         }))
@@ -150,12 +144,13 @@ fn workspace_path(app: AppState, ws: Workspace) -> AnyElement {
         .into_element()
 }
 
-/// The workspace header, then Ask and the palette, the destinations this workspace has, the
-/// Settings sections under Settings while it is selected, the PROJECTS section, and this device.
+/// The scope switcher, then the places this workspace has with Activity's pages under
+/// Activity while one of them shows; at the foot Ask, Go to and Settings with its sections
+/// under it while it is selected, and this device.
 fn sidebar(
     app: AppState,
-    current: Memo<Option<Destination>>,
-    shown: Memo<Vec<Destination>>,
+    current: Memo<Area>,
+    shown: Memo<Vec<Area>>,
     workspace: Memo<Option<Workspace>>,
 ) -> AnyElement {
     let rows = dynamic(move || {
@@ -163,7 +158,7 @@ fn sidebar(
         untracked(move || {
             view()
                 .gap(px(2.0))
-                .children(shown.into_iter().map(|d| destination_row(app, current, d)))
+                .children(shown.into_iter().map(|area| place_row(app, current, area)))
                 .into_element()
         })
     });
@@ -177,23 +172,15 @@ fn sidebar(
         .px(px(8.0))
         .gap(px(2.0))
         .bg(color(Token::Shell))
-        .child(dynamic(move || {
-            workspace.get().map(|ws| workspace_header(app, ws))
-        }))
+        .child(scope_switcher(app, ScopeFace::Sidebar))
+        .child(scroll().flex_1().min_h(px(0.0)).child(rows))
         .child(ask_button(app))
         .child(palette_opener(app))
-        .child(
-            scroll().flex_1().min_h(px(0.0)).child(
-                view()
-                    .gap(px(2.0))
-                    .child(rows)
-                    .child(when(
-                        move || current.get() == Some(Destination::Settings),
-                        move || settings_sections(app),
-                    ))
-                    .child(projects::section(app)),
-            ),
-        )
+        .child(place_row(app, current, Area::Settings))
+        .child(when(
+            move || current.get() == Area::Settings,
+            move || settings_sections(app),
+        ))
         .child(dynamic(move || {
             workspace.get().map(|ws| device_footer(app, ws))
         }))
@@ -234,8 +221,8 @@ fn sidebar_toggle(app: AppState, collapsed: Memo<bool>) -> AnyElement {
 /// when wide, so the sidebar stretches to the full height and its list scrolls inside it.
 fn peek(
     app: AppState,
-    current: Memo<Option<Destination>>,
-    shown: Memo<Vec<Destination>>,
+    current: Memo<Area>,
+    shown: Memo<Vec<Area>>,
     workspace: Memo<Option<Workspace>>,
 ) -> AnyElement {
     view()
@@ -268,16 +255,12 @@ fn peek(
         .into_element()
 }
 
-/// The folded sidebar: Ask and the palette, then each destination as its icon with its count,
-/// the Settings sections as short names under Settings, and one Projects mark that unfolds the
-/// labels to reach the projects. Every control keeps its full name (and a destination its
-/// count) for assistive technology, shows its name and key in a hint while the pointer rests on
-/// it, and the palette lists them all.
-fn rail(
-    app: AppState,
-    current: Memo<Option<Destination>>,
-    shown: Memo<Vec<Destination>>,
-) -> AnyElement {
+/// The folded sidebar: the scope switcher, each place as its icon with its count, Activity's
+/// pages as short names under Activity while one shows; at the foot Ask, the palette and
+/// Settings with its sections as short names. Every control keeps its full name (and a place
+/// its count) for assistive technology, shows its name and key in a hint while the pointer
+/// rests on it, and the palette lists them all.
+fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElement {
     let ink = color(Token::ShellInk);
     let rows = dynamic(move || {
         let shown = shown.get();
@@ -285,7 +268,7 @@ fn rail(
             view()
                 .items_center()
                 .gap(px(2.0))
-                .children(shown.into_iter().map(|d| rail_destination(app, current, d)))
+                .children(shown.into_iter().map(|area| rail_place(app, current, area)))
                 .into_element()
         })
     });
@@ -299,6 +282,8 @@ fn rail(
         .pb(px(10.0))
         .gap(px(2.0))
         .bg(color(Token::Shell))
+        .child(scope_switcher(app, ScopeFace::Rail))
+        .child(scroll().flex_1().min_h(px(0.0)).child(rows))
         .child(
             rail_button(
                 app,
@@ -311,7 +296,6 @@ fn rail(
                 || false,
                 move || app.open_ask(),
             )
-            .bg(ink.opacity(0.1))
             .child(icon(Icon::Ask, 18.0, ink)),
         )
         .child(
@@ -326,101 +310,102 @@ fn rail(
                 || false,
                 move || app.open_palette(),
             )
-            .mb(px(10.0))
             .child(icon(Icon::Search, 18.0, color(Token::ShellInk2))),
         )
-        .child(
-            scroll().flex_1().min_h(px(0.0)).child(
-                view()
-                    .items_center()
-                    .gap(px(2.0))
-                    .child(rows)
-                    .child(when(
-                        move || current.get() == Some(Destination::Settings),
-                        move || rail_sections(app),
-                    ))
-                    .child(rail_projects(app)),
-            ),
-        )
+        .child(rail_place(app, current, Area::Settings))
+        .child(when(
+            move || current.get() == Area::Settings,
+            move || rail_sections(app),
+        ))
         .into_element()
 }
 
-fn rail_destination(
-    app: AppState,
-    current: Memo<Option<Destination>>,
-    d: Destination,
-) -> AnyElement {
+/// A place in the rail: its icon and count, and under Activity, while one of its pages
+/// shows, the pages as short names.
+fn rail_place(app: AppState, current: Memo<Area>, area: Area) -> AnyElement {
     let ink = color(Token::ShellInk);
-    rail_button(
+    let button = rail_button(
         app,
         Hint {
-            name: d.label(),
-            key: Some(d.key().to_string()),
+            name: area.label(),
+            key: Some(area_key(area).to_owned()),
         },
-        destination_spoken(app, d),
-        format!("nav-{}", d.slug()),
-        move || current.get() == Some(d),
-        move || app.go(d),
+        area_spoken(app, area),
+        format!("nav-{}", area.slug()),
+        move || current.get() == area,
+        move || app.go_area(area),
     )
-    .child(icon(Icon::destination(d), 18.0, ink))
-    .child(
+    .child(icon(Icon::area(area), 18.0, ink))
+    .children(area.counted().map(|counted| {
         view()
             .absolute()
             .top(px(1.0))
             .right(px(0.0))
-            .child(count(app, d)),
-    )
-    .into_element()
+            .child(count(app, counted))
+    }))
+    .into_element();
+    if area != Area::Activity {
+        return button;
+    }
+    view()
+        .items_center()
+        .gap(px(2.0))
+        .child(button)
+        .child(when(
+            move || current.get() == Area::Activity,
+            move || rail_pages(app),
+        ))
+        .into_element()
 }
 
-/// The folded PROJECTS section: one mark, current while a Project page shows, with how many
-/// things across the projects need the owner. It unfolds the labels (over the page while
-/// narrow), where each project has its row. test_id "nav-projects".
-fn rail_projects(app: AppState) -> AnyElement {
-    let any = computed(move || has_projects(app));
-    when(
-        move || any.get(),
-        move || {
-            let needs = computed(move || projects::needs_total(app));
-            rail_button(
-                app,
-                Hint {
-                    name: PROJECTS_HEADING,
-                    key: None,
-                },
-                move || match needs.get() {
-                    0 => SharedString::from(PROJECTS_HEADING),
-                    n => SharedString::from(format!("{PROJECTS_HEADING}, {}", waits_on_you(n))),
-                },
-                "nav-projects".into(),
-                move || projects::open_project(app).is_some(),
-                move || app.toggle_sidebar(),
-            )
-            .mt(px(10.0))
-            .child(icon(Icon::Project, 18.0, color(Token::ShellInk)))
-            .child(
-                view()
-                    .absolute()
-                    .top(px(1.0))
-                    .right(px(0.0))
-                    .child(dynamic(move || {
-                        let n = needs.get();
-                        (n > 0).then(|| untracked(|| projects::rail_badge(n)))
-                    })),
-            )
-            .into_element()
-        },
-    )
-    .into_element()
-}
-
-/// Tracked: whether the PROJECTS section has any row.
-fn has_projects(app: AppState) -> bool {
-    app.feed.with(|feed| {
-        !crate::model::projects::Projects::build(feed, &crate::model::ProjectFilter::All)
-            .entries
-            .is_empty()
+/// Activity's pages in the rail, each its short name under its full one for assistive
+/// technology.
+fn rail_pages(app: AppState) -> AnyElement {
+    let pages = computed(move || activity_pages(app));
+    dynamic(move || {
+        let pages = pages.get();
+        untracked(move || {
+            view()
+                .items_center()
+                .gap(px(2.0))
+                .children(pages.into_iter().map(|page| {
+                    let selected = move || app.destination() == page;
+                    let name = page.label();
+                    rail_button(
+                        app,
+                        Hint { name, key: None },
+                        move || SharedString::from(name),
+                        format!("nav-{}", page.slug()),
+                        selected,
+                        move || app.go(page),
+                    )
+                    .h(px(control_height(row_height(app.form))))
+                    .child(
+                        text(page_short(page))
+                            .text_size(px(text_size(app.form) - 2.5))
+                            .text_color(move || {
+                                if selected() {
+                                    color(Token::ShellInk)
+                                } else {
+                                    color(Token::ShellInk2)
+                                }
+                            }),
+                    )
+                    .into_element()
+                }))
+                .into_element()
+        })
     })
+}
+
+/// An Activity page's short name in the folded sidebar.
+const fn page_short(page: Destination) -> &'static str {
+    match page {
+        Destination::Timeline => "Time",
+        Destination::Usage => "Use",
+        Destination::Artifacts => "Files",
+        _ => "Feed",
+    }
 }
 
 /// The Settings sections in the rail, each its short name under its full one for assistive
@@ -540,47 +525,17 @@ fn rail_hint(hint: Hint) -> AnyElement {
         .into_element()
 }
 
-/// The workspace this sidebar shows: its name and autopilot state. A header of its own, apart
-/// from the destinations and projects under it: switching between daemons' workspaces goes
-/// here. test_id "workspace-header".
-fn workspace_header(app: AppState, ws: Workspace) -> AnyElement {
-    let base = text_size(app.form);
-    view()
-        .test_id("workspace-header")
-        .pt(px(6.0))
-        .pb(px(12.0))
-        .px(px(8.0))
-        .gap(px(2.0))
-        .child(
-            text(ws.name.into_owned())
-                .truncate()
-                .text_size(px(base))
-                .font_weight(FontWeight::BOLD)
-                .text_color(color(Token::ShellInk)),
-        )
-        .when(!ws.autopilot.is_empty(), |v| {
-            v.child(
-                text(ws.autopilot)
-                    .number_of_lines(2u32)
-                    .text_size(px(base - 2.0))
-                    .text_color(color(Token::ShellInk2)),
-            )
-        })
-        .into_element()
-}
-
+/// Ask at the sidebar's foot: the way to the composer until Home docks it.
 fn ask_button(app: AppState) -> AnyElement {
     let ink = color(Token::ShellInk);
     view()
-        .h(px(control_height(row_height(app.form) + 4.0)))
+        .h(px(control_height(row_height(app.form))))
         .flex_shrink_0()
         .flex_row()
         .items_center()
-        .gap(px(8.0))
+        .gap(px(10.0))
         .px(px(8.0))
-        .mb(px(6.0))
         .rounded(px(RADIUS_CONTROL))
-        .bg(ink.opacity(0.1))
         .cursor_pointer()
         .transition_colors()
         .duration(120.0_f32)
@@ -591,15 +546,14 @@ fn ask_button(app: AppState) -> AnyElement {
         .label(ASK_LABEL)
         .test_id("ask-open")
         .on_press(move || app.open_ask())
-        .child(icon(Icon::Ask, 16.0, ink))
+        .child(icon(Icon::Ask, 16.0, color(Token::ShellInk2)))
         .child(
-            text(ASK_HINT)
+            text(ASK_LABEL)
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
                 .text_size(px(text_size(app.form)))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(ink),
+                .text_color(color(Token::ShellInk2)),
         )
         .child(key_hint(ASK_KEY))
         .into_element()
@@ -613,17 +567,14 @@ fn palette_opener(app: AppState) -> AnyElement {
         .flex_shrink_0()
         .flex_row()
         .items_center()
-        .gap(px(8.0))
+        .gap(px(10.0))
         .px(px(8.0))
-        .mb(px(10.0))
         .rounded(px(RADIUS_CONTROL))
-        .border(px(1.0))
-        .border_color(ink.opacity(0.16))
         .cursor_pointer()
         .transition_colors()
         .duration(120.0_f32)
-        .hover(move |s| s.bg(ink.opacity(0.06)).border_color(ink.opacity(0.28)))
-        .active(move |s| s.bg(ink.opacity(0.1)))
+        .hover(move |s| s.bg(ink.opacity(0.1)))
+        .active(move |s| s.bg(ink.opacity(0.16)))
         .focus_visible(focus_ring)
         .role(AccessibilityRole::Button)
         .label(PALETTE_HINT)
@@ -642,18 +593,16 @@ fn palette_opener(app: AppState) -> AnyElement {
         .into_element()
 }
 
-fn destination_row(
-    app: AppState,
-    current: Memo<Option<Destination>>,
-    d: Destination,
-) -> AnyElement {
+/// A place's row: its icon, name, count and key. Activity brings its pages under it while one
+/// of them shows.
+fn place_row(app: AppState, current: Memo<Area>, area: Area) -> AnyElement {
     let trailing = view()
         .flex_row()
         .items_center()
         .gap(px(8.0))
-        .child(count(app, d))
+        .children(area.counted().map(|counted| count(app, counted)))
         .child(
-            text(d.key().to_string())
+            text(area_key(area))
                 .w(px(10.0))
                 .font_family(FONT_MONO)
                 .text_size(px(text_size(app.form) - 3.0))
@@ -661,16 +610,51 @@ fn destination_row(
                 .accessibility_elements_hidden(true),
         )
         .into_element();
-    nav_row_icon(
+    let row = nav_row_icon(
         app,
-        Some(Icon::destination(d)),
-        d.label(),
-        destination_spoken(app, d),
-        format!("nav-{}", d.slug()),
-        move || current.get() == Some(d),
+        Some(Icon::area(area)),
+        area.label(),
+        area_spoken(app, area),
+        format!("nav-{}", area.slug()),
+        move || current.get() == area,
         Some(trailing),
-        move || app.go(d),
-    )
+        move || app.go_area(area),
+    );
+    if area != Area::Activity {
+        return row;
+    }
+    view()
+        .gap(px(2.0))
+        .child(row)
+        .child(when(
+            move || current.get() == Area::Activity,
+            move || activity_rows(app),
+        ))
+        .into_element()
+}
+
+/// Activity's pages under its row, set in under the places' labels.
+fn activity_rows(app: AppState) -> AnyElement {
+    let pages = computed(move || activity_pages(app));
+    dynamic(move || {
+        let pages = pages.get();
+        untracked(move || {
+            view()
+                .pl(px(SECTION_INDENT))
+                .gap(px(2.0))
+                .children(pages.into_iter().map(|page| {
+                    nav_row(
+                        app,
+                        page.label(),
+                        format!("nav-{}", page.slug()),
+                        move || app.destination() == page,
+                        None,
+                        move || app.go(page),
+                    )
+                }))
+                .into_element()
+        })
+    })
 }
 
 fn settings_sections(app: AppState) -> AnyElement {
@@ -704,7 +688,7 @@ fn device_footer(app: AppState, ws: Workspace) -> AnyElement {
         .px(px(8.0))
         .gap(px(6.0))
         .border_t(px(1.0))
-        .border_t_color(color(Token::ShellInk).opacity(0.12))
+        .border_t_color(color(Token::ShellRule))
         .child(
             text(format!("{THIS_DEVICE} "))
                 .text_size(px(small))
@@ -740,14 +724,7 @@ fn content(app: AppState) -> AnyElement {
         .child(
             view()
                 .role(AccessibilityRole::Region)
-                .label(move || {
-                    SharedString::from(
-                        projects::open_project(app).map_or_else(
-                            || app.destination().label().to_owned(),
-                            |id| id.to_string(),
-                        ),
-                    )
-                })
+                .label(move || SharedString::from(app.destination().label()))
                 .flex_1()
                 .min_w(px(0.0))
                 .min_h(px(0.0))
@@ -761,7 +738,7 @@ fn content(app: AppState) -> AnyElement {
         .child(crate::screens::agents::start_sheet(app))
         .child(confirmation(app))
         .child(crate::shell::refusal(app))
-        .child(crate::screens::now::verb_composer(app))
+        .child(crate::ui::kit::more::overlays(app))
         .child(toast(app))
         .into_element()
 }

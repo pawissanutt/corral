@@ -14,6 +14,7 @@ use crate::model::effect::Effect;
 use crate::model::projects::ProjectFilter;
 
 mod control;
+mod lines;
 mod live;
 mod menu;
 mod roster;
@@ -25,6 +26,7 @@ pub use control::{
     Control, ControlAsk, Kind, RewindPoint, RewindSheet, ask, control_label, control_verbs,
     controls, kind, rewind_sheet, status as control_status,
 };
+pub use lines::{SessionLine, session_line, session_lines};
 pub(crate) use live::{clock, placement, unix};
 pub use menu::{SESSION_MENU_LABEL, session_verbs};
 pub use roster::{RoleTab, Roster, RosterRole, RosterRow, RowState, Show, ShowTab, roster};
@@ -213,7 +215,7 @@ impl State {
             Action::OpenSession(id) => {
                 vec![Effect::OpenLive(crate::model::Live::Session(id))]
             }
-            Action::Back => vec![Effect::Go(crate::model::Destination::Agents)],
+            Action::Back => vec![Effect::Go(crate::model::Destination::Sessions)],
             Action::Control { session, control } => vec![Effect::Control {
                 session,
                 key: self.ids.next_id(),

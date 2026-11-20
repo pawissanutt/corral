@@ -4,7 +4,7 @@ use super::*;
 fn free_text_ask_survives_even_when_a_command_matches() {
     let feed = Feed::default();
     let rows = filtered(
-        "plan",
+        "tasks",
         false,
         DataState::Fixture,
         &feed,

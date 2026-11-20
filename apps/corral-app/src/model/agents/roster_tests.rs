@@ -1,6 +1,6 @@
 use super::{Action, RosterRole, Show, State, roster};
 use crate::model::daemon::{Feed, Link, Task, TopicState, bare_task, task_row};
-use crate::model::projects::{FilterScreen, Filters, ProjectFilter};
+use crate::model::projects::ProjectFilter;
 use crate::model::{Id, Live};
 use corral_protocol::rows::{
     AgentRow, AssistantKind, AssistantLocation, AssistantRow, AssistantState, BuildFacts,
@@ -112,11 +112,6 @@ fn project_scope_hides_other_projects_runs_but_not_the_quick_chat_and_persists()
     let mut ids: Vec<_> = model.rows.iter().map(|row| row.session.as_str()).collect();
     ids.sort_unstable();
     assert_eq!(ids, ["A-7", "T-1_R1"]);
-    let mut filters = Filters::default();
-    filters.set("store", FilterScreen::Agents, filter.clone());
-    let restored =
-        Filters::parse(&filters.encode().expect("filters encode")).expect("filters parse");
-    assert_eq!(restored.get("store", FilterScreen::Agents, &feed), filter);
 }
 
 /// A build whose host stopped stays listed under Show All, with its Session menu's Resume, so

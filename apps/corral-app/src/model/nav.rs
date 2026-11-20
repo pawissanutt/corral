@@ -1,13 +1,11 @@
-//! Destinations, pages and overlays shared by every shell.
+//! The four places, their pages and overlays shared by every shell.
 
 use crate::model::live::{Live, Route, Selection};
 
-/// Desktop sidebar prompt for the Ask composer.
-pub const ASK_HINT: &str = "Ask…";
 /// Phone floating action label for the Ask composer.
 pub const ASK_LABEL: &str = "Ask";
 /// Desktop sidebar prompt for the command palette.
-pub const PALETTE_HINT: &str = "Go to, answer, open…";
+pub const PALETTE_HINT: &str = "Go to…";
 /// Compact terminal palette launcher label.
 pub const PALETTE_LABEL: &str = "Go to";
 /// The sidebar's name in the terminal key line, after its Ctrl+B cap.
@@ -28,24 +26,23 @@ pub const ASK_BUTTON_LABEL: &str = "Ask (opens the composer)";
 /// Accessible label of the phone large-title palette search button.
 pub const SEARCH_LABEL: &str = "Search";
 
-/// A top-level destination in the app.
+/// A page the navigation opens directly: the four places' own pages and Settings. Activity has
+/// four pages; every other place has one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Destination {
-    /// The current workspace; its first group is what needs you.
-    Now,
-    /// Recent changes.
-    Changes,
-    /// Plans.
-    Plans,
-    /// Agents.
-    Agents,
-    /// Items to review.
-    Review,
-    /// The timeline.
+    /// What waits on the owner, then what is working.
+    Home,
+    /// Every task, grouped by status.
+    Tasks,
+    /// Every session, grouped by state.
+    Sessions,
+    /// Activity › Feed: what changed.
+    Feed,
+    /// Activity › Timeline.
     Timeline,
-    /// Usage.
+    /// Activity › Usage.
     Usage,
-    /// Every task's artifacts: the finder.
+    /// Activity › Artifacts: the finder over every task's artifacts.
     Artifacts,
     /// Settings.
     Settings,
@@ -53,25 +50,26 @@ pub enum Destination {
 
 impl Destination {
     /// Destinations in navigation order.
-    pub const ALL: [Destination; 9] = [
-        Self::Now,
-        Self::Changes,
-        Self::Plans,
-        Self::Agents,
-        Self::Review,
+    pub const ALL: [Destination; 8] = [
+        Self::Home,
+        Self::Tasks,
+        Self::Sessions,
+        Self::Feed,
         Self::Timeline,
         Self::Usage,
         Self::Artifacts,
         Self::Settings,
     ];
+    /// Activity's pages, in the order the sidebar lists them.
+    pub const ACTIVITY: [Destination; 4] =
+        [Self::Feed, Self::Timeline, Self::Usage, Self::Artifacts];
     /// The display label.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Now => "Now",
-            Self::Changes => "Changes",
-            Self::Plans => "Plans",
-            Self::Agents => "Agents",
-            Self::Review => "Review",
+            Self::Home => "Home",
+            Self::Tasks => "Tasks",
+            Self::Sessions => "Sessions",
+            Self::Feed => "Feed",
             Self::Timeline => "Timeline",
             Self::Usage => "Usage",
             Self::Artifacts => "Artifacts",
@@ -81,54 +79,153 @@ impl Destination {
     /// The storage and identifier slug.
     pub const fn slug(self) -> &'static str {
         match self {
-            Self::Now => "now",
-            Self::Changes => "changes",
-            Self::Plans => "plans",
-            Self::Agents => "agents",
-            Self::Review => "review",
+            Self::Home => "home",
+            Self::Tasks => "tasks",
+            Self::Sessions => "sessions",
+            Self::Feed => "feed",
             Self::Timeline => "timeline",
             Self::Usage => "usage",
             Self::Artifacts => "artifacts",
             Self::Settings => "settings",
         }
     }
-    /// Finds a destination by its slug; the merged Inbox and Builds slugs open their new homes.
+    /// Finds a destination by its slug. The nine former destinations' slugs open their new
+    /// homes, so a stored destination or an old link still lands somewhere.
     pub fn from_slug(slug: &str) -> Option<Destination> {
         match slug {
-            "inbox" => Some(Self::Now),
-            "builds" => Some(Self::Agents),
+            "now" | "inbox" => Some(Self::Home),
+            "plans" | "review" => Some(Self::Tasks),
+            "agents" | "builds" => Some(Self::Sessions),
+            "changes" | "activity" => Some(Self::Feed),
             _ => Self::ALL.into_iter().find(|item| item.slug() == slug),
         }
     }
-    /// The destination's keyboard shortcut.
+    /// The place the page belongs to.
+    pub const fn area(self) -> Area {
+        match self {
+            Self::Home => Area::Home,
+            Self::Tasks => Area::Tasks,
+            Self::Sessions => Area::Sessions,
+            Self::Feed | Self::Timeline | Self::Usage | Self::Artifacts => Area::Activity,
+            Self::Settings => Area::Settings,
+        }
+    }
+    /// The phone tab whose stack shows the page; none for Settings, which opens over the tab
+    /// in view.
+    pub const fn phone_tab(self) -> Option<PhoneTab> {
+        match self.area() {
+            Area::Home => Some(PhoneTab::Home),
+            Area::Tasks => Some(PhoneTab::Tasks),
+            Area::Sessions => Some(PhoneTab::Sessions),
+            Area::Activity => Some(PhoneTab::Activity),
+            Area::Settings => None,
+        }
+    }
+}
+
+/// One of the four places, or Settings in its corner: what the sidebar lists at rest and a
+/// place key opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Area {
+    Home,
+    Tasks,
+    Sessions,
+    /// Feed, Timeline, Usage and Artifacts.
+    Activity,
+    Settings,
+}
+
+impl Area {
+    /// The four places in navigation order.
+    pub const PLACES: [Area; 4] = [Self::Home, Self::Tasks, Self::Sessions, Self::Activity];
+    /// The places, then Settings.
+    pub const ALL: [Area; 5] = [
+        Self::Home,
+        Self::Tasks,
+        Self::Sessions,
+        Self::Activity,
+        Self::Settings,
+    ];
+    /// The display label.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Home => "Home",
+            Self::Tasks => "Tasks",
+            Self::Sessions => "Sessions",
+            Self::Activity => "Activity",
+            Self::Settings => "Settings",
+        }
+    }
+    /// The identifier slug (`nav-<slug>`, `tab-<slug>`).
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Home => "home",
+            Self::Tasks => "tasks",
+            Self::Sessions => "sessions",
+            Self::Activity => "activity",
+            Self::Settings => "settings",
+        }
+    }
+    /// The place's keyboard shortcut.
     pub const fn key(self) -> char {
         match self {
-            Self::Now => 'n',
-            Self::Changes => '.',
-            Self::Plans => 'p',
-            Self::Agents => 'a',
-            Self::Review => 'r',
-            Self::Timeline => 't',
-            Self::Usage => 'u',
-            Self::Artifacts => 'f',
+            Self::Home => 'h',
+            Self::Tasks => 't',
+            Self::Sessions => 's',
+            Self::Activity => 'a',
             Self::Settings => ',',
         }
     }
-    /// Finds a destination by its keyboard shortcut; `i`, the former Inbox key, opens Now.
-    pub fn from_key(key: char) -> Option<Destination> {
-        if key == 'i' {
-            return Some(Self::Now);
+    /// Finds a place by its key. The former destinations' keys that no place or list took
+    /// over still open their new homes: `n` (Now) Home, `p` and `r` (Plans, Review) Tasks.
+    pub fn from_key(key: char) -> Option<Area> {
+        match key {
+            'n' => Some(Self::Home),
+            'p' | 'r' => Some(Self::Tasks),
+            _ => Self::ALL.into_iter().find(|item| item.key() == key),
         }
-        Self::ALL.into_iter().find(|item| item.key() == key)
     }
-    /// The phone tab containing this destination.
-    pub const fn phone_tab(self) -> PhoneTab {
+    /// The page whose count the place's row shows: Home's needs-you count.
+    pub const fn counted(self) -> Option<Destination> {
         match self {
-            Self::Now => PhoneTab::Now,
-            Self::Agents => PhoneTab::Agents,
-            Self::Plans => PhoneTab::Plans,
-            _ => PhoneTab::More,
+            Self::Home => Some(Destination::Home),
+            _ => None,
         }
+    }
+}
+
+/// Every key that opens a place or one of Activity's pages: the places' own, the former
+/// destinations' (`n p r`), and Usage's and Artifacts' (`u f`), which they keep.
+pub const PLACE_KEYS: [&str; 10] = ["h", "t", "s", "a", ",", "n", "p", "r", "u", "f"];
+
+/// A tab of the task page. The page is the one place tabs stay: the diff needs the width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum TaskTab {
+    #[default]
+    Overview,
+    Changes,
+    History,
+}
+
+impl TaskTab {
+    pub const ALL: [TaskTab; 3] = [Self::Overview, Self::Changes, Self::History];
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "Overview",
+            Self::Changes => "Changes",
+            Self::History => "History",
+        }
+    }
+    /// The identifier slug (`tab-task-<slug>`) and the address segment.
+    pub const fn slug(self) -> &'static str {
+        match self {
+            Self::Overview => "overview",
+            Self::Changes => "changes",
+            Self::History => "history",
+        }
+    }
+    pub fn from_slug(slug: &str) -> Option<TaskTab> {
+        Self::ALL.into_iter().find(|tab| tab.slug() == slug)
     }
 }
 
@@ -186,68 +283,42 @@ impl SettingsSection {
     }
 }
 
-/// A phone navigation tab.
+/// A phone navigation tab: one per place. Settings opens from the gear in the head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PhoneTab {
-    /// The current workspace tab, opening at what needs you.
-    Now,
-    /// The agents tab.
-    Agents,
-    /// The plans tab.
-    Plans,
-    /// The remaining destinations.
-    More,
+    Home,
+    Tasks,
+    Sessions,
+    /// The list of Activity's pages.
+    Activity,
 }
 impl PhoneTab {
     /// Phone tabs in display order.
-    pub const ALL: [PhoneTab; 4] = [Self::Now, Self::Agents, Self::Plans, Self::More];
-    /// Destinations listed under More.
-    pub const MORE: [Destination; 6] = [
-        Destination::Changes,
-        Destination::Review,
-        Destination::Timeline,
-        Destination::Usage,
-        Destination::Artifacts,
-        Destination::Settings,
-    ];
+    pub const ALL: [PhoneTab; 4] = [Self::Home, Self::Tasks, Self::Sessions, Self::Activity];
+    /// The place the tab shows.
+    pub const fn area(self) -> Area {
+        match self {
+            Self::Home => Area::Home,
+            Self::Tasks => Area::Tasks,
+            Self::Sessions => Area::Sessions,
+            Self::Activity => Area::Activity,
+        }
+    }
     /// The display label.
     pub const fn label(self) -> &'static str {
-        match self {
-            Self::Now => "Now",
-            Self::Agents => "Agents",
-            Self::Plans => "Plans",
-            Self::More => "More",
-        }
+        self.area().label()
     }
     /// The identifier slug.
     pub const fn slug(self) -> &'static str {
-        match self {
-            Self::Now => "now",
-            Self::Agents => "agents",
-            Self::Plans => "plans",
-            Self::More => "more",
-        }
+        self.area().slug()
     }
-    /// The tab's zero-based index.
-    pub const fn index(self) -> u32 {
-        match self {
-            Self::Now => 0,
-            Self::Agents => 1,
-            Self::Plans => 2,
-            Self::More => 3,
-        }
-    }
-    /// Finds a tab by its zero-based index.
-    pub fn from_index(index: u32) -> Option<PhoneTab> {
-        Self::ALL.into_iter().find(|item| item.index() == index)
-    }
-    /// The tab's destination, if it opens one directly.
+    /// The tab's destination, if its root is one: Activity's root lists its pages.
     pub const fn destination(self) -> Option<Destination> {
         match self {
-            Self::Now => Some(Destination::Now),
-            Self::Agents => Some(Destination::Agents),
-            Self::Plans => Some(Destination::Plans),
-            Self::More => None,
+            Self::Home => Some(Destination::Home),
+            Self::Tasks => Some(Destination::Tasks),
+            Self::Sessions => Some(Destination::Sessions),
+            Self::Activity => None,
         }
     }
 }
@@ -354,7 +425,7 @@ pub enum Form {
 impl Form {
     /// The initial destination for this form.
     pub const fn home(self) -> Destination {
-        Destination::Now
+        Destination::Home
     }
 }
 
@@ -363,6 +434,8 @@ impl Form {
 pub struct NavState {
     /// The current destination.
     pub destination: Destination,
+    /// The Activity page last shown, which the Activity place opens again.
+    pub activity: Destination,
     /// The current settings section.
     pub settings: SettingsSection,
     /// Counts explicit section-opening intents, including a repeated opening of the same section.
@@ -372,16 +445,16 @@ pub struct NavState {
     pub goes: u32,
     /// Open overlays in oldest-first order.
     pub overlays: Vec<Overlay>,
-    /// Open pages in oldest-first order; task, plan and review pages are phone-only.
+    /// Open pages in oldest-first order: a task's page or a session's, on every form.
     pub pages: Vec<Route>,
+    /// The tab the task page on top shows.
+    pub task_tab: TaskTab,
     /// The live record selected in each domain.
     pub selection: Selection,
-    /// The record the last navigation opened by name (a link, a row elsewhere, the palette)
-    /// and that selects in place rather than pushing a page; none after a plain `go` or once
-    /// dismissed. A narrow list-or-detail layout shows the detail for it.
+    /// The record a former list-or-detail screen was asked to show in place. Nothing sets it
+    /// since every record opens its page; it goes with the screens that read it.
     pub opened: Option<Live>,
-    /// Grows by one (wrapping) on every such open, so a screen already showing the
-    /// destination can tell a repeated open of the same record from no change.
+    /// Grew by one on every such open.
     pub opens: u32,
 }
 impl NavState {
@@ -389,11 +462,13 @@ impl NavState {
     pub fn new(form: Form) -> NavState {
         NavState {
             destination: form.home(),
+            activity: Destination::Feed,
             settings: SettingsSection::Devices,
             section_opens: 0,
             goes: 0,
             overlays: Vec::new(),
             pages: Vec::new(),
+            task_tab: TaskTab::default(),
             selection: Selection::default(),
             opened: None,
             opens: 0,
@@ -403,9 +478,30 @@ impl NavState {
     pub fn go(&mut self, destination: Destination) {
         self.goes = self.goes.wrapping_add(1);
         self.destination = destination;
+        if destination.area() == Area::Activity {
+            self.activity = destination;
+        }
         self.pages.clear();
         self.opened = None;
         self.close(Overlay::Palette);
+    }
+    /// The page a place opens: its own, or for Activity the page last shown there.
+    pub const fn page_of(&self, area: Area) -> Destination {
+        match area {
+            Area::Home => Destination::Home,
+            Area::Tasks => Destination::Tasks,
+            Area::Sessions => Destination::Sessions,
+            Area::Activity => self.activity,
+            Area::Settings => Destination::Settings,
+        }
+    }
+    /// The page a place key opens ([`PLACE_KEYS`]), from here.
+    pub fn key_page(&self, key: char) -> Option<Destination> {
+        match key {
+            'u' => Some(Destination::Usage),
+            'f' => Some(Destination::Artifacts),
+            _ => Area::from_key(key).map(|area| self.page_of(area)),
+        }
     }
     /// Navigates to a settings section and closes the palette.
     pub fn go_settings(&mut self, section: SettingsSection) {
@@ -413,36 +509,26 @@ impl NavState {
         self.section_opens = self.section_opens.wrapping_add(1);
         self.go(Destination::Settings);
     }
-    /// Selects a live record, then pushes its page where the form stacks it; tasks, plans and
-    /// reviews select in place off phone.
-    pub fn open_live(&mut self, live: Live, form: Form) {
+    /// Selects a live record and pushes its page: a session's, or the task's for a task, a
+    /// plan (a task with children) and a review candidate (a task in Review) alike.
+    pub fn open_live(&mut self, live: Live) {
         self.selection.set(&live);
-        let push = live.pushes(form);
-        if push {
-            self.opened = None;
-        } else {
-            self.opened = Some(live.clone());
-            self.opens = self.opens.wrapping_add(1);
+        let page = live.page();
+        self.selection.set(&page);
+        if matches!(page, Live::Task(_)) && self.live() != Some(&page) {
+            self.task_tab = TaskTab::default();
         }
-        self.open_route(Route::Live(live), push);
+        self.open_route(Route::Live(page));
     }
-    /// Forgets the explicit open, as the way back from a narrow detail to its list does.
+    /// Forgets the explicit open, as the way back from a narrow detail to its list did.
     pub fn dismiss_opened(&mut self) {
         self.opened = None;
     }
-    /// Projects are local pages on every form; no daemon detail subscription is needed.
-    pub fn open_project(&mut self, id: crate::model::Id) {
-        self.open_route(Route::Project(id), true);
-    }
-    fn open_route(&mut self, route: Route, push: bool) {
+    fn open_route(&mut self, route: Route) {
         self.destination = route.owner();
         self.close(Overlay::Palette);
-        if push {
-            if self.pages.last() != Some(&route) {
-                self.pages.push(route);
-            }
-        } else {
-            self.pages.clear();
+        if self.pages.last() != Some(&route) {
+            self.pages.push(route);
         }
     }
     /// Pops the top page; its owner remains selected when the stack becomes empty.
@@ -457,7 +543,7 @@ impl NavState {
     pub fn live(&self) -> Option<&Live> {
         match self.pages.last() {
             Some(Route::Live(live)) => Some(live),
-            _ => None,
+            None => None,
         }
     }
     /// Opens an overlay or moves it to the newest position.
@@ -481,7 +567,7 @@ impl NavState {
     pub fn newest(&self) -> Option<Overlay> {
         self.overlays.last().copied()
     }
-    /// Handles a destination or Ask key unless an overlay is open.
+    /// Handles a place or Ask key unless an overlay is open.
     pub fn press_key(&mut self, key: char) -> bool {
         if !self.overlays.is_empty() {
             return false;
@@ -489,7 +575,7 @@ impl NavState {
         if key == '/' {
             self.open(Overlay::Ask);
             true
-        } else if let Some(destination) = Destination::from_key(key) {
+        } else if let Some(destination) = self.key_page(key) {
             self.go(destination);
             true
         } else {
@@ -498,109 +584,59 @@ impl NavState {
     }
 }
 
-/// Explicit record navigation changes only a destination scope that would hide the record.
-/// Legacy plan rows have unknown project membership and already ignore project filters.
-pub fn explicit_record_filter(
-    feed: &crate::model::daemon::Feed,
-    filters: &crate::model::projects::Filters,
-    live: &Live,
-) -> Option<(
-    crate::model::projects::FilterScreen,
-    crate::model::projects::ProjectFilter,
-)> {
-    use crate::model::projects::{FilterScreen, ProjectFilter};
-
-    let store = feed.store.as_deref()?;
-    let screen = FilterScreen::of(live.owner())?;
-    let filter = filters.get(store, screen, feed);
-    if filter == ProjectFilter::All {
-        return None;
-    }
-    let projects: &[String] = match live {
-        Live::Task(id) | Live::Review(id) | Live::Plan(id) => {
-            feed.board.task(id)?.row.task.project.as_slice()
-        }
-        _ => return None,
-    };
-    let visible = match &filter {
-        ProjectFilter::All => true,
-        ProjectFilter::Project(project) => projects.iter().any(|name| name == project.as_str()),
-        ProjectFilter::Unassigned => projects.is_empty(),
-    };
-    if visible {
-        return None;
-    }
-    let scope = match projects {
-        [] => ProjectFilter::Unassigned,
-        [project] => ProjectFilter::Project(crate::model::Id::from(project.as_str())),
-        _ => ProjectFilter::All,
-    };
-    Some((screen, scope))
-}
-
-/// Navigation targets keep Ask a chat interaction rather than a board destination.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NavigationTarget {
-    Ask,
-    Destination(Destination),
-    Tab(PhoneTab),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NavigationItem {
-    pub id: String,
-    pub label: &'static str,
-    pub target: NavigationTarget,
-}
-
-/// Board destinations disappear in assistant workspaces, rather than becoming disabled.
-pub fn navigation(feed: &crate::model::daemon::Feed) -> Vec<NavigationItem> {
+/// Whether the workspace has the page. An assistant-only workspace has no board: it keeps
+/// Home (its landing), Sessions, Activity › Usage and Settings, and the rest is left out
+/// rather than shown unavailable.
+pub fn offers(feed: &crate::model::daemon::Feed, destination: Destination) -> bool {
     use crate::model::projects::WorkspaceMode;
-    let mut items = vec![NavigationItem {
-        id: "nav-ask".into(),
-        label: "Ask",
-        target: NavigationTarget::Ask,
-    }];
-    let assistant = WorkspaceMode::of(feed) == WorkspaceMode::AssistantOnly;
-    items.extend(
-        Destination::ALL
-            .into_iter()
-            .filter(|destination| {
-                !assistant
-                    || matches!(
-                        destination,
-                        Destination::Agents | Destination::Usage | Destination::Settings
-                    )
-            })
-            .map(|destination| NavigationItem {
-                id: format!("nav-{}", destination.slug()),
-                label: destination.label(),
-                target: NavigationTarget::Destination(destination),
-            }),
-    );
-    items
+    WorkspaceMode::of(feed) != WorkspaceMode::AssistantOnly
+        || matches!(
+            destination,
+            Destination::Home | Destination::Sessions | Destination::Usage | Destination::Settings
+        )
 }
 
-pub fn phone_navigation(feed: &crate::model::daemon::Feed) -> Vec<NavigationItem> {
-    if crate::model::projects::WorkspaceMode::of(feed)
-        == crate::model::projects::WorkspaceMode::AssistantOnly
-    {
-        return navigation(feed)
-            .into_iter()
-            .map(|mut item| {
-                item.id = item.id.replacen("nav-", "tab-", 1);
-                item
-            })
-            .collect();
-    }
+/// The places the sidebar and the phone's tab bar list, in order.
+pub fn places(feed: &crate::model::daemon::Feed) -> Vec<Area> {
+    Area::PLACES
+        .into_iter()
+        .filter(|area| *area == Area::Activity || offers(feed, page_at_rest(*area)))
+        .collect()
+}
+
+/// Activity's pages in this workspace, in order.
+pub fn activity_pages(feed: &crate::model::daemon::Feed) -> Vec<Destination> {
+    Destination::ACTIVITY
+        .into_iter()
+        .filter(|page| offers(feed, *page))
+        .collect()
+}
+
+/// Every page this workspace has, in navigation order: what the palette lists.
+pub fn destinations(feed: &crate::model::daemon::Feed) -> Vec<Destination> {
+    Destination::ALL
+        .into_iter()
+        .filter(|page| offers(feed, *page))
+        .collect()
+}
+
+/// The phone's tabs in this workspace.
+pub fn phone_tabs(feed: &crate::model::daemon::Feed) -> Vec<PhoneTab> {
+    let places = places(feed);
     PhoneTab::ALL
         .into_iter()
-        .map(|tab| NavigationItem {
-            id: format!("tab-{}", tab.slug()),
-            label: tab.label(),
-            target: NavigationTarget::Tab(tab),
-        })
+        .filter(|tab| places.contains(&tab.area()))
         .collect()
+}
+
+const fn page_at_rest(area: Area) -> Destination {
+    match area {
+        Area::Home => Destination::Home,
+        Area::Tasks => Destination::Tasks,
+        Area::Sessions => Destination::Sessions,
+        Area::Activity => Destination::Feed,
+        Area::Settings => Destination::Settings,
+    }
 }
 
 #[cfg(test)]

@@ -26,14 +26,22 @@ pub mod effect;
 pub mod glance;
 /// Snapshot and health types.
 pub mod health;
+/// Home: what waits on the owner, then what is working.
+pub mod home;
 /// Semantic state colours.
 pub mod hue;
 /// Owned daemon identifiers.
 pub mod id;
+/// What every list page shares: sections, the walked selection, a table's columns.
+pub mod list;
 /// Live records, their routes and the shared selection.
 pub mod live;
 /// Navigation and overlay state.
 pub mod nav;
+/// The one next step of a task or a session.
+pub mod next;
+/// Run, gate, review and land as marks, sentences and a plain phrase.
+pub mod pipeline;
 /// Plans: parent tasks with children and a Markdown document.
 pub mod plans;
 /// Explicit sample data served through the canonical daemon model.
@@ -46,8 +54,14 @@ pub mod provenance;
 pub mod review;
 /// The one session page every role opens in: header, tabs, transcript, dock, composer.
 pub mod session;
+/// Sessions: every session, grouped by state.
+pub mod sessions;
 /// Device, connection and app settings.
 pub mod settings;
+/// The engine's statuses and a session's states as words and marks.
+pub mod status;
+/// Tasks: every task, grouped by status, and the task page.
+pub mod tasks;
 /// Styled model text.
 pub mod text;
 /// Timeline ranges and events.
@@ -66,7 +80,8 @@ pub use hue::Hue;
 pub use id::Id;
 pub use live::{Live, LiveKind, Route, Selection};
 pub use nav::{
-    Destination, Form, NavState, Overlay, PhoneTab, SettingsSection, SidebarPref, ThemeChoice,
+    Area, Destination, Form, NavState, Overlay, PhoneTab, SettingsSection, SidebarPref, TaskTab,
+    ThemeChoice,
 };
 pub use projects::{ProjectFilter, WorkspaceMode};
 pub use text::{Rich, Span, flat, live_task_link, span};
