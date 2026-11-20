@@ -208,7 +208,7 @@ export type BuildWriteClassification = { allowed: true } | { allowed: false; rea
 
 /** Build children cannot ask for an out-of-worktree exception. */
 export function classifyBuildWrite(path: string, worktree: string, workspace?: string): BuildWriteClassification {
-  const decision = classifyWriteScope(path, { cwd: worktree, root: worktree, workspace });
+  const decision = classifyWriteScope(path, { cwd: worktree, root: worktree, workspace, buildWorktree: true });
   if (decision.action === "allow") return { allowed: true };
   if (decision.action === "deny") return { allowed: false, reason: decision.reason };
   return { allowed: false, reason: "build rule: writes must stay inside the session worktree; nothing was written." };

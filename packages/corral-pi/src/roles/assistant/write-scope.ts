@@ -9,15 +9,20 @@ const PROTECTED = new Set([".git", ".corral", ".corral-next", ".worktrees"]);
 const UNSAFE = "The write destination could not be resolved safely; nothing was written.";
 const STATE = "Writes into Git or Corral state are refused; nothing was written.";
 
-function hasProtectedComponent(path: string, root: string): boolean {
-  // Ignore the role's own prefix (e.g. the .worktrees that contains a build root),
-  // but don't ignore any component of a destination outside that prefix.
-  const suffix = within(path, root) ? relative(root, path) : path;
-  return suffix.split(sep).some((part) => PROTECTED.has(part.toLowerCase()));
+function hasProtectedComponent(path: string, ownWorktree?: string): boolean {
+  const parts = path.split(sep);
+  const parent = ownWorktree === undefined ? undefined : dirname(ownWorktree);
+  // Only a Build's own direct .worktrees entry exempts its containing segment, never
+  // another protected ancestor, a nested protected component, or the container itself.
+  const exempt = ownWorktree && parent && basename(parent).toLowerCase() === ".worktrees" && within(path, ownWorktree)
+    ? parent.split(sep).length - 1 : -1;
+  return parts.some((part, i) => i !== exempt && PROTECTED.has(part.toLowerCase()));
 }
 
-function isMarkdownMemory(path: string, memory: string): boolean {
-  return within(path, memory) && path.endsWith(".md") && !hasProtectedComponent(path, memory);
+function isMarkdownMemory(path: string, workspace: string): boolean {
+  const memory = join(workspace, ".corral-next", "memory");
+  return within(path, memory) && path.endsWith(".md") && !hasProtectedComponent(workspace)
+    && !hasProtectedComponent(relative(memory, path));
 }
 
 function canonicalDirectory(path: string): string {
@@ -44,7 +49,9 @@ function canonicalDestination(path: string): string {
   return canonical;
 }
 
-export function classifyWriteScope(path: string, scope: { cwd: string; root: string; workspace?: string }): WriteScopeDecision {
+export function classifyWriteScope(path: string, scope: {
+  cwd: string; root: string; workspace?: string; buildWorktree?: boolean;
+}): WriteScopeDecision {
   try {
     const root = resolve(scope.root);
     const target = resolveToolPath(path, scope.cwd);
@@ -55,12 +62,12 @@ export function classifyWriteScope(path: string, scope: { cwd: string; root: str
       // The workspace itself may be an alias. The memory subtree must still have
       // its normal location below that workspace; don't follow memory aliases
       // to redefine which protected directory counts as memory.
-      if (isMarkdownMemory(target, join(workspace, ".corral-next", "memory"))
-        && isMarkdownMemory(canonical, join(canonicalDirectory(workspace), ".corral-next", "memory"))) {
+      if (isMarkdownMemory(target, workspace) && isMarkdownMemory(canonical, canonicalDirectory(workspace))) {
         return { action: "allow" };
       }
     }
-    if (hasProtectedComponent(target, root) || hasProtectedComponent(canonical, canonicalRoot)) {
+    if (hasProtectedComponent(target, scope.buildWorktree ? root : undefined)
+      || hasProtectedComponent(canonical, scope.buildWorktree ? canonicalRoot : undefined)) {
       return { action: "deny", reason: STATE };
     }
     if (within(target, root) && within(canonical, canonicalRoot)) return { action: "allow" };

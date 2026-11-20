@@ -32,8 +32,8 @@ export interface QuestionHost {
   session(): string;
   append(value: PendingQuestion): void;
   entries(): readonly QuestionEntry[];
-  /** Submit the answer as owner input; the persisted user message proves delivery. */
-  deliver(text: string): Promise<boolean>;
+  /** Submit the answer; the persisted message proves delivery. Tool approvals are host notices. */
+  deliver(text: string, question: PendingQuestion): Promise<boolean>;
   changed(question?: PendingQuestion): void;
   now?: () => number;
 }
@@ -161,7 +161,9 @@ export class PendingQuestions {
     if (answers.length !== q.questions.length || answers.some((a, i) => !validAnswer(q.questions[i]!, a))) {
       throw new Error("invalid_question_answer");
     }
-    const text = answerText(q.questions, answers);
+    const text = isToolApproval(q)
+      ? `Corral tool approval ${id}: owner selected ${answers[0]?.option === "allow" ? "allow once" : "deny"}.`
+      : answerText(q.questions, answers);
     if (Buffer.byteLength(text) > ANSWER_MAX_BYTES) throw new Error("question_answer_too_large");
     if (before) {
       await before();
@@ -192,7 +194,7 @@ export class PendingQuestions {
     this.queued.set(id, attempt);
     let accepted = false;
     try {
-      accepted = await this.host.deliver(q.message);
+      accepted = await this.host.deliver(q.message, q);
     } finally {
       // A completion from before close or restore must not clear a newer queued delivery.
       if (!accepted && this.queued.get(id) === attempt) this.queued.delete(id);
