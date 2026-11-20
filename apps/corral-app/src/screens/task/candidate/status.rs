@@ -14,7 +14,7 @@ use super::{Ctx, command, rich_at};
 /// One sent operation: a dot in its tone, what it was and where it stands, then Dismiss once
 /// it settled. Desktop and phone keep the dot in its own column on the first line, the words
 /// wrapping beside it and the actions under them; a terminal sets all of it in one row.
-pub(super) fn status_line(cx: &Ctx, line: &StatusLine) -> AnyElement {
+pub(crate) fn status_line(cx: &Ctx, line: &StatusLine) -> AnyElement {
     let app = cx.app;
     let words = rich_at(app, &line.text, 12.0, Token::Ink2, false);
     let words = if line.hue == Hue::Neutral {

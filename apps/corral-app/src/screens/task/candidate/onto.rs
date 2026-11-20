@@ -25,7 +25,7 @@ const FIELD_CELLS: f32 = 22.0;
 const TARGET: f32 = 44.0;
 
 /// The line, or nothing while no candidate shows.
-pub(super) fn onto(cx: &Ctx) -> AnyElement {
+pub(crate) fn onto(cx: &Ctx) -> AnyElement {
     let page = cx.page;
     let candidate = computed(move || {
         page.with(|page| {

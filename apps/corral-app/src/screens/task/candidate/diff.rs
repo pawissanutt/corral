@@ -36,7 +36,7 @@ fn code_size(form: Form) -> f32 {
 }
 
 /// The phone's notice, then every file in the model's order.
-pub(super) fn diff(cx: &Ctx, diff: &DiffView) -> AnyElement {
+pub(crate) fn diff(cx: &Ctx, diff: &DiffView) -> AnyElement {
     let app = cx.app;
     view()
         .children(diff.notice.map(|notice| {
@@ -63,7 +63,7 @@ fn file_block(cx: &Ctx, file: &FileView) -> AnyElement {
 
 /// An expanded file's patch in place under its Brief row, which carries its name, counts and
 /// collapse: Ask at the trailing edge, then the hunks.
-pub(super) fn file_body(cx: &Ctx, file: &FileView) -> AnyElement {
+pub(crate) fn file_body(cx: &Ctx, file: &FileView) -> AnyElement {
     let terminal = cx.app.form == Form::Terminal;
     view()
         .when(!terminal, |block| {

@@ -12,38 +12,28 @@
 //! decide bar pinned in place of the tab bar. Terminal: outline | candidate in Cells, the facts
 //! under the Brief, the diffs unified.
 
-pub(crate) mod brief;
-mod decide;
-pub(crate) mod diff;
-mod evidence;
 mod head;
 mod list;
-mod onto;
-mod rounds;
-mod status;
 
-use corral_protocol::detail::DetailRef;
-use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
-use crate::model::act;
-use crate::model::daemon::{Feed, Link, Task};
-use crate::model::projects::ProjectFilter;
-use crate::model::review::{self, Action, Body, ButtonStyle, Layout, LoopContent, LoopPage};
-use crate::model::work::{Press, Record};
-use crate::model::{Form, Hue, Id, Live, Rich, Selection};
-use crate::screens::now::parts::press;
+use crate::model::review::{Body, LoopContent, LoopPage};
+use crate::model::{Form, Id, Live};
 use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::glance::{page_head, stats};
-use crate::ui::kit::hint::hint_on;
-use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::page::{Width, bar_pane, columns, pane};
 use crate::ui::kit::text::dim;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+use crate::ui::tokens::{Token, color};
+
+// The candidate's pieces live with the task page; these paths stay for their other callers.
+use crate::screens::task::candidate::{
+    Ctx, act, command, decide, evidence, fits_split, keep_current, layout_switch,
+};
+pub(crate) use crate::screens::task::candidate::{brief, diff};
 
 /// The outline's column: `272px` beside the side facts, `260px` once they stand under the Brief.
 const LIST_WIDE: f32 = 272.0;
@@ -56,47 +46,6 @@ const SIDE_BESIDE: f32 = 1180.0;
 const LIST_BESIDE: f32 = 900.0;
 /// `.is-stale .stalefx`: the last known state reads quieter while offline or down.
 const STALE_OPACITY: f32 = 0.78;
-/// `.mono` is 0.93 of the text around it.
-const MONO_SCALE: f32 = 0.93;
-
-/// What every piece of one Review page shares: the app, the candidate a phone page was pushed
-/// for (else the selected one), whether the candidate's column holds split diff rows, and the
-/// model's page.
-#[derive(Clone)]
-struct Ctx {
-    app: AppState,
-    focus: Option<Id>,
-    /// Desktop: whether the candidate's column is wide enough for side-by-side rows, unknown
-    /// until it is measured; elsewhere never.
-    split: Signal<Option<bool>>,
-    page: Memo<LoopPage>,
-}
-
-impl Ctx {
-    fn new(app: AppState, focus: Option<Id>) -> Ctx {
-        let split = signal((app.form != Form::Desktop).then_some(false));
-        let page = {
-            let focus = focus.clone();
-            // The model reads the width only against its split threshold, so the page is asked
-            // at either side of it rather than again at every measured point.
-            computed(move || {
-                let width = if split.get() == Some(true) {
-                    f32::INFINITY
-                } else {
-                    0.0
-                };
-                loop_page(app, focus.as_ref(), width)
-            })
-        };
-        Ctx {
-            app,
-            focus,
-            split,
-            page,
-        }
-    }
-}
-
 /// How the desktop arranges the outline, the candidate and its side facts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Arrangement {
@@ -144,158 +93,6 @@ pub fn live_review_phone(app: AppState, task: Id) -> PhonePage {
         ask: false,
         scroll: true,
     }
-}
-
-/// The Review screen's own project scope, tracked.
-fn scope(app: AppState) -> ProjectFilter {
-    app.scope_filter()
-}
-
-/// The model's page at `width` (tracked: state, connection, selection, scope and feed).
-fn loop_page(app: AppState, focus: Option<&Id>, width: f32) -> LoopPage {
-    let env = app.env();
-    let selection = app.selection();
-    let filter = scope(app);
-    app.feed.with(|feed| {
-        app.review.with(|state| {
-            review::loop_page_filtered(state, feed, &selection, focus, env, width, &filter)
-        })
-    })
-}
-
-/// Whether a candidate column `width` points wide holds side-by-side rows, by the model's rule.
-fn fits_split(app: AppState, width: f32) -> bool {
-    let env = untracked(|| app.env());
-    let wanted = review::State {
-        layout: Layout::Split,
-        ..review::State::default()
-    };
-    review::effective_layout(&wanted, env, width) == Layout::Split
-}
-
-/// Runs a model action through the feed-backed reducer and the app's effects. A shared verb
-/// (Request changes) runs through the work state instead, whose composer asks for its words.
-fn act(cx: &Ctx, action: Action) -> impl Fn() + 'static {
-    let app = cx.app;
-    let focus = cx.focus.clone();
-    move || {
-        let filter = untracked(|| scope(app));
-        if let Action::Verb(verb) = &action {
-            let shown = app.feed.with_untracked(|feed| {
-                let selection = untracked(|| app.selection());
-                shown_task(feed, &selection, focus.as_ref(), &filter).map(|task| task.id.clone())
-            });
-            if let Some(task) = shown {
-                press(
-                    app,
-                    Press::Verb {
-                        record: Record::Task(task),
-                        verb: *verb,
-                    },
-                );
-            }
-            return;
-        }
-        let action = action.clone();
-        let focus = focus.clone();
-        app.reduce(app.review, move |state, feed, selection, env| {
-            state.apply_live_filtered(action, feed, selection, focus.as_ref(), env, &filter)
-        });
-    }
-}
-
-/// Keeps the served candidate current: its review and task details are fetched when it is first
-/// shown, and revalidated when its board row changes, the link comes back, or an operation sent
-/// from here settles. Every fetch carries the cached etag, so an unchanged detail costs one
-/// small reply. While shown, both details stay pinned in the client's cache, through the source
-/// the page mounted on.
-fn keep_current(cx: &Ctx) {
-    let focus = cx.focus.clone();
-    let app = cx.app;
-    let key = computed(move || {
-        let selection = app.selection();
-        let filter = scope(app);
-        app.feed.with(|feed| {
-            let task = shown_task(feed, &selection, focus.as_ref(), &filter)?;
-            let settled = app.review.with(|state| {
-                state
-                    .sent
-                    .iter()
-                    .filter(|sent| {
-                        act::status(feed, &sent.key).is_some_and(|status| status.settled())
-                    })
-                    .count()
-            });
-            Some((
-                task.id.clone(),
-                task.row.clone(),
-                feed.link == Link::Up,
-                settled,
-            ))
-        })
-    });
-    let refresh = act(cx, Action::Refresh);
-    effect(move || {
-        if key.with(|key| key.as_ref().is_some_and(|(_, _, up, _)| *up)) {
-            untracked(&refresh);
-        }
-    });
-    pin_details(
-        untracked(|| app.scope()),
-        computed(move || key.with(|key| key.as_ref().map(|(id, ..)| id.clone()))),
-    );
-}
-
-/// The candidate this page shows: the one it was pushed for, or the selected one in scope.
-fn shown_task<'a>(
-    feed: &'a Feed,
-    selection: &Selection,
-    focus: Option<&Id>,
-    filter: &ProjectFilter,
-) -> Option<&'a Task> {
-    match focus {
-        Some(id) => feed.board.task(id),
-        None => review::selected_filtered(selection, feed, filter),
-    }
-}
-
-/// Pins the shown candidate's review and task details in the client's cache, letting go when
-/// another is shown or the page goes.
-fn pin_details(app: AppState, shown: Memo<Option<Id>>) {
-    let pinned = stored(None::<Id>);
-    let targets = |task: &Id| {
-        [
-            DetailRef::Review {
-                task: task.to_string(),
-            },
-            DetailRef::Task {
-                id: task.to_string(),
-            },
-        ]
-    };
-    effect(move || {
-        let now = shown.get();
-        if pinned.with(|pinned| *pinned == now) {
-            return;
-        }
-        let was = pinned.replace(now.clone());
-        untracked(|| {
-            for gone in was.iter().flat_map(targets) {
-                app.watch_detail(gone, false);
-            }
-            for new in now.iter().flat_map(targets) {
-                app.watch_detail(new, true);
-            }
-        });
-    });
-    // The owner may already be letting go of its values when this runs.
-    cleanup(move || {
-        if let Some(gone) = pinned.try_with(Option::take).flatten() {
-            for target in targets(&gone) {
-                app.watch_detail(target, false);
-            }
-        }
-    });
 }
 
 /// The page head (`.phead`): Review and its counts.
@@ -621,7 +418,7 @@ fn evidence(cx: &Ctx, body: &Body) -> AnyElement {
     let app = cx.app;
     let content = match body {
         Body::Diff(files) => view()
-            .child(head::layout_switch(cx))
+            .child(layout_switch(cx))
             .child(diff::diff(cx, files))
             .into_element(),
         Body::Report(report) => evidence::report(app, report),
@@ -647,140 +444,4 @@ fn evidence(cx: &Ctx, body: &Body) -> AnyElement {
             .child(content)
             .into_element(),
     }
-}
-
-/// A model button as the kit's button, with what it does beyond its label as its hint.
-fn command(cx: &Ctx, button: &review::Button) -> AnyElement {
-    command_hinted(cx, button, button.hint.clone())
-}
-
-/// A model button as the kit's button (its emphasis, the decide bar's wide primary on a phone,
-/// the speech bubble on Ask, the danger outline on Land anyway) with `hint` on pointer rest and
-/// keyboard focus. A phone has no hover: there the caller says what needs saying in the page.
-fn command_hinted(cx: &Ctx, button: &review::Button, hint: Option<String>) -> AnyElement {
-    let app = cx.app;
-    let kind = match button.style {
-        ButtonStyle::Primary => ButtonKind::Primary,
-        ButtonStyle::Ghost => ButtonKind::Ghost,
-        ButtonStyle::Quiet => ButtonKind::Quiet,
-    };
-    let approve = button.action == Action::Approve && app.form != Form::Phone;
-    let focus = approve.then(|| {
-        let handle = element_ref();
-        app.focus_when_asked(review::APPROVE, handle);
-        handle
-    });
-    let options = ButtonOptions {
-        icon: match button.action {
-            Action::AskAbout { .. } | Action::AskCandidate => Some(Icon::Ask),
-            Action::OpenSession | Action::OpenReviewer => Some(Icon::Agents),
-            _ => None,
-        },
-        wide: app.form == Form::Phone && button.style == ButtonStyle::Primary,
-        danger: button.action == Action::LandAnyway,
-        key_hint: approve.then_some("A"),
-        focus,
-        ..ButtonOptions::default()
-    };
-    let control = button_with(
-        app,
-        button.label.clone(),
-        kind,
-        options,
-        button_id(&button.action),
-        act(cx, button.action.clone()),
-    );
-    match hint {
-        Some(hint) if app.form != Form::Phone => {
-            hint_on(app, view().flex_row().flex_shrink_0().child(control), hint).into_element()
-        }
-        _ => control,
-    }
-}
-
-/// The test id of a control by its action.
-fn button_id(action: &Action) -> String {
-    match action {
-        Action::Approve => review::APPROVE.to_owned(),
-        Action::LandAnyway => "btn-land-anyway".to_owned(),
-        Action::Gate => "btn-gate".to_owned(),
-        Action::StartReview => "btn-review".to_owned(),
-        Action::Verb(verb) => format!("btn-{}", verb.slug()),
-        Action::AskAbout { path, .. } => format!("btn-ask-{}", slug(path)),
-        Action::Expand(path) => format!("btn-expand-{}", slug(path)),
-        Action::Collapse(path) => format!("btn-collapse-{}", slug(path)),
-        Action::Pick(id) => format!("task-{id}"),
-        Action::Tab(_) => "seg-review".to_owned(),
-        Action::Layout(_) => "seg-layout".to_owned(),
-        Action::Dismiss(_) => "btn-dismiss".to_owned(),
-        Action::OpenArtifact(key) | Action::CloseArtifact(key) => {
-            format!("btn-artifact-{}", slug(key))
-        }
-        Action::Refresh => "btn-refresh".to_owned(),
-        Action::AskCandidate => "btn-ask-candidate".to_owned(),
-        Action::OpenSession => "btn-open-session".to_owned(),
-        Action::OpenReviewer => "btn-open-reviewer".to_owned(),
-        Action::Onto(_) => "field-onto".to_owned(),
-    }
-}
-
-/// A path as a test id: lower-case letters and digits, everything else a hyphen.
-fn slug(path: &str) -> String {
-    path.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
-/// The model's [`Rich`] text at `size` in `ink`, for the small runs the kit's two paragraph
-/// sizes do not cover (11.5 pt file heads and attributions, 12.5 pt comments). `mono` sets the
-/// whole run in the mono font; otherwise mono spans take 0.93 of the size. Bold spans are ink,
-/// dim spans ink-3, a hue its colour. A terminal keeps its own font and size.
-fn rich_at(app: AppState, rich: &Rich, size: f32, ink: Token, mono: bool) -> Text {
-    let terminal = app.form == Form::Terminal;
-    let root = text("")
-        .flex_shrink(1.0)
-        .min_w(px(0.0))
-        .text_color(color(ink));
-    let root = if terminal {
-        root
-    } else {
-        root.font_family(if mono { FONT_MONO } else { FONT_TEXT })
-            .text_size(px(size))
-            .line_height(px((size * 1.45).round()))
-    };
-    root.children(rich.iter().map(|run| {
-        let mut piece = text(run.text.clone());
-        if run.bold {
-            piece = piece
-                .font_weight(FontWeight::BOLD)
-                .text_color(color(Token::Ink));
-        }
-        if run.mono && !mono && !terminal {
-            piece = piece
-                .font_family(FONT_MONO)
-                .text_size(px(size * MONO_SCALE));
-        }
-        if run.hue != Hue::Neutral {
-            piece = piece.text_color(hue_ink(run.hue));
-        } else if run.dim {
-            piece = piece.text_color(color(Token::Ink3));
-        }
-        if run.strike {
-            piece = piece.line_through();
-        }
-        piece
-    }))
-}
-
-/// The keyboard focus ring: 2 pt of the focus colour, 2 pt out (`:focus-visible`).
-fn ring(s: StyleRefinement) -> StyleRefinement {
-    s.outline(px(2.0))
-        .outline_color(color(Token::Focus))
-        .outline_offset(px(2.0))
 }
