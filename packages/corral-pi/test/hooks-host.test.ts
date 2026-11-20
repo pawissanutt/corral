@@ -105,8 +105,9 @@ test("bash rules and hooks run around worker tools with durable hook attribution
     expect(result("t1-deny-flags")).toEqual({ isError: true, text: "bash rule \"rm *\" denies \"rm notes.txt\"; nothing ran" });
     expect(result("t1-ask-flags").isError).toBeTrue();
     const pending = live.pendingOwnerQuestions();
-    const wrapped = pending.find(question => question.question === "Run this command?\nbash -lc 'touch asked.txt'");
-    const plain = pending.find(question => question.question === "Run this command?\ntouch asked.txt");
+    const withCommand = (command: string) => pending.find(question => question.question.endsWith(`\n${JSON.stringify(command)}`));
+    const wrapped = withCommand("bash -lc 'touch asked.txt'");
+    const plain = withCommand("touch asked.txt");
     if (!plain || !wrapped) throw new Error("expected both command-specific owner questions");
     expect(result("t1-ask-flags").text).toContain(wrapped.id);
     expect(existsSync(join(cwd, "notes.txt"))).toBeTrue();

@@ -9,7 +9,9 @@ import {
   type BashRuleSettings, BashRuleSettingsSchema, decideBash,
 } from "../capabilities/bash-rules.ts";
 import { type HookSettings, HookSettingsSchema, type Hooks } from "../capabilities/hooks.ts";
+import { classifyWriteScope } from "../roles/assistant/write-scope.ts";
 import type { Role } from "../roles/types.ts";
+import type { ShellTool, ToolApprovals } from "./tool-approvals.ts";
 
 export interface HostControls {
   readonly hooks?: HookSettings;
@@ -43,14 +45,16 @@ export interface ToolControls {
   readonly fixed?: (command: string) => string | undefined;
   readonly hooks?: Hooks;
   readonly rules?: BashRuleSettings;
-  readonly confirmBash?: (command: string) => string | undefined;
+  readonly approvals?: ToolApprovals;
+  /** Undefined for roles without a parent-session write guard; null for an unbound build. */
+  readonly writeScope?: Parameters<typeof classifyWriteScope>[1] | null;
   readonly events: EventLog;
   readonly corral: ReadonlySet<string>;
   currentTurn(): number | undefined;
 }
 
 /** Tools whose `command` input runs in a shell: background jobs obey the same bash rules (T-565). */
-const SHELL_TOOLS: ReadonlySet<string> = new Set(["bash", "job_start"]);
+const isShell = (tool: string): tool is ShellTool => tool === "bash" || tool === "job_start";
 
 function commandOf(input: unknown): string {
   const command = (input as Record<string, unknown>).command;
@@ -59,23 +63,40 @@ function commandOf(input: unknown): string {
 
 export function installToolControls(pi: ExtensionAPI, controls: ToolControls): void {
   const hooked = new Set<string>();
-  pi.on("tool_call", async (event) => {
+  pi.on("tool_call", async (event, ctx) => {
+    const input = event.input as Record<string, unknown>;
+    const { toolName } = event;
     const nested = event.parentToolCallId !== undefined;
-    const secondsField = event.toolName === "bash" ? "timeout"
-      : event.toolName === "corral_job_monitor" ? "timeout_secs" : undefined;
-    const seconds = secondsField && (event.input as Record<string, unknown>)[secondsField];
+    const secondsField = toolName === "bash" ? "timeout"
+      : toolName === "corral_job_monitor" ? "timeout_secs" : undefined;
+    const seconds = secondsField && input[secondsField];
     if (typeof seconds === "number" && seconds < 5) {
       return { block: true, reason: `${secondsField} is in seconds; ${seconds} looks like a unit slip, resend with whole seconds (e.g. 600); nothing ran` };
     }
-    const shell = SHELL_TOOLS.has(event.toolName);
-    const fixed = shell ? controls.fixed?.(commandOf(event.input)) : undefined;
+    const shell = isShell(toolName);
+    const fixed = shell ? controls.fixed?.(commandOf(input)) : undefined;
     if (fixed !== undefined) {
       controls.events.emit("bash_rule_denied", { tool_call_id: event.toolCallId, fixed: true, ...(nested ? { nested: true } : {}) });
       return { block: true, reason: fixed };
     }
+    if (controls.writeScope !== undefined && (toolName === "edit" || toolName === "write")) {
+      if (!controls.writeScope || typeof input.path !== "string") {
+        return { block: true, reason: "File changes require a bound session directory and a target path; nothing was written." };
+      }
+      const decision = classifyWriteScope(input.path, controls.writeScope);
+      const detail = { tool_call_id: event.toolCallId, tool: toolName, ...(nested ? { nested: true } : {}) };
+      const reason = ctx?.signal?.aborted ? "File change aborted; nothing was written."
+        : controls.approvals ? controls.approvals.write(toolName, input, decision)
+        : decision.action === "deny" ? decision.reason
+        : decision.action === "ask" ? "An owner approval interface is unavailable; nothing was written." : undefined;
+      if (reason) {
+        controls.events.emit(decision.action === "ask" ? "write_permission_required" : "write_denied", detail);
+        return { block: true, reason };
+      }
+      if (decision.action === "ask") controls.events.emit("write_permission_allowed", detail);
+    }
     if (controls.rules && shell) {
-      const input = event.input as Record<string, unknown>;
-      const command = typeof input.command === "string" ? input.command : "";
+      const command = commandOf(input);
       const decision = decideBash(command, controls.rules);
       const detail = { tool_call_id: event.toolCallId, ...(decision.rule ? { rule: decision.rule } : {}),
         ...(nested ? { nested: true } : {}) };
@@ -85,11 +106,14 @@ export function installToolControls(pi: ExtensionAPI, controls: ToolControls): v
           + `${JSON.stringify(decision.segment ?? command)}; nothing ran` };
       }
       if (decision.action === "ask") {
-        const reason = controls.confirmBash ? controls.confirmBash(command) : "bash rule requires owner confirmation; nothing ran";
+        const reason = ctx?.signal?.aborted ? "Command aborted; nothing ran."
+          : controls.approvals ? controls.approvals.shell(toolName, input)
+          : "bash rule requires owner confirmation; nothing ran";
         if (reason) {
           controls.events.emit("bash_permission_required", detail);
           return { block: true, reason };
         }
+        controls.events.emit("bash_permission_allowed", detail);
       }
     }
     const hooks = controls.hooks;

@@ -98,7 +98,7 @@ export interface RoleModule {
    * The role's fixed shell refusals: checked for every bash call, top-level or nested, before any
    * configured bash rule, and never disabled by capability settings. A reason refuses the call.
    */
-  readonly shellRefusal?: (command: string) => string | undefined;
+  readonly shellRefusal?: (command: string, bare?: boolean) => string | undefined;
   /** Optional role commands (slash commands). Tools registered here are never activated. */
   extend?(pi: ExtensionAPI, context: RoleContext): void;
 }
