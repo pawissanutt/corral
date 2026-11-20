@@ -2,7 +2,7 @@
 
 ## Scope
 
-This app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain and is not a member of corral's workspace; corral's gate does not build or test it. Design sources are in `docs/app-design/` at the repository root. Read its `README.md` for authority and implementation-status caveats before using `REQUIREMENTS.md`, `ARCHITECTURE.md` and `mockup/`.
+This app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain and is not a member of corral's workspace. Use `bash scripts/app-web-gate.sh` from the repository root for the web packaging check; run the app's Rust tests separately. Design sources are in `docs/app-design/` at the repository root. Read its `README.md` for authority and implementation-status caveats before using `REQUIREMENTS.md`, `ARCHITECTURE.md` and `mockup/`.
 
 The app has three data states (`DataState`):
 
@@ -119,13 +119,13 @@ The explicit preview offers Demo controls; normal palette entries use the served
 
 Run only one cargo or NSH build at a time. Never generate load. Never build the `desktop` feature or the Linux or GPUI targets on this host; GTK 4 development packages are unavailable. Do not run `cargo run`, `nsh run` without `--target`, or `nsh run --target linux` or `gpui` here. The available targets are headless, `tui` and `web`.
 
-`rust-toolchain.toml` pins rustc 1.97.1 and `wasm32-unknown-unknown`; NSH 0.6.0 needs rustc 1.97. Keep the pin and `.cargo/config.toml`, which disables the crashing global sccache wrapper and points the wasm compiler tools at the host's clang 18 installation.
+`rust-toolchain.toml` pins rustc 1.97.1 and `wasm32-unknown-unknown`; NSH 0.6.1 needs rustc 1.97. Keep the pin and `.cargo/config.toml`, which disables the crashing global sccache wrapper and points the wasm compiler tools at the host's clang 18 installation.
 
 If another process holds `~/.cargo/.package-cache`, builds can use `CARGO_HOME` pointing to a directory with `registry`, `git`, `bin` and `config.toml` symlinked from `~/.cargo`, together with `CARGO_NET_OFFLINE=true`.
 
 ## NSH API
 
-Use the [NSH documentation index](https://nsh.dev/llms.txt); documentation pages are available as `.md`. The NSH 0.6.0 crate sources are under `~/.cargo/registry/src/*/nsh-*-0.6.0/`. Read the relevant documentation and source or a real call before using an API.
+Use the [NSH documentation index](https://nsh.dev/llms.txt); documentation pages are available as `.md`. The NSH 0.6.1 crate sources are under `~/.cargo/registry/src/*/nsh-*-0.6.1/`. Read the relevant documentation and source or a real call before using an API.
 
 ## Walking the terminal UI
 
