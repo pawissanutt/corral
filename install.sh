@@ -8,6 +8,8 @@ base=${base%/}
 bin_dir="${CORRAL_INSTALL_DIR:-$HOME/.local/bin}"
 app_dir="${CORRAL_APP_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/corral-next/web}"
 app_asset=corral-app-web.tar.gz
+web_marker=.corral-web-install
+web_marker_text=corral-web-install-v1
 # Keep in sync with the plugin's min_herdr_version.
 min_herdr_version=0.9.3
 herdr_installer=https://herdr.dev/install.sh
@@ -139,49 +141,82 @@ unpack() {
 }
 
 regular_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
+path_exists() { [ -e "$1" ] || [ -L "$1" ]; }
+same_file() {
+    # Supported by the Linux and macOS shells (and specified in POSIX.1-2024).
+    # shellcheck disable=SC3013
+    [ "$1" -ef "$2" ]
+}
+
+# Atomic even on macOS (which does not ship flock). Never remove a lock we did
+# not acquire. An unclean shutdown may leave a lock; fail closed in that case.
+lock_install() {
+    mkdir -m 700 "$1" || fail "cannot acquire install lock: $1 (another install may be running; remove a stale lock only after checking the destination)"
+}
 
 names='corral-next corrald-next corral-pi'
 tmp=$(mktemp -d)
 staged=
 staged_host=
 bin_txn=
+bin_lock=
 web_txn=
+web_lock=
 committing=false
-cleanup() {
-    trap '' INT TERM
-    if [ "$committing" = true ]; then
-        # A missing staged entry was already promoted. Restore the old copy (or absence).
-        if [ -n "$bin_txn" ]; then
-            for name in $names; do
-                if [ ! -e "$bin_txn/$name" ]; then
-                    if [ -e "$bin_txn/old/$name" ] || [ -L "$bin_txn/old/$name" ]; then
-                        mv -f "$bin_txn/old/$name" "$bin_dir/$name" || {
-                            echo "corral: could not restore $bin_dir/$name; backup in $bin_txn/old" >&2
-                            keep_bin=true
-                        }
-                    else
-                        rm -f "$bin_dir/$name" || true
-                    fi
-                fi
-            done
-        fi
-        if [ -n "$web_txn" ]; then
-            if [ ! -d "$web_txn/site" ]; then rm -rf "$app_dir" || true; fi
-            if [ -d "$web_txn/old" ]; then
-                if [ -e "$app_dir" ] || ! mv "$web_txn/old" "$app_dir"; then
-                    echo "corral: could not restore $app_dir; backup in $web_txn/old" >&2
-                    keep_web=true
-                fi
+
+rollback_bins() {
+    for name in $names; do
+        # A missing staged entry was promoted. Restore the old copy (or absence).
+        path_exists "$bin_txn/new/$name" && continue
+        if ! path_exists "$bin_dir/$name" || regular_file "$bin_dir/$name"; then
+            if path_exists "$bin_txn/old/$name"; then
+                mv -f "$bin_txn/old/$name" "$bin_dir" && continue
+            else
+                rm -f "$bin_dir/$name" && continue
             fi
         fi
+        echo "corral: could not roll back $bin_dir/$name; inspect $bin_txn/old" >&2
+        keep_bin=true
+    done
+}
+
+rollback_web() {
+    # Remove only the site from this transaction. Never recursively delete the
+    # destination or discard a backup when an unexpected path blocks rollback.
+    if ! path_exists "$web_site" && path_exists "$app_dir"; then
+        if [ ! -L "$app_dir" ] && regular_file "$app_dir/$web_marker" &&
+            same_file "$app_dir/$web_marker" "$web_txn/staged-marker"; then
+            mv "$app_dir" "$web_txn/new" || keep_web=true
+        else
+            keep_web=true
+        fi
     fi
-    if [ -n "$staged" ]; then rm -f "$staged"; fi
-    if [ -n "$staged_host" ]; then rm -f "$staged_host"; fi
-    if [ -n "$bin_txn" ] && [ "${keep_bin:-false}" = false ]; then rm -rf "$bin_txn"; fi
-    if [ -n "$web_txn" ] && [ "${keep_web:-false}" = false ]; then rm -rf "$web_txn"; fi
+    if path_exists "$web_backup"; then
+        if path_exists "$app_dir" || ! mv "$web_backup" "$app_parent"; then
+            keep_web=true
+        fi
+    fi
+    if [ "${keep_web:-false}" = true ]; then
+        echo "corral: could not roll back $app_dir; inspect $web_txn (previous site backup: $web_backup)" >&2
+    fi
+}
+
+cleanup() {
+    trap '' HUP INT TERM
+    if [ "$committing" = true ]; then
+        if [ -n "$bin_txn" ]; then rollback_bins; fi
+        rollback_web
+    fi
+    if [ -n "$staged" ]; then rm -f "$staged" || true; fi
+    if [ -n "$staged_host" ]; then rm -f "$staged_host" || true; fi
+    if [ -n "$bin_txn" ] && [ "${keep_bin:-false}" = false ]; then rm -rf "$bin_txn" || true; fi
+    if [ -n "$web_txn" ] && [ "${keep_web:-false}" = false ]; then rm -rf "$web_txn" || true; fi
+    if [ -n "$web_lock" ]; then rmdir "$web_lock" || true; fi
+    if [ -n "$bin_lock" ]; then rmdir "$bin_lock" || true; fi
     rm -rf "$tmp"
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -301,33 +336,35 @@ prepare_runtime() {
     mkdir -p "$bin_dir"
     bin_dir=$(CDPATH='' cd -- "$bin_dir" && pwd -P)
     bin_txn=$(mktemp -d "$bin_dir/.corral-next-install.XXXXXX")
-    unpack "$asset" "$bin_txn"
+    mkdir "$bin_txn/new" "$bin_txn/old"
+    unpack "$asset" "$bin_txn/new"
     for name in $names; do
-        regular_file "$bin_txn/$name" || fail "archive has no regular $name binary"
-        chmod 755 "$bin_txn/$name"
-        if [ -e "$bin_dir/$name" ] && [ ! -f "$bin_dir/$name" ]; then
-            fail "install destination is not a regular file: $bin_dir/$name"
-        fi
+        regular_file "$bin_txn/new/$name" || fail "archive has no regular $name binary"
+        chmod 755 "$bin_txn/new/$name"
     done
-    cli=$("$bin_txn/corral-next" --version </dev/null) || fail "corral-next cannot run on this machine; existing install unchanged"
+    cli=$("$bin_txn/new/corral-next" --version </dev/null) || fail "corral-next cannot run on this machine; existing install unchanged"
     case "$cli" in
     'corral-next '*) runtime_tag=v${cli#corral-next } ;;
     *) fail "downloaded CLI did not identify itself as corral-next; existing install unchanged" ;;
     esac
     valid_tag "$runtime_tag" || fail "cannot identify release tag from: $cli"
     check_pin corral-next "$cli"
-    daemon=$("$bin_txn/corrald-next" --version </dev/null) || fail "corrald-next cannot run on this machine; existing install unchanged"
+    daemon=$("$bin_txn/new/corrald-next" --version </dev/null) || fail "corrald-next cannot run on this machine; existing install unchanged"
     [ "$daemon" = "corral-daemon ${runtime_tag#v}" ] || fail "daemon version does not match $cli: $daemon"
-    pi=$("$bin_txn/corral-pi" --version </dev/null) || fail "corral-pi cannot run on this machine; existing install unchanged"
+    pi=$("$bin_txn/new/corral-pi" --version </dev/null) || fail "corral-pi cannot run on this machine; existing install unchanged"
     case "$pi" in
     'corral-pi pi '*) ;;
     *) fail "downloaded Pi host did not identify itself; existing install unchanged" ;;
     esac
-    # Keep previous copies in a separate directory so an archive cannot provide a backup.
-    mkdir "$bin_txn/old"
+}
+
+backup_bins() {
     for name in $names; do
-        if [ -e "$bin_dir/$name" ] || [ -L "$bin_dir/$name" ]; then
-            cp -pP "$bin_dir/$name" "$bin_txn/old/$name"
+        if [ -e "$bin_dir/$name" ] && [ ! -f "$bin_dir/$name" ]; then
+            fail "install destination is not a regular file: $bin_dir/$name"
+        fi
+        if path_exists "$bin_dir/$name"; then
+            cp -pP "$bin_dir/$name" "$bin_txn/old/$name" || fail "cannot back up $bin_dir/$name"
         fi
     done
 }
@@ -348,21 +385,34 @@ prepare_app() {
         case "$bin_dir/" in "$app_dir/"*) fail "web app directory would contain the installed programs" ;; esac
         case "$app_dir/" in "$bin_dir/"*) fail "web app directory must be separate from the binary directory" ;; esac
     fi
+    web_txn=$(mktemp -d "${app_parent%/}/.corral-app-install.XXXXXX")
+    web_site=$web_txn/new/$app_name
+    web_backup=$web_txn/old/$app_name
+    mkdir "$web_txn/new" "$web_txn/old" "$web_site"
+    unpack "$app_asset" "$web_site"
+    regular_file "$web_site/index.html" || fail "web app archive has no root index.html"
+    if path_exists "$web_site/$web_marker"; then fail "web app archive contains reserved file $web_marker"; fi
+    printf '%s\n' "$web_marker_text" >"$web_site/$web_marker"
+    # Keep a reference to our staged marker so rollback can identify this particular site.
+    ln "$web_site/$web_marker" "$web_txn/staged-marker"
+}
+
+check_app_destination() {
+    if same_file "$app_dir" "$web_lock"; then fail "web app destination is reserved: $app_dir"; fi
     if [ -L "$app_dir" ]; then fail "web app directory is a symbolic link: $app_dir"; fi
     if [ -e "$app_dir" ]; then
         [ -d "$app_dir" ] || fail "web app destination is not a directory: $app_dir"
-        if ! regular_file "$app_dir/index.html"; then
-            for entry in "$app_dir"/* "$app_dir"/.[!.]* "$app_dir"/..?*; do
-                if [ -e "$entry" ] || [ -L "$entry" ]; then
-                    fail "web app destination must be empty or contain an installed site: $app_dir"
-                fi
-            done
+        if [ ! -r "$app_dir" ] || [ ! -x "$app_dir" ]; then fail "cannot inspect web app destination: $app_dir"; fi
+        if regular_file "$app_dir/$web_marker" &&
+            printf '%s\n' "$web_marker_text" | cmp -s - "$app_dir/$web_marker"; then
+            return
         fi
+        for entry in "$app_dir"/* "$app_dir"/.[!.]* "$app_dir"/..?*; do
+            if path_exists "$entry"; then
+                fail "web app destination is nonempty and not managed by this installer; choose a dedicated directory: $app_dir"
+            fi
+        done
     fi
-    web_txn=$(mktemp -d "${app_parent%/}/.corral-app-install.XXXXXX")
-    mkdir "$web_txn/site"
-    unpack "$app_asset" "$web_txn/site"
-    regular_file "$web_txn/site/index.html" || fail "web app archive has no root index.html"
 }
 
 install_current() {
@@ -375,12 +425,26 @@ install_current() {
     prepare_app "$runtime_tag"
     if [ "$app_only" = false ]; then check_herdr; fi
 
+    # Hold both locks from validation/backup until promotion or rollback is finished.
+    # Lock the web parent so equivalent leaf names also contend on case-insensitive filesystems.
+    if [ "$app_only" = false ]; then
+        lock_install "$bin_dir/.corral-next-install.lock"
+        bin_lock=$bin_dir/.corral-next-install.lock
+    fi
+    lock_install "${app_parent%/}/.corral-web-install.lock"
+    web_lock=${app_parent%/}/.corral-web-install.lock
+    check_app_destination
+    if [ "$app_only" = false ]; then backup_bins; fi
+
     committing=true
     if [ -d "$app_dir" ]; then mv "$app_dir" "$web_txn/old" || fail "cannot back up web app: $app_dir"; fi
-    mv "$web_txn/site" "$app_dir" || fail "cannot install web app: $app_dir"
+    if path_exists "$app_dir"; then fail "web app destination changed during install: $app_dir"; fi
+    # Move to the parent with the exact final basename, not into a destination
+    # directory that might have appeared after the preceding check.
+    mv "$web_site" "$app_parent" || fail "cannot install web app: $app_dir"
     if [ "$app_only" = false ]; then
         for name in $names; do
-            mv -f "$bin_txn/$name" "$bin_dir/$name" || fail "cannot install $bin_dir/$name"
+            mv -f "$bin_txn/new/$name" "$bin_dir" || fail "cannot install $bin_dir/$name"
         done
     fi
     committing=false
@@ -390,6 +454,7 @@ install_current() {
         echo "An already running daemon is not restarted; restart it explicitly to use these binaries."
     fi
     echo "installed the Corral web app ($runtime_tag) to $app_dir"
+    echo "Keep this directory dedicated to Corral; upgrades replace its contents."
     echo "Serve this directory with a web server that falls back to index.html for app routes."
 }
 

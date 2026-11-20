@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "corral-protocol"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "corral-types",
@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "corral-types"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "jiff",
  "serde",

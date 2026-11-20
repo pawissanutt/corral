@@ -482,7 +482,7 @@ checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
 name = "corral-daemon"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "corral-engine"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "corral-git",
@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "corral-git"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "tempfile",
@@ -537,7 +537,7 @@ dependencies = [
 
 [[package]]
 name = "corral-herdr"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "serde",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "corral-next"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "corral-protocol"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "base64 0.22.1",
  "corral-types",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "corral-types"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "jiff",
  "serde",

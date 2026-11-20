@@ -53,8 +53,9 @@ or upgrade can succeed; older releases do not necessarily contain them.
 | Phone layout | Browser on a compatible phone | Responsive web UI, not a promised Android or iOS packaged release. |
 
 Linux release targets are `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`;
-macOS targets are `x86_64-apple-darwin` and `aarch64-apple-darwin`. There is no new-engine
-Windows or Linux musl artifact in this matrix. The classic CLI's separate Windows installer
+macOS targets are `x86_64-apple-darwin` and `aarch64-apple-darwin`. Linux packages are built
+and tested on Ubuntu 24.04 (glibc 2.39); older glibc distributions are not verified. macOS
+packages target macOS 14 or later. There is no new-engine Windows or Linux musl artifact in this matrix. The classic CLI's separate Windows installer
 and musl archives do not install this app's daemon.
 
 ## Install and upgrade
@@ -80,7 +81,9 @@ corrald-next --version
 Use an actual published tag for the pin. `CORRAL_INSTALL_DIR` overrides the binary
 directory; the static site goes to `$XDG_DATA_HOME/corral-next/web`, or
 `~/.local/share/corral-next/web` when `XDG_DATA_HOME` is unset, with
-`CORRAL_APP_INSTALL_DIR` as an override. `sh install-corral.sh --app-only` installs only
+`CORRAL_APP_INSTALL_DIR` as an override. Use a dedicated directory: upgrades replace the
+marked site wholesale, and nonempty unrelated or manually unpacked directories are not adopted.
+`sh install-corral.sh --app-only` installs only
 the static site; `--dry-run` shows the plan. On native Windows, the PowerShell installer
 can install just the web site, not the new daemon:
 
