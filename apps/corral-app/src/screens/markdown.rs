@@ -6,8 +6,8 @@
 //! assistant's.
 
 use nsh_base::text_view::{
-    Block, CodeBlock, Inline, MarkdownOptions, Parser, Table, TextViewPart as Part, TextViewParts,
-    text_view,
+    Block, CodeBlock, Document, Inline, MarkdownOptions, Parser, Table, TextViewPart as Part,
+    TextViewParts, text_view,
 };
 use nsh_core::prelude::*;
 
@@ -102,6 +102,14 @@ fn records(blocks: Vec<Block>) -> Vec<Block> {
             other => vec![other],
         })
         .collect()
+}
+
+/// Every image of `document`, in its blocks and its footnotes, replaced by its alt text.
+fn without_images(document: &mut Document) {
+    blocks_without_images(&mut document.blocks);
+    for note in &mut document.footnotes {
+        blocks_without_images(&mut note.children);
+    }
 }
 
 /// Every image among `blocks`, at any depth, replaced by its alt text.
@@ -249,7 +257,7 @@ fn laid_out(app: AppState, markdown: &str, streaming: bool, images: bool) -> Any
     };
     let mut document = Parser::new().options(options).markdown(markdown);
     if !images {
-        blocks_without_images(&mut document.blocks);
+        without_images(&mut document);
     }
     if narrow(app) {
         document.blocks = records(std::mem::take(&mut document.blocks));
@@ -258,4 +266,25 @@ fn laid_out(app: AppState, markdown: &str, streaming: bool, images: bool) -> Any
         .document(document)
         .render_code_block(move |code: &CodeBlock| code_block(app, code))
         .into_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stored note must not fetch a URL when shown: an image anywhere, a footnote's
+    /// included, is drawn as its alt text.
+    #[test]
+    fn a_note_without_images_keeps_no_image_url_in_its_body_or_footnotes() {
+        let mut document = Parser::new().markdown(
+            "**See ![shot](https://example.invalid/a.png)** and note[^1].\n\n\
+             - > ![quoted](https://example.invalid/b.png)\n\n\
+             [^1]: ![pixel](https://example.invalid/c.png)\n",
+        );
+        assert_eq!(document.footnotes.len(), 1, "the footnote is parsed apart");
+        without_images(&mut document);
+        let json = serde_json::to_string(&document).unwrap();
+        assert!(!json.contains("example.invalid"), "{json}");
+        assert!(json.contains("pixel") && json.contains("shot"), "{json}");
+    }
 }
