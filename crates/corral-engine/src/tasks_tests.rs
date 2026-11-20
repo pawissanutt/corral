@@ -74,6 +74,7 @@ fn terminal_moves_stop_live_runs_preserve_checkout_and_owner_actions_reset_round
     Engine::init(root.path(), None).unwrap();
     let fake = FakeRunner::new();
     let mut engine = Engine::open_with_runner(root.path(), Box::new(fake.clone())).unwrap();
+    engine.actor = Actor::Owner;
     let mut task = engine
         .new_task(NewTask {
             title: "stop me".to_owned(),
