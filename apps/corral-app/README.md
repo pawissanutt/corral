@@ -409,6 +409,15 @@ The Now, Agents, Plans and Review desktop and phone renders and their `terminal-
 
 Every render here predates the redesign into Home, Tasks, Sessions and Activity: they show Now, Plans, Review, Agents, Changes and the Project page, which no longer exist. `docs/shots/` holds no render of the redesigned places.
 
+## Web packaging gate
+
+Add `"bash scripts/app-web-gate.sh"` to the existing `gate` array under `[projects.corral]`
+in the workspace's `.corral-next/corral.toml`. The root Cargo workspace excludes this app, so
+its Clippy and test commands cannot catch app packaging failures. The new command runs
+`just app-web` on every configured gate run, under the shared app build lock, and fails if
+packaging fails. It builds the same site as `just app-web-install` without installing it or
+starting a server. Put `just`, `flock`, and NSH 0.6.1 on the gate runner's `PATH`.
+
 ## Toolchain on this host
 
 NSH installs under `~/.nsh` and is linked at `~/.local/bin/nsh`. NSH 0.6.1 crates require rustc 1.97; `rust-toolchain.toml` pins 1.97.1 and the `wasm32-unknown-unknown` target. Corral itself stays on 1.94.
