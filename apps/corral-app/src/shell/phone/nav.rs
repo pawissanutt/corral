@@ -207,7 +207,8 @@ impl Nav {
 
     /// Leaves the page at `depth` and those above it (the header's back, the swipe, Android's
     /// back, the browser's): the model's pages among them go too, in one change. Going back
-    /// twice to the same depth does nothing the second time. Leaving Configuration with unsaved
+    /// twice to the same depth does nothing the second time. Over a profile shown alone,
+    /// Configuration stays and its profile list shows again; leaving Configuration with unsaved
     /// edits asks first, as leaving it any other way does.
     pub fn back_to(self, depth: usize) {
         let Some((pages, config)) = self.stack.with_untracked(|s| {
@@ -219,7 +220,7 @@ impl Nav {
         }) else {
             return;
         };
-        if config && self.app.asks_before_leaving_config() {
+        if config && (self.app.back_to_profiles() || self.app.asks_before_leaving_config()) {
             return;
         }
         self.stack.update(|s| s.truncate(depth));

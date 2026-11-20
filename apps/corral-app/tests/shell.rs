@@ -188,8 +188,11 @@ fn phone_profile_edits_survive_returning_to_the_list_and_switching_tabs() {
     app.type_text(model, "-custom").unwrap();
     let drafted = app.screen().input_text(model).unwrap().unwrap().to_owned();
     assert_ne!(drafted, "luna");
-    app.press("id:btn-config-profile-back").unwrap();
+    // The standard Back returns to the list without asking to leave Configuration.
+    app.back().unwrap();
     app.wait_for_gone(model, Duration::from_secs(5)).unwrap();
+    app.wait_for(row).unwrap();
+    assert_eq!(app.screen().count("id:confirm").unwrap(), 0);
     app.press("id:tab-config-4").unwrap();
     app.wait_for("id:btn-config-rule-add").unwrap();
     app.press("id:tab-config-2").unwrap();
@@ -198,6 +201,11 @@ fn phone_profile_edits_survive_returning_to_the_list_and_switching_tabs() {
         app.screen().input_text(model).unwrap(),
         Some(drafted.as_str())
     );
+    // From the list, Back leaves Configuration, which asks first for the unsaved edit.
+    app.back().unwrap();
+    app.wait_for(row).unwrap();
+    app.back().unwrap();
+    app.wait_for("id:confirm").unwrap();
 }
 
 #[test]
