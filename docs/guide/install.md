@@ -12,8 +12,8 @@ administrator access.
 
 The examples below pin [v0.4.0](../releases/v0.4.0.md). Installers download
 published release assets, not a tag alone; older releases may lack Windows
-packages. The release workflow publishes the five native packages below
-with SHA-256 sidecars and installer-proof records after validation.
+packages. The classic release provides the five native packages below with SHA-256
+sidecars; the current release workflow publishes different, next-engine assets.
 
 ## Supported packages
 
