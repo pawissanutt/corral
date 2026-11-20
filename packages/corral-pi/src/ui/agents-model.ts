@@ -1,5 +1,5 @@
 // The row model behind the agents view, the sidebar Context tab and the Agents tab badge. Helper calls and
-// background jobs come from the bound host's snapshot; fleet children (a build session's or any other role's) arrive as ready-made rows through
+// commands come from the bound host's snapshot; fleet children (a build session's or any other role's) arrive as ready-made rows through
 // `AgentExtras`. Unknown values stay absent and render as "–", never as zero.
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { HelperInspection, HelperMessage } from "../extensions/subagent/inspection.ts";
@@ -333,7 +333,7 @@ export function helperRows(snapshot: PanelSnapshot | null, now: number): AgentRo
   });
 }
 
-/** One row per background job in host order. Control needs a bound host, its session and the control seam. */
+/** One row per retained command. Control needs a bound host, its session and the control seam. */
 export function jobRows(snapshot: PanelSnapshot | null, now: number, control: boolean): JobRow[] {
   const bound = snapshot?.bound ?? false, controls = control && bound && snapshot?.inspector?.session !== undefined;
   return (snapshot?.jobs ?? []).map((job): JobRow => {
@@ -376,7 +376,20 @@ export function agentsModel(snapshot: PanelSnapshot | null, now: number,
   };
 }
 
-/** Tab badge: live agents (preparing, queued, running, needs) plus running jobs. */
+/** Keep running commands in host order, then the last to exit, not the last to start. */
+export function visibleCommands(jobs: readonly JobRow[]): JobRow[] {
+  const running: JobRow[] = [];
+  let latest: JobRow | undefined;
+  for (const job of jobs) {
+    if (job.live) running.push(job);
+    else if (job.source.state === "exited" && (!latest
+      || (job.source.detail?.endedAt ?? -Infinity) > (latest.source.detail?.endedAt ?? -Infinity))) latest = job;
+  }
+  if (latest) running.push(latest);
+  return running;
+}
+
+/** Tab badge: live agents (preparing, queued, running, needs) plus running commands. */
 export function liveCount(model: AgentsModel): number {
   return model.agents.filter(agent => LIVE[agent.state]).length + model.jobs.filter(job => job.live).length;
 }

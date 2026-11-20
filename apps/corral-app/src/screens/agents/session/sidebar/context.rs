@@ -1,5 +1,5 @@
 //! The Context tab's rows (`session::ContextTab`): AGENTS (mark, id in bold, profile and model
-//! muted, what it does now under it), COMPLETED with the finished ids, JOBS while the host lists
+//! muted, what it does now under it), COMPLETED with the finished agent ids, COMMANDS while the host lists
 //! one, then what the session works with (directory, worktree, branch, model, effort, context
 //! window), the loaded context files, skills, prompts and tools, and the MCP servers with their
 //! state. An agent or job row opens it in the Agents tab; an asking agent docks its question.
@@ -64,7 +64,7 @@ pub(super) fn agents(app: AppState, tab: &ContextTab) -> AnyElement {
         ));
     }
     if !tab.jobs.is_empty() || tab.jobs_note.is_some() {
-        out.push(captions.next(app, "Jobs", None));
+        out.push(captions.next(app, "Commands", None));
         out.extend(tab.jobs.iter().map(|row| job(app, row)));
         if let Some((hue, note)) = &tab.jobs_note {
             out.push(inset(
@@ -182,7 +182,7 @@ fn job(app: AppState, row: &SideJob) -> AnyElement {
     let action = row.action.clone();
     list_row(
         app,
-        format!("job {}, {}, {}", row.job, row.state, row.command),
+        format!("command {}, {}, {}", row.job, row.state, row.command),
         row.test_id.clone(),
         || false,
         move || run(app, action.clone()),

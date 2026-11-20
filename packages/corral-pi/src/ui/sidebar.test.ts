@@ -22,21 +22,17 @@ const SPIN = /[⠋⠙⠹⠸⠼⠴⠦⠧]/;
 // Unique target keys; a two-line agent item carries its target on both lines.
 const keys = (frame: SideFrame) => [...new Set([...frame.hits.values()].flat().flatMap(hit => hit.target && "key" in hit.target ? [hit.target.key] : []))];
 
-test("failures stay visible while successful completions fold into one line", () => {
+test("the completed agent summary does not fold away a successful command", () => {
   const s = source({
     agents: [agent("helper:1", "scout"), agent("helper:2", "oracle", { glyph: "✓", tone: "success", settled: "ok" }),
       agent("helper:3", "shadow", { glyph: "!", tone: "warning", settled: "failed", activity: "exit 1" })],
-    jobs: [job("job:1", "bun test"), job("job:2", "cargo build", { glyph: "✓", tone: "success", settled: "ok" }),
-      job("job:3", "make lint", { glyph: "✗", tone: "error", settled: "failed" })],
+    jobs: [job("job:1", "bun test"), job("job:2", "cargo build", { glyph: "✓", tone: "success", settled: "ok" })],
   });
   const frame = new Sidebar(() => {}).rail(s, 34, 30), lines = plain(frame);
-  expect(keys(frame).sort()).toEqual(["helper:1", "helper:3", "job:1", "job:3"]);
+  expect(keys(frame).sort()).toEqual(["helper:1", "helper:3", "job:1", "job:2"]);
   expect(lines.some(line => line.includes("! shadow"))).toBeTrue();
-  expect(lines.some(line => line.includes("✗ make lint"))).toBeTrue();
-  const folded = lines.filter(line => line.includes("oracle"));
-  expect(folded).toHaveLength(1);
-  expect(folded[0]).toContain("cargo build");
-  expect(lines.some(line => line.includes("COMPLETED · 2"))).toBeTrue();
+  expect(lines.some(line => line.includes("✓ cargo build"))).toBeTrue();
+  expect(lines.find(line => line.includes("oracle"))?.trim()).toBe("oracle");
 });
 
 test("every rail, row and drawer line is exactly the width, wide glyphs included, with no black cells and no key hints", () => {
@@ -142,7 +138,7 @@ test("the rail starts with Context Files Plan and [Ctrl+B] ▸, the agents direc
   expect(lines.indexOf(" COMPLETED · 1".padEnd(34))).toBeGreaterThan(5);
   expect(lines.some(line => line.trim() === "explore")).toBeTrue();
   const text = lines.join("\n");
-  expect(text).not.toContain("JOBS"); expect(text).not.toContain("Jobs");
+  expect(text).not.toContain("COMMANDS");
   // Nothing in the rail fills a background but the selected row.
   for (const line of frame.lines) expect(line).not.toContain(PANEL_SELECTED);
 });
@@ -157,12 +153,12 @@ test("the agent the Agents view selects is drawn on the selected surface with th
   expect(frame.lines[rows[0]!]).toContain(PANEL_BLUE + "▌");
 });
 
-test("jobs show only while one is listed, and a session with neither agents nor jobs says so in the mock's words", () => {
+test("the Commands section is conditional on a command being listed", () => {
   const empty = plain(new Sidebar(() => {}).rail(source({ agents: null, jobs: null }), 34, 10)).join("\n");
-  expect(empty).toContain("no agents or jobs yet");
+  expect(empty).not.toContain("COMMANDS");
   const jobsOnly = plain(new Sidebar(() => {}).rail(source({ agents: null, jobs: [job("j:1", "bun test")] }), 34, 10));
   expect(jobsOnly.join("\n")).not.toContain("AGENTS");
-  expect(jobsOnly[1]!.trim()).toBe("JOBS");
+  expect(jobsOnly[1]!.trim()).toBe("COMMANDS");
   expect(jobsOnly[2]!.trimEnd()).toMatch(new RegExp("^ " + SPIN.source + " bun test +12s$"));
   const idle = plain(new Sidebar(() => {}).rail(source({ agents: [agent("c:a", "alpha", { settled: "ok", glyph: "✓", tone: "success" })], jobs: [] }), 34, 10));
   expect(idle.some(line => line.trim() === "none at work")).toBeTrue();

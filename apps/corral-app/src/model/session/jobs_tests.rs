@@ -1,6 +1,6 @@
 use corral_protocol::detail::{DetailBody, DetailReply, JobOutputPage, SessionJob};
 
-use super::{JobOutputView, buttons, output, output_target};
+use super::{JobOutputView, buttons, output, output_target, visible_commands};
 use crate::model::Id;
 use crate::model::daemon::{self, DetailCache, Feed, Link};
 use crate::model::health::daemon_env;
@@ -71,6 +71,38 @@ fn opened(text: &str, offset: u64, bytes: u64, next: Option<&str>) -> JobOutputV
     };
     let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &facts);
     output(&cx, JOB)
+}
+
+#[test]
+fn command_list_keeps_every_running_command_and_only_the_latest_exit() {
+    let row = |id: &str, state, code, end: Option<&str>| SessionJob {
+        id: id.into(),
+        ended_at: end.map(str::to_owned),
+        ..job(state, code, &[])
+    };
+    let jobs = [
+        row(
+            "long-failure",
+            "exited",
+            Some(1),
+            Some("2026-11-19T10:00:42.900Z"),
+        ),
+        row("run-a", "running", None, None),
+        row(
+            "short-success",
+            "exited",
+            Some(0),
+            Some("2026-11-19T10:00:42.100Z"),
+        ),
+        row("lost", "lost", None, None),
+        row("run-b", "running", None, None),
+        row("untimed", "exited", Some(0), None),
+    ];
+    let visible: Vec<_> = visible_commands(&jobs)
+        .into_iter()
+        .map(|job| job.id.as_str())
+        .collect();
+    assert_eq!(visible, ["run-a", "run-b", "long-failure"]);
 }
 
 #[test]

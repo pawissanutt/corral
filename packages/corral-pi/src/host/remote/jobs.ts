@@ -20,7 +20,7 @@ const tail = (text: string) => text.trimEnd().split("\n").slice(-2).filter(Boole
 
 export function jobsPart(commands: Pick<Commands, "inspection" | "output" | "recovered"> | undefined,
   allowed: (action: "stop" | "background") => boolean, live = commands?.inspection() ?? [], recovered = commands?.recovered() ?? []): SessionJobs {
-  if (!commands) return { jobs: [], unavailable: "Managed jobs are not enabled for this session" };
+  if (!commands) return { jobs: [], unavailable: "Managed commands are not enabled for this session" };
   const rows = [...live].reverse().map(job => liveJob(job, allowed));
   for (const job of [...recovered].reverse()) {
     const output = commands.output(job.job, { tail_lines: 2, max_bytes: 1024 });

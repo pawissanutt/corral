@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { stripTerminalSequences, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { getLayoutBoxesAt, renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
-import { agentsModel, type AgentRow, type AgentsModel } from "./agents-model.ts";
+import { agentsModel, visibleCommands, type AgentRow, type AgentsModel } from "./agents-model.ts";
 import { agentDensity, renderAgents, AgentsView, type AgentsAction, type AgentsOptions } from "./agents-view.ts";
 import { agentColor } from "./agent-hues.ts";
 import { AGENT_HUES, PACKAGED, type Appearance } from "./appearance.ts";
@@ -46,14 +46,14 @@ function click(view: AgentsView, width: number, height: number, x: number, y: nu
   }
 }
 
-test("the page follows the agents, jobs, detail and timeline order at 140 and 52 columns without captions", () => {
+test("the page follows the agents, commands, detail and timeline order at 140 and 52 columns without captions", () => {
   for (const width of [140, 52]) {
     for (const selected of [undefined, "job:build"]) {
       const rows = plain(renderAgents(agentsModel(fixture, NOW, { jobControl: true }), selected, width, options()).lines);
       const at = (needle: string) => rows.findIndex(row => row.includes(needle));
       expect(at("explore")).toBeGreaterThanOrEqual(0);
       expect(at("oracle")).toBeGreaterThan(at("explore"));
-      expect(at("Jobs")).toBeGreaterThan(at("oracle"));
+      expect(at("Commands")).toBeGreaterThan(at("oracle"));
       expect(at("bun test lint")).toBeGreaterThan(at("bun test build"));
       expect(at("Timeline")).toBeGreaterThan(at(selected ? "OUTPUT_build" : "open conversation"));
       expect(rows.at(-1)).toContain("0s");
@@ -61,6 +61,21 @@ test("the page follows the agents, jobs, detail and timeline order at 140 and 52
       expect(text).not.toMatch(/observations, not task settlement|host observations|unavailable|No helper calls/);
     }
   }
+});
+
+test("commands keep every running process and the latest exit, even if it started earlier", () => {
+  const older = job("short-success", "exited", 0), latest = job("long-failure", "exited", 1);
+  const model = agentsModel({ ...fixture, helpers: [], jobs: [
+    { ...latest, detail: { ...latest.detail!, startedAt: NOW - 50_000, endedAt: NOW - 500 } },
+    older, job("running-one", "running"), job("lost", "lost"), job("running-two", "running"),
+  ] }, NOW);
+  expect(visibleCommands(model.jobs).map(row => row.job)).toEqual(["running-one", "running-two", "long-failure"]);
+  const view = new AgentsView(viewHost(() => model));
+  view.select("job:long-failure");
+  view.move(1);
+  expect(view.entry()?.row.key).toBe("job:long-failure");
+  const direct = renderAgents(model, "job:short-success", 140, options());
+  expect(plain(direct.lines).some(line => line.includes("OUTPUT_short-success"))).toBeTrue();
 });
 
 test("selection stays on the same key when a newer helper is inserted above it", () => {
@@ -142,14 +157,14 @@ test("an unavailable or empty source adds no caption; an empty page says how age
   for (const width of [140, 80, 52]) {
     const unknown = plain(renderAgents(agentsModel({ ...fixture, jobs: null, helpers: null }, NOW), undefined, width, options()).lines).join("\n");
     expect(unknown).not.toContain("unavailable");
-    expect(unknown).not.toContain("Jobs");
+    expect(unknown).not.toContain("Commands");
     expect(unknown).toContain("No agents yet.");
   }
   const jobsOnly = plain(renderAgents(agentsModel({ ...fixture, helpers: [] }, NOW), undefined, 80, options()).lines).join("\n");
-  expect(jobsOnly).toContain("Jobs");
+  expect(jobsOnly).toContain("Commands");
   expect(jobsOnly).not.toMatch(/No agents yet|No helper calls/);
   const agentsOnly = plain(renderAgents(agentsModel({ ...fixture, jobs: [] }, NOW), undefined, 80, options()).lines).join("\n");
-  expect(agentsOnly).not.toContain("Jobs");
+  expect(agentsOnly).not.toContain("Commands");
 });
 
 test("clicking an action label runs that action for the shown row", () => {

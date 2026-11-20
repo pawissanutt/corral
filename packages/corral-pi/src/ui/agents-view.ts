@@ -1,10 +1,10 @@
 // F8 agents view: one scrollable page with the agents table (the mock's `.fleet` grid at three densities),
-// background jobs when there are any, the selected row's detail with its actions as key caps, and the
+// running commands and the latest completion, the selected row's detail with its actions as key caps, and the
 // timeline. Selection is keyed ("helper:<request>", "child:<id>", "job:<id>"), so rows inserted above never
 // move it. Every row keeps one blank cell each side; only the selected row has a surface of its own.
 import { ScrollView, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import {
-  duration, money, sparkline, timeLabel, toneColor, type AgentRow, type AgentSpan, type AgentsModel, type JobRow, type Status, type Tone,
+  duration, money, sparkline, timeLabel, toneColor, visibleCommands, type AgentRow, type AgentSpan, type AgentsModel, type JobRow, type Status, type Tone,
 } from "./agents-model.ts";
 import { keyCap, rule, spinner } from "./frame.ts";
 import { jobDetailLines, type JobFreeze } from "./job-detail.ts";
@@ -73,11 +73,18 @@ function row(text: string, width: number, surface = PANEL_BG): string {
   return PANEL_BG + " " + base + cell(text, width - 2, base) + PANEL_BG + " " + RESET;
 }
 function entriesOf(model: AgentsModel): AgentsEntry[] {
-  return [...model.agents.map(row => ({ kind: "agent" as const, row })), ...model.jobs.map(row => ({ kind: "job" as const, row }))];
+  return [...model.agents.map(row => ({ kind: "agent" as const, row })), ...visibleCommands(model.jobs).map(row => ({ kind: "job" as const, row }))];
 }
-function shownEntry(model: AgentsModel, selected: string | undefined): AgentsEntry | undefined {
-  const entries = entriesOf(model);
-  return selected === undefined ? entries[0] : entries.find(entry => entry.row.key === selected);
+function shownEntry(model: AgentsModel, selected: string | undefined, commands = visibleCommands(model.jobs)): AgentsEntry | undefined {
+  if (selected === undefined) {
+    const agent = model.agents[0], job = commands[0];
+    return agent ? { kind: "agent", row: agent } : job ? { kind: "job", row: job } : undefined;
+  }
+  // A transcript link or an already-open detail can still point to a retained command outside the list.
+  const agent = model.agents.find(row => row.key === selected);
+  if (agent) return { kind: "agent", row: agent };
+  const job = model.jobs.find(row => row.key === selected);
+  return job ? { kind: "job", row: job } : undefined;
 }
 function timeTone(tone: Tone): Tone { return tone === "accent" ? "text" : tone; }
 /** The state cell: the spinner while running (staggered by `phase`), otherwise the state glyph in its tone. */
@@ -239,14 +246,15 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
   const push = (line: string, rowHits?: readonly AgentsHit[]) => { if (rowHits?.length) hits.set(lines.length, [...rowHits]); lines.push(line); };
   const divider = () => push(row(rule(width - 2), width));
   const heading = (title: string, note: string) => push(row(BOLD + PANEL_HEAD + title + UNBOLD + PANEL_MUTED + note, width));
-  const entry = shownEntry(model, selected), bar = options.focused === false ? PANEL_MUTED : PANEL_BLUE;
+  const commands = visibleCommands(model.jobs);
+  const entry = shownEntry(model, selected, commands), bar = options.focused === false ? PANEL_MUTED : PANEL_BLUE;
   let selectedRow = -1;
 
-  if (!model.bound && (model.jobs.length > 0 || model.agents.some(agent => agent.source === "helper"))) {
+  if (!model.bound && (commands.length > 0 || entry?.kind === "job" || model.agents.some(agent => agent.source === "helper"))) {
     push(row(PANEL_WARNING + "! Host closed · these observations may be stale", width));
   }
-  if (!model.agents.length && !model.jobs.length) {
-    lines.push(...wrapped(BOLD + PANEL_TEXT + "No agents yet." + UNBOLD + PANEL_MUTED + " Agents and background jobs appear here when the session starts them.", "", width, 3));
+  if (!model.agents.length && !commands.length && !entry) {
+    lines.push(...wrapped(BOLD + PANEL_TEXT + "No agents yet." + UNBOLD + PANEL_MUTED + " Agents and commands appear here when the session starts them.", "", width, 3));
   }
 
   if (model.agents.length && density === "full") push(headerLine(width));
@@ -255,9 +263,9 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
     if (on) selectedRow = lines.length;
     for (const line of agentLines(agent, index, on, density, width, options.color, options.now, bar)) push(line, [{ key: agent.key }]);
   });
-  if (model.jobs.length) {
-    heading("Jobs", ` · ${model.jobs.filter(job => job.live).length} running`);
-    model.jobs.forEach((job, index) => {
+  if (commands.length) {
+    heading("Commands", ` · ${commands.filter(job => job.live).length} running`);
+    commands.forEach((job, index) => {
       const on = entry?.row.key === job.key;
       if (on) selectedRow = lines.length;
       push(jobLine(job, model.agents.length + index, on, density, width, options.now, bar), [{ key: job.key }]);
@@ -266,7 +274,7 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
 
   if (selected !== undefined && !entry) {
     divider();
-    push(row(PANEL_WARNING + `The selected ${selected.startsWith("job:") ? "job" : "agent"} is no longer retained`, width));
+    push(row(PANEL_WARNING + `The selected ${selected.startsWith("job:") ? "command" : "agent"} is no longer retained`, width));
   } else if (entry?.kind === "agent") {
     const shown = entry.row;
     divider();
@@ -277,6 +285,7 @@ export function renderAgents(model: AgentsModel, selected: string | undefined, w
   } else if (entry?.kind === "job") {
     const shown = entry.row;
     divider();
+    if (selectedRow === -1) selectedRow = lines.length;
     const height = options.short ? 10 : 22;
     for (const line of jobDetailLines(shown.source, { bound: model.bound, now: options.now, legend: options.legend, freeze: options.freeze }, Math.max(4, width - 2), height)) {
       push(row(line, width));
@@ -313,10 +322,11 @@ export class AgentsView {
   }
   /** The shown selection; the first entry when unset, none when the chosen key is no longer retained. */
   entry(): AgentsEntry | undefined { return shownEntry(this.host.model(), this.selected); }
-  /** Agents then jobs, by key. */
+  /** Agents then visible commands, by key. */
   move(delta: number): void {
-    const entries = entriesOf(this.host.model()), shown = this.entry();
-    const index = shown ? entries.findIndex(entry => entry.row.key === shown.row.key) + delta : 0;
+    const entries = entriesOf(this.host.model());
+    const current = this.selected === undefined ? 0 : entries.findIndex(entry => entry.row.key === this.selected);
+    const index = current < 0 ? 0 : current + delta;
     const next = entries[Math.max(0, Math.min(entries.length - 1, index))];
     if (next) this.select(next.row.key);
   }

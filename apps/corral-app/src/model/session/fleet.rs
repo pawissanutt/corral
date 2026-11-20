@@ -1,5 +1,5 @@
 //! The Agents tab: the session's child agents (fleet order, then helper calls newest first) and
-//! its background jobs as their own group; the selected agent's or job's detail with what can be
+//! its running commands and latest exit as their own group; the selected agent's or job's detail with what can be
 //! done to it; the timeline of when each agent ran and the messages between them. Opening an
 //! agent shows its conversation (`conversation`), opening a job follows its output (`jobs`).
 //! The rows are read from the fleet corrald last sent with the session's live pages; an agent's
@@ -42,8 +42,8 @@ pub use child::{AgentDetail, Clipped, EditLine, EditList, ModelChoiceRow, ModelP
 pub use clock::AgentsClock;
 pub(super) use conversation::opened_agent;
 pub use conversation::{Conversation, EndLine};
-pub(super) use jobs::short_id;
 pub use jobs::{JobDetail, JobList, JobOutputView, JobRowView};
+pub(super) use jobs::{short_id, visible_commands};
 pub use ops::{Asking, ConfirmView, FleetAction, FleetRequest};
 pub(super) use ops::{act, actions, keys, press, settle};
 
@@ -88,7 +88,7 @@ pub struct AgentsTab {
     /// Said while the host is unreachable or not running: the rows are the last ones received.
     pub unbound: Option<String>,
     pub rows: Vec<AgentRowView>,
-    /// The background jobs; none when the session has none and serves none.
+    /// The visible commands; none when the session has none and serves none.
     pub jobs: Option<JobList>,
     pub selected: Option<String>,
     pub detail: Option<AgentDetail>,
@@ -627,8 +627,7 @@ pub fn agents_tab(cx: &Cx<'_>, state: &State) -> AgentsTab {
     });
     let messages_total = fleet.map_or(0, |fleet| fleet.messages_total);
     let empty = (children.is_empty() && messages_total == 0 && job_list.is_none()).then(|| {
-        "No agents yet. Agents and background jobs appear here when the session starts them."
-            .to_owned()
+        "No agents yet. Agents and commands appear here when the session starts them.".to_owned()
     });
     AgentsTab {
         unbound,

@@ -1,4 +1,4 @@
-//! The session's background jobs on the Agents tab: their group under the agents (`Jobs · 1
+//! The session's commands on the Agents tab: their group under the agents (`Commands · 1
 //! running`, then one line per job: its mark, its name (the command's first line) and state with
 //! its time over its last output line, and Peek, which opens its last lines in place), the
 //! selected job's detail (the name with the id's first eight characters, its directory, its
@@ -135,7 +135,7 @@ pub(super) fn list(app: AppState, tab: Tab) -> AnyElement {
     view()
         .test_id("session-jobs")
         .role(AccessibilityRole::List)
-        .label("Background jobs")
+        .label("Commands")
         .style_when(move || listed.get() != Some(true), |s| s.hidden())
         .child(head)
         .child(rows)
@@ -208,9 +208,9 @@ fn job_line(app: AppState, tab: Tab, row: ReadSignal<JobRowView>) -> AnyElement 
             row.with(|r| {
                 let state = with_elapsed(&r.state, elapsed);
                 if r.selected {
-                    format!("Job {}, {state}; press to follow its output", r.command)
+                    format!("Command {}, {state}; press to follow its output", r.command)
                 } else {
-                    format!("Job {}, {state}", r.command)
+                    format!("Command {}, {state}", r.command)
                 }
             })
         },

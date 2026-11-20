@@ -264,7 +264,7 @@ fn at_work(cx: &Cx<'_>) -> (String, Hue) {
         parts.push(format!("{} waiting", state.children.waiting));
     }
     if parts.is_empty() {
-        return ("no agents or jobs at work".into(), Hue::Neutral);
+        return ("no agents or commands at work".into(), Hue::Neutral);
     }
     let hue = if state.children.waiting > 0 {
         Hue::You

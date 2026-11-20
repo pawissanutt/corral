@@ -420,9 +420,9 @@ pub(super) fn confirm_view(cx: &Cx<'_>) -> Option<ConfirmView> {
             no: ("Keep it running".into(), answer(false)),
         },
         Asking::Stop(_) => ConfirmView {
-            title: "Stop this job?".into(),
+            title: "Stop this command?".into(),
             detail: "Its output so far is kept.".into(),
-            yes: ("Stop job".into(), answer(true)),
+            yes: ("Stop command".into(), answer(true)),
             no: ("Keep it running".into(), answer(false)),
         },
     })
@@ -496,15 +496,15 @@ const KEYS: [(&str, &str, &str); 6] = [
     ("s", "s", "steer"),
     ("x", "x", "cancel or stop (asks)"),
     ("m", "m", "change model"),
-    ("b", "b", "send a job to the background"),
+    ("b", "b", "send a command to the background"),
 ];
 
-/// The walk through the agents and then the jobs, by stroke.
+/// The walk through the agents and then the visible commands, by stroke.
 const WALK: [(&str, &str, &str, isize); 4] = [
-    ("j", "j", "next agent or job", 1),
-    ("down", "↓", "next agent or job", 1),
-    ("k", "k", "previous agent or job", -1),
-    ("up", "↑", "previous agent or job", -1),
+    ("j", "j", "next agent or command", 1),
+    ("down", "↓", "next agent or command", 1),
+    ("k", "k", "previous agent or command", -1),
+    ("up", "↑", "previous agent or command", -1),
 ];
 
 pub(in crate::model::session) fn keys() -> Vec<KeyBinding> {
@@ -530,12 +530,16 @@ fn walk(cx: &Cx<'_>, delta: isize) -> Option<Action> {
             child: Some(child.id.clone()),
         })
         .collect();
-    order.extend(jobs::all(cx).iter().map(|job| {
-        Action::Fleet(FleetAction::SelectJob {
-            session: session.clone(),
-            job: job.id.clone(),
-        })
-    }));
+    order.extend(
+        jobs::visible_commands(jobs::all(cx))
+            .into_iter()
+            .map(|job| {
+                Action::Fleet(FleetAction::SelectJob {
+                    session: session.clone(),
+                    job: job.id.clone(),
+                })
+            }),
+    );
     if order.is_empty() {
         return None;
     }
