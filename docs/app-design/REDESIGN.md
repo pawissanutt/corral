@@ -3,10 +3,15 @@
 Owner interviews of 2026-11-19: a first round, a second after the owner saw the first
 reference, and one remark after the second reference. Every row under *Decisions* is an owner
 answer. The standalone
-reference built from this brief is [mockup/redesign.html](mockup/redesign.html). Once the owner
-accepts that reference, this document and it replace `mockup/DESIGN.md` and
-`mockup/main-loop.html` as the design authority for `apps/corral-app`. Until then they are a
-proposal: nothing here changes the app, the daemon or the wire.
+reference built from this brief is [mockup/redesign.html](mockup/redesign.html). The owner
+accepted it on 2026-11-19: this document and the reference replace `mockup/DESIGN.md` and
+`mockup/main-loop.html` as the design authority for `apps/corral-app`. They change neither the
+daemon nor the wire. [REDESIGN-IMPL.md](REDESIGN-IMPL.md) records how the app implements them.
+
+When the build began, the owner also decided two of the questions under *Not decided here*: the
+terminal uses the same four places and pages with its own widgets, staying usable at 80 × 24,
+and has no separate design; the screens the redesign replaces are removed and their parts reused,
+and their old addresses and keys lead to their new homes.
 
 ## Why
 
