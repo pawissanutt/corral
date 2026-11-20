@@ -175,7 +175,10 @@ impl Template {
     }
 
     /// The engine replaces the whole harness, so include both flags when starting an override.
-    pub fn write(&self, doc: &mut DocumentMut, key: &str) {
+    pub fn create_override(&self, doc: &mut DocumentMut, key: &str) -> bool {
+        if builtin(key).is_none() || document::get(doc, &Path::of(&["harnesses", key])).is_some() {
+            return false;
+        }
         document::add_entry(doc, "harnesses", key);
         for (field, value) in self.fields() {
             if let Some(value) = value {
@@ -186,11 +189,12 @@ impl Template {
                 );
             }
         }
+        true
     }
 
     pub fn example(&self, key: &str) -> String {
         let mut doc = DocumentMut::new();
-        self.write(&mut doc, key);
+        self.create_override(&mut doc, key);
         doc.to_string().trim_end().into()
     }
 }
