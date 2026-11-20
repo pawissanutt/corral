@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -352,7 +352,12 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
               const path = event.input.path;
               if (typeof path !== "string") reason = "Build writes require a path";
               else if (options.writeRefusal) reason = options.writeRefusal(path);
-              else { const decision = classifyBuildWrite(path, cwd, undefined, options.buildWorktree); if (!decision.allowed) reason = decision.reason; }
+              else {
+                const task = options.context.session.task;
+                const managedWorktree = options.buildWorktree || (task !== undefined && /^T-\d+$/.test(task) && basename(cwd) === task);
+                const decision = classifyBuildWrite(path, cwd, undefined, managedWorktree);
+                if (!decision.allowed) reason = decision.reason;
+              }
             } else if (event.toolName === "bash" || event.toolName === "job_start" || Object.hasOwn(event.input, "command")) {
               // Local command tools, including background jobs, share the same child boundary.
               const command = (event.input as Record<string, unknown>).command;
