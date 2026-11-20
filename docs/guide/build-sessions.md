@@ -50,6 +50,37 @@ scopes, and see attribution and changes outside assigned ownership.
 **Board** shows workspace tasks and blocked or failed work. Refresh it and review
 proposed plans; you can file a proposal, file and start its tasks, or dismiss it.
 
+## Write and command approvals
+
+For the parent build, edit and write inside the session worktree work normally, as does
+bound workspace Markdown memory. An edit or write outside the worktree, including an ordinary
+canonical symlink escape, requires a host-issued once-only owner allow. Protected `.git`,
+`.corral`, `.corral-next` and `.worktrees` paths are hard blocks, except for the scoped
+worktree and workspace memory exceptions.
+
+When enabled, `bash_rules` apply to both `bash` and `job_start`. For example, the role's
+capability settings can allow known commands and ask about unmatched ones:
+
+```toml
+[agent.capabilities.build.bash_rules]
+enabled = true
+allow = ["git status*", "git diff*"]
+default = "ask"
+```
+
+A matching `ask` also requests approval; deny takes precedence over ask, which takes
+precedence over allow. Configured deny and fixed rules cannot be overridden. The host-generated
+question appears through the existing owner prompt, `/questions` or a connected app. An
+affirmative answer authorizes only the exact request once; it does not execute it automatically.
+Retry the same exact call once after the answer. There are no permanent grants, and approvals
+do not carry over after host restart or rewind. Only the host-generated question authorizes:
+ordinary chat or `ask_user` is not a substitute.
+
+Never use shell, another tool or `ask_user` to bypass a refusal or approval. Rules do not
+inspect command intent or side effects, grant OS elevation or provide a sandbox. Shell and
+other tools can have effects outside edit/write enforcement. This change gives children and
+other roles no new authority.
+
 ## Finish
 
 Choose **Finish** in the app, or use `/finish` in the terminal. The agent can

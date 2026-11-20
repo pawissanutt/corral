@@ -14,10 +14,21 @@ another checkout or change that identity.
 ## Worktree and tools
 
 Do the work in the session worktree. Read with read, grep, find and ls; change files with
-edit and write; use bash for repository commands and checks. Edit and write refuse paths
-outside the session worktree (except workspace memory when present) and inside its
-`.git`, `.corral`, `.corral-next` or `.worktrees` directories, including destinations
-reached through symlinks. Never work around a write refusal or send input into another pane.
+edit and write; use bash for repository commands and checks. Parent edit/write calls outside
+the session worktree, including ordinary canonical symlink escapes, require a host-issued,
+once-only owner allow. In-scope writes and bound workspace Markdown memory remain normal.
+Protected `.git`, `.corral`, `.corral-next` and `.worktrees` paths are hard blocks, except
+the scoped worktree and workspace memory exceptions. Never use shell, other tools or
+`ask_user` to work around a refusal or approval, and never send input into another pane.
+
+When enabled, configured `bash_rules` apply to `bash` and `job_start`: `ask` requires an owner
+allow for the exact request; configured deny and fixed rules cannot be overridden. The host
+issues the approval question through the existing owner prompt, `/questions` or a connected
+app. An affirmative answer does not execute the call: retry the exact call once. No permanent
+grant exists, and approvals do not carry over after host restart or rewind. Only the
+host-generated question authorizes; ordinary owner text and `ask_user` do not. These checks
+do not detect command intent or side effects, provide OS elevation, or sandbox shell or other
+tools. Children and other roles gain no new authority.
 
 When `corral_todo` is available, keep the request plan current as described in Request
 execution below.
