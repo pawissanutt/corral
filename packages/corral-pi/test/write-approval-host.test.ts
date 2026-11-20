@@ -34,16 +34,18 @@ test("assistant writes outside its directory only on an exact owner-approved ret
     await host.session.bindExtensions({});
     await host.startLocal();
     const external = join(work, "external.txt"), protectedPath = join(work, ".corral-next", "state.txt");
+    const unboundMemory = join(work, ".corral-next", "memory", "unbound.md");
     const write = (callId: string, path: string, content: string) => ({
       toolCalls: [{ callId, name: "write", arguments: { path, content } }],
     });
     transport.script([write("inside", "local.txt", "local"), write("external", external, "original"),
-      write("protected", protectedPath, "not allowed"), { text: "Waiting." }]);
+      write("protected", protectedPath, "not allowed"), write("unbound", unboundMemory, "not allowed"), { text: "Waiting." }]);
     await host.session.prompt("Make these fixture changes", { source: "extension" });
     await host.drained();
     expect(readFileSync(join(cwd, "local.txt"), "utf8")).toBe("local");
     expect(existsSync(external)).toBeFalse();
     expect(existsSync(protectedPath)).toBeFalse();
+    expect(existsSync(unboundMemory)).toBeFalse();
     const [question] = host.pendingOwnerQuestions();
     expect(host.pendingOwnerQuestions()).toHaveLength(1);
     expect(question?.question).toContain(external);

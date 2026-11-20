@@ -11,7 +11,7 @@ type Input = Record<string, unknown>;
 function quoted(text: string): string {
   // Show literal whitespace and bidi/terminal controls instead of letting input change the prompt.
   return JSON.stringify(text).replace(/[\x7f-\x9f\p{Cf}\u2028\u2029]/gu,
-    char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    char => char.split("").map(unit => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`).join(""));
 }
 
 // The app caps card question text by both UTF-8 and escaped JSON byte length.

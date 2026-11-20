@@ -55,6 +55,7 @@ export interface SdkRunnerOptions {
   /** Bound children intersect their fixed ceiling with the parent's enabled capabilities. */
   readonly parentLoadout?: readonly string[];
   readonly writeRefusal?: (path: string) => string | undefined;
+  readonly buildWorktree?: boolean;
   readonly bound?: boolean;
   readonly now?: () => number;
 }
@@ -351,7 +352,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
               const path = event.input.path;
               if (typeof path !== "string") reason = "Build writes require a path";
               else if (options.writeRefusal) reason = options.writeRefusal(path);
-              else { const decision = classifyBuildWrite(path, cwd); if (!decision.allowed) reason = decision.reason; }
+              else { const decision = classifyBuildWrite(path, cwd, undefined, options.buildWorktree); if (!decision.allowed) reason = decision.reason; }
             } else if (event.toolName === "bash" || event.toolName === "job_start" || Object.hasOwn(event.input, "command")) {
               // Local command tools, including background jobs, share the same child boundary.
               const command = (event.input as Record<string, unknown>).command;
