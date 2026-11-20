@@ -294,7 +294,9 @@ jobs:
                   print(f'{label}: exit {result.returncode}\n{result.stdout}{result.stderr}', flush=True)
 
               def verify_payload():
-                  assert {p.relative_to(site).as_posix(): digest(p) for p in site.rglob('*') if p.is_file()} == site_files
+                  marker = site / '.corral-web-install'
+                  assert marker.read_bytes() == b'corral-web-install-v1\n'
+                  assert {p.relative_to(site).as_posix(): digest(p) for p in site.rglob('*') if p.is_file() and p != marker} == site_files
                   assert {name: digest(bin_dir / name) for name in names} == runtime_files
 
               handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root))
@@ -304,6 +306,14 @@ jobs:
                   url = f'http://127.0.0.1:{server.server_port}'
                   env['CORRAL_BASE_URL'] = f'{url}/releases'
                   try:
+                      # Refuse an unrelated web root without deleting its contents.
+                      site.mkdir(parents=True)
+                      (site / 'index.html').write_text('unrelated site', encoding='ascii')
+                      (site / '.user-file').write_text('keep', encoding='ascii')
+                      install_case('reject an unrelated site', success=False)
+                      assert (site / 'index.html').read_text() == 'unrelated site'
+                      assert (site / '.user-file').read_text() == 'keep'
+                      shutil.rmtree(site)
                       # For a latest native download, only /download/vVERSION has the web asset.
                       install_case('clean install')
                       verify_payload()
