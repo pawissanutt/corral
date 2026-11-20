@@ -177,17 +177,26 @@ impl Client {
     }
 }
 
-fn load_app(port: u16) -> String {
+fn request_http(port: u16, request: &[u8]) -> TcpStream {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
+    stream.write_all(request).unwrap();
     stream
-        .write_all(b"GET /sessions HTTP/1.1\r\nHost: localhost\r\nAccept: text/html\r\n\r\n")
-        .unwrap();
+}
+
+fn read_http(mut stream: TcpStream) -> String {
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     response
+}
+
+fn load_app(port: u16) -> String {
+    read_http(request_http(
+        port,
+        b"GET /sessions HTTP/1.1\r\nHost: localhost\r\nAccept: text/html\r\n\r\n",
+    ))
 }
 
 #[test]
@@ -211,6 +220,20 @@ fn paired_browser_is_owner_until_revocation_closes_it() {
     std::fs::write(bundle.join("index.html"), "app shell").unwrap();
     let page = load_app(port);
     assert!(page.starts_with("HTTP/1.1 200") && page.ends_with("\r\n\r\napp shell"));
+    std::fs::write(bundle.join("app.js"), "/* startup */").unwrap();
+    // A browser startup burst must not need an app-session slot. An HTTP/2
+    // proxy can also send an h2c offer upstream; that is not a WebSocket.
+    let sessions: Vec<_> = (0..MAX_APP_CONNECTIONS)
+        .map(|_| AppPermit::acquire(fixture.shared()).unwrap())
+        .collect();
+    let startup: Vec<_> = (0..16)
+        .map(|_| request_http(port, b"GET /app.js HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: h2c\r\n\r\n"))
+        .collect();
+    for stream in startup {
+        let asset = read_http(stream);
+        assert!(asset.starts_with("HTTP/1.1 200") && asset.ends_with("\r\n\r\n/* startup */"));
+    }
+    drop(sessions);
 
     let error = upgrade(port, SESSION_PATH, "http://evil.example").unwrap_err();
     assert!(matches!(error, tungstenite::Error::Http(response) if response.status() == 403));

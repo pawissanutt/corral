@@ -42,6 +42,7 @@ pub(super) struct Bounded {
     remaining: Option<usize>,
     read_deadline: Instant,
     write_deadline: Instant,
+    write_idle: Option<Duration>,
 }
 
 fn remaining(deadline: Instant) -> io::Result<Duration> {
@@ -60,7 +61,13 @@ impl Bounded {
             remaining: Some(UPGRADE_MAX),
             read_deadline: deadline,
             write_deadline: deadline,
+            write_idle: None,
         }
+    }
+
+    pub(super) fn static_transfer(&mut self, budget: Duration) {
+        self.write_deadline = Instant::now() + budget;
+        self.write_idle = Some(Duration::from_secs(10));
     }
 
     pub(super) fn replay(&mut self, bytes: Vec<u8>) {
@@ -108,8 +115,11 @@ impl Read for Bounded {
 
 impl Write for Bounded {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.stream
-            .set_write_timeout(Some(remaining(self.write_deadline)?))?;
+        let remaining = remaining(self.write_deadline)?;
+        let timeout = self
+            .write_idle
+            .map_or(remaining, |idle| remaining.min(idle));
+        self.stream.set_write_timeout(Some(timeout))?;
         self.stream.write(bytes)
     }
 
