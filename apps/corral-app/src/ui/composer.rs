@@ -27,7 +27,7 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 mod draft;
 mod session;
 
-pub(crate) use session::{ask_composer, session_composer};
+pub(crate) use session::{ask_composer, docked_composer, session_composer};
 
 /// What Ask adds to its session's composer, read through one memo so typing redraws only what
 /// the draft changes.
