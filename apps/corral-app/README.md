@@ -78,14 +78,35 @@ the shell reports **not connected**, without mockup dates, health or task counts
 Other destinations do not fall back to sample content. **Connect** opens Settings › Connection;
 **Preview with sample data** is an explicit, launch-only choice.
 
-Enable the optional listener, then restart `corrald-next`. It is off by default. In
-`.corral-next/corral.toml` (or with `run --listen ADDR --web-origin ORIGIN`) this example is local-only:
+For development with the separate NSH server above, enable the optional listener, then
+restart `corrald-next`. It is off by default. In `.corral-next/corral.toml` (or with
+`run --listen ADDR --web-origin ORIGIN`) this example is local-only:
 
 ```toml
 [daemon]
 listen = "127.0.0.1:7841"
 web_origin = ["http://127.0.0.1:8790"]
 ```
+
+Alternatively, serve the packaged app on the daemon's listener, without a separate Python
+service. From the repository root run `just app-web-install`; it installs the bundle at
+`$XDG_DATA_HOME/corral-next/web`, or `~/.local/share/corral-next/web` when unset.
+In `.corral-next/corral.toml`, use the actual absolute path to that dedicated bundle:
+
+```toml
+[daemon]
+listen = "127.0.0.1:7841"
+web_dir = "/absolute/path/to/dedicated/web/bundle"
+web_origin = ["http://127.0.0.1:7841"]
+```
+
+Restart `corrald-next` and open http://127.0.0.1:7841/. `web_dir` requires an explicit
+`listen`; `run --web-dir PATH` overrides the configured directory. Relative paths are
+workspace-relative; shell `~` is not expanded in configuration. Use only a dedicated
+bundle directory, never a repository, workspace, home directory, or any directory with
+secrets. A missing bundle makes the UI unavailable but does not stop the daemon. Updating
+only the web files does not require a daemon restart. The native Unix app is unchanged.
+The separate loopback Python service remains supported if preferred.
 
 Run `corrald-next pair` on the daemon host, or choose **Pair a device** in Settings › Devices on any
 paired device, browser or native. The command prints a pairing link, then waits for the device. Open the link or QR. It opens Settings › Connection
@@ -99,10 +120,16 @@ two-minute confirmation window. Opening a link does not claim, approve or replac
 identity. The new device cannot confirm its own pending pairing.
 
 LAN/Tailscale access is opt-in: `daemon.listen` accepts one concrete numeric unicast
-interface, not wildcard/multicast addresses. Remote browsers need an HTTPS-served app,
-an exact `web_origin` entry and `run --web-endpoint wss://host[:port]`.
-The operator supplies TLS through a reverse proxy or Tailscale Serve; corrald has no
-embedded TLS. Noise remains end-to-end inside WSS.
+interface, not wildcard/multicast addresses. Remote browsers need an HTTPS-served app, an exact `web_origin` entry and
+`web_endpoint = "wss://public-host"` in `[daemon]` (`run --web-endpoint` overrides it).
+The operator supplies TLS through an HTTPS reverse proxy or Tailscale Serve; corrald has no
+embedded TLS. If the daemon serves the bundle, forward all app traffic to it; otherwise,
+forward only `/v1/session` and `/v1/pair/<id>`. Preserve the browser's `Origin` header for
+WebSocket upgrades. Noise remains end-to-end inside WSS.
+
+Browser credentials and saved data are scoped to the origin. Keeping the old URL while a
+proxy points it to the new upstream retains that origin; otherwise pair again. Old drafts
+do not automatically move to a new origin.
 
 Pairing switches to live data automatically. Reload preserves the device and daemon pin:
 the browser stores its credential encrypted in IndexedDB with a non-extractable
@@ -136,10 +163,10 @@ the last destination, and an unpaired browser opens Settings › Connection what
 The sample preview is not restored, so a reload at one of its records shows what corrald has
 under that id. The native and terminal forms have no address and restore the last destination.
 
-Serve the site at the host's root (`nsh.json` `web.base` is `/`). `just app-serve`,
-`nsh run --target web` and `nsh package --target web --run` serve `index.html` for browser
-navigation to app paths. With `just app-serve`, existing files are served normally and
-missing assets such as `.js` files still return 404.
+Serve the site at the host's root (`nsh.json` `web.base` is `/`). Daemon hosting,
+`just app-serve`, `nsh run --target web` and `nsh package --target web --run` serve `index.html`
+for browser navigation to app paths. With daemon hosting or `just app-serve`, existing files
+are served normally and missing assets such as `.js` files still return 404.
 
 If your existing `corral-next-app-web.service` uses `python3 -m http.server`, it will return
 404 on reload below `/`. Run `just app-web-install` to install the site and its new loopback
