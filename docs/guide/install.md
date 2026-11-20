@@ -3,17 +3,18 @@
 This guide covers the classic `corral` CLI and board. For the current app and
 engine, see the [app README](../../apps/corral-app/README.md). The main
 installers default to the current product; classic installs must explicitly select
-legacy mode and a published legacy tag such as v0.4.0.
+legacy mode and a published legacy tag such as v0.2.0.
 
 The installers download a packaged release binary, check its SHA-256 sidecar,
 and run the candidate's version probe before replacing an existing installation.
 Neither installation nor normal use needs Rust, Cargo, a C compiler, or
 administrator access.
 
-The examples below pin [v0.4.0](../releases/v0.4.0.md). Installers download
-published release assets, not a tag alone; older releases may lack Windows
-packages. The classic release provides the five native packages below with SHA-256
-sidecars; the current release workflow publishes different, next-engine assets.
+The examples below pin published [v0.2.0](../releases/v0.2.0.md), which provides
+the five native packages below with SHA-256 sidecars. Installers download release
+assets, not a tag alone. The [v0.4.0 Pi notes](../releases/v0.4.0.md) describe
+source work, not published classic v0.4.0 assets; the current release workflow
+publishes different, next-engine assets.
 
 ## Supported packages
 
@@ -25,11 +26,9 @@ sidecars; the current release workflow publishes different, next-engine assets.
 | macOS | Apple silicon arm64 | `corral-aarch64-apple-darwin.tar.gz` |
 | Windows | x86_64 / AMD64 | `corral-x86_64-pc-windows-msvc.zip` |
 
-Each archive has an adjacent `<archive>.sha256` file. From v0.4.0 the Linux and
-macOS archives also contain `corral-pi-host`, the compiled [corral-pi agent
-host](#optional-the-corral-pi-agent-host); the Windows archive does not. Linux
-`corral` uses musl rather than requiring a particular glibc version;
-`corral-pi-host` is a glibc build (any mainstream distribution, not Alpine). macOS packages target macOS
+Each archive has an adjacent `<archive>.sha256` file. The published v0.2.0
+archives do not include the [corral-pi agent host](#optional-the-corral-pi-agent-host).
+Linux `corral` uses musl rather than requiring a particular glibc version. macOS packages target macOS
 14 or later. Windows packages statically link the MSVC runtime and target 64-bit Windows
 10/11; the native smoke runner is Windows Server 2022. The x86_64 Windows
 package is not advertised as native ARM64 support: ARM64 and 32-bit Windows
@@ -58,10 +57,10 @@ separate from planner mode.
 
 ## Linux
 
-Install the classic v0.4.0 release:
+Install the classic v0.2.0 release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.4.0 sh -s -- --legacy --yes
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.2.0 sh -s -- --legacy --yes
 export PATH="$HOME/.local/bin:$PATH"
 corral --version
 ```
@@ -80,7 +79,7 @@ prints the official herdr installation command instead.
 Install using Terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.4.0 sh -s -- --legacy --yes
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.2.0 sh -s -- --legacy --yes
 export PATH="$HOME/.local/bin:$PATH"
 corral --version
 ```
@@ -96,7 +95,7 @@ Run in PowerShell:
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.2.0
 $env:PATH = "$env:LOCALAPPDATA\Programs\corral\bin;$env:PATH"
 corral --version
 ```
@@ -112,7 +111,7 @@ script first, then run it under your organization's permitted policy:
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.2.0
 ```
 
 The Windows installer prints setup guidance and does not install herdr
@@ -155,27 +154,27 @@ Re-running the same installer replaces the binary in place. Keep `--legacy` (or
 `-Legacy` on Windows) and an explicit published legacy tag on every invocation;
 `latest` can refer to a newer, incompatible release. There is no automatic updater.
 
-Download the installer and select v0.4.0 on Linux/macOS:
+Download the installer and select v0.2.0 on Linux/macOS:
 
 ```sh
 curl -fsSLo install.sh https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh
-CORRAL_VERSION=v0.4.0 sh install.sh --legacy
+CORRAL_VERSION=v0.2.0 sh install.sh --legacy
 ```
 
 For a different destination, the variable applies to the installer process,
 not just to curl:
 
 ```sh
-CORRAL_VERSION=v0.4.0 CORRAL_INSTALL_DIR="$HOME/bin" sh install.sh --legacy
-CORRAL_VERSION=v0.4.0 sh install.sh --legacy --dry-run
+CORRAL_VERSION=v0.2.0 CORRAL_INSTALL_DIR="$HOME/bin" sh install.sh --legacy
+CORRAL_VERSION=v0.2.0 sh install.sh --legacy --dry-run
 ```
 
 On Windows, after downloading `install.ps1`:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0 -InstallDir "$HOME\bin"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0 -DryRun
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.2.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.2.0 -InstallDir "$HOME\bin"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.2.0 -DryRun
 ```
 
 PowerShell also accepts `CORRAL_VERSION` and `CORRAL_INSTALL_DIR` environment
@@ -202,9 +201,12 @@ are not part of this release pipeline.
 The [corral-pi host](corral-pi.md) is opt-in and needs nothing above unless you configure a
 `corral-pi` profile. It runs on Linux and macOS.
 
-From a release (v0.4.0 and later) `install.sh` installs `corral-pi-host` beside `corral`
-and runs `corral agent install` for you. The host is one executable that embeds Bun and
-every dependency, so no Bun, checkout or network install is involved. Then log in once:
+The v0.4.0 Pi host is source-only: no classic v0.4.0 release assets are
+published, and the v0.2.0 binaries above do not include it. The following
+instructions require a compatible classic source build with Pi support, not
+the published v0.2.0 binary. Build the host locally using
+`scripts/build-pi-host.sh <out>`; the compiled host embeds Bun and its dependencies.
+Install the host using `corral agent install`, then log in once:
 
 ```sh
 corral agent login      # pick OpenAI (ChatGPT) or Anthropic (Claude Pro/Max)

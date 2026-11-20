@@ -11,7 +11,7 @@ Authenticate through that agent's own login flow before starting; corral uses yo
 On Linux or macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.4.0 sh -s -- --legacy --yes
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.2.0 sh -s -- --legacy --yes
 export PATH="$HOME/.local/bin:$PATH"
 corral --version
 ```
@@ -24,7 +24,7 @@ On native Windows x86_64, run in PowerShell:
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.2.0
 $env:PATH = "$env:LOCALAPPDATA\Programs\corral\bin;$env:PATH"
 corral --version
 ```
@@ -32,6 +32,9 @@ corral --version
 The Windows installer prints engine setup guidance rather than installing herdr. Complete the
 [Windows herdr and Git Bash setup](install.md#native-windows), then use Git Bash for the steps below.
 The [installation guide](install.md) also covers persistent PATH, updates and version pins.
+
+The rest of this walkthrough describes later classic source features; the published v0.2.0
+binaries may not support every command or behavior shown.
 
 ## 2. Open your workspace
 
