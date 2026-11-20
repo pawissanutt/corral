@@ -1,6 +1,6 @@
 //! Authenticated browser sessions share the bounded enrolled-device app gateway.
 use std::{
-    net::{SocketAddr, TcpStream},
+    net::SocketAddr,
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
@@ -17,7 +17,7 @@ use tungstenite::protocol::frame::coding::CloseCode;
 
 use super::{
     dispatch,
-    ws::{self, Mode, WsConn},
+    ws::{self, Bounded, Mode, WsConn},
 };
 use crate::{
     conn::{Peer, error, notify, reply},
@@ -44,7 +44,7 @@ impl Drop for PairGuard {
 }
 
 pub(super) fn serve(
-    stream: TcpStream,
+    stream: Bounded,
     peer: SocketAddr,
     shared: Arc<Shared>,
     origins: &[String],

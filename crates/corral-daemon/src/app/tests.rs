@@ -1,5 +1,5 @@
 use super::*;
-use std::net::TcpStream;
+use std::io::{Read, Write};
 use std::time::Duration;
 
 use corral_protocol::{
@@ -177,19 +177,40 @@ impl Client {
     }
 }
 
+fn load_app(port: u16) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .write_all(b"GET /sessions HTTP/1.1\r\nHost: localhost\r\nAccept: text/html\r\n\r\n")
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+
 #[test]
 fn paired_browser_is_owner_until_revocation_closes_it() {
     let fixture = crate::tests::Fixture::new();
     fixture.unix_server();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let bundle = fixture.root().join("web");
     serve_listener(
         listener,
         Arc::clone(fixture.shared()),
         vec![ORIGIN.into()],
         None,
+        Some(bundle.clone()),
     )
     .unwrap();
+
+    assert!(load_app(port).starts_with("HTTP/1.1 503"));
+    std::fs::create_dir(&bundle).unwrap();
+    std::fs::write(bundle.join("index.html"), "app shell").unwrap();
+    let page = load_app(port);
+    assert!(page.starts_with("HTTP/1.1 200") && page.ends_with("\r\n\r\napp shell"));
 
     let error = upgrade(port, SESSION_PATH, "http://evil.example").unwrap_err();
     assert!(matches!(error, tungstenite::Error::Http(response) if response.status() == 403));
@@ -275,6 +296,8 @@ fn paired_browser_is_owner_until_revocation_closes_it() {
     let app_session = browser.call(wire::app::APP_SESSION, json!({}));
     assert_eq!(app_session["result"]["device"]["id"], device.id);
     assert_eq!(app_session["result"]["local"], true);
+    std::fs::write(bundle.join("index.html"), "new app shell").unwrap();
+    assert!(load_app(port).ends_with("\r\n\r\nnew app shell"));
     let acted = browser.call(
         wire::op::OP_SUBMIT,
         wire::op::OpSubmit {

@@ -56,6 +56,8 @@ impl Default for Config {
 pub struct DaemonConfig {
     pub listen: Option<std::net::SocketAddr>,
     pub web_origin: Vec<String>,
+    pub web_dir: Option<PathBuf>,
+    pub web_endpoint: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

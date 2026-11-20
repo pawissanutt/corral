@@ -493,6 +493,7 @@ dependencies = [
  "corral-types",
  "futures-lite",
  "getrandom 0.4.3",
+ "httparse",
  "isahc",
  "jiff",
  "rustix",
