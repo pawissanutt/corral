@@ -216,6 +216,63 @@ pub struct SettingsSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<crate::schema_types::ConfigProblem>")]
     pub problem: Option<corral_types::ConfigProblem>,
+    /// Daemon filesystem observations for this configuration revision. Absent if not observed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_facts: Option<Vec<HarnessFact>>,
+    /// Only the workspace Pi file location and its configured child profile selections.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pi_config: Option<PiConfigFacts>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HarnessFact {
+    /// Exact key in the effective engine harness configuration.
+    pub name: String,
+    pub status: HarnessStatus,
+    /// Literal command program when identifiable; never includes arguments or assignments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<String>,
+    /// Executable file observed on the daemon host, not a guarantee of what a runner launches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessStatus {
+    /// An executable file was found. Does not assert that it can launch or authenticate.
+    Installed,
+    /// No executable file matched the daemon lookup.
+    NotFound,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PiConfigFacts {
+    /// Absolute path on the daemon host.
+    pub path: String,
+    pub status: PiConfigStatus,
+    /// Named entries in `[build.profiles]`; does not assert launch eligibility.
+    pub child_profiles: Vec<PiChildProfile>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PiConfigStatus {
+    /// The child profile projection could be read; not a validation of all Pi settings.
+    Read,
+    Missing,
+    #[serde(other)]
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PiChildProfile {
+    pub name: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

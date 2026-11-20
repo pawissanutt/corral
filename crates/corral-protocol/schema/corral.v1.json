@@ -3521,6 +3521,56 @@
         ],
         "type": "string"
       },
+      "HarnessFact": {
+        "properties": {
+          "executable": {
+            "description": "Literal command program when identifiable; never includes arguments or assignments.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "description": "Exact key in the effective engine harness configuration.",
+            "type": "string"
+          },
+          "resolved_path": {
+            "description": "Executable file observed on the daemon host, not a guarantee of what a runner launches.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/HarnessStatus"
+          }
+        },
+        "required": [
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
+      "HarnessStatus": {
+        "oneOf": [
+          {
+            "enum": [
+              "unknown"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "installed",
+            "description": "An executable file was found. Does not assert that it can launch or authenticate.",
+            "type": "string"
+          },
+          {
+            "const": "not_found",
+            "description": "No executable file matched the daemon lookup.",
+            "type": "string"
+          }
+        ]
+      },
       "Health": {
         "properties": {
           "daemon": {
@@ -4396,6 +4446,67 @@
           "truncated"
         ],
         "type": "object"
+      },
+      "PiChildProfile": {
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "model"
+        ],
+        "type": "object"
+      },
+      "PiConfigFacts": {
+        "properties": {
+          "child_profiles": {
+            "description": "Named entries in `[build.profiles]`; does not assert launch eligibility.",
+            "items": {
+              "$ref": "#/components/schemas/PiChildProfile"
+            },
+            "type": "array"
+          },
+          "path": {
+            "description": "Absolute path on the daemon host.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PiConfigStatus"
+          }
+        },
+        "required": [
+          "path",
+          "status",
+          "child_profiles"
+        ],
+        "type": "object"
+      },
+      "PiConfigStatus": {
+        "oneOf": [
+          {
+            "enum": [
+              "missing",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "read",
+            "description": "The child profile projection could be read; not a validation of all Pi settings.",
+            "type": "string"
+          }
+        ]
       },
       "Ping": {
         "type": "object"
@@ -8100,6 +8211,16 @@
             },
             "type": "array"
           },
+          "harness_facts": {
+            "description": "Daemon filesystem observations for this configuration revision. Absent if not observed.",
+            "items": {
+              "$ref": "#/components/schemas/HarnessFact"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
           "hostname": {
             "type": [
               "string",
@@ -8115,6 +8236,17 @@
                 "type": "null"
               }
             ]
+          },
+          "pi_config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PiConfigFacts"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only the workspace Pi file location and its configured child profile selections."
           },
           "problem": {
             "anyOf": [
