@@ -23,13 +23,10 @@ use crate::ui::kit::status::look_mark;
 use crate::ui::term::{self, cells};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, row_height};
 
-/// The inspector's width beside a desktop list, and the least page that keeps both (the mock's
-/// 340 and 980).
-const INSPECTOR: f32 = 340.0;
+/// The least desktop page that keeps the inspector beside the list (the mock's 980, with the
+/// inspector at its least, `list::inspector_width`).
 const BESIDE: f32 = 980.0;
-/// The same in a terminal: the panel's Cells, and the least page that keeps a list of 44
-/// Cells and the line between them beside it.
-const INSPECTOR_CELLS: f32 = 36.0;
+/// The same in a terminal: a list of 44 Cells, the line and the inspector at its least.
 const BESIDE_CELLS: f32 = 81.0;
 /// A desktop row's paddings and the gap between two of its columns.
 const PAD_LEFT: f32 = 16.0;
@@ -115,27 +112,31 @@ pub fn list_page_with(app: AppState, page: ListPage, foot: Option<AnyElement>) -
     let has_inspector = inspector.is_some();
     let beside =
         computed(move || has_inspector && app.inspector.get() && inspector_fits(app, width.get()));
+    let terminal = form == Form::Terminal;
+    // The inspector's width in the form's unit: points, or Cells in a terminal.
+    let inspector_width = computed(move || {
+        let page = width.get();
+        list::inspector_width(if terminal { page / cells(1.0).0 } else { page }, terminal)
+    });
     // The columns that fit the list: the page less the inspector.
     let columns = Rc::new(columns);
     let shown = {
         let columns = Rc::clone(&columns);
         computed(move || {
-            let terminal = form == Form::Terminal;
             let page = width.get();
             if page <= 0.0 {
                 return vec![true; columns.len()];
             }
-            let room = if terminal {
-                let list = page / cells(1.0).0
-                    - if beside.get() {
-                        INSPECTOR_CELLS + 1.0
-                    } else {
-                        0.0
-                    };
-                // The selection bar's Cell and the Cell after it.
-                list - 2.0
+            let panel = if beside.get() {
+                inspector_width.get()
             } else {
-                page - if beside.get() { INSPECTOR } else { 0.0 } - PAD_LEFT - PAD_RIGHT
+                0.0
+            };
+            let room = if terminal {
+                // The line before the inspector, the selection bar's Cell and the Cell after it.
+                page / cells(1.0).0 - if beside.get() { panel + 1.0 } else { 0.0 } - 2.0
+            } else {
+                page - panel - PAD_LEFT - PAD_RIGHT
             };
             list::fitted(&columns, room, if terminal { 1.0 } else { GAP }, terminal)
         })
@@ -216,12 +217,12 @@ pub fn list_page_with(app: AppState, page: ListPage, foot: Option<AnyElement>) -
                         .child(term::vrule())
                         .child(
                             panel
-                                .w(cells(INSPECTOR_CELLS))
+                                .w(move || cells(inspector_width.get()))
                                 .child(scroll().flex_1().min_h(px(0.0)).child(body)),
                         )
                         .into_element(),
                     Form::Desktop | Form::Phone => panel
-                        .w(px(INSPECTOR))
+                        .w(move || px(inspector_width.get()))
                         .border_l(px(1.0))
                         .border_color(color(Token::Rule))
                         .bg(color(Token::Surface))
@@ -252,7 +253,8 @@ pub fn list_page_with(app: AppState, page: ListPage, foot: Option<AnyElement>) -
 }
 
 /// A column's slot: its fixed width, or a share of what the fixed ones leave, never under its
-/// least. Out of the row while the column has given way.
+/// least nor over its most; what the bounded columns leave on a wide page stays after the last
+/// one, inside the row. Out of the row while the column has given way.
 fn slot(form: Form, column: &Column, at: usize, shown: Memo<Vec<bool>>) -> View {
     let slot = view()
         .flex_row()
@@ -277,10 +279,14 @@ fn slot(form: Form, column: &Column, at: usize, shown: Memo<Vec<bool>>) -> View 
             points,
             cells,
             grow,
+            most,
         } => slot
             .w(length(points, cells))
             .flex_grow(grow)
-            .flex_shrink(1.0),
+            .flex_shrink(1.0)
+            .when_some(most, |slot, (points, cells)| {
+                slot.max_w(length(points, cells))
+            }),
     }
 }
 

@@ -37,7 +37,7 @@ use crate::ui::kit::page_phone::search;
 use crate::ui::kit::status::{pipeline_marks, status_mark};
 use crate::ui::kit::text::dim;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
+use crate::ui::tokens::{FONT_TEXT, MEASURE_FORM, Token, color, text_size};
 
 /// The filter field's width beside the head's title: points on a desktop, Cells in a terminal.
 const FILTER_WIDTH: f32 = 220.0;
@@ -81,10 +81,16 @@ fn list(app: AppState) -> AnyElement {
             .map(str::to_owned)
     });
     let columns = untracked(|| tasks::columns(&app.project_scope()));
+    // The board's health reads as a line under the head, not a band across a wide list.
+    let health = view()
+        .when(app.form == Form::Desktop, |health| {
+            health.max_w(px(MEASURE_FORM))
+        })
+        .child(board_status(app));
     let head = view()
         .flex_none()
         .child(page_head(app))
-        .child(board_status(app))
+        .child(health)
         .into_element();
     let page = list_page_with(
         app,

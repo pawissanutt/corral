@@ -1,6 +1,7 @@
 //! What every list page shares: grouped sections of rows, the selection that walks them, and
 //! the columns of a table row with the order they give way in as the list narrows. Tasks and
-//! Sessions are such lists beside an inspector; Home's phone form is one without it.
+//! Sessions are such lists beside an inspector, as wide as the page allows
+//! (`inspector_width`); Home's phone form is one without it.
 
 use crate::model::Id;
 use crate::model::status::Look;
@@ -112,8 +113,15 @@ pub enum ColumnWidth {
     /// Exactly this many points on a desktop and Cells in a terminal.
     Fixed { points: f32, cells: f32 },
     /// Shares what the fixed columns leave, never under its least width; `grow` weighs it
-    /// against the other flexible columns.
-    Flex { points: f32, cells: f32, grow: f32 },
+    /// against the other flexible columns. `most` (points, Cells) bounds it, so on a wide page
+    /// a name keeps a readable line and the columns after it stay beside it rather than
+    /// across an empty middle.
+    Flex {
+        points: f32,
+        cells: f32,
+        grow: f32,
+        most: Option<(f32, f32)>,
+    },
 }
 
 impl ColumnWidth {
@@ -123,6 +131,18 @@ impl ColumnWidth {
             (Self::Fixed { points, .. } | Self::Flex { points, .. }, false) => points,
         }
     }
+}
+
+/// The inspector beside a list: a quarter of the page, never under the mock's 340 points (36
+/// Cells) so it keeps its width wherever it showed before, and never over 520 (56), past which
+/// its facts and buttons gain nothing. `page` is in points on a desktop, Cells in a terminal.
+pub fn inspector_width(page: f32, terminal: bool) -> f32 {
+    let (least, most) = if terminal {
+        (36.0, 56.0)
+    } else {
+        (340.0, 520.0)
+    };
+    (page * 0.25).clamp(least, most)
 }
 
 /// One column of a list's table: the header's name and how its cells sit.
@@ -168,11 +188,30 @@ impl Column {
                 points,
                 cells,
                 grow,
+                most: None,
             },
             end: false,
             gives_way: None,
             short: None,
         }
+    }
+    /// A flexible column grows to at most `points` on a desktop and `cells` in a terminal.
+    pub const fn most(mut self, points: f32, cells: f32) -> Column {
+        if let ColumnWidth::Flex {
+            points: least,
+            cells: least_cells,
+            grow,
+            ..
+        } = self.width
+        {
+            self.width = ColumnWidth::Flex {
+                points: least,
+                cells: least_cells,
+                grow,
+                most: Some((points, cells)),
+            };
+        }
+        self
     }
     /// Set against the trailing edge.
     pub const fn end(mut self) -> Column {
@@ -337,5 +376,18 @@ mod tests {
             fitted(&columns, 44.0, 1.0, true),
             [true, true, false, false, true]
         );
+    }
+
+    /// On a 3400-point window the inspector stayed 340 points wide, so the selected row's
+    /// facts sat in a narrow strip while the list stretched across the rest: it grows with
+    /// the page, yet keeps its width where it showed before and stops at a readable bound.
+    #[test]
+    fn the_inspector_grows_with_a_wide_page_within_its_bounds() {
+        // A 1440-point window less the sidebar.
+        assert_eq!(inspector_width(1232.0, false), 340.0);
+        assert!(inspector_width(2400.0, false) > 340.0);
+        assert_eq!(inspector_width(3192.0, false), 520.0);
+        assert_eq!(inspector_width(68.0, true), 36.0);
+        assert_eq!(inspector_width(300.0, true), 56.0);
     }
 }

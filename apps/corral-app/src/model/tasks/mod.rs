@@ -425,13 +425,16 @@ pub fn facts(feed: &Feed, id: &str) -> Option<TaskFacts> {
 }
 
 /// A task row's columns. Profile gives way first as the list narrows, then project, then
-/// cost, then the phrase; with one project in scope the project column is left out.
+/// cost, then the phrase; with one project in scope the project column is left out. The title
+/// and the phrase stop growing at a readable line.
 pub fn columns(scope: &Scope) -> Vec<Column> {
     let mut columns = vec![
         Column::fixed("status", "", 14.0, 1.0),
         Column::fixed("id", "ID", 58.0, 6.0),
-        Column::flex("title", "Title", 140.0, 16.0, 1.4),
-        Column::flex("now", "Now", 110.0, 14.0, 1.0).gives_way(4),
+        Column::flex("title", "Title", 140.0, 16.0, 1.4).most(480.0, 56.0),
+        Column::flex("now", "Now", 110.0, 14.0, 1.0)
+            .most(360.0, 40.0)
+            .gives_way(4),
         Column::fixed("pipeline", "run gate rev land", 104.0, 7.0).short("stages"),
     ];
     if scope.project().is_none() {
