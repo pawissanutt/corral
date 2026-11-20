@@ -1,7 +1,8 @@
 //! The task page's Overview: Description (the body's Markdown), Children (a plan's), Depends
 //! on, then Pipeline, Checks (each round's gate and review), Runs (each opening its session,
 //! the live reviewer's included) and Artifacts (the finder, narrowed to the task). On a wide
-//! desktop the first three stand beside the rest; elsewhere one column.
+//! desktop what is read (Description, Checks with the reviewer's notes, Children, Depends on)
+//! stands beside a rail of what is placed (Pipeline, Runs, Artifacts); elsewhere one column.
 
 use nsh_core::prelude::*;
 
@@ -15,12 +16,19 @@ use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::more::press;
 use crate::ui::kit::status::pipeline_rows;
 use crate::ui::term;
+use crate::ui::tokens::MEASURE_PROSE;
 
 use super::candidate::brief::chain;
 use super::parts::{block, linked, plain_row, quiet, run};
 
 /// The least width of a desktop page whose blocks stand in two columns.
 const TWO_COLUMNS: f32 = 900.0;
+/// How much faster the main column grows than the rail, and the rail's least and most width:
+/// the rail grows with the page but the longest text (the description, the reviewer's notes)
+/// keeps the larger share.
+const MAIN_SHARE: f32 = 1.6;
+const RAIL_MIN: f32 = 340.0;
+const RAIL_MAX: f32 = 520.0;
 
 /// The Overview of task `id`.
 pub(crate) fn overview(app: AppState, id: Id) -> AnyElement {
@@ -31,30 +39,46 @@ pub(crate) fn overview(app: AppState, id: Id) -> AnyElement {
         let wide = wide.get();
         let id = id.clone();
         untracked(move || {
-            let left = vec![
-                description(app, id.clone()),
-                children(app, id.clone()),
-                depends(app, id.clone()),
-            ];
-            let mut right = Vec::new();
-            if form != Form::Phone {
-                right.push(pipeline(app, id.clone()));
-            }
-            right.extend([
-                checks(app, id.clone()),
-                runs(app, id.clone()),
-                artifacts(app, id),
-            ]);
+            let description = description(app, id.clone());
+            let children = children(app, id.clone());
+            let depends = depends(app, id.clone());
+            let checks = checks(app, id.clone());
+            let runs = runs(app, id.clone());
+            let artifacts = artifacts(app, id.clone());
             if wide {
-                view()
+                return view()
                     .flex_row()
                     .gap(px(28.0))
-                    .child(view().flex_1().min_w(px(0.0)).children(left))
-                    .child(view().w(px(380.0)).flex_shrink_0().children(right))
-                    .into_element()
-            } else {
-                view().children(left).children(right).into_element()
+                    .child(
+                        view()
+                            .flex_1()
+                            .flex_grow(MAIN_SHARE)
+                            .min_w(px(0.0))
+                            .child(description)
+                            .child(checks)
+                            .child(children)
+                            .child(depends),
+                    )
+                    .child(
+                        view()
+                            .flex_1()
+                            .min_w(px(RAIL_MIN))
+                            .max_w(px(RAIL_MAX))
+                            .child(pipeline(app, id))
+                            .child(runs)
+                            .child(artifacts),
+                    )
+                    .into_element();
             }
+            view()
+                .child(description)
+                .child(children)
+                .child(depends)
+                .children((form != Form::Phone).then(|| pipeline(app, id)))
+                .child(checks)
+                .child(runs)
+                .child(artifacts)
+                .into_element()
         })
     });
     let page = view()
@@ -68,7 +92,7 @@ pub(crate) fn overview(app: AppState, id: Id) -> AnyElement {
     }
 }
 
-/// The body's Markdown, exactly as the engine stores it.
+/// The body's Markdown, exactly as the engine stores it, kept to a readable line on desktop.
 fn description(app: AppState, id: Id) -> AnyElement {
     let body = computed(move || {
         app.feed
@@ -77,7 +101,12 @@ fn description(app: AppState, id: Id) -> AnyElement {
     provide_styles(app);
     dynamic(move || {
         let content = match body.get() {
-            Some(body) => markdown(app, &body, false),
+            Some(body) => view()
+                .when(app.form == Form::Desktop, |prose| {
+                    prose.max_w(px(MEASURE_PROSE))
+                })
+                .child(markdown(app, &body, false))
+                .into_element(),
             None => quiet(app, page::NO_DESCRIPTION),
         };
         block(app, page::DESCRIPTION, None, content)

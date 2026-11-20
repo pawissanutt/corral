@@ -3,8 +3,9 @@
 //! to Tasks and names the task (status, id, title, Ask about this, More); a meta line gives
 //! its project, priority, kind, size, base, profile and round; the decision band (`band.rs`)
 //! holds what the owner decides; then the tabs Overview, Changes and History (`NavState::task_tab`, keys `1`
-//! `2` `3`, in the address as `/task/<id>/<tab>`). Escape returns to Tasks. The phone shows the
-//! same page in one column, the band first.
+//! `2` `3`, in the address as `/task/<id>/<tab>`). Escape returns to Tasks. On a wide desktop
+//! window the content keeps to `MEASURE_RECORD`, centred, while the rules and the band's ground
+//! run edge to edge. The phone shows the same page in one column, the band first.
 //!
 //! While the page shows, it keeps the task's detail (and a plan's detail, and a candidate's
 //! review detail) loaded and current.
@@ -28,10 +29,11 @@ use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with, tab_strip};
 use crate::ui::kit::next::more_button;
+use crate::ui::kit::page::measure;
 use crate::ui::kit::status::status_word_mark;
 use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::term;
-use crate::ui::tokens::{Token, color};
+use crate::ui::tokens::{MEASURE_RECORD, Token, color};
 
 pub(crate) use band::decision;
 
@@ -83,23 +85,29 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
             .into_element(),
         Form::Desktop | Form::Phone => view()
             .flex_none()
-            .px(px(18.0))
-            .pt(px(8.0))
-            .pb(px(10.0))
-            .gap(px(4.0))
             .border_b(px(1.0))
             .border_color(color(Token::Rule))
-            .child(
+            .child(measure(
+                app,
+                MEASURE_RECORD,
                 view()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(10.0))
-                    .child(back)
-                    .child(named(app, &id))
-                    .child(ask)
-                    .child(more),
-            )
-            .child(meta(app, &id))
+                    .px(px(18.0))
+                    .pt(px(8.0))
+                    .pb(px(10.0))
+                    .gap(px(4.0))
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(10.0))
+                            .child(back)
+                            .child(named(app, &id))
+                            .child(ask)
+                            .child(more),
+                    )
+                    .child(meta(app, &id))
+                    .into_element(),
+            ))
             .into_element(),
     };
     let page = view()
@@ -124,15 +132,46 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
                 ),
             )
             .into_element(),
+        // The scroll spans the window, so its bar stays at the edge; what it scrolls is measured.
         Form::Desktop | Form::Phone => page
-            .child(view().flex_none().child(decision(app, id.clone(), false)))
-            .child(view().flex_none().px(px(18.0)).child(tabs(app)))
-            .child(
-                scroll()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .child(view().px(px(18.0)).child(tab_body(app, id))),
-            )
+            .child(band(app, id.clone()))
+            .child(view().flex_none().child(measure(
+                app,
+                MEASURE_RECORD,
+                view().px(px(18.0)).child(tabs(app)).into_element(),
+            )))
+            .child(scroll().flex_1().min_h(px(0.0)).child(measure(
+                app,
+                MEASURE_RECORD,
+                view().px(px(18.0)).child(tab_body(app, id)).into_element(),
+            )))
+            .into_element(),
+    }
+}
+
+/// The page's band. A desktop lays its ground and rule across the window and holds the band's
+/// words and buttons to the page's measure, so it draws the ground here around the flat band
+/// (which keeps its own 12 pt under it); the inspector's band stays as it is.
+fn band(app: AppState, id: Id) -> AnyElement {
+    match app.form {
+        Form::Desktop => view()
+            .flex_none()
+            .bg(color(Token::Surface))
+            .border_b(px(1.0))
+            .border_color(color(Token::Rule))
+            .child(measure(
+                app,
+                MEASURE_RECORD,
+                view()
+                    .pt(px(12.0))
+                    .px(px(20.0))
+                    .child(decision(app, id, true))
+                    .into_element(),
+            ))
+            .into_element(),
+        Form::Phone | Form::Terminal => view()
+            .flex_none()
+            .child(decision(app, id, false))
             .into_element(),
     }
 }

@@ -6,18 +6,17 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::review::{ReadyLink, ReviewQuote};
+use crate::screens::markdown::{markdown, provide_styles};
 use crate::state::AppState;
 use crate::ui::kit::hint::hinted;
 use crate::ui::kit::marks::mark;
 use crate::ui::kit::text::mono;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_TEXT, MEASURE_PROSE, Token, color};
 
 /// A chain link's mark column and the line that joins it to the next (`.ready li`).
 const MARK_COLUMN: f32 = 18.0;
 const MARK_ROW: f32 = 20.0;
-/// The reviewer's quoted note (`.ready blockquote { max-width: 68ch }`).
-const QUOTE_MAX: f32 = 560.0;
 
 /// `.ready`: each link's mark in its hue on a rule-2 line down to the next, the title (its
 /// hint the receipt), the candidate's SHA, a count of older results, the quoted note.
@@ -116,8 +115,10 @@ fn chain_link(app: AppState, link: &ReadyLink, last: bool) -> AnyElement {
         .into_element()
 }
 
-/// The reviewer's note in a quiet bordered block, who said it above it (`.ready blockquote`);
-/// a terminal sets it two Cells in, who quiet over the words.
+/// The reviewer's note in a quiet bordered block, who said it above it (`.ready blockquote`),
+/// kept to a readable line. Reviewers write Markdown (headings, lists, code spans), so it is
+/// laid out as such; a long path breaks within the block rather than running past it. A
+/// terminal sets it two Cells in, who quiet over the words.
 fn quoted(app: AppState, quote: &ReviewQuote) -> AnyElement {
     let form = app.form;
     if form == Form::Terminal {
@@ -127,14 +128,11 @@ fn quoted(app: AppState, quote: &ReviewQuote) -> AnyElement {
             .child(text(quote.text.clone()).text_color(color(Token::Ink)))
             .into_element();
     }
-    let (by, size) = if form == Form::Phone {
-        (13.0, 14.0)
-    } else {
-        (12.0, 13.0)
-    };
+    provide_styles(app);
     view()
         .mt(px(8.0))
-        .max_w(px(QUOTE_MAX))
+        .max_w(px(MEASURE_PROSE))
+        .min_w(px(0.0))
         .px(px(12.0))
         .py(px(8.0))
         .rounded(px(6.0))
@@ -145,15 +143,9 @@ fn quoted(app: AppState, quote: &ReviewQuote) -> AnyElement {
         .child(
             text(quote.by.clone())
                 .font_family(FONT_TEXT)
-                .text_size(px(by))
+                .text_size(px(if form == Form::Phone { 13.0 } else { 12.0 }))
                 .text_color(color(Token::Ink3)),
         )
-        .child(
-            text(quote.text.clone())
-                .font_family(FONT_TEXT)
-                .text_size(px(size))
-                .line_height(px((size * 1.5).round()))
-                .text_color(color(Token::Ink)),
-        )
+        .child(markdown(app, &quote.text, false))
         .into_element()
 }
