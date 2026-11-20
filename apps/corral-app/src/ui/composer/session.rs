@@ -114,7 +114,7 @@ pub(crate) fn session_composer(
     command: Memo<Option<Vec<Action>>>,
     focused: Memo<bool>,
 ) -> AnyElement {
-    build(app, id, composer, command, focused, None)
+    build(app, id, composer, command, focused, None, true)
 }
 
 /// The same composer in Ask: its field takes the focus each time Ask opens, and the chips, the
@@ -127,7 +127,19 @@ pub(crate) fn ask_composer(
     focused: Memo<bool>,
 ) -> AnyElement {
     let ask = super::ask(app, &id);
-    build(app, id, composer, command, focused, Some(ask))
+    build(app, id, composer, command, focused, Some(ask), true)
+}
+
+/// Ask's composer docked at Home's foot: as [`ask_composer`], but the field takes the keyboard
+/// focus only when pressed, so Home's keys walk its cards meanwhile.
+pub(crate) fn docked_composer(
+    app: AppState,
+    id: Id,
+    composer: Memo<Option<SessionComposer>>,
+    command: Memo<Option<Vec<Action>>>,
+) -> AnyElement {
+    let ask = super::ask(app, &id);
+    build(app, id, composer, command, computed(|| false), Some(ask), false)
 }
 
 fn build(
@@ -137,6 +149,7 @@ fn build(
     command: Memo<Option<Vec<Action>>>,
     focused: Memo<bool>,
     ask: Option<Ask>,
+    take_focus: bool,
 ) -> AnyElement {
     let form = app.form;
     let entry = element_ref();
@@ -160,7 +173,7 @@ fn build(
             move |_| send(app, &id, composer, SendPolicy::FollowUp, ask, attach),
         );
     }
-    if ask.is_some() {
+    if ask.is_some() && take_focus {
         super::focus_on_open(app, entry);
     }
     let field = field(app, id.clone(), composer, command, entry, ask, attach);
