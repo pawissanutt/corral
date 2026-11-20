@@ -6,12 +6,10 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::state::AppState;
+use crate::ui::kit::page::measure;
 use crate::ui::kit::text::h3;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
-
-/// The widest a section reads at on the desktop (the mockup's `max-width: 960px`).
-const MEASURE: f32 = 960.0;
+use crate::ui::tokens::{FONT_MONO, FONT_TEXT, MEASURE_FORM, Token, color, text_size};
 
 /// The keyboard focus ring: 2 pt of the focus colour, 2 pt out.
 pub fn ring(s: StyleRefinement) -> StyleRefinement {
@@ -75,16 +73,21 @@ fn heading(app: AppState, title: &'static str) -> AnyElement {
 }
 
 /// A section as each form shows it: on the desktop the title over the parts, `gap` points
-/// apart, held to the mockup's measure; in a terminal a framed pane with the title in its top
-/// line; on the phone the parts alone, padded as the mockup's page bodies (14 18 24).
+/// apart, held to a form's measure (the mockup's `max-width: 960px`) and centred, so a wide
+/// window leaves the room either side rather than all of it on the right; in a terminal a
+/// framed pane with the title in its top line; on the phone the parts alone, padded as the
+/// mockup's page bodies (14 18 24).
 pub fn frame(app: AppState, title: &'static str, gap: f32, parts: Vec<AnyElement>) -> AnyElement {
     match app.form {
-        Form::Desktop => view()
-            .max_w(px(MEASURE))
-            .child(heading(app, title))
-            .child(view().h(px(gap)).flex_shrink_0())
-            .children(parts)
-            .into_element(),
+        Form::Desktop => measure(
+            app,
+            MEASURE_FORM,
+            view()
+                .child(heading(app, title))
+                .child(view().h(px(gap)).flex_shrink_0())
+                .children(parts)
+                .into_element(),
+        ),
         Form::Terminal => term::framed(view().px(term::cells(1.0)).children(parts))
             .child(term::top_title(heading(app, title)))
             .into_element(),

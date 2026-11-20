@@ -10,10 +10,10 @@ use crate::model::projects::assistant_landing;
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
-use crate::ui::kit::page::{body, head, search};
+use crate::ui::kit::page::{body, measure, measured_head, search};
 use crate::ui::kit::text::{h3, plain};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
+use crate::ui::tokens::{FONT_TEXT, MEASURE_PAGE, Token, color, text_size};
 
 /// The measure of the landing's prose on desktop and phone.
 const MEASURE: f32 = 560.0;
@@ -80,7 +80,18 @@ pub fn screen(app: AppState) -> AnyElement {
         .flex_col()
         .min_w(px(0.0))
         .min_h(px(0.0))
-        .child(head(app, landing.title, None, actions))
-        .child(body(app, "landing-pane", content.into_element()))
+        // Home's place, so a desktop keeps it to Home's measure, centred, as the dashboard.
+        .child(measured_head(
+            app,
+            MEASURE_PAGE,
+            landing.title,
+            None,
+            actions,
+        ))
+        .child(body(
+            app,
+            "landing-pane",
+            measure(app, MEASURE_PAGE, content.into_element()),
+        ))
         .into_element()
 }

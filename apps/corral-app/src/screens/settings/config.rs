@@ -22,10 +22,10 @@ use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with, tab_strip};
 use crate::ui::kit::notice::error;
-use crate::ui::kit::page::{bar, body};
+use crate::ui::kit::page::{body, measured_bar};
 use crate::ui::kit::text::h3;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, Token, color};
+use crate::ui::tokens::{FONT_MONO, MEASURE_FORM, Token, color};
 
 const PARTS: [(Part, &str); 7] = [
     (Part::Workspace, "Workspace"),
@@ -36,6 +36,10 @@ const PARTS: [(Part, &str); 7] = [
     (Part::Artifacts, "Artifacts"),
     (Part::File, "File"),
 ];
+
+/// The save bar's measure: the section's, with the 24 pt the bar and the body each pad their
+/// sides with, so Save stands under the section's left edge.
+const BAR_MEASURE: f32 = MEASURE_FORM + 2.0 * 24.0;
 
 /// Desktop and terminal: the scrolling editor over its pinned save bar.
 pub fn screen(app: AppState) -> AnyElement {
@@ -548,7 +552,7 @@ fn save_bar(app: AppState) -> AnyElement {
                 .test_id("config-status")
                 .number_of_lines(1u32)
                 .text_color(color(if dirty { Token::Ink } else { Token::Ink3 }));
-            bar(app, actions, Some(words.into_element()))
+            measured_bar(app, BAR_MEASURE, actions, Some(words.into_element()))
         })
     })
     .into_element()

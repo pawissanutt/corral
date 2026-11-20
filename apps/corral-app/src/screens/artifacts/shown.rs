@@ -15,11 +15,11 @@ use crate::screens::markdown::{markdown, provide_styles};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::marks::hue_ink;
-use crate::ui::kit::page::{body, head};
+use crate::ui::kit::page::{body, measure, measured_head};
 use crate::ui::kit::table::kv;
 use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, Token, color};
+use crate::ui::tokens::{FONT_MONO, MEASURE_RECORD, Token, color};
 
 /// A code or log line's size and leading on desktop and phone.
 const CODE: (f32, f32) = (11.5, 17.0);
@@ -29,6 +29,10 @@ const IMAGE_RATIO: f32 = 16.0 / 9.0;
 const IMAGE_MAX: f32 = 720.0;
 /// The measure of Markdown and plain text on desktop.
 const MEASURE: f32 = 680.0;
+/// The column a desktop preview keeps to, centred in its pane: an image's widest, so the title
+/// and buttons stand over the words or the picture rather than across an empty pane. Code and
+/// logs scroll sideways within it.
+const PREVIEW_MEASURE: f32 = IMAGE_MAX;
 
 /// The selected artifact beside or under the results: test ids "artifact-preview",
 /// "btn-open-full", "btn-open-task".
@@ -52,7 +56,7 @@ pub(super) fn preview(app: AppState, page: Memo<Page>) -> AnyElement {
                     "btn-open-full",
                     move || app.artifacts_act(Action::Open(open.clone())),
                 );
-                view()
+                let shown = view()
                     .gap(px(if terminal { 0.0 } else { 8.0 }))
                     .child(
                         plain(app, preview.title.clone())
@@ -63,8 +67,8 @@ pub(super) fn preview(app: AppState, page: Memo<Page>) -> AnyElement {
                     .when(terminal, |part| part.child(term::blank()))
                     .child(actions(app, &preview, full))
                     .when(terminal, |part| part.child(term::blank()))
-                    .child(content(app, &preview.content))
-                    .into_element()
+                    .child(content(app, &preview.content));
+                measure(app, PREVIEW_MEASURE, shown.into_element())
             })
         }))
         .into_element()
@@ -96,8 +100,8 @@ fn actions(app: AppState, preview: &Preview, first: AnyElement) -> AnyElement {
 }
 
 /// The artifact full size in the results' place: its title and reference in the head with Back
-/// and Open its task, then its facts and all of its content. test ids "artifact-full",
-/// "btn-artifact-back", "btn-open-task".
+/// and Open its task, then its facts and all of its content, kept to the record's measure on a
+/// desktop, centred. test ids "artifact-full", "btn-artifact-back", "btn-open-task".
 pub(super) fn full(app: AppState, page: Memo<Page>) -> AnyElement {
     let shown = computed(move || page.with(|page| page.full.clone()));
     dynamic(move || {
@@ -139,13 +143,18 @@ pub(super) fn full(app: AppState, page: Memo<Page>) -> AnyElement {
                 .flex_1()
                 .min_w(px(0.0))
                 .min_h(px(0.0))
-                .child(head(
+                .child(measured_head(
                     app,
+                    MEASURE_RECORD,
                     preview.title.clone(),
                     Some(preview.reference.clone()),
                     Vec::new(),
                 ))
-                .child(body(app, "artifact-full", scroll))
+                .child(body(
+                    app,
+                    "artifact-full",
+                    measure(app, MEASURE_RECORD, scroll),
+                ))
                 .into_element()
         })
     })
