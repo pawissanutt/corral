@@ -136,11 +136,24 @@ the last destination, and an unpaired browser opens Settings › Connection what
 The sample preview is not restored, so a reload at one of its records shows what corrald has
 under that id. The native and terminal forms have no address and restore the last destination.
 
-The site is served at its host's root (`nsh.json` `web.base` is `/`), and the host answers the
-app's paths with `index.html`: a `GET` that asks for HTML at a path whose last segment has no
-file extension. `nsh run --target web` and `nsh package --target web --run` do; nginx needs
-`location / { try_files $uri /index.html; }`, and a plain file server such as
-`python3 -m http.server` answers a reload below `/` with 404.
+Serve the site at the host's root (`nsh.json` `web.base` is `/`). `just app-serve`,
+`nsh run --target web` and `nsh package --target web --run` serve `index.html` for browser
+navigation to app paths. With `just app-serve`, existing files are served normally and
+missing assets such as `.js` files still return 404.
+
+If your existing `corral-next-app-web.service` uses `python3 -m http.server`, it will return
+404 on reload below `/`. Run `just app-web-install` to install the site and its new loopback
+server, then run `systemctl --user edit corral-next-app-web.service` and add this override
+(adjust both paths if you install under a custom `XDG_DATA_HOME`):
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/bin/python3 %h/.local/share/corral-next/web.serve.py --directory %h/.local/share/corral-next/web 8890
+```
+
+Run `systemctl --user restart corral-next-app-web.service` to apply the change. Future
+`just app-web-install` runs update the same site and server paths.
 
 ### Live behavior and revocation
 

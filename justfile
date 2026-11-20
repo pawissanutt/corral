@@ -208,6 +208,7 @@ app-web-install: app-web
     dest={{ quote(data / 'web') }}
     mkdir -p "$dest"
     rsync -a --delete apps/corral-app/.nsh/out/Corral/ "$dest/"
+    install -m 644 scripts/app_web_serve.py "$dest.serve.py"
     git rev-parse --short HEAD > "$dest.SOURCE_COMMIT"
     echo "the web app in $dest is now $(cat "$dest.SOURCE_COMMIT")"
 
@@ -215,7 +216,7 @@ app-web-install: app-web
 [group('app')]
 [working-directory('apps/corral-app')]
 app-serve port='8890':
-    python3 -m http.server --bind 127.0.0.1 --directory .nsh/out/Corral {{ port }}
+    python3 ../../scripts/app_web_serve.py --directory .nsh/out/Corral {{ quote(port) }}
 
 # The workspace root: `root`, else the nearest directory above this checkout that holds `.corral-next/`.
 [private]
