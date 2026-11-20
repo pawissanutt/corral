@@ -397,22 +397,18 @@ prepare_app() {
     ln "$web_site/$web_marker" "$web_txn/staged-marker"
 }
 
-check_app_destination() {
-    if same_file "$app_dir" "$web_lock"; then fail "web app destination is reserved: $app_dir"; fi
-    if [ -L "$app_dir" ]; then fail "web app directory is a symbolic link: $app_dir"; fi
-    if [ -e "$app_dir" ]; then
-        [ -d "$app_dir" ] || fail "web app destination is not a directory: $app_dir"
-        if [ ! -r "$app_dir" ] || [ ! -x "$app_dir" ]; then fail "cannot inspect web app destination: $app_dir"; fi
-        if regular_file "$app_dir/$web_marker" &&
-            printf '%s\n' "$web_marker_text" | cmp -s - "$app_dir/$web_marker"; then
-            return
-        fi
-        for entry in "$app_dir"/* "$app_dir"/.[!.]* "$app_dir"/..?*; do
-            if path_exists "$entry"; then
-                fail "web app destination is nonempty and not managed by this installer; choose a dedicated directory: $app_dir"
-            fi
-        done
+check_app_site() {
+    if [ -L "$1" ]; then fail "web app directory is a symbolic link: $1"; fi
+    [ -d "$1" ] || fail "web app destination is not a directory: $1"
+    if [ ! -r "$1" ] || [ ! -x "$1" ]; then fail "cannot inspect web app destination: $1"; fi
+    if regular_file "$1/$web_marker" &&
+        printf '%s\n' "$web_marker_text" | cmp -s - "$1/$web_marker"; then
+        return
     fi
+    # Include hidden entries and do not let command substitution strip a filename
+    # made entirely of newlines. An inspection error is not proof of emptiness.
+    entries=$(LC_ALL=C ls -Aq "$1") || fail "cannot inspect web app destination: $1"
+    [ -z "$entries" ] || fail "web app destination is nonempty and not managed by this installer; choose a dedicated directory: $1"
 }
 
 install_current() {
@@ -433,11 +429,17 @@ install_current() {
     fi
     lock_install "${app_parent%/}/.corral-web-install.lock"
     web_lock=${app_parent%/}/.corral-web-install.lock
-    check_app_destination
+    if same_file "$app_dir" "$web_lock"; then fail "web app destination is reserved: $app_dir"; fi
+    if path_exists "$app_dir"; then check_app_site "$app_dir"; fi
     if [ "$app_only" = false ]; then backup_bins; fi
 
     committing=true
-    if [ -d "$app_dir" ]; then mv "$app_dir" "$web_txn/old" || fail "cannot back up web app: $app_dir"; fi
+    if [ -d "$app_dir" ]; then
+        mv "$app_dir" "$web_txn/old" || fail "cannot back up web app: $app_dir"
+        # An independent writer could have changed the site after preflight.
+        # Validate the exact backup; on failure cleanup restores or preserves it.
+        check_app_site "$web_backup"
+    fi
     if path_exists "$app_dir"; then fail "web app destination changed during install: $app_dir"; fi
     # Move to the parent with the exact final basename, not into a destination
     # directory that might have appeared after the preceding check.

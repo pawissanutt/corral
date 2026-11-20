@@ -88,8 +88,8 @@ the static site; `--dry-run` shows the plan. On native Windows, the PowerShell i
 can install just the web site, not the new daemon:
 
 ```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install-corral.ps1
-.\install-corral.ps1 -AppOnly -Version vX.Y.Z
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install-corral.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install-corral.ps1 -AppOnly -Version vX.Y.Z
 ```
 
 On Windows the default site directory is `$env:LOCALAPPDATA\Programs\corral\web`;
@@ -102,7 +102,7 @@ against the installed runtime's version. Rerun the installer to upgrade; it does
 register or restart a daemon service, or serve the web app. Restart your daemon and replace
 the served web files after upgrading. Back up your workspace and configuration before
 upgrading; no automatic rollback or downgrade compatibility is promised.
-`sh install-corral.sh --legacy` selects the older classic CLI instead.
+`CORRAL_VERSION=v0.4.0 sh install-corral.sh --legacy` selects the older classic CLI instead.
 
 In the intended workspace directory, initialize with `corral-next init`, then run
 `corrald-next --root <workspace> run` on the Unix host (use an absolute workspace path).

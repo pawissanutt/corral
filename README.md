@@ -159,7 +159,7 @@ The PM-first experience still has setup gaps:
 - **Delegation is not the default policy.** The PM still asks before dispatching; plan requirements,
   Ready admission and automatic landing need explicit choices. Ideas remain owner-promoted.
 - **PM event push is off by default.** The PM can subscribe to board events; push notifications require
-  opt-in and an already-open PM. Keep corrald running, or a board without a daemon, for automatic advancement.
+  opt-in and an already-open PM. Keep the board open for automatic advancement.
 
 Proposed follow-ups: a first-run PM launch and installed-harness choice, guided project gate/reviewer
 setup, and a single explicit delegation setup covering dispatch, review and PM event awareness.
