@@ -104,6 +104,57 @@ fn records(blocks: Vec<Block>) -> Vec<Block> {
         .collect()
 }
 
+/// Every image among `blocks`, at any depth, replaced by its alt text.
+fn blocks_without_images(blocks: &mut [Block]) {
+    for block in blocks {
+        match block {
+            Block::Paragraph { content } | Block::Heading { content, .. } => {
+                inlines_without_images(content);
+            }
+            Block::Blockquote { children, .. } => blocks_without_images(children),
+            Block::List { items, .. } => {
+                for item in items {
+                    blocks_without_images(&mut item.children);
+                }
+            }
+            Block::Table(table) => {
+                for cell in table.head.iter_mut().chain(table.rows.iter_mut().flatten()) {
+                    inlines_without_images(&mut cell.content);
+                }
+            }
+            Block::Details {
+                summary, children, ..
+            } => {
+                inlines_without_images(summary);
+                blocks_without_images(children);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn inlines_without_images(inlines: &mut [Inline]) {
+    for inline in inlines {
+        if let Inline::Image(image) = inline {
+            let alt = std::mem::take(&mut image.alt);
+            *inline = Inline::text(alt);
+            continue;
+        }
+        match inline {
+            Inline::Strong { content }
+            | Inline::Emphasis { content }
+            | Inline::Strikethrough { content }
+            | Inline::Underline { content }
+            | Inline::Superscript { content }
+            | Inline::Small { content }
+            | Inline::Subscript { content }
+            | Inline::Highlight { content, .. }
+            | Inline::Link { content, .. } => inlines_without_images(content),
+            _ => {}
+        }
+    }
+}
+
 fn record_blocks(table: &Table) -> Vec<Block> {
     table
         .rows
@@ -179,6 +230,16 @@ fn code_block(app: AppState, code: &CodeBlock) -> AnyElement {
 /// `markdown` laid out; while `streaming`, syntax its end leaves open reads as closed. Text
 /// and HTML-looking words stay literal, as the terminal shows them: no formulas, no markup.
 pub(crate) fn markdown(app: AppState, markdown: &str, streaming: bool) -> AnyElement {
+    laid_out(app, markdown, streaming, true)
+}
+
+/// `markdown` laid out, every image as its alt text: for stored words someone else wrote (a
+/// reviewer's note), which must not make the device fetch a URL just by being shown.
+pub(crate) fn markdown_without_images(app: AppState, markdown: &str) -> AnyElement {
+    laid_out(app, markdown, false, false)
+}
+
+fn laid_out(app: AppState, markdown: &str, streaming: bool, images: bool) -> AnyElement {
     let options = MarkdownOptions {
         math: false,
         html: false,
@@ -187,6 +248,9 @@ pub(crate) fn markdown(app: AppState, markdown: &str, streaming: bool) -> AnyEle
         ..MarkdownOptions::default()
     };
     let mut document = Parser::new().options(options).markdown(markdown);
+    if !images {
+        blocks_without_images(&mut document.blocks);
+    }
     if narrow(app) {
         document.blocks = records(std::mem::take(&mut document.blocks));
     }

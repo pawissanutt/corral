@@ -1,7 +1,8 @@
 //! A session's Session menu, on its list row and its page head: the run controls that apply to
 //! it (Cancel turn, Pause, Resume, Rewind…, Terminate or Stop, Relaunch or Resume), then for a
 //! run Reply (its task's engine operation) and its task's whole Actions menu. A chat's or a
-//! build's menu holds its controls.
+//! build's menu holds its controls, and a build stopped here also Remove…, so removal never
+//! depends on the row or the inspector having room for it.
 
 use crate::model::Id;
 use crate::model::daemon;
@@ -15,6 +16,15 @@ pub const SESSION_MENU_LABEL: &str = "Session";
 /// The Session menu of session `session` (`T-42_R1`, `A-3`, `B-k3x9`).
 pub fn session_verbs(feed: &daemon::Feed, session: &Id) -> Vec<VerbAction> {
     let mut verbs = control_verbs(feed, session);
+    if super::removable(feed, session.as_str()) {
+        verbs.push(VerbAction {
+            slug: "remove",
+            label: "Remove…".into(),
+            enabled: true,
+            reason: None,
+            press: Press::Remove(session.clone()),
+        });
+    }
     let Some(task) = session_task(session).map(Id::new) else {
         return verbs;
     };
@@ -86,13 +96,14 @@ mod tests {
         assert_eq!(slugs(&feed, "T-3_R1")[0], "relaunch");
     }
 
-    /// A stopped build is resumed, never offered Terminate or a turn control.
+    /// A stopped build is resumed or removed from its menu, wherever the row or inspector has
+    /// no room for Remove…; it is never offered Terminate or a turn control.
     #[test]
-    fn a_stopped_build_offers_only_resume() {
+    fn a_stopped_build_offers_resume_and_remove_only() {
         let mut feed = Feed::default();
         let mut build = assistant("B-k3x9", AssistantKind::Build);
         build.state = AssistantState::Cold;
         feed.assistants.insert("B-k3x9".into(), build);
-        assert_eq!(slugs(&feed, "B-k3x9"), ["relaunch"]);
+        assert_eq!(slugs(&feed, "B-k3x9"), ["relaunch", "remove"]);
     }
 }

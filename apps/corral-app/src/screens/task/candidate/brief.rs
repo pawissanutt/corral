@@ -6,7 +6,7 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::review::{ReadyLink, ReviewQuote};
-use crate::screens::markdown::{markdown, provide_styles};
+use crate::screens::markdown::{markdown_without_images, provide_styles};
 use crate::state::AppState;
 use crate::ui::kit::hint::hinted;
 use crate::ui::kit::marks::mark;
@@ -146,6 +146,6 @@ fn quoted(app: AppState, quote: &ReviewQuote) -> AnyElement {
                 .text_size(px(if form == Form::Phone { 13.0 } else { 12.0 }))
                 .text_color(color(Token::Ink3)),
         )
-        .child(markdown(app, &quote.text, false))
+        .child(markdown_without_images(app, &quote.text))
         .into_element()
 }

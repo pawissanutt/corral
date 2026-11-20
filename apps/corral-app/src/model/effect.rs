@@ -71,6 +71,8 @@ pub enum Effect {
     Detail(DetailGet),
     /// Open the artifact finder narrowed to one task's artifacts.
     FindArtifacts(Id),
+    /// Open the Remove sheet of a build stopped here, from a menu that is not the agents'.
+    RemoveBuild(Id),
     /// Resolve the complete recorded item behind a transcript preview.
     SessionItem {
         session: Id,
