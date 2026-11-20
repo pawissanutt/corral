@@ -12,13 +12,13 @@ use nsh_core::prelude::*;
 
 use super::config_fields::{edit, field};
 use super::parts::{button_row, cell, mono_cell, space};
-use crate::model::Form;
 use crate::model::hue::Hue;
 use crate::model::settings::document::{self, Path, RuleEdit};
 use crate::model::settings::editor::{Edit, Part};
 use crate::model::settings::form::{Field, Group, Live};
 use crate::model::settings::routing::{self, Routing, Rule, Step, Target, Tone};
 use crate::model::text::span;
+use crate::model::{DataState, Form};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::notice::notice;
@@ -63,12 +63,17 @@ pub(super) fn routing(app: AppState, groups: &[Group], live: Memo<Live>) -> AnyE
         .collect();
     let add = element_ref();
     focus_after_removal(app, &handles, add);
-    let mut parts = vec![
+    let mut parts = Vec::new();
+    if app.data.get_untracked() == DataState::Fixture {
+        parts.push(cell(app, routing::PREVIEW_NOTE, Token::Ink3, false).into_element());
+        parts.push(space(app, 10.0));
+    }
+    parts.extend([
         order(app, read),
         space(app, 12.0),
         h3(app, "Rules", Some("first match wins".into())),
         catch_all(app, read),
-    ];
+    ]);
     if rules.is_empty() {
         parts.push(cell(app, routing::NO_RULES, Token::Ink3, false).into_element());
     }
