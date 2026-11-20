@@ -12,6 +12,7 @@ use crate::model::{Id, Live, home, work};
 use crate::screens::agents::{Compact, ask_session, ask_view};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::board_status::{board_status, dim_stale};
 use crate::ui::kit::list::phone_lines;
 use crate::ui::kit::next::next_button;
 use crate::ui::kit::page::{head, search};
@@ -19,6 +20,7 @@ use crate::ui::kit::status::look_mark;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::cards::reply_box;
+use super::parts::ask_project;
 
 pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
     let said = computed(move || {
@@ -31,12 +33,14 @@ pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
                     .project()
                     .map(|id| home::project_facts(feed, id))
                     .unwrap_or_default(),
+                scope.clone(),
             )
         })
     });
     let top = dynamic(move || {
-        let (title, summary, facts) = said.get();
+        let (title, summary, facts, scope) = said.get();
         untracked(move || {
+            let ask = ask_project(app, &scope).map(|ask| view().flex_row().child(ask));
             view()
                 .child(head(app, title, None, vec![search(app)]))
                 .child(
@@ -65,7 +69,8 @@ pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
                                 .text_size(px(13.0))
                                 .text_color(color(Token::Ink3)),
                             )
-                        }),
+                        })
+                        .children(ask),
                 )
                 .into_element()
         })
@@ -74,21 +79,27 @@ pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
         let scope = scope.get();
         app.feed.with(|feed| home::sections(feed, &scope))
     });
+    let notice = computed(move || {
+        let empty = sections.with(Vec::is_empty);
+        app.feed.with(|feed| home::notice(feed, empty, home::EMPTY))
+    });
+    let notice = dynamic(move || {
+        notice.get().map(|words| {
+            view()
+                .px(px(18.0))
+                .py(px(16.0))
+                .child(
+                    text(words)
+                        .font_family(FONT_TEXT)
+                        .text_size(px(13.0))
+                        .text_color(color(Token::Ink3)),
+                )
+                .into_element()
+        })
+    });
     let rows = dynamic(move || {
         let sections = sections.get();
         untracked(move || {
-            if sections.is_empty() {
-                return view()
-                    .px(px(18.0))
-                    .py(px(16.0))
-                    .child(
-                        text(home::EMPTY)
-                            .font_family(FONT_TEXT)
-                            .text_size(px(13.0))
-                            .text_color(color(Token::Ink3)),
-                    )
-                    .into_element();
-            }
             let mut out = Vec::new();
             for section in &sections {
                 out.push(section_head(section));
@@ -104,13 +115,14 @@ pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
         .min_h(px(0.0))
         .bg(color(Token::Bg))
         .child(top)
+        .child(board_status(app))
         .child(
             scroll()
                 .test_id("list-home")
                 .element_ref(&app.list_keys)
                 .flex_1()
                 .min_h(px(0.0))
-                .child(rows),
+                .child(dim_stale(app, view()).child(rows).child(notice)),
         )
         .into_element()
 }

@@ -30,6 +30,7 @@ use crate::model::next::{NextStep, next_step, session_next_step};
 use crate::model::pipeline::phrase;
 use crate::model::projects::Scope;
 use crate::model::status::{Look, SessionState, session_look, status_look, status_word};
+use crate::model::tasks::{self, Board};
 use crate::model::{Id, Live};
 
 pub const TITLE: &str = "Home";
@@ -38,6 +39,14 @@ pub const WORKING: &str = "Working";
 pub const FINISHED: &str = "Just finished";
 /// What Home says when nothing waits, nothing works and nothing finished.
 pub const EMPTY: &str = "Nothing waits on you and nothing is working.";
+/// What the Needs you cards say when nothing waits.
+pub const NOTHING_WAITS: &str = "Nothing waits on you.";
+/// What Home says while the board is not complete: what waits on the owner is not known.
+pub const LOADING: &str = "Loading tasks: what waits on you is not known yet.";
+pub const UNAVAILABLE: &str = "Tasks are unavailable, so what waits on you is not known.";
+/// Ask opened with the project in scope as its context, and the sentence behind it.
+pub const ASK_PROJECT: &str = "Ask about this project";
+pub const ASK_PROJECT_HINT: &str = "Ask with this project as the context; ideas filed land in it";
 
 /// Home's own state: the row or card the keys stand on, a task's id or a session's, and
 /// whether Home shows as the dashboard, where the keys walk only the cards of Needs you.
@@ -162,32 +171,58 @@ pub fn order(feed: &Feed, scope: &Scope, state: &State) -> Vec<Id> {
     }
 }
 
-/// Home's head: `3 need you · 4 working · 2 finished since 09:16`.
-pub fn summary(feed: &Feed, scope: &Scope) -> String {
-    let since = since(feed, scope);
+/// What Home says in place of what it lists: `nothing` when the board is complete and Home
+/// lists nothing, else, until the board is complete, that what waits is not known.
+pub fn notice(feed: &Feed, empty: bool, nothing: &'static str) -> Option<&'static str> {
+    unknown(feed).or_else(|| empty.then_some(nothing))
+}
+
+/// Why what waits on the owner is not known: the board is still coming or cannot come; none
+/// once it is complete.
+pub fn unknown(feed: &Feed) -> Option<&'static str> {
+    match tasks::board(feed) {
+        Board::Complete => None,
+        Board::Loading => Some(LOADING),
+        Board::Unavailable => Some(UNAVAILABLE),
+    }
+}
+
+/// The head's word on what needs the owner, none while the board is not complete.
+fn need_phrase(feed: &Feed, scope: &Scope) -> Option<String> {
+    if !feed.board.complete {
+        return None;
+    }
     let need = needs_you(feed, scope).len();
-    let need = if need == 0 {
+    Some(if need == 0 {
         "nothing needs you".to_owned()
     } else {
         format!("{need} need you")
-    };
+    })
+}
+
+/// Home's head: `3 need you · 4 working · 2 finished since 09:16`. While the board is not
+/// complete it counts only what finished.
+pub fn summary(feed: &Feed, scope: &Scope) -> String {
+    let since = since(feed, scope);
     let finished = match &since.at {
         Some(at) => format!("{} finished since {at}", since.finished.len()),
         None => format!("{} finished since your last visit", since.finished.len()),
     };
-    format!(
-        "{need} · {} working · {finished}",
-        working(feed, scope).len()
-    )
+    match need_phrase(feed, scope) {
+        Some(need) => format!(
+            "{need} · {} working · {finished}",
+            working(feed, scope).len()
+        ),
+        None => finished,
+    }
 }
 
 /// The dashboard's head: what needs the owner and since when the numbers count.
 pub fn dash_summary(feed: &Feed, scope: &Scope) -> String {
-    let need = needs_you(feed, scope).len();
-    let need = if need == 0 {
-        "nothing needs you".to_owned()
-    } else {
-        format!("{need} need you")
+    let Some(need) = need_phrase(feed, scope) else {
+        return since(feed, scope)
+            .at
+            .map_or_else(String::new, |at| format!("since your last visit at {at}"));
     };
     match since(feed, scope).at {
         Some(at) => format!("{need} · since your last visit at {at}"),
@@ -325,6 +360,44 @@ mod tests {
         // A build's choice is a big thing: it opens its page rather than being answered in
         // the phone's list.
         assert!(!build.in_place);
+    }
+
+    /// A cold start or a failed tasks topic left Home saying nothing waits and its tiles
+    /// counting 0: until the board is complete Home's empty state and the board's tiles read
+    /// as unknown, whether the board is still coming or cannot come.
+    #[test]
+    fn home_reads_unknown_not_empty_until_the_board_is_complete() {
+        use crate::model::daemon::{ClientError, TopicState};
+
+        let loading = Feed::default();
+        let mut failed = Feed::default();
+        failed.topics.insert(
+            "tasks".into(),
+            TopicState {
+                loading: false,
+                stale: true,
+                error: Some(ClientError {
+                    code: "unavailable".into(),
+                    message: "board unavailable".into(),
+                }),
+            },
+        );
+        for feed in [&loading, &failed] {
+            assert_ne!(notice(feed, true, EMPTY), Some(EMPTY));
+            let since = since(feed, &Scope::All);
+            let tiles = tiles(feed, &Scope::All, &since, &cost(feed));
+            for key in ["needs", "working", "ready"] {
+                let tile = tiles.iter().find(|tile| tile.key == key);
+                assert!(
+                    tile.is_some_and(|tile| tile.value.parse::<usize>().is_err()),
+                    "{key} counts from a board that is not complete"
+                );
+            }
+        }
+        assert_ne!(notice(&loading, true, EMPTY), notice(&failed, true, EMPTY));
+        let mut complete = Feed::default();
+        complete.board.apply_batch(1, Vec::new(), &[]);
+        assert_eq!(notice(&complete, true, EMPTY), Some(EMPTY));
     }
 
     /// On the dashboard `j` walked from the last card into the lanes, which show no

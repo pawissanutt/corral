@@ -1,6 +1,6 @@
-//! The inspector beside Tasks (`.insp`): the selected task's status, id, Open page and More, its
-//! title; then the same decision band as its page, so a decision is made without leaving the
-//! list; then its facts (round, priority, profile and base among them), its pipeline spelled
+//! The inspector beside Tasks (`.insp`): the selected task's status, id, Open page, Ask about
+//! this and More, its title; then the same decision band as its page, so a decision is made
+//! without leaving the list; then its facts (round, priority, profile and base among them), its pipeline spelled
 //! out, a plan's children, the files its candidate changed, its description, its runs and its
 //! last events.
 
@@ -11,7 +11,7 @@ use crate::model::work::Record;
 use crate::model::{Form, Id, Live, TaskTab};
 use crate::screens::markdown::{markdown, provide_styles};
 use crate::screens::task::parts::{block, event, link_row, linked, run};
-use crate::screens::task::{decision, keeper};
+use crate::screens::task::{ask_about, decision, keeper};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::next::more_button;
@@ -79,6 +79,7 @@ fn header(app: AppState, id: &Id, facts: Memo<Option<tasks::TaskFacts>>) -> AnyE
                         .child(mono(app, shown))
                         .child(view().flex_1())
                         .child(open)
+                        .child(ask_about(app, &id))
                         .child(more_button(app, Record::Task(id), true)),
                 )
                 .child(plain(app, title).font_weight(FontWeight::BOLD))

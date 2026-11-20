@@ -1,8 +1,8 @@
 //! The task page: the one page of a task on every form. A plan is a task with children and a
 //! review a task in Review, so `Live::Plan` and `Live::Review` open it too. Its head goes back
-//! to Tasks and names the task (status, id, title, More); a meta line gives its project,
-//! priority, kind, size, base, profile and round; the decision band (`band.rs`) holds what the
-//! owner decides; then the tabs Overview, Changes and History (`NavState::task_tab`, keys `1`
+//! to Tasks and names the task (status, id, title, Ask about this, More); a meta line gives
+//! its project, priority, kind, size, base, profile and round; the decision band (`band.rs`)
+//! holds what the owner decides; then the tabs Overview, Changes and History (`NavState::task_tab`, keys `1`
 //! `2` `3`, in the address as `/task/<id>/<tab>`). Escape returns to Tasks. The phone shows the
 //! same page in one column, the band first.
 //!
@@ -21,11 +21,12 @@ use nsh_core::prelude::*;
 
 use crate::model::tasks::{self, page as task_page};
 use crate::model::work::Record;
-use crate::model::{Destination, Form, Id, TaskTab};
+use crate::model::{Destination, Form, Id, Live, TaskTab};
 use crate::screens::PhonePage;
 use crate::screens::task::keep::{keep_loaded, wanted_id};
 use crate::state::AppState;
-use crate::ui::kit::button::{ButtonKind, button, tab_strip};
+use crate::ui::icons::Icon;
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with, tab_strip};
 use crate::ui::kit::next::more_button;
 use crate::ui::kit::status::status_word_mark;
 use crate::ui::kit::text::{dim, mono, plain};
@@ -33,6 +34,23 @@ use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
 pub(crate) use band::decision;
+
+/// Ask opened with the task's bounded context (`btn-ask-about`), on its page and in the
+/// inspector.
+pub(crate) fn ask_about(app: AppState, id: &Id) -> AnyElement {
+    let context = Live::Task(id.clone()).context(None);
+    button_with(
+        app,
+        task_page::ASK,
+        ButtonKind::Ghost,
+        ButtonOptions {
+            icon: Some(Icon::Ask),
+            ..ButtonOptions::default()
+        },
+        "btn-ask-about",
+        move || app.ask_about(Some(context.clone()), None),
+    )
+}
 
 /// The page on desktop and in a terminal.
 pub fn page(app: AppState, id: Id) -> AnyElement {
@@ -44,6 +62,7 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
         "btn-back",
         move || app.back(),
     );
+    let ask = ask_about(app, &id);
     let more = more_button(app, Record::Task(id.clone()), false);
     let head = match form {
         Form::Terminal => view()
@@ -56,6 +75,7 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
                     .gap(px(8.0))
                     .child(back)
                     .child(named(app, &id))
+                    .child(ask)
                     .child(more),
             )
             .child(view().px(term::cells(1.0)).child(meta(app, &id)))
@@ -76,6 +96,7 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
                     .gap(px(10.0))
                     .child(back)
                     .child(named(app, &id))
+                    .child(ask)
                     .child(more),
             )
             .child(meta(app, &id))
@@ -117,7 +138,7 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
 }
 
 /// The page on a phone: the shell heads it with the task's id and More, and scrolls its body:
-/// the title and meta line, the band, the tabs and the tab's body.
+/// the title, meta line and Ask about this, the band, the tabs and the tab's body.
 pub fn phone(app: AppState, id: Id) -> PhonePage {
     let body = view()
         .test_id("task-page")
@@ -129,7 +150,8 @@ pub fn phone(app: AppState, id: Id) -> PhonePage {
                 .pb(px(10.0))
                 .gap(px(6.0))
                 .child(named(app, &id))
-                .child(meta(app, &id)),
+                .child(meta(app, &id))
+                .child(view().flex_row().child(ask_about(app, &id))),
         )
         .child(decision(app, id.clone(), false))
         .child(view().px(px(8.0)).child(tabs(app)))

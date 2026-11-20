@@ -38,12 +38,9 @@ pub(super) fn needs_you(app: AppState, scope: Memo<Scope>) -> AnyElement {
                 .with(|state| list::settled(ids, state.selected.as_ref()))
         })
     });
-    let body = dynamic(move || {
+    let cards = dynamic(move || {
         let ids = ids.get();
         untracked(move || {
-            if ids.is_empty() {
-                return empty(app, "Nothing waits on you.");
-            }
             view()
                 .children(
                     ids.into_iter()
@@ -53,6 +50,13 @@ pub(super) fn needs_you(app: AppState, scope: Memo<Scope>) -> AnyElement {
                 .into_element()
         })
     });
+    let said = computed(move || {
+        let none = ids.with(Vec::is_empty);
+        app.feed
+            .with(|feed| home::notice(feed, none, home::NOTHING_WAITS))
+    });
+    let said = dynamic(move || said.get().map(|words| empty(app, words)));
+    let body = view().child(cards).child(said);
     // The head follows the count; the cards keep their state under it.
     let name = dynamic(move || {
         let count = ids.with(Vec::len);

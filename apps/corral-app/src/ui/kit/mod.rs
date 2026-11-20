@@ -1,10 +1,12 @@
 //! The pieces screens are built from, in the look of each form: marks, chips, buttons and a
 //! press-opened menu's trigger, styled text, rows and list pages, page scaffolds, notices,
-//! handover bands, tables, the toast, the confirmation and sheets, the work model's buttons, the
-//! arrow keys through a menu the app draws itself, and the hint behind a terse fact. Every
-//! function takes the app first and reads its form from it.
+//! handover bands, the board's health over a board place, tables, the toast, the confirmation
+//! and sheets, the work model's buttons, the arrow keys through a menu the app draws itself,
+//! and the hint behind a terse fact. Every function takes the app first and reads its form
+//! from it.
 
 pub mod band;
+pub mod board_status;
 pub mod button;
 pub mod chip;
 pub mod hint;

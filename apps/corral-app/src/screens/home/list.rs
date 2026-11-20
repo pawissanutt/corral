@@ -10,12 +10,14 @@ use crate::model::list::{self, Column, ListKey};
 use crate::model::projects::Scope;
 use crate::model::{Id, home};
 use crate::state::AppState;
+use crate::ui::kit::board_status::{board_status, dim_stale};
 use crate::ui::kit::list::{ListPage, Row, cell_mono, cell_text, list_page};
 use crate::ui::kit::next::{more_button, next_button};
 use crate::ui::kit::page::head;
 use crate::ui::kit::status::look_word;
 
 use super::dash::composer;
+use super::parts::ask_project;
 
 /// The list's columns: the status word, the id, the title, what is happening, the next step.
 fn columns() -> Vec<Column> {
@@ -38,19 +40,32 @@ pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
         app.home
             .with(|state| list::settled(&order, state.selected.as_ref()))
     });
-    let notice = computed(move || sections.with(Vec::is_empty).then(|| home::EMPTY.to_owned()));
+    let notice = computed(move || {
+        let empty = sections.with(Vec::is_empty);
+        app.feed
+            .with(|feed| home::notice(feed, empty, home::EMPTY))
+            .map(str::to_owned)
+    });
     let said = computed(move || {
         let scope = scope.get();
         (
             home::title(&scope),
             app.feed.with(|feed| home::summary(feed, &scope)),
+            scope,
         )
     });
     let page_head = dynamic(move || {
-        let (title, summary) = said.get();
-        untracked(move || head(app, title, Some(summary), Vec::new()))
-    })
-    .into_element();
+        let (title, summary, scope) = said.get();
+        untracked(move || {
+            let actions = ask_project(app, &scope).into_iter().collect();
+            head(app, title, Some(summary), actions)
+        })
+    });
+    let page_head = view()
+        .flex_none()
+        .child(page_head)
+        .child(board_status(app))
+        .into_element();
     let page = list_page(
         app,
         ListPage {
@@ -78,7 +93,7 @@ pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
         .flex_grow(1.0)
         .flex_col()
         .min_h(px(0.0))
-        .child(view().flex_1().min_h(px(0.0)).child(page))
+        .child(dim_stale(app, view().flex_1().min_h(px(0.0))).child(page))
         .child(composer(app))
         .into_element()
 }

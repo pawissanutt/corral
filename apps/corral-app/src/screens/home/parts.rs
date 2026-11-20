@@ -1,15 +1,37 @@
 //! What the dashboard's tiles, cards and panels share: the panel frame with its head, a
 //! pressable line that opens the page holding its detail, words at the dashboard's sizes and a
-//! bar drawn as a share of its track.
+//! bar drawn as a share of its track; and Ask about the project in scope, in every form's head.
 
 use nsh_core::prelude::*;
 
-use crate::model::Form;
 use crate::model::hue::Hue;
+use crate::model::projects::Scope;
+use crate::model::{Form, home};
 use crate::state::AppState;
+use crate::ui::icons::Icon;
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
+use crate::ui::kit::hint::hinted;
 use crate::ui::kit::marks::hue_fill;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+
+/// Ask opened with the project in scope as its context (`btn-ask-project`); none with every
+/// project in scope.
+pub(super) fn ask_project(app: AppState, scope: &Scope) -> Option<AnyElement> {
+    let project = scope.project()?.clone();
+    let ask = button_with(
+        app,
+        home::ASK_PROJECT,
+        ButtonKind::Ghost,
+        ButtonOptions {
+            icon: Some(Icon::Ask),
+            ..ButtonOptions::default()
+        },
+        "btn-ask-project",
+        move || app.ask_project(project.clone()),
+    );
+    Some(hinted(app, ask, home::ASK_PROJECT_HINT))
+}
 
 /// Words on one line, cut at their edge: `size` points on the desktop, the terminal's own.
 pub(super) fn words(form: Form, content: impl Into<SharedString>, size: f32, ink: Token) -> Text {

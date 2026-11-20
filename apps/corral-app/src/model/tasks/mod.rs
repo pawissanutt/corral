@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 
 use corral_types::{Priority, Status};
 
-use crate::model::daemon::{Feed, Task};
+use crate::model::daemon::{Feed, Link, Task};
 use crate::model::list::{Column, Section};
 use crate::model::next::{NextStep, next_step};
 use crate::model::pipeline::{PipelineStep, phrase, pipeline};
@@ -26,6 +26,8 @@ pub use closed::Closed;
 pub const TITLE: &str = "Tasks";
 /// What the list says while the open tasks have not arrived.
 pub const LOADING: &str = "Loading tasks…";
+/// What the list says when the open tasks cannot arrive; the board's banner says why.
+pub const UNAVAILABLE: &str = "Tasks are unavailable until corrald serves the board.";
 /// What the list says when the scope holds no task.
 pub const EMPTY: &str = "No tasks in this scope.";
 /// What the list says when the filter's words match no task.
@@ -64,6 +66,38 @@ impl State {
         if !self.plans.remove(plan) {
             self.plans.insert(plan.clone());
         }
+    }
+}
+
+/// How far the open tasks are known. Until the board is complete a place counts nothing as
+/// zero and says nothing is there: the tasks are still coming, or they cannot come because the
+/// tasks topic failed or corrald is unreachable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Board {
+    Complete,
+    Loading,
+    Unavailable,
+}
+
+pub fn board(feed: &Feed) -> Board {
+    if feed.board.complete {
+        Board::Complete
+    } else if feed.link == Link::Down || work::daemon_status(feed).banner.is_some() {
+        Board::Unavailable
+    } else {
+        Board::Loading
+    }
+}
+
+/// What the list says beside its rows: why it has none, or, while the board is not complete,
+/// that the rows it holds are not every task.
+pub fn notice(feed: &Feed, empty: bool, filtered: bool) -> Option<&'static str> {
+    match board(feed) {
+        Board::Loading => Some(LOADING),
+        Board::Unavailable => Some(UNAVAILABLE),
+        Board::Complete if !empty => None,
+        Board::Complete if filtered => Some(NO_MATCH),
+        Board::Complete => Some(EMPTY),
     }
 }
 
@@ -176,11 +210,17 @@ pub fn sections(feed: &Feed, scope: &Scope, state: &State) -> Vec<Section> {
 }
 
 /// `22 open · slots 3 of 5 used` over the list: the open tasks in scope, and the running slots
-/// corrald counts (a project with its own limit counts its own).
+/// corrald counts (a project with its own limit counts its own). The open count is unknown
+/// until the board is complete.
 pub fn summary(feed: &Feed, scope: &Scope) -> String {
-    let open = in_scope(feed, scope)
-        .filter(|task| !folds(task.status()))
-        .count();
+    let open = if feed.board.complete {
+        in_scope(feed, scope)
+            .filter(|task| !folds(task.status()))
+            .count()
+            .to_string()
+    } else {
+        ABSENT.to_owned()
+    };
     let slots = feed
         .health
         .as_ref()
@@ -478,6 +518,35 @@ mod tests {
         assert_eq!(task_of(&under), Id::from("T-2"));
         assert_eq!(task_of(&Id::from("T-2")), Id::from("T-2"));
         assert!(line(&feed, "T-1").is_some_and(|line| line.plan));
+    }
+
+    /// A tasks topic that failed before the first board left Tasks loading forever, with no
+    /// reason and no way to retry: the board reads as unavailable, and its banner offers a
+    /// Retry that can be pressed.
+    #[test]
+    fn a_tasks_topic_failed_before_the_board_is_unavailable_with_retry() {
+        use crate::model::daemon::{ClientError, TopicState};
+
+        let mut feed = Feed::default();
+        feed.topics.insert(
+            "tasks".into(),
+            TopicState {
+                loading: false,
+                stale: true,
+                error: Some(ClientError {
+                    code: "unavailable".into(),
+                    message: "board unavailable".into(),
+                }),
+            },
+        );
+        assert_eq!(board(&feed), Board::Unavailable);
+        assert_ne!(notice(&feed, true, false), Some(LOADING));
+        let retry = work::daemon_status(&feed)
+            .banner
+            .and_then(|banner| banner.actions.into_iter().next());
+        assert!(retry.is_some_and(|button| {
+            button.enabled && button.action == Some(work::Press::RetryBoard)
+        }));
     }
 
     /// With one project in scope a Project column would repeat it on every row.

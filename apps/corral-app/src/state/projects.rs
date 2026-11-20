@@ -70,6 +70,7 @@ impl AppState {
         self.go(Destination::Home);
     }
 
+    /// Opens Ask with the project as its context: Home's Ask about this project.
     pub fn ask_project(&self, id: Id) {
         self.project_context_removed.set(None);
         self.ask_about(Some(assistant::project_context(&id)), None);

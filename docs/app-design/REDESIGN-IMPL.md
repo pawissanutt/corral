@@ -217,6 +217,25 @@ parent before changing one. Put a slice's headless tests in its own `tests/<slic
   outside these screens (web-only client paths, `NavState::{close_newest, press_key}` with
   their tests, a few `state` helpers), which predates phase 3.
 
+### Restored after review
+
+- **The board's health on Home and Tasks.** `ui/kit/board_status.rs` draws
+  `work::daemon_status` once for both places: `board_status` (the banner, "Board unavailable:
+  …" or out of date, with Retry board `btn-retry-board`, then the `as of` stamp, test id
+  `board-status`) under the head, and `dim_stale`, which fades what the place lists while the
+  board is last known. Home draws it on the dashboard, the list form and the phone. Retry board
+  is enabled unless the link is Down, since a topic can fail before its first board while the
+  link is still Connecting.
+- **No count or empty state from an incomplete board.** `tasks::board` says whether the board
+  is complete, loading or unavailable (the tasks topic failed or corrald is unreachable);
+  `tasks::notice` and `home::notice`/`home::unknown` say loading or unavailable instead of
+  "no tasks" or "nothing waits". Home's Needs you, Working and Ready tiles read `—`,
+  `home::by_status` is `Err` with the words to show, and both heads leave out the counts.
+- **Ask about this.** The task page's head (phone: under its meta line) and the Tasks
+  inspector have `btn-ask-about`, which opens Ask with `Live::Task(id).context(None)`
+  (`screens::task::ask_about`); there is no `Press::Ask`. Home has Ask about this project
+  (`btn-ask-project`, `AppState::ask_project`) in its head while a project is in scope.
+
 ## Traps
 
 - `app.scope()` is the owner scope of `state/source.rs`. The project scope is

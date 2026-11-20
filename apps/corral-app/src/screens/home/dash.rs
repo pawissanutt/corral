@@ -13,10 +13,12 @@ use crate::model::{Form, Overlay};
 use crate::screens::agents::ask_view;
 use crate::state::AppState;
 use crate::ui::composer::docked_composer;
+use crate::ui::kit::board_status::{board_status, dim_stale};
 use crate::ui::kit::page;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
+use super::parts::ask_project;
 use super::{cards, panels};
 
 /// A half's least width: desktop points, terminal Cells.
@@ -33,11 +35,15 @@ pub(super) fn dashboard(app: AppState, scope: Memo<Scope>) -> AnyElement {
         (
             home::title(&scope),
             app.feed.with(|feed| home::dash_summary(feed, &scope)),
+            scope,
         )
     });
     let head = dynamic(move || {
-        let (title, summary) = said.get();
-        untracked(move || page::head(app, title, Some(summary), Vec::new()))
+        let (title, summary, scope) = said.get();
+        untracked(move || {
+            let actions = ask_project(app, &scope).into_iter().collect();
+            page::head(app, title, Some(summary), actions)
+        })
     });
     let half = |child: AnyElement| {
         view()
@@ -108,7 +114,8 @@ pub(super) fn dashboard(app: AppState, scope: Memo<Scope>) -> AnyElement {
         .min_h(px(0.0))
         .bg(color(Token::Bg))
         .child(head)
-        .child(scroll().flex_1().min_h(px(0.0)).child(dash))
+        .child(board_status(app))
+        .child(scroll().flex_1().min_h(px(0.0)).child(dim_stale(app, dash)))
         .child(composer(app))
         .into_element()
 }

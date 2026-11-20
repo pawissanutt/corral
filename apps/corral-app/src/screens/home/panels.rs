@@ -209,7 +209,20 @@ pub(super) fn by_status(app: AppState, scope: Memo<Scope>) -> AnyElement {
         let scope = scope.get();
         app.feed.with(|feed| home::by_status(feed, &scope))
     });
-    following(shown, move |(open, bars)| {
+    following(shown, move |shown| {
+        let (open, bars) = match shown {
+            Ok(shown) => shown,
+            Err(unknown) => {
+                return panel(
+                    app,
+                    "panel-status",
+                    "Tasks by status".into(),
+                    None,
+                    None,
+                    empty(app, unknown),
+                );
+            }
+        };
         let width = match form {
             Form::Terminal => term::cells(12.0),
             Form::Desktop | Form::Phone => px(90.0),
