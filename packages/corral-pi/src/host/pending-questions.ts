@@ -26,6 +26,7 @@ const Record = z.object({ version: z.literal(1), id: z.string(), session: z.stri
   answers: z.array(Answer).optional(), message: z.string().optional(),
 });
 export type PendingQuestion = z.infer<typeof Record>;
+export const isToolApproval = (q: PendingQuestion): boolean => q.tool === "bash" || q.tool === "file_write";
 export type QuestionEntry = { type: string; customType?: string; data?: unknown; message?: unknown };
 export interface QuestionHost {
   session(): string;
@@ -78,8 +79,7 @@ export class PendingQuestions {
     }
     // A process-local approval binding cannot be restored, including after rewind or reload.
     for (const q of this.questions.values()) {
-      if ((q.tool === "bash" || q.tool === "file_write") &&
-          (q.status === "pending" || (q.status === "answered" && !this.consumed.has(q.id)))) {
+      if (isToolApproval(q) && (q.status === "pending" || (q.status === "answered" && !this.consumed.has(q.id)))) {
         this.save({ ...q, status: "cancelled" });
       }
     }

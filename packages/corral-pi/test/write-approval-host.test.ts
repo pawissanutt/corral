@@ -47,6 +47,8 @@ test("assistant writes outside its directory only on an exact owner-approved ret
     const [question] = host.pendingOwnerQuestions();
     expect(host.pendingOwnerQuestions()).toHaveLength(1);
     expect(question?.question).toContain(external);
+    expect(await host.replyToQuestion("allow")).toBeFalse();
+    expect(host.pendingOwnerQuestions()[0]?.id).toBe(question?.id);
     transport.script([write("approved", external, "original"), write("repeat", external, "original"), { text: "Done." }]);
     await host.answerQuestion({ question: question!.id, option: "allow" }, async () => {});
     await host.session.waitForIdle();

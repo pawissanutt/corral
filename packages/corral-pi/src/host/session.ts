@@ -67,7 +67,7 @@ import { TodoLedger, installPlanCommand } from "../ui/todo.ts";
 import type { HostCapabilities, ModelChoice, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { askUserTool, localQuestionAsk } from "./ask-user.ts";
-import { PENDING_MAX, PendingQuestions, QUESTION_ENTRY, validAnswer } from "./pending-questions.ts";
+import { isToolApproval, PENDING_MAX, PendingQuestions, QUESTION_ENTRY, validAnswer } from "./pending-questions.ts";
 import { OwnerQuestionUi } from "../ui/owner-questions.ts";
 import { registerCacheStats } from "../ui/cache-stats.ts";
 import type { HerdrLifecycle } from "./herdr.ts";
@@ -1686,7 +1686,9 @@ export class HostSession {
     const pending = this.ownerQuestions;
     const records = pending?.pending() ?? [];
     const record = records[0], question = record?.questions[0];
-    if (!pending || !record || records.length !== 1 || !question || record.questions.length !== 1 || text.startsWith("/")) return false;
+    // Only the structured pane/app answer flow may authorize a tool call; ordinary chat is not consent.
+    if (!pending || !record || records.length !== 1 || !question || record.questions.length !== 1 ||
+        isToolApproval(record) || text.startsWith("/")) return false;
     const option = text.trim();
     const answer = question.options.includes(option) ? { option } : { text };
     if (!validAnswer(question, answer)) return false;

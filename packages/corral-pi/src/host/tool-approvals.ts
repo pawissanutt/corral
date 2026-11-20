@@ -48,8 +48,11 @@ export class ToolApprovals {
   }
 
   shell(tool: ShellTool, input: Input): string | undefined {
+    const runtime = typeof input.timeout === "number" ? `\nRequested timeout: ${input.timeout} s` : "";
+    const wait = tool === "job_start" || input.wait_ms === 0 ? "\nStart in background without waiting."
+      : typeof input.wait_ms === "number" ? `\nWait up to ${input.wait_ms} ms for output.` : "";
     return this.confirm(this.key(tool, input), "bash", `Allow this ${tool} command once?\n`
-      + `Working directory: ${quoted(this.cwd)}\n${quoted(String(input.command))}`);
+      + `Working directory: ${quoted(this.cwd)}${runtime}${wait}\n${quoted(String(input.command))}`);
   }
 
   write(tool: WriteTool, input: Input, decision: WriteScopeDecision): string | undefined {

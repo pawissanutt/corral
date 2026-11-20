@@ -42,7 +42,10 @@ test("a command approval cannot switch tools, survive restore, or be used after 
   const id = questions.pending()[0]!.id;
   await questions.answer(id, [{ option: "allow" }]);
   expect(approvals.shell("job_start", input)).toContain("Waiting");
-  expect(approvals.shell("bash", { ...input, timeout: 15.5 })).toContain("Waiting");
+  expect(approvals.shell("bash", { ...input, timeout: 15.5, wait_ms: 0 })).toContain("Waiting");
+  const prompt = questions.pending().at(-1)!.questions[0]!.question;
+  expect(prompt).toContain("15.5 s");
+  expect(prompt).toContain("background");
   expire();
   expect(approvals.shell("bash", input)).toContain("No current owner approval");
   expect(approvals.shell("bash", input)).toContain("Waiting");

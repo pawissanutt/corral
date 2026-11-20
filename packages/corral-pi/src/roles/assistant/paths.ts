@@ -3,16 +3,26 @@ import { lstatSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-const UNICODE_SPACES = /[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g;
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
-/** A tool path resolved as Pi's edit and write tools resolve it: `@`, `~`, file URLs, cwd. */
+function normalizePiPath(path: string): string {
+  if (process.platform === "win32" && !path.includes("\\")) {
+    const mount = /^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i.exec(path);
+    if (mount) path = `${mount[1]!.toUpperCase()}:\\${mount[2]?.replaceAll("/", "\\") ?? ""}`;
+  }
+  if (path === "~") return homedir();
+  if (path.startsWith("~/") || (process.platform === "win32" && path.startsWith("~\\"))) {
+    return join(homedir(), path.slice(2));
+  }
+  return path.startsWith("file://") ? fileURLToPath(path) : path;
+}
+
+/** Mirror Pi's private resolveToCwd for edit/write; checked against the SDK in paths.test.ts. */
 export function resolveToolPath(input: string, cwd: string): string {
-  let path = input.replace(UNICODE_SPACES, " ");
-  if (path.startsWith("@")) path = path.slice(1);
-  if (path === "~") path = homedir();
-  else if (path.startsWith("~/")) path = join(homedir(), path.slice(2));
-  else if (path.startsWith("file://")) path = fileURLToPath(path);
-  return resolve(cwd, path);
+  const normalized = input.replace(UNICODE_SPACES, " ");
+  const path = normalizePiPath(normalized.startsWith("@") ? normalized.slice(1) : normalized);
+  const base = normalizePiPath(cwd);
+  return isAbsolute(path) ? resolve(path) : resolve(base, path);
 }
 
 function present(path: string): boolean {
