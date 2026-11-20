@@ -82,19 +82,9 @@ pub fn head(
     let form = app.form;
     let title: SharedString = title.into();
     match form {
-        Form::Desktop => view()
-            .flex_row()
-            .flex_none()
-            .items_center()
-            .gap(px(12.0))
-            .h(px(46.0))
-            .px(px(18.0))
+        Form::Desktop => desktop_head_row(title, sub, actions)
             .border_b(px(1.0))
             .border_color(color(Token::Rule))
-            .child(title_text(form, title, "page-title", Title::Page))
-            .when_some(sub, |row, sub| row.child(desktop_sub(sub)))
-            .child(spacer())
-            .child(actions_row(form, actions, 8.0))
             .into_element(),
         Form::Phone => view()
             .flex_none()
@@ -117,6 +107,46 @@ pub fn head(
             .child(term::hrule())
             .into_element(),
     }
+}
+
+/// [`head`] over a page whose content is kept to `max` points ([`measure`]): on a desktop the
+/// title and actions sit in the measured column while the rule under them runs edge to edge, as
+/// the bands under a head do. Phone and terminal heads are [`head`]'s.
+pub fn measured_head(
+    app: AppState,
+    max: f32,
+    title: impl Into<SharedString>,
+    sub: Option<String>,
+    actions: Vec<AnyElement>,
+) -> AnyElement {
+    match app.form {
+        Form::Desktop => view()
+            .flex_none()
+            .border_b(px(1.0))
+            .border_color(color(Token::Rule))
+            .child(measure(
+                app,
+                max,
+                desktop_head_row(title.into(), sub, actions).into_element(),
+            ))
+            .into_element(),
+        Form::Phone | Form::Terminal => head(app, title, sub, actions),
+    }
+}
+
+/// The desktop head's 46 pt row without its rule.
+fn desktop_head_row(title: SharedString, sub: Option<String>, actions: Vec<AnyElement>) -> View {
+    view()
+        .flex_row()
+        .flex_none()
+        .items_center()
+        .gap(px(12.0))
+        .h(px(46.0))
+        .px(px(18.0))
+        .child(title_text(Form::Desktop, title, "page-title", Title::Page))
+        .when_some(sub, |row, sub| row.child(desktop_sub(sub)))
+        .child(spacer())
+        .child(actions_row(Form::Desktop, actions, 8.0))
 }
 
 /// The phone's page head: the large title (`.plarge`, 30 pt) with the actions at its trailing
