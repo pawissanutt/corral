@@ -18,7 +18,7 @@ use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::hue_ink;
-use crate::ui::kit::overlay::{Modal, counted, modal};
+use crate::ui::kit::overlay::{Modal, counted, counted_context, modal};
 use crate::ui::kit::suggest::suggestions;
 use crate::ui::kit::walk::walk;
 use crate::ui::term;
@@ -48,7 +48,7 @@ pub(crate) fn with_menu(app: AppState, record: Record, row: AnyElement) -> AnyEl
     context_menu()
         .popup_style(popup(app.form))
         .backdrop_style(backdrop)
-        .on_open_change(counted(app))
+        .on_open_change(counted_context(app))
         .trigger(row)
         .child(dynamic(move || {
             let record = record.clone();

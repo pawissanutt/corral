@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nsh_base::{MenuEvent, SheetEvent, dialog, sheet};
+use nsh_base::{ContextMenuEvents, MenuEvent, SheetEvent, dialog, sheet};
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
@@ -32,6 +32,27 @@ const SHEET_HEAD: f32 = 72.0;
 /// once it closes or goes with its trigger, so the key line gives a menu's keys whether the key
 /// or a press opened it.
 pub fn counted(app: AppState) -> impl Fn(&MenuEvent) + 'static {
+    let opened = open_count(app);
+    move |event: &MenuEvent| {
+        if let MenuEvent::OpenChange(now, _) = event {
+            opened(*now);
+        }
+    }
+}
+
+/// `counted` for a context menu, whose events are its own type.
+pub fn counted_context(app: AppState) -> impl Fn(&ContextMenuEvents) + 'static {
+    let opened = open_count(app);
+    move |event: &ContextMenuEvents| {
+        if let ContextMenuEvents::OpenChange(now, _) = event {
+            opened(*now);
+        }
+    }
+}
+
+/// Counts one menu among `AppState::menus` while it is open, and no longer once it closes or
+/// goes with its trigger.
+fn open_count(app: AppState) -> impl Fn(bool) + 'static {
     let open = Rc::new(Cell::new(false));
     let menus = app.menus;
     let held = open.clone();
@@ -40,11 +61,9 @@ pub fn counted(app: AppState) -> impl Fn(&MenuEvent) + 'static {
             menus.update(|n| *n = n.saturating_sub(1));
         }
     });
-    move |event: &MenuEvent| {
-        if let MenuEvent::OpenChange(now, _) = event
-            && open.replace(*now) != *now
-        {
-            menus.update(|n| *n = if *now { *n + 1 } else { n.saturating_sub(1) });
+    move |now: bool| {
+        if open.replace(now) != now {
+            menus.update(|n| *n = if now { *n + 1 } else { n.saturating_sub(1) });
         }
     }
 }
