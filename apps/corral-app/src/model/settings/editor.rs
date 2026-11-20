@@ -14,6 +14,7 @@ use toml_edit::{DocumentMut, Value};
 
 use super::State;
 use super::document::{self, ListEdit, Path, RuleEdit, Seg};
+use super::harnesses::{self, Template};
 use crate::model::Id;
 use crate::model::daemon::Feed;
 use crate::model::effect::Effect;
@@ -104,6 +105,7 @@ pub enum Edit {
     /// One name of a table of strings (an environment); `None` removes it.
     Pair(Path, String, Option<String>),
     AddEntry(Part, String),
+    OverrideHarness(String, Template),
     DuplicateProfile {
         from: String,
         name: String,
@@ -241,11 +243,26 @@ impl Editor {
                 let Some(root) = part.root().filter(|_| !name.is_empty()) else {
                     return Ok(());
                 };
+                if *part == Part::Harnesses
+                    && (harnesses::builtin(name).is_some()
+                        || document::get(&doc, &Path::of(&[root, name])).is_some())
+                {
+                    return Ok(());
+                }
                 document::add_entry(&mut doc, root, name);
                 self.chosen.insert(*part, name.to_owned());
                 self.added = Some(Path::entry(root, name, entry_first_key(*part)));
                 if *part == Part::Profiles {
                     self.profile_focus = true;
+                }
+            }
+            Edit::OverrideHarness(name, template) => {
+                if harnesses::builtin(name).is_some()
+                    && document::get(&doc, &Path::of(&["harnesses", name])).is_none()
+                {
+                    template.write(&mut doc, name);
+                    self.chosen.insert(Part::Harnesses, name.clone());
+                    self.added = Some(Path::entry("harnesses", name, "command"));
                 }
             }
             Edit::DuplicateProfile { from, name } => {
@@ -270,7 +287,9 @@ impl Editor {
                     }
                     document::remove_entry(&mut doc, root, name);
                     self.chosen.remove(part);
-                    if let Some(next) = document::names(&doc, root).into_iter().next() {
+                    if *part == Part::Harnesses && harnesses::builtin(name).is_some() {
+                        self.chosen.insert(*part, name.clone());
+                    } else if let Some(next) = document::names(&doc, root).into_iter().next() {
                         self.added = Some(Path::entry(root, &next, entry_first_key(*part)));
                         self.chosen.insert(*part, next);
                     }
