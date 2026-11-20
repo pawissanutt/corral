@@ -257,10 +257,7 @@ impl Editor {
                 }
             }
             Edit::OverrideHarness(name, template) => {
-                if harnesses::builtin(name).is_some()
-                    && document::get(&doc, &Path::of(&["harnesses", name])).is_none()
-                {
-                    template.write(&mut doc, name);
+                if template.create_override(&mut doc, name) {
                     self.chosen.insert(Part::Harnesses, name.clone());
                     self.added = Some(Path::entry("harnesses", name, "command"));
                 }
