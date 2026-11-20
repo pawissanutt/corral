@@ -104,6 +104,10 @@ pub enum Edit {
     /// One name of a table of strings (an environment); `None` removes it.
     Pair(Path, String, Option<String>),
     AddEntry(Part, String),
+    DuplicateProfile {
+        from: String,
+        name: String,
+    },
     RemoveEntry(Part, String),
     Rules(RuleEdit),
     /// The whole file, from the plain-text view.
@@ -123,6 +127,12 @@ pub struct Editor {
     pub part: Part,
     /// The entry each listing part shows.
     pub chosen: BTreeMap<Part, String>,
+    /// On a narrow layout, whether to show the selected profile or its list.
+    pub profile_focus: bool,
+    /// The profile list's filter, independent of the document.
+    pub profile_query: String,
+    /// The one expanded routing editor, in the draft's current order.
+    pub open_rule: Option<usize>,
     /// What was typed into number and word fields, shown as typed while the draft holds the
     /// value it means.
     pub raw: BTreeMap<Path, String>,
@@ -175,6 +185,8 @@ impl Editor {
             self.draft.clone_from(text);
             self.raw.clear();
             self.invalid.clear();
+            self.added = None;
+            self.open_rule = None;
             return Ok(());
         }
         let mut doc = document::parse(&self.draft)?;
@@ -227,9 +239,30 @@ impl Editor {
                 document::add_entry(&mut doc, root, name);
                 self.chosen.insert(*part, name.to_owned());
                 self.added = Some(Path::entry(root, name, entry_first_key(*part)));
+                if *part == Part::Profiles {
+                    self.profile_focus = true;
+                }
+            }
+            Edit::DuplicateProfile { from, name } => {
+                let name = name.trim();
+                if !name.is_empty() && document::duplicate_entry(&mut doc, "profiles", from, name) {
+                    self.chosen.insert(Part::Profiles, name.to_owned());
+                    self.profile_focus = true;
+                    self.added = Some(Path::entry("profiles", name, "harness"));
+                }
             }
             Edit::RemoveEntry(part, name) => {
                 if let Some(root) = part.root() {
+                    let removed = Path::of(&[root, name]);
+                    self.reasons.retain(|reason| {
+                        !reason
+                            .at
+                            .as_ref()
+                            .is_some_and(|path| path.0.starts_with(&removed.0))
+                    });
+                    if *part == Part::Profiles {
+                        self.profile_focus = false;
+                    }
                     document::remove_entry(&mut doc, root, name);
                     self.chosen.remove(part);
                     if let Some(next) = document::names(&doc, root).into_iter().next() {
@@ -239,21 +272,65 @@ impl Editor {
                 }
             }
             Edit::Rules(edit) => {
+                let before = document::rule_count(&doc);
                 document::edit_rules(&mut doc, edit);
-                let count = document::rule_count(&doc);
-                let focused = match edit {
-                    RuleEdit::Add(_) => count.checked_sub(1),
-                    RuleEdit::Remove(index) => (count > 0).then(|| (*index).min(count - 1)),
-                    _ => None,
-                };
-                if let Some(at) = focused {
-                    self.added = Some(Path::rule(at, "kind"));
-                }
+                self.rule_layout(edit, before, document::rule_count(&doc));
             }
             Edit::File(_) => {}
         }
         self.draft = doc.to_string();
         Ok(())
+    }
+
+    /// Rule editors are addressed by position; drafts and error anchors must follow the rule.
+    fn rule_layout(&mut self, edit: &RuleEdit, before: usize, after: usize) {
+        let (removed, moved) = match *edit {
+            RuleEdit::Add(_) if after > before => {
+                self.open_rule = after.checked_sub(1);
+                self.added = self.open_rule.map(|index| Path::rule(index, "kind"));
+                return;
+            }
+            RuleEdit::Remove(index) if after < before => (Some(index), None),
+            RuleEdit::Move(from, up) if from < before => {
+                let to = if up {
+                    from.checked_sub(1)
+                } else {
+                    from.checked_add(1)
+                };
+                let Some(to) = to.filter(|to| *to < before) else {
+                    return;
+                };
+                (None, Some((from, to)))
+            }
+            _ => return,
+        };
+        let index = |at| match (removed, moved) {
+            (Some(removed), _) if at == removed => None,
+            (Some(removed), _) if at > removed => Some(at - 1),
+            (_, Some((from, to))) if at == from => Some(to),
+            (_, Some((from, to))) if at == to => Some(from),
+            _ => Some(at),
+        };
+        self.open_rule = self.open_rule.and_then(index);
+        let relocate = |path: &mut Path| {
+            if let [Seg::Key(root), Seg::Index(at), ..] = path.0.as_mut_slice()
+                && root == "routing"
+            {
+                let Some(next) = index(*at) else { return false };
+                *at = next;
+            }
+            true
+        };
+        self.raw = std::mem::take(&mut self.raw)
+            .into_iter()
+            .filter_map(|(mut path, value)| relocate(&mut path).then_some((path, value)))
+            .collect();
+        self.invalid = std::mem::take(&mut self.invalid)
+            .into_iter()
+            .filter_map(|mut path| relocate(&mut path).then_some(path))
+            .collect();
+        self.reasons
+            .retain_mut(|reason| reason.at.as_mut().is_none_or(relocate));
     }
 
     fn typed(&mut self, doc: &mut DocumentMut, path: &Path, typed: Typed, text: &str) {
@@ -407,12 +484,21 @@ impl State {
     }
 
     pub fn config_part(&mut self, part: Part) -> Vec<Effect> {
+        if part != self.config.part {
+            self.config.added = None;
+            self.config.profile_focus = false;
+        }
         self.config.part = part;
         Vec::new()
     }
 
     pub fn choose_entry(&mut self, part: Part, name: String) -> Vec<Effect> {
+        self.config.added = None;
         self.config.chosen.insert(part, name);
+        if part == Part::Profiles {
+            self.config.part = part;
+            self.config.profile_focus = true;
+        }
         Vec::new()
     }
 
@@ -461,6 +547,13 @@ impl State {
     pub fn show_config(&mut self, path: &Path) -> Vec<Effect> {
         if let Some((part, entry, _)) = super::form::locate(path) {
             self.config.part = part;
+            self.config.profile_focus = part == Part::Profiles;
+            if let [Seg::Key(root), Seg::Index(index), ..] = path.0.as_slice()
+                && root == "routing"
+            {
+                self.config.open_rule = Some(*index);
+            }
+            self.config.added = Some(path.clone());
             if let (Some(entry), Some(_)) = (entry, part.root()) {
                 self.config.chosen.insert(part, entry);
             }
@@ -484,6 +577,9 @@ impl State {
         self.config.invalid.clear();
         self.config.reasons.clear();
         self.config.problem = None;
+        self.config.added = None;
+        self.config.profile_focus = false;
+        self.config.open_rule = None;
         Vec::new()
     }
 
@@ -571,6 +667,67 @@ mod tests {
     use crate::model::daemon::Operation;
 
     const FILE: &str = "# owner notes\n[limits]\nrunning = 4\n\n[projects.app] # main repo\npath = \"app\"\ngate = [\"just check\"]\n\n[unknown_table]\nkept = 1\n";
+
+    #[test]
+    fn duplicate_profile_preserves_unshown_fields_and_leaves_source_in_place() {
+        let original = "[profiles.source]\nharness = 'pi' # keep me\nfallback = ['provider/model']\n\n[profiles.other]\nharness = 'omp'\n";
+        let mut editor = Editor {
+            draft: original.to_owned(),
+            ..Editor::default()
+        };
+        editor
+            .apply(&Edit::DuplicateProfile {
+                from: "source".into(),
+                name: "copy".into(),
+            })
+            .unwrap();
+        assert!(editor.draft.starts_with(original));
+        let doc = document::parse(&editor.draft).unwrap();
+        assert_eq!(
+            document::lines(document::get(
+                &doc,
+                &Path::entry("profiles", "copy", "fallback")
+            )),
+            ["provider/model"]
+        );
+        assert_eq!(
+            editor.chosen.get(&Part::Profiles).map(String::as_str),
+            Some("copy")
+        );
+        assert!(editor.profile_focus);
+        let duplicated = editor.draft.clone();
+        editor
+            .apply(&Edit::DuplicateProfile {
+                from: "source".into(),
+                name: "other".into(),
+            })
+            .unwrap();
+        assert_eq!(editor.draft, duplicated);
+    }
+
+    #[test]
+    fn moving_and_removing_rules_reindex_open_editor_raw_values_and_refusals() {
+        let mut editor = Editor {
+            open_rule: Some(0),
+            ..Editor::default()
+        };
+        let raw = |at| Path::rule(at, "kind");
+        editor.raw.insert(raw(0), "ui,".into());
+        editor.raw.insert(raw(1), "docs".into());
+        editor.reasons.push(Reason {
+            at: Some(Path::rule(1, "profile")),
+            line: String::new(),
+            position: None,
+        });
+        editor.rule_layout(&RuleEdit::Move(0, false), 2, 2);
+        assert_eq!(editor.open_rule, Some(1));
+        assert_eq!(editor.raw.get(&raw(1)).map(String::as_str), Some("ui,"));
+        assert_eq!(editor.reasons[0].at, Some(Path::rule(0, "profile")));
+        editor.rule_layout(&RuleEdit::Remove(0), 2, 1);
+        assert_eq!(editor.open_rule, Some(0));
+        assert_eq!(editor.raw.get(&raw(0)).map(String::as_str), Some("ui,"));
+        assert!(editor.reasons.is_empty());
+    }
 
     fn problem(key: Option<&str>, message: &str, at: Option<(usize, usize)>) -> ConfigProblem {
         ConfigProblem {

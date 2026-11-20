@@ -177,6 +177,30 @@ fn phone_settings_open_from_the_gear_and_their_sections_push_their_pages() {
 }
 
 #[test]
+fn phone_profile_edits_survive_returning_to_the_list_and_switching_tabs() {
+    let mut app = preview(phone(), &[]);
+    app.press("id:nav-settings").unwrap();
+    app.press("id:settings-config").unwrap();
+    app.press("id:tab-config-2").unwrap();
+    let row = "id:seg-config-profiles-pi-luna";
+    let model = "id:field-config-profiles.pi-luna.model";
+    app.press(row).unwrap();
+    app.type_text(model, "-custom").unwrap();
+    let drafted = app.screen().input_text(model).unwrap().unwrap().to_owned();
+    assert_ne!(drafted, "luna");
+    app.press("id:btn-config-profile-back").unwrap();
+    app.wait_for_gone(model, Duration::from_secs(5)).unwrap();
+    app.press("id:tab-config-4").unwrap();
+    app.wait_for("id:btn-config-rule-add").unwrap();
+    app.press("id:tab-config-2").unwrap();
+    app.press(row).unwrap();
+    assert_eq!(
+        app.screen().input_text(model).unwrap(),
+        Some(drafted.as_str())
+    );
+}
+
+#[test]
 fn typing_in_ask_does_not_navigate() {
     let mut app = preview(desktop(), &[]);
     app.press("id:nav-tasks").unwrap();

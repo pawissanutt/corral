@@ -8,8 +8,10 @@ mod edits;
 pub mod form;
 pub mod inherit;
 pub mod live;
+pub mod profiles;
 pub mod push;
 pub mod qr;
+pub mod routing;
 
 pub use edits::{Edits, Pending, device_slot};
 pub use live::daemon_connection_details;
