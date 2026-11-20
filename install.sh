@@ -192,7 +192,12 @@ rollback_web() {
         fi
     fi
     if path_exists "$web_backup"; then
-        if path_exists "$app_dir" || ! mv "$web_backup" "$app_parent"; then
+        # mv has no portable atomic no-replace mode; -n is not a guarantee.
+        # Retain directory backups for manual recovery. For other objects,
+        # ln -P without -f atomically creates the same basename in the parent,
+        # or fails without replacing an arrival (even a directory or symlink).
+        if { [ ! -L "$web_backup" ] && [ -d "$web_backup" ]; } ||
+            ! ln -P "$web_backup" "$app_parent"; then
             keep_web=true
         fi
     fi
