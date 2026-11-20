@@ -1,6 +1,8 @@
 # corral (classic)
 
-This README describes the classic `corral` CLI and board, pinned to v0.4.0.
+This README describes the classic `corral` CLI and board, including features developed
+after the published v0.2.0 release. The published classic binaries are v0.2.0;
+the v0.4.0 Pi release notes describe source work, not published classic assets.
 For the current app and engine, see the [app README](apps/corral-app/README.md).
 
 **Tell the PM what you want built.** corral is project management for coding agents, powered by the
@@ -33,16 +35,16 @@ or Claude Code (`claude`). No Rust toolchain is required.
 Linux and macOS (includes consent to install or upgrade herdr):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.4.0 sh -s -- --legacy --yes
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.2.0 sh -s -- --legacy --yes
 export PATH="$HOME/.local/bin:$PATH"
 corral --version
 ```
 
-Native Windows (x86_64; see the [v0.4.0 release notes](docs/releases/v0.4.0.md)):
+Native Windows (x86_64; see the [v0.2.0 release notes](docs/releases/v0.2.0.md)):
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.2.0
 $env:PATH = "$env:LOCALAPPDATA\Programs\corral\bin;$env:PATH"
 corral --version
 ```
@@ -51,6 +53,9 @@ On Windows, complete [herdr and Git Bash setup](docs/guide/install.md#native-win
 opening the board. The [installation guide](docs/guide/install.md) covers updates and version pins.
 
 ## Quick start
+
+The following workflow describes later classic source features; commands and behavior may differ
+in the published v0.2.0 binaries.
 
 ```bash
 cd ~/code                 # a git repository, or a directory containing repositories
@@ -173,13 +178,14 @@ control; they are not a vocabulary you need before talking to the PM.
 ### Installation and setup controls
 
 Set `CORRAL_INSTALL_DIR` to change the install location. Classic installs require `--legacy`
-and a published legacy tag such as `CORRAL_VERSION=v0.4.0`. To answer the engine consent
-prompt yourself, download `install.sh` and run `CORRAL_VERSION=v0.4.0 sh install.sh --legacy`
+and a published legacy tag such as `CORRAL_VERSION=v0.2.0`. To answer the engine consent
+prompt yourself, download `install.sh` and run `CORRAL_VERSION=v0.2.0 sh install.sh --legacy`
 from a terminal. With closed or piped stdin and no `--yes`, the installer prints the official
 engine install command and continues without installing herdr.
-`CORRAL_VERSION=v0.4.0 sh install.sh --legacy --dry-run` previews without changes.
+`CORRAL_VERSION=v0.2.0 sh install.sh --legacy --dry-run` previews without changes.
 See the [engine installation guide](https://herdr.dev/docs/install/).
-From a v0.4.0 checkout: `cargo install --path crates/corral --locked`.
+For a source build of the classic CLI, use a compatible classic checkout:
+`cargo install --path crates/corral --locked`.
 
 `corral up --yes` accepts unattended initialization. Bare `corral` also runs `up`.
 The default herdr session is `corral`; `corral up --session <name>` overrides it.
