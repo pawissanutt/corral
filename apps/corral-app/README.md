@@ -99,8 +99,9 @@ legacy CLI mode is separate and needs an older published tag.
 Keep the binaries and app from the same release: this is a prototype and the frontend
 does not emulate missing daemon capabilities. The normal Unix installer resolves the app
 against the installed runtime's version. Rerun the installer to upgrade; it does not
-register or restart a daemon service, or serve the web app. Restart your daemon and replace
-the served web files after upgrading. Back up your workspace and configuration before
+register or restart a daemon service, or serve the web app. Restart your daemon after
+upgrading its binary. The installer replaces its own web bundle; update separately deployed
+web files yourself. Back up your workspace and configuration before
 upgrading; no automatic rollback or downgrade compatibility is promised.
 `CORRAL_VERSION=v0.2.0 sh install-corral.sh --legacy` selects the published classic CLI instead. That classic release does not include the Pi host; the new engine's `corral-pi` artifact is separate and requires a release that actually contains it.
 
@@ -132,9 +133,10 @@ Python 3 example below serves the installed Unix site at `http://127.0.0.1:8790`
 fallback. Configure the Unix daemon's `listen = "127.0.0.1:7841"` and
 `web_origin = ["http://127.0.0.1:8790"]` and omit `web_dir`; restart it and open that exact
 origin (not `localhost`). Set `CORRAL_APP_INSTALL_DIR` if needed. This is not a production
-server. On Windows, serve the installed Windows site using an appropriate static server
-with SPA fallback and configure its exact HTTPS origin and WSS endpoint on the Unix daemon
-for remote access, as described below.
+server. On Windows, optionally serve the installed Windows site using an appropriate static server
+with SPA fallback; a Windows browser can instead use a site served by the Unix host. Configure
+the site's exact HTTPS origin and the daemon's WSS endpoint for remote access, as described
+below; these may be different hosts.
 
 ```sh
 SITE_DIR="${CORRAL_APP_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/corral-next/web}"
@@ -207,7 +209,8 @@ changing listener or origin configuration. A missing bundle makes the UI unavail
 does not stop the daemon. Development with the separate NSH server uses the same loopback
 listener and its `http://127.0.0.1:8790` origin, without `web_dir`.
 
-Run `corrald-next pair` on the daemon host, or choose **Pair a device** in Settings › Devices on any
+Run `corrald-next --root <absolute-workspace-path> pair` on the daemon host (using the same
+workspace as `run`), or choose **Pair a device** in Settings › Devices on any
 paired device, browser or native. The command prints a pairing link, then waits for the device. Open the link or QR. It opens Settings › Connection
 with the code prefilled; press **Pair**. The short-lived code is in the URL fragment,
 not the query/path, and the app clears it from the address bar before pairing.
@@ -218,8 +221,8 @@ or confirm on any attached device. For scripts, `corrald-next pair --json` print
 two-minute confirmation window. Opening a link does not claim, approve or replace a stored
 identity. The new device cannot confirm its own pending pairing.
 
-LAN/Tailscale access is opt-in: `daemon.listen` accepts one concrete numeric unicast
-interface, not wildcard/multicast addresses. Remote browsers need an HTTPS-served app, an exact `web_origin` entry and
+LAN/Tailscale access is opt-in: use a concrete numeric unicast address for `daemon.listen`.
+Remote browsers need an HTTPS-served app, an exact `web_origin` entry and
 `web_endpoint = "wss://public-host"` in `[daemon]` (`run --web-endpoint` overrides it).
 The operator supplies TLS through an HTTPS reverse proxy or Tailscale Serve; corrald has no
 embedded TLS. If the daemon serves the bundle, forward all app traffic to it; otherwise,
