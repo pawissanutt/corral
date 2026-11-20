@@ -42,12 +42,25 @@ const COLLAPSE_AFTER: f32 = 40.0;
 /// the rule above them, and what is left split above and below.
 const SHORT_BAR_PAD: f32 = (48.0 - 44.0 - 1.0) / 2.0;
 
-/// How wide a column is: the rest of the row, or fixed (desktop points, as the mockup's grid
-/// columns: `400`, `340`, `300`).
+/// How wide a column is: the rest of the row, fixed (desktop points, as the mockup's grid
+/// columns: `400`, `340`, `300`), or a share of the row kept between two widths, so a side
+/// column grows with a wide window instead of leaving all the room to the one beside it. A
+/// terminal takes `Between` at its least width, as it would a fixed column.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Width {
     Fill,
     Fixed(f32),
+    Between { share: f32, min: f32, max: f32 },
+}
+
+impl Width {
+    /// The points a terminal sizes this column from; none for `Fill`.
+    pub const fn least(self) -> Option<f32> {
+        match self {
+            Width::Fill => None,
+            Width::Fixed(points) | Width::Between { min: points, .. } => Some(points),
+        }
+    }
 }
 
 /// The page head (`.pagehead`): the title, an optional sub line, the actions at the trailing
@@ -163,6 +176,11 @@ pub fn columns(app: AppState, cols: Vec<(Width, AnyElement)>, main: usize) -> An
                 let cell = match width {
                     Width::Fill => cell.flex_1(),
                     Width::Fixed(points) => cell.w(px(points)).flex_shrink_0(),
+                    Width::Between { share, min, max } => cell
+                        .w(relative(share))
+                        .min_w(px(min))
+                        .max_w(px(max))
+                        .flex_shrink_0(),
                 };
                 cell.when(at > 0, |cell| {
                     cell.border_l(px(1.0)).border_l_color(color(Token::Rule))
@@ -194,14 +212,11 @@ pub fn columns(app: AppState, cols: Vec<(Width, AnyElement)>, main: usize) -> An
 fn terminal_columns(app: AppState, cols: Vec<(Width, AnyElement)>, main: usize) -> AnyElement {
     let fixed_count = cols
         .iter()
-        .filter(|(width, _)| matches!(width, Width::Fixed(_)))
+        .filter(|(width, _)| width.least().is_some())
         .count();
     let fixed: f32 = cols
         .iter()
-        .map(|(width, _)| match width {
-            Width::Fixed(points) => fixed_cells(*points),
-            Width::Fill => 0.0,
-        })
+        .map(|(width, _)| width.least().map_or(0.0, fixed_cells))
         .sum();
     // `term::beside` counts the one line beside a list; any further line is the columns' too.
     let lines = cols.len().saturating_sub(2) as f32;
@@ -229,9 +244,9 @@ fn terminal_columns(app: AppState, cols: Vec<(Width, AnyElement)>, main: usize) 
             }
         }
         let cell = view().flex_col().min_w(px(0.0)).min_h(px(0.0));
-        let cell = match width {
-            Width::Fill => cell.flex_1(),
-            Width::Fixed(points) => {
+        let cell = match width.least() {
+            None => cell.flex_1(),
+            Some(points) => {
                 let natural = fixed_cells(points);
                 // Only a list alone beside its detail grows: next to another fixed column its
                 // growth would come out of the detail's least width.
@@ -272,6 +287,56 @@ fn terminal_columns(app: AppState, cols: Vec<(Width, AnyElement)>, main: usize) 
 /// A fixed column's width in Cells: one for every [`POINTS_PER_COLUMN_CELL`] desktop points.
 fn fixed_cells(points: f32) -> f32 {
     (points / POINTS_PER_COLUMN_CELL).round()
+}
+
+/// Desktop content kept to `max` points and centred in a wider row (the `MEASURE_*` tokens), so a
+/// wide window does not stretch it edge to edge; a narrower row gives it the whole width. For
+/// content that flows down a scrolling body; [`measure_fill`] is the form for content that
+/// fills the height it is given. Phone and terminal content is returned as is.
+pub fn measure(app: AppState, max: f32, content: AnyElement) -> AnyElement {
+    match app.form {
+        Form::Desktop => view()
+            .flex_col()
+            .w_full()
+            .min_w(px(0.0))
+            .items_center()
+            .child(
+                view()
+                    .flex_col()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .max_w(px(max))
+                    .child(content),
+            )
+            .into_element(),
+        Form::Phone | Form::Terminal => content,
+    }
+}
+
+/// [`measure`] for content that fills its column's height (a pane, columns of panes, a
+/// conversation over its composer): the measured box grows to the height the page leaves.
+pub fn measure_fill(app: AppState, max: f32, content: AnyElement) -> AnyElement {
+    match app.form {
+        Form::Desktop => view()
+            .flex_1()
+            .flex_col()
+            .w_full()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
+            .items_center()
+            .child(
+                view()
+                    .flex_1()
+                    .flex_col()
+                    .w_full()
+                    .min_w(px(0.0))
+                    .min_h(px(0.0))
+                    .max_w(px(max))
+                    .child(content),
+            )
+            .into_element(),
+        Form::Phone | Form::Terminal => content,
+    }
 }
 
 /// A scrolling pane with no padding of its own, for lists whose rows carry their paddings
