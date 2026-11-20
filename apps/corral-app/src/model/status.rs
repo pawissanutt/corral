@@ -23,24 +23,35 @@ pub fn status_unavailable(row: &AssistantRow) -> bool {
 }
 
 /// A session's state as the engine's `SessionStatus` names it: Blocked waits on the owner.
+/// Unavailable is the app's own: the host runs but its status could not be read, so it is
+/// none of the engine's four.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SessionState {
     Blocked,
     Working,
     Idle,
+    /// Its host is live but refused to report its status ([`status_unavailable`]).
+    Unavailable,
     /// Its host is not running: stopped, ended or lost.
     Gone,
 }
 
 impl SessionState {
     /// The states a session list groups by, in order; Gone folds at the bottom.
-    pub const ORDER: [SessionState; 4] = [Self::Blocked, Self::Working, Self::Idle, Self::Gone];
+    pub const ORDER: [SessionState; 5] = [
+        Self::Blocked,
+        Self::Working,
+        Self::Idle,
+        Self::Unavailable,
+        Self::Gone,
+    ];
 
     pub const fn word(self) -> &'static str {
         match self {
             Self::Blocked => "Blocked",
             Self::Working => "Working",
             Self::Idle => "Idle",
+            Self::Unavailable => "Status unavailable",
             Self::Gone => "Gone",
         }
     }
@@ -51,6 +62,7 @@ impl SessionState {
             Self::Blocked => "blocked",
             Self::Working => "working",
             Self::Idle => "idle",
+            Self::Unavailable => "unavailable",
             Self::Gone => "gone",
         }
     }
@@ -60,6 +72,7 @@ impl SessionState {
         match self {
             Self::Blocked => Some("waits on you"),
             Self::Idle => Some("host running, nothing to do"),
+            Self::Unavailable => Some("host running, status could not be read"),
             Self::Working | Self::Gone => None,
         }
     }
@@ -189,6 +202,7 @@ pub const fn session_look(state: SessionState) -> Look {
         SessionState::Blocked => look(Shape::Solid, '▲', Hue::You, false),
         SessionState::Working => look(Shape::Half, '◐', Hue::Worker, false),
         SessionState::Idle => look(Shape::Ring, '○', Hue::Neutral, true),
+        SessionState::Unavailable => look(Shape::Dashed, '◌', Hue::Neutral, false),
         SessionState::Gone => look(Shape::Dash, '–', Hue::Neutral, true),
     }
 }
@@ -223,6 +237,6 @@ mod tests {
             .into_iter()
             .map(|state| session_look(state).glyph)
             .collect();
-        assert_eq!(states.len(), 4);
+        assert_eq!(states.len(), SessionState::ORDER.len());
     }
 }

@@ -66,7 +66,9 @@ impl<'a> Source<'a> {
         }) && !self.elsewhere()
     }
     /// Where the session stands: waiting on the owner, working, idle, or its host gone (not
-    /// running or ended), in the order the list groups them.
+    /// running or ended), in the order the list groups them. A live host whose status could
+    /// not be read is Unavailable: never idle, gone or waiting on the owner, and `doing` says
+    /// why.
     pub fn state(self) -> SessionState {
         if let Some(run) = self.run {
             return match &run.status {
@@ -79,6 +81,9 @@ impl<'a> Source<'a> {
         let Some(chat) = self.chat else {
             return SessionState::Idle;
         };
+        if status_unavailable(chat) {
+            return SessionState::Unavailable;
+        }
         let exit = chat
             .build
             .as_ref()

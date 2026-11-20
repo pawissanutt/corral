@@ -1,5 +1,5 @@
 //! Sessions: one list of every session in scope, grouped by state in the order Blocked,
-//! Working, Idle, with Gone folded at the bottom; each row's facts and its one next step, the
+//! Working, Idle, Status unavailable, with Gone folded at the bottom; each row's facts and its one next step, the
 //! columns they sit in, the head's summary and the inspector of the selected session. The
 //! session page itself is `model::session`.
 

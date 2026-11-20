@@ -103,7 +103,7 @@ pub fn next_step(task: &Task) -> Option<NextStep> {
 pub fn session_next_step(session: &SessionLine) -> Option<NextStep> {
     let (label, yours) = match session.state {
         SessionState::Blocked => ("Answer", true),
-        SessionState::Working | SessionState::Idle => ("Open", false),
+        SessionState::Working | SessionState::Idle | SessionState::Unavailable => ("Open", false),
         SessionState::Gone => return None,
     };
     Some(NextStep {
