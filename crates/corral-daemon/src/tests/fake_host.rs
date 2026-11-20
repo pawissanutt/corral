@@ -408,40 +408,34 @@ impl Runner for Placement {
 #[test]
 fn oversized_chat_status_preserves_location_without_inventing_lifecycle() {
     use super::Fixture;
-    use corral_protocol::{
-        assistant::AssistantWarm,
-        rows::{AssistantLocation, AssistantState},
-    };
+    use corral_engine::runner::pi::chat_session;
+    use corral_protocol::rows::{AssistantLocation, AssistantState};
 
-    let placement = Placement::new(|command, dir| {
-        let args: Vec<_> = command.get_args().collect();
-        let host = Host::start(
-            PathBuf::from(args[4]),
-            dir.file_name().unwrap().to_str().unwrap().into(),
-            "assistant",
-            dir,
-            Script::default().reply_result("get_state", |_, _, _| {
-                Err(("response_too_large", "status exceeds frame limit"))
-            }),
-        );
-        fs::write(
-            dir.join("session.json"),
-            json!({"pid": PID, "sessionFile": host.transcript}).to_string(),
-        )
-        .unwrap();
-        Some(host)
-    });
-    let fixture = Fixture::with_runner(Arc::new(move || Box::new(placement.clone())));
+    let fixture = Fixture::new();
+    let dir = fixture.root().join(crate::STATE_DIR).join("chat/A-1");
+    fs::create_dir_all(&dir).unwrap();
     fs::write(
-        fixture.root().join(crate::STATE_DIR).join("corral.toml"),
-        "[profiles.pi]\nharness = \"pi\"\n",
+        dir.join("chat.json"),
+        json!({"quick": true, "profile": "pi", "task": null, "ended": false}).to_string(),
     )
     .unwrap();
-    crate::assistant::warm(
-        fixture.shared(),
-        AssistantWarm {
-            thread: "quick".into(),
-        },
+    let root = fixture.shared().private_chat_sockets().unwrap();
+    let SessionRef::Pi { socket, .. } = chat_session(&dir, PID, Some(&root)).unwrap() else {
+        unreachable!();
+    };
+    // Drop the socket host before the temp directory so it can wake its listener to join.
+    let host = Host::start(
+        socket,
+        "A-1".into(),
+        "assistant",
+        &dir,
+        Script::default().reply_result("get_state", |_, _, _| {
+            Err(("response_too_large", "status exceeds frame limit"))
+        }),
+    );
+    fs::write(
+        dir.join("session.json"),
+        json!({"pid": PID, "sessionFile": host.transcript}).to_string(),
     )
     .unwrap();
     let rows = crate::assistant::rows(fixture.shared(), false).unwrap();
