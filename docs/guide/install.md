@@ -1,4 +1,9 @@
-# Install and update
+# Install and update (classic)
+
+This guide covers the classic `corral` CLI and board. For the current app and
+engine, see the [app README](../../apps/corral-app/README.md). The main
+installers default to the current product; classic installs must explicitly select
+legacy mode and a published legacy tag such as v0.4.0.
 
 The installers download a packaged release binary, check its SHA-256 sidecar,
 and run the candidate's version probe before replacing an existing installation.
@@ -53,10 +58,10 @@ separate from planner mode.
 
 ## Linux
 
-Install the latest published release:
+Install the classic v0.4.0 release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.4.0 sh -s -- --legacy --yes
 export PATH="$HOME/.local/bin:$PATH"
 corral --version
 ```
@@ -75,7 +80,7 @@ prints the official herdr installation command instead.
 Install using Terminal:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.4.0 sh -s -- --legacy --yes
 export PATH="$HOME/.local/bin:$PATH"
 corral --version
 ```
@@ -90,7 +95,8 @@ shell running under Rosetta selects the Intel package.
 Run in PowerShell:
 
 ```powershell
-Invoke-RestMethod https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 | Invoke-Expression
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0
 $env:PATH = "$env:LOCALAPPDATA\Programs\corral\bin;$env:PATH"
 corral --version
 ```
@@ -106,7 +112,7 @@ script first, then run it under your organization's permitted policy:
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0
 ```
 
 The Windows installer prints setup guidance and does not install herdr
@@ -145,38 +151,35 @@ documents these settings. Native Windows engine plugins are currently a
 
 ## Pin a version, update, or change the destination
 
-Re-running the same installer updates the binary in place. The default
-`CORRAL_VERSION=latest` selects GitHub's latest published release, not an
-unreleased main-branch build or a prerelease. An explicit `vX.Y.Z` tag stays
-pinned on subsequent invocations where that setting remains present. There
-is no automatic updater: re-run to update, or choose an older available tag
-to downgrade.
+Re-running the same installer replaces the binary in place. Keep `--legacy` (or
+`-Legacy` on Windows) and an explicit published legacy tag on every invocation;
+`latest` can refer to a newer, incompatible release. There is no automatic updater.
 
-Pin `v0.4.0` on Linux/macOS once its release assets are published:
+Download the installer and select v0.4.0 on Linux/macOS:
 
 ```sh
 curl -fsSLo install.sh https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh
-CORRAL_VERSION=v0.4.0 sh install.sh
+CORRAL_VERSION=v0.4.0 sh install.sh --legacy
 ```
 
 For a different destination, the variable applies to the installer process,
 not just to curl:
 
 ```sh
-CORRAL_INSTALL_DIR="$HOME/bin" sh install.sh
-sh install.sh --dry-run
+CORRAL_VERSION=v0.4.0 CORRAL_INSTALL_DIR="$HOME/bin" sh install.sh --legacy
+CORRAL_VERSION=v0.4.0 sh install.sh --legacy --dry-run
 ```
 
 On Windows, after downloading `install.ps1`:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Version v0.4.0
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -InstallDir "$HOME\bin"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DryRun
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0 -InstallDir "$HOME\bin"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0 -DryRun
 ```
 
 PowerShell also accepts `CORRAL_VERSION` and `CORRAL_INSTALL_DIR` environment
-variables, useful with the one-line command. `CORRAL_REPO` overrides the
+variables; legacy mode still requires `-Legacy`. `CORRAL_REPO` overrides the
 GitHub owner/repository; `CORRAL_BASE_URL` overrides the releases root for
 mirrors or testing. PowerShell also accepts `-Repo` and `-BaseUrl`.
 Only use mirrors whose binaries and checksum files you trust.

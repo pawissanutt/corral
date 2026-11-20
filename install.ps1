@@ -50,20 +50,16 @@ function Install-CorralWebApp($Archive, $Destination, $Tag) {
 
     $parent = [IO.Path]::GetDirectoryName($Destination)
     if (-not $parent) { throw "corral: unsafe web app directory: $Destination" }
-    $current = Get-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
-    if ($current) {
-        if (-not $current.PSIsContainer -or ($current.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-            throw "corral: web app destination must be a directory, not a link: $Destination"
-        }
-        if (-not (Test-RegularFile (Join-Path $Destination 'index.html')) -and
-            (Get-ChildItem -LiteralPath $Destination -Force | Select-Object -First 1)) {
-            throw "corral: web app destination must be empty or contain an installed site: $Destination"
-        }
-    }
+    $marker = '.corral-web-install'
+    $markerContents = "corral-web-install-v1`n"
+    # Lock the parent rather than the leaf, so aliases of the same destination contend.
+    $lockPath = Join-Path $parent '.corral-web-install.lock'
+    if ($Destination -eq $lockPath) { throw "corral: web app destination is reserved: $Destination" }
     [IO.Directory]::CreateDirectory($parent) | Out-Null
     $transaction = Join-Path $parent ('.corral-app-install-' + [guid]::NewGuid())
     $site = Join-Path $transaction 'site'
     $old = Join-Path $transaction 'old'
+    $lock = $null
     try {
         [IO.Directory]::CreateDirectory($site) | Out-Null
         & $tar -xzf $Archive -C $site
@@ -71,17 +67,49 @@ function Install-CorralWebApp($Archive, $Destination, $Tag) {
         if (-not (Test-RegularFile (Join-Path $site 'index.html'))) {
             throw 'corral: web app archive has no root index.html.'
         }
-        if ($current) { [IO.Directory]::Move($Destination, $old) }
+        $stagedMarker = Join-Path $site $marker
+        if (Get-Item -LiteralPath $stagedMarker -Force -ErrorAction SilentlyContinue) {
+            throw "corral: web app archive contains reserved file $marker."
+        }
+        [IO.File]::WriteAllText($stagedMarker, $markerContents, [Text.Encoding]::ASCII)
+        try {
+            $lock = [IO.File]::Open($lockPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        } catch {
+            throw "corral: cannot acquire install lock: $lockPath (another install may be running; remove a stale lock only after checking the destination): $($_.Exception.Message)"
+        }
+        $current = Get-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+        if ($current) {
+            if (-not $current.PSIsContainer -or ($current.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw "corral: web app destination must be a directory, not a link: $Destination"
+            }
+            $currentMarker = Join-Path $Destination $marker
+            $managed = ((Test-RegularFile $currentMarker) -and
+                ((Get-Item -LiteralPath $currentMarker -Force).Length -eq $markerContents.Length) -and
+                ([IO.File]::ReadAllText($currentMarker) -ceq $markerContents))
+            if (-not $managed -and (Get-ChildItem -LiteralPath $Destination -Force | Select-Object -First 1)) {
+                throw "corral: web app destination is nonempty and not managed by this installer; choose a dedicated directory: $Destination"
+            }
+            [IO.Directory]::Move($Destination, $old)
+        }
         [IO.Directory]::Move($site, $Destination)
     } finally {
-        # If promotion did not happen, restore the old site before cleaning up the backup.
-        if ([IO.Directory]::Exists($site) -and [IO.Directory]::Exists($old)) {
-            try { [IO.Directory]::Move($old, $Destination) }
-            catch { throw "corral: cannot restore $Destination; backup in $old`: $($_.Exception.Message)" }
+        try {
+            # Exact-path moves refuse to overwrite unexpected destinations. If restore
+            # fails, throw before deleting the transaction so the backup survives.
+            if ([IO.Directory]::Exists($site) -and [IO.Directory]::Exists($old)) {
+                try { [IO.Directory]::Move($old, $Destination) }
+                catch { throw "corral: cannot restore $Destination; backup in $old`: $($_.Exception.Message)" }
+            }
+            if ([IO.Directory]::Exists($transaction)) { [IO.Directory]::Delete($transaction, $true) }
+        } finally {
+            if ($null -ne $lock) {
+                $lock.Dispose()
+                [IO.File]::Delete($lockPath)
+            }
         }
-        if ([IO.Directory]::Exists($transaction)) { [IO.Directory]::Delete($transaction, $true) }
     }
     Write-Output "installed the Corral web app ($Tag) to $Destination"
+    Write-Output 'Keep this directory dedicated to Corral; upgrades replace its contents.'
     Write-Output 'Serve this directory with a web server that falls back to index.html for app routes. The current daemon must run on a supported Unix host.'
 }
 

@@ -6,8 +6,13 @@ set -eu
 installer=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)/install.sh
 original_path=$PATH
 suite=$(mktemp -d)
+first=
 cleanup() {
     status=$?
+    if [ -n "$first" ]; then
+        : >"$TEST_ROOT/continue"
+        wait "$first" || true
+    fi
     if [ "$status" -ne 0 ] && [ -n "${TEST_ROOT:-}" ] && [ -f "$TEST_ROOT/output" ]; then
         PATH=$original_path grep "^" "$TEST_ROOT/output" >&2
     fi
@@ -17,9 +22,38 @@ trap cleanup EXIT
 mkdir -p "$suite/bin" "$suite/fixtures"
 
 # Restrict PATH so an installed herdr (or real downloader) cannot be reached.
-for cmd in sh awk mktemp rm tar gzip mkdir cp chmod mv ln sha256sum script; do
+export TEST_REAL_MV
+TEST_REAL_MV=$(command -v mv)
+for cmd in sh awk mktemp rm tar gzip mkdir rmdir cp chmod cmp ln sha256sum script sleep; do
     ln -s "$(command -v "$cmd")" "$suite/bin/$cmd"
 done
+cat >"$suite/bin/mv" <<'SH'
+#!/bin/sh
+set -eu
+case "$1:$2" in
+-f:*/new/corrald-next)
+    [ "${TEST_FAIL_PROMOTION:-0}" = 0 ] || exit 47
+    ;;
+*/.corral-app-install.*/new/site:*)
+    if [ "${TEST_PROMOTION_COLLISION:-0}" = 1 ]; then
+        mkdir "$CORRAL_APP_INSTALL_DIR"
+        printf 'unrelated\n' >"$CORRAL_APP_INSTALL_DIR/index.html"
+    fi
+    ;;
+esac
+"$TEST_REAL_MV" "$@"
+if [ "$1" = "$CORRAL_APP_INSTALL_DIR" ] && [ "${TEST_PAUSE_BACKUP:-0}" = 1 ]; then
+    # The live site is now absent, but the first installer still owns the locks.
+    : >"$TEST_ROOT/paused"
+    tries=0
+    until [ -f "$TEST_ROOT/continue" ]; do
+        [ "$tries" -lt 300 ] || exit 48
+        tries=$((tries + 1))
+        sleep 0.05
+    done
+fi
+SH
+chmod +x "$suite/bin/mv"
 cat >"$suite/bin/uname" <<'SH'
 #!/bin/sh
 case "$1" in
@@ -49,12 +83,20 @@ https://fixture.invalid/*/*.tar.gz.sha256)
     elif [ "${TEST_WRONG_CHECKSUM_NAME:-0}" = 1 ]; then
         printf '%064d  unrelated.tar.gz\n' 0 >"$destination"
     else
-        cp "$TEST_FIXTURES/${TEST_ARCHIVE:-release}.sha256" "$destination"
+        case "${url##*/}" in
+        corral-next-* | corral-app-web.*)
+            cp "$TEST_FIXTURES/${TEST_CURRENT_FIXTURE:-1}/${url##*/}" "$destination" ;;
+        *) cp "$TEST_FIXTURES/${TEST_ARCHIVE:-release}.sha256" "$destination" ;;
+        esac
     fi
     ;;
 https://fixture.invalid/*/*.tar.gz)
     [ "${TEST_RELEASE_DOWNLOAD_FAIL:-0}" = 0 ] || exit 22
-    cp "$TEST_FIXTURES/${TEST_ARCHIVE:-release}.tar.gz" "$destination"
+    case "${url##*/}" in
+    corral-next-* | corral-app-web.*)
+        cp "$TEST_FIXTURES/${TEST_CURRENT_FIXTURE:-1}/${url##*/}" "$destination" ;;
+    *) cp "$TEST_FIXTURES/${TEST_ARCHIVE:-release}.tar.gz" "$destination" ;;
+    esac
     ;;
 *) exit 23 ;;
 esac
@@ -111,7 +153,9 @@ new_case() {
     cases=$((cases + 1))
     export TEST_ROOT="$suite/case-$cases"
     export HOME="$TEST_ROOT/home" CORRAL_INSTALL_DIR="$TEST_ROOT/install"
+    export CORRAL_APP_INSTALL_DIR="$TEST_ROOT/site"
     export CORRAL_BASE_URL=https://fixture.invalid/releases CORRAL_VERSION=latest
+    unset TEST_CURRENT_FIXTURE TEST_FAIL_PROMOTION TEST_PAUSE_BACKUP TEST_PROMOTION_COLLISION
     unset TEST_HERDR_VERSION TEST_VERSION_EXIT TEST_ENGINE_DOWNLOAD_FAIL TEST_ENGINE_EXIT
     unset TEST_BAD_CHECKSUM TEST_ARCH TEST_OS CORRAL_REPO
     unset TEST_CORRAL_VERSION TEST_BINARY_EXIT TEST_WRONG_CHECKSUM_NAME
@@ -136,6 +180,7 @@ host_installed() {
 engine_skipped() { [ ! -f "$TEST_ROOT/engine-ran" ]; }
 engine_accepted() { [ -f "$TEST_ROOT/engine-ran" ]; }
 
+export CORRAL_INSTALL_LEGACY=1
 # Given no engine and noninteractive stdin, installation continues without consent.
 new_case
 run
@@ -306,5 +351,135 @@ if run; then
     exit 1
 fi
 [ ! -e "$TEST_ROOT/downloads" ]
+
+unset CORRAL_INSTALL_LEGACY
+for revision in 1 2; do
+    fixture=$TEST_FIXTURES/$revision
+    mkdir "$fixture"
+    printf 'site %s\n' "$revision" >"$fixture/index.html"
+    for spec in 'corral-next|corral-next' 'corrald-next|corral-daemon' 'corral-pi|corral-pi pi'; do
+        name=${spec%%|*}
+        # The fixture, not this harness, expands $1.
+        # shellcheck disable=SC2016
+        printf '#!/bin/sh\n[ "$1" = --version ] || exit 98\necho "%s 7.8.%s"\n' "${spec#*|}" "$revision" >"$fixture/$name"
+    done
+    tar -czf "$fixture/corral-app-web.tar.gz" -C "$fixture" index.html
+    tar -czf "$fixture/corral-next-x86_64-unknown-linux-gnu.tar.gz" -C "$fixture" corral-next corrald-next corral-pi
+    (cd "$fixture" && sha256sum corral-app-web.tar.gz >corral-app-web.tar.gz.sha256 &&
+        sha256sum corral-next-x86_64-unknown-linux-gnu.tar.gz >corral-next-x86_64-unknown-linux-gnu.tar.gz.sha256)
+done
+
+# Ordinary sites and hidden entries (including dangling links) are not ownership proof.
+for existing in index dotfile marker directory symlink; do
+    new_case
+    mkdir "$CORRAL_APP_INSTALL_DIR"
+    case "$existing" in
+    index) echo unrelated >"$CORRAL_APP_INSTALL_DIR/index.html"; entry=index.html ;;
+    dotfile) ln -s nowhere "$CORRAL_APP_INSTALL_DIR/.user-file"; entry=.user-file ;;
+    marker) echo unrelated >"$CORRAL_APP_INSTALL_DIR/.corral-web-install"; entry=.corral-web-install ;;
+    directory) mkdir "$CORRAL_APP_INSTALL_DIR/.corral-web-install"; entry=.corral-web-install ;;
+    symlink)
+        echo corral-web-install-v1 >"$TEST_ROOT/fake-marker"
+        ln -s "$TEST_ROOT/fake-marker" "$CORRAL_APP_INSTALL_DIR/.corral-web-install"
+        entry=.corral-web-install
+        ;;
+    esac
+    if run --app-only; then echo "unexpected adoption: $existing" >&2; exit 1; fi
+    PATH=$original_path grep -F 'destination is nonempty and not managed' "$TEST_ROOT/output" >/dev/null
+    [ -e "$CORRAL_APP_INSTALL_DIR/$entry" ] || [ -L "$CORRAL_APP_INSTALL_DIR/$entry" ]
+    case "$existing" in
+    index | marker) printf 'unrelated\n' | cmp -s - "$CORRAL_APP_INSTALL_DIR/$entry" ;;
+    esac
+done
+
+verify_current() {
+    printf 'corral-web-install-v1\n' | cmp -s - "$CORRAL_APP_INSTALL_DIR/.corral-web-install"
+    printf 'site %s\n' "$1" | cmp -s - "$CORRAL_APP_INSTALL_DIR/index.html"
+    [ "$("$CORRAL_INSTALL_DIR/corral-next" --version)" = "corral-next 7.8.$1" ]
+    [ "$("$CORRAL_INSTALL_DIR/corrald-next" --version)" = "corral-daemon 7.8.$1" ]
+    [ "$("$CORRAL_INSTALL_DIR/corral-pi" --version)" = "corral-pi pi 7.8.$1" ]
+    [ ! -e "$CORRAL_INSTALL_DIR/.corral-next-install.lock" ]
+    [ ! -e "$TEST_ROOT/.corral-web-install.lock" ]
+}
+
+# The installer can adopt an empty directory and later replace its own site.
+new_case
+mkdir "$CORRAL_APP_INSTALL_DIR"
+run
+verify_current 1
+: >"$CORRAL_APP_INSTALL_DIR/obsolete"
+TEST_CURRENT_FIXTURE=2 CORRAL_VERSION=v7.8.2 run
+verify_current 2
+[ ! -e "$CORRAL_APP_INSTALL_DIR/obsolete" ]
+
+# A promotion failure after the web site and CLI were exchanged restores the old
+# release, or the absence of those files on a fresh install.
+for prior in existing absent; do
+    new_case
+    if [ "$prior" = existing ]; then
+        run
+        printf 'old-only data\n' >"$CORRAL_APP_INSTALL_DIR/previous"
+    fi
+    if TEST_CURRENT_FIXTURE=2 TEST_FAIL_PROMOTION=1 run; then
+        echo "unexpected success after injected promotion failure" >&2
+        exit 1
+    fi
+    if [ "$prior" = existing ]; then
+        verify_current 1
+        printf 'old-only data\n' | cmp -s - "$CORRAL_APP_INSTALL_DIR/previous"
+    else
+        [ ! -e "$CORRAL_APP_INSTALL_DIR" ]
+        for name in corral-next corrald-next corral-pi .corral-next-install.lock; do
+            [ ! -e "$CORRAL_INSTALL_DIR/$name" ]
+        done
+        [ ! -e "$TEST_ROOT/.corral-web-install.lock" ]
+    fi
+done
+
+# An unrelated writer is not bound by the lock. If it recreates the destination
+# after backup, do not replace it or throw away the old installation.
+new_case
+run --app-only
+if TEST_CURRENT_FIXTURE=2 TEST_PROMOTION_COLLISION=1 run --app-only; then
+    echo 'unexpected success after an unrelated change to the destination' >&2
+    exit 1
+fi
+PATH=$original_path grep -F 'could not roll back' "$TEST_ROOT/output" >/dev/null
+printf 'unrelated\n' | cmp -s - "$CORRAL_APP_INSTALL_DIR/index.html"
+set -- "$TEST_ROOT"/.corral-app-install.*/old/site/index.html
+[ "$#" -eq 1 ]
+printf 'site 1\n' | cmp -s - "$1"
+[ ! -e "$TEST_ROOT/.corral-web-install.lock" ]
+
+# Reproduce the old window precisely, from a second process while the first is
+# paused after moving the old site aside. Both shared destinations must be locked.
+new_case
+run
+TEST_CURRENT_FIXTURE=2 TEST_PAUSE_BACKUP=1 sh "$installer" >"$TEST_ROOT/first-output" 2>&1 </dev/null &
+first=$!
+tries=0
+until [ -f "$TEST_ROOT/paused" ]; do
+    if ! kill -0 "$first" 2>/dev/null || [ "$tries" -ge 200 ]; then
+        PATH=$original_path cat "$TEST_ROOT/first-output" >&2
+        exit 1
+    fi
+    tries=$((tries + 1))
+    sleep 0.05
+done
+[ ! -e "$CORRAL_APP_INSTALL_DIR" ]
+if run --app-only; then echo 'concurrent app-only install unexpectedly succeeded' >&2; exit 1; fi
+PATH=$original_path grep -F 'cannot acquire install lock' "$TEST_ROOT/output" >/dev/null
+mkdir "$TEST_ROOT/other-parent"
+if CORRAL_APP_INSTALL_DIR="$TEST_ROOT/other-parent/site" run; then
+    echo 'concurrent install sharing bin directory unexpectedly succeeded' >&2
+    exit 1
+fi
+PATH=$original_path grep -F '.corral-next-install.lock' "$TEST_ROOT/output" >/dev/null
+: >"$TEST_ROOT/continue"
+if ! wait "$first"; then PATH=$original_path cat "$TEST_ROOT/first-output" >&2; exit 1; fi
+first=
+verify_current 2
+[ ! -e "$CORRAL_APP_INSTALL_DIR/site" ]
+[ ! -e "$TEST_ROOT/other-parent/site" ]
 
 printf 'installer tests passed: %s isolated cases\n' "$cases"
