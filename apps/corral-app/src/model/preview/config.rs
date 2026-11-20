@@ -111,6 +111,14 @@ fn built_in() -> Map<String, Value> {
             "base": null, "branch_prefix": "corral/", "max_rounds": 2, "profile": "omp-sol",
             "auto_dispatch": false, "auto_land": false
         },
+        "profiles": {
+            "omo": { "harness": "omo" },
+            "omp": { "harness": "omp" },
+            "claude": { "harness": "claude" },
+            "pi": { "harness": "pi" },
+            "generic": { "harness": "generic" },
+            "omp-sol": { "harness": "omp", "model": "gpt-6.2-sol", "effort": "medium" }
+        },
         "runner": { "mode": "herdr" },
         "sync": { "quiet_after_secs": 120, "watch_secs": 5 },
         "artifacts": { "globs": ["docs/**/records/*", "**/*report*.html"], "max_bytes": 20_000_000 }
@@ -221,7 +229,7 @@ pub fn config(feed: &mut Feed, key: &Id, put: Option<&str>) {
     );
 }
 
-const BUILT_IN_HARNESSES: [&str; 4] = ["omo", "omp", "claude", "generic"];
+const BUILT_IN_HARNESSES: [&str; 5] = ["omo", "omp", "claude", "pi", "generic"];
 
 /// A problem the engine names by key.
 fn keyed(key: impl Into<String>, message: impl Into<String>) -> ConfigProblem {
@@ -370,6 +378,18 @@ fn check(text: &str) -> Result<(), Vec<ConfigProblem>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn built_in_routing_target_is_reported_and_accepted_without_a_profile_table() {
+        let text = "[[routing]]\nprofile = 'omp'\n";
+        let settings = snapshot(text, SettingsSnapshot::default());
+        assert!(
+            settings.built_in_defaults.unwrap()["profiles"]
+                .get("omp")
+                .is_some()
+        );
+        assert_eq!(check(text), Ok(()));
+    }
 
     #[test]
     fn the_sample_file_passes_its_own_check_and_an_unknown_profile_is_refused_by_name() {

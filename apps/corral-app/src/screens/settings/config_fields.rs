@@ -84,12 +84,32 @@ fn entry_with(
             .as_ref()
             .is_some_and(|added| self::id(added) == id)
     });
-    let field = input();
-    let field = match &handle {
-        Some(handle) => field.element_ref(handle),
-        None => field,
-    };
-    let field = field
+    let handle = handle.unwrap_or_else(element_ref);
+    let jump_id = id.clone();
+    let jump = computed(move || {
+        app.settings.with(|state| {
+            state
+                .config
+                .focus_path
+                .as_ref()
+                .is_some_and(|path| self::id(path) == jump_id)
+        })
+    });
+    effect(move || {
+        if jump.get() {
+            after_answer(move || {
+                if jump.get_untracked() {
+                    handle.focus();
+                    app.act(app.settings, |state, _| {
+                        state.config.focus_path = None;
+                        Vec::new()
+                    });
+                }
+            });
+        }
+    });
+    let field = input()
+        .element_ref(&handle)
         .test_id(&id)
         .label(label.clone())
         .placeholder(label.to_string())
