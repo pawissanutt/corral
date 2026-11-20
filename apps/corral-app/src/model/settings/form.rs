@@ -9,6 +9,7 @@ use toml_edit::{DocumentMut, Item};
 
 use super::document::{self, Path};
 use super::editor::{Editor, Part, Typed};
+use super::harnesses;
 use crate::model::daemon::Feed;
 
 /// What a field edits.
@@ -69,12 +70,12 @@ pub enum Shape {
         groups: Vec<Group>,
         empty: Option<&'static str>,
     },
+    Harnesses(Vec<String>),
     File,
     /// The draft is not TOML, so the form cannot read it; the text view can.
     Unparsed(String),
 }
 
-const BUILT_IN_HARNESSES: [&str; 5] = ["omo", "omp", "claude", "pi", "generic"];
 const PROJECT_KEYS: [&str; 11] = [
     "path",
     "base",
@@ -197,6 +198,7 @@ pub fn shape(editor: &Editor, feed: &Feed) -> Shape {
             append_offers(&mut targets, built_in_names(feed, "profiles"));
             (None, None, routing(&doc, &targets), None)
         }
+        Part::Harnesses => return Shape::Harnesses(document::names(&doc, "harnesses")),
         part => {
             let entries = listed(editor, &doc, part);
             let groups = entries
@@ -205,14 +207,11 @@ pub fn shape(editor: &Editor, feed: &Feed) -> Shape {
                 .map(|name| vec![entry(&doc, feed, part, name, &profiles)])
                 .unwrap_or_default();
             let empty = match part {
-                Part::Projects => "No projects: corral manages no repository yet.",
-                Part::Profiles => "No profiles: dispatch has nothing to run.",
-                _ => "No harness tables: corral uses its built-in omo, omp, claude and generic.",
+                Part::Projects => Some("No projects: corral manages no repository yet."),
+                Part::Profiles => Some("No profiles: dispatch has nothing to run."),
+                _ => None,
             };
-            let note = (part == Part::Harnesses).then_some(
-                "A table overrides a built-in harness of the same name or adds one. Placeholders: {prompt_ref}, {prompt_file}, {model_args}, {name}, {task}, {worktree}, {corral}.",
-            );
-            (note, Some(entries), groups, Some(empty))
+            (None, Some(entries), groups, empty)
         }
     };
     Shape::Form {
@@ -343,7 +342,7 @@ fn entry(doc: &DocumentMut, feed: &Feed, part: Part, name: &str, profiles: &[Str
                     if let Some(built_in) = built_in_table(feed, "harnesses") {
                         append_offers(&mut harnesses, built_in.keys().map(String::as_str));
                     } else {
-                        append_offers(&mut harnesses, BUILT_IN_HARNESSES);
+                        append_offers(&mut harnesses, harnesses::keys());
                     }
                     field(at(key), key, Kind::Text).offer("Harnesses", harnesses)
                 }
@@ -352,14 +351,7 @@ fn entry(doc: &DocumentMut, feed: &Feed, part: Part, name: &str, profiles: &[Str
                 _ => field(at(key), key, Kind::Text),
             })
             .collect(),
-        _ => HARNESS_KEYS
-            .iter()
-            .map(|key| match *key {
-                "command" => field(at(key), key, Kind::Text)
-                    .note("an owner-written shell line; {model_args} carries the profile's model, effort and arguments"),
-                _ => field(at(key), key, Kind::Text),
-            })
-            .collect(),
+        _ => Vec::new(),
     };
     Group {
         title: None,
@@ -368,7 +360,21 @@ fn entry(doc: &DocumentMut, feed: &Feed, part: Part, name: &str, profiles: &[Str
     }
 }
 
-fn built_in_table<'a>(
+pub fn harness_fields(name: &str) -> Vec<Field> {
+    HARNESS_KEYS
+        .into_iter()
+        .map(|key| {
+            let control = field(Path::entry("harnesses", name, key), key, Kind::Text);
+            if key == "command" {
+                control.note("An owner-written shell line. Placeholders: {prompt_ref}, {prompt_file}, {model_args}, {name}, {task}, {worktree}, {corral}.")
+            } else {
+                control
+            }
+        })
+        .collect()
+}
+
+pub(super) fn built_in_table<'a>(
     feed: &'a Feed,
     table: &str,
 ) -> Option<&'a serde_json::Map<String, serde_json::Value>> {

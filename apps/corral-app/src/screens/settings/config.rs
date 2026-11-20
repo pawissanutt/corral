@@ -13,6 +13,8 @@ use nsh_core::prelude::*;
 use super::config_fields::{edit, entry, field};
 use super::parts::{cell, frame, space};
 use super::{config_profiles, config_routing};
+
+mod harnesses;
 use crate::model::Form;
 use crate::model::settings::document::Path;
 use crate::model::settings::editor::{self, Edit, Part};
@@ -240,6 +242,7 @@ fn reason_button(app: AppState, at: usize, path: Option<Path>, line: String) -> 
 fn part(app: AppState, selected: Part, shape: Shape, live: Memo<Live>) -> AnyElement {
     match shape {
         Shape::File => file(app),
+        Shape::Harnesses(configured) => harnesses::catalog(app, &configured, live),
         Shape::Unparsed(problem) => view()
             .min_w(px(0.0))
             .child(error(
