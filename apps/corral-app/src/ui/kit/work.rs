@@ -72,5 +72,6 @@ pub fn press_id(press: &Press) -> String {
         Press::Older(_) => "btn-older".into(),
         Press::RetryBoard => "btn-retry-board".into(),
         Press::FindArtifacts(_) => "btn-find-artifacts".into(),
+        Press::Remove(_) => "btn-remove".into(),
     }
 }

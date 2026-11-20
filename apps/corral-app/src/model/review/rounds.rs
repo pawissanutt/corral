@@ -187,7 +187,9 @@ pub(super) fn rounds(feed: &Feed, shown: &Shown) -> Option<Rounds> {
     }
     Some(Rounds {
         heading: "Rounds",
-        count: max.map(|max| format!("round {} of {max}", task.round.max(1))),
+        // `task.round` counts automatic send-backs against their budget, from 0; it is not the
+        // meta line's round number, so the caption names what it counts.
+        count: max.map(|max| format!("sent back {} of {max}", task.round)),
         hint: "Each round is one submission and the checks that judged it. A red gate or a review asking changes sends the work back for another round; once the rounds are used, the task waits for you.",
         rounds,
         reviewer,

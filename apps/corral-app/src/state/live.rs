@@ -235,6 +235,7 @@ impl AppState {
                     | Effect::Act(_)
                     | Effect::Device(_)
                     | Effect::Control { .. }
+                    | Effect::RemoveBuild(_)
                     | Effect::Config { .. }
                     | Effect::Refused(_)
             )
@@ -293,6 +294,14 @@ impl AppState {
                 }
             }
             Effect::Refused(sheet) => self.refusal.set(Some(sheet)),
+            // The agents' reducer owns the Remove sheet; its dry run goes out as its effect,
+            // to the daemon or the sample alike.
+            Effect::RemoveBuild(session) => {
+                let filter = untracked(|| self.scope_filter());
+                self.reduce(self.agents, move |state, feed, _, _| {
+                    state.act(crate::model::agents::Action::Remove(session), feed, &filter)
+                });
+            }
             Effect::Warm(warm) => {
                 if let Some(refusal) = self.link_refusal() {
                     self.toast(refusal);

@@ -90,6 +90,8 @@ pub enum Press {
     RetryBoard,
     /// Open the artifact finder with this task's token filled in.
     FindArtifacts(Id),
+    /// Open the Remove sheet of a build stopped here (prune's dry run first).
+    Remove(Id),
 }
 
 /// A status's own next step: an operation that needs no words, sent on one press.
@@ -224,6 +226,10 @@ impl State {
                 limit: CHANGES_PER_PAGE,
             })],
             Press::FindArtifacts(task) => vec![Effect::FindArtifacts(task)],
+            Press::Remove(session) => {
+                self.menu = None;
+                vec![Effect::RemoveBuild(session)]
+            }
         }
     }
 }
