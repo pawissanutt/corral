@@ -1,5 +1,5 @@
-//! The session's background jobs on the Agents tab, read from the host's `SessionJobs` part:
-//! their group (`Jobs · 1 running`, each job with its last output line and a peek at its last
+//! The session's visible commands on the Agents tab, read from the host's `SessionJobs` part:
+//! their group (`Commands · 1 running`, each command with its last output line and a peek at its last
 //! lines in place), the selected job's detail (command, directory, state and elapsed time,
 //! output size, exit code, armed watches, the last lines of output) and its controls, and the
 //! opened job's output (`SessionJobOutput`): the newest bytes first, re-read as the host
@@ -36,7 +36,7 @@ const JOB_CONTROL: &str = "job_control";
 /// The jobs' group on the tab.
 #[derive(Debug, Clone, PartialEq)]
 pub struct JobList {
-    /// `Jobs · 1 running`.
+    /// `Commands · 1 running`.
     pub heading: String,
     pub rows: Vec<JobRowView>,
     /// Why the list is missing or partial: unavailable, reading, failed.
@@ -91,7 +91,7 @@ pub struct JobOutputView {
     /// The id's first eight characters, beside the name.
     pub short: String,
     pub back: Action,
-    /// `$ cargo test -p auth`, or `a job no longer listed` when the list no longer has it.
+    /// `$ cargo test -p auth`, or a fallback when the host no longer retains the command.
     pub command: String,
     /// `▼ following the newest output`, `‖ showing older output`, `■ exited 0`.
     pub status: (Hue, String),
@@ -192,13 +192,37 @@ pub(super) fn named(feed: &crate::model::daemon::Feed, session: &Id, job: &str) 
     served(feed.detail(&target(session)))
         .and_then(|jobs| jobs.jobs.iter().find(|found| found.id == job))
         .map_or_else(
-            || format!("job {}", short_id(job)),
+            || format!("command {}", short_id(job)),
             |found| name(&found.command),
         )
 }
 
 fn running(job: &SessionJob) -> bool {
     job.state == "running"
+}
+
+/// All running commands in host order, then the latest exit (successful or not).
+/// An untimed retained exit is a fallback; a lost command is not a known exit.
+pub(in crate::model::session) fn visible_commands(jobs: &[SessionJob]) -> Vec<&SessionJob> {
+    let mut visible = Vec::new();
+    let mut latest = None;
+    let mut latest_end = None;
+    for job in jobs {
+        if running(job) {
+            visible.push(job);
+        } else if job.state == "exited" {
+            let ended = job
+                .ended_at
+                .as_deref()
+                .and_then(|value| value.parse::<jiff::Timestamp>().ok());
+            if latest.is_none() || ended > latest_end {
+                latest = Some(job);
+                latest_end = ended;
+            }
+        }
+    }
+    visible.extend(latest);
+    visible
 }
 
 /// A job's state as a mark, its hue and its words.
@@ -261,7 +285,7 @@ pub(super) fn buttons(
     let sending = sending.then(|| "your last request is on its way".to_owned());
     let refused = |action: &str| {
         (!job.actions.iter().any(|offered| offered == action))
-            .then(|| "the host does not offer this for the job".to_owned())
+            .then(|| "the host does not offer this for the command".to_owned())
     };
     out.push(
         FleetButton::new(
@@ -312,7 +336,7 @@ pub(super) fn list(cx: &Cx<'_>, selected: Option<&str>) -> Option<JobList> {
     let cache = cx.feed.detail(&target);
     let read = ReadState::of(cache, cx.feed);
     let served = served(cache);
-    let jobs = served.map_or(&[][..], |jobs| jobs.jobs.as_slice());
+    let jobs = visible_commands(served.map_or(&[][..], |jobs| jobs.jobs.as_slice()));
     let counted = cx.state.map_or(0, |state| state.jobs.total);
     let unavailable = served
         .and_then(|jobs| jobs.unavailable.clone())
@@ -321,7 +345,7 @@ pub(super) fn list(cx: &Cx<'_>, selected: Option<&str>) -> Option<JobList> {
             _ => None,
         });
     let failed = matches!(read, ReadState::Failed(_));
-    if jobs.is_empty() && counted == 0 && unavailable.is_none() && !failed {
+    if jobs.is_empty() && (served.is_some() || counted == 0) && unavailable.is_none() && !failed {
         return None;
     }
     let note = if let Some(why) = unavailable {
@@ -329,7 +353,7 @@ pub(super) fn list(cx: &Cx<'_>, selected: Option<&str>) -> Option<JobList> {
     } else if failed || matches!(read, ReadState::Stale { .. }) {
         Some((read.hue(), read.words()))
     } else if served.is_none() {
-        Some((Hue::Neutral, "Reading the jobs…".to_owned()))
+        Some((Hue::Neutral, "Reading the commands…".to_owned()))
     } else {
         None
     };
@@ -340,11 +364,11 @@ pub(super) fn list(cx: &Cx<'_>, selected: Option<&str>) -> Option<JobList> {
     };
     Some(JobList {
         heading: match live {
-            0 => "Jobs · none running".into(),
-            n => format!("Jobs · {n} running"),
+            0 => "Commands · none running".into(),
+            n => format!("Commands · {n} running"),
         },
         rows: jobs
-            .iter()
+            .into_iter()
             .map(|job| {
                 let (mark, hue, state) = job_state(job);
                 let chosen = selected == Some(job.id.as_str());
@@ -483,7 +507,7 @@ pub(super) fn output(cx: &Cx<'_>, id: &str) -> JobOutputView {
             sub: None,
         },
         command: job.map_or_else(
-            || "a job no longer listed".to_owned(),
+            || "a command no longer retained".to_owned(),
             |job| format!("$ {}", name(&job.command)),
         ),
         status,

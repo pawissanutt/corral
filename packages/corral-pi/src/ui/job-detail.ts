@@ -71,7 +71,7 @@ export function jobDetailLines(job: PanelJob, input: { readonly bound: boolean; 
   if (!input.bound) chips.push({ text: "stale", tone: "warning" });
   const rows = [truncateToWidth(head, width, "…"), ...chipRows(chips, width)];
   if (input.legend) {
-    const body = ["Source: this host's job runtime only; a job missing here is not completed.",
+    const body = ["Source: this host only. A missing command does not imply completion.",
       "Exit status is a local observation: it does not imply gate PASS or task settlement.",
       ...(d ? [`Process group ${d.groupClear ? "observed clear" : "not confirmed clear"}.`, `Monitoring · ${d.monitorAttempts} attempts (not active-wait count).`] : []),
       ...(d?.watches ?? []).flatMap(w => [`Watch ${plainLabel(w.wait)} /${plainLabel(w.pattern)}/ · deadline ${plainLabel(w.deadline)}${w.reportQueued ? " · report queued, settlement unknown" : ""}`,
@@ -81,7 +81,7 @@ export function jobDetailLines(job: PanelJob, input: { readonly bound: boolean; 
       .flatMap(line => wrapTextWithAnsi(line, Math.max(1, width - 4))).map(line => PANEL_MUTED + line);
     rows.push(...titledBox("Legend", body, width));
   }
-  if (job.state === "lost" || !d) return [...rows, PANEL_MUTED + "Detailed output unavailable for this job source."];
+  if (job.state === "lost" || !d) return [...rows, PANEL_MUTED + "Detailed output unavailable for this command."];
   if (!input.bound) return [...rows, PANEL_WARNING + "Output unavailable: stale/disconnected host"];
   const frozen = input.freeze?.job === job.job ? input.freeze : undefined;
   const source = frozen ?? { tail: d.tail, lines: d.lines, running: job.state === "running" };

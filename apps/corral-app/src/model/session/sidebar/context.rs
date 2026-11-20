@@ -1,5 +1,5 @@
 //! The sidebar's Context tab: the agents at work (from the fleet corrald sends with the live
-//! pages), the background jobs the host lists (`DetailRef::SessionJobs`), then what the session
+//! pages), the commands the host lists (`DetailRef::SessionJobs`), then what the session
 //! works with as its host reports it (`DetailRef::SessionContext`): its directory, worktree and
 //! branch, the model and effort and how full the context window is, the loaded context files,
 //! skills, prompts and tools, and the MCP servers with their state. A row opens its agent or job
@@ -15,9 +15,6 @@ use super::super::status::tokens;
 use super::super::{Action, Cx, DockAction, FleetAction};
 use super::SidebarAction;
 
-/// The jobs the rail lists before it points to the Agents tab.
-const JOB_ROWS: usize = 8;
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextTab {
     /// Agents at work, asking or failed, in the fleet's order.
@@ -28,9 +25,9 @@ pub struct ContextTab {
     pub completed: Option<(String, String)>,
     /// Shown only while the host lists a job.
     pub jobs: Vec<SideJob>,
-    /// `+3 more in Agents`, or why the jobs could not be read.
+    /// Why the commands could not be read.
     pub jobs_note: Option<(Hue, String)>,
-    /// `no agents or jobs yet`.
+    /// `no agents or commands yet`.
     pub empty: Option<String>,
     /// Directory, worktree, branch, model, effort, context window.
     pub facts: Vec<ContextFact>,
@@ -372,34 +369,30 @@ pub(super) fn context_tab(cx: &Cx<'_>, target: &DetailRef) -> ContextTab {
     };
     let listed = cx.state.is_some_and(|state| state.jobs.total > 0);
     let served_jobs = jobs_read(cx);
-    let mut jobs: Vec<&SessionJob> = served_jobs
-        .map(|served| served.jobs.iter().collect())
-        .unwrap_or_default();
-    jobs.sort_by_key(|job| job.state != "running");
-    let more = jobs.len().saturating_sub(JOB_ROWS);
     let jobs_note = match served_jobs {
         Some(served) if served.unavailable.is_some() => served
             .unavailable
             .as_ref()
-            .map(|why| (Hue::Held, format!("jobs unavailable: {why}"))),
-        Some(_) if more > 0 => Some((Hue::Neutral, format!("+{more} more in Agents"))),
+            .map(|why| (Hue::Held, format!("commands unavailable: {why}"))),
         Some(_) => None,
         None if listed => {
             let cache = cx.feed.detail(&jobs_target(cx));
             Some(match cache.and_then(|cache| cache.error.as_ref()) {
-                Some(error) => (Hue::Fail, format!("jobs not read: {}", error.message)),
-                None => (Hue::Neutral, "reading the jobs…".into()),
+                Some(error) => (Hue::Fail, format!("commands not read: {}", error.message)),
+                None => (Hue::Neutral, "reading the commands…".into()),
             })
         }
         None => None,
     };
-    let jobs: Vec<SideJob> = jobs
-        .into_iter()
-        .take(JOB_ROWS)
-        .map(|row| job(cx, row))
-        .collect();
-    let empty = (children.is_empty() && jobs.is_empty() && agents_note.is_none() && !listed)
-        .then(|| "no agents or jobs yet".into());
+    let jobs: Vec<SideJob> = super::super::fleet::visible_commands(
+        served_jobs.map_or(&[][..], |served| served.jobs.as_slice()),
+    )
+    .into_iter()
+    .map(|row| job(cx, row))
+    .collect();
+    let empty =
+        (children.is_empty() && jobs.is_empty() && agents_note.is_none() && jobs_note.is_none())
+            .then(|| "no agents or commands yet".into());
     let context = read(cx, target);
     ContextTab {
         agents,

@@ -149,10 +149,8 @@ function contextBlocks(source: SideSource): Block[] {
   // Sections are separated by one blank row, never a rule.
   const section = (block: Block) => { if (blocks.length) blocks.push(GAP); blocks.push(block); };
   const agents = source.agents ?? [], jobs = source.jobs ?? [];
-  if (!agents.length && !jobs.length) return [note("no agents or jobs yet")];
-  // Successful completions fold into one line; failed and uncertain ones stay listed.
-  const done = [...agents.filter(agent => agent.settled === "ok").map(agent => plainLabel(agent.name)),
-    ...jobs.filter(job => job.settled === "ok").map(job => plainLabel(job.command))];
+  if (!agents.length && !jobs.length) return [note("no agents or commands yet")];
+  const done = agents.filter(agent => agent.settled === "ok").map(agent => plainLabel(agent.name));
   if (source.agents !== null) {
     section(heading("AGENTS"));
     const listed = agents.filter(agent => agent.settled !== "ok");
@@ -166,10 +164,8 @@ function contextBlocks(source: SideSource): Block[] {
         item: { key: targetKey({ kind: "agent", key: agent.key }), target: { kind: "agent", key: agent.key } } });
     });
   }
-  // A Jobs section appears only while a job is listed.
-  const listedJobs = jobs.filter(job => job.settled !== "ok");
-  if (listedJobs.length) section(heading("JOBS"));
-  listedJobs.forEach((job, index) => {
+  if (jobs.length) section(heading("COMMANDS"));
+  jobs.forEach((job, index) => {
     const time = plainLabel(job.time);
     blocks.push({ rows: [{ left: stateGlyph(job.glyph, job.tone, !job.settled && job.tone === "accent", index + agents.length) + " "
       + PANEL_TEXT + plainLabel(job.command), ...(time ? { right: PANEL_MUTED + time } : {}) }],

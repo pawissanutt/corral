@@ -15,7 +15,7 @@ import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot, type Revi
 import { ChangesView, changesModel, type ChangeAuthor, type ChangesModel } from "./changes-view.ts";
 import { LifecycleView } from "./lifecycle-view.ts";
 import { ArtifactView } from "./artifact-view.ts";
-import { agentsModel, isLive, liveCount, statusLabel, type AgentActions, type AgentRow, type AgentsModel } from "./agents-model.ts";
+import { agentsModel, isLive, liveCount, statusLabel, visibleCommands, type AgentActions, type AgentRow, type AgentsModel } from "./agents-model.ts";
 import { AgentsView, type AgentsAction } from "./agents-view.ts";
 import { AgentConversation } from "./agent-conversation.ts";
 import { HelperChat } from "./helper-chat.ts";
@@ -518,11 +518,11 @@ export class NativeWorkbench {
   private async openJobOutput(id: string, search: boolean): Promise<void> {
     const ui = this.ui, snapshot = this.options.snapshot(), job = snapshot?.jobs?.find(item => item.job === id);
     if (!ui || !this.options.canInteract()) return;
-    if (!job?.detail || !snapshot?.bound) { this.notice("Job output unavailable for this job source or host", "warning"); return; }
+    if (!job?.detail || !snapshot?.bound) { this.notice("Command output unavailable from this host", "warning"); return; }
     const lines = pagerLines(job);
     let start = lines.length;
     if (search) {
-      const query = await ui.input("Search retained job output");
+      const query = await ui.input("Search retained command output");
       if (!query) return;
       start = lines.findIndex(line => line.includes(query));
       if (start < 0) { this.notice(`No match for ${JSON.stringify(plainLabel(query))} in retained output`); return; }
@@ -971,7 +971,7 @@ export class NativeWorkbench {
         key: row.key, name: row.name, hue: row.hue, profile: row.profile, glyph: row.status.glyph, tone: row.status.tone, activity: row.activity,
         settled: isLive(row.state) ? undefined : row.state === "done" ? "ok" as const : "failed" as const,
       })) : null,
-      jobs: model.sources.jobs ? model.jobs.map(row => ({
+      jobs: model.sources.jobs ? visibleCommands(model.jobs).map(row => ({
         key: row.key, command: row.command, glyph: row.status.glyph, tone: row.status.tone, time: statusLabel(row.status),
         settled: row.live ? undefined : row.status.tone === "success" ? "ok" as const : "failed" as const,
       })) : null,
