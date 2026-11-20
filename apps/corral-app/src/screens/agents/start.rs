@@ -155,7 +155,7 @@ fn content(app: AppState) -> Modal {
             sheet,
             "field-build-name",
             |s| s.name.value.clone(),
-            |text| StartAction::Name(text),
+            StartAction::Name,
         ),
         Some(quiet(
             app,

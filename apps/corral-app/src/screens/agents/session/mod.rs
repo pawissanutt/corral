@@ -12,6 +12,7 @@
 
 mod agents_tab;
 mod board;
+mod body;
 mod cards;
 mod changes;
 mod command_menu;
@@ -40,7 +41,7 @@ use nsh_core::prelude::*;
 
 use crate::model::board::Mark;
 use crate::model::hue::Hue;
-use crate::model::session::{self, Body, Chat, Cx, Facts, Focus, KeyAction, SessionPage};
+use crate::model::session::{self, Body, Cx, Facts, Focus, KeyAction, SessionPage};
 use crate::model::text::span;
 use crate::model::work::{session_task, task_ref};
 use crate::model::{Form, Id};
@@ -53,7 +54,8 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 use super::run;
-use super::transcript::{self, watch};
+use super::transcript::watch;
+use body::{chat, conversation, main, view_bar};
 
 /// How far from its end a scroll still counts as at its end, in points.
 const END_SLACK: f32 = 24.0;
@@ -62,8 +64,6 @@ const END_SLACK: f32 = 24.0;
 /// the conversation's place.
 const BESIDE: f32 = 900.0;
 const BESIDE_CELLS: f32 = 100.0;
-/// The rows a terminal's conversation or view keeps however much waits in the dock.
-const MAIN_ROWS: f32 = 6.0;
 /// The window's title while no session page is on top.
 const APP_TITLE: &str = "Corral";
 
@@ -111,6 +111,8 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
             (true, false) => Panel::Instead,
         }
     });
+    // Details widens with the page; BESIDE reads the whole page, before Details takes its share.
+    let panel_width = computed(move || sidebar::panel_width(room.get()));
     let talk = view()
         .flex_1()
         .min_w(px(0.0))
@@ -118,10 +120,14 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
         .flex_col()
         .child(view_bar(app, page))
         .child(main(app, page))
-        .child(dock::dock(app, page))
-        .child(command_menu::menu(app, page, commands))
-        .child(bottom(app, page, id.clone(), commands, false, true))
-        .child(status::bar(app, page))
+        .child(dock::dock(app, page, true))
+        .child(conversation(
+            app,
+            true,
+            command_menu::menu(app, page, commands),
+        ))
+        .child(bottom(app, page, id.clone(), commands, false, true, true))
+        .child(status::bar(app, page, true))
         .style_when(move || panel.get() == Panel::Instead, |s| s.hidden());
     view()
         .size_full()
@@ -148,76 +154,14 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
                 .child(talk)
                 .child(dynamic(move || match panel.get() {
                     Panel::Closed => None,
-                    Panel::Beside => Some(untracked(|| sidebar::panel(app, page, true))),
-                    Panel::Instead => Some(untracked(|| sidebar::panel(app, page, false))),
+                    Panel::Beside => {
+                        Some(untracked(|| sidebar::panel(app, page, Some(panel_width))))
+                    }
+                    Panel::Instead => Some(untracked(|| sidebar::panel(app, page, None))),
                 })),
         )
         .child(sidebar::sheets(app, id))
         .into_element()
-}
-
-/// Over a part's full view (Changes, Agents, the board, Usage): what it is, and the way back to
-/// the conversation, which Escape also takes. A terminal's key line says `esc chat` and its
-/// rows are few, so it has none.
-fn view_bar(app: AppState, page: Memo<SessionPage>) -> AnyElement {
-    let form = app.form;
-    if form == Form::Terminal {
-        return view().into_element();
-    }
-    let shown = computed(move || {
-        page.with(|p| {
-            let on_view = p.tab != session::Tab::Chat || p.sub.is_some();
-            on_view.then(|| {
-                let label = p
-                    .tabs
-                    .iter()
-                    .find(|item| item.selected)
-                    .map_or_else(|| p.tab.label().to_owned(), |item| item.label.clone());
-                (
-                    label,
-                    session::Action::Tab {
-                        session: p.id.clone(),
-                        tab: session::Tab::Chat,
-                    },
-                )
-            })
-        })
-    });
-    dynamic(move || {
-        shown.get().map(|(label, back)| {
-            untracked(|| {
-                let line = view()
-                    .test_id("session-view-bar")
-                    .flex_row()
-                    .flex_none()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(crate::ui::kit::button::button(
-                        app,
-                        "‹ Conversation",
-                        crate::ui::kit::button::ButtonKind::Quiet,
-                        "btn-view-back",
-                        move || run(app, back.clone()),
-                    ))
-                    .child(
-                        text(label)
-                            .number_of_lines(1u32)
-                            .truncate()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(color(Token::Ink)),
-                    );
-                match form {
-                    Form::Terminal => line.px(term::cells(1.0)).into_element(),
-                    _ => line
-                        .h(px(36.0))
-                        .px(px(14.0))
-                        .border_b(px(1.0))
-                        .border_color(color(Token::Rule))
-                        .into_element(),
-                }
-            })
-        })
-    })
 }
 
 /// While the page is on top, the window's title is the session's (`▲ needs you · <target>`,
@@ -264,9 +208,9 @@ pub fn phone(app: AppState, id: Id) -> PhonePage {
         .bg(color(Token::Bg))
         .border_t_1()
         .border_color(color(Token::Rule))
-        .child(dock::dock(app, page))
+        .child(dock::dock(app, page, false))
         .child(command_menu::menu(app, page, commands))
-        .child(bottom(app, page, id, commands, false, true))
+        .child(bottom(app, page, id, commands, false, true, false))
         .into_element();
     PhonePage {
         title,
@@ -307,11 +251,11 @@ pub fn compact(app: AppState, id: Id, page: Memo<SessionPage>, form: Compact) ->
     let card = form == Compact::Card;
     let tail = view()
         .flex_none()
-        .child(dock::dock(app, page))
+        .child(dock::dock(app, page, false))
         .child(command_menu::menu(app, page, commands))
-        .child(bottom(app, page, id.clone(), commands, !card, !card))
+        .child(bottom(app, page, id.clone(), commands, !card, !card, false))
         .when(!matches!(form, Compact::Composer | Compact::Card), |tail| {
-            tail.child(status::bar(app, page))
+            tail.child(status::bar(app, page, false))
         });
     match form {
         Compact::Drawer => view()
@@ -546,159 +490,12 @@ fn banner(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     })
 }
 
-/// Which main view shows: drawn again only when that changes, each following its own part.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Shown {
-    Chat,
-    Usage,
-    Agents,
-    Changes,
-    Board,
-    Task,
-    Proof,
-    Log,
-}
-
-fn main(app: AppState, page: Memo<SessionPage>) -> AnyElement {
-    let shown = computed(move || {
-        page.with(|p| match &p.body {
-            Body::Chat(_) => Shown::Chat,
-            Body::Usage(_) => Shown::Usage,
-            Body::Agents(_) => Shown::Agents,
-            Body::Changes(_) => Shown::Changes,
-            Body::Board(_) => Shown::Board,
-            Body::Task(_) => Shown::Task,
-            Body::Proof(_) => Shown::Proof,
-            Body::Log(_) => Shown::Log,
-        })
-    });
-    // A small terminal keeps rows of the conversation or view; the dock scrolls instead.
-    let least = if app.form == Form::Terminal {
-        term::rows(MAIN_ROWS)
-    } else {
-        px(0.0)
-    };
-    view()
-        .flex_1()
-        .min_w(px(0.0))
-        .min_h(least)
-        .flex_col()
-        .child(dynamic(move || {
-            let shown = shown.get();
-            untracked(|| match shown {
-                Shown::Chat => chat(app, page),
-                Shown::Usage => usage::tab(app, page),
-                Shown::Agents => agents_tab::tab(app, page),
-                Shown::Changes => changes::tab(app, page),
-                Shown::Board => board::tab(app, page),
-                Shown::Task => task::tab(app, page),
-                Shown::Proof => proof::tab(app, page),
-                Shown::Log => pager::pager(app, page),
-            })
-        }))
-        .into_element()
-}
-
-/// Chat: the transcript in its own scroll, which keeps to the newest rows as they arrive unless
-/// the owner scrolled up (then a control counts what arrived and returns to the end); before
-/// the first row, who receives the message.
-fn chat(app: AppState, page: Memo<SessionPage>) -> AnyElement {
-    let chat = computed(move || {
-        page.with(|p| match &p.body {
-            Body::Chat(chat) => Some(chat.clone()),
-            _ => None,
-        })
-    });
-    let shown = dynamic(move || {
-        chat.with(|chat| {
-            chat.as_ref()
-                .map(|chat| untracked(|| chat_content(app, chat)))
-        })
-    });
-    let content = if app.form == Form::Terminal {
-        view().px(term::cells(1.0)).child(shown).into_element()
-    } else {
-        shown
-    };
-    transcript::follow(
-        app,
-        scroll()
-            .test_id("session-transcript")
-            .flex_1()
-            .min_h(px(0.0))
-            .child(content),
-        move || chat.with(|c| c.as_ref().map(|c| c.transcript.following())),
-        move || page.with(|p| p.jump),
-    )
-}
-
-fn chat_content(app: AppState, chat: &Chat) -> AnyElement {
-    let Some(empty) = &chat.empty else {
-        return transcript::transcript(app, &chat.transcript);
-    };
-    let form = app.form;
-    let sentence = text(empty.sentence.clone()).text_color(color(Token::Ink2));
-    let keys = view()
-        .flex_row()
-        .flex_wrap()
-        .gap(px(if form == Form::Terminal { 16.0 } else { 12.0 }))
-        .children(
-            empty
-                .keys
-                .iter()
-                .map(|&(keys, name)| term_or_hint(app, keys, name)),
-        );
-    let block = view().test_id("session-empty").gap(px(8.0));
-    match form {
-        Form::Terminal => block
-            .child(term::blank())
-            .child(sentence)
-            .child(keys)
-            .into_element(),
-        Form::Desktop | Form::Phone => view()
-            .w_full()
-            .items_center()
-            .pt(px(32.0))
-            .px(px(24.0))
-            .child(
-                block
-                    .max_w(px(560.0))
-                    .child(
-                        sentence
-                            .font_family(FONT_TEXT)
-                            .text_size(px(14.0))
-                            .line_height(px(21.0)),
-                    )
-                    .child(keys),
-            )
-            .into_element(),
-    }
-}
-
-/// A key and what it does: the terminal's legend, the desktop's cap.
-fn term_or_hint(app: AppState, keys: &'static str, name: &'static str) -> AnyElement {
-    if app.form == Form::Terminal {
-        return term::legend(keys, name);
-    }
-    view()
-        .flex_row()
-        .items_center()
-        .gap(px(4.0))
-        .child(crate::ui::atoms::key_hint(keys))
-        .child(
-            text(name)
-                .font_family(FONT_TEXT)
-                .text_size(px(11.5))
-                .text_color(color(Token::Ink3)),
-        )
-        .into_element()
-}
-
 /// What the composer's place shows: the one confirmation a destructive option asks for, a
 /// decision card, an open answer card, the composer, or the bar standing in for it while the
 /// session takes no message (not running, ended, read-only), with Resume or Relaunch where the
 /// host can be started again. `commands` are the `/` rows the draft matches; `ask` is Ask's
-/// composer; `takes_focus` lets the composer take the keyboard while the page gives it the keys.
+/// composer; `takes_focus` lets the composer take the keyboard while the page gives it the keys;
+/// `measured` keeps it under the transcript's measure (the page).
 fn bottom(
     app: AppState,
     page: Memo<SessionPage>,
@@ -706,6 +503,7 @@ fn bottom(
     commands: Memo<Option<session::SlashMenu>>,
     ask: bool,
     takes_focus: bool,
+    measured: bool,
 ) -> AnyElement {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Place {
@@ -737,13 +535,17 @@ fn bottom(
     dynamic(move || {
         let place = place.get();
         let id = id.clone();
-        untracked(|| match place {
-            Place::Confirm => decision::confirm(app, page),
-            Place::Decision => decision::decision(app, page),
-            Place::Answer => questions::answer(app, page),
-            Place::Composer if ask => ask_composer(app, id, composer, command, focused),
-            Place::Composer => session_composer(app, id, composer, command, focused),
-            Place::Bar => dock::host_bar(app, bar),
+        untracked(|| {
+            let shown = match place {
+                Place::Confirm => decision::confirm(app, page),
+                Place::Decision => decision::decision(app, page),
+                Place::Answer => questions::answer(app, page),
+                Place::Composer if ask => ask_composer(app, id, composer, command, focused),
+                Place::Composer => session_composer(app, id, composer, command, focused),
+                // The bar's band runs edge to edge; it keeps its words to the measure itself.
+                Place::Bar => return dock::host_bar(app, bar, measured),
+            };
+            conversation(app, measured, shown)
         })
     })
     .into_element()

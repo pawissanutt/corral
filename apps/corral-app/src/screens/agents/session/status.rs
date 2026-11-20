@@ -16,12 +16,15 @@ use crate::ui::kit::marks::hue_ink;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
-pub(super) fn bar(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+use super::body::conversation;
+
+/// `measured`: its words keep to the transcript's measure (the page), its rule edge to edge.
+pub(super) fn bar(app: AppState, page: Memo<SessionPage>, measured: bool) -> AnyElement {
     let status = computed(move || page.with(|p| p.status.clone()));
-    dynamic(move || status.with(|status| untracked(|| face(app, status))))
+    dynamic(move || status.with(|status| untracked(|| face(app, status, measured))))
 }
 
-fn face(app: AppState, status: &StatusBar) -> AnyElement {
+fn face(app: AppState, status: &StatusBar, measured: bool) -> AnyElement {
     let form = app.form;
     let phone = form == Form::Phone;
     let words = |content: String, ink: AdaptiveColor, mono: bool| {
@@ -128,13 +131,15 @@ fn face(app: AppState, status: &StatusBar) -> AnyElement {
             .px(term::cells(1.0))
             .child(line)
             .into_element(),
-        Form::Desktop => line
+        Form::Desktop => view()
             .flex_none()
-            .min_h(px(26.0))
-            .px(px(18.0))
-            .py(px(4.0))
             .border_t(px(1.0))
             .border_color(color(Token::Rule))
+            .child(conversation(
+                app,
+                measured,
+                line.min_h(px(26.0)).px(px(18.0)).py(px(4.0)).into_element(),
+            ))
             .into_element(),
         Form::Phone => line
             .flex_none()

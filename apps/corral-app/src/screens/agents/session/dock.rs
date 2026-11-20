@@ -27,6 +27,7 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 use super::super::run;
+use super::body::conversation;
 use super::header::popup;
 use super::{cards, exit};
 
@@ -43,7 +44,8 @@ const DOCK_MIN: f32 = 96.0;
 
 /// The dock: its items stay mounted and follow their own parts; the whole is hidden while none
 /// shows. The phone has no queue: what waits there is said by the composer's last-send line.
-pub(super) fn dock(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+/// `measured`: its cards keep to the transcript's measure (the page), its rule edge to edge.
+pub(super) fn dock(app: AppState, page: Memo<SessionPage>, measured: bool) -> AnyElement {
     let form = app.form;
     let dock = computed(move || page.with(|p| p.dock.clone()));
     let any = computed(move || {
@@ -87,7 +89,7 @@ pub(super) fn dock(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                 .min(height - CONTENT_MIN - FRAME)
                 .max(DOCK_MIN))
         })
-        .child(column);
+        .child(conversation(app, measured, column.into_element()));
     let shell = match form {
         Form::Terminal => view().child(term::hrule()).child(shown),
         Form::Desktop => view()
@@ -558,8 +560,9 @@ fn inert(app: AppState, dock: Memo<Dock>) -> AnyElement {
 }
 
 /// The bar in the composer's place: why the session takes no message, and Resume or Relaunch
-/// where its host can be started again here.
-pub(super) fn host_bar(app: AppState, bar: Memo<Option<HostBar>>) -> AnyElement {
+/// where its host can be started again here. `measured`: its words keep to the transcript's
+/// measure (the page), its band edge to edge.
+pub(super) fn host_bar(app: AppState, bar: Memo<Option<HostBar>>, measured: bool) -> AnyElement {
     let form = app.form;
     dynamic(move || {
         bar.get().map(|bar| {
@@ -591,13 +594,16 @@ pub(super) fn host_bar(app: AppState, bar: Memo<Option<HostBar>>) -> AnyElement 
                         .child(term::hrule())
                         .child(line.px(term::cells(1.0)))
                         .into_element(),
-                    Form::Desktop => line
+                    Form::Desktop => view()
                         .flex_none()
-                        .px(px(18.0))
-                        .py(px(10.0))
                         .border_t(px(1.0))
                         .border_color(color(Token::Rule))
                         .bg(color(Token::Surface))
+                        .child(conversation(
+                            app,
+                            measured,
+                            line.px(px(18.0)).py(px(10.0)).into_element(),
+                        ))
                         .into_element(),
                     Form::Phone => line.flex_none().px(px(16.0)).py(px(10.0)).into_element(),
                 }
