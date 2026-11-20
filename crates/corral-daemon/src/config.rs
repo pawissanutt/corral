@@ -30,7 +30,11 @@ fn revision(toml: &str) -> String {
 }
 
 pub(crate) fn get(shared: &Shared) -> Result<ConfigDocument> {
-    let path = path(shared.root());
+    get_at(shared.root())
+}
+
+pub(crate) fn get_at(root: &Path) -> Result<ConfigDocument> {
+    let path = path(root);
     let toml = fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
     Ok(ConfigDocument {
         revision: Some(revision(&toml)),

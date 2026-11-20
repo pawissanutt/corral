@@ -31,7 +31,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, atomic::Ordering},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, ensure};
@@ -139,6 +139,7 @@ fn run_with_runner(root: &Path, options: RunOptions, runner: Option<RunnerFactor
     })();
     let result = match started {
         Ok(sync) => {
+            harnesses::start_sampler(&shared);
             poll_loop(&shared, &store, seq, version);
             shared.stop();
             sync.join()
@@ -175,7 +176,6 @@ fn sync_loop(shared: &Shared) {
 }
 
 fn poll_loop(shared: &Shared, store: &Store, mut seq: u64, mut version: u64) {
-    let mut harness_refresh = Instant::now();
     while !shared.lock().stop {
         shared.wait(POLL_INTERVAL);
         if shared.lock().stop {
@@ -183,10 +183,6 @@ fn poll_loop(shared: &Shared, store: &Store, mut seq: u64, mut version: u64) {
         }
         if let Err(error) = shared.refresh_config() {
             eprintln!("corrald configuration poll: {error:#}");
-        }
-        if Instant::now() >= harness_refresh {
-            shared.harness_inventory.refresh(shared);
-            harness_refresh = Instant::now() + harnesses::REFRESH_INTERVAL;
         }
         let result = (|| -> Result<()> {
             // Sample data_version first so a non-event commit racing this scan is seen next time.
