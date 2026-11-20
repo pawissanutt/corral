@@ -13,9 +13,10 @@ use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::marks::{hue_fill, hue_ink};
+use crate::ui::kit::page::measure;
 use crate::ui::kit::text::{rich, rich_small};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
+use crate::ui::tokens::{FONT_TEXT, MEASURE_FEED, MEASURE_PAGE, Token, color, text_size};
 
 /// One sweep of the skeleton's pulse, as the mockup's `.skel` shimmer.
 const PULSE_MS: f32 = 1400.0;
@@ -23,10 +24,13 @@ const PULSE_MS: f32 = 1400.0;
 /// flashes them.
 const CAPTION_DELAY_MS: f32 = 600.0;
 const CAPTION_FADE_MS: f32 = 200.0;
+/// The widest a notice or error box is drawn, so on a wide page its action stays within reach
+/// of its sentence.
+const NOTICE_MOST: f32 = MEASURE_FEED;
 
 /// A notice (`.notice`): the sentence on its tone's ground with an optional trailing action.
-/// Desktop: padding 10 14, radius 8, 10 pt between text and action. Phone: the same at
-/// padding 12 14, radius 10. Terminal: the tone's mark ([`tone_mark`]) in the tone and bold,
+/// Desktop: padding 10 14, radius 8, 10 pt between text and action, at most [`NOTICE_MOST`]
+/// wide. Phone: the same at padding 12 14, radius 10. Terminal: the tone's mark ([`tone_mark`]) in the tone and bold,
 /// the sentence, the action at the end of the row. test_id "notice".
 pub fn notice(app: AppState, hue: Hue, content: &Rich, action: Option<AnyElement>) -> AnyElement {
     toned(app, hue, None, content, action)
@@ -56,6 +60,7 @@ fn toned(
         .flex_row()
         .items_center()
         .gap(px(10.0))
+        .max_w(px(NOTICE_MOST))
         .px(px(14.0))
         .py(px(if phone { 12.0 } else { 10.0 }))
         .rounded(px(if phone { 10.0 } else { 8.0 }))
@@ -67,7 +72,8 @@ fn toned(
 }
 
 /// The error box (`.err`): what failed and what happens now, on the failure ground, with an
-/// optional action ("Retry now"). Desktop and phone: margin 14 18, padding 12 14, radius 8; bold
+/// optional action ("Retry now"). Desktop and phone: margin 14 18, padding 12 14, radius 8, at
+/// most [`NOTICE_MOST`] wide; bold
 /// runs of `content` should carry `Hue::Fail` as the mockup's `.err b`. Terminal: `✗` in the
 /// failure tone, the sentence and the action. role alert, test_id "error".
 pub fn error(app: AppState, content: &Rich, action: Option<AnyElement>) -> AnyElement {
@@ -83,6 +89,7 @@ pub fn error(app: AppState, content: &Rich, action: Option<AnyElement>) -> AnyEl
         .flex_row()
         .items_center()
         .gap(px(10.0))
+        .max_w(px(NOTICE_MOST))
         .mx(px(18.0))
         .my(px(14.0))
         .px(px(14.0))
@@ -281,8 +288,9 @@ fn tone_hue(tone: Tone) -> Hue {
 }
 
 /// The connection banner (`.conn-banner`): a strip across the top of the page saying how the
-/// connection stands, with its actions. Desktop: padding 7 18, the tone's ground, a rule under
-/// it, the actions 8 pt apart at the trailing edge. Phone: padding 10 18 and no actions, as the
+/// connection stands, with its actions. Desktop: padding 7 18, the tone's ground and a rule
+/// under it across the page, the sentence and the actions 8 pt apart at its trailing edge kept
+/// to the page's measure, centred, so the actions stay near the sentence on a wide window. Phone: padding 10 18 and no actions, as the
 /// mockup's phone banner (Settings › Connection is a push away). Terminal: the tone's mark, the
 /// sentence, the actions, a joined rule under the row. test_id "conn-banner".
 pub fn banner(app: AppState, hue: Hue, content: &Rich, actions: Vec<AnyElement>) -> AnyElement {
@@ -290,23 +298,29 @@ pub fn banner(app: AppState, hue: Hue, content: &Rich, actions: Vec<AnyElement>)
         Form::Desktop => view()
             .test_id("conn-banner")
             .flex_none()
-            .flex_row()
-            .items_center()
-            .gap(px(10.0))
-            .px(px(18.0))
             .py(px(7.0))
             .bg(hue_fill(hue))
             .border_b(px(1.0))
             .border_color(color(Token::Rule))
-            .child(sentence(app, content))
-            .child(
+            .child(measure(
+                app,
+                MEASURE_PAGE,
                 view()
                     .flex_row()
                     .items_center()
-                    .flex_shrink_0()
-                    .gap(px(8.0))
-                    .children(actions),
-            )
+                    .gap(px(10.0))
+                    .px(px(18.0))
+                    .child(sentence(app, content))
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .flex_shrink_0()
+                            .gap(px(8.0))
+                            .children(actions),
+                    )
+                    .into_element(),
+            ))
             .into_element(),
         Form::Phone => view()
             .test_id("conn-banner")

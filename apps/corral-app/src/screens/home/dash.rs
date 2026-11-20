@@ -2,7 +2,8 @@
 //! halves: what waits on the owner as cards on the left, what Corral is doing on the right.
 //! Ask's composer is docked under it. The halves sit side by side while both keep their least
 //! width, else one above the other; on the right Working spans the half and the other panels
-//! share rows.
+//! share rows. A desktop keeps the page to [`MEASURE_PAGE`], centred, so a wide window gives
+//! two panels a row and no tile grows into a card.
 
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
@@ -16,7 +17,7 @@ use crate::ui::composer::docked_composer;
 use crate::ui::kit::board_status::{board_status, dim_stale};
 use crate::ui::kit::page;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_MONO, FONT_TEXT, MEASURE_PAGE, Token, color};
 
 use super::parts::ask_project;
 use super::{cards, panels};
@@ -26,6 +27,9 @@ const HALF: f32 = 440.0;
 const HALF_CELLS: f32 = 48.0;
 /// A right-hand panel's least width beside another.
 const PANEL: f32 = 270.0;
+/// A tile's width: it grows from the least to share the row, never past the most.
+const TILE: f32 = 150.0;
+const TILE_MOST: f32 = 240.0;
 
 /// The dashboard with its head and the docked composer.
 pub(super) fn dashboard(app: AppState, scope: Memo<Scope>) -> AnyElement {
@@ -42,7 +46,7 @@ pub(super) fn dashboard(app: AppState, scope: Memo<Scope>) -> AnyElement {
         let (title, summary, scope) = said.get();
         untracked(move || {
             let actions = ask_project(app, &scope).into_iter().collect();
-            page::head(app, title, Some(summary), actions)
+            page::measured_head(app, MEASURE_PAGE, title, Some(summary), actions)
         })
     });
     let half = |child: AnyElement| {
@@ -114,8 +118,13 @@ pub(super) fn dashboard(app: AppState, scope: Memo<Scope>) -> AnyElement {
         .min_h(px(0.0))
         .bg(color(Token::Bg))
         .child(head)
-        .child(board_status(app))
-        .child(scroll().flex_1().min_h(px(0.0)).child(dim_stale(app, dash)))
+        .child(page::measure(app, MEASURE_PAGE, board_status(app)))
+        // The scroll spans the window, so its bar stays at the edge; what it scrolls is measured.
+        .child(scroll().flex_1().min_h(px(0.0)).child(page::measure(
+            app,
+            MEASURE_PAGE,
+            dim_stale(app, dash).into_element(),
+        )))
         .child(composer(app))
         .into_element()
 }
@@ -183,7 +192,8 @@ fn tile(app: AppState, tile: Tile) -> AnyElement {
                     .child(sub),
             ),
         Form::Desktop | Form::Phone => view()
-            .w(px(150.0))
+            .w(px(TILE))
+            .max_w(px(TILE_MOST))
             .gap(px(1.0))
             .px(px(12.0))
             .pt(px(9.0))
@@ -298,13 +308,18 @@ pub(super) fn composer(app: AppState) -> AnyElement {
             }
             let page = ask_view(app, id.clone());
             let composer = computed(move || page.with(|p| p.composer.clone()));
+            // The rule runs edge to edge; the field keeps to the dashboard's measure.
             view()
                 .test_id("home-composer")
                 .flex_none()
                 .when(app.form == Form::Desktop, |dock| {
                     dock.border_t_1().border_color(color(Token::Rule))
                 })
-                .child(docked_composer(app, id, composer, computed(|| None)))
+                .child(page::measure(
+                    app,
+                    MEASURE_PAGE,
+                    docked_composer(app, id, composer, computed(|| None)),
+                ))
                 .into_element()
         }))
     })

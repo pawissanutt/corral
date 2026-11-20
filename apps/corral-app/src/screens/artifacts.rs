@@ -29,11 +29,16 @@ use crate::ui::kit::page::{Width, columns, context, head, pane};
 use crate::ui::kit::rows::{list_row_tall, revealing, titled, walked_row};
 use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
+use crate::ui::tokens::{FONT_TEXT, MEASURE_FORM, Token, color, text_size};
 
-/// The results column's width on desktop (`.split`'s first column at most 440 pt), and in a
+/// The results column's width on desktop: a share of the page between 440 pt (`.split`'s first
+/// column) and 640, so a wide window widens the results rather than only the preview; in a
 /// terminal, where a Cell stands for 12 points, room for a result's columns and its title.
-const LIST: f32 = 440.0;
+const LIST: Width = Width::Between {
+    share: 0.30,
+    min: 440.0,
+    max: 640.0,
+};
 const TERMINAL_LIST: f32 = 680.0;
 /// Terminal Cells of a result's kind, task, run, project and date columns.
 const KIND_CELLS: f32 = 10.0;
@@ -114,11 +119,11 @@ fn finder(app: AppState, page: Memo<Page>) -> AnyElement {
         app,
         vec![
             (
-                Width::Fixed(if form == Form::Terminal {
-                    TERMINAL_LIST
+                if form == Form::Terminal {
+                    Width::Fixed(TERMINAL_LIST)
                 } else {
                     LIST
-                }),
+                },
                 pane(app, "artifacts", results(app, page)),
             ),
             (
@@ -133,7 +138,7 @@ fn finder(app: AppState, page: Memo<Page>) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(head(app, TITLE, Some(SUBTITLE.to_owned()), Vec::new()))
-        .children(subnav(app))
+        .children(subnav(app, None))
         .child(field_bar(app, page))
         .when(form == Form::Terminal, |page| page.child(term::hrule()))
         .child(cols)
@@ -176,16 +181,20 @@ fn field_bar(app: AppState, page: Memo<Page>) -> AnyElement {
                 .when(form == Form::Desktop, |bar| {
                     bar.border_b(px(1.0)).border_color(color(Token::Rule))
                 })
+                // The rule runs edge to edge; the field keeps a form's width, so the count
+                // stays beside what was typed.
                 .child(
                     view()
                         .flex_row()
                         .items_center()
+                        .max_w(px(MEASURE_FORM))
                         .gap(px(10.0))
                         .child(field(app))
                         .child(count.font_family(FONT_TEXT).text_size(px(small))),
                 )
                 .child(
                     text(HINT)
+                        .max_w(px(MEASURE_FORM))
                         .font_family(FONT_TEXT)
                         .text_size(px(small))
                         .text_color(color(Token::Ink3)),

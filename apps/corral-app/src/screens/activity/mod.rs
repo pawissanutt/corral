@@ -12,6 +12,7 @@ use crate::model::{Destination, Form};
 use crate::screens::{artifacts, timeline, usage};
 use crate::state::AppState;
 use crate::ui::kit::button::tab_strip;
+use crate::ui::kit::page::measure;
 use crate::ui::term;
 
 /// The Activity page `page` names; Feed for a destination that is not one of Activity's.
@@ -33,9 +34,10 @@ const PAGES: [Destination; 4] = [
 ];
 
 /// The strip under an Activity page's head (`.subnav`): Feed · Timeline · Usage · Artifacts,
-/// the page shown selected, each opening its page (`subnav-<n>`). The phone has none: its
-/// Activity tab lists the pages and pushes each.
-pub(crate) fn subnav(app: AppState) -> Option<AnyElement> {
+/// the page shown selected, each opening its page (`subnav-<n>`). A desktop keeps it to the
+/// page's measure, if it has one, so it stays over the content it switches. The phone has
+/// none: its Activity tab lists the pages and pushes each.
+pub(crate) fn subnav(app: AppState, measured: Option<f32>) -> Option<AnyElement> {
     let form = app.form;
     if form == Form::Phone {
         return None;
@@ -52,6 +54,12 @@ pub(crate) fn subnav(app: AppState) -> Option<AnyElement> {
     let row = view().flex_none();
     Some(match form {
         Form::Terminal => row.px(term::cells(1.0)).child(strip).into_element(),
-        Form::Desktop | Form::Phone => row.px(px(10.0)).child(strip).into_element(),
+        Form::Desktop | Form::Phone => row
+            .px(px(10.0))
+            .child(match measured {
+                Some(max) => measure(app, max, strip),
+                None => strip,
+            })
+            .into_element(),
     })
 }

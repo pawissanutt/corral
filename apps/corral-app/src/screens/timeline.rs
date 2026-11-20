@@ -25,10 +25,10 @@ use crate::state::AppState;
 use crate::ui::kit::button::seg;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::notice::{empty, error, notice};
-use crate::ui::kit::page::{body, head, pane};
+use crate::ui::kit::page::{body, head, measure, measured_head, pane};
 use crate::ui::kit::text::{h3, mono, plain};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_TEXT, MEASURE_PAGE, Token, color};
 
 use shown::{Shown, Status};
 
@@ -38,8 +38,8 @@ const BURNUP_MEASURE: f32 = 880.0;
 const GAPS_MEASURE: f32 = 844.0;
 
 /// The Timeline. Desktop: the page head (title, sub line, the Today / 7 days and By task / By
-/// run switches), then a scrolling pane of the legend, the lanes chart, and the gaps beside
-/// the burn-up (stacked when narrow). Phone: the range and grouping switches across the page,
+/// run switches), then a scrolling pane of the legend, the lanes chart, the burn-up and the
+/// gaps, all kept to [`MEASURE_PAGE`] and centred. Phone: the range and grouping switches across the page,
 /// the legend, the compressed chart, the gaps and the burn-up stacked, in one scroll with the Ask
 /// clearance. Terminal: the head, then the sub line, legend, lanes as Cells, gaps and burn-up in
 /// one scroll. The burn-up's scope is a menu (`scope.rs`). Test ids: "page-title",
@@ -89,14 +89,19 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
         .flex_col()
         .min_w(px(0.0))
         .min_h(px(0.0))
-        .child(head(
+        .child(measured_head(
             app,
+            MEASURE_PAGE,
             page.title,
             Some(LIVE_SUBTITLE.to_owned()),
             head_actions(app, &page),
         ))
-        .children(subnav(app))
-        .child(pane(app, "timeline-pane", content.into_element()))
+        .children(subnav(app, Some(MEASURE_PAGE)))
+        .child(pane(
+            app,
+            "timeline-pane",
+            measure(app, MEASURE_PAGE, content.into_element()),
+        ))
         .into_element()
 }
 
@@ -158,7 +163,7 @@ fn terminal(app: AppState, data: Memo<Shown>) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(head(app, page.title, None, head_actions(app, &page)))
-        .children(subnav(app))
+        .children(subnav(app, Some(MEASURE_PAGE)))
         .child(body(app, "timeline-pane", content.into_element()))
         .into_element()
 }

@@ -3,8 +3,8 @@
 //! ran on a harness that reports no usage"); then the tokens of each day, one table grouped by
 //! the selected key (profile, model, task or day) with each group's own coverage and the
 //! period's total under it, that quota is unknown, and where the figures come from. Desktop puts
-//! the period and grouping switches in the page head; the terminal and the phone put them at the
-//! top of the scroll, where they wrap. Loading, stale and failed reads are said once, compactly,
+//! the period and grouping switches in the page head and keeps the page to `MEASURE_PAGE`,
+//! centred; the terminal and the phone put them at the top of the scroll, where they wrap. Loading, stale and failed reads are said once, compactly,
 //! above the content. Every word and figure is `model::usage`'s.
 
 mod controls;
@@ -22,10 +22,10 @@ use crate::screens::activity::subnav;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::notice::notice;
-use crate::ui::kit::page::{body, head, pane, section};
+use crate::ui::kit::page::{body, measure, measured_head, pane, section};
 use crate::ui::kit::text::h3;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_TEXT, MEASURE_PAGE, Token, color};
 
 /// Below this content width the table has no room for its five columns and its groups stack
 /// as records (a narrow window, or a collapsed sidebar on a small screen).
@@ -194,7 +194,7 @@ fn page_head(
         .test_id("usage-head")
         .child(dynamic(move || {
             let line = line.get();
-            untracked(|| head(app, TITLE, Some(line), actions(app)))
+            untracked(|| measured_head(app, MEASURE_PAGE, TITLE, Some(line), actions(app)))
         }))
         .into_element()
 }
@@ -218,8 +218,8 @@ fn desktop(app: AppState, data: Memo<Page>) -> AnyElement {
         .child(page_head(app, data, |app| {
             vec![controls::period_seg(app), controls::grouping_seg(app)]
         }))
-        .children(subnav(app))
-        .child(pane(app, "usage", scroll))
+        .children(subnav(app, Some(MEASURE_PAGE)))
+        .child(pane(app, "usage", measure(app, MEASURE_PAGE, scroll)))
         .into_element()
 }
 
@@ -256,7 +256,7 @@ fn terminal(app: AppState, data: Memo<Page>) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(page_head(app, data, |_| Vec::new()))
-        .children(subnav(app))
+        .children(subnav(app, Some(MEASURE_PAGE)))
         .child(body(app, "usage", scroll))
         .into_element()
 }
