@@ -56,6 +56,14 @@ test("a command approval cannot switch tools, survive restore, or be used after 
   expect(approvals.shell("bash", input)).not.toContain(beforeRestore);
 });
 
+test("a command with a supplementary format character is shown losslessly", () => {
+  const { questions, approvals } = fixture();
+  const command = "echo \u{e0001}";
+  approvals.shell("bash", { command });
+  const prompt = cardDetail(questionEntries(questions)[0]!.card).questions[0]!.text;
+  expect(JSON.parse(prompt.split("\n").at(-1)!)).toBe(command);
+});
+
 test("approval is not offered if the app would truncate a command", () => {
   const { questions, approvals } = fixture();
   expect(approvals.shell("bash", { command: `echo '${"✨".repeat(350)}'` })).toContain("does not fit");

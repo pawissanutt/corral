@@ -48,6 +48,7 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
   let journal: BuildJournal | undefined;
   const runner: ChildRunner = options.runner ?? { run(...args) {
     sdkRunner ??= createSdkRunner({ ...options, models: options.models(), localTools: options.localTools(),
+      buildWorktree: !context.session.here && context.session.repository !== false,
       ...(context.session.bare ? { shellRefusal: (command: string) => buildShellRefusal(command, true) } : {}) });
     return sdkRunner.run(...args);
   } };

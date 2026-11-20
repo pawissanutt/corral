@@ -1114,8 +1114,11 @@ export class HostSession {
     });
     const shellRefusal = this.options.modules.role.shellRefusal;
     const { cwd, workspaceRoot, identity, build } = this.roleContext;
-    const writeScope = identity.role === "assistant" ? { cwd, root: cwd, workspace: workspaceRoot }
-      : identity.role === "build" ? build ? { cwd, root: build.session.worktree, buildWorktree: true,
+    const assistantWorkspace = identity.role === "assistant" && workspaceRoot && existsSync(join(workspaceRoot, ".corral-next", "corral.toml"))
+      ? workspaceRoot : undefined;
+    const writeScope = identity.role === "assistant" ? { cwd, root: cwd, workspace: assistantWorkspace }
+      : identity.role === "build" ? build ? { cwd, root: build.session.worktree,
+        buildWorktree: !build.session.here && build.session.repository !== false,
         workspace: build.session.bare ? undefined : build.session.workspaceRoot } : null : undefined;
     installToolControls(pi, {
       ...(shellRefusal ? { fixed: (command) => shellRefusal(command, build?.session.bare === true) } : {}),

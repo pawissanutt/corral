@@ -10,15 +10,16 @@ test("build writes stay inside the session worktree and outside protected direct
   const worktree = join(base, ".worktrees", "build-test");
   mkdirSync(worktree, { recursive: true });
   try {
-    expect(classifyBuildWrite(join(worktree, "src", "new.ts"), worktree)).toEqual({ allowed: true });
-    expect(classifyBuildWrite("src/new.ts", worktree)).toEqual({ allowed: true });
+    expect(classifyBuildWrite(join(worktree, "src", "new.ts"), worktree, undefined, true)).toEqual({ allowed: true });
+    expect(classifyBuildWrite("src/new.ts", worktree, undefined, true)).toEqual({ allowed: true });
+    expect(classifyBuildWrite("src/new.ts", worktree).allowed).toBeFalse();
     for (const path of [join(base, "outside.ts"), join(`${worktree}-other`, "file.ts"), "../outside.ts"]) {
-      expect(classifyBuildWrite(path, worktree).allowed).toBe(false);
+      expect(classifyBuildWrite(path, worktree, undefined, true).allowed).toBe(false);
     }
     for (const directory of [".git", ".corral", ".corral-next", ".worktrees"]) {
-      expect(classifyBuildWrite(join(worktree, directory), worktree).allowed).toBe(false);
-      expect(classifyBuildWrite(join(worktree, directory, "new"), worktree).allowed).toBe(false);
-      expect(classifyBuildWrite(join(worktree, "nested", directory, "new"), worktree).allowed).toBe(false);
+      expect(classifyBuildWrite(join(worktree, directory), worktree, undefined, true).allowed).toBe(false);
+      expect(classifyBuildWrite(join(worktree, directory, "new"), worktree, undefined, true).allowed).toBe(false);
+      expect(classifyBuildWrite(join(worktree, "nested", directory, "new"), worktree, undefined, true).allowed).toBe(false);
     }
     const memory = join(base, ".corral-next", "memory");
     mkdirSync(memory, { recursive: true });
