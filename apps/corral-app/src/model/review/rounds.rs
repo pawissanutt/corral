@@ -33,8 +33,8 @@ pub struct ReviewerLine {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rounds {
     pub heading: &'static str,
-    /// "round 1 of 2": the engine's round (automatic send-backs since the owner last acted)
-    /// against the limit, at least 1 as the meta line and the pipeline say it.
+    /// "sent back 0 of 2": the engine's round (automatic send-backs since the owner last
+    /// acted, from 0) against their limit, as counted, not the meta line's round number.
     pub count: Option<String>,
     pub hint: &'static str,
     /// Oldest first; empty while the task is in its first round, which the readiness chain
