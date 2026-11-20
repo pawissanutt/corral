@@ -503,6 +503,23 @@ impl<'a> PiRunner<'a> {
         Ok((status, Some(state.paused)))
     }
 
+    /// An older Pi host can answer but fail to fit its diagnostic state in a frame.
+    /// Its refusal proves liveness, not a lifecycle status. Never use this in reconciliation.
+    pub(crate) fn is_live(&self, session: &SessionRef) -> Result<bool> {
+        match self.status(session) {
+            Ok(status) => Ok(status != SessionStatus::Gone),
+            Err(error)
+                if matches!(session, SessionRef::Pi { .. })
+                    && error.downcast_ref::<PiRefusal>().is_some_and(|refusal| {
+                        refusal.command == "get_state" && refusal.code == "response_too_large"
+                    }) =>
+            {
+                Ok(true)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     fn wait_for_hello(&self, client: &Client<'_>, inner: &SessionRef) -> Result<Hello> {
         let deadline = Instant::now() + START_TIMEOUT;
         let mut check_placement = Instant::now();
