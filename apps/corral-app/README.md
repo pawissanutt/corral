@@ -104,20 +104,37 @@ the served web files after upgrading. Back up your workspace and configuration b
 upgrading; no automatic rollback or downgrade compatibility is promised.
 `CORRAL_VERSION=v0.2.0 sh install-corral.sh --legacy` selects the published classic CLI instead. That classic release does not include the Pi host; the new engine's `corral-pi` artifact is separate and requires a release that actually contains it.
 
-In the intended workspace directory, initialize with `corral-next init`, then run
-`corrald-next --root <workspace> run` on the Unix host (use an absolute workspace path).
-The local socket is
-`<workspace>/.corral-next/daemon.sock`. For the web app, serve the installed static site
-at the host root with SPA fallback to `index.html`; configure the optional daemon listener
-and exact app origin, then pair as described in [Browser](#browser). A plain file server
-without fallback does not support deep-link reloads. Do not expose the daemon listener
-without the TLS and origin configuration described there.
+In the intended Unix workspace, run `corral-next init`. In `.corral-next/corral.toml`,
+set the absolute path of the installed dedicated bundle (use your `CORRAL_APP_INSTALL_DIR`
+if overridden):
 
-For example, this local-only Python server serves the installed site at
-`http://127.0.0.1:8790` and falls back to `index.html` for extensionless HTML
-routes. Set `CORRAL_APP_INSTALL_DIR` if you installed the site elsewhere. It matches
-the `web_origin` in the daemon example below; open that exact origin (not `localhost`).
-It requires Python 3 and is not a production server.
+```toml
+[daemon]
+listen = "127.0.0.1:7841"
+web_dir = "/absolute/path/to/dedicated/web/bundle"
+web_origin = ["http://127.0.0.1:7841"]
+```
+
+For the default install, the bundle is `$XDG_DATA_HOME/corral-next/web`, or
+`$HOME/.local/share/corral-next/web` when unset; substitute the expanded absolute path,
+not a literal `$HOME` or `~`. Run `corrald-next --root <absolute-workspace-path> run`,
+open http://127.0.0.1:7841/ and pair as described in [Browser](#browser). The socket is
+`<workspace>/.corral-next/daemon.sock`. `web_dir` requires `listen`; `run --web-dir PATH`
+overrides it, and relative paths are workspace-relative. Use a dedicated bundle, never a
+workspace, home directory, repository, or directory containing secrets. Updating the web
+files alone does not require a daemon restart. Do not expose the listener without the TLS
+and origin configuration described below.
+
+**Optional separate static server:** Windows can install the web bundle but cannot run the
+current daemon natively; it needs a separately reachable Unix daemon and pairing setup.
+On Unix, a separate server is also optional. For local-only use on the daemon host, the
+Python 3 example below serves the installed Unix site at `http://127.0.0.1:8790` with SPA
+fallback. Configure the Unix daemon's `listen = "127.0.0.1:7841"` and
+`web_origin = ["http://127.0.0.1:8790"]` and omit `web_dir`; restart it and open that exact
+origin (not `localhost`). Set `CORRAL_APP_INSTALL_DIR` if needed. This is not a production
+server. On Windows, serve the installed Windows site using an appropriate static server
+with SPA fallback and configure its exact HTTPS origin and WSS endpoint on the Unix daemon
+for remote access, as described below.
 
 ```sh
 SITE_DIR="${CORRAL_APP_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/corral-next/web}"
@@ -184,35 +201,11 @@ the shell reports **not connected**, without mockup dates, health or task counts
 Other destinations do not fall back to sample content. **Connect** opens Settings › Connection;
 **Preview with sample data** is an explicit, launch-only choice.
 
-For development with the separate NSH server above, enable the optional listener, then
-restart `corrald-next`. It is off by default. In `.corral-next/corral.toml` (or with
-`run --listen ADDR --web-origin ORIGIN`) this example is local-only:
-
-```toml
-[daemon]
-listen = "127.0.0.1:7841"
-web_origin = ["http://127.0.0.1:8790"]
-```
-
-Alternatively, serve the packaged app on the daemon's listener, without a separate Python
-service. From the repository root run `just app-web-install`; it installs the bundle at
-`$XDG_DATA_HOME/corral-next/web`, or `~/.local/share/corral-next/web` when unset.
-In `.corral-next/corral.toml`, use the actual absolute path to that dedicated bundle:
-
-```toml
-[daemon]
-listen = "127.0.0.1:7841"
-web_dir = "/absolute/path/to/dedicated/web/bundle"
-web_origin = ["http://127.0.0.1:7841"]
-```
-
-Restart `corrald-next` and open http://127.0.0.1:7841/. `web_dir` requires an explicit
-`listen`; `run --web-dir PATH` overrides the configured directory. Relative paths are
-workspace-relative; shell `~` is not expanded in configuration. Use only a dedicated
-bundle directory, never a repository, workspace, home directory, or any directory with
-secrets. A missing bundle makes the UI unavailable but does not stop the daemon. Updating
-only the web files does not require a daemon restart. The native Unix app is unchanged.
-The separate loopback Python service remains supported if preferred.
+The [release setup](#install-and-upgrade) above serves the installed bundle and enables
+the listener on loopback. The listener is off by default; restart `corrald-next` after
+changing listener or origin configuration. A missing bundle makes the UI unavailable but
+does not stop the daemon. Development with the separate NSH server uses the same loopback
+listener and its `http://127.0.0.1:8790` origin, without `web_dir`.
 
 Run `corrald-next pair` on the daemon host, or choose **Pair a device** in Settings › Devices on any
 paired device, browser or native. The command prints a pairing link, then waits for the device. Open the link or QR. It opens Settings › Connection
