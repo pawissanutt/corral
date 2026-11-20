@@ -5,7 +5,10 @@
 use corral_protocol::detail::TaskDetail;
 use corral_protocol::device::{DeviceInfo, DevicePlatform, DeviceReach};
 use corral_protocol::health::{SlotCount, Slots};
-use corral_protocol::rows::{EffectiveProjectSettings, ListenerInfo, SettingsSnapshot};
+use corral_protocol::rows::{
+    EffectiveProjectSettings, ListenerInfo, PiChildProfile, PiConfigFacts, PiConfigStatus,
+    SettingsSnapshot,
+};
 use corral_types::{Actor, CheckKind, CheckResult, EventKind, Outcome, Role, Status};
 use serde_json::{Map, Value, json};
 
@@ -26,6 +29,15 @@ pub(super) fn populate(feed: &mut Feed, projects: bool) {
         }),
         devices,
         hostname: Some("preview-workstation".into()),
+        pi_config: Some(PiConfigFacts {
+            path: "/sample/.corral-next/pi.toml".into(),
+            status: PiConfigStatus::Read,
+            child_profiles: vec![PiChildProfile {
+                name: "code-reader".into(),
+                model: "openai-codex/gpt-6.1-sol".into(),
+                effort: Some("medium".into()),
+            }],
+        }),
         ..SettingsSnapshot::default()
     };
     feed.settings = Some(super::config::snapshot(&file, around));
