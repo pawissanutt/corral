@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, Result, anyhow, ensure};
 use corral_engine::{
     refuse,
-    runner::pi::{BuildLaunch, Client, Hello, PiRunner, build_session, build_socket},
+    runner::pi::{BuildLaunch, Client, Hello, PiRefusal, PiRunner, build_session, build_socket},
 };
 use corral_protocol::{
     app::SESSION_PART_MAX,
@@ -114,7 +114,7 @@ struct LegacyTurn {
 
 #[derive(Deserialize)]
 struct LegacyQuestion {
-    id: String,
+    id: Option<String>,
     question: String,
 }
 
@@ -180,10 +180,15 @@ impl Build {
                 .ok()?
                 .state
         });
-        let legacy = if page.is_none() {
-            socket
-                .and_then(|socket| probe(socket, "get_state", json!({})).ok())
-                .unwrap_or_default()
+        let mut status_unavailable = false;
+        let legacy = if let Some(socket) = socket.filter(|_| page.is_none()) {
+            match probe(socket, "get_state", json!({})) {
+                Ok(state) => state,
+                Err(error) => {
+                    status_unavailable = oversized_status(&error);
+                    LegacyState::default()
+                }
+            }
         } else {
             LegacyState::default()
         };
@@ -202,11 +207,11 @@ impl Build {
         let first_card = page
             .as_ref()
             .and_then(|state| state.cards.first())
-            .map(|card| (card.id.as_str(), card.title.as_str()))
+            .map(|card| (Some(card.id.as_str()), card.title.as_str()))
             .or_else(|| {
                 owner_questions
                     .first()
-                    .map(|q| (q.id.as_str(), q.question.as_str()))
+                    .map(|q| (q.id.as_deref(), q.question.as_str()))
             });
         let host_error = page
             .as_ref()
@@ -218,6 +223,8 @@ impl Build {
             } else {
                 AssistantState::Cold
             }
+        } else if status_unavailable {
+            AssistantState::Other
         } else if first_card.is_some() {
             AssistantState::Waiting
         } else if page.as_ref().map_or(paused, |s| s.paused) {
@@ -235,17 +242,24 @@ impl Build {
         let live_in = match (live, page.as_ref().map(|s| s.mode).or(mode)) {
             (None, _) => AssistantLocation::None,
             (Some(_), Some(SessionMode::Interactive)) => AssistantLocation::Pane,
+            (Some(_), _) if status_unavailable => AssistantLocation::Other,
             (Some(_), _) => AssistantLocation::Daemon,
         };
         let wait = first_card
             .map(|(_, title)| ("owner_question", title))
             .or_else(|| host_error.map(|text| ("host_error", text)))
+            .or_else(|| {
+                status_unavailable.then_some((
+                    "status_unavailable",
+                    "Pi status unavailable: response too large",
+                ))
+            })
             .map(|(code, text)| WaitReason {
                 code: code.into(),
                 text: bounded(text, 512),
                 retry_at: None,
             });
-        let question_id = first_card.map(|(id, _)| bounded(id, 160));
+        let question_id = first_card.and_then(|(id, _)| id.map(|id| bounded(id, 160)));
         let mut children = Counts::default();
         for child in &journal.children {
             children.total += 1;
@@ -529,6 +543,12 @@ pub(crate) fn relaunch(shared: &Shared, id: &str) -> Result<SessionRelaunched> {
     Ok(SessionRelaunched { id: id.into() })
 }
 
+fn oversized_status(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<PiRefusal>().is_some_and(|refusal| {
+        refusal.command == "get_state" && refusal.code == "response_too_large"
+    })
+}
+
 pub(crate) fn terminate(shared: &Shared, id: &str) -> Result<()> {
     let _lock = shared
         .build_ops
@@ -540,8 +560,11 @@ pub(crate) fn terminate(shared: &Shared, id: &str) -> Result<()> {
             anyhow::bail!("build placement has no Pi socket");
         };
         // Never signal a terminal's process group. Its host owns terminal teardown.
-        let terminal = probe::<LegacyState>(socket, "get_state", json!({}))
-            .is_ok_and(|state| state.mode == Some(SessionMode::Interactive));
+        let terminal = match probe::<LegacyState>(socket, "get_state", json!({})) {
+            Ok(state) => state.mode == Some(SessionMode::Interactive),
+            // The old host responded, but may still own a terminal. Don't signal its group.
+            Err(error) => oversized_status(&error),
+        };
         let deadline = Instant::now() + Duration::from_secs(10);
         let shutdown = forward::connect(socket, deadline).and_then(|stream| {
             Client::request_on::<_, Value>(stream, "shutdown", json!({}), deadline)

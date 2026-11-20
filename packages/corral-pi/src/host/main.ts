@@ -196,10 +196,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
         protocol: BRIDGE_VERSION, role: config.identity.role, session_id: config.local.id,
         session_file: sessionFile, pid: process.pid,
       }),
-      state: () => {
-        const { identity: _identity, ...state } = session.state();
-        return { ...state, paused: owner.paused, owner_questions: session.pendingOwnerQuestions() };
-      },
+      state: () => session.controlState(owner.paused),
       submit: (input, requestId) => owner.submit(input, undefined, requestId),
       answer: input => owner.answer(input),
       pause: () => owner.pause(),

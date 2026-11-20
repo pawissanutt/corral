@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { EventLog } from "../src/bridge/events.ts";
 import { attachHeadless, headlessEnabled } from "../src/host/headless.ts";
 import { openSession } from "../src/host/lifecycle.ts";
+import { PENDING_MAX } from "../src/host/pending-questions.ts";
 import type { TranscriptMark } from "../src/host/transcript-marks.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
@@ -130,6 +131,30 @@ test("a headless worker asks, reopens its transcript and reports done after the 
     rmSync(work, { recursive: true, force: true });
   }
 }, 120_000);
+
+test("status is bounded with a full queue of heavily escaped owner questions", async () => {
+  const fx = await codeHost("worker", { enabled: ["ask_user"] });
+  try {
+    const question = "😀\u0001".repeat(330);
+    const options = ["a", "b", "c", "d"].map(letter => letter + "\u0001".repeat(299));
+    await fx.turn([{ toolCalls: Array.from({ length: PENDING_MAX }, (_, i) => ({
+      callId: `ask-${i}`, name: "ask_user", arguments: { nonBlocking: true, questions: [{ question, options }] },
+    })) }, { text: "Waiting for choices." }]);
+    const pending = fx.host.pendingOwnerQuestions();
+    expect(pending).toHaveLength(PENDING_MAX);
+    expect(Buffer.byteLength(JSON.stringify(pending))).toBeGreaterThan(64 * 1024);
+    const status = fx.host.controlState(true);
+    expect(Buffer.byteLength(JSON.stringify(status))).toBeLessThanOrEqual(8 * 1024);
+    expect(status).toMatchObject({ paused: true, turn: { open: false }, owner_questions_total: PENDING_MAX });
+    expect(status.owner_questions.map(entry => entry.id)).toEqual(pending.map(entry => entry.id));
+    for (const entry of status.owner_questions) {
+      expect(entry.question.startsWith("😀")).toBeTrue();
+      expect(question.startsWith(entry.question)).toBeTrue();
+      expect(/[\uD800-\uDFFF]/u.test(entry.question)).toBeFalse();
+      expect(Buffer.byteLength(JSON.stringify(entry.question))).toBeLessThanOrEqual(514);
+    }
+  } finally { await fx.close(); }
+});
 
 test("a headless session records run-end, model and note marks", async () => {
   const fx = await codeHost("assistant", { enabled: [] });

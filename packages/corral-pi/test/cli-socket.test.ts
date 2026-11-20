@@ -78,8 +78,12 @@ test("one flag launch runs the fixture to idle; v2 answers, pauses, restarts and
     const state = await call(client, "get_state");
     const [question] = state.owner_questions as { id: string }[];
     expect(typeof question?.id).toBe("string");
-    expect(state.owner_questions).toEqual([{ id: question?.id, status: "pending", question: "Which direction?",
-      options: ["Left", "Right"], free_text: true }]);
+    expect(state.owner_questions_total).toBe(1);
+    expect(state.owner_questions).toEqual([{ id: question?.id, status: "pending", question: "Which direction?" }]);
+    const cards = await call(client, "cards");
+    expect(cards.cards).toMatchObject([{ id: question?.id, questions: [{
+      text: "Which direction?", options: [{ id: "Left", label: "Left" }, { id: "Right", label: "Right" }], free_text: true,
+    }] }]);
     const answer = await call(client, "answer", { question: question?.id, option: "Right" });
     expect(answer.status).toMatch(/^(answered|delivered)$/);
     await first.output(/turn 3 ended/);
