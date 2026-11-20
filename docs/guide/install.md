@@ -198,40 +198,10 @@ are not part of this release pipeline.
 
 ## Optional: the corral-pi agent host
 
-The [corral-pi host](corral-pi.md) is opt-in and needs nothing above unless you configure a
-`corral-pi` profile. It runs on Linux and macOS.
-
-The v0.4.0 Pi host is source-only: no classic v0.4.0 release assets are
-published, and the v0.2.0 binaries above do not include it. The following
-instructions require a compatible classic source build with Pi support, not
-the published v0.2.0 binary. Build the host locally using
-`scripts/build-pi-host.sh <out>`; the compiled host embeds Bun and its dependencies.
-Install the host using `corral agent install`, then log in once:
-
-```sh
-corral agent login      # pick OpenAI (ChatGPT) or Anthropic (Claude Pro/Max)
-corral agent doctor
-```
-
-`corral agent install` copies the host into
-`$XDG_DATA_HOME/corral/corral-pi/assets/<digest>/` (`~/.local/share/...` without
-`XDG_DATA_HOME`) with the `compat.json` and role files it writes there, and records the
-digest; re-run it after replacing `corral-pi-host` by hand. Anthropic profiles also need
-the `claude` CLI (Claude Code) on PATH.
-
-For a binary built with `cargo install` from a checkout that still exists, `corral agent install`
-rebuilds the compiled host from that checkout using Bun (currently exactly 1.4.2), atomically
-replaces the sibling host, and installs it. If checkout HEAD differs from the binary's build
-commit, reinstall corral with `cargo install` or explicitly select a host with `--from`.
-Use `--no-build` to retain the sibling-first behavior. To install the package as source instead:
-
-```sh
-corral agent install --from <corral checkout>/packages/corral-pi
-```
-
-That copies the package and runs `bun install --frozen-lockfile` in the copy.
-`scripts/build-pi-host.sh <out>` builds the release host locally. Neither install nor login touches `~/.codex`, `~/.claude` or another agent's
-store.
+The published v0.2.0 archives do not include a Pi host. Classic Pi support exists in
+the historical v0.4.0 source, but that tag has no published release assets and is not
+covered by the no-toolchain installation above. The current engine's Pi host is a
+separate component; see the [current app install guide](../../apps/corral-app/README.md).
 
 ## Contributors
 
