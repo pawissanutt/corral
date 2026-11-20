@@ -1,7 +1,7 @@
 # Release runbook
 
 The current release pipeline is `.github/workflows/release.yml`. The classic `v0.4.0`
-tag and its assets are historical; do not move or replace them. The current workspace
+tag is historical and has no published release assets; do not move or reuse it. The current workspace
 version is `0.4.1`, a new candidate tag, not a claim that it has been published.
 Tagging and publishing are external writes and require separate owner authorization.
 
