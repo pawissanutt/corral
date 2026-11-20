@@ -143,11 +143,7 @@ pub fn measured_bar(
 }
 
 /// The desktop bar's row of actions and trailing attribution, without its ground and rule.
-fn desktop_bar_row(
-    root: View,
-    actions: Vec<AnyElement>,
-    attribution: Option<AnyElement>,
-) -> View {
+fn desktop_bar_row(root: View, actions: Vec<AnyElement>, attribution: Option<AnyElement>) -> View {
     root.flex_row()
         .items_center()
         .gap(px(10.0))
