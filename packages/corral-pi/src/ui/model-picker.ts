@@ -154,7 +154,7 @@ export function modelPicker(request: ModelSelectorRequest, host: OwnerDialogHost
   const favoritesFirst = (models: readonly Model<Api>[]) => [...models].sort((a, b) => Number(favorite(b)) - Number(favorite(a)));
 
   let all = sorted(request.models());
-  let scoped = favoritesFirst(request.scoped.map(entry => entry.model));
+  let scoped = request.scoped.map(entry => entry.model);
   let scope: "all" | "scoped" = scoped.length ? "scoped" : "all";
   let status: RefreshStatus = { text: "Refreshing model catalogs…", tone: "muted" };
   let stopped = false, timedOut = false;
@@ -169,7 +169,7 @@ export function modelPicker(request: ModelSelectorRequest, host: OwnerDialogHost
       : failed.length > 1 ? cached(`Could not refresh ${failed.length} model catalogs (${failed.join(", ")})`)
       : { text: "Model catalogs refreshed.", tone: "success" };
     all = sorted(request.models());
-    scoped = favoritesFirst(request.scoped.map(entry => all.find(model => modelKey(model) === modelKey(entry.model)) ?? entry.model));
+    scoped = request.scoped.map(entry => all.find(model => modelKey(model) === modelKey(entry.model)) ?? entry.model);
     host.changed();
   }, (error: unknown) => {
     if (stopped) return;
@@ -178,7 +178,8 @@ export function modelPicker(request: ModelSelectorRequest, host: OwnerDialogHost
     host.changed();
   }).finally(() => clearTimeout(timer));
 
-  const shown = () => scope === "scoped" ? scoped : all;
+  // Sorted as shown: another session or the app may change the favorites while the card is open.
+  const shown = () => scope === "scoped" ? favoritesFirst(scoped) : sorted(all);
   const find = (key: string | undefined) => key === undefined ? undefined : shown().find(model => modelKey(model) === key);
   const items = (): OwnerListItem<string>[] => {
     const models = shown();
@@ -241,8 +242,6 @@ export function modelPicker(request: ModelSelectorRequest, host: OwnerDialogHost
         if (!model) return true;
         try {
           favorites.set(model, !favorite(model));
-          all = sorted(all);
-          scoped = favoritesFirst(scoped);
         } catch (error) {
           status = { text: `Could not save the favorite: ${error instanceof Error ? error.message : String(error)}`, tone: "warning" };
         }

@@ -643,9 +643,15 @@ pub(crate) fn act(state: &mut State, action: PickerAction, feed: &Feed) -> Vec<E
             let at = highlight(&shown, &ui)
                 .saturating_add_signed(isize::from(delta))
                 .min(last);
+            // The highlight keeps its model, so a catalog reordered by a favorite change
+            // arriving later never moves it onto another model.
+            let follow = match shown.get(at) {
+                Some(Choice::Model(model)) => Some(model.id.clone()),
+                _ => None,
+            };
             let picker = &mut state.ui_mut(&session).picker;
             picker.at = at;
-            picker.follow = None;
+            picker.follow = follow;
             Vec::new()
         }
         PickerAction::Choose(session) => {
