@@ -177,10 +177,15 @@ fn table_row(
             });
         let slot = match (form, width) {
             (_, Width::Fill) => slot.flex_1(),
-            (Form::Terminal, Width::Fixed(points)) => slot
+            (Form::Terminal, Width::Fixed(points) | Width::Between { min: points, .. }) => slot
                 .w(term::cells((points / POINTS_PER_TABLE_CELL).round()))
                 .flex_shrink_0(),
             (_, Width::Fixed(points)) => slot.w(px(points)).flex_shrink_0(),
+            (_, Width::Between { share, min, max }) => slot
+                .w(relative(share))
+                .min_w(px(min))
+                .max_w(px(max))
+                .flex_shrink_0(),
         };
         if form == Form::Terminal {
             if at > 0 {

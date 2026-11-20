@@ -143,6 +143,24 @@ pub fn row_height(form: Form) -> f32 {
     }
 }
 
+/// The widest a desktop page's content reads at, in points (`kit::page::measure`): past it a wide
+/// window centres the content instead of stretching it, so a row's facts stay near its title and
+/// prose keeps a readable line. Phone and terminal forms take no measure.
+///
+/// Dashboards and pages of panels or tables (Home, Usage, Timeline).
+pub const MEASURE_PAGE: f32 = 1600.0;
+/// A record's page (a task, a session's full views); at least 1100 pt plus padding, so the task
+/// page's Changes tab still splits its diff side by side.
+pub const MEASURE_RECORD: f32 = 1320.0;
+/// A feed of one-line rows (Activity › Feed).
+pub const MEASURE_FEED: f32 = 1280.0;
+/// Forms and settings sections (the mockup's 960).
+pub const MEASURE_FORM: f32 = 960.0;
+/// A conversation: the transcript and what sits under it (dock, composer, status line).
+pub const MEASURE_CONVERSATION: f32 = 820.0;
+/// Prose and Markdown: about 75 characters a line.
+pub const MEASURE_PROSE: f32 = 680.0;
+
 /// The colour a health tone is drawn in.
 pub fn tone(tone: Tone) -> AdaptiveColor {
     color(match tone {
