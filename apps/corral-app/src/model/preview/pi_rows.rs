@@ -172,6 +172,7 @@ fn queue_actions(host: &Host, n: usize) -> Vec<String> {
 /// What a build's host serves beyond what every host does.
 const BUILD_CAN: &[&str] = &[
     "model",
+    "model_favorite",
     "children",
     "child_control",
     "jobs",

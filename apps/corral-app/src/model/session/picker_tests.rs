@@ -1,4 +1,5 @@
 use corral_protocol::detail::{DetailBody, DetailRef, ModelChoice, SessionModels};
+use corral_protocol::session_host::SessionAction;
 use corral_protocol::session_state::{Capability, SessionState};
 
 use super::{Action, Cx, Facts, PickerAction, PickerKind, SessionRole, State, Ui, model_picker};
@@ -20,20 +21,36 @@ fn model(id: &str, provider: &str) -> ModelChoice {
         context_window: Some(200_000),
         effort_levels: vec!["low".into(), "medium".into(), "high".into()],
         scoped: false,
+        favorite: false,
         note: None,
     }
 }
 
 /// A session on the subscription model whose catalog also serves the same model by API.
 fn feed_with_catalog(id: &Id) -> Feed {
+    feed_with(
+        id,
+        vec![
+            model(SUBSCRIPTION, "anthropic"),
+            model(API, "anthropic-api"),
+        ],
+    )
+}
+
+/// A session on the subscription model with `models` as its catalog, whose host keeps
+/// favorites.
+fn feed_with(id: &Id, models: Vec<ModelChoice>) -> Feed {
     let mut feed = Feed::default();
     let mut live = LiveSession::default();
     live.replace_state(Some(Box::new(SessionState {
         model: Some(SUBSCRIPTION.into()),
-        can: vec![Capability {
-            id: "model".into(),
-            unavailable: None,
-        }],
+        can: ["model", "model_favorite"]
+            .into_iter()
+            .map(|id| Capability {
+                id: id.into(),
+                unavailable: None,
+            })
+            .collect(),
         ..SessionState::default()
     })));
     feed.live.insert(id.clone(), live);
@@ -50,10 +67,7 @@ fn feed_with_catalog(id: &Id) -> Feed {
                 current: Some(SUBSCRIPTION.into()),
                 default: Some(SUBSCRIPTION.into()),
                 effort: Some("medium".into()),
-                models: vec![
-                    model(SUBSCRIPTION, "anthropic"),
-                    model(API, "anthropic-api"),
-                ],
+                models,
                 refreshed_at: None,
                 refreshing: false,
             })),
@@ -122,4 +136,61 @@ fn subscription_and_api_models_of_one_vendor_are_separate_choices() {
     let filtered = model_picker(&cx).expect("the model list is open");
     let models: Vec<&str> = filtered.rows.iter().map(|row| row.model.as_str()).collect();
     assert_eq!(models, [API]);
+}
+
+/// A favorite listed under the rest while filtering is lost in a long catalog, and a star that
+/// also chose the model or closed the list would switch the session's model when the owner only
+/// meant to mark it.
+#[test]
+fn favorites_lead_the_filtered_list_and_starring_keeps_the_model_and_the_list() {
+    let id = Id::from("B-k3x9");
+    let favorite = ModelChoice {
+        favorite: true,
+        ..model(API, "anthropic-api")
+    };
+    let feed = feed_with(&id, vec![model(SUBSCRIPTION, "anthropic"), favorite]);
+    let facts = Facts {
+        role: SessionRole::Build,
+        task: None,
+    };
+    let mut ui = Ui::default();
+    ui.picker.open = Some(PickerKind::Model);
+    ui.picker.filter = "sonnet".into();
+    let cx = Cx::new(&feed, &ui, &id, daemon_env(&feed, Form::Desktop), &facts);
+    let picker = model_picker(&cx).expect("the model list is open");
+    let listed: Vec<(&str, Option<bool>)> = picker
+        .rows
+        .iter()
+        .map(|row| (row.model.as_str(), row.favorite))
+        .collect();
+    assert_eq!(listed, [(API, Some(true)), (SUBSCRIPTION, Some(false))]);
+    assert!(
+        picker.rows[1].action.is_some(),
+        "a non-favorite stays selectable"
+    );
+
+    let star = picker.rows[1]
+        .star
+        .clone()
+        .expect("the host keeps favorites");
+    let mut state = State::default();
+    state.sessions.insert(id.clone(), ui.clone());
+    let effects = state.act(star, &feed);
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SessionModel { .. }))
+    );
+    let marked: Vec<(String, bool)> = effects
+        .into_iter()
+        .filter_map(|effect| match effect {
+            Effect::SessionAction { request, .. } => match request.action {
+                SessionAction::ModelFavorite { model, favorite } => Some((model, favorite)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(marked, [(SUBSCRIPTION.to_owned(), true)]);
+    assert_eq!(state.ui(id.as_str()).picker.open, Some(PickerKind::Model));
 }

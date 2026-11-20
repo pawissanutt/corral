@@ -163,3 +163,28 @@ test("at 44 columns and 12 rows every row fits and the selected model's long nam
     expect(text).toContain("HEADMARK");
     expect(open.selected).toEqual([]);
   }));
+
+test("favorites list first, also while filtering; Alt+S marks one without choosing it, keyed by provider and id", () =>
+  withPiKeys(() => {
+    const ALT_S = "\x1bs";
+    const kept = new Set<string>();
+    const favorites = {
+      has: (m: { provider: string; id: string }) => kept.has(`${m.provider}|${m.id}`),
+      set: (m: { provider: string; id: string }, on: boolean) => { if (on) kept.add(`${m.provider}|${m.id}`); else kept.delete(`${m.provider}|${m.id}`); },
+    };
+    const models = [model("anthropic", "claude-sonnet-4"), model("anthropic-api", "claude-sonnet-4"), model("openai", "gpt-5")];
+    const once = modelRequest(models, { current: models[0] });
+    const picker = modelPicker(once.request, host(24), favorites);
+    picker.render(100);
+    picker.handleInput(DOWN);
+    picker.handleInput(ALT_S);
+    expect([...kept]).toEqual(["anthropic-api|claude-sonnet-4"]);
+    expect(once.selected).toEqual([]);
+    for (const key of "claude") picker.handleInput(key);
+    const rows = plain(picker.render(100)).filter(line => line.includes("claude-sonnet-4") && !line.includes("·"));
+    expect(rows[0]).toContain("★");
+    expect(rows[0]).toContain("anthropic-api");
+    expect(rows[1]).not.toContain("★");
+    picker.handleInput(ENTER);
+    expect(once.selected).toEqual([["claude-sonnet-4", false]]);
+  }));

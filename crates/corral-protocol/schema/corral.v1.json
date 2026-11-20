@@ -3934,6 +3934,10 @@
             },
             "type": "array"
           },
+          "favorite": {
+            "description": "A favorite of the workspace, shared by every session and the terminal UI.",
+            "type": "boolean"
+          },
           "id": {
             "description": "`<provider>/<model>`.",
             "type": "string"
@@ -5471,6 +5475,28 @@
               "action",
               "command",
               "exclude_from_context"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Marks or unmarks a model as a favorite of the workspace; the session's model is unchanged.",
+            "properties": {
+              "action": {
+                "const": "model_favorite",
+                "type": "string"
+              },
+              "favorite": {
+                "type": "boolean"
+              },
+              "model": {
+                "description": "`<provider>/<model>`, as `ModelChoice::id`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "action",
+              "model",
+              "favorite"
             ],
             "type": "object"
           },
@@ -12570,6 +12596,10 @@
                 "type": "string"
               },
               {
+                "const": "model_favorite",
+                "type": "string"
+              },
+              {
                 "const": "other",
                 "type": "string"
               }
@@ -12597,6 +12627,16 @@
           ]
         },
         {
+          "name": "favorite",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          },
+          "x-required-in": [
+            5
+          ]
+        },
+        {
           "name": "instructions",
           "required": false,
           "schema": {
@@ -12605,6 +12645,17 @@
               "null"
             ]
           }
+        },
+        {
+          "name": "model",
+          "required": false,
+          "schema": {
+            "description": "`<provider>/<model>`, as `ModelChoice::id`.",
+            "type": "string"
+          },
+          "x-required-in": [
+            5
+          ]
         }
       ],
       "result": {

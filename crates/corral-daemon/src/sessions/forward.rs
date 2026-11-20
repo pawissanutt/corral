@@ -124,6 +124,10 @@ enum ActArgs<'a> {
         command: String,
         exclude_from_context: bool,
     },
+    ModelFavorite {
+        model: String,
+        favorite: bool,
+    },
 }
 
 pub(crate) fn queue_withdraw(shared: &Shared, request: SessionQueueKey) -> Result<QueueWithdrawn> {
@@ -229,6 +233,10 @@ pub(crate) fn action(shared: &Shared, request: SessionActionRequest) -> Result<S
                 command,
                 exclude_from_context,
             }),
+        ),
+        SessionAction::ModelFavorite { model, favorite } => (
+            "model_favorite",
+            Some(ActArgs::ModelFavorite { model, favorite }),
         ),
         SessionAction::Other => anyhow::bail!("invalid: unknown session action"),
     };

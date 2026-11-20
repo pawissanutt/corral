@@ -53,6 +53,7 @@ fn catalog(at: String) -> SessionModels {
             context_window: Some(WINDOW),
             effort_levels: levels.iter().map(|level| (*level).to_owned()).collect(),
             scoped,
+            favorite: false,
             note: note.map(str::to_owned),
         }
     };

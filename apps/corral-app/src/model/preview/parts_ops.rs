@@ -1,7 +1,8 @@
 //! What the owner's actions on a sample build's parts change, answered as corral-pi answers them
 //! through corrald: a child cancelled or given another model, a steer to a child, a job stopped
 //! or sent to the background, the session's model and effort (a transcript row says each
-//! change), Compact (the plan it kept goes stale), the board's refresh, the answers to a child's
+//! change), a model's favorite mark, Compact (the plan it kept goes stale), the board's refresh,
+//! the answers to a child's
 //! question and to a proposed board plan, and the exit's outcome in the build record. Export is
 //! refused with the host's reason. Each change reaches every watcher through the host's state.
 
@@ -330,6 +331,40 @@ pub(super) fn compact(
         text: Some(format!(
             "Compacted session context ({before} tokens before compaction)"
         )),
+    })
+}
+
+/// A model marked or unmarked as a favorite; the session's model is unchanged and the catalog,
+/// re-served, carries the mark.
+pub(super) fn favorite(
+    feed: &mut Feed,
+    id: &Id,
+    model: &str,
+    favorite: bool,
+) -> Result<Value, String> {
+    let at = stamp(feed.now);
+    let host = feed
+        .hosts
+        .get_mut(id.as_str())
+        .filter(|host| host.parts.is_some())
+        .ok_or("this session's host does not keep favorites")?;
+    let parts = parts(host)?;
+    let choice = parts
+        .models
+        .models
+        .iter_mut()
+        .find(|choice| choice.id == model)
+        .ok_or_else(|| format!("{model} is not in this session's model list"))?;
+    choice.favorite = favorite;
+    let event = json!({"model": model, "favorite": favorite});
+    parts.event(&at, "model_favorite", event.to_string());
+    settle(feed, id.as_str());
+    reply(SessionActionDone {
+        text: Some(if favorite {
+            format!("{model} is a favorite")
+        } else {
+            format!("{model} is no longer a favorite")
+        }),
     })
 }
 

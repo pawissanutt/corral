@@ -1,15 +1,19 @@
 //! The model and effort pickers of a session (`/model`, Ctrl+Shift+M, the composer's model pill;
 //! `Alt+E` cycles the effort). The model list is the host's catalog (`DetailRef::SessionModels`):
-//! the current model first, then the default, then the host's order; each row names its provider
+//! the workspace's favorites first, then the rest, each group the current model first, then the
+//! default, then the host's order; each row names its provider
 //! as the host reports it, so a vendor's subscription and API providers (`anthropic`,
 //! `anthropic-api`) stay separate choices and are never merged by model name. Typing filters
 //! (every word must match the model, its name or its provider); `All | Scoped` narrows to the
 //! session's scoped models where the host has any. Choosing sends `session.model`; the composer
 //! follows the host's live state, and a refused change keeps the model and says why as a notice.
-//! The effort list is the current model's levels.
+//! A row's star (or `Alt+S` on the highlighted row) marks or unmarks the model as a favorite
+//! through `session.action` (`ModelFavorite`), keeping the list open and the session's model; the
+//! host keeps favorites for the workspace and re-announces its catalog, so the star follows the
+//! catalog, never this device. The effort list is the current model's levels.
 
 use corral_protocol::detail::{DetailBody, DetailGet, DetailRef, ModelChoice, SessionModels};
-use corral_protocol::session_host::SessionModel;
+use corral_protocol::session_host::{SessionAction, SessionActionRequest, SessionModel};
 use corral_protocol::session_state::SessionState;
 
 use crate::model::Id;
@@ -35,6 +39,8 @@ pub struct PickerUi {
     pub scoped: bool,
     /// The highlighted row of the open list.
     pub at: usize,
+    /// The model the highlight stays on while a favorite change reorders the list.
+    pub follow: Option<String>,
     /// The highlighted row of the `/` menu.
     pub slash_at: usize,
     /// The draft the `/` menu was closed on (Esc keeps the text); it opens again once the draft
@@ -48,6 +54,7 @@ impl PickerUi {
         filter: String::new(),
         scoped: false,
         at: 0,
+        follow: None,
         slash_at: 0,
         slash_closed: None,
     };
@@ -92,6 +99,12 @@ pub enum PickerAction {
         session: Id,
         delta: i8,
     },
+    /// Mark (or unmark) this model as a favorite of the workspace; the list stays open.
+    Favorite {
+        session: Id,
+        model: String,
+        favorite: bool,
+    },
 }
 
 /// The open picker as it shows.
@@ -117,6 +130,8 @@ pub struct Picker {
     pub read: ReadState,
     /// The host cannot change the model now: rows stay listed and do not run.
     pub unavailable: Option<String>,
+    /// The host cannot change favorites now: the stars stay listed and do not run.
+    pub favorites: Option<String>,
     pub close: Action,
     /// The action typing into the filter runs, without its text.
     pub session: Id,
@@ -146,6 +161,10 @@ pub struct PickRow {
     pub current: bool,
     /// None while the host cannot change it now.
     pub action: Option<Action>,
+    /// Whether the model is a favorite of the workspace; none for an effort row.
+    pub favorite: Option<bool>,
+    /// Marks or unmarks it (`pick-<n>-favorite`); none while the host cannot.
+    pub star: Option<Action>,
 }
 
 /// One choice of a list, before the page decides what pressing it does.
@@ -194,16 +213,18 @@ fn matches(model: &ModelChoice, filter: &str) -> bool {
         .all(|word| haystack.contains(word))
 }
 
-/// The catalog in the picker's order: the current model, the default, then the host's order.
+/// The catalog in the picker's order: favorites, then the rest, each the current model, the
+/// default, then the host's order.
 fn ordered<'m>(models: &'m SessionModels, current: Option<&str>) -> Vec<&'m ModelChoice> {
     let rank = |model: &ModelChoice| {
-        if Some(model.id.as_str()) == current {
+        let place = if Some(model.id.as_str()) == current {
             0
         } else if Some(&model.id) == models.default.as_ref() {
             1
         } else {
             2
-        }
+        };
+        (!model.favorite, place)
     };
     let mut ordered: Vec<&ModelChoice> = models.models.iter().collect();
     ordered.sort_by_key(|model| rank(model));
@@ -304,7 +325,21 @@ pub(crate) fn unavailable(cx: &Cx<'_>) -> Option<String> {
     }
 }
 
-fn row_of(cx: &Cx<'_>, at: usize, choice: &Choice, blocked: bool) -> PickRow {
+/// Why the session's host cannot mark favorites now, if it cannot.
+fn favorites_unavailable(cx: &Cx<'_>) -> Option<String> {
+    match cx.can("model_favorite") {
+        Can::Absent => return Some("this session's host does not keep favorites".into()),
+        Can::Unavailable(why) => return Some(why),
+        Can::Yes | Can::Unknown => {}
+    }
+    match cx.host {
+        Host::NotRunning | Host::Ended => Some("the host is not running".into()),
+        Host::Unreachable => Some("corrald cannot reach the host".into()),
+        Host::Running | Host::Unknown => None,
+    }
+}
+
+fn row_of(cx: &Cx<'_>, at: usize, choice: &Choice, blocked: bool, stars: bool) -> PickRow {
     let session = cx.id.clone();
     let current = cx.model();
     match choice {
@@ -330,6 +365,14 @@ fn row_of(cx: &Cx<'_>, at: usize, choice: &Choice, blocked: bool) -> PickRow {
                 meta: model_meta(model),
                 marks,
                 current: is_current,
+                star: stars.then(|| {
+                    Action::Picker(PickerAction::Favorite {
+                        session: session.clone(),
+                        model: model.id.clone(),
+                        favorite: !model.favorite,
+                    })
+                }),
+                favorite: Some(model.favorite),
                 action: (!blocked).then(|| {
                     if is_current {
                         Action::Picker(PickerAction::Close(session))
@@ -356,6 +399,8 @@ fn row_of(cx: &Cx<'_>, at: usize, choice: &Choice, blocked: bool) -> PickRow {
                     Vec::new()
                 },
                 current: is_current,
+                favorite: None,
+                star: None,
                 action: (!blocked).then(|| {
                     Action::Picker(PickerAction::Effort {
                         session,
@@ -377,12 +422,28 @@ fn catalog(cx: &Cx<'_>, models: &SessionModels) -> Option<(Hue, String)> {
     Some((Hue::Neutral, format!("Model catalogs refreshed {clock}")))
 }
 
+/// The highlighted row of `shown`: the followed model's while it is listed, else `at`.
+fn highlight(shown: &[Choice], ui: &PickerUi) -> usize {
+    ui.follow
+        .as_deref()
+        .and_then(|follow| {
+            shown
+                .iter()
+                .position(|choice| matches!(choice, Choice::Model(model) if model.id == follow))
+        })
+        .unwrap_or(ui.at)
+        .min(shown.len().saturating_sub(1))
+}
+
 /// The open picker of the session `cx` reads; none while no list is open.
 pub fn picker(cx: &Cx<'_>) -> Option<Picker> {
     let ui = &cx.ui.picker;
     let kind = ui.open?;
     let session = cx.id.clone();
     let blocked = unavailable(cx);
+    let favorites = (kind == PickerKind::Model)
+        .then(|| favorites_unavailable(cx))
+        .flatten();
     let all = choices(
         cx.feed,
         cx.id.as_str(),
@@ -396,9 +457,9 @@ pub fn picker(cx: &Cx<'_>) -> Option<Picker> {
     let rows: Vec<PickRow> = shown
         .iter()
         .enumerate()
-        .map(|(at, choice)| row_of(cx, at, choice, blocked.is_some()))
+        .map(|(at, choice)| row_of(cx, at, choice, blocked.is_some(), favorites.is_none()))
         .collect();
-    let at = (!rows.is_empty()).then(|| ui.at.min(rows.len() - 1));
+    let at = (!rows.is_empty()).then(|| highlight(&shown, ui));
     let detail = at.and_then(|at| rows.get(at)).and_then(|row| {
         row.provider
             .as_ref()
@@ -452,6 +513,7 @@ pub fn picker(cx: &Cx<'_>) -> Option<Picker> {
         detail,
         note,
         unavailable: blocked,
+        favorites,
         close: Action::Picker(PickerAction::Close(session.clone())),
         session,
     })
@@ -526,6 +588,7 @@ fn open(state: &mut State, session: &Id, kind: PickerKind, feed: &Feed) -> Vec<E
     ui.picker.open = Some(kind);
     ui.picker.filter.clear();
     ui.picker.at = 0;
+    ui.picker.follow = None;
     let reads = kind == PickerKind::Model
         || levels(
             feed,
@@ -561,26 +624,28 @@ pub(crate) fn act(state: &mut State, action: PickerAction, feed: &Feed) -> Vec<E
             let ui = state.ui_mut(&session);
             ui.picker.filter = text;
             ui.picker.at = 0;
+            ui.picker.follow = None;
             Vec::new()
         }
         PickerAction::Scoped { session, scoped } => {
             let ui = state.ui_mut(&session);
             ui.picker.scoped = scoped;
             ui.picker.at = 0;
+            ui.picker.follow = None;
             Vec::new()
         }
         PickerAction::Step { session, delta } => {
             let ui = state.ui(session.as_str()).picker.clone();
-            let len = ui
+            let shown = ui
                 .open
-                .map_or(0, |kind| choices(feed, session.as_str(), &ui, kind).len());
-            let last = len.saturating_sub(1);
-            let at = ui
-                .at
-                .min(last)
+                .map_or_else(Vec::new, |kind| choices(feed, session.as_str(), &ui, kind));
+            let last = shown.len().saturating_sub(1);
+            let at = highlight(&shown, &ui)
                 .saturating_add_signed(isize::from(delta))
                 .min(last);
-            state.ui_mut(&session).picker.at = at;
+            let picker = &mut state.ui_mut(&session).picker;
+            picker.at = at;
+            picker.follow = None;
             Vec::new()
         }
         PickerAction::Choose(session) => {
@@ -589,7 +654,7 @@ pub(crate) fn act(state: &mut State, action: PickerAction, feed: &Feed) -> Vec<E
                 return Vec::new();
             };
             let shown = choices(feed, session.as_str(), &ui, kind);
-            let Some(choice) = shown.get(ui.at.min(shown.len().saturating_sub(1))).cloned() else {
+            let Some(choice) = shown.get(highlight(&shown, &ui)).cloned() else {
                 return Vec::new();
             };
             match choice {
@@ -654,5 +719,43 @@ pub(crate) fn act(state: &mut State, action: PickerAction, feed: &Feed) -> Vec<E
                 None => Vec::new(),
             }
         }
+        PickerAction::Favorite {
+            session,
+            model,
+            favorite,
+        } => favorite_model(state, &session, model, favorite, feed),
     }
+}
+
+/// Sends `ModelFavorite` under a new key with the list left open; the star changes when the
+/// host re-announces its catalog. The highlight stays on its model while the list reorders.
+fn favorite_model(
+    state: &mut State,
+    session: &Id,
+    model: String,
+    favorite: bool,
+    feed: &Feed,
+) -> Vec<Effect> {
+    let ui = state.ui(session.as_str()).picker.clone();
+    let follow = ui.open.and_then(|kind| {
+        let shown = choices(feed, session.as_str(), &ui, kind);
+        match shown.get(highlight(&shown, &ui)) {
+            Some(Choice::Model(highlighted)) => Some(highlighted.id.clone()),
+            _ => None,
+        }
+    });
+    let key = state.ids.next_id();
+    let ui = state.ui_mut(session);
+    ui.picker.follow = follow;
+    let what = if favorite { "Favorite" } else { "Unfavorite" };
+    ui.dock
+        .pending
+        .insert(key.clone(), Pending::Action { what });
+    vec![Effect::SessionAction {
+        key,
+        request: SessionActionRequest {
+            id: session.to_string(),
+            action: SessionAction::ModelFavorite { model, favorite },
+        },
+    }]
 }

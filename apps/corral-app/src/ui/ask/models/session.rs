@@ -4,11 +4,12 @@
 //! (↑ ↓ move, Enter uses the highlighted row, Esc closes), then the rows. Each model row is its
 //! name over its full `<provider>/<model>` id, the provider in stronger ink, so a vendor's
 //! subscription and API providers read as the separate choices they are; its context window and
-//! effort range at the trailing edge, `current`, `default` and `next` as words. While the host
-//! cannot change the model the rows stay listed, muted, with its reason above them. Desktop and
-//! phone: a panel in flow over the composer (the phone's rows full touch targets); terminal: the
-//! same rows between rules. Test ids `session-picker`, `field-picker`, `pick-<n>`, `btn-model`,
-//! `btn-effort`.
+//! effort range at the trailing edge, `current`, `default` and `next` as words; a leading star,
+//! filled for a favorite, marks or unmarks it (Alt+S on the highlighted row). While the host
+//! cannot change the model (or its favorites) the rows (or stars) stay listed, muted, with its
+//! reason above them. Desktop and phone: a panel in flow over the composer (the phone's rows full
+//! touch targets); terminal: the same rows between rules. Test ids `session-picker`,
+//! `field-picker`, `pick-<n>`, `pick-<n>-favorite`, `btn-model`, `btn-effort`.
 
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::keymap::When;
@@ -560,6 +561,12 @@ fn body(app: AppState, picker: &Picker) -> AnyElement {
             Hue::Held,
         ));
     }
+    if let Some(why) = &picker.favorites {
+        notes.push(line(
+            format!("Favorites cannot change now: {why}"),
+            Hue::Neutral,
+        ));
+    }
     match &picker.read {
         ReadState::Reading | ReadState::ReadingKept if picker.kind == PickerKind::Model => {
             notes.push(line("Reading the model catalog…".into(), Hue::Neutral));
@@ -701,6 +708,8 @@ fn option(app: AppState, row: &PickRow, highlighted: bool, muted: bool) -> AnyEl
         })
         .flex_row()
         .items_center()
+        .flex_1()
+        .min_w(px(0.0))
         .when(enabled, |v| {
             v.cursor_pointer().on_press(move || {
                 if let Some(action) = &action {
@@ -708,28 +717,32 @@ fn option(app: AppState, row: &PickRow, highlighted: bool, muted: bool) -> AnyEl
                 }
             })
         });
+    // The star is the row's sibling, so pressing it never also chooses the model.
+    let star = row.favorite.map(|favorite| star(app, row, favorite));
+    let line = view().flex_row().items_center();
     if form == Form::Terminal {
-        let line = item
+        let item = item
+            .gap(term::cells(1.0))
+            .child(check)
+            .child(name.flex_shrink_0());
+        let item = match id {
+            Some(id) => item.child(id.flex_1()),
+            None => item.child(view().flex_1()),
+        }
+        .child(facts);
+        return line
             .gap(term::cells(1.0))
             .px(term::cells(1.0))
             .when(highlighted, |v| v.bg(color(Token::Surface2)))
-            .child(check)
-            .child(name.flex_shrink_0());
-        return match id {
-            Some(id) => line.child(id.flex_1()),
-            None => line.child(view().flex_1()),
-        }
-        .child(facts)
-        .into_element();
+            .children(star)
+            .child(item)
+            .into_element();
     }
     let phone = form == Form::Phone;
-    item.gap(px(8.0))
-        .px(px(8.0))
+    let item = item
+        .gap(px(8.0))
         .py(px(if phone { 8.0 } else { 6.0 }))
         .when(phone, |v| v.min_h(px(44.0)))
-        .rounded(px(7.0))
-        .when(highlighted, |v| v.bg(color(Token::Sel)))
-        .hover(|s| s.bg(color(Token::Hover)))
         .child(view().w(px(16.0)).items_center().child(check))
         .child(
             view()
@@ -739,6 +752,62 @@ fn option(app: AppState, row: &PickRow, highlighted: bool, muted: bool) -> AnyEl
                 .child(name)
                 .children(id),
         )
-        .child(facts.max_w(px(if phone { 140.0 } else { 220.0 })))
+        .child(facts.max_w(px(if phone { 140.0 } else { 220.0 })));
+    line.gap(px(8.0))
+        .px(px(8.0))
+        .rounded(px(7.0))
+        .when(highlighted, |v| v.bg(color(Token::Sel)))
+        .hover(|s| s.bg(color(Token::Hover)))
+        .children(star)
+        .child(item)
+        .into_element()
+}
+
+/// A model's star: filled for a favorite of the workspace, hollow otherwise; pressing it marks
+/// or unmarks the model and keeps the list open. Muted, and pressing it does nothing, while the
+/// host cannot change favorites (the reason stands over the rows).
+fn star(app: AppState, row: &PickRow, favorite: bool) -> AnyElement {
+    let form = app.form;
+    let action = row.star.clone();
+    let enabled = action.is_some();
+    let ink = match (enabled, favorite) {
+        (true, true) => hue_ink(Hue::Held),
+        (true, false) => color(Token::Ink2),
+        (false, _) => color(Token::Ink3),
+    };
+    let label = match (favorite, enabled) {
+        (true, true) => format!("Remove {} from favorites", row.label),
+        (false, true) => format!("Add {} to favorites", row.label),
+        (true, false) => format!("{} is a favorite; favorites cannot change now", row.label),
+        (false, false) => format!(
+            "{} is not a favorite; favorites cannot change now",
+            row.label
+        ),
+    };
+    view()
+        .test_id(&format!("{}-favorite", row.id))
+        .role(AccessibilityRole::Button)
+        .label(label)
+        .accessibility_state(AccessibilityState {
+            selected: favorite,
+            disabled: !enabled,
+            ..AccessibilityState::default()
+        })
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .when(form == Form::Phone, |v| v.min_w(px(36.0)).min_h(px(44.0)))
+        .when(enabled, |v| {
+            v.cursor_pointer().on_press(move || {
+                if let Some(action) = &action {
+                    act(app, action.clone());
+                }
+            })
+        })
+        .child(small(
+            form,
+            text(if favorite { "★" } else { "☆" }).text_color(ink),
+            false,
+        ))
         .into_element()
 }

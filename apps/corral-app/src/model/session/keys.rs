@@ -72,6 +72,8 @@ pub enum KeyAction {
     Effort,
     /// The next (1) or previous (-1) model.
     NextModel(i8),
+    /// Mark or unmark the model list's highlighted row as a favorite (Alt+S, while it is open).
+    Favorite,
     /// Next receiver.
     Receiver,
     /// Send the draft with this policy.
@@ -221,6 +223,7 @@ pub fn keys() -> Vec<KeyBinding> {
             "previous model",
             KeyAction::NextModel(-1),
         ),
+        bind("alt+s", "Alt+S", "favorite", KeyAction::Favorite),
         bind("alt+t", "Alt+T", "next receiver", KeyAction::Receiver),
         bind(
             "enter",
@@ -348,6 +351,12 @@ pub fn press(key: &str, cx: &Cx<'_>, web: bool) -> Option<Action> {
         KeyAction::NextModel(delta) => {
             talks(cx).then(|| Action::Picker(PickerAction::NextModel { session, delta }))
         }
+        // The highlighted row's star, as pressing it does: nothing while the host cannot.
+        KeyAction::Favorite if cx.ui.picker.open == Some(PickerKind::Model) => {
+            let picker = super::model_picker(cx)?;
+            picker.rows.get(picker.at?)?.star.clone()
+        }
+        KeyAction::Favorite => None,
         KeyAction::Receiver => Some(Action::CycleReceiver(session)),
         KeyAction::Send(_) => None,
         KeyAction::Part => PARTS.iter().find_map(|part| (part.press)(key, cx)),
@@ -411,18 +420,19 @@ fn part_legend(tab: Tab) -> Vec<(&'static str, &'static str)> {
 /// `/` menu (`slash`: it shows), the transcript, a view or the sidebar with its own keys, a
 /// card, or the composer.
 pub fn legend_of(cx: &Cx<'_>, tab: Tab, slash: bool) -> Vec<(&'static str, &'static str)> {
-    if let Some(kind) = cx.ui.picker.open {
-        return vec![
-            ("↑ ↓", "move"),
-            (
-                "⏎",
-                match kind {
-                    PickerKind::Model => "use model",
-                    PickerKind::Effort => "use effort",
-                },
-            ),
-            ("esc", "close"),
-        ];
+    match cx.ui.picker.open {
+        Some(PickerKind::Model) => {
+            return vec![
+                ("↑ ↓", "move"),
+                ("⏎", "use model"),
+                ("Alt+S", "favorite"),
+                ("esc", "close"),
+            ];
+        }
+        Some(PickerKind::Effort) => {
+            return vec![("↑ ↓", "move"), ("⏎", "use effort"), ("esc", "close")];
+        }
+        None => {}
     }
     let focus = cx.ui.focus;
     if slash && focus == Focus::Composer && tab == Tab::Chat {

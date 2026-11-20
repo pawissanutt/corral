@@ -4,8 +4,9 @@
 // or cancels at most once; afterwards keys and clicks are ignored until Pi closes it.
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelSelectorRequest, OptionSelectorRequest, SelectorComponent, ThinkingSelectorRequest } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
-import type { TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { matchesKey, visibleWidth } from "@earendil-works/pi-tui";
+import type { KeyId, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
+import type { FavoriteModels } from "../host/model-favorites.ts";
 import { keyData, keyLabel, piKey, piPressed } from "./keymap.ts";
 import { ownerListCard, type OwnerDialogHost, type OwnerListItem, type OwnerListOptions } from "./owner-dialog.ts";
 import type { DialogHint } from "./owner-dialog-parts.ts";
@@ -18,6 +19,10 @@ const REFRESH_TIMEOUT_MS = 15_000;
 const ID_MAX = 40, PROVIDER_MAX = 18, LABEL_MAX = 32;
 /** Narrowest id or note column worth drawing; below it the column gives way and the selected item's rows say it. */
 const ID_MIN = 12, NOTE_MIN = 8;
+/** Marks or unmarks the selected model as a favorite; Pi binds no Alt+S, and the filter takes no Alt chord. */
+const FAVORITE_KEY: KeyId = "alt+s";
+/** A favorite's mark, in its own column before the id. */
+const STAR = "★";
 /** Pi's own note when the session has no model scope. */
 const PROVIDERS_NOTE = "Only showing models from configured providers. To add one, run `corral-pi login --provider <id>` in a terminal and start a new session.";
 
@@ -92,6 +97,12 @@ function bindingHint(id: string, label: string): DialogHint[] {
   return key && data ? [{ key: keyLabel(key), label, data }] : [];
 }
 
+/** Alt+S's hint for the selected model, which a click replays. */
+function favoriteHint(starred: boolean): DialogHint[] {
+  const data = keyData(FAVORITE_KEY);
+  return data ? [{ key: keyLabel(FAVORITE_KEY), label: starred ? "unfavorite" : "favorite", data }] : [];
+}
+
 /** A row's marks, styled, and the cells their plain text takes. */
 interface Marks { readonly text: string; readonly width: number }
 
@@ -125,19 +136,25 @@ function labelledLines(label: string, column: number, note: string, mark: Marks,
 const modelKey = (model: { readonly provider: string; readonly id: string }) => `${model.provider}\0${model.id}`;
 
 /**
- * Pi's model selector: the current model first, then the default, then by provider (Pi's order); Tab switches between
- * all models and the session's scoped models when it has some; Enter uses the selected model for this session and
- * Pi's save key also makes it the default. Pi's catalog refresh runs while the card is open, gives up after 15 s, and
- * is aborted when the picker commits, cancels or closes; the selection stays on its model when the rows change.
+ * Pi's model selector: the workspace's favorites first, then the rest, each the current model first, then the default,
+ * then by provider (Pi's order); Tab switches between all models and the session's scoped models when it has some;
+ * Enter uses the selected model for this session and Pi's save key also makes it the default; Alt+S marks or unmarks
+ * the selected model as a favorite and keeps the card open. Pi's catalog refresh runs while the card is open, gives up
+ * after 15 s, and is aborted when the picker commits, cancels or closes; the selection stays on its model when the
+ * rows change.
  */
-export function modelPicker(request: ModelSelectorRequest, host: OwnerDialogHost): SelectorComponent {
+export function modelPicker(request: ModelSelectorRequest, host: OwnerDialogHost, favorites?: FavoriteModels): SelectorComponent {
   const current = request.current ? modelKey(request.current) : undefined;
   const defaultKey = request.defaultModel ? modelKey(request.defaultModel) : undefined;
+  const favorite = (model: Model<Api>) => favorites?.has(model) ?? false;
   const rank = (model: Model<Api>) => modelKey(model) === current ? 0 : modelKey(model) === defaultKey ? 1 : 2;
-  const sorted = (models: readonly Model<Api>[]) => [...models].sort((a, b) => rank(a) - rank(b) || a.provider.localeCompare(b.provider));
+  const sorted = (models: readonly Model<Api>[]) => [...models].sort((a, b) =>
+    Number(favorite(b)) - Number(favorite(a)) || rank(a) - rank(b) || a.provider.localeCompare(b.provider));
+  // The session's scoped models keep Pi's order within the favorites and within the rest.
+  const favoritesFirst = (models: readonly Model<Api>[]) => [...models].sort((a, b) => Number(favorite(b)) - Number(favorite(a)));
 
   let all = sorted(request.models());
-  let scoped = request.scoped.map(entry => entry.model);
+  let scoped = favoritesFirst(request.scoped.map(entry => entry.model));
   let scope: "all" | "scoped" = scoped.length ? "scoped" : "all";
   let status: RefreshStatus = { text: "Refreshing model catalogs…", tone: "muted" };
   let stopped = false, timedOut = false;
@@ -152,7 +169,7 @@ export function modelPicker(request: ModelSelectorRequest, host: OwnerDialogHost
       : failed.length > 1 ? cached(`Could not refresh ${failed.length} model catalogs (${failed.join(", ")})`)
       : { text: "Model catalogs refreshed.", tone: "success" };
     all = sorted(request.models());
-    scoped = request.scoped.map(entry => all.find(model => modelKey(model) === modelKey(entry.model)) ?? entry.model);
+    scoped = favoritesFirst(request.scoped.map(entry => all.find(model => modelKey(model) === modelKey(entry.model)) ?? entry.model));
     host.changed();
   }, (error: unknown) => {
     if (stopped) return;
@@ -168,24 +185,28 @@ export function modelPicker(request: ModelSelectorRequest, host: OwnerDialogHost
     const idColumn = Math.min(ID_MAX, Math.max(1, ...models.map(model => visibleWidth(plainLabel(model.id)))));
     const providerColumn = Math.min(PROVIDER_MAX, Math.max(1, ...models.map(model => visibleWidth(plainLabel(model.provider)))));
     const markColumn = Math.max(0, ...models.map(model => marks(modelKey(model) === current, modelKey(model) === defaultKey).width));
+    // The star column shows while any listed model is a favorite, so the ids stay aligned.
+    const starColumn = models.some(favorite) ? visibleWidth(STAR) + 1 : 0;
     return models.map(model => {
-      const key = modelKey(model), mark = marks(key === current, key === defaultKey);
+      const key = modelKey(model), mark = marks(key === current, key === defaultKey), starred = favorite(model);
       const id = plainLabel(model.id), provider = plainLabel(model.provider), name = plainLabel(model.name);
       return {
         value: key,
-        match: `${provider} ${provider}/${id} ${id} ${name}${key === defaultKey ? " default" : ""}${key === current ? " current" : ""}`,
+        match: `${provider} ${provider}/${id} ${id} ${name}${starred ? " favorite" : ""}${key === defaultKey ? " default" : ""}${key === current ? " current" : ""}`,
         lines: (width, selected) => {
           const tail = markColumn ? markColumn + GAP.length : 0;
+          const star = !starColumn ? "" : starred ? PANEL_WARNING + STAR + PANEL_TEXT + " " : " ".repeat(starColumn);
+          const room = width - starColumn;
           // The provider column goes before the id is cut below ID_MIN; the selected row's detail names it.
-          const withProvider = width - tail - providerColumn - GAP.length >= Math.min(ID_MIN, idColumn);
-          const idWidth = Math.max(1, Math.min(idColumn, width - tail - (withProvider ? providerColumn + GAP.length : 0)));
-          const row = cell(id, idWidth, selected)
+          const withProvider = room - tail - providerColumn - GAP.length >= Math.min(ID_MIN, idColumn);
+          const idWidth = Math.max(1, Math.min(idColumn, room - tail - (withProvider ? providerColumn + GAP.length : 0)));
+          const row = star + cell(id, idWidth, selected)
             + (withProvider ? GAP + PANEL_MUTED + cell(provider, providerColumn) + PANEL_TEXT : "")
             + (mark.width ? GAP + mark.text : "");
           if (!selected) return [row];
           return [
             row,
-            ...detailRows(name && name !== id ? `${name} · ${provider}/${id}` : `${provider}/${id}`, width),
+            ...detailRows((name && name !== id ? `${name} · ${provider}/${id}` : `${provider}/${id}`) + (starred ? " · favorite" : ""), width),
             ...(scoped.length ? [] : detailRows(PROVIDERS_NOTE, width, 2, PANEL_WARNING)),
           ];
         },
@@ -210,10 +231,24 @@ export function modelPicker(request: ModelSelectorRequest, host: OwnerDialogHost
       initial: rows => request.initialSearch ? 0 : Math.max(0, rows.findIndex(row => row.value === current)),
       hints: selected => [
         ...(find(selected) ? bindingHint("app.models.save", "make default") : []),
+        ...(favorites && find(selected) ? favoriteHint(favorite(find(selected)!)) : []),
         ...(scoped.length ? bindingHint("tui.input.tab", scope === "all" ? "scoped models" : "all models") : []),
       ],
     },
     key: (data, selected) => {
+      if (favorites && matchesKey(data, FAVORITE_KEY)) {
+        const model = find(selected);
+        if (!model) return true;
+        try {
+          favorites.set(model, !favorite(model));
+          all = sorted(all);
+          scoped = favoritesFirst(scoped);
+        } catch (error) {
+          status = { text: `Could not save the favorite: ${error instanceof Error ? error.message : String(error)}`, tone: "warning" };
+        }
+        host.changed();
+        return true;
+      }
       if (piPressed(data, "tui.input.tab")) {
         if (scoped.length) scope = scope === "all" ? "scoped" : "all";
         return true;

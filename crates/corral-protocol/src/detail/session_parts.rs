@@ -119,6 +119,9 @@ pub struct ModelChoice {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effort_levels: Vec<String>,
     pub scoped: bool,
+    /// A favorite of the workspace, shared by every session and the terminal UI.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub favorite: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
