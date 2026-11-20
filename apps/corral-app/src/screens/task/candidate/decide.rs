@@ -102,7 +102,7 @@ impl TermFit {
 
 /// The Onto line and the decide bar of the shown candidate; an empty element while none is
 /// shown. A terminal measures its row to keep the line whole (`TermFit`).
-pub(super) fn decide(cx: Ctx) -> AnyElement {
+pub(crate) fn decide(cx: Ctx) -> AnyElement {
     let page = cx.page;
     let terminal = cx.app.form == Form::Terminal;
     // The phone's Onto field stands in the page (`phone_secondary`), not in its pinned bar.
@@ -142,7 +142,7 @@ pub(super) fn decide(cx: Ctx) -> AnyElement {
 
 /// The Onto field, then Run gate, Start review and Land anyway, which a phone keeps in the page
 /// rather than in its bar.
-pub(super) fn phone_secondary(cx: &Ctx) -> AnyElement {
+pub(crate) fn phone_secondary(cx: &Ctx) -> AnyElement {
     let field = onto(cx);
     let page = cx.page;
     let secondary = computed(move || {

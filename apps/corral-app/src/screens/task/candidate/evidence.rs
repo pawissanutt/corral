@@ -25,7 +25,7 @@ const CURSOR: (f32, f32) = (7.0, 13.0);
 const IMAGE_RATIO: f32 = 16.0 / 9.0;
 
 /// The worker run's summary: heading, paragraphs and the source line.
-pub(super) fn report(app: AppState, report: &ReportView) -> AnyElement {
+pub(crate) fn report(app: AppState, report: &ReportView) -> AnyElement {
     let form = app.form;
     let terminal = form == Form::Terminal;
     let leading = (text_size(form) * TERM_LEADING).round();
@@ -61,7 +61,7 @@ pub(super) fn report(app: AppState, report: &ReportView) -> AnyElement {
 
 /// The gate log, its passing lines in the success colour and failing ones in the failure
 /// colour, then the served tail's extent.
-pub(super) fn log(app: AppState, lines: &[LogView], note: &str) -> AnyElement {
+pub(crate) fn log(app: AppState, lines: &[LogView], note: &str) -> AnyElement {
     let ink = console_ink(app);
     let mut spans = Vec::with_capacity(lines.len() * 2);
     for (at, line) in lines.iter().enumerate() {
@@ -82,7 +82,7 @@ pub(super) fn log(app: AppState, lines: &[LogView], note: &str) -> AnyElement {
 
 /// The candidate's artifacts: each record's title, type and catalog key with Show or Hide, and
 /// once shown its contents; then where those contents come from.
-pub(super) fn artifacts(cx: &Ctx, list: &ArtifactsView) -> AnyElement {
+pub(crate) fn artifacts(cx: &Ctx, list: &ArtifactsView) -> AnyElement {
     let app = cx.app;
     let terminal = app.form == Form::Terminal;
     view()

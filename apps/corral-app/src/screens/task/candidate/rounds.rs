@@ -14,7 +14,7 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 use super::brief::{caption, chain};
 use super::{Ctx, command};
 
-pub(super) fn rounds(cx: &Ctx, rounds: &Rounds) -> AnyElement {
+pub(crate) fn rounds(cx: &Ctx, rounds: &Rounds) -> AnyElement {
     let app = cx.app;
     let heading = hinted(
         app,

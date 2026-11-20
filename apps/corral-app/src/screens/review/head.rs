@@ -4,7 +4,7 @@
 
 use nsh_core::prelude::*;
 
-use crate::model::review::{Action, CandidateHeader, Layout, Notice, Tab};
+use crate::model::review::{Action, CandidateHeader, Notice, Tab};
 use crate::model::{Form, Hue, span};
 use crate::state::AppState;
 use crate::ui::kit::button::seg;
@@ -232,56 +232,5 @@ fn tabs(cx: &Ctx) -> AnyElement {
             },
             "seg-review",
         ))
-    })
-}
-
-/// The Unified | Side by side control (`.dtools`), `seg-layout`, offered with the Diff tab only
-/// where the candidate's column is wide enough for side by side (the model's rule): narrower,
-/// the diff is unified and a control whose other choice could not show would mislead.
-pub(super) fn layout_switch(cx: &Ctx) -> AnyElement {
-    let app = cx.app;
-    let page = cx.page;
-    let split = cx.split;
-    let choices = computed(move || {
-        if split.get() != Some(true) {
-            return Vec::new();
-        }
-        page.with(|page| {
-            page.detail
-                .as_ref()
-                .map(|detail| {
-                    detail
-                        .layouts
-                        .iter()
-                        .map(|choice| (Some(choice.layout), choice.label))
-                        .collect::<Vec<(Option<Layout>, &'static str)>>()
-                })
-                .unwrap_or_default()
-        })
-    });
-    let cx = cx.clone();
-    dynamic(move || {
-        let options = choices.get();
-        if options.is_empty() {
-            return None;
-        }
-        let cx = cx.clone();
-        Some(
-            view()
-                .flex_row()
-                .pb(px(12.0))
-                .child(seg(
-                    app,
-                    &options,
-                    move || app.review.with(|state| Some(state.layout)),
-                    move |choice: Option<Layout>| {
-                        if let Some(layout) = choice {
-                            act(&cx, Action::Layout(layout))();
-                        }
-                    },
-                    "seg-layout",
-                ))
-                .into_element(),
-        )
     })
 }

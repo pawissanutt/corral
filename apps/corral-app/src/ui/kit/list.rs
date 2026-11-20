@@ -92,6 +92,12 @@ fn inspector_fits(app: AppState, width: f32) -> bool {
 
 /// The list page.
 pub fn list_page(app: AppState, page: ListPage) -> AnyElement {
+    list_page_with(app, page, None)
+}
+
+/// [`list_page`] with `foot` under the rows, inside the scrolling list: the pager of a paged
+/// section.
+pub fn list_page_with(app: AppState, page: ListPage, foot: Option<AnyElement>) -> AnyElement {
     let form = app.form;
     let ListPage {
         key,
@@ -188,6 +194,7 @@ pub fn list_page(app: AppState, page: ListPage) -> AnyElement {
                 .flex_1()
                 .min_h(px(0.0))
                 .child(rows)
+                .children(foot)
                 .child(empty),
         );
     let panel = inspector.map(|inspector| {

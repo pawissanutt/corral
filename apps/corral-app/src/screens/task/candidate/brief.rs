@@ -36,7 +36,7 @@ const TARGET: f32 = 44.0;
 const RING: f32 = 2.0;
 
 /// The Brief, the side facts after it when `side_below`.
-pub(super) fn brief(cx: &Ctx, brief: &Brief, side_below: bool) -> AnyElement {
+pub(crate) fn brief(cx: &Ctx, brief: &Brief, side_below: bool) -> AnyElement {
     let app = cx.app;
     view()
         .child(block(
@@ -96,7 +96,7 @@ fn block(app: AppState, first: bool, content: AnyElement) -> AnyElement {
 
 /// A block's or a side section's heading (`.blk > h3`, `.sec > h3`): the label semibold in
 /// ink-3, its count after it, at the trailing edge in a side section; bold in a terminal.
-pub(super) fn caption(
+pub(crate) fn caption(
     app: AppState,
     label: &'static str,
     count: Option<String>,
@@ -438,7 +438,7 @@ fn file_row(cx: &Ctx, file: &ChangedFile) -> AnyElement {
 
 /// The side facts (`.aside`): what the task asked for, the run's facts, then Open session and
 /// the task's Actions menu; each a section with a rule under it.
-pub(super) fn side(cx: &Ctx, side: &BriefSide) -> AnyElement {
+pub(crate) fn side(cx: &Ctx, side: &BriefSide) -> AnyElement {
     let app = cx.app;
     let mut sections = Vec::with_capacity(3);
     if let Some(asked) = &side.asked_for {
