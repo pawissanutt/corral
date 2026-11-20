@@ -11,8 +11,10 @@ use std::rc::Rc;
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
+use crate::model::hue::Hue;
 use crate::model::list::{self, ListKey};
 use crate::model::status::SessionState;
+use crate::model::text::span;
 use crate::model::work::Record;
 use crate::model::{Form, Id, Live, sessions};
 use crate::screens::agents::{self, Compact, ask_session, ask_view};
@@ -21,9 +23,10 @@ use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::list::{
-    ListPage, Row, cell_mono, cell_text, cell_title, list_page, phone_lines,
+    ListPage, Row, cell_mono, cell_text, cell_title, list_page_with, phone_lines,
 };
 use crate::ui::kit::next::{more_button, next_button};
+use crate::ui::kit::notice::{error, notice};
 use crate::ui::kit::page::head;
 use crate::ui::kit::status::{session_mark, session_word_mark};
 use crate::ui::kit::table::kv;
@@ -58,16 +61,15 @@ pub fn screen(app: AppState) -> AnyElement {
             untracked(|| app.nav.update(|nav| nav.selection.session = shown));
         }
     });
+    let standing = computed(move || {
+        let has_rows = !sections.with(Vec::is_empty);
+        app.feed.with(|feed| sessions::standing(feed, has_rows))
+    });
     let notice = computed(move || {
-        if !sections.with(Vec::is_empty) {
-            None
-        } else if app.feed.with(|feed| {
-            feed.topics.contains_key("agents") || feed.topics.contains_key("assistant")
-        }) {
-            Some(sessions::EMPTY.to_owned())
-        } else {
-            Some(sessions::LOADING.to_owned())
-        }
+        standing.with(|standing| match &standing.fill {
+            Some(fill @ (sessions::Fill::Loading | sessions::Fill::Empty)) => Some(fill.words()),
+            Some(sessions::Fill::Failed(_)) | None => None,
+        })
     });
     let summary = computed(move || {
         let env = app.env();
@@ -103,8 +105,12 @@ pub fn screen(app: AppState) -> AnyElement {
             head(app, sessions::TITLE, Some(summary), actions)
         })
     });
+    let page_head = view()
+        .child(page_head)
+        .child(stale(app, standing))
+        .into_element();
     let columns = sessions::columns();
-    list_page(
+    list_page_with(
         app,
         ListPage {
             key: "sessions",
@@ -122,7 +128,49 @@ pub fn screen(app: AppState) -> AnyElement {
             on_fold: Rc::new(move |key| app.agents.update(|state| state.list.toggle(key))),
             notice,
         },
+        Some(failed(app, standing)),
     )
+}
+
+/// The line over sessions shown from the last update while their source is stale.
+fn stale(app: AppState, standing: Memo<sessions::Standing>) -> AnyElement {
+    let words = computed(move || standing.with(|standing| standing.stale.clone()));
+    dynamic(move || {
+        words.get().map(|words| {
+            untracked(|| {
+                let shown = notice(app, Hue::Held, &vec![span(words)], None);
+                match app.form {
+                    Form::Terminal => shown,
+                    Form::Phone => view().px(px(16.0)).pt(px(10.0)).child(shown).into_element(),
+                    Form::Desktop => view().px(px(18.0)).py(px(8.0)).child(shown).into_element(),
+                }
+            })
+        })
+    })
+}
+
+/// A failed subscription in the rows' place, with corrald's message and code: the list's
+/// quiet notice would read like an empty list.
+fn failed(app: AppState, standing: Memo<sessions::Standing>) -> AnyElement {
+    let words = computed(move || {
+        standing.with(|standing| match &standing.fill {
+            Some(fill @ sessions::Fill::Failed(_)) => Some(fill.words()),
+            Some(sessions::Fill::Loading | sessions::Fill::Empty) | None => None,
+        })
+    });
+    dynamic(move || {
+        words.get().map(|words| {
+            untracked(|| {
+                let shown = error(app, &vec![span(words)], None);
+                match app.form {
+                    Form::Terminal => shown,
+                    Form::Desktop | Form::Phone => {
+                        view().px(px(18.0)).py(px(16.0)).child(shown).into_element()
+                    }
+                }
+            })
+        })
+    })
 }
 
 /// One session's facts as the model reads them now (tracked).
