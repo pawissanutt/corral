@@ -28,6 +28,7 @@ class ReloadTest(unittest.TestCase):
                         ("/app.js", "text/html", 200, b"script"),
                         ("/missing.js", "text/html", 404, None),
                         ("/sessions", "*/*", 404, None),
+                        ("/sessions", "text/html;q=0, */*", 404, None),
                     ]:
                         with self.subTest(path=path, accept=accept):
                             conn = HTTPConnection(*server.server_address, timeout=5)

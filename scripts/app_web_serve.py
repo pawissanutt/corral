@@ -7,16 +7,30 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from os.path import exists
 
 
+def accepts_html(header):
+    for item in header.split(","):
+        media_type, *params = item.split(";")
+        if media_type.strip().lower() != "text/html":
+            continue
+        for param in params:
+            name, _, value = param.partition("=")
+            if name.strip().lower() == "q":
+                try:
+                    if not 0 < float(value) <= 1:
+                        break
+                except ValueError:
+                    break
+        else:
+            return True
+    return False
+
+
 class AppHandler(SimpleHTTPRequestHandler):
     def send_head(self):
         # Use the URL, not the decoded file path: the app escapes dots in record IDs.
         path = self.path.partition("?")[0].rstrip("/")
-        accepts_html = any(
-            item.partition(";")[0].strip().lower() == "text/html"
-            for item in self.headers.get("Accept", "").split(",")
-        )
         if (
-            accepts_html
+            accepts_html(self.headers.get("Accept", ""))
             and "." not in path.rsplit("/", 1)[-1]
             and not exists(self.translate_path(self.path))
         ):
