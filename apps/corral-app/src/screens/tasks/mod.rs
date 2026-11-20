@@ -4,7 +4,8 @@
 //! holds every other operation. A plan's caret unfolds its children under it; Done and Dropped
 //! fold at the bottom, read a page at a time with Load older under them. The head carries the
 //! filter field (id, title or project words), the open count with the running slots, the
-//! inspector's switch and New task.
+//! inspector's switch and New task; under it the board's health (`ui::kit::board_status`), and
+//! the page fades while the board is last known.
 
 mod inspector;
 
@@ -22,6 +23,7 @@ use crate::model::{Form, Hue, Id, Live};
 use crate::screens::task::keep::keep_details;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::board_status::{board_status, dim_stale};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::hint::hinted;
@@ -72,22 +74,23 @@ fn list(app: AppState) -> AnyElement {
     });
     keep_closed(app);
     let notice = computed(move || {
-        if !sections.with(Vec::is_empty) {
-            None
-        } else if !app.feed.with(|feed| feed.board.complete) {
-            Some(tasks::LOADING.to_owned())
-        } else if app.tasks.with(|state| state.filter.trim().is_empty()) {
-            Some(tasks::EMPTY.to_owned())
-        } else {
-            Some(tasks::NO_MATCH.to_owned())
-        }
+        let empty = sections.with(Vec::is_empty);
+        let filtered = app.tasks.with(|state| !state.filter.trim().is_empty());
+        app.feed
+            .with(|feed| tasks::notice(feed, empty, filtered))
+            .map(str::to_owned)
     });
     let columns = untracked(|| tasks::columns(&app.project_scope()));
-    list_page_with(
+    let head = view()
+        .flex_none()
+        .child(page_head(app))
+        .child(board_status(app))
+        .into_element();
+    let page = list_page_with(
         app,
         ListPage {
             key: "tasks",
-            head: page_head(app),
+            head,
             columns: columns.clone(),
             sections,
             selected,
@@ -102,7 +105,13 @@ fn list(app: AppState) -> AnyElement {
             notice,
         },
         Some(closed_foot(app)),
+    );
+    dim_stale(
+        app,
+        view().size_full().flex_grow(1.0).flex_col().min_h(px(0.0)),
     )
+    .child(page)
+    .into_element()
 }
 
 /// The head: the title with the open count and the slots, the filter field, the inspector's

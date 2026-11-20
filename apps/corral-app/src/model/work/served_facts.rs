@@ -47,9 +47,11 @@ pub fn daemon_status(feed: &daemon::Feed) -> Status {
                         ""
                     }),
                 ],
+                // A topic that failed before its first board leaves the link Connecting, yet
+                // corrald answered, so the subscription can be opened again.
                 actions: vec![
                     Button::new("Retry board", Press::RetryBoard, ButtonKind::Ghost)
-                        .enabled(feed.link == Link::Up && !pending),
+                        .enabled(feed.link != Link::Down && !pending),
                 ],
             }),
     }

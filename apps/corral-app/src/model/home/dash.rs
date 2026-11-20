@@ -12,6 +12,7 @@ use crate::model::daemon::Feed;
 use crate::model::nav::Destination;
 use crate::model::projects::Scope;
 use crate::model::status::{OPEN, SessionState, status_word};
+use crate::model::tasks::{self, Board};
 use crate::model::usage::{self, Period};
 
 /// Stands in for a figure corrald does not report.
@@ -39,8 +40,21 @@ pub struct Tile {
 }
 
 /// The six tiles: needs you, working with the slots, ready, sessions by state, landed since
-/// the last visit, cost today.
+/// the last visit, cost today. Needs you, Working and Ready count tasks, so they are unknown
+/// until the board is complete.
 pub fn tiles(feed: &Feed, scope: &Scope, since: &Since, cost: &Cost) -> Vec<Tile> {
+    let unknown = match tasks::board(feed) {
+        Board::Complete => None,
+        Board::Loading => Some("tasks loading"),
+        Board::Unavailable => Some("tasks unavailable"),
+    };
+    let count = |count: usize| {
+        if unknown.is_some() {
+            UNKNOWN.to_owned()
+        } else {
+            count.to_string()
+        }
+    };
     let need = needs_you(feed, scope);
     let need_tasks = need
         .iter()
@@ -89,12 +103,16 @@ pub fn tiles(feed: &Feed, scope: &Scope, since: &Since, cost: &Cost) -> Vec<Tile
     };
     vec![
         Tile {
-            you: !need.is_empty(),
+            you: unknown.is_none() && !need.is_empty(),
             ..tile(
                 "needs",
                 "Needs you".into(),
-                need.len().to_string(),
-                format!("{need_tasks} tasks · {} sessions", need.len() - need_tasks),
+                count(need.len()),
+                format!(
+                    "{} · {} sessions",
+                    unknown.map_or_else(|| format!("{need_tasks} tasks"), str::to_owned),
+                    need.len() - need_tasks
+                ),
                 "Blocked tasks, reviews ready to land and sessions waiting on an answer".into(),
             )
         },
@@ -104,7 +122,7 @@ pub fn tiles(feed: &Feed, scope: &Scope, since: &Since, cost: &Cost) -> Vec<Tile
             ..tile(
                 "working",
                 "Working".into(),
-                working(feed, scope).len().to_string(),
+                count(working(feed, scope).len()),
                 slots.map_or_else(
                     || "slots unknown".to_owned(),
                     |(used, limit)| format!("slots {used}/{limit}"),
@@ -119,8 +137,8 @@ pub fn tiles(feed: &Feed, scope: &Scope, since: &Since, cost: &Cost) -> Vec<Tile
             ..tile(
                 "ready",
                 "Ready".into(),
-                ready.len().to_string(),
-                ready_sub.join(" · "),
+                count(ready.len()),
+                unknown.map_or_else(|| ready_sub.join(" · "), str::to_owned),
                 "Ready tasks wait for a dispatch and a free slot".into(),
             )
         },
@@ -201,8 +219,12 @@ pub struct StatusBar {
     pub fraction: f32,
 }
 
-/// The open tasks in scope by status, in the engine's order, and how many are open.
-pub fn by_status(feed: &Feed, scope: &Scope) -> (usize, Vec<StatusBar>) {
+/// The open tasks in scope by status, in the engine's order, and how many are open; until the
+/// board is complete, what the panel says instead.
+pub fn by_status(feed: &Feed, scope: &Scope) -> Result<(usize, Vec<StatusBar>), &'static str> {
+    if let Some(unknown) = super::unknown(feed) {
+        return Err(unknown);
+    }
     let count = |status| {
         feed.board
             .tasks()
@@ -213,7 +235,7 @@ pub fn by_status(feed: &Feed, scope: &Scope) -> (usize, Vec<StatusBar>) {
     let counts: Vec<(Status, usize)> = OPEN.iter().map(|&status| (status, count(status))).collect();
     let most = counts.iter().map(|(_, n)| *n).max().unwrap_or(0).max(1);
     let open = counts.iter().map(|(_, n)| n).sum();
-    (
+    Ok((
         open,
         counts
             .into_iter()
@@ -224,7 +246,7 @@ pub fn by_status(feed: &Feed, scope: &Scope) -> (usize, Vec<StatusBar>) {
                 fraction: count as f32 / most as f32,
             })
             .collect(),
-    )
+    ))
 }
 
 /// One project in the Projects panel: pressing it scopes every page to it.

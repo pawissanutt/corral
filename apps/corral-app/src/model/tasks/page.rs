@@ -38,10 +38,11 @@ pub const NO_ARTIFACTS: &str = "None recorded.";
 pub const NO_SUMMARY: &str = "No summary yet: the worker writes one when it runs `corral done`.";
 
 /// The controls' words: the artifact finder narrowed to the task, the inspector's way to the
-/// page, the Comment box's send.
+/// page, the Comment box's send, and Ask opened with the task as its context.
 pub const FIND: &str = "Find in Artifacts";
 pub const OPEN_PAGE: &str = "Open page";
 pub const SEND: &str = "Comment";
+pub const ASK: &str = "Ask about this";
 
 /// `2 files`: the Changes block's count.
 pub fn file_count(files: usize) -> String {

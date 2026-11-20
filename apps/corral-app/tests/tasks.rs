@@ -97,6 +97,18 @@ fn the_done_and_dropped_fold_lists_the_served_closed_tasks() {
     app.wait_for("text:Device authority editor").unwrap();
 }
 
+/// The redesign dropped Ask about this from every task surface: the task page offers it again,
+/// and Ask opens with the task attached as its context.
+#[test]
+fn ask_about_this_opens_ask_with_the_task_attached() {
+    let mut app = preview("tasks");
+    select(&mut app, "T-12 Timeline zoom presets");
+    app.wait_for("id:task-page").unwrap();
+    app.press("id:btn-ask-about").unwrap();
+    app.wait_for("id:ask-transcript").unwrap();
+    app.wait_for("id:btn-unchip").unwrap();
+}
+
 /// A comment sent from History is an engine operation on the task, and the task's events,
 /// read again as the task changes, list it.
 #[test]
