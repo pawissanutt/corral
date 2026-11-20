@@ -273,7 +273,7 @@ def main():
     ensure_pyte()
     walk = Walk(args)
     try:
-        # Started: the top bar names the app. The sidebar's "Now" is not a sign at every size:
+        # Started: the top bar names the app. The sidebar's "Home" is not a sign at every size:
         # a narrow grid folds the sidebar to its keys.
         walk.until("Corral", True, args.start)
         walk.pump(quiet=1.0, limit=10)

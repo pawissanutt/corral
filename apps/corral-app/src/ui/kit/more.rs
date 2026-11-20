@@ -104,8 +104,8 @@ fn backdrop(s: StyleRefinement) -> StyleRefinement {
 
 /// Every engine operation of the record, in the table's order; each runs when chosen, or
 /// opens the composer when it asks for input. Nothing is predicted or disabled: the engine
-/// decides, and a refusal opens its sheet. A Session menu's Task entry is a submenu holding the
-/// task's Actions menu; its Focus pane says why where it cannot work.
+/// decides, and a refusal opens its sheet. A session's More menu holds its controls; a task's
+/// holds the fifteen operations with its next step marked.
 fn items(app: AppState, record: &Record) -> AnyElement {
     let (verbs, next) = app.feed.with_untracked(|feed| {
         (

@@ -1,12 +1,10 @@
-//! Pure Review model: the tasks in Review, their stored candidate (the run's summary, its diff
-//! and the gate and review checks) and the engine operations that decide them.
+//! Pure model of a task's candidate on its page: the stored candidate (the run's summary, its
+//! diff and the gate and review checks) and the engine operations that decide it.
 //!
-//! The candidate list is the board's Review tasks; the selected one's `Review` and `Task`
-//! details, its expanded file patches and its artifacts are read from the client's cache.
+//! The task's `Review` and `Task` details, its expanded file patches and its artifacts are read from the client's cache.
 //! Every decision is one engine operation (`Effect::Act`): the engine decides whether it runs,
 //! and the app never predicts a refusal. Request changes needs words, so it opens the shared
 //! verb composer through the work state (`Action::Verb`, routed by the screen).
-//! Project filters scope the candidate list, not an explicitly pushed candidate page or its actions.
 //! `loop_page_filtered` is a candidate's page: the Brief-first candidate with
 //! its evidence tabs and decide bar.
 
@@ -49,7 +47,7 @@ use crate::model::effect::Effect;
 use crate::model::id::Id;
 use crate::model::work::Verb;
 
-/// The decide bar's Approve (`btn-approve`), which `A` focuses.
+/// The decide bar's Approve (`btn-approve`).
 pub const APPROVE: &str = "btn-approve";
 
 /// The desktop preference; phone, terminal and narrow desktop output remain unified.

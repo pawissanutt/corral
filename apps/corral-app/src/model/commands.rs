@@ -416,7 +416,7 @@ fn live_verbs(rows: &mut Vec<Command>, record: Option<&crate::model::work::Recor
     let workspace = Record::Workspace;
     let record = record.unwrap_or(&workspace);
     let verbs = record_verbs(record, feed).into_iter();
-    // Focus pane where it cannot work stays out: the palette has no room to say why.
+    // A verb the record cannot take stays out: the palette has no room to say why.
     rows.extend(verbs.filter(|verb| verb.enabled).map(|verb| {
         let label = match (record, &verb.press) {
             (_, Press::Menu(_)) | (Record::Workspace, _) => verb.label,

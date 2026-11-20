@@ -216,7 +216,7 @@ impl TaskTab {
             Self::History => "History",
         }
     }
-    /// The identifier slug (`tab-task-<slug>`) and the address segment.
+    /// The tab's address segment (`/task/<id>/<slug>`); its test id is `tab-task-<n>`.
     pub const fn slug(self) -> &'static str {
         match self {
             Self::Overview => "overview",

@@ -1,4 +1,4 @@
-//! Starting a session from Agents: the New menu (a new assistant session, or the New build
+//! Starting a session from Sessions: the New menu (a new assistant session, or the New build
 //! sheet) and the sheet itself: the project, a name the host may choose, a new worktree or the
 //! project's checkout, the model and the effort. The choices offered are what `corral.toml`
 //! names (the configured build route, `[build.profiles]` and the models profiles name), plus a

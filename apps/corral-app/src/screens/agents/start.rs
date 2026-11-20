@@ -1,4 +1,4 @@
-//! Where sessions start on Agents: the New menu (a new assistant session, which opens on its
+//! Where sessions start from Sessions: the New menu (a new assistant session, which opens on its
 //! page once corrald made it; the New build sheet) and the New build sheet itself
 //! (`agents::NewBuildForm`): the project, a name the host may choose, a new worktree or the
 //! checkout, the model and the effort, then Start build, which reads `Starting…` while it waits.

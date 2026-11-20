@@ -1,10 +1,10 @@
 //! The one session page every session opens in, of every role: the header with the way back,
-//! the state word and the ⋯ actions, the tab strip with the tabs the model offers, the main view
-//! (the transcript, the Usage view, the Agents, Changes, Board, Task or Proof tab, or the
-//! read-only log of a session without a Pi host) with the sidebar's rail beside it when the page
+//! the state word, Details, More and the ⋯ host actions, the main view (the transcript, or a
+//! Details section opened in its place: Usage, Agents, Changes, Board, Task or Proof, or the
+//! read-only log of a session without a Pi host) with the Details panel beside it when the page
 //! is wide, the dock, the composer (or what takes its place: a decision card, the one
 //! confirmation of a destructive option, an answer card, or the bar standing in for it while the
-//! session takes no message) with the `/` command menu over it, and the status bar. Every fact
+//! session takes no message) with the `/` command menu over it, and the status line. Every fact
 //! is the model's (`model::session::page`); every press runs the session reducer. Desktop and
 //! terminal stack the parts top to bottom across the page; the phone pushes the page with the
 //! transcript scrolling and the dock, the composer and the status fixed at the bottom. While
