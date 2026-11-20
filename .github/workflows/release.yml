@@ -21,128 +21,398 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install gate prerequisites
+      - name: Read workspace version and verify the release tag
+        id: version
         run: |
-          exec </dev/null
-          sudo apt-get update
-          sudo apt-get install -y apparmor bubblewrap strace shellcheck
-          sudo apparmor_parser --replace scripts/ci-bwrap.apparmor
-          bwrap --ro-bind / / --dev /dev --proc /proc -- /bin/true
-          curl -fsSLo "$RUNNER_TEMP/herdr-install.sh" https://herdr.dev/install.sh
-          sh "$RUNNER_TEMP/herdr-install.sh"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Installer regressions and diagnostics
-        run: |
-          exec </dev/null
-          shellcheck install.sh scripts/install-test.sh
-          sh scripts/install-test.sh
-          python scripts/test_gate.py
-      - name: Deterministic watch skew regression
-        run: cargo test --locked -p corral --features test-skew-barrier --test version_skew_cli watch_persists_skew_detected_by_read_only_snapshot </dev/null
-      - name: Full gate in isolated plugin-free herdr
-        env:
-          CORRAL_SIZE_LIMITS: '{"rs":800}'
-        run: |
-          exec </dev/null
-          set -o pipefail
-          source scripts/test-herdr.sh
-          corral_test_herdr_start
-          scripts/gate.sh 2>&1 | tee "$RUNNER_TEMP/gate.log"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: gate-log
-          path: ${{ runner.temp }}/gate.log
-          if-no-files-found: warn
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
 
-  build:
+          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          if os.environ['GITHUB_REF'].startswith('refs/tags/'):
+              assert os.environ['GITHUB_REF_NAME'] == f'v{version}', 'release tag must match Cargo.toml'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              print(f'version={version}', file=out)
+          PY
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+      - name: Current workspace tests
+        run: cargo test --locked --workspace </dev/null
+      - name: Legacy installer regressions
+        run: |
+          shellcheck install.sh scripts/install-test.sh
+          CORRAL_INSTALL_LEGACY=1 sh scripts/install-test.sh </dev/null
+
+  native:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04 }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
           - { target: x86_64-apple-darwin, os: macos-15-intel }
           - { target: aarch64-apple-darwin, os: macos-15 }
-          - { target: x86_64-pc-windows-msvc, os: windows-2022 }
     runs-on: ${{ matrix.os }}
     env:
+      TARGET: ${{ matrix.target }}
       MACOSX_DEPLOYMENT_TARGET: "14.0"
+      OPENSSL_STATIC: "1"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
         with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
           targets: ${{ matrix.target }}
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Verify release tag matches the manifest
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Configure static OpenSSL for the daemon
         run: |
-          python -c 'import os,tomllib; v=tomllib.load(open("Cargo.toml","rb"))["workspace"]["package"]["version"]; assert os.environ["GITHUB_REF_NAME"] == "v"+v, "release tag must match Cargo.toml"'
-      - if: runner.os == 'Linux'
-        run: sudo apt-get update </dev/null && sudo apt-get install -y musl-tools </dev/null
-      - name: Native platform tests
+          if [ "$RUNNER_OS" = macOS ]; then
+            echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          else
+            sudo apt-get update </dev/null
+            sudo apt-get install -y libssl-dev pkg-config </dev/null
+            # Explicit paths bypass openssl-sys's pkg-config autodetection, which
+            # can otherwise select shared libraries even with OPENSSL_STATIC=1.
+            echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> "$GITHUB_ENV"
+            echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> "$GITHUB_ENV"
+          fi
+      - name: Build the CLI and daemon for the runner's own target
         run: |
-          exec </dev/null
-          cargo test --locked -p corral-core -p corral-git
-          cargo test --locked -p corral-herdr --lib
-          cargo test --locked -p corral-ops --lib native
-          cargo test --locked -p corral --test native_runtime
-      - name: Darwin runtime without default features
-        if: runner.os == 'macOS'
-        run: cargo check --locked -p corral-ops --no-default-features --target ${{ matrix.target }} </dev/null
-      - name: Build release binary
-        env:
-          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
-          CORRAL_BUILD_SHA: ${{ github.sha }}
-        run: cargo build --release --locked -p corral --target ${{ matrix.target }} </dev/null
-      # corral-pi runs on Unix only. The host is compiled natively on each runner, so its
-      # platform add-ons match; the Bun version must equal the GO manifest's pin.
-      - if: runner.os != 'Windows'
-        uses: oven-sh/setup-bun@v2
+          test "$(rustc -vV | sed -n 's/^host: //p')" = "$TARGET"
+          cargo build --release --locked --target "$TARGET" -p corral-next -p corral-daemon </dev/null
+      - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.2"
-      - name: Build the compiled corral-pi host
-        if: runner.os != 'Windows'
-        run: sh scripts/build-pi-host.sh "target/${{ matrix.target }}/release/corral-pi-host" </dev/null
-      - name: Package archive and checksum
-        run: python scripts/package-release.py ${{ matrix.target }} </dev/null
-      - name: Native clean install and failure-path proof without Rust
-        run: python scripts/release-install-test.py dist ${{ matrix.target }} </dev/null
+          bun-version-file: packages/corral-pi/package.json
+      - name: Compile the Pi host and embed its Code Mode worker
+        working-directory: packages/corral-pi
+        run: |
+          test "$(bun --version)" = "$(bun -p 'require("./package.json").engines.bun')"
+          bun install --frozen-lockfile </dev/null
+          bun build --compile --root . --no-compile-autoload-dotenv --no-compile-autoload-bunfig \
+            src/cli.ts src/extensions/codemode/kernel-worker.ts \
+            --outfile "$GITHUB_WORKSPACE/target/$TARGET/release/corral-pi" </dev/null
+      - name: Package the native executables and SHA-256 sidecar
+        run: |
+          mkdir dist
+          archive="corral-next-$TARGET.tar.gz"
+          tar -czf "dist/$archive" LICENSE README.md \
+            -C "target/$TARGET/release" corral-next corrald-next corral-pi
+          (cd dist && shasum -a 256 "$archive" > "$archive.sha256")
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: ${{ matrix.target }}
+          name: release-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+          targets: wasm32-unknown-unknown
+      - name: Install the pinned NSH packager and wasm C tools
+        run: |
+          sudo apt-get update </dev/null
+          sudo apt-get install -y clang-18 llvm-18 </dev/null
+          (
+            cd "$RUNNER_TEMP"
+            asset=nsh-linux-x86_64.tar.gz
+            curl -fsSLO "https://github.com/longbridge/nsh/releases/download/v0.6.1/$asset"
+            echo "9a7ac692f1c229df476be8ff83a3c5912d271453b644e313f02cb19d18696070  $asset" | sha256sum -c -
+            tar -xzf "$asset"
+          )
+          "$RUNNER_TEMP/nsh/bin/nsh" --version
+      - name: Build and package the portable web app
+        run: |
+          # The checked-in app config contains force=true absolute tool paths for
+          # the developer host. Supply the equivalent tools in a disposable checkout.
+          src="$RUNNER_TEMP/app-src"
+          mkdir "$src"
+          git archive HEAD | tar -x -C "$src"
+          cat > "$src/apps/corral-app/.cargo/config.toml" <<'EOF'
+          [build]
+          rustc-wrapper = ""
+          [env]
+          CC_wasm32_unknown_unknown = { value = "clang-18", force = true }
+          AR_wasm32_unknown_unknown = { value = "llvm-ar-18", force = true }
+          EOF
+          (
+            cd "$src/apps/corral-app"
+            "$RUNNER_TEMP/nsh/bin/nsh" package --target web --out "$RUNNER_TEMP/site" </dev/null
+          )
+          test -f "$RUNNER_TEMP/site/Corral/index.html"
+          mkdir dist
+          tar -czf dist/corral-app-web.tar.gz -C "$RUNNER_TEMP/site/Corral" .
+          (cd dist && sha256sum corral-app-web.tar.gz > corral-app-web.tar.gz.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-web
+          path: dist/*
+          if-no-files-found: error
+
+  smoke:
+    needs: [validate, native, web]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+          - { target: aarch64-apple-darwin, os: macos-15 }
+          # The daemon is Unix-only; Windows can install and serve the web app.
+          - { target: web-only, os: windows-2022 }
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        if: matrix.target != 'web-only'
+        with:
+          name: release-${{ matrix.target }}
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-web
+          path: dist
+      - name: Install, exercise and upgrade the packaged release without build tools
+        run: |
+          python - <<'PY'
+          import functools
+          import hashlib
+          import http.server
+          import json
+          import os
+          import shutil
+          import subprocess
+          import tarfile
+          import tempfile
+          import threading
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          repo = Path.cwd()
+          target, version = os.environ['TARGET'], os.environ['VERSION']
+          windows = target == 'web-only'
+          assert windows == (os.name == 'nt')
+          names = () if windows else ('corral-next', 'corrald-next', 'corral-pi')
+          web = 'corral-app-web.tar.gz'
+          native = f'corral-next-{target}.tar.gz'
+
+          def digest(path):
+              with path.open('rb') as source:
+                  return hashlib.file_digest(source, 'sha256').hexdigest()
+
+          def fixture(asset, directory):
+              path = repo / 'dist' / asset
+              sidecar = path.with_name(asset + '.sha256')
+              assert sidecar.read_text().split() == [digest(path), asset], asset
+              for source in (path, sidecar):
+                  shutil.copyfile(source, directory / source.name)
+
+          # A short workspace path also leaves room for the Unix socket name on Darwin.
+          with tempfile.TemporaryDirectory(prefix='corral-ci-', dir=None if windows else '/tmp') as tmp:
+              root = Path(tmp).resolve()
+              home = root / 'home'
+              home.mkdir()
+              pinned = root / 'releases' / 'download' / f'v{version}'
+              pinned.mkdir(parents=True)
+              fixture(web, pinned)
+              if not windows:
+                  latest = root / 'releases' / 'latest' / 'download'
+                  latest.mkdir(parents=True)
+                  fixture(native, latest)
+                  fixture(native, pinned)
+              with tarfile.open(pinned / web) as bundle:
+                  assert all(entry.isfile() or entry.isdir() for entry in bundle.getmembers())
+                  site_files = {
+                      entry.name.removeprefix('./'): hashlib.sha256(bundle.extractfile(entry).read()).hexdigest()
+                      for entry in bundle.getmembers() if entry.isfile()
+                  }
+              assert 'index.html' in site_files and any(name.endswith('.wasm') for name in site_files)
+              runtime_files = {}
+              if names:
+                  with tarfile.open(pinned / native) as bundle:
+                      for name in names:
+                          member = bundle.getmember(name)
+                          assert member.isfile() and member.mode & 0o111, name
+                          runtime_files[name] = hashlib.sha256(bundle.extractfile(member).read()).hexdigest()
+
+              env = {key: value for key, value in os.environ.items()
+                     if not key.startswith(('CORRAL_', 'HERDR_', 'RUSTUP_', 'CARGO_', 'BUN_', 'XDG_'))}
+              env.update(HOME=str(home), USERPROFILE=str(home), LOCALAPPDATA=str(home / 'local'),
+                         XDG_DATA_HOME=str(home / 'data'), HTTP_PROXY='', HTTPS_PROXY='',
+                         ALL_PROXY='', NO_PROXY='127.0.0.1')
+              bin_dir = home / '.local' / 'bin'
+              if windows:
+                  system = Path(os.environ['SystemRoot']) / 'System32'
+                  shell = system / 'WindowsPowerShell' / 'v1.0' / 'powershell.exe'
+                  env.update(PATH=str(system), CORRAL_VERSION=f'v{version}')
+                  install = [str(shell), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                             '-File', str(repo / 'install.ps1'), '-AppOnly']
+                  site = home / 'local' / 'Programs' / 'corral' / 'web'
+              else:
+                  env['PATH'] = f'{bin_dir}:/usr/bin:/bin'
+                  install = ['/bin/sh', str(repo / 'install.sh')]
+                  site = home / 'data' / 'corral-next' / 'web'
+              for tool in ('cargo', 'rustc', 'bun', 'nsh'):
+                  assert shutil.which(tool, path=env['PATH']) is None, tool
+
+              def run(argv, expected=True, timeout=60):
+                  result = subprocess.run(argv, env=env, cwd=root, stdin=subprocess.DEVNULL,
+                                          capture_output=True, text=True, timeout=timeout)
+                  if (result.returncode == 0) != expected:
+                      raise AssertionError((argv, result.returncode, result.stdout, result.stderr))
+                  return result
+
+              def install_case(label, success=True):
+                  result = run(install, expected=success, timeout=120)
+                  print(f'{label}: exit {result.returncode}\n{result.stdout}{result.stderr}', flush=True)
+
+              def verify_payload():
+                  assert {p.relative_to(site).as_posix(): digest(p) for p in site.rglob('*') if p.is_file()} == site_files
+                  assert {name: digest(bin_dir / name) for name in names} == runtime_files
+
+              handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(root))
+              with http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler) as server:
+                  thread = threading.Thread(target=server.serve_forever, daemon=True)
+                  thread.start()
+                  url = f'http://127.0.0.1:{server.server_port}'
+                  env['CORRAL_BASE_URL'] = f'{url}/releases'
+                  try:
+                      # For a latest native download, only /download/vVERSION has the web asset.
+                      install_case('clean install')
+                      verify_payload()
+                      old = site / 'old-site-marker'
+                      old.touch()
+                      for name in names:
+                          # Distinct prior executables prove replacement, not only re-use.
+                          (bin_dir / name).write_text('#!/bin/sh\necho previous-install\n', encoding='ascii')
+                      env['CORRAL_VERSION'] = f'v{version}'
+                      install_case('pinned upgrade')
+                      verify_payload()
+                      assert not old.exists()
+                      sidecar = pinned / (web + '.sha256')
+                      sidecar.write_text(f'{"0" * 64}  {web}\n', encoding='ascii')
+                      install_case('reject a bad web checksum without changing the installation', success=False)
+                      verify_payload()
+                  finally:
+                      server.shutdown()
+                      thread.join(timeout=5)
+
+              # Serve the installed site, not files from the builder's source tree.
+              handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(site))
+              with http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler) as server:
+                  thread = threading.Thread(target=server.serve_forever, daemon=True)
+                  thread.start()
+                  try:
+                      url = f'http://127.0.0.1:{server.server_port}'
+                      for path in ('index.html', *(name for name in site_files if name.endswith('.wasm'))):
+                          with urllib.request.urlopen(f'{url}/{path}', timeout=10) as response:
+                              body = response.read()
+                              assert hashlib.sha256(body).hexdigest() == site_files[path], path
+                              if path.endswith('.wasm'):
+                                  assert body.startswith(b'\x00asm') and response.headers.get_content_type() == 'application/wasm'
+                      print('served installed HTML and WebAssembly over loopback', flush=True)
+                  finally:
+                      server.shutdown()
+                      thread.join(timeout=5)
+
+              if names:
+                  cli, daemon, pi = (str(bin_dir / name) for name in names)
+                  assert run([cli, '--version']).stdout.strip() == f'corral-next {version}'
+                  assert run([daemon, '--version']).stdout.strip() == f'corral-daemon {version}'
+                  package = json.loads((repo / 'packages/corral-pi/package.json').read_text())
+                  assert run([pi, '--version']).stdout.strip() == (
+                      f"corral-pi pi {package['dependencies']['@earendil-works/pi-coding-agent']} bun {package['engines']['bun']}"
+                  )
+                  print(run([pi, '--check-code-kernel'], timeout=30).stdout, flush=True)
+                  workspace = root / 'ws'
+                  workspace.mkdir()
+                  run([cli, '--root', str(workspace), 'init'])
+                  config = workspace / '.corral-next' / 'corral.toml'
+                  with config.open('a') as out:
+                      out.write('\n[runner]\nmode = "process"\n')
+                  command = [daemon, '--root', str(workspace)]
+                  assert run([*command, 'status']).stdout.strip() == 'daemon down'
+                  with (root / 'daemon.log').open('w+') as log:
+                      with subprocess.Popen([*command, 'run'], env=env, cwd=root,
+                                            stdin=subprocess.DEVNULL, stdout=log, stderr=log) as child:
+                          try:
+                              for _ in range(80):
+                                  assert child.poll() is None, 'daemon exited before readiness'
+                                  status = run([*command, 'status'], timeout=5).stdout.strip()
+                                  if status.startswith(('daemon healthy', 'daemon degraded')):
+                                      print(status, flush=True)
+                                      break
+                                  time.sleep(0.1)
+                              else:
+                                  raise AssertionError('daemon did not answer a health request')
+                              run([*command, 'stop'])
+                              assert child.wait(timeout=15) == 0
+                          finally:
+                              if child.poll() is None:
+                                  child.kill()
+                              child.wait(timeout=5)
+                              log.seek(0)
+                              print(log.read(), flush=True)
+              print(f'{target}: packaged release smoke passed', flush=True)
+          PY
+
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [validate, build]
+    needs: [validate, native, web, smoke]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: "*-*-*"
+          pattern: release-*
           path: dist
           merge-multiple: true
-      - name: Verify checksums and publish
-        run: |
-          exec </dev/null
-          (cd dist && sha256sum -c ./*.sha256)
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --verify-tag --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" --generate-notes
+      - name: Verify the complete release asset set and publish
         env:
           GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          assets=(
+            corral-next-x86_64-unknown-linux-gnu.tar.gz
+            corral-next-aarch64-unknown-linux-gnu.tar.gz
+            corral-next-x86_64-apple-darwin.tar.gz
+            corral-next-aarch64-apple-darwin.tar.gz
+            corral-app-web.tar.gz
+          )
+          files=()
+          for archive in "${assets[@]}"; do
+            # Require the sidecar to name and hash exactly this asset.
+            sha256sum "$archive" | diff - "$archive.sha256"
+            files+=("$archive" "$archive.sha256")
+          done
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+            --verify-tag --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --generate-notes

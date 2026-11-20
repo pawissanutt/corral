@@ -38,7 +38,79 @@ Disconnected screens offer **Connect** and **Preview with sample data**; see [Sa
 
 The app lives in the corral repository as `apps/corral-app/`. It is its own Cargo workspace with its own toolchain, not a member of corral's workspace. The [design handoff](../../docs/app-design/README.md) contains the requirements, architecture proposal and runnable mockup, with their authority and implementation-status caveats.
 
-## Quick start
+## Platform and release support
+
+The app and the new engine are separate from the classic `corral` release. The matrix
+below describes the intended release artifacts, not a claim that every source target or
+native desktop host has been tested. A release must contain the assets before an install
+or upgrade can succeed; older releases do not necessarily contain them.
+
+| Component | OS and architecture | Distribution / limitations |
+|---|---|---|
+| `corral-next`, `corrald-next`, `corral-pi` | Linux glibc x86_64 and aarch64; macOS x86_64 and arm64 | `corral-next-<Rust target>.tar.gz`, with a `.sha256` sidecar. The daemon requires Unix sockets; native Windows is not supported. |
+| Web app | Browser with WebAssembly, WebSocket, IndexedDB and WebCrypto; independent of host CPU | `corral-app-web.tar.gz` and `.sha256`; static files, no Rust or NSH at runtime. Pairing and remote use have the secure-origin requirements below. |
+| Native desktop / terminal app | Source targets include Linux and macOS; desktop backend also names Windows | No native app release artifact is promised. Native live connection needs Unix peer credentials; Windows native connection is unavailable. Desktop builds and platform integrations require verification on the target host. |
+| Phone layout | Browser on a compatible phone | Responsive web UI, not a promised Android or iOS packaged release. |
+
+Linux release targets are `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`;
+macOS targets are `x86_64-apple-darwin` and `aarch64-apple-darwin`. There is no new-engine
+Windows or Linux musl artifact in this matrix. The classic CLI's separate Windows installer
+and musl archives do not install this app's daemon.
+
+## Install and upgrade
+
+On a supported Unix host, the repository installer downloads the new engine and static web
+app, verifies their SHA-256 sidecars, and installs the executables under `~/.local/bin` by
+default. It needs network access, `curl` or `wget`, `tar`, and `sha256sum` or `shasum`.
+For agent work, install Git and an authenticated agent provider; herdr 0.9.3 or newer is
+needed for the terminal engine. The installer may offer to install or upgrade herdr;
+`--yes` grants that consent. See the [installation guide](../../docs/guide/install.md)
+for the classic CLI and its prerequisites.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh -o install-corral.sh
+sh install-corral.sh                 # install, or rerun to upgrade to latest
+# Optional pin instead of latest:
+CORRAL_VERSION=vX.Y.Z sh install-corral.sh
+export PATH="$HOME/.local/bin:$PATH"
+corral-next --version
+corrald-next --version
+```
+
+Use an actual published tag for the pin. `CORRAL_INSTALL_DIR` overrides the binary
+directory; the static site goes to `$XDG_DATA_HOME/corral-next/web`, or
+`~/.local/share/corral-next/web` when `XDG_DATA_HOME` is unset, with
+`CORRAL_APP_INSTALL_DIR` as an override. `sh install-corral.sh --app-only` installs only
+the static site; `--dry-run` shows the plan. On native Windows, the PowerShell installer
+can install just the web site, not the new daemon:
+
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install-corral.ps1
+.\install-corral.ps1 -AppOnly -Version vX.Y.Z
+```
+
+On Windows the default site directory is `$env:LOCALAPPDATA\Programs\corral\web`;
+`-AppInstallDir` or `CORRAL_APP_INSTALL_DIR` overrides it. The Windows installer's
+legacy CLI mode is separate and needs an older published tag.
+
+Keep the binaries and app from the same release: this is a prototype and the frontend
+does not emulate missing daemon capabilities. The normal Unix installer resolves the app
+against the installed runtime's version. Rerun the installer to upgrade; it does not
+register or restart a daemon service, or serve the web app. Restart your daemon and replace
+the served web files after upgrading. Back up your workspace and configuration before
+upgrading; no automatic rollback or downgrade compatibility is promised.
+`sh install-corral.sh --legacy` selects the older classic CLI instead.
+
+In the intended workspace directory, initialize with `corral-next init`, then run
+`corrald-next --root <workspace> run` on the Unix host (use an absolute workspace path).
+The local socket is
+`<workspace>/.corral-next/daemon.sock`. For the web app, serve the installed static site
+at the host root with SPA fallback to `index.html`; configure the optional daemon listener
+and exact app origin, then pair as described in [Browser](#browser). A plain file server
+without fallback does not support deep-link reloads. Do not expose the daemon listener
+without the TLS and origin configuration described there.
+
+## Development quick start
 
 Install NSH with `curl -fsSL https://nsh.dev/install.sh | sh` (or `nsh update`). Check `nsh --version`: the app is tested with 0.6.1. Then run these commands in the project directory:
 
@@ -55,8 +127,9 @@ on the same port, even when its target differs.
 
 ## Live data
 
-Use the daemon built from this checkout, `corrald-next` (`crates/corral-daemon`); an older
-installed daemon does not support the app contracts. The frontend does not emulate missing capabilities.
+Use the matching release's `corrald-next`, or build it from this checkout
+(`crates/corral-daemon`); an older installed daemon does not necessarily support the app
+contracts. The frontend does not emulate missing capabilities.
 
 With `corrald-next --root <workspace> run` serving the workspace, start the terminal build with its socket:
 
