@@ -3,7 +3,7 @@
 //! bottom, or the top page's own bar in their place. iOS and Android show the system's tab bar;
 //! everywhere else it takes no room, so the shell draws its own.
 //!
-//! Each tab is one stack: its root (a destination's screen, or the More list), then the pages
+//! Each tab is one stack: its root (a place's screen, or Activity's list of pages), then the pages
 //! pushed over it. `nav` keeps the stack and the model's pages in step both ways. A phone held
 //! sideways has little height, so its chrome closes up: the health strip keeps to one row and
 //! the Ask button gives way to a page's own bar.

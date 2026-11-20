@@ -1,6 +1,6 @@
 //! The Proof tab of a task-bound session (`session::ProofTab`): where the read of the task's
 //! checks stands, the newest checks in words as chips, the ways out (Artifacts narrowed to the
-//! task, Open in Review), then the newest gate and review drawn with Review's own readiness
+//! task, Open task), then the newest gate and review drawn with the task page's readiness
 //! chain (each reviewer's notes quoted), the earlier rounds with theirs, and the task's
 //! artifacts. A check is the engine's result on one commit, never acceptance, and the tab says
 //! so. test ids `session-proof`, `proof-checks`, `proof-rounds`, `proof-artifacts`,

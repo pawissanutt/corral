@@ -128,7 +128,7 @@ pub struct LiveEvidence {
 /// Said when the task has no artifacts.
 pub const NO_ARTIFACTS: &str = "No artifacts recorded for this task.";
 
-/// The reply box's field (`field-reply`), which `R` puts the keyboard focus in.
+/// The reply box's field (`field-reply`).
 pub const REPLY_FIELD: &str = "field-reply";
 
 /// The task's reply box, when its Blocked card recommends a reply.

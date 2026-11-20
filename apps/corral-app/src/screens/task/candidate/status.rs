@@ -1,4 +1,4 @@
-//! The lines that say where an engine operation sent from the Review page stands.
+//! The lines that say where an engine operation sent from the task page's decide bar stands.
 
 use nsh_core::prelude::*;
 
