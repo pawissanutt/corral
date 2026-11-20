@@ -91,7 +91,8 @@ pub fn find<'a>(feed: &'a Feed, id: &str) -> Option<&'a corral_types::Task> {
 
 /// The fold: its rows while open, its count either way. The count is corrald's total while
 /// every closed task could be listed (all projects, no filter words), else the rows that match.
-/// None until something is known to count.
+/// None until something is known to count, unless corrald names an older page: a project or
+/// filter words that match nothing loaded yet may match there, and the fold holds Load older.
 pub fn section(
     feed: &Feed,
     scope: &Scope,
@@ -120,16 +121,25 @@ pub fn section(
         _ => rows.len(),
     };
     let shown = rows.len();
+    let older = closed
+        .targets()
+        .last()
+        .and_then(|target| page(feed, target))
+        .is_some_and(|page| page.older.is_some());
     let section = Section {
         key: KEY.to_owned(),
         label: LABEL.to_owned(),
         look: None,
         count,
-        note: (open && count > shown).then(|| format!("newest {shown} loaded")),
+        note: if open && shown == 0 && older {
+            Some("none of the loaded match".to_owned())
+        } else {
+            (open && count > shown).then(|| format!("newest {shown} loaded"))
+        },
         fold: Some(open),
         rows: if open { rows } else { Vec::new() },
     };
-    section.shown().then_some(section)
+    (section.shown() || older).then_some(section)
 }
 
 /// What stands under the open fold: why nothing is listed, Load older, or Retry.
@@ -242,5 +252,23 @@ mod tests {
         let words = ["t-7".to_owned()];
         let found = section(&feed, &Scope::All, &words, &closed, true);
         assert_eq!(found.map(|s| s.count), Some(1));
+    }
+
+    /// Filter words that matched nothing on the newest page hid the fold, and with it Load
+    /// older, so an older matching task could never be reached.
+    #[test]
+    fn the_fold_stays_while_an_older_page_may_hold_a_match() {
+        let mut feed = Feed::default();
+        feed.capabilities.insert(CLOSED_V1.into());
+        serve(&mut feed, None, &["T-9", "T-8"], Some("a1"));
+        serve(&mut feed, Some("a1"), &["T-7"], None);
+        let mut closed = Closed::default();
+        let words = ["t-7".to_owned()];
+        let first = section(&feed, &Scope::All, &words, &closed, true);
+        assert_eq!(first.map(|s| s.rows.len()), Some(0));
+        assert!(foot(&feed, &closed, true).is_some_and(|foot| foot.older));
+        closed.more(&feed);
+        let found = section(&feed, &Scope::All, &words, &closed, true);
+        assert_eq!(found.map(|s| s.rows.len()), Some(1));
     }
 }
