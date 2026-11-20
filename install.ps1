@@ -34,6 +34,20 @@ function Test-RegularFile($Path) {
         -not ((Get-Item -LiteralPath $Path -Force).Attributes -band [IO.FileAttributes]::ReparsePoint))
 }
 
+function Assert-WebAppSite($Path, $Marker, $MarkerContents) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "corral: web app destination must be a directory, not a link: $Path"
+    }
+    $markerPath = Join-Path $Path $Marker
+    $managed = ((Test-RegularFile $markerPath) -and
+        ((Get-Item -LiteralPath $markerPath -Force).Length -eq $MarkerContents.Length) -and
+        ([IO.File]::ReadAllText($markerPath) -ceq $MarkerContents))
+    if (-not $managed -and (Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop | Select-Object -First 1)) {
+        throw "corral: web app destination is nonempty and not managed by this installer; choose a dedicated directory: $Path"
+    }
+}
+
 function Install-CorralWebApp($Archive, $Destination, $Tag) {
     $tar = (Get-Command tar.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
     if (-not $tar) { throw 'corral: install the Windows tar.exe utility or unpack the verified web archive on a supported host.' }
@@ -60,6 +74,8 @@ function Install-CorralWebApp($Archive, $Destination, $Tag) {
     $site = Join-Path $transaction 'site'
     $old = Join-Path $transaction 'old'
     $lock = $null
+    $backedUp = $false
+    $promoted = $false
     try {
         [IO.Directory]::CreateDirectory($site) | Out-Null
         & $tar -xzf $Archive -C $site
@@ -77,26 +93,21 @@ function Install-CorralWebApp($Archive, $Destination, $Tag) {
         } catch {
             throw "corral: cannot acquire install lock: $lockPath (another install may be running; remove a stale lock only after checking the destination): $($_.Exception.Message)"
         }
-        $current = Get-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
-        if ($current) {
-            if (-not $current.PSIsContainer -or ($current.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-                throw "corral: web app destination must be a directory, not a link: $Destination"
-            }
-            $currentMarker = Join-Path $Destination $marker
-            $managed = ((Test-RegularFile $currentMarker) -and
-                ((Get-Item -LiteralPath $currentMarker -Force).Length -eq $markerContents.Length) -and
-                ([IO.File]::ReadAllText($currentMarker) -ceq $markerContents))
-            if (-not $managed -and (Get-ChildItem -LiteralPath $Destination -Force | Select-Object -First 1)) {
-                throw "corral: web app destination is nonempty and not managed by this installer; choose a dedicated directory: $Destination"
-            }
+        if (Get-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue) {
+            Assert-WebAppSite $Destination $marker $markerContents
             [IO.Directory]::Move($Destination, $old)
+            $backedUp = $true
+            # An independent writer can change the site between preflight and move.
+            # Validate the actual backup before promoting the new site.
+            Assert-WebAppSite $old $marker $markerContents
         }
         [IO.Directory]::Move($site, $Destination)
+        $promoted = $true
     } finally {
         try {
             # Exact-path moves refuse to overwrite unexpected destinations. If restore
             # fails, throw before deleting the transaction so the backup survives.
-            if ([IO.Directory]::Exists($site) -and [IO.Directory]::Exists($old)) {
+            if ($backedUp -and -not $promoted) {
                 try { [IO.Directory]::Move($old, $Destination) }
                 catch { throw "corral: cannot restore $Destination; backup in $old`: $($_.Exception.Message)" }
             }

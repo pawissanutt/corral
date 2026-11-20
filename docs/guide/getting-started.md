@@ -1,7 +1,7 @@
 # Your first reviewed task
 
-Install corral, open the PM, and take one small change through checks, a separate review and your
-approval. You do not need to read configuration docs or write TOML first.
+Install the classic `corral` CLI, open the PM, and take one small change through checks, a separate review and your
+approval. For the current `corral-next` engine and app, see the [app README](../../apps/corral-app/README.md). You do not need to read configuration docs or write TOML first.
 
 ## 1. Install
 
@@ -11,7 +11,7 @@ Authenticate through that agent's own login flow before starting; corral uses yo
 On Linux or macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | sh -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.4.0 sh -s -- --legacy --yes
 export PATH="$HOME/.local/bin:$PATH"
 corral --version
 ```
@@ -23,7 +23,8 @@ file to keep it available in new terminals.
 On native Windows x86_64, run in PowerShell:
 
 ```powershell
-Invoke-RestMethod https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 | Invoke-Expression
+Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.4.0
 $env:PATH = "$env:LOCALAPPDATA\Programs\corral\bin;$env:PATH"
 corral --version
 ```
