@@ -13,16 +13,19 @@ const HOME_MOVE: &[&str] = &["j", "k", "down", "up", "."];
 /// Tasks: as Home, and `i` shows or hides the inspector beside the list.
 const LIST_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "i", "."];
 const LIST_MOVE: &[&str] = &["j", "k", "down", "up", "i", "."];
-/// Sessions: move, Enter opens the selected session, N (Shift+N) the New build sheet.
-const SESSIONS_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "N", "."];
-const SESSIONS_MOVE: &[&str] = &["j", "k", "down", "up", "N", "."];
-/// A task's or a session's page: `.` opens its More menu.
+/// Sessions: as Tasks, and N (Shift+N) the New build sheet.
+const SESSIONS_OPEN: &[&str] = &["j", "k", "down", "up", "enter", "i", "N", "."];
+const SESSIONS_MOVE: &[&str] = &["j", "k", "down", "up", "i", "N", "."];
+/// A session's page: `.` opens its More menu.
 const MENU: &[&str] = &["."];
+/// A task's page: `1` `2` `3` show Overview, Changes and History; `.` opens its More menu.
+const TASK_PAGE: &[&str] = &["1", "2", "3", "."];
 
 /// The list keys on `destination` under the page on top.
 pub fn list_keys_live(destination: Destination, top: Option<&Live>) -> &'static [&'static str] {
     match (destination, top) {
-        (_, Some(_)) => MENU,
+        (_, Some(Live::Session(_))) => MENU,
+        (_, Some(_)) => TASK_PAGE,
         (Destination::Home, None) => HOME_OPEN,
         (Destination::Tasks, None) => LIST_OPEN,
         (Destination::Sessions, None) => SESSIONS_OPEN,
@@ -62,7 +65,7 @@ pub fn key_legend_live(
 ) -> Vec<(&'static str, &'static str)> {
     match (destination, top) {
         (_, Some(Live::Session(_))) => vec![(".", "more")],
-        (_, Some(_)) => vec![("Esc", "tasks"), (".", "more")],
+        (_, Some(_)) => vec![("Esc", "tasks"), ("1 2 3", "tabs"), (".", "more")],
         (Destination::Home, None) => vec![("j k", "move"), ("Enter", "open"), (".", "more")],
         (Destination::Tasks, None) => vec![
             ("j k", "move"),
@@ -73,6 +76,7 @@ pub fn key_legend_live(
         (Destination::Sessions, None) => vec![
             ("j k", "move"),
             ("Enter", "open"),
+            ("i", "inspector"),
             ("N", "build"),
             (".", "more"),
         ],

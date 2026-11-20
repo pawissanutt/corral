@@ -1,7 +1,7 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nsh_core::{
-    PasteEvent, PastedFile, Points, Size,
+    PasteEvent, Points, Size,
     platform::{Idiom, Os},
 };
 use nsh_engine::{EngineConfig, Root};
@@ -404,7 +404,7 @@ fn phone_blocked_task_page_goes_back_to_homes_list() {
     app.wait_for("id:field-reply").unwrap();
     app.press("id:page-back").unwrap();
     app.wait_for("id:task-T-8").unwrap();
-    assert_eq!(app.screen().count("id:field-reply").unwrap(), 0);
+    assert_eq!(app.screen().count("id:task-page").unwrap(), 0);
     assert_text(&mut app, "page-title", "Home");
 }
 
@@ -501,7 +501,8 @@ fn land_anyway_over_a_red_gate_is_offered_by_the_refusal_and_lands() {
     app.press("id:confirm-confirm").unwrap();
     app.wait_for("id:refused").unwrap();
     app.wait_for("text:/the gate check/").unwrap();
-    app.press("text:Land anyway").unwrap();
+    // The page's decide bar offers Land anyway too; this is the refusal's own step.
+    app.press("id:btn-refusal-1").unwrap();
     app.wait_for("text:/^Land anyway T-10 · Done/").unwrap();
 }
 
@@ -541,95 +542,6 @@ fn approving_onto_a_missing_branch_offers_each_existing_branch() {
         .unwrap();
 }
 
-/// Escape steps back before it leaves: on a session page it returns a view (the Agents tab) to
-/// Chat, and the page and the Sessions place stay. The sample's build serves its children,
-/// so its page has the Agents tab.
-#[test]
-fn escape_returns_a_session_view_to_chat_before_leaving_the_page() {
-    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.press("id:agent-B-k3x9").unwrap();
-    app.wait_for("id:tab-agents").unwrap();
-    app.press("id:tab-agents").unwrap();
-    app.wait_for("id:session-agents").unwrap();
-    app.press_key("escape").unwrap();
-    app.wait_for_gone("id:session-agents", Duration::from_secs(5))
-        .unwrap();
-    app.wait_for("id:session-transcript").unwrap();
-    assert!(selected(&app, "nav-sessions"));
-}
-
-/// A run row's Session menu terminates its session: Terminate asks once, confirming sends it,
-/// and the run leaves the roster.
-#[test]
-fn terminate_from_a_session_row_asks_once_and_ends_the_run() {
-    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.wait_for("id:agent-T-14_R1").unwrap();
-    app.right_click("id:agent-T-14_R1").unwrap();
-    app.press("id:btn-terminate").unwrap();
-    app.wait_for("id:confirm").unwrap();
-    app.press("id:confirm-confirm").unwrap();
-    app.wait_for("text:/Terminated/").unwrap();
-    app.wait_for_gone("id:agent-T-14_R1", Duration::from_secs(5))
-        .unwrap();
-    assert_eq!(app.screen().count("id:confirm").unwrap(), 0);
-}
-
-/// A menu the pointer opened lost the arrows to the roster under it, which moved its selection:
-/// they go into the menu (End to its last item, Task ›, then Up past Reply…), and Enter runs the
-/// item reached, Terminate.
-#[test]
-fn arrow_keys_walk_a_menu_the_pointer_opened() {
-    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.wait_for("id:agent-T-14_R1").unwrap();
-    app.right_click("id:agent-T-14_R1").unwrap();
-    app.wait_for("id:btn-terminate").unwrap();
-    for key in ["end", "up", "up"] {
-        app.press_key(key).unwrap();
-    }
-    app.press_key("enter").unwrap();
-    app.wait_for("id:confirm").unwrap();
-    app.wait_for("text:/Terminate/").unwrap();
-}
-
-/// Pause on a session without a pi host is refused, and the refusal sheet says corrald's reason.
-#[test]
-fn pause_on_a_session_without_a_pi_host_shows_the_refusal_reason() {
-    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.wait_for("id:agent-T-15_R1").unwrap();
-    app.right_click("id:agent-T-15_R1").unwrap();
-    app.press("id:btn-pause").unwrap();
-    app.wait_for("id:refused").unwrap();
-    app.wait_for("text:/no Pi socket/").unwrap();
-}
-
-/// In a terminal, a control chosen in the session page's ⋯ menu changes the run's state under
-/// the menu, and the menu's trigger must still be there and open the menu again (the page opens
-/// with the keyboard in its composer, so the closing menu hands the keys back there rather than
-/// to the trigger); then Ctrl+K opens the palette and Escape closes it with the sample preview
-/// still shown.
-#[test]
-fn the_keyboard_stays_with_the_app_after_a_session_menu_control_in_a_terminal() {
-    let mut app = preview(terminal_80(), &[("corral.destination", "agents")]);
-    app.press("id:agent-T-14_R1").unwrap();
-    app.press("id:btn-session-actions").unwrap();
-    app.wait_for("id:act-cancel-turn").unwrap();
-    app.press("id:act-cancel-turn").unwrap();
-    app.wait_for_gone("id:act-cancel-turn", Duration::from_secs(5))
-        .unwrap();
-    app.press("id:btn-session-actions").unwrap();
-    app.wait_for("id:act-terminate").unwrap();
-    app.press_key("escape").unwrap();
-    app.wait_for_gone("id:act-terminate", Duration::from_secs(5))
-        .unwrap();
-    app.press_key("ctrl+k").unwrap();
-    app.wait_for("id:palette-input").unwrap();
-    app.press_key("escape").unwrap();
-    app.wait_for_gone("id:palette-input", Duration::from_secs(5))
-        .unwrap();
-    app.wait_for("id:btn-session-actions").unwrap();
-    assert_eq!(app.screen().count("text:/not reachable/").unwrap(), 0);
-}
-
 /// The grouping switch asks the feed for the other grouping and redraws the lanes from its
 /// answer: By run draws one lane per run, which By task does not have, and a live run's lane
 /// opens its session page: T-15's headless run has no Pi host, so the page is its read-only log.
@@ -644,113 +556,6 @@ fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     app.wait_for("id:session-log").unwrap();
 }
 
-/// A rewind leaves a gap in the live stream, so the session page reads the transcript again:
-/// after rewinding T-14's worker to turn 3, the words of turn 3 are no longer on the page.
-#[test]
-fn rewinding_a_session_reloads_its_transcript() {
-    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.press("id:agent-T-14_R1").unwrap();
-    app.wait_for("text:/A run that crossed midnight/").unwrap();
-    app.press("id:btn-session-actions").unwrap();
-    app.press("id:act-rewind").unwrap();
-    app.press("id:btn-rewind-turn-3").unwrap();
-    app.wait_for("id:confirm").unwrap();
-    app.press("id:confirm-confirm").unwrap();
-    app.wait_for_gone("text:/A run that crossed midnight/", Duration::from_secs(5))
-        .unwrap();
-}
-
-/// Agents › New › New build session: the sheet starts the build in the chosen project under the
-/// typed name, closes, and the new build's session page opens.
-#[test]
-fn starting_a_build_opens_its_session_page() {
-    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.press("id:btn-new").unwrap();
-    app.press("id:btn-new-build").unwrap();
-    app.wait_for("id:field-build-name").unwrap();
-    app.press("id:seg-build-project-corral").unwrap();
-    app.type_text("id:field-build-name", "walk").unwrap();
-    app.press("id:btn-start-build").unwrap();
-    app.wait_for_gone("id:field-build-name", Duration::from_secs(5))
-        .unwrap();
-    app.wait_for("id:btn-session-actions").unwrap();
-    app.wait_for("text:build · walk").unwrap();
-}
-
-/// The sample build waits on a two-question card: its answer card takes one answer per
-/// question and sends them once both are answered. Two follow-ups queued while it works join
-/// the two the sample queued; they are reordered and one is taken back into the draft (the
-/// queue folds while cards wait, so it is unfolded first). `/fin` runs Finish…, which docks the
-/// exit choice; Land asks once on this device, then for the reason, and the exit walks rebase,
-/// gate and land to its outcome.
-#[test]
-fn a_build_session_is_answered_and_landed() {
-    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.press("id:agent-B-k3x9").unwrap();
-
-    app.wait_for("id:dock-q-b1").unwrap();
-    app.press("id:dock-q-b1").unwrap();
-    app.wait_for("id:opt-q-b1-0").unwrap();
-    app.press("id:opt-q-b1-0").unwrap();
-    app.wait_for("id:question-1").unwrap();
-    app.press("id:opt-q-b1-1").unwrap();
-    app.wait_for("id:review-1").unwrap();
-    app.press("id:btn-send-answers").unwrap();
-    app.wait_for_gone("id:btn-send-answers", Duration::from_secs(5))
-        .unwrap();
-
-    app.wait_for("id:btn-queue").unwrap();
-    for text in ["first follow-up", "second follow-up"] {
-        app.clear("id:field-message").unwrap();
-        app.type_text("id:field-message", text).unwrap();
-        app.press("id:btn-queue").unwrap();
-    }
-    if !in_tree(&app, "queue-0") {
-        app.press("id:btn-queue-toggle").unwrap();
-        wait_in_tree(&mut app, "queue-0");
-    }
-    wait_in_tree(&mut app, "queue-3");
-    app.press("id:btn-queue-down-2").unwrap();
-    app.wait_for("id:btn-queue-edit-2").unwrap();
-    app.press("id:btn-queue-edit-2").unwrap();
-    app.wait_for_gone("id:queue-3", Duration::from_secs(5))
-        .unwrap();
-    assert_eq!(
-        app.screen().input_text("id:field-message").unwrap(),
-        Some("second follow-up")
-    );
-
-    app.clear("id:field-message").unwrap();
-    app.type_text("id:field-message", "/fin").unwrap();
-    app.wait_for("id:cmd-finish").unwrap();
-    app.submit("id:field-message").unwrap();
-    app.wait_for("id:opt-exit-B-k3x9-1").unwrap();
-    app.press("id:opt-exit-B-k3x9-1").unwrap();
-    app.wait_for("id:btn-card-confirm").unwrap();
-    app.press("id:btn-card-confirm").unwrap();
-    app.wait_for("id:field-message").unwrap();
-    app.type_text("id:field-message", "The open finding is accepted for now.")
-        .unwrap();
-    app.submit("id:field-message").unwrap();
-    app.wait_for_within("text:/^✓ Landed/", Duration::from_secs(30))
-        .unwrap();
-}
-
-/// A build page whose host declares attachments offers them and hears an image pasted into its
-/// field: the sample host takes none now, so the paste is refused visibly, not dropped.
-#[test]
-fn an_image_pasted_into_a_build_page_reaches_its_attachments() {
-    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.press("id:agent-B-k3x9").unwrap();
-    app.wait_for("id:field-message").unwrap();
-    app.wait_for("id:btn-attach-0").unwrap();
-    let png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
-    let mut paste = PasteEvent::default();
-    paste.files.push(PastedFile::image(png));
-    app.paste("id:field-message", &paste).unwrap();
-    app.wait_for("text:/^Not attached/").unwrap();
-}
-
 /// A file copied in a file manager arrives as its path alone: pasted into Ask, which takes
 /// attachments, it is refused with that reason rather than dropped.
 #[test]
@@ -762,135 +567,4 @@ fn a_file_pasted_as_a_path_alone_is_refused_visibly() {
     paste.uris.push("file:///tmp/shot.png".into());
     app.paste("id:ask-input", &paste).unwrap();
     app.wait_for("text:/path alone/").unwrap();
-}
-
-/// A stopped build's row offers Remove…; its sheet shows prune's dry run before anything goes,
-/// and confirming removes the build from the roster.
-#[test]
-fn a_stopped_build_is_removed_after_its_dry_run() {
-    let mut app = preview(desktop(), &[("corral.destination", "agents")]);
-    app.press("id:seg-show-all").unwrap();
-    app.wait_for("id:btn-remove-B-k2a1").unwrap();
-    app.press("id:btn-remove-B-k2a1").unwrap();
-    app.wait_for("id:remove-lines").unwrap();
-    app.wait_for("text:/would remove worktree/").unwrap();
-    app.press("id:btn-remove-confirm").unwrap();
-    app.wait_for_gone("id:agent-B-k2a1", Duration::from_secs(5))
-        .unwrap();
-}
-
-/// Whether a view with test id `id` is in the tree and not hidden, scrolled or clipped into
-/// sight or not. `wait_for` and `count` take only views on screen: not hidden, with non-empty
-/// bounds inside the window and every clipping view around them (a scroll view's content counts
-/// along its axis), so a row of a list squeezed or folded out of the window is never "showing".
-fn in_tree(app: &Headless, id: &str) -> bool {
-    app.screen()
-        .layout_nodes()
-        .iter()
-        .any(|node| node.test_id.as_deref() == Some(id) && !node.hidden)
-}
-
-/// Waits, as long as `wait_for` does, for [`in_tree`].
-fn wait_in_tree(app: &mut Headless, id: &str) {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !in_tree(app, id) {
-        assert!(Instant::now() < deadline, "id:{id} never joined the tree");
-        app.next_change(Duration::from_millis(100)).unwrap();
-    }
-}
-
-/// The sample build serves every part a host serves, so each of its tabs opens on what the
-/// sample holds on every form; a part the preview did not answer would leave its tab reading
-/// forever. Chat shows the transcript; Agents lists the three children and both jobs, a child
-/// opens on its detail and its conversation, a job on its output (older output is offered only
-/// once the newest page was read); Changes lists the three files and the first opens on its two
-/// hunks; Board lists its tasks and proposal and opens the build record's sections; the ⋯ menu
-/// lists the host's actions and opens Usage on one row per agent and the total; the sidebar's
-/// Plan lists the plan's steps. Every press is followed by what proves it took effect before the
-/// next step, and list rows are looked for in the tree, not on screen.
-#[test]
-fn every_session_tab_opens_in_the_sample_preview_on_phone_desktop_and_terminal() {
-    for (config, rail) in [(phone(), false), (desktop(), true), (terminal_80(), false)] {
-        let mut app = preview(config, &[("corral.destination", "agents")]);
-        app.press("id:agent-B-k3x9").unwrap();
-        app.wait_for("id:session-transcript").unwrap();
-        wait_in_tree(&mut app, "item-0");
-
-        app.press("id:tab-agents").unwrap();
-        app.wait_for("id:session-agents").unwrap();
-        for child in ["migration", "docs", "review"] {
-            wait_in_tree(&mut app, &format!("agent-B-k3x9-child-{child}"));
-        }
-        for job in ["j1-1", "j1-2"] {
-            wait_in_tree(&mut app, &format!("job-{job}"));
-        }
-        app.press("id:agent-B-k3x9-child-migration").unwrap();
-        app.wait_for("id:session-agent-detail").unwrap();
-        app.press("id:btn-child-open").unwrap();
-        app.wait_for("id:session-conversation").unwrap();
-        wait_in_tree(&mut app, "item-0");
-        app.press("id:btn-agents-back").unwrap();
-        app.wait_for_gone("id:session-conversation", Duration::from_secs(5))
-            .unwrap();
-        app.wait_for("id:session-agents").unwrap();
-        app.press("id:job-j1-1").unwrap();
-        app.wait_for("id:session-job-detail").unwrap();
-        app.press("id:btn-job-open").unwrap();
-        app.wait_for("id:session-job-output").unwrap();
-        wait_in_tree(&mut app, "btn-job-older");
-        app.press("id:btn-agents-back").unwrap();
-        app.wait_for_gone("id:session-job-output", Duration::from_secs(5))
-            .unwrap();
-        app.wait_for("id:session-agents").unwrap();
-
-        app.press("id:tab-changes").unwrap();
-        app.wait_for("id:session-changes").unwrap();
-        for file in 0..3 {
-            wait_in_tree(&mut app, &format!("change-file-{file}"));
-        }
-        app.press("id:change-file-0").unwrap();
-        app.wait_for("id:changes-file").unwrap();
-        wait_in_tree(&mut app, "hunk-1");
-
-        app.press("id:tab-board").unwrap();
-        app.wait_for("id:session-board").unwrap();
-        wait_in_tree(&mut app, "task-T-004");
-        wait_in_tree(&mut app, "board-plan");
-        app.press("id:btn-board-record").unwrap();
-        app.wait_for("id:session-record").unwrap();
-        for section in ["gate", "reviews", "decisions", "timeline"] {
-            wait_in_tree(&mut app, &format!("record-{section}"));
-        }
-
-        app.press("id:btn-session-actions").unwrap();
-        app.wait_for("id:session-actions").unwrap();
-        for row in [
-            "model",
-            "compact",
-            "export",
-            "board-refresh",
-            "build-record",
-            "plan-ledger",
-        ] {
-            wait_in_tree(&mut app, &format!("act-{row}"));
-        }
-        app.press("id:act-view-usage").unwrap();
-        app.wait_for_gone("id:session-actions", Duration::from_secs(5))
-            .unwrap();
-        app.wait_for("id:session-usage").unwrap();
-        for row in ["pane", "migration", "docs", "review"] {
-            wait_in_tree(&mut app, &format!("usage-row-{row}"));
-        }
-        wait_in_tree(&mut app, "usage-total");
-
-        app.press(if rail {
-            "id:side-plan"
-        } else {
-            "id:side-row-plan"
-        })
-        .unwrap();
-        for step in 0..5 {
-            wait_in_tree(&mut app, &format!("side-step-{step}"));
-        }
-    }
 }

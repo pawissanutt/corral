@@ -16,7 +16,7 @@ use crate::model::list::{self, ListKey};
 use crate::model::projects::WorkspaceMode;
 use crate::model::session::{self, Cx, Facts, Focus, KeyAction};
 use crate::model::{
-    DataState, Destination, Effect, Live, Overlay, commands, home, nav, tasks, work,
+    DataState, Destination, Effect, Live, Overlay, commands, home, nav, sessions, tasks, work,
 };
 
 /// Where the keyboard focus is, as far as key routing needs it.
@@ -274,9 +274,9 @@ impl AppState {
                     .then(|| self.focused_row.get());
                 // The selected row as the focused one is named: its test id.
                 let selected = match destination {
-                    Destination::Sessions => self.agents.with(|state| {
-                        state
-                            .roster_session
+                    Destination::Sessions => self.nav.with(|nav| {
+                        nav.selection
+                            .session
                             .as_ref()
                             .map(|session| list::row_id(&Live::Session(session.clone())))
                     }),
@@ -313,6 +313,11 @@ impl AppState {
             return;
         }
         match key {
+            // Home docks Ask's composer at its foot: there `/` goes to that field.
+            "/" if self.home_docks_composer() => {
+                self.focus_to.set(Some(crate::model::assistant::COMPOSER_FIELD));
+                return;
+            }
             "/" => {
                 self.open_ask();
                 return;
@@ -356,17 +361,38 @@ impl AppState {
         match (destination, top) {
             // A task's page: `.` opens its More menu.
             (_, Some(Live::Task(id) | Live::Plan(id) | Live::Review(id))) => {
-                Some(vec![Effect::VerbMenu(work::Record::Task(id))])
+                Some(match tasks::page_tab(key) {
+                    Some(tab) => {
+                        self.set_task_tab(tab);
+                        Vec::new()
+                    }
+                    None => vec![Effect::VerbMenu(work::Record::Task(id))],
+                })
             }
-            (Destination::Sessions, top) | (_, top @ Some(Live::Session(_))) => {
-                let filter = scope.filter();
-                let mut effects = None;
-                self.feed.with_untracked(|feed| {
-                    self.agents.update(|state| {
-                        effects = state.key(key, top.as_ref(), feed, &filter);
-                    });
+            // A session's page: `.` opens its More menu.
+            (_, Some(Live::Session(id))) => {
+                Some(vec![Effect::VerbMenu(work::Record::Session(id))])
+            }
+            (Destination::Sessions, None) => {
+                if key == "N" {
+                    self.agents.update(|state| state.start.open = true);
+                    return Some(Vec::new());
+                }
+                let order = self.feed.with_untracked(|feed| {
+                    self.agents.with_untracked(|state| {
+                        list::order(&sessions::sections(feed, &scope, &state.list))
+                    })
                 });
-                effects
+                let selected = list::settled(&order, selection.session.as_ref());
+                Some(match list::key(key, &order, selected.as_ref())? {
+                    ListKey::Select(id) => vec![Effect::Select(Live::Session(id))],
+                    ListKey::Open(id) => vec![Effect::OpenLive(Live::Session(id))],
+                    ListKey::More(id) => vec![Effect::VerbMenu(work::Record::Session(id))],
+                    ListKey::Inspector => {
+                        self.toggle_inspector();
+                        Vec::new()
+                    }
+                })
             }
             (Destination::Tasks, None) => {
                 let order = self.feed.with_untracked(|feed| {
@@ -376,8 +402,10 @@ impl AppState {
                 let selected = list::settled(&order, selection.task.as_ref());
                 Some(match list::key(key, &order, selected.as_ref())? {
                     ListKey::Select(id) => vec![Effect::Select(Live::Task(id))],
-                    ListKey::Open(id) => vec![Effect::OpenLive(Live::Task(id))],
-                    ListKey::More(id) => vec![Effect::VerbMenu(work::Record::Task(id))],
+                    ListKey::Open(id) => vec![Effect::OpenLive(Live::Task(tasks::task_of(&id)))],
+                    ListKey::More(id) => {
+                        vec![Effect::VerbMenu(work::Record::Task(tasks::task_of(&id)))]
+                    }
                     ListKey::Inspector => {
                         self.toggle_inspector();
                         Vec::new()
@@ -385,10 +413,11 @@ impl AppState {
                 })
             }
             (Destination::Home, None) => self.feed.with_untracked(|feed| {
-                let order = list::order(&home::sections(feed, &scope));
-                let selected = self
-                    .home
-                    .with_untracked(|state| list::settled(&order, state.selected.as_ref()));
+                let (order, selected) = self.home.with_untracked(|state| {
+                    let order = home::order(feed, &scope, state);
+                    let selected = list::settled(&order, state.selected.as_ref());
+                    (order, selected)
+                });
                 Some(match list::key(key, &order, selected.as_ref())? {
                     ListKey::Select(id) => {
                         self.home.update(|state| state.selected = Some(id));
@@ -405,6 +434,17 @@ impl AppState {
 }
 
 impl AppState {
+    /// Untracked: whether Home is in view with Ask's composer docked at its foot: desktop and
+    /// terminal, no page over it, served, and not the assistant-only landing.
+    fn home_docks_composer(&self) -> bool {
+        self.form != crate::model::Form::Phone
+            && self
+                .nav
+                .with_untracked(|nav| nav.destination == Destination::Home && nav.pages.is_empty())
+            && self.data.get_untracked() != DataState::Disconnected
+            && untracked(|| self.workspace_mode()) != WorkspaceMode::AssistantOnly
+    }
+
     /// Tracked: the confirm sheet, the refusal sheet, the rewind sheet, the New build sheet, the
     /// Remove sheet or the action composer is up.
     pub(super) fn sheet_open(&self) -> bool {
