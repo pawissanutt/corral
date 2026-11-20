@@ -143,6 +143,8 @@ pub struct Editor {
     /// a removed one's place (the next line, rule or entry), so the focus stays where the owner
     /// was working rather than leaving with the removed field's controls.
     pub added: Option<Path>,
+    /// Explicit jump from a validation notice or related setting, even if the field is mounted.
+    pub focus_path: Option<Path>,
     /// The revision of `saved`, as corrald stated it.
     pub revision: Option<String>,
     /// The revision the last accepted save replaced: a settings snapshot still stating it has
@@ -181,6 +183,7 @@ impl Editor {
     }
 
     fn apply(&mut self, edit: &Edit) -> Result<(), String> {
+        self.focus_path = None;
         if let Edit::File(text) = edit {
             self.draft.clone_from(text);
             self.raw.clear();
@@ -486,6 +489,7 @@ impl State {
     pub fn config_part(&mut self, part: Part) -> Vec<Effect> {
         if part != self.config.part {
             self.config.added = None;
+            self.config.focus_path = None;
             self.config.profile_focus = false;
         }
         self.config.part = part;
@@ -494,6 +498,7 @@ impl State {
 
     pub fn choose_entry(&mut self, part: Part, name: String) -> Vec<Effect> {
         self.config.added = None;
+        self.config.focus_path = None;
         self.config.chosen.insert(part, name);
         if part == Part::Profiles {
             self.config.part = part;
@@ -554,6 +559,7 @@ impl State {
                 self.config.open_rule = Some(*index);
             }
             self.config.added = Some(path.clone());
+            self.config.focus_path = Some(path.clone());
             if let (Some(entry), Some(_)) = (entry, part.root()) {
                 self.config.chosen.insert(part, entry);
             }
@@ -578,6 +584,7 @@ impl State {
         self.config.reasons.clear();
         self.config.problem = None;
         self.config.added = None;
+        self.config.focus_path = None;
         self.config.profile_focus = false;
         self.config.open_rule = None;
         Vec::new()
