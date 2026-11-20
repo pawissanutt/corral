@@ -1,11 +1,12 @@
-//! Sample descriptive host facts in the daemon poll loop, never in Settings reads.
+//! Sample descriptive host facts off the daemon event loop and Settings read path.
 use std::{
     collections::BTreeMap,
     ffi::OsStr,
     fs::File,
     io::{ErrorKind, Read},
     path::Path,
-    sync::Mutex,
+    sync::{Arc, Mutex},
+    thread,
     time::Duration,
 };
 
@@ -18,7 +19,7 @@ use serde::Deserialize;
 
 use crate::state::Shared;
 
-pub(crate) const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const PI_FILE_MAX: u64 = 256 * 1024;
 const FACT_BYTES_MAX: usize = 8 * 1024;
 const ENTRIES_MAX: usize = 64;
@@ -32,19 +33,50 @@ struct Observation {
     pi: Option<PiConfigFacts>,
 }
 
-impl Inventory {
-    pub(crate) fn refresh(&self, shared: &Shared) {
+// A stale mount can block filesystem access indefinitely. Run only one sampler, hold no
+// daemon reference during I/O, and never join it as part of shutdown.
+pub(crate) fn start_sampler(shared: &Arc<Shared>) {
+    let root = shared.root().to_owned();
+    let weak = Arc::downgrade(shared);
+    if let Err(error) = thread::Builder::new()
+        .name("corrald-inventory".into())
+        .spawn(move || {
+            loop {
+                let sample = Observation::read(&root);
+                let Some(shared) = weak.upgrade() else { break };
+                if shared.lock().stop {
+                    break;
+                }
+                shared.harness_inventory.update(&shared, sample);
+                shared.wait(REFRESH_INTERVAL);
+                if shared.lock().stop {
+                    break;
+                }
+            }
+        })
+    {
+        eprintln!("corrald harness discovery unavailable: {error}");
+    }
+}
+
+impl Observation {
+    fn read(root: &Path) -> Self {
         let search = std::env::var_os("PATH");
-        let harnesses = crate::config::get(shared).ok().and_then(|doc| {
+        let harnesses = crate::config::get_at(root).ok().and_then(|doc| {
             let revision = doc.revision?;
             let config = Config::parse(&doc.toml).ok()?;
             Some((revision, harness_facts(&config, search.as_deref())?))
         });
-        let path = shared.root().join(crate::STATE_DIR).join("pi.toml");
-        let observation = Observation {
+        let path = root.join(crate::STATE_DIR).join("pi.toml");
+        Self {
             harnesses,
             pi: pi_config(&path),
-        };
+        }
+    }
+}
+
+impl Inventory {
+    fn update(&self, shared: &Shared, observation: Observation) {
         let mut previous = self.0.lock().unwrap_or_else(|error| error.into_inner());
         if *previous != observation {
             *previous = observation;
@@ -249,8 +281,8 @@ fn read_child_profiles(file: File) -> Option<Vec<PiChildProfile>> {
             {
                 return None;
             }
-            if row
-                .effort
+            let effort = row.effort.filter(|value| !value.is_empty());
+            if effort
                 .as_ref()
                 .is_some_and(|value| display_value(value, 64).is_none())
             {
@@ -259,7 +291,7 @@ fn read_child_profiles(file: File) -> Option<Vec<PiChildProfile>> {
             Some(PiChildProfile {
                 name: display_value(&name, 96)?.to_owned(),
                 model: model.to_owned(),
-                effort: row.effort,
+                effort,
             })
         })
         .collect::<Option<_>>()?;

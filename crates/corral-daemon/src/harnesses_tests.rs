@@ -18,6 +18,11 @@ fn settings(fixture: &Fixture) -> SettingsSnapshot {
 fn settings_use_cached_host_facts_without_leaking_pi_settings_or_reusing_an_old_command() {
     let fixture = Fixture::new();
     let shared = &fixture.shared;
+    let sample = || {
+        shared
+            .harness_inventory
+            .update(shared, super::Observation::read(shared.root()))
+    };
     let state = shared.root().join(crate::STATE_DIR);
     let executable = state.join("custom-exe");
     let marker = state.join("must-not-run");
@@ -45,6 +50,9 @@ model = "anthropic-api/claude-opus-5-5"
 effort = "high"
 description = "description-not-served"
 api_key = "credential-not-served"
+[build.profiles.second]
+model = "anthropic-api/claude-opus-5-5"
+effort = ""
 [web]
 api_key = "another-credential-not-served"
 "#,
@@ -53,7 +61,7 @@ api_key = "another-credential-not-served"
 
     let before = settings(&fixture);
     assert!(before.harness_facts.is_none() && before.pi_config.is_none());
-    shared.harness_inventory.refresh(shared);
+    sample();
     let observed = settings(&fixture);
     let facts = observed.harness_facts.as_ref().unwrap();
     let custom = facts.iter().find(|fact| fact.name == "custom").unwrap();
@@ -66,7 +74,8 @@ api_key = "another-credential-not-served"
     assert_eq!(
         serde_json::to_value(&pi_facts.child_profiles).unwrap(),
         serde_json::json!([
-            {"name":"reviewer", "model":"anthropic-api/claude-opus-5-5", "effort":"high"}
+            {"name":"reviewer", "model":"anthropic-api/claude-opus-5-5", "effort":"high"},
+            {"name":"second", "model":"anthropic-api/claude-opus-5-5"}
         ])
     );
     let projected = serde_json::to_string(&(facts, pi_facts)).unwrap();
@@ -82,7 +91,7 @@ api_key = "another-credential-not-served"
     fs::write(&config, "[harnesses.custom]\ncommand = 'new-command'\n").unwrap();
     shared.refresh_config().unwrap();
     assert!(settings(&fixture).harness_facts.is_none());
-    shared.harness_inventory.refresh(shared);
+    sample();
     assert_eq!(
         settings(&fixture).pi_config.unwrap().status,
         PiConfigStatus::Missing
@@ -92,7 +101,7 @@ api_key = "another-credential-not-served"
         "[build.profiles.legacy]\nmodel = 'anthropic/opus'\nconnection = 'anthropic-api'\n",
     )
     .unwrap();
-    shared.harness_inventory.refresh(shared);
+    sample();
     let legacy = settings(&fixture).pi_config.unwrap();
     assert_eq!(legacy.status, PiConfigStatus::Unavailable);
     assert!(legacy.child_profiles.is_empty());
