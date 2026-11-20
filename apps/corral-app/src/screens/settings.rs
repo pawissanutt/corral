@@ -8,6 +8,8 @@
 
 mod config;
 mod config_fields;
+mod config_profiles;
+mod config_routing;
 mod connection;
 mod enrolment;
 mod general;

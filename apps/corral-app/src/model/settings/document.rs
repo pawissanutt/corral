@@ -295,6 +295,41 @@ pub fn add_entry(doc: &mut DocumentMut, root: &str, name: &str) {
     }
 }
 
+/// Copies an entry without replacing the destination or rebuilding its fields.
+pub fn duplicate_entry(doc: &mut DocumentMut, root: &str, from: &str, name: &str) -> bool {
+    let Some(parent) = table_mut(doc.as_table_mut(), &[Seg::Key(root.into())], false) else {
+        return false;
+    };
+    if parent.contains_key(name) {
+        return false;
+    }
+    let Some(mut item) = parent
+        .get(from)
+        .filter(|item| item.is_table_like())
+        .cloned()
+    else {
+        return false;
+    };
+    fn place_last(table: &mut Table) {
+        table.set_position(Some(isize::MAX));
+        for (_, item) in table.iter_mut() {
+            if let Some(child) = item.as_table_mut() {
+                place_last(child);
+            } else if let Some(children) = item.as_array_of_tables_mut() {
+                for child in children.iter_mut() {
+                    place_last(child);
+                }
+            }
+        }
+    }
+    // The copied tables must not retain their source positions among existing tables.
+    if let Some(table) = item.as_table_mut() {
+        place_last(table);
+    }
+    parent.insert(name, item);
+    true
+}
+
 pub fn remove_entry(doc: &mut DocumentMut, root: &str, name: &str) {
     if let Some(parent) = table_mut(doc.as_table_mut(), &[Seg::Key(root.into())], false) {
         parent.remove(name);

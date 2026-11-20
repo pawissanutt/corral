@@ -74,7 +74,7 @@ pub enum Shape {
     Unparsed(String),
 }
 
-const BUILT_IN_HARNESSES: [&str; 4] = ["omo", "omp", "claude", "generic"];
+const BUILT_IN_HARNESSES: [&str; 5] = ["omo", "omp", "claude", "pi", "generic"];
 const PROJECT_KEYS: [&str; 11] = [
     "path",
     "base",
@@ -192,14 +192,11 @@ pub fn shape(editor: &Editor, feed: &Feed) -> Shape {
             }],
             None,
         ),
-        Part::Routing => (
-            Some(
-                "Rules match in order and the first match picks the worker profile; a task's own profile wins.",
-            ),
-            None,
-            routing(&doc, &profiles),
-            Some("No rules: tasks use their own, their project's or the workspace profile."),
-        ),
+        Part::Routing => {
+            let mut targets = profiles.clone();
+            append_offers(&mut targets, built_in_names(feed, "profiles"));
+            (None, None, routing(&doc, &targets), None)
+        }
         part => {
             let entries = listed(editor, &doc, part);
             let groups = entries
@@ -343,10 +340,10 @@ fn entry(doc: &DocumentMut, feed: &Feed, part: Part, name: &str, profiles: &[Str
             .map(|key| match *key {
                 "harness" => {
                     let mut harnesses = document::names(doc, "harnesses");
-                    for built in BUILT_IN_HARNESSES {
-                        if !harnesses.iter().any(|name| name == built) {
-                            harnesses.push(built.into());
-                        }
+                    if let Some(built_in) = built_in_table(feed, "harnesses") {
+                        append_offers(&mut harnesses, built_in.keys().map(String::as_str));
+                    } else {
+                        append_offers(&mut harnesses, BUILT_IN_HARNESSES);
                     }
                     field(at(key), key, Kind::Text).offer("Harnesses", harnesses)
                 }
@@ -368,6 +365,32 @@ fn entry(doc: &DocumentMut, feed: &Feed, part: Part, name: &str, profiles: &[Str
         title: None,
         rule: None,
         fields,
+    }
+}
+
+fn built_in_table<'a>(
+    feed: &'a Feed,
+    table: &str,
+) -> Option<&'a serde_json::Map<String, serde_json::Value>> {
+    feed.settings
+        .as_ref()?
+        .built_in_defaults
+        .as_ref()?
+        .get(table)?
+        .as_object()
+}
+
+fn built_in_names<'a>(feed: &'a Feed, table: &str) -> impl Iterator<Item = &'a str> {
+    built_in_table(feed, table)
+        .into_iter()
+        .flat_map(|table| table.keys().map(String::as_str))
+}
+
+fn append_offers<'a>(offers: &mut Vec<String>, extra: impl IntoIterator<Item = &'a str>) {
+    for name in extra {
+        if !offers.iter().any(|current| current == name) {
+            offers.push(name.to_owned());
+        }
     }
 }
 
@@ -416,6 +439,10 @@ pub fn anchors(doc: &DocumentMut) -> Vec<Path> {
         }
     }
     for index in 0..document::rule_count(doc) {
+        anchors.push(Path(vec![
+            document::Seg::Key("routing".into()),
+            document::Seg::Index(index),
+        ]));
         anchors.extend(RULE_KEYS.iter().map(|key| Path::rule(index, key)));
     }
     anchors
@@ -446,7 +473,10 @@ pub fn locate(path: &Path) -> Option<(Part, Option<String>, Option<&'static str>
             };
             Some((part, Some(name.clone()), Some(label(key))))
         }
-        [Seg::Key(_), Seg::Index(index), Seg::Key(key)] => Some((
+        [Seg::Key(root), Seg::Index(index)] if root == "routing" => {
+            Some((Part::Routing, Some(format!("Rule {}", index + 1)), None))
+        }
+        [Seg::Key(root), Seg::Index(index), Seg::Key(key)] if root == "routing" => Some((
             Part::Routing,
             Some(format!("Rule {}", index + 1)),
             Some(label(key)),

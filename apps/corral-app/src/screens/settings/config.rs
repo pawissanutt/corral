@@ -11,9 +11,10 @@
 use nsh_core::prelude::*;
 
 use super::config_fields::{edit, entry, field};
-use super::parts::{button_row, cell, frame, space};
+use super::parts::{cell, frame, space};
+use super::{config_profiles, config_routing};
 use crate::model::Form;
-use crate::model::settings::document::{Path, RuleEdit};
+use crate::model::settings::document::Path;
 use crate::model::settings::editor::{self, Edit, Part};
 use crate::model::settings::form::{self, Entries, Group, Live, Shape};
 use crate::model::text::span;
@@ -90,8 +91,12 @@ fn content(app: AppState) -> AnyElement {
     open(app);
     let live = computed(move || app.settings.with(|state| Live::of(&state.config)));
     let shape = computed(move || {
-        app.settings
-            .with(|state| app.feed.with(|feed| form::shape(&state.config, feed)))
+        app.settings.with(|state| {
+            (
+                state.config.part,
+                app.feed.with(|feed| form::shape(&state.config, feed)),
+            )
+        })
     });
     let loaded = computed(move || app.settings.with(|state| state.config.saved.is_some()));
     let parts = dynamic(move || {
@@ -110,8 +115,8 @@ fn content(app: AppState) -> AnyElement {
                 ))
                 .child(space(app, 12.0))
                 .child(dynamic(move || {
-                    let shape = shape.get();
-                    untracked(move || part(app, shape, live))
+                    let (selected, shape) = shape.get();
+                    untracked(move || part(app, selected, shape, live))
                 }))
                 .into_element()
         })
@@ -228,7 +233,7 @@ fn reason_button(app: AppState, at: usize, path: Option<Path>, line: String) -> 
         .into_element()
 }
 
-fn part(app: AppState, shape: Shape, live: Memo<Live>) -> AnyElement {
+fn part(app: AppState, selected: Part, shape: Shape, live: Memo<Live>) -> AnyElement {
     match shape {
         Shape::File => file(app),
         Shape::Unparsed(problem) => view()
@@ -256,12 +261,19 @@ fn part(app: AppState, shape: Shape, live: Memo<Live>) -> AnyElement {
             groups,
             empty,
         } => {
+            if selected == Part::Profiles
+                && let Some(listed) = &listed
+            {
+                return config_profiles::profiles(app, listed, groups.first(), live);
+            }
+            if selected == Part::Routing {
+                return config_routing::routing(app, &groups, live);
+            }
             let mut parts = Vec::new();
             if let Some(note) = note {
                 parts.push(cell(app, note, Token::Ink3, false).into_element());
                 parts.push(space(app, 10.0));
             }
-            let rules = app.settings.with_untracked(|state| state.config.part) == Part::Routing;
             if let Some(listed) = &listed {
                 parts.push(entries(app, listed));
                 parts.push(space(app, 12.0));
@@ -273,10 +285,6 @@ fn part(app: AppState, shape: Shape, live: Memo<Live>) -> AnyElement {
             }
             for group_shape in groups {
                 parts.push(group(app, group_shape, live));
-            }
-            if rules {
-                parts.push(space(app, 10.0));
-                parts.push(add_rule(app));
             }
             view().min_w(px(0.0)).children(parts).into_element()
         }
@@ -411,40 +419,11 @@ fn entries(app: AppState, listed: &Entries) -> AnyElement {
     view().min_w(px(0.0)).children(parts).into_element()
 }
 
-/// A group's heading (with a rule's Up, Down and Remove), then its fields a row apart.
+/// A group's heading, then its fields a row apart.
 fn group(app: AppState, group: Group, live: Memo<Live>) -> AnyElement {
     let mut parts = Vec::new();
     if let Some(title) = group.title {
-        let head = match group.rule {
-            Some(index) => {
-                let control = |word: &'static str, action: &'static str, change: RuleEdit| {
-                    button(
-                        app,
-                        word,
-                        ButtonKind::Quiet,
-                        format!("btn-config-rule-{index}-{action}"),
-                        move || edit(app, Edit::Rules(change.clone())),
-                    )
-                };
-                view()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(8.0))
-                    .min_w(px(0.0))
-                    .child(view().flex_1().min_w(px(0.0)).child(h3(app, title, None)))
-                    .child(button_row(
-                        app,
-                        vec![
-                            control("Up", "up", RuleEdit::Move(index, true)),
-                            control("Down", "down", RuleEdit::Move(index, false)),
-                            control("Remove", "remove", RuleEdit::Remove(index)),
-                        ],
-                    ))
-                    .into_element()
-            }
-            None => h3(app, title, None),
-        };
-        parts.push(head);
+        parts.push(h3(app, title, None));
     }
     let gap = if app.form == Form::Terminal {
         term::rows(1.0)
@@ -459,32 +438,6 @@ fn group(app: AppState, group: Group, live: Memo<Live>) -> AnyElement {
             .into_element(),
     );
     view().min_w(px(0.0)).children(parts).into_element()
-}
-
-/// Adds a rule after the others, naming the first profile, for the owner to narrow.
-fn add_rule(app: AppState) -> AnyElement {
-    button_row(
-        app,
-        vec![button(
-            app,
-            "Add rule",
-            ButtonKind::Ghost,
-            "btn-config-rule-add",
-            move || {
-                let profile = app.settings.with_untracked(|state| {
-                    crate::model::settings::document::parse(&state.config.draft)
-                        .ok()
-                        .and_then(|doc| {
-                            crate::model::settings::document::names(&doc, "profiles")
-                                .into_iter()
-                                .next()
-                        })
-                        .unwrap_or_default()
-                });
-                edit(app, Edit::Rules(RuleEdit::Add(profile)));
-            },
-        )],
-    )
 }
 
 /// The whole file as text.
