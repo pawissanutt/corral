@@ -128,6 +128,7 @@ test("chat runs the engine as the assistant and edits plain workspace memory", a
   try {
     const memory = join(dir, ".corral-next", "memory", "notes.md");
     mkdirSync(join(dir, ".corral-next", "memory"), { recursive: true });
+    writeFileSync(join(dir, ".corral-next", "corral.toml"), "");
     writeFileSync(memory, "# Notes\nOriginal text\n");
     const engine = writeFakeEngine(dir, { list: { result: [{ id: "T-1" }] } });
     const assets = scriptedFixtureInstall(dir, [
