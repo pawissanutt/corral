@@ -102,7 +102,7 @@ against the installed runtime's version. Rerun the installer to upgrade; it does
 register or restart a daemon service, or serve the web app. Restart your daemon and replace
 the served web files after upgrading. Back up your workspace and configuration before
 upgrading; no automatic rollback or downgrade compatibility is promised.
-`CORRAL_VERSION=v0.4.0 sh install-corral.sh --legacy` selects the older classic CLI instead.
+`CORRAL_VERSION=v0.2.0 sh install-corral.sh --legacy` selects the published classic CLI instead. That classic release does not include the Pi host; the new engine's `corral-pi` artifact is separate and requires a release that actually contains it.
 
 In the intended workspace directory, initialize with `corral-next init`, then run
 `corrald-next --root <workspace> run` on the Unix host (use an absolute workspace path).
@@ -112,6 +112,36 @@ at the host root with SPA fallback to `index.html`; configure the optional daemo
 and exact app origin, then pair as described in [Browser](#browser). A plain file server
 without fallback does not support deep-link reloads. Do not expose the daemon listener
 without the TLS and origin configuration described there.
+
+For example, this local-only Python server serves the installed site at
+`http://127.0.0.1:8790` and falls back to `index.html` for extensionless HTML
+routes. Set `CORRAL_APP_INSTALL_DIR` if you installed the site elsewhere. It matches
+the `web_origin` in the daemon example below; open that exact origin (not `localhost`).
+It requires Python 3 and is not a production server.
+
+```sh
+SITE_DIR="${CORRAL_APP_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/corral-next/web}"
+python3 - "$SITE_DIR" <<'PY'
+import functools
+import http.server
+import os
+import sys
+import urllib.parse
+
+class AppHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        path = urllib.parse.urlsplit(self.path).path
+        local = self.translate_path(path)
+        if ("text/html" in self.headers.get("Accept", "")
+                and not os.path.splitext(path.rstrip("/").rsplit("/", 1)[-1])[1]
+                and not os.path.exists(local)):
+            self.path = "/index.html"
+        super().do_GET()
+
+handler = functools.partial(AppHandler, directory=sys.argv[1])
+http.server.ThreadingHTTPServer(("127.0.0.1", 8790), handler).serve_forever()
+PY
+```
 
 ## Development quick start
 
