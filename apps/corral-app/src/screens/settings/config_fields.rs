@@ -86,28 +86,7 @@ fn entry_with(
     });
     let handle = handle.unwrap_or_else(element_ref);
     let jump_id = id.clone();
-    let jump = computed(move || {
-        app.settings.with(|state| {
-            state
-                .config
-                .focus_path
-                .as_ref()
-                .is_some_and(|path| self::id(path) == jump_id)
-        })
-    });
-    effect(move || {
-        if jump.get() {
-            after_answer(move || {
-                if jump.get_untracked() {
-                    handle.focus();
-                    app.act(app.settings, |state, _| {
-                        state.config.focus_path = None;
-                        Vec::new()
-                    });
-                }
-            });
-        }
-    });
+    on_jump(app, move |path| self::id(path) == jump_id, || {}, handle);
     let field = input()
         .element_ref(&handle)
         .test_id(&id)
@@ -145,6 +124,33 @@ fn entry_with(
             .rounded(px(10.0))
             .into_element(),
     }
+}
+
+/// Reveals and focuses the control that owns an explicit jump, even when it is already mounted.
+pub(super) fn on_jump(
+    app: AppState,
+    matches: impl Fn(&Path) -> bool + 'static,
+    reveal: impl Fn() + 'static,
+    handle: ElementRef,
+) {
+    let jump = computed(move || {
+        app.settings
+            .with(|state| state.config.focus_path.as_ref().is_some_and(&matches))
+    });
+    effect(move || {
+        if jump.get() {
+            reveal();
+            after_answer(move || {
+                if jump.get_untracked() {
+                    handle.focus();
+                    app.act(app.settings, |state, _| {
+                        state.config.focus_path = None;
+                        Vec::new()
+                    });
+                }
+            });
+        }
+    });
 }
 
 /// The field's note, what it inherits while the draft leaves it unset, and the refusal's reasons

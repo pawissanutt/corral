@@ -20,7 +20,7 @@ use nsh_base::{menu, menu_item};
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
-use super::config_fields::{edit, entry, field, row};
+use super::config_fields::{edit, entry, field, on_jump, row};
 use super::parts::{button_row, cell, mono_cell, space};
 use crate::model::Form;
 use crate::model::settings::document::{self, Path};
@@ -829,10 +829,15 @@ fn advanced(app: AppState, args: Field, live: Memo<Live>) -> AnyElement {
             open.set(true);
         }
     });
-    let count = computed(move || live.with(|live| live.draft.lines(&path).len()));
-    // The button's words say whether it is open, so it redraws on a press; the handle keeps
-    // the keyboard on it.
+    let jump_path = path.clone();
     let handle = element_ref();
+    on_jump(
+        app,
+        move |path| *path == jump_path,
+        move || open.set(true),
+        handle,
+    );
+    let count = computed(move || live.with(|live| live.draft.lines(&path).len()));
     let toggle = dynamic(move || {
         let (shown, count) = (open.get(), count.get());
         untracked(move || {
@@ -853,14 +858,8 @@ fn advanced(app: AppState, args: Field, live: Memo<Live>) -> AnyElement {
         })
     })
     .into_element();
-    let fields = dynamic(move || {
-        if !open.get() {
-            return None;
-        }
-        let args = args.clone();
-        Some(untracked(move || field(app, &args, live)))
-    })
-    .into_element();
+    let fields =
+        dynamic(move || open.get().then(|| untracked(|| field(app, &args, live)))).into_element();
     view()
         .min_w(px(0.0))
         .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))

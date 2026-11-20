@@ -454,6 +454,9 @@ pub const WORKER_ONLY: &str =
     "Routing picks worker profiles only; a review runs each project's Reviewer.";
 
 /// Said by Add rule: where a new rule goes and what it matches until narrowed.
+pub const PREVIEW_NOTE: &str =
+    "Preview saves routing rules, but sample dispatch does not apply them.";
+
 pub const NEW_RULE: &str = "A new rule goes last and has no conditions, so it matches every task that reaches it until you add a kind, size, title pattern or project.";
 
 /// Said in an open catch-all rule's editor.
