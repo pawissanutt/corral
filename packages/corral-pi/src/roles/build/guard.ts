@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { assistantShellRefusal } from "../assistant/guard.ts";
-import { resolveToolPath } from "../assistant/paths.ts";
 import { classifyWriteScope } from "../assistant/write-scope.ts";
 import type { RoleContext } from "../types.ts";
 
@@ -224,16 +223,6 @@ export function installBuildGuard(pi: ExtensionAPI, context: RoleContext): void 
       const refusal = buildShellRefusal(input.command, context.build?.session.bare === true);
       if (refusal) return { block: true, reason: refusal };
     }
-    if (event.toolName !== "edit" && event.toolName !== "write") return undefined;
-    if (!context.build) return { block: true, reason: "build rule: no build session is bound, so every edit and write is refused; nothing was written." };
-    const path = input.path;
-    if (typeof path !== "string") return { block: true, reason: "build rule: edit and write require a target path; nothing was written." };
-    try {
-      const { session } = context.build;
-      const result = classifyBuildWrite(resolveToolPath(path, context.cwd), session.worktree, session.bare ? undefined : session.workspaceRoot);
-      return result.allowed ? undefined : { block: true, reason: result.reason };
-    } catch {
-      return { block: true, reason: "build rule: the write destination could not be resolved safely; nothing was written." };
-    }
+    return undefined;
   });
 }

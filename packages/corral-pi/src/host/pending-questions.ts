@@ -21,7 +21,7 @@ export function validAnswer(q: ChoiceQuestion, a: ChoiceAnswer): boolean {
 }
 const Record = z.object({ version: z.literal(1), id: z.string(), session: z.string(),
   questions: z.array(Choice).min(1).max(4), expires: z.number(),
-  tool: z.enum(["ask_user", "bash"]).optional(),
+  tool: z.enum(["ask_user", "bash", "file_write"]).optional(),
   status: z.enum(["pending", "answered", "cancelled", "expired", "withdrawn", "ended"]),
   answers: z.array(Answer).optional(), message: z.string().optional(),
 });
@@ -76,6 +76,13 @@ export class PendingQuestions {
     for (const q of this.questions.values()) {
       if (q.message && userTexts.has(q.message)) this.consumed.add(q.id);
     }
+    // A process-local approval binding cannot be restored, including after rewind or reload.
+    for (const q of this.questions.values()) {
+      if ((q.tool === "bash" || q.tool === "file_write") &&
+          (q.status === "pending" || (q.status === "answered" && !this.consumed.has(q.id)))) {
+        this.save({ ...q, status: "cancelled" });
+      }
+    }
     this.expire();
     this.scheduleExpiry();
     for (const q of this.questions.values()) if (q.status === "pending") this.host.changed(q);
@@ -108,6 +115,10 @@ export class PendingQuestions {
   }
   pending(): readonly PendingQuestion[] { this.expire(); return this.list().filter(q => q.status === "pending"); }
   get(id: string): PendingQuestion | undefined { this.expire(); return this.questions.get(id); }
+  allowed(id: string): boolean {
+    const q = this.get(id);
+    return q?.status === "answered" && q.expires > this.now() && q.answers?.[0]?.option === "allow";
+  }
   status(id: string): string { return this.consumed.has(id) ? "delivered" : this.questions.get(id)?.status ?? "missing"; }
 
   ask(call: string, questions: ChoiceQuestion[], tool?: PendingQuestion["tool"]): PendingQuestion {

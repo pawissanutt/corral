@@ -22,6 +22,7 @@ import { HOOK_ENTRY, Hooks } from "../capabilities/hooks.ts";
 import { CHECKPOINT_ENTRY, Checkpoints } from "../capabilities/checkpoints.ts";
 import { jobControl, type JobControl } from "./job-controls.ts";
 import { type HostControls, installToolControls, parseControls } from "./tool-controls.ts";
+import { ToolApprovals } from "./tool-approvals.ts";
 import { type CapabilityGuidance, type Guidance, selectGuidance } from "../capabilities/guidance.ts";
 import { PROVIDERS, type ProviderId, billingKind, hostDestinations, isApiProvider, isProviderId } from "../auth/providers.ts";
 import type { AuthContext, Fetch } from "../auth/types.ts";
@@ -382,7 +383,7 @@ export class HostSession {
   private readonly hooks: Hooks | undefined;
   private additionalLsp: LspToolkit | undefined;
   private readonly additionalLspFactory: (() => LspToolkit) | undefined;
-  private readonly bashQuestions = new Map<string, string>();
+  private readonly toolApprovals: ToolApprovals | undefined;
   private readonly checkpoints: Checkpoints | undefined;
   private rewinding = false;
   private readonly auxiliary: AuxiliaryRuntime | undefined;
@@ -646,7 +647,8 @@ export class HostSession {
       });
     }
     const dialogEnabled = options.capabilities?.enabled.includes("ask_user") === true;
-    const questions = dialogEnabled || options.capabilities?.enabled.includes("bash_rules") ? new PendingQuestions({
+    const writeApprovalRole = options.identity.role === "build" || options.identity.role === "assistant";
+    const questions = dialogEnabled || writeApprovalRole || options.capabilities?.enabled.includes("bash_rules") ? new PendingQuestions({
       session: () => options.sessionManager.getSessionId(),
       entries: () => options.sessionManager.getEntries(),
       append: value => { options.sessionManager.appendCustomEntry(QUESTION_ENTRY, value, { immediate: true }); },
@@ -665,6 +667,7 @@ export class HostSession {
       },
     }) : undefined;
     this.ownerQuestions = questions;
+    this.toolApprovals = questions ? new ToolApprovals(questions, options.cwd) : undefined;
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
       ...(dialogEnabled && questions ? [askUserTool(async answer => {
         if (!this.dialogPi) throw new Error("dialog session is unavailable");
@@ -983,6 +986,7 @@ export class HostSession {
       const model = this.session.model;
       if (model) this.modelChanged(`${model.provider}/${model.id}`, event.level);
     });
+    pi.on("session_start", () => { this.toolApprovals?.clear(); });
     if (this.ownerQuestions) {
       this.questionUi = new OwnerQuestionUi(this.ownerQuestions, () => this.bound && !this.closing,
         message => { this.session.sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, undefined); },
@@ -1108,12 +1112,17 @@ export class HostSession {
         reason,
       };
     });
-    const fixed = this.options.modules.role.shellRefusal;
+    const shellRefusal = this.options.modules.role.shellRefusal;
+    const { cwd, workspaceRoot, identity, build } = this.roleContext;
+    const writeScope = identity.role === "assistant" ? { cwd, root: cwd, workspace: workspaceRoot }
+      : identity.role === "build" ? build ? { cwd, root: build.session.worktree,
+        workspace: build.session.bare ? undefined : build.session.workspaceRoot } : null : undefined;
     installToolControls(pi, {
-      ...(fixed ? { fixed } : {}),
+      ...(shellRefusal ? { fixed: (command) => shellRefusal(command, build?.session.bare === true) } : {}),
       ...(this.hooks ? { hooks: this.hooks } : {}),
       ...(this.controls.bashRules ? { rules: this.controls.bashRules } : {}),
-      confirmBash: command => this.confirmBash(command),
+      ...(this.toolApprovals ? { approvals: this.toolApprovals } : {}),
+      ...(writeScope === undefined ? {} : { writeScope }),
       events: this.options.events, corral, currentTurn: () => this.currentTurn(),
     });
     if (!this.loadout.includes("bash")) {
@@ -1653,23 +1662,6 @@ export class HostSession {
     });
     return promise;
   }
-  private confirmBash(command: string): string | undefined {
-    const questions = this.ownerQuestions;
-    const text = `Run this command?\n${command}`;
-    if (!questions || text.length > 1000) return "bash rule requires owner confirmation; use a shorter command; nothing ran";
-    const id = this.bashQuestions.get(command);
-    if (id) {
-      const prior = questions.get(id);
-      if (prior?.status === "pending") return `Waiting for owner question ${id}; nothing ran`;
-      this.bashQuestions.delete(command);
-      if (prior?.answers?.[0]?.option === "allow") return;
-      return "The owner did not allow this command; nothing ran";
-    }
-    const question = questions.ask(crypto.randomUUID(), [{ question: text, options: ["allow", "deny"], freeText: false }], "bash");
-    this.bashQuestions.set(command, question.id);
-    return `Waiting for owner question ${question.id}; nothing ran`;
-  }
-
   pendingOwnerQuestions() {
     return this.ownerQuestions?.pending().flatMap(record => {
       const question = record.questions[0];
@@ -1757,7 +1749,7 @@ export class HostSession {
       this.restoreTurn(manager);
       this.turnError = null;
       this.stopCause = undefined;
-      this.bashQuestions.clear();
+      this.toolApprovals?.clear();
       for (const question of this.ownerQuestions?.list() ?? []) {
         if (question.status === "pending") this.options.herdr?.questionChanged(question.id, false);
       }
