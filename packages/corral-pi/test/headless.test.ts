@@ -135,7 +135,7 @@ test("a headless worker asks, reopens its transcript and reports done after the 
 test("status is bounded with a full queue of heavily escaped owner questions", async () => {
   const fx = await codeHost("worker", { enabled: ["ask_user"] });
   try {
-    const question = "😀\u0001".repeat(330);
+    const question = "😀\uD800" + "😀\u0001".repeat(330);
     const options = ["a", "b", "c", "d"].map(letter => letter + "\u0001".repeat(299));
     await fx.turn([{ toolCalls: Array.from({ length: PENDING_MAX }, (_, i) => ({
       callId: `ask-${i}`, name: "ask_user", arguments: { nonBlocking: true,
@@ -150,9 +150,9 @@ test("status is bounded with a full queue of heavily escaped owner questions", a
     expect(status).toMatchObject({ paused: true, turn: { open: false }, owner_questions_total: PENDING_MAX });
     expect(status.owner_questions.map(entry => entry.id)).toEqual([undefined, ...pending.map(entry => entry.id)]);
     for (const entry of status.owner_questions) {
-      expect(entry.question.startsWith("😀")).toBeTrue();
-      expect(question.startsWith(entry.question)).toBeTrue();
-      expect(/[\uD800-\uDFFF]/u.test(entry.question)).toBeFalse();
+      expect(entry.question.startsWith("😀�")).toBeTrue();
+      expect(question.toWellFormed().startsWith(entry.question)).toBeTrue();
+      expect(entry.question.isWellFormed()).toBeTrue();
       expect(Buffer.byteLength(JSON.stringify(entry.question))).toBeLessThanOrEqual(514);
     }
   } finally { await fx.close(); }
