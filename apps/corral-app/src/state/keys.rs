@@ -129,7 +129,13 @@ impl AppState {
             }
         });
         on_key_with("mod+k", anywhere, move |_| self.toggle_palette());
-        on_key_with("escape", anywhere, move |_| self.close_newest());
+        // Over a profile shown alone, Escape returns to the profile list rather than leaving
+        // Configuration; whatever stands over the page closes first.
+        on_key_with("escape", anywhere, move |_| {
+            if !self.escape_profile() {
+                self.close_newest();
+            }
+        });
         on_key_with("mod+b", typing, move |_| self.toggle_sidebar());
         // Save the configuration draft from any of its fields, as the save bar's Save does.
         on_key_with("mod+s", anywhere, move |_| {

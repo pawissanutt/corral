@@ -267,10 +267,13 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
     nav.register(depth, &entry, &title, bar.as_ref().map(|bar| bar.shown));
     let position = depth + 1;
     let title: Reactive<SharedString> = SharedString::from(title).into_reactive();
-    // Configuration with unsaved edits stays on a back press or swipe until the confirm sheet
-    // has asked; every other page pops at once.
+    // Configuration stays on a back press or swipe while a profile shows alone, which returns
+    // to the profile list, and with unsaved edits until the confirm sheet has asked; every
+    // other page pops at once.
     let config = matches!(entry, Entry::Section(SettingsSection::Config));
-    let holds = computed(move || config && app.settings.with(|state| state.config.dirty()));
+    let holds = computed(move || {
+        config && (app.profile_alone() || app.settings.with(|state| state.config.dirty()))
+    });
     let page = nav_page()
         .title(title.clone())
         .header_style_with(|s| {
@@ -282,10 +285,10 @@ fn pushed_page(nav: Nav, depth: usize, entry: Entry) -> Screen {
         // The browser's back and Escape slide this page out before it is dismissed: the page
         // under it shows again first.
         .on_back_press(move || {
-            if holds.get_untracked() {
-                app.asks_before_leaving_config();
-            } else {
+            if !holds.get_untracked() {
                 nav.uncover(depth);
+            } else if !app.back_to_profiles() {
+                app.asks_before_leaving_config();
             }
         })
         .on_dismiss(move || nav.back_to(depth));
