@@ -2,11 +2,9 @@
 //! or credentials.
 use super::AppState;
 use crate::model::{
-    DataState, Destination, Id, ProjectFilter, WorkspaceMode,
-    agents::{self, Show},
-    assistant,
+    DataState, Destination, Id, ProjectFilter, WorkspaceMode, assistant,
     nav::{self, Area},
-    projects::{NowGroup, Scope, Scopes},
+    projects::{Scope, Scopes},
 };
 use corral_protocol::assistant::ContextRef;
 use nsh_core::{prelude::*, storage::Storage};
@@ -64,53 +62,6 @@ impl AppState {
             None => self.scope_pending.set(Some(scope)),
         }
         self.project_context_removed.set(None);
-    }
-
-    pub fn now_group(&self) -> NowGroup {
-        self.feed.with(|feed| {
-            feed.store.as_deref().map_or(NowGroup::State, |store| {
-                self.scopes.with(|scopes| scopes.now_group(store))
-            })
-        })
-    }
-
-    pub fn set_now_group(&self, group: NowGroup) {
-        if let Some(store) = self.feed.with_untracked(|feed| feed.store.clone()) {
-            self.scopes
-                .update(|scopes| scopes.set_now_group(&store, group));
-        }
-    }
-
-    /// Shows the sessions whose host runs or waits, or every one the daemon lists, and keeps
-    /// the choice in `corral.scope` for this workspace.
-    pub fn set_agents_show(&self, show: Show) {
-        if let Some(store) = self.feed.with_untracked(|feed| feed.store.clone()) {
-            self.scopes
-                .update(|scopes| scopes.set_agents_show(&store, show));
-        }
-        let filter = untracked(|| self.scope_filter());
-        self.reduce(self.agents, |state, feed, _, _| {
-            state.act(agents::Action::SetShow(show), feed, &filter)
-        });
-    }
-
-    /// Restores the Show choice saved for the workspace whenever the workspace or its saved
-    /// choices change.
-    pub(super) fn follow_agents_show(self) {
-        let saved = computed(move || {
-            self.feed.with(|feed| {
-                feed.store
-                    .as_deref()
-                    .map(|store| self.scopes.with(|scopes| scopes.agents_show(store)))
-            })
-        });
-        effect(move || {
-            if let Some(show) = saved.get()
-                && untracked(|| self.agents.with(|state| state.show != show))
-            {
-                untracked(|| self.agents.update(|state| state.show = show));
-            }
-        });
     }
 
     /// A project's page is Home scoped to it.

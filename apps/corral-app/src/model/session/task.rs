@@ -1,10 +1,9 @@
 //! The Task tab of a task-bound session (worker, reviewer, planner): the run's task as the
-//! engine records it (`DetailRef::Task`), shown as Now shows it. The story itself (status,
-//! title, body with its acceptance, stages, dependencies, a blocked task's reply box, every
-//! engine operation) is Now's own (`work::task_page`), drawn by Now's renderer; this module adds
-//! what the session page says around it: the summary from the board's row, every attempt the
-//! engine recorded for the task with this session's own marked, and the links out (Open in
-//! Now, the Timeline). A session with no task run has no Task tab at all.
+//! engine records it (`DetailRef::Task`), shown as its page's Overview shows it, which the
+//! screen draws; this module adds what the session page says around it: the summary from the
+//! board's row, every attempt the engine recorded for the task with this session's own marked,
+//! and the links out (the task's page, the Timeline). A session with no task run has no Task
+//! tab at all.
 
 use corral_protocol::detail::DetailRef;
 use corral_types::{Outcome, Role};
@@ -169,8 +168,8 @@ fn attempts(cx: &Cx<'_>, task: &Id) -> Vec<Attempt> {
 fn links(task: &Id) -> Vec<TaskLink> {
     vec![
         TaskLink {
-            id: "btn-task-now",
-            label: "Open in Now",
+            id: "btn-task-page",
+            label: "Open task",
             key: None,
             action: Action::OpenLive(Live::Task(task.clone())),
         },
@@ -204,8 +203,8 @@ pub(super) fn act(_: &mut State, action: TaskAction, _: &Feed) -> Vec<Effect> {
     }
 }
 
-/// The Task group: the task's decisions in Now (the terminal UI's Inbox) while it waits on the
-/// owner, the task in Now, its Timeline.
+/// The Task group: the task's decisions while it waits on the owner, the task's page, its
+/// Timeline.
 pub fn actions(cx: &Cx<'_>) -> Option<ActionGroup> {
     let task = bound(cx)?;
     let mut rows = Vec::new();
@@ -223,8 +222,8 @@ pub fn actions(cx: &Cx<'_>) -> Option<ActionGroup> {
         ));
     }
     rows.push(row(
-        "task-now",
-        format!("Open {task} in Now"),
+        "task-page",
+        format!("Open {task}"),
         None,
         Action::OpenLive(Live::Task(task.clone())),
     ));

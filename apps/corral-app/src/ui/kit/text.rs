@@ -49,13 +49,6 @@ pub fn rich_small(app: AppState, rich: &Rich) -> AnyElement {
     paragraph(app, rich, small_size(app.form), Token::Ink2)
 }
 
-/// [`rich`] at `size` points with `ink` as the base colour of runs without a hue or dim of their
-/// own: a lede at 13.5 pt, a phone band paragraph at 15.5 pt. A terminal keeps its one size and
-/// takes only the ink.
-pub fn rich_at(app: AppState, rich: &Rich, size: f32, ink: Token) -> AnyElement {
-    paragraph(app, rich, size, ink)
-}
-
 fn paragraph(app: AppState, rich: &Rich, size: f32, ink: Token) -> AnyElement {
     let form = app.form;
     let root = text("")

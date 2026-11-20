@@ -23,7 +23,7 @@ use crate::model::{Id, Live};
 use super::actions::{ActionGroup, row};
 use super::dock::{DockAction, Pending};
 use super::keys::{KeyAction, KeyBinding, bind};
-use super::tabs::{Badge, PartBody, count, load, part};
+use super::tabs::{PartBody, load, part};
 use super::{Action, Can, Cx, Focus, Host, SessionRole, State, Tab};
 
 #[path = "record.rs"]
@@ -338,36 +338,6 @@ pub fn summary(cx: &Cx<'_>) -> (String, Hue) {
         Hue::Neutral
     };
     (parts.join(" · "), hue)
-}
-
-/// The tab's mark: tasks not landed, `!` when one is blocked or failed, `◆` while a plan waits
-/// and nothing is open. The host's brief counts them; before it does, the board last read.
-pub fn badge(cx: &Cx<'_>) -> Option<Badge> {
-    let (open, alarmed, proposed) = match cx.state.and_then(|state| state.board) {
-        Some(board) => (board.open, board.blocked + board.failed > 0, board.proposed),
-        None => {
-            let board = loaded(cx.feed, cx.id.as_str())?;
-            let open = board.tasks.len() - phases(board, &["landed"]);
-            (
-                u32::try_from(open).unwrap_or(u32::MAX),
-                phases(board, &["blocked", "failed"]) > 0,
-                board.proposed.is_some(),
-            )
-        }
-    };
-    if alarmed {
-        Some(Badge {
-            text: format!("{open} !"),
-            hue: Hue::Held,
-        })
-    } else if proposed && open == 0 {
-        Some(Badge {
-            text: "◆".into(),
-            hue: Hue::Held,
-        })
-    } else {
-        count(open)
-    }
 }
 
 /// The board-plan card the host raised, by id.

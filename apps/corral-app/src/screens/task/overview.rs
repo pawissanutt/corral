@@ -10,9 +10,9 @@ use crate::model::tasks::{self, page};
 use crate::model::work::Press;
 use crate::model::{Form, Id};
 use crate::screens::markdown::{markdown, provide_styles};
-use crate::screens::now::parts::press;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
+use crate::ui::kit::more::press;
 use crate::ui::kit::status::pipeline_rows;
 use crate::ui::term;
 

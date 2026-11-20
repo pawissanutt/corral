@@ -18,8 +18,7 @@ use crate::model::{Id, Live};
 
 use super::actions::{ActionGroup, row};
 use super::keys::{KeyAction, KeyBinding, bind};
-use super::read_state::ReadState;
-use super::tabs::{Badge, PartBody, load, part};
+use super::tabs::{PartBody, load, part};
 use super::task::{TaskLink, bound};
 use super::{Action, Cx, Focus, State, Tab};
 
@@ -147,39 +146,6 @@ pub fn proof_tab(cx: &Cx<'_>) -> ProofTab {
         artifacts_empty: evidence.empty,
         links: links(task),
     }
-}
-
-/// The badge: `proof?` once a read of the checks failed, else the newest gate in words.
-pub fn badge(cx: &Cx<'_>) -> Option<Badge> {
-    let target = target(cx).ok()?;
-    if matches!(
-        ReadState::of(cx.feed.detail(&target), cx.feed),
-        ReadState::Failed(_)
-    ) {
-        return Some(Badge {
-            text: "proof?".into(),
-            hue: Hue::Held,
-        });
-    }
-    let task = bound(cx)?;
-    let chips = with_task(cx.feed, task, |shown| {
-        chips(shown.row.gate.as_ref(), shown.row.review.as_ref())
-    })?;
-    let hue = if chips.iter().any(|(_, hue)| *hue == Hue::Fail) {
-        Hue::Fail
-    } else if chips.len() > 1 && chips.iter().all(|(_, hue)| *hue == Hue::Ok) {
-        Hue::Ok
-    } else {
-        Hue::Neutral
-    };
-    Some(Badge {
-        text: chips
-            .into_iter()
-            .map(|(words, _)| words)
-            .collect::<Vec<_>>()
-            .join(" · "),
-        hue,
-    })
 }
 
 /// What the tab reads while it shows: the checks and the task's record (its artifacts).

@@ -1,5 +1,5 @@
 //! The desktop and web shell: a top bar across the window, the sidebar (the scope switcher,
-//! the four places with Activity's pages under it while one shows, then Ask, Go to and
+//! the four places with Activity's pages under it while one shows, then Go to and
 //! Settings at its foot; folding to a rail of icons by choice or on a narrow window), and the
 //! content container that holds the connection banner and the current page, with the Ask
 //! drawer, the palette, the confirmation and the toast over it. On a touch tablet every shell
@@ -10,7 +10,7 @@ use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
 use crate::model::commands::area_key;
-use crate::model::nav::{ASK_KEY, ASK_LABEL, PALETTE_HINT, PALETTE_KEY, SIGNS_AS, THIS_DEVICE};
+use crate::model::nav::{PALETTE_HINT, PALETTE_KEY, SIGNS_AS, THIS_DEVICE};
 use crate::model::{Area, Destination, SettingsSection, Workspace};
 use crate::screens;
 use crate::shell::{
@@ -145,7 +145,7 @@ fn workspace_path(app: AppState, ws: Workspace) -> AnyElement {
 }
 
 /// The scope switcher, then the places this workspace has with Activity's pages under
-/// Activity while one of them shows; at the foot Ask, Go to and Settings with its sections
+/// Activity while one of them shows; at the foot Go to and Settings with its sections
 /// under it while it is selected, and this device.
 fn sidebar(
     app: AppState,
@@ -174,7 +174,6 @@ fn sidebar(
         .bg(color(Token::Shell))
         .child(scope_switcher(app, ScopeFace::Sidebar))
         .child(scroll().flex_1().min_h(px(0.0)).child(rows))
-        .child(ask_button(app))
         .child(palette_opener(app))
         .child(place_row(app, current, Area::Settings))
         .child(when(
@@ -256,12 +255,11 @@ fn peek(
 }
 
 /// The folded sidebar: the scope switcher, each place as its icon with its count, Activity's
-/// pages as short names under Activity while one shows; at the foot Ask, the palette and
+/// pages as short names under Activity while one shows; at the foot the palette and
 /// Settings with its sections as short names. Every control keeps its full name (and a place
 /// its count) for assistive technology, shows its name and key in a hint while the pointer
 /// rests on it, and the palette lists them all.
 fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElement {
-    let ink = color(Token::ShellInk);
     let rows = dynamic(move || {
         let shown = shown.get();
         untracked(move || {
@@ -284,20 +282,6 @@ fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElemen
         .bg(color(Token::Shell))
         .child(scope_switcher(app, ScopeFace::Rail))
         .child(scroll().flex_1().min_h(px(0.0)).child(rows))
-        .child(
-            rail_button(
-                app,
-                Hint {
-                    name: ASK_LABEL,
-                    key: Some(ASK_KEY.to_owned()),
-                },
-                move || SharedString::from(ASK_LABEL),
-                "ask-open".into(),
-                || false,
-                move || app.open_ask(),
-            )
-            .child(icon(Icon::Ask, 18.0, ink)),
-        )
         .child(
             rail_button(
                 app,
@@ -522,40 +506,6 @@ fn rail_hint(hint: Hint) -> AnyElement {
                 .text_size(px(10.5))
                 .text_color(color(Token::Ink3))
         }))
-        .into_element()
-}
-
-/// Ask at the sidebar's foot: the way to the composer until Home docks it.
-fn ask_button(app: AppState) -> AnyElement {
-    let ink = color(Token::ShellInk);
-    view()
-        .h(px(control_height(row_height(app.form))))
-        .flex_shrink_0()
-        .flex_row()
-        .items_center()
-        .gap(px(10.0))
-        .px(px(8.0))
-        .rounded(px(RADIUS_CONTROL))
-        .cursor_pointer()
-        .transition_colors()
-        .duration(120.0_f32)
-        .hover(move |s| s.bg(ink.opacity(0.16)))
-        .active(move |s| s.bg(ink.opacity(0.2)))
-        .focus_visible(focus_ring)
-        .role(AccessibilityRole::Button)
-        .label(ASK_LABEL)
-        .test_id("ask-open")
-        .on_press(move || app.open_ask())
-        .child(icon(Icon::Ask, 16.0, color(Token::ShellInk2)))
-        .child(
-            text(ASK_LABEL)
-                .flex_1()
-                .min_w(px(0.0))
-                .truncate()
-                .text_size(px(text_size(app.form)))
-                .text_color(color(Token::ShellInk2)),
-        )
-        .child(key_hint(ASK_KEY))
         .into_element()
 }
 

@@ -18,8 +18,7 @@ use crate::model::effect::Effect;
 use crate::model::hue::Hue;
 
 use super::changes_diff::{self, FileDiff, Opened, Pinned};
-use super::read_state::ReadState;
-use super::tabs::{Badge, PartBody, count, load, part};
+use super::tabs::{PartBody, load, part};
 use super::{Action, Cx, Focus, State, Tab};
 
 #[path = "changes_keys.rs"]
@@ -682,31 +681,6 @@ pub fn changes_tab(cx: &Cx<'_>) -> ChangesTab {
             .as_ref()
             .map(|opened| changes_diff::file_diff(cx, opened)),
     }
-}
-
-/// The host's file count; `project?` while a session without a worktree of its own has no
-/// project chosen, `git?` once a read of the changes failed or the host could not read the
-/// repository.
-pub fn badge(cx: &Cx<'_>) -> Option<Badge> {
-    let target = target(cx);
-    let served = served(cx, &target);
-    if let Some(served) = served.filter(|served| served.error.is_some()) {
-        let own = served.scopes.iter().any(|scope| scope.id == "bound");
-        return Some(Badge {
-            text: if own { "git?" } else { "project?" }.into(),
-            hue: Hue::Held,
-        });
-    }
-    if matches!(
-        ReadState::of(cx.feed.detail(&target), cx.feed),
-        ReadState::Failed(_)
-    ) {
-        return Some(Badge {
-            text: "git?".into(),
-            hue: Hue::Held,
-        });
-    }
-    count(cx.state?.changes?)
 }
 
 /// What the tab reads while it shows: its list, the opened file's patch, and the pin of a

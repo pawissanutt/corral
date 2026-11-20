@@ -318,4 +318,11 @@ fn burnup_counts_each_task_once_and_follows_drops_and_reopens() {
     let counts: Vec<(u32, u32)> = series.points.iter().map(|p| (p.1, p.2)).collect();
     assert!(counts.contains(&(2, 1)));
     assert_eq!(counts.last(), Some(&(1, 0)));
+    // The legend counts events, so the twice-recorded landing counts twice.
+    let tally: Vec<&str> = series
+        .tally
+        .iter()
+        .map(|entry| entry.words.as_str())
+        .collect();
+    assert_eq!(tally, ["created 2", "landed 2", "dropped 1", "reopened 1"]);
 }

@@ -44,7 +44,7 @@ pub(super) fn artifact_ref(reference: &str) -> DetailRef {
 /// Every task in Review on the board, in the project scope, as the list shows them: those
 /// waiting for the owner's verdict first, each group in board order. j/k walk and the first
 /// candidate shown follow this order.
-pub fn candidates_filtered<'a>(feed: &'a Feed, filter: &ProjectFilter) -> Vec<&'a Task> {
+fn candidates_filtered<'a>(feed: &'a Feed, filter: &ProjectFilter) -> Vec<&'a Task> {
     let filter = filter.resolved(feed);
     let mut candidates: Vec<&Task> = feed
         .board

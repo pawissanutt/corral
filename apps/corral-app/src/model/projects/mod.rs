@@ -1,43 +1,29 @@
 //! Workspace projects and the one device-local project scope. No client or UI runtime.
 mod branches;
-mod page;
 mod scope;
 #[cfg(test)]
 mod tests;
 
 pub use branches::{BRANCHES_CAPTION, branches, suggest};
-pub use page::{
-    FACTS_LABEL, PLANS_HEADING, PLANS_HINT, ProjectEmpty, ProjectFact, ProjectPage, ProjectPlan,
-    ProjectSession, SESSIONS_HEADING, SESSIONS_HINT, not_found, page, project_now,
-};
-pub use scope::{
-    ALL_PROJECTS, NowGroup, NowScope, SCOPE_HEADING, Scope, ScopeEntry, Scopes, scope_menu,
-    scope_note,
-};
-
-/// The sidebar section's and the phone list's name.
-pub const PROJECTS_HEADING: &str = "Projects";
-/// The phone More row that opens the project list.
-pub const PROJECTS_MORE_SUBTITLE: &str = "Open work by project";
+pub use scope::{ALL_PROJECTS, SCOPE_HEADING, Scope, ScopeEntry, Scopes, scope_menu, scope_note};
 
 use crate::model::{
     Id,
-    daemon::{Feed, Group, Task},
+    daemon::{Feed, Task},
 };
 use corral_types::Status;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeSet;
 
 pub(crate) fn is_open(task: &Task) -> bool {
     !matches!(task.status(), Status::Done | Status::Dropped)
 }
 
+/// The scope as the domains' `*_filtered` builders take it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum ProjectFilter {
     #[default]
     All,
     Project(Id),
-    Unassigned,
 }
 
 impl ProjectFilter {
@@ -53,29 +39,7 @@ impl ProjectFilter {
         match self {
             Self::All => true,
             Self::Project(id) => project == Some(id.as_str()),
-            Self::Unassigned => project.is_none(),
         }
-    }
-}
-
-// Null is All and the empty name is Unassigned; configured project names are nonempty.
-// Real project names remain plain strings, including names such as "all" or "unassigned".
-impl Serialize for ProjectFilter {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        match self {
-            Self::All => serializer.serialize_none(),
-            Self::Project(id) => serializer.serialize_str(id.as_str()),
-            Self::Unassigned => serializer.serialize_str(""),
-        }
-    }
-}
-impl<'de> Deserialize<'de> for ProjectFilter {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(match Option::<String>::deserialize(deserializer)? {
-            None => Self::All,
-            Some(name) if name.is_empty() => Self::Unassigned,
-            Some(name) => Self::Project(Id::from(name)),
-        })
     }
 }
 
@@ -104,165 +68,6 @@ pub fn known_projects(feed: &Feed) -> Vec<Id> {
             .map(Id::from)
             .collect()
     }
-}
-
-pub fn has_multiple_projects(feed: &Feed) -> bool {
-    if feed.capable(corral_protocol::PROJECTS_V1) {
-        return feed.projects.len() >= 2;
-    }
-    let mut names = feed
-        .board
-        .tasks()
-        .iter()
-        .filter(|task| is_open(task))
-        .filter_map(Task::project);
-    let first = names.next();
-    names.any(|name| Some(name) != first)
-}
-
-pub fn has_unassigned(feed: &Feed) -> bool {
-    feed.board
-        .tasks()
-        .iter()
-        .any(|task| is_open(task) && task.project().is_none())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProjectEntry {
-    /// Sidebar/More interaction id, including the required project prefix.
-    pub id: String,
-    pub label: String,
-    pub filter: ProjectFilter,
-    /// Unknown on old daemons; never synthesize canonical statistics from partial lists.
-    pub open: Option<u32>,
-    /// Counted from the complete open-task list; unknown until it arrives.
-    pub running: Option<u32>,
-    pub review: Option<u32>,
-    pub needs_me: Option<u32>,
-    pub selected: bool,
-}
-
-impl ProjectEntry {
-    /// The configured project this row opens; `None` for the Unassigned row.
-    pub fn project(&self) -> Option<&Id> {
-        match &self.filter {
-            ProjectFilter::Project(id) => Some(id),
-            ProjectFilter::All | ProjectFilter::Unassigned => None,
-        }
-    }
-
-    /// The counts as a line: what is open, running and waiting on the owner.
-    pub fn summary(&self) -> String {
-        if self.filter == ProjectFilter::Unassigned {
-            return UNASSIGNED_HINT.into();
-        }
-        let Some(open) = self.open else {
-            return "Counts not reported by this corrald".into();
-        };
-        if open == 0 {
-            return "No open work".into();
-        }
-        let mut parts = vec![format!("{open} open")];
-        if let Some(running) = self.running.filter(|n| *n > 0) {
-            parts.push(format!("{running} running"));
-        }
-        if let Some(needs) = self.needs_me.filter(|n| *n > 0) {
-            parts.push(format!("{needs} need you"));
-        }
-        parts.join(" · ")
-    }
-
-    /// What assistive technology hears for the row: its name, then [`Self::summary`].
-    pub fn spoken(&self) -> String {
-        format!("{}, {}", self.label, self.summary())
-    }
-
-    /// What the sidebar's needs-you figure stands for: `3 wait on you`; `None` while nothing
-    /// waits or the daemon reports no counts.
-    pub fn needs_hint(&self) -> Option<String> {
-        self.needs_me
-            .filter(|n| *n > 0)
-            .map(crate::model::health::waits_on_you)
-    }
-
-    /// What the sidebar's open figure stands for: `40 open tasks: 2 running, 5 in review`;
-    /// `None` where the daemon reports no counts.
-    pub fn open_hint(&self) -> Option<String> {
-        let open = self.open?;
-        let noun = if open == 1 { "task" } else { "tasks" };
-        let detail = [(self.running, "running"), (self.review, "in review")]
-            .into_iter()
-            .filter_map(|(n, word)| n.filter(|n| *n > 0).map(|n| format!("{n} {word}")))
-            .collect::<Vec<_>>();
-        Some(if detail.is_empty() {
-            format!("{open} open {noun}")
-        } else {
-            format!("{open} open {noun}: {}", detail.join(", "))
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Projects {
-    pub entries: Vec<ProjectEntry>,
-}
-
-/// How many of the project's open tasks are in `group`, once the open-task list is complete.
-fn count(feed: &Feed, id: &str, groups: &[Group]) -> Option<u32> {
-    feed.board.complete.then(|| {
-        let count = feed
-            .board
-            .tasks()
-            .iter()
-            .filter(|task| task.project() == Some(id) && groups.contains(&task.group))
-            .count();
-        u32::try_from(count).unwrap_or(u32::MAX)
-    })
-}
-
-impl Projects {
-    pub fn build(feed: &Feed, filter: &ProjectFilter) -> Self {
-        let filter = filter.resolved(feed);
-        let mut entries = known_projects(feed)
-            .into_iter()
-            .map(|id| {
-                let row = feed
-                    .projects
-                    .get(&id)
-                    .filter(|_| feed.capable(corral_protocol::PROJECTS_V1));
-                ProjectEntry {
-                    id: format!("project-{id}"),
-                    label: id.to_string(),
-                    selected: filter == ProjectFilter::Project(id.clone()),
-                    open: row.map(|row| u32::try_from(row.open).unwrap_or(u32::MAX)),
-                    running: count(feed, &id, &[Group::Producing]),
-                    review: count(feed, &id, &[Group::Verifying]),
-                    needs_me: count(feed, &id, &[Group::NeedsYou]),
-                    filter: ProjectFilter::Project(id),
-                }
-            })
-            .collect::<Vec<_>>();
-        if has_unassigned(feed) {
-            entries.push(ProjectEntry {
-                id: "filter-unassigned".into(),
-                label: "Unassigned".into(),
-                filter: ProjectFilter::Unassigned,
-                open: None,
-                running: None,
-                review: None,
-                needs_me: None,
-                selected: filter == ProjectFilter::Unassigned,
-            });
-        }
-        Self { entries }
-    }
-}
-
-const UNASSIGNED_HINT: &str = "Tasks filed without a project";
-
-pub fn project_chip(feed: &Feed, filter: &ProjectFilter, project: Option<&str>) -> Option<String> {
-    (filter.resolved(feed) == ProjectFilter::All && has_multiple_projects(feed))
-        .then(|| project.unwrap_or("Unassigned").to_owned())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

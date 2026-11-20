@@ -28,8 +28,8 @@ use crate::model::act::RefusalSheet;
 use crate::model::commands::Action;
 use crate::model::{
     Act, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay, SettingsSection,
-    SidebarPref, Snapshot, ThemeChoice, agents, artifacts, assistant, daemon, plans, review,
-    session, settings, timeline, usage, work,
+    SidebarPref, Snapshot, ThemeChoice, agents, artifacts, assistant, daemon, review, session,
+    settings, timeline, usage, work,
 };
 
 const DESTINATION_KEY: &str = "corral.destination";
@@ -54,8 +54,9 @@ pub struct AppState {
     /// The test id of a control a direct key asked to take the keyboard focus (`Effect::Focus`),
     /// until it has taken it or the next commit has passed.
     pub focus_to: Signal<Option<&'static str>>,
+    /// Home's docked composer field while it has the keyboard focus, which Escape takes off it.
+    pub docked_field: Signal<Option<ElementRef>>,
     pub work: source::StateSource<work::State>,
-    pub plans: source::StateSource<plans::State>,
     pub timeline: Signal<timeline::State>,
     pub usage: Signal<usage::State>,
     pub artifacts: Signal<artifacts::State>,
@@ -181,6 +182,7 @@ impl AppState {
             sidebar: signal(preference(SIDEBAR_KEY, SidebarPref::from_slug).unwrap_or_default()),
             ask_focus: signal(0),
             focus_to: signal(None),
+            docked_field: signal(None),
             work: source::StateSource::new(
                 data,
                 work::State {
@@ -189,17 +191,6 @@ impl AppState {
                 },
                 work::State {
                     ids: crate::model::id::IdSupply::new(format!("{namespace}-wf")),
-                    ..Default::default()
-                },
-            ),
-            plans: source::StateSource::new(
-                data,
-                plans::State {
-                    ids: crate::model::id::IdSupply::new(format!("{namespace}-pd")),
-                    ..Default::default()
-                },
-                plans::State {
-                    ids: crate::model::id::IdSupply::new(format!("{namespace}-pf")),
                     ..Default::default()
                 },
             ),
@@ -306,7 +297,6 @@ impl AppState {
         app.follow_sidebar();
         app.follow_projects();
         app.follow_sessions();
-        app.follow_agents_show();
         app.settle_config();
         app.follow_cached_feed();
         app.watch_device_receipts();
@@ -493,6 +483,12 @@ impl AppState {
         }
         if let Some(overlay) = self.nav.with_untracked(NavState::newest) {
             self.close(overlay);
+            return;
+        }
+        // Escape leaves Home's docked composer, so Home's keys walk its cards again.
+        if let Some(field) = self.docked_field.get_untracked() {
+            self.docked_field.set(None);
+            field.blur();
             return;
         }
         if self.clear_page_selection() || self.escape_session() {

@@ -1,5 +1,6 @@
 //! The grouped table: each profile, model, task or day with the runs it covers beside the
-//! requests, tokens and cost reported for it. Figures sit at the trailing edge in tabular mono;
+//! tokens and cost reported for it, the period's total under them. Figures sit at the trailing
+//! edge in tabular mono;
 //! a figure corral does not hold is the model's quiet dash. A group whose figures are partial
 //! holds its coverage in the held tone and says why under its key. Where the width has no room
 //! for six columns the groups are records instead; the phone's table sets each row as a record
@@ -16,25 +17,23 @@ use crate::ui::kit::table::utable;
 use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
-/// Desktop figure columns: room for "12 of 14", "12,345", "1.2M", "$1,061".
-const DESKTOP: [Width; 6] = [
+/// Desktop figure columns: room for "12 of 14", "1.2M", "$1,061".
+const DESKTOP: [Width; 5] = [
     Width::Fill,
     Width::Fixed(96.0),
-    Width::Fixed(84.0),
     Width::Fixed(84.0),
     Width::Fixed(88.0),
     Width::Fixed(84.0),
 ];
-/// Terminal figure columns at 8 points a Cell: 12, 9, 9, 10 and 9 Cells.
-const TERMINAL: [Width; 6] = [
+/// Terminal figure columns at 8 points a Cell: 12, 9, 10 and 9 Cells.
+const TERMINAL: [Width; 5] = [
     Width::Fill,
     Width::Fixed(96.0),
-    Width::Fixed(72.0),
     Width::Fixed(72.0),
     Width::Fixed(80.0),
     Width::Fixed(72.0),
 ];
-const ALIGN_END: [bool; 6] = [false, true, true, true, true, true];
+const ALIGN_END: [bool; 5] = [false, true, true, true, true];
 
 /// A figure (`td.n`): mono, tabular, in `ink`; [`UNKNOWN`] in the quiet ink.
 fn figure(form: Form, content: &str, ink: AdaptiveColor) -> AnyElement {
@@ -93,6 +92,7 @@ fn key(app: AppState, row: &GroupRow) -> AnyElement {
                 .text_color(color(Token::Ink2))
         }));
     view()
+        .test_id(&row.id)
         .flex_1()
         .min_w(px(0.0))
         .gap(px(1.0))
@@ -136,6 +136,7 @@ pub fn table(app: AppState, page: &Page, records: bool) -> AnyElement {
             &ALIGN_END,
             page.rows
                 .iter()
+                .chain(&page.total)
                 .map(|row| {
                     let covered = if row.runs_missing {
                         hue_ink(Hue::Held)
@@ -145,7 +146,6 @@ pub fn table(app: AppState, page: &Page, records: bool) -> AnyElement {
                     vec![
                         key(app, row),
                         figure(form, &row.covered, covered),
-                        figure(form, &row.requests, ink),
                         figure(form, &row.input, ink),
                         figure(form, &row.output, ink),
                         figure(form, &row.cost, ink),

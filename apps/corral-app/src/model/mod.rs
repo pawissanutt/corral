@@ -4,7 +4,7 @@
 pub mod act;
 /// The place the navigation shows, as an address.
 pub mod address;
-/// The Agents roster, where sessions start, and each session's run controls.
+/// Every session as a line, where sessions start, and each session's run controls.
 pub mod agents;
 /// The artifact finder over every task's artifacts.
 pub mod artifacts;
@@ -22,8 +22,6 @@ pub mod devices;
 pub mod disconnected;
 /// Reducer effects and environment switches.
 pub mod effect;
-/// Counts, the loop band, named rails and activity, each with its hint.
-pub mod glance;
 /// Snapshot and health types.
 pub mod health;
 /// Home: what waits on the owner, then what is working.
@@ -42,11 +40,9 @@ pub mod nav;
 pub mod next;
 /// Run, gate, review and land as marks, sentences and a plain phrase.
 pub mod pipeline;
-/// Plans: parent tasks with children and a Markdown document.
-pub mod plans;
 /// Explicit sample data served through the canonical daemon model.
 pub mod preview;
-/// Configured projects, independent screen scopes and assistant-only workspace views.
+/// Configured projects, the one project scope and assistant-only workspace views.
 pub mod projects;
 /// Human names for recorded actors and devices.
 pub mod provenance;
@@ -68,7 +64,7 @@ pub mod text;
 pub mod timeline;
 /// Usage totals and illustrative charts.
 pub mod usage;
-/// Now, tasks and changes.
+/// Engine operations on a task, its detail, and the changes feed.
 pub mod work;
 
 pub use act::{Act, ActStatus};

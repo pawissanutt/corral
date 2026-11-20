@@ -95,7 +95,12 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
     effect(move || {
         let wide = wide.get();
         if untracked(|| app.session.with(|state| state.panel.wide != wide)) {
-            untracked(|| run(app, session::Action::Sidebar(session::SidebarAction::Wide(wide))));
+            untracked(|| {
+                run(
+                    app,
+                    session::Action::Sidebar(session::SidebarAction::Wide(wide)),
+                )
+            });
         }
     });
     let panel = computed(move || {

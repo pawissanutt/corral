@@ -6,7 +6,6 @@
 
 use nsh_core::prelude::*;
 
-use crate::model::glance::StatIcon;
 use crate::model::{Area, Destination, PhoneTab};
 
 const NOW: ImageAsset = asset!("icons/now.svg");
@@ -145,24 +144,6 @@ impl Icon {
     /// The phone tab's icon: its place's.
     pub const fn phone_tab(tab: PhoneTab) -> Icon {
         Icon::area(tab.area())
-    }
-
-    /// The glyph of a count: the shape of the state it counts. Sessions are the Agents
-    /// destination's terminal window.
-    pub const fn stat(icon: StatIcon) -> Icon {
-        match icon {
-            StatIcon::NeedsYou => Icon::NeedsYou,
-            StatIcon::Moving => Icon::Moving,
-            StatIcon::Stale => Icon::Stale,
-            StatIcon::Landed => Icon::Landed,
-            StatIcon::Failed => Icon::Failed,
-            StatIcon::Queued => Icon::Queued,
-            StatIcon::Parked => Icon::Parked,
-            StatIcon::Held => Icon::Held,
-            StatIcon::Events => Icon::Events,
-            StatIcon::Sessions => Icon::Agents,
-            StatIcon::Files => Icon::Files,
-        }
     }
 
     const fn asset(self) -> ImageAsset {

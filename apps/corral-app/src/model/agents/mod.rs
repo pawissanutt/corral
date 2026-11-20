@@ -1,8 +1,8 @@
-//! The Agents destination: one roster of every session the daemon addresses (runs of every role,
-//! the assistant's chats, build sessions), where sessions start (the New menu and the New build
-//! sheet), each session's run controls and Session menu, and the Remove sheet of a stopped
-//! build: what removing it would delete, as prune's dry run says, before it is removed. A row
-//! opens the session page (`model::session`), which every role shares.
+//! Every session the daemon addresses (runs of every role, the assistant's chats, build
+//! sessions) as Sessions and Home list them (`lines`), where sessions start (the New menu and
+//! the New build sheet), each session's run controls and Session menu, and the Remove sheet of
+//! a stopped build: what removing it would delete, as prune's dry run says, before it is
+//! removed. A line opens the session page (`model::session`), which every role shares.
 
 use std::collections::BTreeMap;
 
@@ -17,9 +17,9 @@ mod control;
 mod lines;
 mod live;
 mod menu;
-mod roster;
+mod source;
 #[cfg(test)]
-pub(crate) mod roster_tests;
+pub(crate) mod source_tests;
 mod start;
 
 pub use control::{
@@ -29,21 +29,18 @@ pub use control::{
 pub use lines::{SessionLine, removable, session_line, session_lines};
 pub(crate) use live::{clock, placement, unix};
 pub use menu::{SESSION_MENU_LABEL, session_verbs};
-pub use roster::{RoleTab, Roster, RosterRole, RosterRow, RowState, Show, ShowTab, roster};
 pub use start::{
     Choice, EffortField, ModelField, ModelPick, NameField, NewBuildForm, NewItem, NewMenu,
     NewPress, Place, PlaceField, ProjectField, Start, StartAction, StartButton, form, new_menu,
 };
 
-/// Agents interaction state: the roster's selection and filters, the latest control per
-/// session, the rewind sheet, the New build sheet and the Remove sheet.
+/// Sessions' interaction state: the list's folds, the latest control per session, the rewind
+/// sheet, the New build sheet and the Remove sheet.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct State {
     pub ids: crate::model::id::IdSupply,
     /// The Sessions list's folds (its selection is the navigation's, `selection.session`).
     pub list: crate::model::sessions::State,
-    pub roster_role: RosterRole,
-    pub show: Show,
     /// The latest session control per session, whose outcome it shows.
     pub controls: BTreeMap<Id, control::ControlSent>,
     /// The open rewind sheet.
@@ -165,19 +162,9 @@ pub fn remove_sheet(state: &State, feed: &Feed) -> Option<RemoveSheet> {
     })
 }
 
-/// What the roster, the Session menu, the rewind sheet, the New build sheet and the Remove
-/// sheet do.
+/// What the rewind sheet, the New build sheet and the Remove sheet do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    SetRosterRole(RosterRole),
-    SetShow(Show),
-    OpenSession(Id),
-    Back,
-    /// Send a session control (the confirm sheet first for one that asks).
-    Control {
-        session: Id,
-        control: Control,
-    },
     /// Rewind the open rewind sheet's session to the start of this turn, after one confirm.
     RewindTo(u64),
     CloseRewind,
@@ -194,24 +181,6 @@ impl State {
     /// Handles an action. Every operation goes out as an effect; nothing is simulated here.
     pub fn act(&mut self, action: Action, feed: &Feed, filter: &ProjectFilter) -> Vec<Effect> {
         match action {
-            Action::SetRosterRole(role) => {
-                self.roster_role = role;
-                Vec::new()
-            }
-            Action::SetShow(show) => {
-                self.show = show;
-                Vec::new()
-            }
-            Action::OpenSession(id) => {
-                vec![Effect::OpenLive(crate::model::Live::Session(id))]
-            }
-            Action::Back => vec![Effect::Go(crate::model::Destination::Sessions)],
-            Action::Control { session, control } => vec![Effect::Control {
-                session,
-                key: self.ids.next_id(),
-                control,
-                confirmed: false,
-            }],
             Action::RewindTo(turn) => self.rewind_to(turn),
             Action::CloseRewind => {
                 self.rewind = None;

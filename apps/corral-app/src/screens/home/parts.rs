@@ -12,12 +12,7 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 /// Words on one line, cut at their edge: `size` points on the desktop, the terminal's own.
-pub(super) fn words(
-    form: Form,
-    content: impl Into<SharedString>,
-    size: f32,
-    ink: Token,
-) -> Text {
+pub(super) fn words(form: Form, content: impl Into<SharedString>, size: f32, ink: Token) -> Text {
     let words = text(content.into())
         .number_of_lines(1u32)
         .truncate()

@@ -6,12 +6,12 @@
 
 use corral_types::Status;
 
+use crate::model::Id;
 use crate::model::daemon::{Feed, Task};
 use crate::model::next::{NextStep, next_step};
 use crate::model::pipeline::{phrase, pipeline};
 use crate::model::status::{Stage, status_word};
 use crate::model::work::{self, BlockedCard};
-use crate::model::{Form, Id};
 
 use super::task_at;
 
@@ -80,21 +80,18 @@ fn review(task: &Task) -> (String, String, Hold) {
     (what, progress(task), hold)
 }
 
-fn of(state: &work::State, feed: &Feed, task: &Task, form: Form) -> Band {
+fn of(feed: &Feed, task: &Task) -> Band {
     let status = task.status();
     let step = || Hold::Step(next_step(task));
     let (what, how, hold) = match status {
-        Status::Blocked => {
-            let story = work::live_story(state, feed, task, form);
-            match story.blocked {
-                Some(card) => (
-                    format!("Blocked: {}", card.reason),
-                    String::new(),
-                    Hold::Blocked(card),
-                ),
-                None => ("Blocked".to_owned(), phrase(task, feed), step()),
-            }
-        }
+        Status::Blocked => match work::blocked_card(task) {
+            Some(card) => (
+                format!("Blocked: {}", card.reason),
+                String::new(),
+                Hold::Blocked(card),
+            ),
+            None => ("Blocked".to_owned(), phrase(task, feed), step()),
+        },
         Status::Review => review(task),
         Status::Running => match &task.row.run {
             Some(run) => (
@@ -137,8 +134,8 @@ fn of(state: &work::State, feed: &Feed, task: &Task, form: Form) -> Band {
 }
 
 /// The task's band, wherever the client holds the task.
-pub fn band(state: &work::State, feed: &Feed, id: &str, form: Form) -> Option<Band> {
-    task_at(feed, id).map(|task| of(state, feed, &task, form))
+pub fn band(feed: &Feed, id: &str) -> Option<Band> {
+    task_at(feed, id).map(|task| of(feed, &task))
 }
 
 #[cfg(test)]
@@ -178,8 +175,7 @@ mod tests {
     /// and a red gate (Land anyway), and a review still in the engine's hands holds nothing.
     #[test]
     fn the_band_decides_a_ready_review_or_a_red_gate_and_waits_otherwise() {
-        let state = work::State::default();
-        let hold = |feed: &Feed| band(&state, feed, "T-1", Form::Desktop).map(|band| band.hold);
+        let hold = |feed: &Feed| band(feed, "T-1").map(|band| band.hold);
         assert_eq!(
             hold(&review_task(true, CheckResult::Pass)),
             Some(Hold::Decide)

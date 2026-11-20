@@ -49,7 +49,7 @@ fn sessions(config: EngineConfig) -> Headless {
         "sessions".to_owned(),
     )]));
     let mut app = Headless::start(config).unwrap();
-    app.wait_for("id:ask-open").unwrap();
+    app.wait_for("id:nav-settings").unwrap();
     app.press(opener).unwrap();
     app.wait_for("id:palette-input").unwrap();
     app.type_text("id:palette-input", "Data: fixture").unwrap();
@@ -138,7 +138,10 @@ fn the_inspector_answers_a_blocked_session_in_place() {
     app.press("id:btn-send-answers").unwrap();
     app.wait_for_gone("id:btn-send-answers", Duration::from_secs(5))
         .unwrap();
-    assert!(!in_tree(&app, "page-back"), "answered without leaving the list");
+    assert!(
+        !in_tree(&app, "page-back"),
+        "answered without leaving the list"
+    );
 }
 
 /// Details sits beside the conversation on a wide page and is open there; at 80 columns it is
@@ -164,7 +167,10 @@ fn details_open_beside_a_wide_page_and_by_key_at_80_columns() {
     wait_in_tree(&mut app, "session-changes");
     app.wait_for_gone("id:session-details", Duration::from_secs(5))
         .unwrap();
-    assert!(!in_tree(&app, "session-details"), "the view took Details' place");
+    assert!(
+        !in_tree(&app, "session-details"),
+        "the view took Details' place"
+    );
 }
 
 /// Escape steps back before it leaves: on a session page it returns a view (Agents) to the

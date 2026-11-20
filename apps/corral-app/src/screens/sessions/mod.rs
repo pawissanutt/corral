@@ -295,9 +295,7 @@ fn inspector(app: AppState, id: &Id) -> AnyElement {
     let answer = dynamic(move || {
         blocked.get().then(|| {
             let session = session.clone();
-            untracked(|| {
-                ask_session(app, session.clone(), ask_view(app, session), Compact::Card)
-            })
+            untracked(|| ask_session(app, session.clone(), ask_view(app, session), Compact::Card))
         })
     });
     let top = dynamic(move || {
@@ -388,7 +386,9 @@ fn inspector(app: AppState, id: &Id) -> AnyElement {
                 .map(|line| {
                     (
                         line.who.clone(),
-                        dim(app, line.words.clone()).number_of_lines(2u32).into_element(),
+                        dim(app, line.words.clone())
+                            .number_of_lines(2u32)
+                            .into_element(),
                     )
                 })
                 .collect();

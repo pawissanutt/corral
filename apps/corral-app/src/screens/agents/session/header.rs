@@ -41,9 +41,8 @@ const MENU_MAX: f32 = 340.0;
 
 /// `Details`, which opens and closes the panel, while the session has one.
 fn details_button(app: AppState, page: Memo<SessionPage>) -> AnyElement {
-    let toggle = computed(move || {
-        page.with(|p| p.details.as_ref().map(|d| (d.toggle.clone(), d.shown)))
-    });
+    let toggle =
+        computed(move || page.with(|p| p.details.as_ref().map(|d| (d.toggle.clone(), d.shown))));
     dynamic(move || {
         toggle.get().map(|(action, shown)| {
             untracked(|| {
@@ -84,10 +83,8 @@ fn meta(app: AppState, page: Memo<SessionPage>) -> AnyElement {
         let facts = facts.get();
         (!facts.is_empty()).then(|| {
             untracked(|| {
-                let parts: Vec<AnyElement> = facts
-                    .into_iter()
-                    .map(|fact| meta_fact(app, fact))
-                    .collect();
+                let parts: Vec<AnyElement> =
+                    facts.into_iter().map(|fact| meta_fact(app, fact)).collect();
                 let line = view()
                     .test_id("session-meta")
                     .flex_row()

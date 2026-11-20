@@ -133,10 +133,8 @@ pub(super) const fn bind(
 
 /// A part of the page with its own bindings.
 struct Part {
-    /// The tab whose view has these keys; none for the dock's and the sidebar's.
+    /// The tab whose view has these keys; none for the dock's and the Details panel's.
     tab: Option<Tab>,
-    /// The sidebar's own keys, listed while the sidebar has the focus.
-    sidebar: bool,
     keys: fn() -> Vec<KeyBinding>,
     press: fn(&str, &Cx<'_>) -> Option<Action>,
 }
@@ -145,55 +143,46 @@ struct Part {
 const PARTS: &[Part] = &[
     Part {
         tab: None,
-        sidebar: false,
         keys: dock::keys,
         press: dock::press,
     },
     Part {
         tab: None,
-        sidebar: false,
         keys: questions::keys,
         press: questions::press,
     },
     Part {
         tab: None,
-        sidebar: true,
         keys: sidebar::keys,
         press: sidebar::press,
     },
     Part {
         tab: Some(Tab::Chat),
-        sidebar: false,
         keys: usage::keys,
         press: usage::press,
     },
     Part {
         tab: Some(Tab::Changes),
-        sidebar: false,
         keys: changes::keys,
         press: changes::press,
     },
     Part {
         tab: Some(Tab::Board),
-        sidebar: false,
         keys: board::keys,
         press: board::press,
     },
     Part {
         tab: Some(Tab::Task),
-        sidebar: false,
         keys: task::keys,
         press: task::press,
     },
     Part {
         tab: Some(Tab::Proof),
-        sidebar: false,
         keys: proof::keys,
         press: proof::press,
     },
     Part {
         tab: Some(Tab::Agents),
-        sidebar: false,
         keys: fleet::keys,
         press: fleet::press,
     },
@@ -380,7 +369,7 @@ pub fn legend(focus: Focus, tab: Tab, working: bool) -> Vec<(&'static str, &'sta
                 ("esc", "not now"),
             ];
         }
-        Focus::Composer | Focus::Main | Focus::Sidebar => {}
+        Focus::Composer | Focus::Main => {}
     }
     let mut legend = Vec::new();
     if focus != Focus::Composer || tab != Tab::Chat {
@@ -401,21 +390,14 @@ pub fn legend(focus: Focus, tab: Tab, working: bool) -> Vec<(&'static str, &'sta
     legend
 }
 
-/// The bindings of the part whose view has the keys on `tab`, or of the sidebar, in the part's
-/// order and one per action: a second key for the same action (↓ beside `j`) only takes the
-/// line's room from the next action.
-fn part_legend(focus: Focus, tab: Tab) -> Vec<(&'static str, &'static str)> {
-    let sidebar = focus == Focus::Sidebar;
+/// The bindings of the part whose view has the keys on `tab`, in the part's order and one per
+/// action: a second key for the same action (↓ beside `j`) only takes the line's room from the
+/// next action.
+fn part_legend(tab: Tab) -> Vec<(&'static str, &'static str)> {
     let mut legend: Vec<(&'static str, &'static str)> = Vec::new();
     for binding in PARTS
         .iter()
-        .filter(|part| {
-            if sidebar {
-                part.sidebar
-            } else {
-                part.tab == Some(tab) && tab != Tab::Chat
-            }
-        })
+        .filter(|part| part.tab == Some(tab) && tab != Tab::Chat)
         .flat_map(|part| (part.keys)())
     {
         if !binding.label.is_empty() && !legend.iter().any(|(_, label)| *label == binding.label) {
@@ -454,16 +436,9 @@ pub fn legend_of(cx: &Cx<'_>, tab: Tab, slash: bool) -> Vec<(&'static str, &'sta
             ("Alt+H", "thinking"),
             ("esc", "composer"),
         ],
-        Focus::Main | Focus::Sidebar => {
-            let mut legend = vec![(
-                "esc",
-                if focus == Focus::Sidebar {
-                    "composer"
-                } else {
-                    "chat"
-                },
-            )];
-            legend.extend(part_legend(focus, tab));
+        Focus::Main => {
+            let mut legend = vec![("esc", "chat")];
+            legend.extend(part_legend(tab));
             legend
         }
         _ => legend(focus, tab, super::composer::working(cx)),

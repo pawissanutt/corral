@@ -1,9 +1,13 @@
-# Redesign implementation: what phase 1 left and how phase 2 builds on it
+# Redesign implementation: what each phase built
 
 Design authority: [REDESIGN.md](REDESIGN.md) and [mockup/redesign.html](mockup/redesign.html).
-This note is the interface between the foundation (phase 1, done) and the four phase-2 slices.
-Paths are relative to `apps/corral-app/`. Everything named here exists and is tested unless it
-is listed under *Placeholder*.
+This note began as the interface between the foundation (phase 1) and the phase-2 slices.
+Paths are relative to `apps/corral-app/`.
+
+Status: **phase 1** (navigation, one scope, shared pieces), **phase 2** (Home, Tasks and the
+task page, Sessions and the session workbench) and **phase 3** (Activity's four pages, removal
+of the replaced screens) are done. The *Placeholder* notes under *Slices* below describe the
+state before phase 2 and are kept as history; *Phase 3* at the end says what is there now.
 
 ## What phase 1 changed
 
@@ -133,26 +137,80 @@ parent before changing one. Put a slice's headless tests in its own `tests/<slic
   deletion of the former screens once the other slices have taken their parts.
 - Placeholder: each page is the former destination's screen; the phone's Activity root is a
   plain list (`shell/phone.rs::activity_list`).
-- Still referenced, so not yet deletable:
-  - `screens/now/`: `inspector::view_of` (task page, `agents/session/task.rs`),
-    `parts::{keep_loaded, wanted_id}` (task page), `parts::*` and `feed::*` (`changes.rs`),
-    `list::revealing` (`artifacts.rs`, `agents/session/changes*.rs`), `parts::press`
-    (`review.rs`); `screens/projects.rs` uses `closed`, `list`, `rows`, `side`.
-  - `screens/plans/`: `menu_trigger` (`timeline/scope.rs`, `review/brief.rs`,
-    `agents/start.rs`, `agents/session/dock.rs`), `live_graph` (`now/context.rs`).
-  - `screens/review/`: `diff::unified_line` (`agents/session/changes_diff.rs`),
-    `brief::chain` (`agents/session/proof.rs`).
-  - No route reaches `now::screen`, `plans::screen`, `review::screen`,
-    `plans::live_plan_phone`, `review::live_review_phone`, `now::live_task_phone` or anything in
-    `screens/projects*.rs`.
-  - Model left for them: `work::{now_page, now_digest, now_keys, KEYS}`, `plans::KEYS`,
-    `review::KEYS`, `State::key_now_page/key_live_filtered`, `projects::page`,
-    `NavState.{opened, opens, dismiss_opened}` (nothing sets `opened` any more),
-    `ProjectFilter::Unassigned`, `NowGroup`, `scopes.now_group`.
-  - Ask drawer: `ui/ask/`, `Overlay::Ask`, `ask-open` at the sidebar's foot, in the terminal
-    sidebar and as the phone's floating button stay until Home docks the composer.
-- Docs to update at the end: AGENTS.md and README (destinations, storage keys, module map, id
-  shapes).
+- Done in phase 3; see *Phase 3* below. Nothing of the replaced screens is still referenced.
+- Docs still to update: AGENTS.md and README (destinations, storage keys, module map, id
+  shapes); a docs pass follows phase 3.
+
+## Phase 3: Activity and the removal of the replaced screens
+
+### Activity's pages
+
+- `screens/activity/mod.rs`: `screen` routes the four pages; `subnav(app)` is the strip under
+  each page's head on desktop and in a terminal (`tab_strip`, ids `subnav-<0..3>`, Feed ·
+  Timeline · Usage · Artifacts, the page shown selected). The phone keeps its Activity root list
+  and pushed pages; `subnav` draws nothing there.
+- **Feed** (`screens/activity/feed.rs` over `model/work/live_changes.rs::feed_page`): every
+  loaded event in the one scope, newest first, under a heading per local day (`Today`,
+  `Yesterday`, `Wed 18 Nov`; `work::{local_day, day_label}`). A row is time, the engine's kind
+  (`forced` in the failure colour), task id, `work::event_detail` and who; it opens the task's
+  page (`app.open_live`), test id `event-<seq>`. The scope follows the event-project rule
+  (`work::event_project`; an event whose project nothing names stays in every scope). Load older
+  (`btn-older`) pages back; Mark seen (`btn-mark-seen`) stays in the head because Home's "since
+  your last visit" counts from this device's seen cursor and nothing else moves it. Changes'
+  filter chips, seen line and project chips are gone.
+- **Timeline**: lanes, their legend under them, then the burn-up with its legend at its foot
+  (`BurnupSeries.tally`: created, landed, dropped, reopened events, the two drawn lines with
+  their stroke) and `timeline::BURNUP_RANGE_NOTE`; the gaps worth a look follow. Home's panel
+  (`scoped_burnup`) shows the same legend with the counting rule instead of the range note.
+  The burn-up's own scope menu (workspace, project, plan) stays.
+- **Usage**: the head's line is `usage::Page.head` ("covers N of M runs; the other K ran on a
+  harness that reports no usage"); unpriced requests are the one held note
+  (`usage-coverage`); the strip (`usage-days`); the table by the selected grouping with Runs,
+  Input, Output, Cost and a Total row (`usage-row-<key>`, `usage-row-total`); `usage-quota`;
+  the note. The totals block (cost, tokens, cache, requests, quota) is gone; requests stay in
+  a group's record form and the day strip's hints. The grouping switch stays beside the period
+  (the served summary groups by one key, so the mock's Profile and Model side by side is not
+  served).
+- **Artifacts**: unchanged but for the strip and a 440 pt results column on desktop (the
+  terminal keeps 680 points, 56 Cells, so a result keeps its title).
+
+### Removed, and where the kept parts went
+
+- `screens/{now,now.rs,plans,plans.rs,review,review.rs,projects,projects.rs,changes.rs}` and
+  `ui/kit/glance.rs` are deleted.
+- `menu_trigger` → `ui/kit/button.rs`; `revealing` → `ui/kit/rows.rs`; `keep_loaded`,
+  `wanted_id`, `Wanted` → `screens/task/keep.rs`; `model_button`, `pressable`, `press_id` →
+  `ui/kit/work.rs`; `press` is `ui/kit/more.rs`'s. Proof and the session diff use
+  `screens::task::candidate::{brief::chain, diff::unified_line}` (`brief.rs` is now the chain
+  only; `candidate/{evidence,rounds}.rs` went with the Review screen).
+- A task-bound session's Task tab draws the task page's Overview
+  (`screens::task::overview::overview`) instead of the Now story; its link is "Open task"
+  (`btn-task-page`), its menu row `act-task-page`.
+- Model removed: `model/plans/` entirely (and `AppState.plans`), `model/glance.rs`,
+  `model/board/line.rs` with `Actor`, `Rail`, `STAGES`, `rail_label`, `ChangeKind`;
+  `work::{now_page, now_digest, now_keys, served, list, data, closed, inspector, KEYS, NowTab,
+  ChangeFilter, Action, Sent, VERB_MENU_LABEL, LivePlan, plan_context}` and most of
+  `live_task.rs`/`task_page.rs` (kept: `task_ref`, `loaded_task`, `detail_note`,
+  `BlockedCard`, `blocked_card`, `ReplyBox`, `reply_box`, `REPLY_FIELD`, `live_evidence`,
+  `detail_task`); `Press::{Work, Select, ClearSelection, Ask, Closed}`;
+  `review::{outline list, KEYS, key_live_filtered, candidate_header, Chip, Action::Pick}`
+  (`LoopCandidate.task` replaces its header); `projects::{page, Projects, ProjectEntry,
+  has_unassigned, project_chip}`, `ProjectFilter::Unassigned` and its serde; `NowGroup`,
+  `now.group` and `agents.show` in `corral.scope` (old keys are ignored on read);
+  `agents::{Show, roster, Roster, RosterRow, RoleTab, ShowTab, RowState, RosterRole,
+  Action::{SetRosterRole, SetShow, OpenSession, Back, Control}}` (`model/agents/source.rs`
+  keeps `Source`, `scoped`, `removable`); `TabItem.{key, badge, unread}`, `Badge` and the
+  tabs' `badge` fns; `session::Focus::Sidebar`; `NavState.{opened, opens, dismiss_opened}`.
+  `work::closed_offered` became `tasks::closed::offered`.
+- Ask: the sidebar's Ask entry is gone on desktop (sidebar and rail) and in the terminal; `/`
+  focuses Home's docked composer there and opens `Overlay::Ask` elsewhere. The phone keeps its
+  floating Ask button (`ask-open`). Escape in Home's docked composer leaves the field
+  (`AppState.docked_field`, taken in `close_newest`), so `j`/`k` walk the cards again.
+- Left in place on purpose: `landing.rs` (assistant-only Home); `model::review`'s Brief and
+  evidence builders, which `loop_page_filtered` still builds for the task page although the
+  page draws only its diff, decide bar and Onto; dead code a private-module check still finds
+  outside these screens (web-only client paths, `NavState::{close_newest, press_key}` with
+  their tests, a few `state` helpers), which predates phase 3.
 
 ## Traps
 
@@ -170,7 +228,7 @@ parent before changing one. Put a slice's headless tests in its own `tests/<slic
   still pushed the title out. Measure with `on_layout` and hide whole elements
   (`cell_title`, `list::fitted`).
 - `tasks::line`/`facts` return `None` for a task the open-task list does not hold (Done,
-  Dropped). The page's Overview already handles those through `work::task_page`.
+  Dropped). The page reads those from their detail (`work::loaded_task`, `detail_task`).
 - A blocked run is listed on Home by its task only; chats and builds stand for themselves
   (`home::sessions` filters `task.is_none()`).
 - On a session page a place's letter does not navigate (session views use letters); on a task

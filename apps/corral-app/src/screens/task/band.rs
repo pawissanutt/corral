@@ -15,12 +15,13 @@ use nsh_core::prelude::*;
 use crate::model::tasks::band::{Band, Hold, band};
 use crate::model::work::{self, ReplyBox};
 use crate::model::{Form, Id};
-use crate::screens::now::parts::{press, pressable};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
+use crate::ui::kit::more::press;
 use crate::ui::kit::next::next_button;
 use crate::ui::kit::text::plain;
+use crate::ui::kit::work::pressable;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -50,11 +51,7 @@ pub(crate) fn decision(app: AppState, id: Id, flat: bool) -> AnyElement {
     let form = app.form;
     let model = {
         let id = id.clone();
-        computed(move || {
-            let state = app.work.get();
-            app.feed
-                .with(|feed| band(&state, feed, id.as_str(), untracked(|| app.form)))
-        })
+        computed(move || app.feed.with(|feed| band(feed, id.as_str())))
     };
     let kind = computed(move || {
         model.with(|band| {

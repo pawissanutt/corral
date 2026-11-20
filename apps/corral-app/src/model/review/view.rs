@@ -9,22 +9,6 @@ use crate::model::text::Rich;
 use super::diff::{split_rows, unified_rows};
 use super::{Action, Layout, State, Tab};
 
-/// A neutral or state-coloured chip whose copy is already resolved for the form.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Chip {
-    /// Chip text, without extra punctuation added by a renderer.
-    pub label: String,
-    /// Semantic state colour.
-    pub hue: Hue,
-}
-
-pub(super) fn chip(label: impl Into<String>, hue: Hue) -> Chip {
-    Chip {
-        label: label.into(),
-        hue,
-    }
-}
-
 /// Button emphasis from the source, not a platform-specific layout instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ButtonStyle {

@@ -1,9 +1,7 @@
-//! The Review page: the candidate outline, its counts and the selected candidate's Brief or
-//! evidence with the decide bar.
+//! A review candidate's page: the selected candidate's Brief or evidence with the decide bar.
 
 use crate::model::daemon::{Feed, Link};
 use crate::model::effect::{Conn, Env};
-use crate::model::glance::Stat;
 use crate::model::id::Id;
 use crate::model::live::Selection;
 use crate::model::projects::ProjectFilter;
@@ -11,10 +9,7 @@ use crate::model::projects::ProjectFilter;
 use super::brief::{Brief, brief};
 use super::decide::decide_bar;
 use super::live::{Shown, log, notice, report, selected_filtered};
-use super::outline::{
-    CandidateHeader, OutlineGroup, candidate_header, candidate_tabs, outline_filtered,
-    outline_stats, selected_tab,
-};
+use super::outline::{candidate_tabs, selected_tab};
 use super::view::{effective_layout, layouts};
 use super::{Body, DecideBar, LayoutChoice, Notice, State, Tab, TabView};
 
@@ -27,7 +22,8 @@ pub enum LoopContent {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopCandidate {
-    pub header: CandidateHeader,
+    /// The candidate's task.
+    pub task: Id,
     pub notice: Option<Notice>,
     pub tabs: Vec<TabView>,
     pub layouts: Vec<LayoutChoice>,
@@ -37,9 +33,6 @@ pub struct LoopCandidate {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoopPage {
-    pub title: &'static str,
-    pub stats: Vec<Stat>,
-    pub outline: Vec<OutlineGroup>,
     pub detail: Option<LoopCandidate>,
     pub empty: Option<String>,
     pub stale: bool,
@@ -92,7 +85,7 @@ pub fn loop_page_filtered(
             ))),
         };
         LoopCandidate {
-            header: candidate_header(feed, shown.task, filter),
+            task: shown.task.id.clone(),
             notice: notice(shown),
             tabs: candidate_tabs(state, shown),
             layouts: layouts(state, env),
@@ -100,11 +93,7 @@ pub fn loop_page_filtered(
             decide: decide_bar(state, feed, shown, env),
         }
     });
-    let outline = outline_filtered(feed, selection, focus, filter);
     LoopPage {
-        title: "Review",
-        stats: outline_stats(&outline),
-        outline,
         empty: if detail.is_some() {
             None
         } else if let Some(id) = focus {

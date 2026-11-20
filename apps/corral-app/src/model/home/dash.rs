@@ -6,13 +6,13 @@ use corral_protocol::detail::{DetailBody, DetailRef};
 use corral_types::{Status, UsageBy, UsageSummary};
 
 use super::{Since, needs_you, task_needs_you, task_working, working};
+use crate::model::Id;
 use crate::model::agents::session_lines;
 use crate::model::daemon::Feed;
 use crate::model::nav::Destination;
 use crate::model::projects::Scope;
 use crate::model::status::{OPEN, SessionState, status_word};
 use crate::model::usage::{self, Period};
-use crate::model::Id;
 
 /// Stands in for a figure corrald does not report.
 const UNKNOWN: &str = "—";
@@ -94,10 +94,7 @@ pub fn tiles(feed: &Feed, scope: &Scope, since: &Since, cost: &Cost) -> Vec<Tile
                 "needs",
                 "Needs you".into(),
                 need.len().to_string(),
-                format!(
-                    "{need_tasks} tasks · {} sessions",
-                    need.len() - need_tasks
-                ),
+                format!("{need_tasks} tasks · {} sessions", need.len() - need_tasks),
                 "Blocked tasks, reviews ready to land and sessions waiting on an answer".into(),
             )
         },
@@ -137,11 +134,15 @@ pub fn tiles(feed: &Feed, scope: &Scope, since: &Since, cost: &Cost) -> Vec<Tile
                     .filter(|line| line.state != SessionState::Gone)
                     .count()
                     .to_string(),
-                [SessionState::Blocked, SessionState::Working, SessionState::Idle]
-                    .into_iter()
-                    .map(|state| format!("{} {}", by(state), state.word().to_lowercase()))
-                    .collect::<Vec<_>>()
-                    .join(" · "),
+                [
+                    SessionState::Blocked,
+                    SessionState::Working,
+                    SessionState::Idle,
+                ]
+                .into_iter()
+                .map(|state| format!("{} {}", by(state), state.word().to_lowercase()))
+                .collect::<Vec<_>>()
+                .join(" · "),
                 "Every session whose host has not gone, by state".into(),
             )
         },
@@ -364,7 +365,10 @@ pub fn cost(feed: &Feed) -> Cost {
         .iter()
         .filter_map(|group| {
             let usd = group.total.usd.filter(|usd| *usd > 0.0)?;
-            Some((group.key.clone().unwrap_or_else(|| "no profile".into()), usd))
+            Some((
+                group.key.clone().unwrap_or_else(|| "no profile".into()),
+                usd,
+            ))
         })
         .collect();
     rows.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -407,9 +411,15 @@ mod tests {
         assert_eq!(cost(&feed).today, UNKNOWN);
         let since = Since::default();
         let tiles = tiles(&feed, &Scope::All, &since, &cost(&feed));
-        let cost_tile = tiles.iter().find(|tile| tile.key == "cost").expect("cost tile");
+        let cost_tile = tiles
+            .iter()
+            .find(|tile| tile.key == "cost")
+            .expect("cost tile");
         assert_eq!(cost_tile.value, UNKNOWN);
-        let working = tiles.iter().find(|tile| tile.key == "working").expect("tile");
+        let working = tiles
+            .iter()
+            .find(|tile| tile.key == "working")
+            .expect("tile");
         assert_eq!(working.meter, None);
     }
 }

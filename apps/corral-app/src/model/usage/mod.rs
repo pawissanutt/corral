@@ -36,21 +36,11 @@ pub enum Status {
     Loading,
 }
 
-/// What the totals cover, said first: the runs they cover and, when they are partial, each
-/// plain reason the rest is missing. Held in tone when anything is missing.
+/// What the totals leave out besides the runs the head names: requests that reported tokens
+/// without a price. Held in tone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Coverage {
-    pub line: String,
     pub reasons: Vec<String>,
-    pub partial: bool,
-}
-
-/// One total: its name, its figure and what qualifies it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Figure {
-    pub label: &'static str,
-    pub value: String,
-    pub detail: Option<String>,
 }
 
 /// One day of the period in the per-day view: its height against the period's busiest day and
@@ -91,6 +81,8 @@ impl DayStrip {
 /// One group's totals beside the runs it covers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupRow {
+    /// `usage-row-<key>`.
+    pub id: String,
     pub key: String,
     /// False for a group without a key ("no profile recorded"), drawn quieter than a name.
     pub named: bool,
@@ -123,16 +115,22 @@ impl GroupRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Page {
     pub status: Status,
+    /// The head's line: which runs the totals cover and why the rest are missing, once
+    /// corrald has answered for the period.
+    pub head: String,
     /// The period's days, how many, and the local time they are counted in.
     pub period: String,
-    /// None until corrald has answered for the period.
+    /// None until corrald has answered for the period, and while nothing else is missing.
     pub coverage: Option<Coverage>,
-    pub figures: Vec<Figure>,
     pub days: Option<DayStrip>,
     /// "By profile".
     pub group_title: String,
-    pub headers: [&'static str; 6],
+    pub headers: [&'static str; 5],
     pub rows: Vec<GroupRow>,
+    /// The period's totals under the rows.
+    pub total: Option<GroupRow>,
+    /// That no harness reports quota or remaining allowance.
+    pub quota: &'static str,
     /// Said in place of the rows.
     pub rows_empty: Option<&'static str>,
     /// One short paragraph on where the figures come from and what [`UNKNOWN`] means.

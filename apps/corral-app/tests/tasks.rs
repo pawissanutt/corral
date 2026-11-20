@@ -26,7 +26,7 @@ fn preview(destination: &str) -> Headless {
         destination.to_owned(),
     )]));
     let mut app = Headless::start(config).unwrap();
-    app.wait_for("id:ask-open").unwrap();
+    app.wait_for("id:nav-settings").unwrap();
     select(&mut app, "Data: fixture");
     app
 }

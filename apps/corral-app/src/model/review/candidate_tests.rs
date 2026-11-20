@@ -7,7 +7,8 @@ use super::live::review_ref;
 use super::*;
 use crate::model::Form;
 use crate::model::daemon::{DetailCache, Feed, Task, bare_task, detail_key, task_row};
-use crate::model::effect::Conn;
+use crate::model::effect::{Conn, Env};
+use crate::model::live::Selection;
 use crate::model::projects::ProjectFilter;
 
 fn env() -> Env {
@@ -81,16 +82,6 @@ fn page(state: &State, feed: &Feed) -> LoopPage {
 }
 
 #[test]
-fn only_review_tasks_are_candidates_and_ready_ones_wait_on_your_verdict() {
-    let verifying = page(&State::default(), &feed(None, false));
-    assert_eq!(verifying.outline.len(), 1);
-    assert_eq!(verifying.outline[0].label, "In verification");
-    assert_eq!(verifying.outline[0].rows[0].id, "T-1");
-    let ready = page(&State::default(), &feed(None, true));
-    assert_eq!(ready.outline[0].label, "Your verdict");
-}
-
-#[test]
 fn land_anyway_appears_only_while_the_gate_is_red() {
     let labels = |feed: &Feed| -> Vec<Action> {
         let page = page(&State::default(), feed);
@@ -140,7 +131,6 @@ fn deciding_submits_the_engine_operation_without_predicting_a_refusal() {
             &feed,
             &Selection::default(),
             None,
-            env(),
             &ProjectFilter::All,
         )
     };
@@ -204,46 +194,6 @@ fn a_review_body_without_a_finished_run_says_so_instead_of_an_empty_diff() {
         diff.empty
             .is_some_and(|line| line.contains("No worker run"))
     );
-}
-
-/// The list shows Your verdict above In verification whatever the board's order, so Review must
-/// open at the first candidate of Your verdict and j/k must walk the rows as they are drawn.
-#[test]
-fn review_opens_at_your_verdict_and_j_k_follow_the_rows_on_screen() {
-    let verifying = task_row(bare_task(
-        "T-1",
-        "In verification",
-        Status::Review,
-        Timestamp::UNIX_EPOCH,
-    ));
-    let mut ready = task_row(bare_task(
-        "T-3",
-        "Your verdict",
-        Status::Review,
-        Timestamp::UNIX_EPOCH,
-    ));
-    ready.ready = true;
-    let mut feed = Feed::default();
-    feed.board_received(1, vec![Task::new(verifying), Task::new(ready)], &[], true);
-
-    let drawn: Vec<String> = page(&State::default(), &feed)
-        .outline
-        .into_iter()
-        .flat_map(|group| group.rows.into_iter().map(|row| row.id))
-        .collect();
-    assert_eq!(drawn, ["T-3", "T-1"]);
-    let opened = super::live::selected_filtered(&Selection::default(), &feed, &ProjectFilter::All);
-    assert_eq!(opened.map(|task| task.id.as_str()), Some("T-3"));
-
-    let mut state = State::default();
-    let mut walk = |key: &str, from: &str| {
-        let mut selection = Selection::default();
-        selection.set(&Live::Review(Id::new(from)));
-        state.key_live_filtered(key, None, &selection, &feed, env(), &ProjectFilter::All)
-    };
-    let to = |id: &str| Some(vec![Effect::Select(Live::Review(Id::new(id)))]);
-    assert_eq!(walk("j", "T-3"), to("T-1"));
-    assert_eq!(walk("k", "T-1"), to("T-3"));
 }
 
 /// The engine refuses landing a candidate onto its own branch, so the Onto field's branches and

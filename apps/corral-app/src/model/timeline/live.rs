@@ -13,8 +13,8 @@ use jiff::tz::TimeZone;
 use jiff::{Timestamp, ToSpan, Zoned};
 
 use super::{
-    BURNUP_COUNTS, BurnupSeries, Gap, Grouping, Kind, Marker, Opens, Plot, PlotLane, PlotSegment,
-    PlotTick, Range, State,
+    BURNUP_COUNTS, BurnupLine, BurnupSeries, Gap, Grouping, Kind, Marker, Opens, Plot, PlotLane,
+    PlotSegment, PlotTick, Range, State, TallyEntry,
 };
 use crate::model::daemon::Feed;
 use crate::model::work::{age, stamp, when};
@@ -551,10 +551,23 @@ pub fn burnup_series(burnup: &WireBurnup, now: u64, feed: &Feed) -> Option<Burnu
     let mut scope = BTreeSet::new();
     let mut landed = BTreeSet::new();
     let mut points: Vec<(Timestamp, u32, u32)> = Vec::new();
+    // Created, landed, dropped and reopened events, in the legend's order.
+    let mut tally = [0u32; 4];
     for event in events {
         let Some(task) = event.task.as_deref() else {
             continue;
         };
+        if let Some(at) = [
+            EventKind::Created,
+            EventKind::Landed,
+            EventKind::Dropped,
+            EventKind::Reopened,
+        ]
+        .iter()
+        .position(|kind| *kind == event.kind)
+        {
+            tally[at] += 1;
+        }
         match event.kind {
             EventKind::Created => {
                 scope.insert(task);
@@ -608,6 +621,19 @@ pub fn burnup_series(burnup: &WireBurnup, now: u64, feed: &Feed) -> Option<Burnu
         first: day,
         last: "today".into(),
         counts: BURNUP_COUNTS,
+        tally: [
+            ("created", Some(BurnupLine::Scope)),
+            ("landed", Some(BurnupLine::Landed)),
+            ("dropped", None),
+            ("reopened", None),
+        ]
+        .into_iter()
+        .zip(tally)
+        .map(|((word, line), count)| TallyEntry {
+            words: format!("{word} {count}"),
+            line,
+        })
+        .collect(),
     })
 }
 

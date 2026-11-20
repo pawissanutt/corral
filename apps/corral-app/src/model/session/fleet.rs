@@ -24,7 +24,7 @@ use crate::model::text::{Rich, span};
 use crate::model::work::when;
 
 use super::status::cost_text;
-use super::tabs::{Badge, load};
+use super::tabs::load;
 use super::{Action, Can, Cx, Host, State, SubView};
 
 #[path = "child_detail.rs"]
@@ -647,27 +647,6 @@ pub fn agents_tab(cx: &Cx<'_>, state: &State) -> AgentsTab {
         messages: fleet.and_then(|fleet| messages(cx.id, fleet, cx.feed)),
         empty,
         clock: clock::clock(cx),
-    }
-}
-
-/// The tab's count: the agents and jobs at work, and how many agents ask the owner (`3 ▲1`).
-pub fn badge(cx: &Cx<'_>) -> Option<Badge> {
-    let state = cx.state?;
-    let working = state.children.live.saturating_add(state.jobs.live);
-    match (working, state.children.waiting) {
-        (0, 0) => None,
-        (working, 0) => Some(Badge {
-            text: working.to_string(),
-            hue: Hue::Neutral,
-        }),
-        (0, waiting) => Some(Badge {
-            text: format!("▲{waiting}"),
-            hue: Hue::You,
-        }),
-        (working, waiting) => Some(Badge {
-            text: format!("{working} ▲{waiting}"),
-            hue: Hue::You,
-        }),
     }
 }
 

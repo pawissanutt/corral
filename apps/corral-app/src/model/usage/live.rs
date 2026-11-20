@@ -1,8 +1,9 @@
-//! corral's recorded usage over the chosen period as the Usage page. The coverage line comes
-//! first: how many of the runs started in the period reported any usage, since a harness that
-//! reports no usage leaves its runs out of every total, and how many requests reported tokens
-//! without a price, since the cost leaves those out. Then the period's totals, the per-day view
-//! and one table grouped by the selected key, each group with its own coverage and reasons.
+//! corral's recorded usage over the chosen period as the Usage page. The head says first how
+//! many of the runs started in the period reported any usage, since a harness that reports no
+//! usage leaves its runs out of every total; a note says how many requests reported tokens
+//! without a price, since the cost leaves those out. Then the per-day view and one table
+//! grouped by the selected key, each group with its own coverage and reasons, the period's
+//! total under it.
 
 use std::collections::BTreeMap;
 
@@ -11,8 +12,8 @@ use corral_types::{UsageBy, UsageGroup, UsageSummary, UsageTotal};
 use jiff::civil::Date;
 
 use super::{
-    Coverage, CustomRange, DayBar, DayStrip, Days, Figure, GroupRow, Local, MOST_DAYS, Page,
-    Period, State, Status, UNKNOWN, count, local, money, plural, series_request, tokens,
+    Coverage, CustomRange, DayBar, DayStrip, Days, GroupRow, Local, MOST_DAYS, Page, Period,
+    SUBTITLE, State, Status, UNKNOWN, count, local, money, plural, series_request, tokens,
 };
 use crate::model::daemon::{DetailCache, Feed};
 
@@ -42,91 +43,44 @@ fn unpriced(total: &UsageTotal) -> u64 {
     total.requests.saturating_sub(total.priced_requests)
 }
 
-/// "Covers N of M runs started in this period", and each plain reason the rest is missing.
-fn coverage(summary: &UsageSummary) -> Coverage {
+/// The head's line: "covers N of M runs; the other K ran on a harness that reports no usage".
+fn covers(summary: &UsageSummary) -> String {
     let (covered, total) = (summary.covered_runs, summary.total_runs);
-    let mut reasons = Vec::new();
-    let line = if total == 0 {
-        "No run started in this period, so there is no run for these totals to cover.".to_owned()
+    if total == 0 {
+        "no run started in this period".to_owned()
     } else if covered >= total {
-        format!("Covers all {total} runs started in this period: every one reported its usage.")
+        format!("covers all {total} runs started in this period")
     } else {
         let rest = total - covered;
-        reasons.push(if rest == 1 {
-            "The other run ran on a harness that reports no usage, so its tokens and cost are not \
-             in these totals."
-                .to_owned()
+        let other = if rest == 1 {
+            "the other one".to_owned()
         } else {
-            format!(
-                "The other {rest} runs ran on a harness that reports no usage, so their tokens \
-                 and cost are not in these totals."
-            )
-        });
-        format!("Covers {covered} of {total} runs started in this period.")
-    };
+            format!("the other {rest}")
+        };
+        format!("covers {covered} of {total} runs; {other} ran on a harness that reports no usage")
+    }
+}
+
+/// What else the totals leave out: requests that reported tokens without a price.
+fn coverage(summary: &UsageSummary) -> Option<Coverage> {
     let missing = unpriced(&summary.total);
-    if missing > 0 {
-        reasons.push(format!(
+    (missing > 0).then(|| Coverage {
+        reasons: vec![format!(
             "{} of the {} requests reported tokens but no price: their tokens are counted, \
              their cost is not.",
             count(missing),
             count(summary.total.requests)
-        ));
-    }
-    Coverage {
-        line,
-        partial: !reasons.is_empty(),
-        reasons,
-    }
+        )],
+    })
 }
 
-/// A cost and, when some requests reported no price, which share it sums.
-fn cost(total: &UsageTotal) -> (String, Option<String>) {
-    let figure = total.usd.map_or_else(|| UNKNOWN.to_owned(), money);
-    let note = match (total.priced_requests, total.requests) {
-        (_, 0) => None,
-        (0, _) => Some("no request reported a price".to_owned()),
-        (priced, requests) if priced < requests => Some(format!(
-            "sums the {} of {} requests that reported a price",
-            count(priced),
-            count(requests)
-        )),
-        _ => None,
-    };
-    (figure, note)
+/// A cost, or [`UNKNOWN`] where no request reported a price.
+fn cost(total: &UsageTotal) -> String {
+    total.usd.map_or_else(|| UNKNOWN.to_owned(), money)
 }
 
-fn figures(total: &UsageTotal) -> Vec<Figure> {
-    let (value, detail) = cost(total);
-    let figure = |label, value| Figure {
-        label,
-        value,
-        detail: None,
-    };
-    vec![
-        Figure {
-            label: "Cost",
-            value,
-            detail,
-        },
-        figure("Tokens in", tokens(total.input)),
-        figure("Tokens out", tokens(total.output)),
-        figure(
-            "Cache",
-            format!(
-                "{} read · {} written",
-                tokens(total.cache_read),
-                tokens(total.cache_write)
-            ),
-        ),
-        figure("Requests", count(total.requests)),
-        Figure {
-            label: "Quota",
-            value: "unknown".into(),
-            detail: Some("no harness reports quota or remaining allowance".into()),
-        },
-    ]
-}
+/// Said under the table: corral holds no quota for any harness.
+const QUOTA: &str = "Quota is unknown: no harness reports quota or remaining allowance.";
 
 fn add(sum: &mut UsageTotal, total: &UsageTotal) {
     sum.requests += total.requests;
@@ -265,29 +219,57 @@ fn rows(by: UsageBy, summary: &UsageSummary, feed: &Feed) -> Vec<GroupRow> {
                 }
                 None => (missing(by).to_owned(), false, None),
             };
-            let reported = group.total.requests > 0;
-            let figure = |value: fn(&UsageTotal) -> String| {
-                if reported {
-                    value(&group.total)
-                } else {
-                    UNKNOWN.into()
-                }
-            };
-            let (covered, runs_missing, reasons) = group_coverage(group);
-            GroupRow {
-                key,
-                named,
-                detail,
-                covered,
-                runs_missing,
-                reasons,
-                requests: figure(|t| count(t.requests)),
-                input: figure(|t| tokens(t.input)),
-                output: figure(|t| tokens(t.output)),
-                cost: figure(|t| cost(t).0),
-            }
+            let id = format!("usage-row-{}", group.key.as_deref().unwrap_or("none"));
+            group_row(id, key, named, detail, group)
         })
         .collect()
+}
+
+/// One group's figures beside the runs it covers.
+fn group_row(
+    id: String,
+    key: String,
+    named: bool,
+    detail: Option<String>,
+    group: &UsageGroup,
+) -> GroupRow {
+    let reported = group.total.requests > 0;
+    let figure = |value: fn(&UsageTotal) -> String| {
+        if reported {
+            value(&group.total)
+        } else {
+            UNKNOWN.into()
+        }
+    };
+    let (covered, runs_missing, reasons) = group_coverage(group);
+    GroupRow {
+        id,
+        key,
+        named,
+        detail,
+        covered,
+        runs_missing,
+        reasons,
+        requests: figure(|t| count(t.requests)),
+        input: figure(|t| tokens(t.input)),
+        output: figure(|t| tokens(t.output)),
+        cost: figure(cost),
+    }
+}
+
+/// The period's totals as the table's last row, its runs covered of those started.
+fn total_row(summary: &UsageSummary) -> GroupRow {
+    let group = UsageGroup {
+        key: None,
+        total: summary.total.clone(),
+        covered_runs: Some(summary.covered_runs),
+        total_runs: Some(summary.total_runs),
+    };
+    // The head and the note above say why the totals are partial; the row does not repeat it.
+    GroupRow {
+        reasons: None,
+        ..group_row("usage-row-total".into(), "Total".into(), true, None, &group)
+    }
 }
 
 /// The period's days by tokens reported, against its busiest day.
@@ -322,7 +304,7 @@ fn day_strip(days: Days, series: &UsageSeries) -> DayStrip {
                 plural(total.requests, "request", "requests")
             );
             if total.usd.is_some() {
-                hint.push_str(&format!(" · {}", cost(total).0));
+                hint.push_str(&format!(" · {}", cost(total)));
             }
             if summary.total_runs > 0 {
                 hint.push_str(&format!(
@@ -451,22 +433,14 @@ pub fn page(state: &State, feed: &Feed) -> Page {
     };
     Page {
         status: status(cache),
+        head: summary.as_ref().map_or_else(|| SUBTITLE.to_owned(), covers),
         period: period_words(days, &local),
-        coverage: summary.as_ref().map(coverage),
-        figures: summary
-            .as_ref()
-            .map(|summary| figures(&summary.total))
-            .unwrap_or_default(),
+        coverage: summary.as_ref().and_then(coverage),
         days: series.map(|series| day_strip(days, series)),
         group_title: format!("By {}", header(by).to_lowercase()),
-        headers: [
-            header(by),
-            "Runs covered",
-            "Requests",
-            "Tokens in",
-            "Tokens out",
-            "Cost",
-        ],
+        headers: [header(by), "Runs", "Input", "Output", "Cost"],
+        total: summary.as_ref().filter(|_| !rows.is_empty()).map(total_row),
+        quota: QUOTA,
         rows,
         rows_empty,
         disclaimer: DISCLAIMER,
@@ -556,11 +530,11 @@ mod tests {
             },
         );
         let page = page(&state, &feed);
-        let coverage = page.coverage.unwrap();
-        assert!(coverage.partial);
-        assert!(coverage.line.starts_with("Covers 1 of 3 runs"));
-        assert!(coverage.reasons[0].contains("harness that reports no usage"));
-        assert!(coverage.reasons[1].contains("no price"));
+        assert!(page.head.contains("1 of 3 runs"), "{}", page.head);
+        assert!(page.head.contains("harness that reports no usage"));
+        assert!(page.coverage.unwrap().reasons[0].contains("no price"));
+        let total = page.total.as_ref().unwrap();
+        assert_eq!(total.covered, "1 of 3");
         let claude = page.rows.iter().find(|row| row.key == "claude").unwrap();
         assert_eq!(claude.covered, "0 of 2");
         assert_eq!(claude.requests, UNKNOWN);
@@ -575,12 +549,6 @@ mod tests {
         assert_eq!(pi.covered, "1 of 1");
         assert!(pi.reasons.as_deref().unwrap().contains("no price"));
         assert!(!page.headers.contains(&"Run time"));
-        let quota = page
-            .figures
-            .iter()
-            .find(|figure| figure.label == "Quota")
-            .unwrap();
-        assert_eq!(quota.value, "unknown");
         let days = page.days.unwrap();
         assert_eq!(days.bars.len(), 30);
         assert_eq!(

@@ -17,7 +17,7 @@ use nsh_core::prelude::*;
 
 use crate::model::list::{self, ListKey};
 use crate::model::tasks::{self, closed};
-use crate::model::work::{self, Press, Record, Verb};
+use crate::model::work::{Press, Record, Verb};
 use crate::model::{Form, Hue, Id, Live};
 use crate::screens::task::keep::keep_details;
 use crate::state::AppState;
@@ -226,7 +226,7 @@ fn filter(app: AppState) -> AnyElement {
 /// newest always (its total is the fold's count), the older ones while loaded.
 fn keep_closed(app: AppState) {
     let targets = computed(move || {
-        if !app.feed.with(work::closed_offered) {
+        if !app.feed.with(closed::offered) {
             return Vec::<DetailRef>::new();
         }
         app.tasks.with(|state| state.closed.targets())

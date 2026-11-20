@@ -43,7 +43,7 @@ fn with_storage(config: EngineConfig, entries: &[(&str, &str)]) -> Headless {
             .map(|(key, value)| (key.to_string(), value.to_string())),
     ));
     let mut app = Headless::start(config).unwrap();
-    app.wait_for("id:ask-open").unwrap();
+    app.wait_for("id:nav-settings").unwrap();
     app
 }
 
@@ -181,7 +181,7 @@ fn typing_in_ask_does_not_navigate() {
     let mut app = preview(desktop(), &[]);
     app.press("id:nav-tasks").unwrap();
     app.wait_for("id:list-tasks").unwrap();
-    app.press("id:ask-open").unwrap();
+    app.press_key("/").unwrap();
     app.wait_for("id:ask-input").unwrap();
 
     let draft = "h s a n p r u f , i j k .";
@@ -194,10 +194,12 @@ fn typing_in_ask_does_not_navigate() {
     );
 }
 
+/// `/` opens Ask over a page, or on Home puts the focus in its docked composer; the phone's
+/// floating button opens it too. Either way the field has the keys at once.
 #[test]
 fn ask_opens_with_the_field_focused() {
     let mut app = preview(desktop(), &[]);
-    app.press("id:ask-open").unwrap();
+    app.press_key("/").unwrap();
     app.wait_for("id:ask-input").unwrap();
     // Selector-free keystrokes cannot give an unfocused field the focus.
     for key in ["h", "e", "l", "l", "o"] {
@@ -219,6 +221,21 @@ fn ask_opens_with_the_field_focused() {
         app.screen().input_text("id:ask-input").unwrap(),
         Some("hello")
     );
+}
+
+/// Escape in Home's docked composer stayed in the field, so `j` typed into it instead of
+/// walking Home's cards: Escape leaves the field.
+#[test]
+fn escape_leaves_homes_docked_composer_so_the_keys_walk_the_cards() {
+    let mut app = preview(desktop(), &[("corral.destination", "home")]);
+    app.wait_for("id:list-home").unwrap();
+    app.press_key("/").unwrap();
+    app.wait_for("id:ask-input").unwrap();
+    app.press_key("x").unwrap();
+    assert_eq!(app.screen().input_text("id:ask-input").unwrap(), Some("x"));
+    app.press_key("escape").unwrap();
+    app.press_key("j").unwrap();
+    assert_eq!(app.screen().input_text("id:ask-input").unwrap(), Some("x"));
 }
 
 #[test]
@@ -262,8 +279,9 @@ fn disconnected_state_shows_no_healthy_segment_and_no_count() {
 
 #[test]
 fn sending_from_ask_appends_to_the_quick_thread_and_clears_the_draft() {
-    let mut app = preview(desktop(), &[]);
-    app.press("id:ask-open").unwrap();
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    app.wait_for("id:list-tasks").unwrap();
+    app.press_key("/").unwrap();
     app.wait_for("id:ask-transcript").unwrap();
     let message = "Why do violet badgers collect moonstones?";
     app.type_text("id:ask-input", message).unwrap();
@@ -272,7 +290,7 @@ fn sending_from_ask_appends_to_the_quick_thread_and_clears_the_draft() {
     app.wait_for(&format!("text:{message}")).unwrap();
     assert_eq!(app.screen().input_text("id:ask-input").unwrap(), Some(""));
     app.press("id:ask-close").unwrap();
-    app.press("id:ask-open").unwrap();
+    app.press_key("/").unwrap();
     app.wait_for(&format!("text:{message}")).unwrap();
 }
 
@@ -430,7 +448,7 @@ fn terminal_80_columns_keeps_what_needs_you_in_view() {
 
 /// The engine refuses dispatching T-12 while T-14 is not done. The sheet offers "Dispatch
 /// anyway", which names what it skips and is the one confirmation: pressing it submits the same
-/// dispatch with force, T-12 runs, and Changes records the forced operation.
+/// dispatch with force, T-12 runs, and Activity's Feed records the forced operation.
 #[test]
 fn a_refused_dispatch_offers_dispatch_anyway_and_forcing_it_runs_the_task() {
     let mut app = preview(desktop(), &[("corral.destination", "now")]);
@@ -448,7 +466,8 @@ fn a_refused_dispatch_offers_dispatch_anyway_and_forcing_it_runs_the_task() {
     app.press("id:nav-sessions").unwrap();
     app.wait_for("id:agent-T-12_R1").unwrap();
     app.press("id:nav-activity").unwrap();
-    app.wait_for("text:/forced dispatch/").unwrap();
+    app.wait_for("text:/^dispatch · skipped unfinished dependencies/")
+        .unwrap();
 }
 
 /// The keyboard's Actions menu (`.`) took no arrows, so Down three times and Enter ran its first
@@ -561,7 +580,7 @@ fn timeline_grouping_redraws_the_lanes_from_the_feed() {
 #[test]
 fn a_file_pasted_as_a_path_alone_is_refused_visibly() {
     let mut app = preview(desktop(), &[]);
-    app.press("id:ask-open").unwrap();
+    app.press_key("/").unwrap();
     app.wait_for("id:ask-input").unwrap();
     let mut paste = PasteEvent::default();
     paste.uris.push("file:///tmp/shot.png".into());

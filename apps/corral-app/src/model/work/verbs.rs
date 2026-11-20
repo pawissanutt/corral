@@ -23,13 +23,6 @@ impl Record {
             Live::Session(_) => Self::Workspace,
         }
     }
-    pub fn live(&self) -> Option<Live> {
-        match self {
-            Self::Task(id) => Some(Live::Task(id.clone())),
-            Self::Session(id) => Some(Live::Session(id.clone())),
-            Self::Workspace => None,
-        }
-    }
     pub fn id(&self) -> &str {
         match self {
             Self::Task(id) | Self::Session(id) => id.as_str(),

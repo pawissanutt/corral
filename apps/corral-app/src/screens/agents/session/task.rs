@@ -1,16 +1,14 @@
 //! The Task tab of a task-bound session (`session::TaskTab`): where the read of the task's record
-//! stands with the ways out (Open in Now, Timeline), then the task's story exactly as Now draws
-//! it (`work::task_page` through Now's own renderer: status, title, body with its acceptance,
-//! stages, dependencies, a blocked task's reply box, every engine operation), then every attempt
-//! the engine recorded, this session's marked. test ids `session-task`, `btn-task-<link>`,
-//! `attempt-<run>`.
+//! stands with the ways out (its page, Timeline), then the task's Overview exactly as its page
+//! draws it (description, children, dependencies, pipeline, checks, runs, artifacts), then every
+//! attempt the engine recorded, this session's marked. test ids `session-task`,
+//! `btn-task-<link>`, `attempt-<run>`.
 
 use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::session::{Attempt, Body, SessionPage, TaskLink, TaskTab};
-use crate::model::work;
-use crate::screens::now::inspector::view_of;
+use crate::screens::task::overview::overview;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::text::h3;
@@ -30,17 +28,6 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
         })
     });
     let task = computed(move || shown.with(|tab| tab.as_ref().and_then(|tab| tab.task.clone())));
-    // Now's own story of the task: the board's row while it lists the task, else its record.
-    let story = computed(move || {
-        let id = task.get()?;
-        let state = app.work.get();
-        app.feed.with(|feed| {
-            Some(match work::task_page(&state, feed, &id) {
-                work::TaskPage::Waiting(inspector) => inspector,
-                work::TaskPage::Ready { story, .. } => *story,
-            })
-        })
-    });
     let top =
         dynamic(move || shown.with(|tab| tab.as_ref().map(|tab| untracked(|| head(app, tab)))));
     let tried = dynamic(move || {
@@ -49,8 +36,7 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                 .and_then(|tab| untracked(|| attempts(app, tab)))
         })
     });
-    let has_story = computed(move || story.with(Option::is_some));
-    let story_view = dynamic(move || has_story.get().then(|| untracked(|| view_of(app, story))));
+    let story_view = dynamic(move || task.get().map(|id| untracked(|| overview(app, id))));
     let pad = match app.form {
         Form::Terminal => 0.0,
         Form::Desktop => 12.0,

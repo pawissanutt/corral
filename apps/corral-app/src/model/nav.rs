@@ -451,11 +451,6 @@ pub struct NavState {
     pub task_tab: TaskTab,
     /// The live record selected in each domain.
     pub selection: Selection,
-    /// The record a former list-or-detail screen was asked to show in place. Nothing sets it
-    /// since every record opens its page; it goes with the screens that read it.
-    pub opened: Option<Live>,
-    /// Grew by one on every such open.
-    pub opens: u32,
 }
 impl NavState {
     /// Creates navigation state at the form's home destination.
@@ -470,8 +465,6 @@ impl NavState {
             pages: Vec::new(),
             task_tab: TaskTab::default(),
             selection: Selection::default(),
-            opened: None,
-            opens: 0,
         }
     }
     /// Navigates to a destination and closes the palette.
@@ -482,7 +475,6 @@ impl NavState {
             self.activity = destination;
         }
         self.pages.clear();
-        self.opened = None;
         self.close(Overlay::Palette);
     }
     /// The page a place opens: its own, or for Activity the page last shown there.
@@ -519,10 +511,6 @@ impl NavState {
             self.task_tab = TaskTab::default();
         }
         self.open_route(Route::Live(page));
-    }
-    /// Forgets the explicit open, as the way back from a narrow detail to its list did.
-    pub fn dismiss_opened(&mut self) {
-        self.opened = None;
     }
     fn open_route(&mut self, route: Route) {
         self.destination = route.owner();

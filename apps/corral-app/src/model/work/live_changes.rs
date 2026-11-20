@@ -1,131 +1,120 @@
-//! Changes in the Daemon state: the engine's events, newest first, split by this device's own
-//! seen cursor, filtered, paged backwards, with who did each, and the device's Mark seen
-//! advancing its cursor through the newest event.
+//! Activity › Feed: every engine event in the one project scope, newest first, grouped by the
+//! local day it happened on, each row opening its task; older pages load on request, and Mark
+//! seen moves this device's own seen cursor, which Home's "since your last visit" counts from.
 
-use corral_types::Event;
+use corral_types::{Event, EventKind};
+use jiff::civil::Date;
 
 use crate::model::daemon::{Feed, Link};
-use crate::model::nav::Form;
-use crate::model::projects::ProjectFilter;
+use crate::model::projects::Scope;
+use crate::model::{Id, Live};
 
 use super::{
-    Button, ButtonKind, Changes, FeedRow, Press, State, change_row_filtered, changes_loading,
-    changes_notice, daemon_status, event_project, feed_filters, stamp,
+    Button, ButtonKind, Press, Status, actor_word, changes_loading, changes_notice, daemon_status,
+    day_label, event_detail, event_project, local_day,
 };
 
-/// Whether an unseen count is canonical or only the events this device has loaded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UnseenCount {
-    pub count: u64,
-    pub total: bool,
+/// The Feed's title and what it lists.
+pub const FEED_TITLE: &str = "Feed";
+pub const FEED_SUB: &str = "every event, newest first";
+
+/// One event: its local time, the engine's word for its kind, its task, what it says and who
+/// did it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedEvent {
+    /// `18:40`, local.
+    pub at: String,
+    /// The engine's kind, `review_started`.
+    pub kind: &'static str,
+    /// A forced operation: its kind reads in the failure colour, so it is not read past.
+    pub forced: bool,
+    /// The task the event concerns; empty for an event about none.
+    pub id: String,
+    pub text: String,
+    pub who: &'static str,
+    /// The page the row opens: the task's.
+    pub open: Option<Live>,
+    /// The row's test id: `event-<seq>`.
+    pub test_id: String,
 }
 
-/// The loaded events past this device's seen cursor.
-fn unseen_events(feed: &Feed) -> impl Iterator<Item = &Event> {
-    let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
-    feed.changes
-        .range((
-            std::ops::Bound::Excluded(through),
-            std::ops::Bound::Unbounded,
-        ))
-        .map(|(_, event)| event)
-}
-
-/// Event sequences are cursors, not counts. A server total belongs to its seen cursor.
-pub fn unseen_count(feed: &Feed) -> UnseenCount {
-    let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
-    if let Some((cursor, count)) = feed.changes_unseen
-        && cursor == through
-    {
-        return UnseenCount { count, total: true };
-    }
-    UnseenCount {
-        count: u64::try_from(unseen_events(feed).count()).unwrap_or(u64::MAX),
-        total: false,
-    }
-}
-
-/// Project totals cover loaded changes only; the daemon's unseen total is workspace-wide.
-pub fn unseen_count_filtered(feed: &Feed, filter: &ProjectFilter) -> UnseenCount {
-    let filter = filter.resolved(feed);
-    if filter == ProjectFilter::All {
-        return unseen_count(feed);
-    }
-    let count = unseen_events(feed)
-        .filter(|event| change_matches_project(event, feed, &filter))
-        .count();
-    UnseenCount {
-        count: u64::try_from(count).unwrap_or(u64::MAX),
-        total: false,
+impl FeedEvent {
+    /// What a screen reader hears: time, kind, task, event and attribution.
+    pub fn spoken(&self) -> String {
+        [
+            self.at.as_str(),
+            self.kind,
+            self.id.as_str(),
+            self.text.as_str(),
+            self.who,
+        ]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
     }
 }
 
-/// When this device last saw the feed, in local time, if it ever did.
-fn last_visit(feed: &Feed) -> Option<String> {
-    feed.seen
-        .as_ref()
-        .filter(|seen| seen.through != 0)
-        .and_then(|seen| seen.at.as_deref())
-        .map(|at| stamp(at, feed))
-        .filter(|at| !at.is_empty())
+/// The events of one local day.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedDay {
+    /// `Today`, `Yesterday`, `Wed 18 Nov`.
+    pub label: String,
+    pub events: Vec<FeedEvent>,
 }
 
-/// Changes for the authenticated device's own cursor; the shell owns back navigation.
-/// Projects come from the event itself, else from the open task's row.
-pub fn live_changes_filtered(
-    state: &State,
-    feed: &Feed,
-    device: Option<&str>,
-    form: Form,
-    filter: &ProjectFilter,
-) -> Changes {
-    let filter = filter.resolved(feed);
-    let phone = form == Form::Phone;
-    let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
-    let visit = last_visit(feed);
-    let mut recent: Vec<FeedRow> = Vec::new();
-    let mut history: Vec<FeedRow> = Vec::new();
+/// The whole Feed page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeedPage {
+    pub days: Vec<FeedDay>,
+    /// Move this device's seen cursor through the newest event, while corrald serves changes.
+    pub mark_seen: Option<Button>,
+    /// Fetch the page before the oldest row shown, while corrald has more.
+    pub older: Option<Button>,
+    /// One line instead of the rows: not served, loading, failed or none in scope.
+    pub notice: Option<String>,
+    pub status: Status,
+}
+
+/// The project an event is filed under (see [`event_project`]); an event with none known, a
+/// workspace event or one of a task nothing loaded names, stays in every scope rather than
+/// silently dropping from the retained history.
+fn in_scope(event: &Event, feed: &Feed, scope: &Scope) -> bool {
+    event_project(event, feed).is_none_or(|project| scope.matches(project))
+}
+
+fn event_row(event: &Event, at: String) -> FeedEvent {
+    FeedEvent {
+        at,
+        kind: event.kind.as_str(),
+        forced: event.kind == EventKind::Forced,
+        id: event.task.clone().unwrap_or_default(),
+        text: event_detail(event),
+        who: actor_word(event.actor),
+        open: event.task.as_deref().map(|task| Live::Task(Id::new(task))),
+        test_id: format!("event-{}", event.seq),
+    }
+}
+
+/// The Feed in `scope`: every loaded event, newest first, by local day.
+pub fn feed_page(feed: &Feed, scope: &Scope) -> FeedPage {
+    let scope = scope.resolved(feed);
+    let mut days: Vec<(Date, Vec<FeedEvent>)> = Vec::new();
     for event in feed
         .changes
         .values()
         .rev()
-        .filter(|event| state.filter.admits(event.kind))
-        .filter(|event| change_matches_project(event, feed, &filter))
+        .filter(|event| in_scope(event, feed, &scope))
     {
-        if event.seq > through {
-            recent.push(change_row_filtered(event, feed, true, &filter));
-        } else {
-            history.push(change_row_filtered(event, feed, false, &filter));
+        let (day, at) = local_day(event.ts, feed);
+        match days.last_mut() {
+            Some((last, events)) if *last == day => events.push(event_row(event, at)),
+            _ => days.push((day, vec![event_row(event, at)])),
         }
     }
-    let unseen = unseen_count_filtered(feed, &filter);
-    let device_words = device.map_or_else(|| "this device".to_owned(), |name| name.to_owned());
-    let seen_line = match (&visit, phone) {
-        (Some(at), true) => format!("last visit {at}"),
-        (Some(at), false) => format!("your last visit · {at} · seen-cursor for {device_words}"),
-        (None, true) => "nothing marked seen yet".to_owned(),
-        (None, false) => format!("nothing marked seen on {device_words} yet"),
-    };
-    let subtitle = (!phone).then(|| {
-        let events = format!(
-            "{} {}event{}",
-            unseen.count,
-            if unseen.total {
-                "new "
-            } else {
-                "loaded unseen "
-            },
-            if unseen.count == 1 { "" } else { "s" }
-        );
-        let cursor =
-            "the seen-cursor is per device: marking seen here leaves your other devices' marks";
-        match &visit {
-            Some(at) => format!("since this device's last visit {at} · {events} · {cursor}"),
-            None => format!("{events} · {cursor}"),
-        }
-    });
     let up = feed.link == Link::Up;
     let loading = changes_loading(feed);
+    let through = feed.seen.as_ref().map_or(0, |seen| seen.through);
     let head = feed
         .changes
         .keys()
@@ -136,18 +125,18 @@ pub fn live_changes_filtered(
     let notice = changes_notice(feed)
         .map(|notice| notice.text().to_owned())
         .or_else(|| {
-            (recent.is_empty() && history.is_empty())
-                .then(|| format!("No {} events loaded.", state.filter.label().to_lowercase()))
+            days.is_empty()
+                .then(|| "No events in this scope yet.".to_owned())
         });
-    Changes {
-        title: "Changes",
-        subtitle,
-        filters: feed_filters(state),
-        recent,
-        seen_line,
-        history,
-        illustrative: None,
-        // Each device keeps its own cursor, so the phone can move its own too.
+    FeedPage {
+        days: days
+            .into_iter()
+            .map(|(day, events)| FeedDay {
+                label: day_label(day, feed),
+                events,
+            })
+            .collect(),
+        // Each device keeps its own cursor: marking seen here leaves the others' marks.
         mark_seen: feed.capable(corral_protocol::app::CHANGES_V1).then(|| {
             if head > through {
                 Button::new("Mark seen", Press::Seen(head), ButtonKind::Ghost).enabled(up)
@@ -172,107 +161,39 @@ pub fn live_changes_filtered(
     }
 }
 
-/// The project an event is filed under (see [`event_project`]); an event with none known, a
-/// workspace event or one of a task nothing loaded names, stays in every scope rather than
-/// silently dropping from the retained history.
-pub(crate) fn change_matches_project(event: &Event, feed: &Feed, filter: &ProjectFilter) -> bool {
-    event_project(event, feed).is_none_or(|project| filter.matches(project))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Id;
-    use crate::model::board::{ChangeKind, Mark};
-    use crate::model::work::ChangeFilter;
-    use corral_protocol::app::{CHANGES_V1, SeenCursor};
-    use corral_types::{Actor, EventKind};
+    use corral_protocol::app::CHANGES_V1;
+    use corral_types::Actor;
     use serde_json::json;
 
-    fn event(seq: u64, kind: EventKind, detail: serde_json::Value) -> Event {
+    fn event(seq: u64, at: &str, kind: EventKind, project: Option<&str>) -> Event {
         Event {
             seq,
-            ts: "2026-11-14T10:00:00Z".parse().unwrap(),
+            ts: at.parse().unwrap(),
             task: Some(format!("T-{seq}")),
             run: None,
-            project: None,
+            project: project.map(str::to_owned),
             kind,
             actor: Actor::Owner,
-            detail,
+            detail: json!({}),
         }
     }
 
-    /// The seen cursor splits new from seen; a forced line names every rule it skipped in plain
-    /// words, and Forced narrows the feed to the forced lines, each opening its task.
+    /// The Feed lists newest first under each local day, a forced operation names what it
+    /// skipped, and a project's scope keeps its own events (named by the event even for a task
+    /// no longer on the board) and those whose project nothing names, never another project's.
     #[test]
-    fn the_seen_cursor_splits_new_from_seen_and_a_forced_line_names_what_it_skipped() {
-        let mut feed = Feed::default();
-        feed.capabilities.insert(CHANGES_V1.into());
-        feed.changes.extend([
-            (1, event(1, EventKind::Gate, json!({"result": "fail"}))),
-            (
-                2,
-                event(2, EventKind::Blocked, json!({"reason": "gate failed"})),
-            ),
-            (
-                3,
-                event(
-                    3,
-                    EventKind::Forced,
-                    json!({"operation": "dispatch", "skipped": ["dependencies", "limits.running"]}),
-                ),
-            ),
-            (
-                4,
-                event(
-                    4,
-                    EventKind::Landed,
-                    json!({"sha": "abcdef123", "base": "main"}),
-                ),
-            ),
-        ]);
-        feed.seen = Some(SeenCursor {
-            through: 2,
-            at: Some("2026-11-14T09:00:00Z".into()),
-        });
-        let mut state = State::default();
-        let all = ProjectFilter::All;
-        let changes = live_changes_filtered(&state, &feed, Some("phone"), Form::Desktop, &all);
-        let ids = |rows: &[FeedRow]| rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>();
-        assert_eq!(ids(&changes.recent), ["T-4", "T-3"]);
-        assert_eq!(ids(&changes.history), ["T-2", "T-1"]);
-        assert!(
-            changes.recent[1]
-                .text
-                .ends_with("skipped unfinished dependencies and the running-slot limit"),
-            "{}",
-            changes.recent[1].text
-        );
-        assert_eq!(changes.history[1].kind, ChangeKind::Mark(Mark::Fail));
-        assert_eq!(changes.recent[0].at, "Nov 14");
-        assert_eq!(
-            changes.mark_seen.and_then(|button| button.action),
-            Some(Press::Seen(4))
-        );
-        state.filter = ChangeFilter::Verdicts;
-        let changes = live_changes_filtered(&state, &feed, None, Form::Desktop, &all);
-        assert_eq!(ids(&changes.recent), ["T-4"]);
-        assert_eq!(ids(&changes.history), ["T-1"]);
-        state.filter = ChangeFilter::Forced;
-        let changes = live_changes_filtered(&state, &feed, None, Form::Desktop, &all);
-        assert_eq!(ids(&changes.recent), ["T-3"]);
-        assert!(changes.history.is_empty());
-        assert_eq!(
-            changes.recent[0].action,
-            Some(Press::Open(crate::model::Live::Task("T-3".into())))
-        );
-    }
-
-    /// A Done task has no board row, so its events once read no project: they lost their label
-    /// and stayed in every project's scope. The event's own project labels them and scopes them.
-    #[test]
-    fn a_closed_tasks_event_is_labelled_with_its_project_and_stays_under_that_projects_filter() {
-        let mut feed = Feed::default();
+    fn the_feed_groups_by_day_newest_first_and_keeps_the_scopes_events() {
+        let mut feed = Feed {
+            now: "2026-11-15T12:00:00Z"
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+                .as_second() as u64,
+            time_zone: Some(jiff::tz::TimeZone::UTC),
+            ..Feed::default()
+        };
         feed.capabilities.insert(CHANGES_V1.into());
         feed.capabilities
             .insert(corral_protocol::PROJECTS_V1.into());
@@ -289,32 +210,46 @@ mod tests {
                 },
             );
         }
-        for (seq, project) in [(1, "corral"), (2, "site")] {
-            let landed = Event {
-                project: Some(project.into()),
-                ..event(seq, EventKind::Landed, json!({}))
-            };
-            feed.changes.insert(seq, landed);
+        for event in [
+            event(1, "2026-11-14T09:00:00Z", EventKind::Created, Some("site")),
+            event(2, "2026-11-15T08:00:00Z", EventKind::Landed, Some("corral")),
+            Event {
+                detail: json!({"operation": "dispatch", "skipped": ["dependencies"]}),
+                ..event(3, "2026-11-15T09:30:00Z", EventKind::Forced, None)
+            },
+        ] {
+            feed.changes.insert(event.seq, event);
         }
-        let state = State::default();
-        let rows = |filter: &ProjectFilter| {
-            let changes = live_changes_filtered(&state, &feed, None, Form::Desktop, filter);
-            changes
-                .recent
-                .into_iter()
-                .map(|row| (row.id, row.project_chip))
-                .collect::<Vec<_>>()
-        };
+        let page = feed_page(&feed, &Scope::All);
+        let days: Vec<(&str, Vec<&str>)> = page
+            .days
+            .iter()
+            .map(|day| {
+                let ids = day.events.iter().map(|event| event.id.as_str()).collect();
+                (day.label.as_str(), ids)
+            })
+            .collect();
         assert_eq!(
-            rows(&ProjectFilter::All),
-            [
-                ("T-2".to_owned(), Some("site".to_owned())),
-                ("T-1".to_owned(), Some("corral".to_owned())),
-            ]
+            days,
+            [("Today", vec!["T-3", "T-2"]), ("Yesterday", vec!["T-1"])]
+        );
+        let forced = &page.days[0].events[0];
+        assert!(forced.forced);
+        assert!(
+            forced.text.ends_with("skipped unfinished dependencies"),
+            "{}",
+            forced.text
         );
         assert_eq!(
-            rows(&ProjectFilter::Project(Id::from("site"))),
-            [("T-2".to_owned(), None)]
+            page.days[0].events[0].open,
+            Some(Live::Task(Id::new("T-3")))
         );
+        let site = feed_page(&feed, &Scope::Project(Id::new("site")));
+        let ids: Vec<&str> = site
+            .days
+            .iter()
+            .flat_map(|day| day.events.iter().map(|event| event.id.as_str()))
+            .collect();
+        assert_eq!(ids, ["T-3", "T-1"]);
     }
 }

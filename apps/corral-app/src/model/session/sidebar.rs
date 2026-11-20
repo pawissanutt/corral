@@ -278,7 +278,9 @@ fn at_work(cx: &Cx<'_>) -> (String, Hue) {
 fn plan_summary(cx: &Cx<'_>) -> (String, Hue) {
     match cx.state.and_then(|state| state.plan.as_ref()) {
         Some(plan) if plan.stale => (format!("{}/{} · stale", plan.done, plan.total), Hue::Held),
-        Some(plan) if plan.total > 0 => (format!("{}/{} done", plan.done, plan.total), Hue::Neutral),
+        Some(plan) if plan.total > 0 => {
+            (format!("{}/{} done", plan.done, plan.total), Hue::Neutral)
+        }
         Some(_) => ("no plan yet".into(), Hue::Neutral),
         None => ("not reported yet".into(), Hue::Neutral),
     }
@@ -333,9 +335,7 @@ fn content(cx: &Cx<'_>, section: Section) -> Option<SectionContent> {
         Section::Changes => SectionContent::Files(files::files_tab(cx, &changes::target(cx))),
         Section::Agents => SectionContent::Agents(context::context_tab(cx, &context_target(cx))),
         Section::Plan => SectionContent::Plan(plan::plan_tab(cx)),
-        Section::Context => {
-            SectionContent::Context(context::context_tab(cx, &context_target(cx)))
-        }
+        Section::Context => SectionContent::Context(context::context_tab(cx, &context_target(cx))),
         Section::Task => {
             let task = cx.task?;
             let status = cx
