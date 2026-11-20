@@ -20,6 +20,10 @@ export interface FavoriteModels {
   set(model: ModelRef, favorite: boolean): void;
 }
 
+/**
+ * A host refuses to add a favorite past this many. Two hosts adding at once may both pass the check, so the directory
+ * can hold a few more; the reader lists every favorite file, so a save that succeeded is always visible.
+ */
 const FAVORITES_MAX = 1000;
 const PART_MAX_BYTES = 512;
 /** A favorite's file holds its two parts; anything larger is not one this store wrote. */
@@ -69,7 +73,7 @@ export class WorkspaceModelFavorites implements FavoriteModels {
    * `changed` runs after the favorites change, in this host or in another session's (the directory is watched), so
    * this host re-announces its catalog to the app and redraws an open picker.
    */
-  constructor(root: string, private readonly changed?: () => void) {
+  constructor(root: string, private readonly changed?: () => void, private readonly max = FAVORITES_MAX) {
     this.dir = join(root, ".corral-next", "model-favorites");
     if (changed) this.watch();
   }
@@ -110,7 +114,6 @@ export class WorkspaceModelFavorites implements FavoriteModels {
       let names: string[] = [];
       try { names = readdirSync(this.dir); } catch { /* no favorites readable */ }
       for (const name of names) {
-        if (keys.size >= FAVORITES_MAX) break;
         const model = NAME.test(name) ? readFavorite(this.dir, name) : undefined;
         if (model) keys.add(key(model));
       }
@@ -126,8 +129,8 @@ export class WorkspaceModelFavorites implements FavoriteModels {
     const path = join(this.dir, fileName(model));
     this.cache = undefined;
     if (favorite) {
-      if (!this.keys().has(key(model)) && this.keys().size >= FAVORITES_MAX) {
-        throw new Error(`at most ${FAVORITES_MAX} models can be favorites`);
+      if (!this.keys().has(key(model)) && this.keys().size >= this.max) {
+        throw new Error(`at most ${this.max} models can be favorites`);
       }
       mkdirSync(this.dir, { recursive: true });
       const temporary = join(this.dir, `.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);

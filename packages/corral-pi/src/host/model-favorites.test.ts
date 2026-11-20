@@ -55,3 +55,17 @@ test("another host's change notifies a watching host, and concurrent hosts never
     watching.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("every favorite a host saved stays visible, also past the limit two racing hosts can overshoot", () => {
+  const root = mkdtempSync(join(tmpdir(), "favorites-"));
+  try {
+    const gpt = { provider: "openai", id: "gpt-5" };
+    const a = new WorkspaceModelFavorites(root, undefined, 1);
+    a.set(claude, true);
+    expect(() => a.set(gpt, true)).toThrow();
+    // A host that passed its check before the other's save landed also saves; both are favorites everywhere.
+    new WorkspaceModelFavorites(root, undefined, 2).set(gpt, true);
+    const reader = new WorkspaceModelFavorites(root, undefined, 1);
+    expect(reader.has(claude) && reader.has(gpt)).toBeTrue();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

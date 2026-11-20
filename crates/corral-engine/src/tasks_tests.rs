@@ -74,6 +74,8 @@ fn terminal_moves_stop_live_runs_preserve_checkout_and_owner_actions_reset_round
     Engine::init(root.path(), None).unwrap();
     let fake = FakeRunner::new();
     let mut engine = Engine::open_with_runner(root.path(), Box::new(fake.clone())).unwrap();
+    // The actor comes from CORRAL_ACTOR, which an agent's shell sets; this test is the owner's.
+    engine.actor = Actor::Owner;
     let mut task = engine
         .new_task(NewTask {
             title: "stop me".to_owned(),
@@ -106,6 +108,19 @@ fn terminal_moves_stop_live_runs_preserve_checkout_and_owner_actions_reset_round
     assert_eq!(task.status, Status::Backlog);
     task.round = 2;
     engine.store.update_task(&task).unwrap();
+    // Only the owner's edit restarts the review rounds.
+    engine.actor = Actor::Reviewer;
+    let kept = engine
+        .edit_task(
+            &task.id,
+            TaskEdit {
+                title: Some("noted".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(kept.round, 2);
+    engine.actor = Actor::Owner;
     let edited = engine
         .edit_task(
             &task.id,
