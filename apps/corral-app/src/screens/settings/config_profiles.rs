@@ -2,8 +2,11 @@
 //! one chosen, which shows its harness, model and effort, with its arguments folded under
 //! Advanced. From 640 pt (84 Cells) of room the list stands beside the profile; narrower, and
 //! on the phone, the list shows first and a profile opens in its place with a way back. New
-//! and Duplicate ask for a name first; Remove sits in the profile's More menu and says what in
-//! the draft still names the profile before it goes, leaving those keys for the owner to change.
+//! and Duplicate ask for a name first, refusing any key the draft's `[profiles]` already holds
+//! and warning, on the button too, when the name overrides one of corral's built-in profiles.
+//! The workspace default is the draft's, else corral's reported one. Remove sits in the
+//! profile's More menu and says what in the draft still names the profile before it goes,
+//! leaving those keys for the owner to change.
 //! Model and effort take any text; the values other profiles of the same harness set are
 //! offered beside it, read from the draft as it is typed so the fields never remount. IDs:
 //! `seg-config-profiles-<name>` for a row, `field-config-profiles-search`,
@@ -20,10 +23,10 @@ use nsh_core::prelude::*;
 use super::config_fields::{edit, entry, field, row};
 use super::parts::{button_row, cell, mono_cell, space};
 use crate::model::Form;
-use crate::model::settings::document::{self, Path, Seg};
+use crate::model::settings::document::{self, Path};
 use crate::model::settings::editor::{Edit, Part};
 use crate::model::settings::form::{Entries, Field, Group, Live};
-use crate::model::settings::profiles::{self, Naming};
+use crate::model::settings::profiles::{self, Check, Naming, Taken, key_of};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with, menu_trigger};
@@ -44,22 +47,16 @@ const MENU_MIN: f32 = 180.0;
 const TARGET: f32 = 44.0;
 
 /// What every part of the screen reads: the shape's profiles, the one chosen and its fields,
-/// the draft's values, and the open name panel.
+/// the draft's values, the names a new profile may land on, and the open name panel.
 #[derive(Clone)]
 struct Cx {
     names: Vec<String>,
     chosen: Option<String>,
     fields: Vec<Field>,
     live: Memo<Live>,
+    taken: Memo<Taken>,
     naming: Signal<Option<Naming>>,
     typed: Signal<String>,
-}
-
-fn key_of(field: &Field) -> Option<&str> {
-    match field.path.0.last() {
-        Some(Seg::Key(key)) => Some(key.as_str()),
-        _ => None,
-    }
 }
 
 /// The Profiles part: the name panel when open, then the list and the chosen profile, beside
@@ -76,6 +73,10 @@ pub(super) fn profiles(
         chosen: listed.chosen.clone(),
         fields: group.map(|group| group.fields.clone()).unwrap_or_default(),
         live,
+        taken: computed(move || {
+            let draft = app.settings.with(|state| state.config.draft.clone());
+            app.feed.with(|feed| Taken::read(&draft, feed))
+        }),
         naming: signal(None),
         typed: signal(String::new()),
     };
@@ -85,6 +86,21 @@ pub(super) fn profiles(
         (Form::Desktop, width) => width.is_none_or(|width| width >= BESIDE),
         (Form::Terminal, Some(width)) => width >= term::cells(BESIDE_CELLS).0,
         (Form::Terminal, None) => term::page_columns(app) >= BESIDE_CELLS,
+    });
+    // Back and Escape read whether the list stands beside the profile; written on a change only.
+    effect(move || {
+        let beside = wide.get();
+        let held = app
+            .settings
+            .with_untracked(|state| state.config.profile_beside);
+        untracked(move || {
+            if held != beside {
+                app.act(app.settings, move |state, _| {
+                    state.config.profile_beside = beside;
+                    Vec::new()
+                });
+            }
+        });
     });
     let focused = computed(move || app.settings.with(|state| state.config.profile_focus));
     let layout = {
@@ -202,11 +218,11 @@ fn list(app: AppState, cx: &Cx) -> AnyElement {
         let kept = live.with(|live| profiles::filtered(&names, &live.draft, &query));
         (kept, query)
     });
-    let chosen = cx.chosen.clone();
+    let cx = cx.clone();
     parts.push(
         dynamic(move || {
             let (kept, query) = kept.get();
-            let chosen = chosen.clone();
+            let cx = cx.clone();
             untracked(move || {
                 if kept.is_empty() {
                     return cell(app, profiles::no_match(&query), Token::Ink3, false)
@@ -217,8 +233,8 @@ fn list(app: AppState, cx: &Cx) -> AnyElement {
                     .role(AccessibilityRole::Group)
                     .label("Profiles")
                     .children(kept.into_iter().map(|name| {
-                        let selected = chosen.as_deref() == Some(name.as_str());
-                        profile_row(app, live, name, selected)
+                        let selected = cx.chosen.as_deref() == Some(name.as_str());
+                        profile_row(app, &cx, name, selected)
                     }))
                     .into_element()
             })
@@ -228,12 +244,15 @@ fn list(app: AppState, cx: &Cx) -> AnyElement {
     view().min_w(px(0.0)).children(parts).into_element()
 }
 
-/// A profile's row: its name and whether the workspace defaults to it, its model in full, its
-/// harness and effort; one line in a terminal.
-fn profile_row(app: AppState, live: Memo<Live>, name: String, selected: bool) -> AnyElement {
-    let form = app.form;
+/// A profile's row: its name and whether the workspace defaults to it, by the draft or else
+/// corral, its model in full, its harness and effort; one line in a terminal.
+fn profile_row(app: AppState, cx: &Cx, name: String, selected: bool) -> AnyElement {
+    let (form, live, taken) = (app.form, cx.live, cx.taken);
     let read = name.clone();
-    let summary = computed(move || live.with(|live| profiles::summary(&live.draft, &read)));
+    let summary = computed(move || {
+        let default = taken.with(|taken| taken.default.clone());
+        live.with(|live| profiles::summary(&live.draft, &read, default.as_deref()))
+    });
     let shown = name.clone();
     let content = dynamic(move || {
         let summary = summary.get();
@@ -286,16 +305,15 @@ fn profile_row(app: AppState, live: Memo<Live>, name: String, selected: bool) ->
     }
 }
 
-/// The name a new or duplicated profile takes: the field, why the name cannot be used, and the
-/// button that makes it. Enter makes it too.
+/// The name a new or duplicated profile takes: the field, why the name cannot be used or the
+/// built-in profile it overrides, and the button that makes it, which says so. Enter makes it
+/// too.
 fn naming(app: AppState, cx: &Cx) -> AnyElement {
-    let (naming, typed) = (cx.naming, cx.typed);
-    let names = cx.names.clone();
+    let (naming, typed, taken) = (cx.naming, cx.typed, cx.taken);
     dynamic(move || {
         let making = naming.get()?;
-        let names = names.clone();
         Some(untracked(move || {
-            naming_panel(app, making, names, naming, typed)
+            naming_panel(app, making, taken, naming, typed)
         }))
     })
     .into_element()
@@ -304,16 +322,16 @@ fn naming(app: AppState, cx: &Cx) -> AnyElement {
 fn naming_panel(
     app: AppState,
     making: Naming,
-    names: Vec<String>,
+    taken: Memo<Taken>,
     naming: Signal<Option<Naming>>,
     typed: Signal<String>,
 ) -> AnyElement {
     let form = app.form;
     let create = {
-        let (making, names) = (making.clone(), names.clone());
+        let making = making.clone();
         move || {
             let name = typed.get_untracked().trim().to_owned();
-            if !profiles::name_ok(&names, &name) {
+            if !taken.with_untracked(|taken| taken.check(&name).ready()) {
                 return;
             }
             naming.set(None);
@@ -332,22 +350,19 @@ fn naming_panel(
             });
         }
     };
-    let checked = names.clone();
-    let problem = computed(move || typed.with(|typed| profiles::name_problem(&checked, typed)));
-    let ready = computed(move || typed.with(|typed| profiles::name_ok(&names, typed)));
-    let action = making.action();
+    let check = computed(move || typed.with(|typed| taken.with(|taken| taken.check(typed))));
     let confirm = {
-        let create = create.clone();
+        let (create, making) = (create.clone(), making.clone());
         dynamic(move || {
-            let disabled = !ready.get();
-            let create = create.clone();
+            let check = check.get();
+            let (create, action) = (create.clone(), making.action(&check));
             untracked(move || {
                 button_with(
                     app,
                     action,
                     ButtonKind::Primary,
                     ButtonOptions {
-                        disabled,
+                        disabled: !check.ready(),
                         ..ButtonOptions::default()
                     },
                     "btn-config-add-profiles",
@@ -368,9 +383,13 @@ fn naming_panel(
         },
     );
     let warning = dynamic(move || {
-        let problem = problem.get()?;
+        let (words, token) = match check.get() {
+            Check::Refused(words) => (words, Token::Fail),
+            Check::Overrides(words) => (words, Token::Held),
+            Check::Empty | Check::Free => return None,
+        };
         Some(untracked(move || {
-            cell(app, problem, Token::Fail, false).into_element()
+            cell(app, words, token, false).into_element()
         }))
     })
     .into_element();
@@ -459,19 +478,12 @@ fn detail(app: AppState, cx: &Cx, name: String, wide: bool) -> AnyElement {
     }
     parts.push(head(app, cx, &name, removing));
     parts.push(entry_reasons(app, &name));
-    parts.push(
-        {
-            let name = name.clone();
-            dynamic(move || {
-                if !removing.get() {
-                    return None;
-                }
-                let name = name.clone();
-                Some(untracked(move || removal(app, name, removing)))
-            })
-        }
-        .into_element(),
-    );
+    let gone = name.clone();
+    let warning = dynamic(move || {
+        let name = removing.get().then(|| gone.clone())?;
+        Some(untracked(move || removal(app, name, removing)))
+    });
+    parts.push(warning.into_element());
     parts.push(space(app, 10.0));
     // The shape's fields in its order: harness (with its offers), model, effort, arguments.
     let fields: Vec<AnyElement> = cx
@@ -484,17 +496,12 @@ fn detail(app: AppState, cx: &Cx, name: String, wide: bool) -> AnyElement {
             _ => field(app, shape, cx.live),
         })
         .collect();
-    parts.push(
-        view()
-            .min_w(px(0.0))
-            .gap(if form == Form::Terminal {
-                term::rows(1.0)
-            } else {
-                px(14.0)
-            })
-            .children(fields)
-            .into_element(),
-    );
+    let gap = match form {
+        Form::Terminal => term::rows(1.0),
+        _ => px(14.0),
+    };
+    let column = view().min_w(px(0.0)).gap(gap);
+    parts.push(column.children(fields).into_element());
     view()
         .test_id("config-profile")
         .min_w(px(0.0))
@@ -506,9 +513,8 @@ fn detail(app: AppState, cx: &Cx, name: String, wide: bool) -> AnyElement {
 /// The profile's name, then Duplicate and its More menu.
 fn head(app: AppState, cx: &Cx, name: &str, removing: Signal<bool>) -> AnyElement {
     let form = app.form;
-    let (naming, typed) = (cx.naming, cx.typed);
+    let (naming, typed, taken) = (cx.naming, cx.typed, cx.taken);
     let copied = name.to_owned();
-    let names = cx.names.clone();
     let title = cell(app, name.to_owned(), Token::Ink, true)
         .role(AccessibilityRole::Header)
         .when(form != Form::Terminal, |title| title.text_size(px(15.0)));
@@ -519,7 +525,7 @@ fn head(app: AppState, cx: &Cx, name: &str, removing: Signal<bool>) -> AnyElemen
         "btn-config-duplicate-profiles",
         move || {
             let making = Naming::Duplicate(copied.clone());
-            typed.set(making.initial(&names));
+            typed.set(taken.with_untracked(|taken| making.initial(taken)));
             naming.set(Some(making));
         },
     );
