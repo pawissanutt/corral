@@ -119,7 +119,7 @@ Keep intent, scope and authority with you; let the PM handle the mechanics:
   than treating a suggestion or board notification as consent.
 
 The PM asks questions in its pane. Stopped workers, missing reviewers, unresolved waits and owner
-decisions appear in **Blocked**, with a reason, unblocker and age. Select a card to inspect it;
+decisions appear in **Needs me**, with a reason, unblocker and age. Select a card to inspect it;
 `r` replies when the agent is waiting for input. Idea promotion is owner-controlled today; Ready-task admission can be configured, but
 does not promote ideas. See [PM policy boundaries](docs/guide/pm.md#policy-boundaries).
 
@@ -133,7 +133,7 @@ does not promote ideas. See [PM policy boundaries](docs/guide/pm.md#policy-bound
 - **Automation needs your grant.** The default mode is Assist, with no gate, no reviewer and owner
   acceptance. Automatic work needs a confirmed, finite Autopilot grant; legacy settings such as
   `[review] autopilot` or `accept = "auto"` never grant it. Configured checks, independent review,
-  protected paths and review-round guards still apply and can send work to Blocked.
+  protected paths and review-round guards still apply and can send work to Needs me.
   `corral mode pause` (alias `corral autopilot off`) stops every new automatic action across the
   workspace without killing running agents.
 - **Bounded scratch and retained evidence.** Finished clean worktrees can be reclaimed with their

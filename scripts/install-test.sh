@@ -22,14 +22,24 @@ trap cleanup EXIT
 mkdir -p "$suite/bin" "$suite/fixtures"
 
 # Restrict PATH so an installed herdr (or real downloader) cannot be reached.
-export TEST_REAL_MV
+export TEST_REAL_MV TEST_REAL_LN
 TEST_REAL_MV=$(command -v mv)
-for cmd in sh awk mktemp rm tar gzip mkdir rmdir cp chmod cmp ln ls sha256sum script sleep; do
+TEST_REAL_LN=$(command -v ln)
+for cmd in sh awk mktemp rm tar gzip mkdir rmdir cp chmod cmp ls sha256sum script sleep; do
     ln -s "$(command -v "$cmd")" "$suite/bin/$cmd"
 done
 cat >"$suite/bin/mv" <<'SH'
 #!/bin/sh
 set -eu
+case "$1:$2" in
+*/.corral-app-install.*/old/site:* | -P:*/.corral-app-install.*/old/site)
+    if [ "${TEST_BACKUP_RACE:-}" = file-blocked ]; then
+        # Arrive during the restore operation, after any destination precheck.
+        printf 'new arrival\n' >"$CORRAL_APP_INSTALL_DIR"
+    fi
+    ;;
+esac
+if [ "${0##*/}" = ln ]; then exec "$TEST_REAL_LN" "$@"; fi
 case "$1:$2" in
 -f:*/new/corrald-next)
     [ "${TEST_FAIL_PROMOTION:-0}" = 0 ] || exit 47
@@ -46,6 +56,10 @@ case "$1:$2" in
         "$TEST_REAL_MV" "$1" "$TEST_ROOT/original-site"
         mkdir "$1"
         printf 'unrelated\n' >"$1/index.html"
+        ;;
+    file-blocked)
+        "$TEST_REAL_MV" "$1" "$TEST_ROOT/original-site"
+        printf 'unrelated backup\n' >"$1"
         ;;
     esac
     ;;
@@ -73,6 +87,7 @@ if [ "$1" = "$CORRAL_APP_INSTALL_DIR" ] && [ "${TEST_PAUSE_BACKUP:-0}" = 1 ]; th
 fi
 SH
 chmod +x "$suite/bin/mv"
+ln -s mv "$suite/bin/ln"
 cat >"$suite/bin/uname" <<'SH'
 #!/bin/sh
 case "$1" in
@@ -412,8 +427,9 @@ for existing in index dotfile marker directory symlink; do
 done
 
 verify_current() {
-    printf 'corral-web-install-v1\n' | cmp -s - "$CORRAL_APP_INSTALL_DIR/.corral-web-install"
-    printf 'site %s\n' "$1" | cmp -s - "$CORRAL_APP_INSTALL_DIR/index.html"
+    site=${2:-$CORRAL_APP_INSTALL_DIR}
+    printf 'corral-web-install-v1\n' | cmp -s - "$site/.corral-web-install"
+    printf 'site %s\n' "$1" | cmp -s - "$site/index.html"
     [ "$("$CORRAL_INSTALL_DIR/corral-next" --version)" = "corral-next 7.8.$1" ]
     [ "$("$CORRAL_INSTALL_DIR/corrald-next" --version)" = "corral-daemon 7.8.$1" ]
     [ "$("$CORRAL_INSTALL_DIR/corral-pi" --version)" = "corral-pi pi 7.8.$1" ]
@@ -431,8 +447,8 @@ TEST_CURRENT_FIXTURE=2 CORRAL_VERSION=v7.8.2 run
 verify_current 2
 [ ! -e "$CORRAL_APP_INSTALL_DIR/obsolete" ]
 
-# A promotion failure after the web site and CLI were exchanged restores the old
-# release, or the absence of those files on a fresh install.
+# A promotion failure rolls back the runtime and removes the staged site.
+# The old directory is retained for manual recovery rather than moved unsafely.
 for prior in existing absent; do
     new_case
     if [ "$prior" = existing ]; then
@@ -443,11 +459,14 @@ for prior in existing absent; do
         echo "unexpected success after injected promotion failure" >&2
         exit 1
     fi
+    [ ! -e "$CORRAL_APP_INSTALL_DIR" ]
     if [ "$prior" = existing ]; then
-        verify_current 1
-        printf 'old-only data\n' | cmp -s - "$CORRAL_APP_INSTALL_DIR/previous"
+        set -- "$TEST_ROOT"/.corral-app-install.*/old/site
+        [ "$#" -eq 1 ]
+        verify_current 1 "$1"
+        printf 'old-only data\n' | cmp -s - "$1/previous"
+        PATH=$original_path grep -F "previous site backup: $1" "$TEST_ROOT/output" >/dev/null
     else
-        [ ! -e "$CORRAL_APP_INSTALL_DIR" ]
         for name in corral-next corrald-next corral-pi .corral-next-install.lock; do
             [ ! -e "$CORRAL_INSTALL_DIR/$name" ]
         done
@@ -456,8 +475,7 @@ for prior in existing absent; do
 done
 
 # An unrelated writer can fill an empty directory or replace a managed site
-# after preflight. Reject the actual backup and restore it, or retain it if
-# another arrival prevents restoration.
+# after preflight. Reject the actual backup but retain it for recovery.
 for race in fill replace replace-blocked; do
     new_case
     entry=index.html
@@ -474,18 +492,16 @@ for race in fill replace replace-blocked; do
         exit 1
     fi
     PATH=$original_path grep -F 'destination is nonempty and not managed' "$TEST_ROOT/output" >/dev/null
-    recovered=$CORRAL_APP_INSTALL_DIR
-    set -- "$TEST_ROOT"/.corral-app-install.*
+    set -- "$TEST_ROOT"/.corral-app-install.*/old/site
     [ "$#" -eq 1 ]
+    PATH=$original_path grep -F "previous site backup: $1" "$TEST_ROOT/output" >/dev/null
     if [ "$race" = replace-blocked ]; then
-        PATH=$original_path grep -F 'could not roll back' "$TEST_ROOT/output" >/dev/null
         printf 'new arrival\n' | cmp -s - "$CORRAL_APP_INSTALL_DIR/index.html"
-        recovered=$1/old/site
     else
-        [ ! -e "$1" ]
+        [ ! -e "$CORRAL_APP_INSTALL_DIR" ]
     fi
-    printf 'unrelated\n' | cmp -s - "$recovered/$entry"
-    [ ! -e "$recovered/.corral-web-install" ]
+    printf 'unrelated\n' | cmp -s - "$1/$entry"
+    [ ! -e "$1/.corral-web-install" ]
     if [ "$race" = fill ]; then
         [ ! -e "$CORRAL_INSTALL_DIR/corral-next" ]
     else
@@ -495,6 +511,21 @@ for race in fill replace replace-blocked; do
     [ ! -e "$CORRAL_INSTALL_DIR/.corral-next-install.lock" ]
     [ ! -e "$TEST_ROOT/.corral-web-install.lock" ]
 done
+
+# A file swapped in after preflight is rejected. If another file arrives just
+# as rollback tries to restore that backup, keep both objects unchanged.
+new_case
+run --app-only
+if TEST_CURRENT_FIXTURE=2 TEST_BACKUP_RACE=file-blocked run --app-only; then
+    echo 'unexpected success after a file was backed up' >&2
+    exit 1
+fi
+printf 'new arrival\n' | cmp -s - "$CORRAL_APP_INSTALL_DIR"
+set -- "$TEST_ROOT"/.corral-app-install.*/old/site
+[ "$#" -eq 1 ]
+printf 'unrelated backup\n' | cmp -s - "$1"
+PATH=$original_path grep -F "previous site backup: $1" "$TEST_ROOT/output" >/dev/null
+[ ! -e "$TEST_ROOT/.corral-web-install.lock" ]
 
 # If an unrelated writer recreates the destination after a valid backup, do not
 # replace it or throw away the old installation.
