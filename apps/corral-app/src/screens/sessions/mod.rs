@@ -32,7 +32,7 @@ use crate::ui::kit::status::{session_mark, session_word_mark};
 use crate::ui::kit::table::kv;
 use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::term;
-use crate::ui::tokens::{Token, color};
+use crate::ui::tokens::{MEASURE_FORM, Token, color};
 
 /// The Sessions place on every form. With the daemon, the page settles new chats, which open
 /// their page, for as long as it stays open.
@@ -132,7 +132,8 @@ pub fn screen(app: AppState) -> AnyElement {
     )
 }
 
-/// The line over sessions shown from the last update while their source is stale.
+/// The line over sessions shown from the last update while their source is stale, a line's
+/// measure wide on a desktop rather than across the whole list.
 fn stale(app: AppState, standing: Memo<sessions::Standing>) -> AnyElement {
     let words = computed(move || standing.with(|standing| standing.stale.clone()));
     dynamic(move || {
@@ -142,7 +143,12 @@ fn stale(app: AppState, standing: Memo<sessions::Standing>) -> AnyElement {
                 match app.form {
                     Form::Terminal => shown,
                     Form::Phone => view().px(px(16.0)).pt(px(10.0)).child(shown).into_element(),
-                    Form::Desktop => view().px(px(18.0)).py(px(8.0)).child(shown).into_element(),
+                    Form::Desktop => view()
+                        .max_w(px(MEASURE_FORM))
+                        .px(px(18.0))
+                        .py(px(8.0))
+                        .child(shown)
+                        .into_element(),
                 }
             })
         })
@@ -162,11 +168,11 @@ fn failed(app: AppState, standing: Memo<sessions::Standing>) -> AnyElement {
         words.get().map(|words| {
             untracked(|| {
                 let shown = error(app, &vec![span(words)], None);
+                let frame = view().px(px(18.0)).py(px(16.0));
                 match app.form {
                     Form::Terminal => shown,
-                    Form::Desktop | Form::Phone => {
-                        view().px(px(18.0)).py(px(16.0)).child(shown).into_element()
-                    }
+                    Form::Desktop => frame.max_w(px(MEASURE_FORM)).child(shown).into_element(),
+                    Form::Phone => frame.child(shown).into_element(),
                 }
             })
         })
@@ -285,7 +291,7 @@ fn cell(
             dynamic(move || {
                 let (next, remove) = line.with(|line| {
                     line.as_ref()
-                        .map(|line| (line.next.clone(), line.remove.clone()))
+                        .map(|line| (line.next.clone(), line.remove_in_row()))
                         .unwrap_or_default()
                 });
                 let (shown, record) = (shown.clone(), record.clone());

@@ -64,6 +64,13 @@ impl SessionRow {
         })
     }
 
+    /// `Remove…` as the row's step cell shows it: only for a build with no other step (its
+    /// host gone), so the cell never holds three buttons. A stopped build whose exit still
+    /// reports or asks keeps its step there and `Remove…` in the inspector.
+    pub fn remove_in_row(&self) -> Option<crate::model::agents::Action> {
+        self.remove.clone().filter(|_| self.next.is_none())
+    }
+
     /// The session's page.
     pub fn live(&self) -> Live {
         Live::Session(self.line.id.clone())
