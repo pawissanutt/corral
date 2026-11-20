@@ -129,6 +129,8 @@ pub struct Editor {
     pub chosen: BTreeMap<Part, String>,
     /// On a narrow layout, whether to show the selected profile or its list.
     pub profile_focus: bool,
+    /// Whether the Profiles view measured room for the list beside the editor.
+    pub profile_beside: bool,
     /// The profile list's filter, independent of the document.
     pub profile_query: String,
     /// The one expanded routing editor, in the draft's current order.
