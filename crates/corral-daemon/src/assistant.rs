@@ -370,15 +370,26 @@ impl Chat {
     fn row(self, shared: &Shared) -> Result<AssistantRow> {
         let chat = self;
         let resolved = chat.resolve(shared)?;
+        let mut status_unavailable = false;
         let host = resolved.session.as_ref().and_then(|session| {
             let client = Client::for_session(session).ok()?;
-            client
-                .request_with_timeout::<_, HostState>(
-                    "get_state",
-                    json!({}),
-                    Duration::from_millis(250),
-                )
-                .ok()
+            match client.request_with_timeout::<_, HostState>(
+                "get_state",
+                json!({}),
+                Duration::from_millis(250),
+            ) {
+                Ok(host) => Some(host),
+                Err(error) => {
+                    status_unavailable =
+                        error
+                            .downcast_ref::<pi::PiRefusal>()
+                            .is_some_and(|refusal| {
+                                refusal.command == "get_state"
+                                    && refusal.code == "response_too_large"
+                            });
+                    None
+                }
+            }
         });
         let state = if chat.meta.ended {
             AssistantState::Ended
@@ -394,10 +405,12 @@ impl Chat {
             } else {
                 AssistantState::Ready
             }
+        } else if status_unavailable {
+            AssistantState::Other
         } else {
             AssistantState::Cold
         };
-        let live_in = if host.is_some() {
+        let live_in = if host.is_some() || status_unavailable {
             AssistantLocation::Daemon
         } else {
             AssistantLocation::None
@@ -406,7 +419,12 @@ impl Chat {
             .as_ref()
             .map(|host| host.turn.current)
             .filter(|turn| *turn > 0);
-        let (wait, question_id) = host.map_or((None, None), |host| {
+        let unavailable = status_unavailable.then(|| WaitReason {
+            code: "status_unavailable".into(),
+            text: "Pi status unavailable: response too large".into(),
+            retry_at: None,
+        });
+        let (wait, question_id) = host.map_or((unavailable, None), |host| {
             if let Some(q) = host.owner_questions.into_iter().next() {
                 let wait = WaitReason {
                     code: "owner_question".into(),
