@@ -33,7 +33,8 @@ pub struct ReviewerLine {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rounds {
     pub heading: &'static str,
-    /// "round 1 of 2": automatic send-backs since the owner last acted, against the limit.
+    /// "round 1 of 2": the engine's round (automatic send-backs since the owner last acted)
+    /// against the limit, at least 1 as the meta line and the pipeline say it.
     pub count: Option<String>,
     pub hint: &'static str,
     /// Oldest first; empty while the task is in its first round, which the readiness chain
@@ -186,7 +187,7 @@ pub(super) fn rounds(feed: &Feed, shown: &Shown) -> Option<Rounds> {
     }
     Some(Rounds {
         heading: "Rounds",
-        count: max.map(|max| format!("round {} of {max}", task.round)),
+        count: max.map(|max| format!("round {} of {max}", task.round.max(1))),
         hint: "Each round is one submission and the checks that judged it. A red gate or a review asking changes sends the work back for another round; once the rounds are used, the task waits for you.",
         rounds,
         reviewer,
