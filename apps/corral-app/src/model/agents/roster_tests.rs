@@ -1,7 +1,7 @@
-use super::{Action, RosterRole, Show, State, roster};
+use super::{Action, Show, State, roster};
 use crate::model::daemon::{Feed, Link, Task, TopicState, bare_task, task_row};
 use crate::model::projects::ProjectFilter;
-use crate::model::{Id, Live};
+use crate::model::Id;
 use corral_protocol::rows::{
     AgentRow, AssistantKind, AssistantLocation, AssistantRow, AssistantState, BuildFacts,
 };
@@ -208,29 +208,4 @@ fn quiet_time_follows_the_runners_quiet_since_and_stays_unknown_without_it() {
         .collect();
     assert!(quiet.contains(&("T-1_R1", "quiet 9m")));
     assert!(quiet.contains(&("T-2_R1", "–")));
-}
-
-#[test]
-fn keys_follow_only_visible_rows_and_enter_opens_the_selected_session() {
-    let feed = feed(vec![
-        agent("T-1", "R1", Role::Worker),
-        agent("T-2", "R1", Role::Worker),
-    ]);
-    let mut state = State::default();
-    let filter = ProjectFilter::Project("one".into());
-    state.key("j", None, &feed, &filter);
-    assert_eq!(state.roster_session, Some(Id::from("T-1_R1")));
-    assert_eq!(
-        state.key("enter", None, &feed, &filter),
-        Some(vec![crate::model::Effect::OpenLive(Live::Session(
-            Id::from("T-1_R1")
-        ))])
-    );
-    state.act(Action::SetRosterRole(RosterRole::Reviewer), &feed, &filter);
-    assert!(
-        roster(&state, &feed, &filter).rows.is_empty(),
-        "no reviewer runs in this scope"
-    );
-    state.key("escape", None, &feed, &filter);
-    assert!(state.roster_session.is_none());
 }

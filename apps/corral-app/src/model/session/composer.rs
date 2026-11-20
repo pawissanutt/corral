@@ -316,7 +316,11 @@ pub fn composer(cx: &Cx<'_>) -> Option<SessionComposer> {
                 policy: SendPolicy::Steer,
                 unavailable: refused.clone().or_else(|| unavailable(cx.can("steer"))),
             };
-            let queue = (!matches!(cx.can("follow_up"), Can::Absent)).then(|| SendButton {
+            // The phone shows no queue, so it offers nothing to queue; Steer still reaches the
+            // working agent.
+            let queues = !matches!(cx.can("follow_up"), Can::Absent)
+                && cx.env.form != crate::model::nav::Form::Phone;
+            let queue = queues.then(|| SendButton {
                 id: "btn-queue",
                 label: "Queue",
                 policy: SendPolicy::FollowUp,

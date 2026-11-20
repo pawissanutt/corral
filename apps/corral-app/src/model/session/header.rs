@@ -19,14 +19,20 @@ use super::{Action, Cx, Host, SessionRole};
 /// The page head.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
-    /// `‹ Agents`.
+    /// `‹ Sessions`.
     pub back: (&'static str, Action),
-    /// `build · auth-refactor`, `assistant · Quick thread`, `T-12 R2 · Fix gate cache`.
+    /// `build · auth-refactor`, `assistant · Quick thread`, `T-12 R2 · Fix gate cache`: the
+    /// window's title and the phone's head.
     pub target: String,
     /// The session's own id as the roster shows it (`B-4`, `A-2`, `T-12 R2`).
     pub shown_id: String,
-    /// Muted: `corral · .worktrees/auth · build/auth`, `T-12 · <title> · <status>`.
-    pub line2: Option<String>,
+    /// The session's name: `auth-refactor`, the task's title.
+    pub name: String,
+    /// `build`, `worker`, `chat`.
+    pub role: String,
+    /// The meta line: project, branch, task, model and effort, what it does; only the facts
+    /// reported.
+    pub meta: Vec<Meta>,
     pub state: StateWord,
     pub needs_you: Option<NeedsChip>,
     pub decisions: Option<DecisionsChip>,
@@ -34,6 +40,72 @@ pub struct Header {
     pub notice: Option<Notice>,
     /// The window or tab title while the page is on top: `▲ needs you · <target>`.
     pub title: String,
+}
+
+/// One fact of the meta line: `project corral`, `task T-12` (which opens the task's page).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Meta {
+    /// `project`; none for the words of what the session does.
+    pub label: Option<&'static str>,
+    pub value: String,
+    /// A path, branch, id or model: drawn in the mono face.
+    pub mono: bool,
+    pub action: Option<Action>,
+}
+
+/// The role as the session lists say it: the assistant's sessions are chats.
+pub fn role_word(role: &SessionRole) -> String {
+    match role {
+        SessionRole::Assistant => "chat".into(),
+        role => role.label(),
+    }
+}
+
+fn meta(cx: &Cx<'_>) -> Vec<Meta> {
+    let fact = |label, value: String, mono| Meta {
+        label: Some(label),
+        value,
+        mono,
+        action: None,
+    };
+    let build = cx.build();
+    let project = build.and_then(|build| build.project.clone()).or_else(|| {
+        cx.task
+            .and_then(|task| cx.feed.board.task(task))
+            .and_then(|task| task.project().map(str::to_owned))
+    });
+    let branch = build
+        .and_then(|build| build.branch.clone())
+        .or_else(|| cx.run.map(|run| run.run.branch.clone()))
+        .filter(|branch| !branch.is_empty());
+    let mut meta: Vec<Meta> = project
+        .map(|project| fact("project", project, false))
+        .into_iter()
+        .chain(branch.map(|branch| fact("branch", branch, true)))
+        .collect();
+    if let Some(task) = cx.task.filter(|_| cx.role.task_bound()) {
+        meta.push(Meta {
+            action: Some(Action::OpenLive(Live::Task(task.clone()))),
+            ..fact("task", task.to_string(), true)
+        });
+    }
+    if let Some(model) = cx.model() {
+        let words = match cx.effort() {
+            Some(effort) => format!("{model} · {effort}"),
+            None => model,
+        };
+        meta.push(fact("model", words, true));
+    }
+    let doing = crate::model::agents::session_line(cx.feed, cx.id.as_str())
+        .and_then(|line| line.doing)
+        .filter(|doing| !doing.trim().is_empty());
+    meta.extend(doing.map(|doing| Meta {
+        label: None,
+        value: doing,
+        mono: false,
+        action: None,
+    }));
+    meta
 }
 
 /// The state word and its mark.
@@ -280,48 +352,6 @@ fn target(cx: &Cx<'_>) -> String {
     }
 }
 
-/// A worktree path as the header writes it: relative to its repository when inside it.
-fn relative(path: &str, root: &str) -> String {
-    path.strip_prefix(root)
-        .map(|rest| rest.trim_start_matches('/'))
-        .filter(|rest| !rest.is_empty())
-        .unwrap_or(path)
-        .to_owned()
-}
-
-fn line2(cx: &Cx<'_>) -> Option<String> {
-    if let Some(build) = cx.build() {
-        let mut parts = vec![build.project.clone().unwrap_or_else(|| "workspace".into())];
-        if build.here {
-            parts.push("in the checkout".into());
-        } else {
-            parts.push(relative(&build.worktree, &build.repo_root));
-        }
-        parts.extend(build.branch.clone());
-        return Some(parts.join(" · "));
-    }
-    if cx.role.task_bound() {
-        let task = cx.task?;
-        let mut parts = vec![task.to_string()];
-        if let Some(found) = cx.feed.board.task(task) {
-            parts.push(found.title().to_owned());
-            parts.push(found.now());
-        }
-        return Some(parts.join(" · "));
-    }
-    if *cx.role == SessionRole::Assistant {
-        let directory = cx.feed.workspace.clone();
-        return Some(
-            ["workspace".to_owned()]
-                .into_iter()
-                .chain(directory)
-                .collect::<Vec<_>>()
-                .join(" · "),
-        );
-    }
-    None
-}
-
 fn decisions(cx: &Cx<'_>) -> Option<DecisionsChip> {
     if !cx.role.task_bound() {
         return None;
@@ -354,9 +384,11 @@ pub fn header(cx: &Cx<'_>) -> Header {
         (None, false) => target.clone(),
     };
     Header {
-        back: ("Agents", Action::Back),
+        back: ("Sessions", Action::Back),
         shown_id: cx.shown_id(),
-        line2: line2(cx),
+        name: cx.title(),
+        role: role_word(cx.role),
+        meta: meta(cx),
         notice: notices::current(&cx.ui.notices, cx.state, cx.feed.now),
         decisions: decisions(cx),
         needs_you,

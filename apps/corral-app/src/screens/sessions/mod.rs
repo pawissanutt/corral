@@ -1,14 +1,426 @@
-//! Sessions: every session of every role. The session page itself is `screens::agents::session`.
-//!
-//! This is the first cut of Sessions: the former Agents roster, with its New menu, role tabs
-//! and Show switch, under the one project scope. The list grouped by state beside an inspector
-//! (`model::sessions`, `ui::kit::list`) replaces it here.
+//! Sessions: every session in scope as one list grouped by state (Blocked, Working, Idle, then
+//! Gone folded), beside the inspector of the selected one (`model::sessions`, `ui::kit::list`).
+//! A row shows the session's state, id, name, role, what it does now, project, model, context
+//! share, cost, age and its one next step; More holds its controls. The head says how many are
+//! live and what they spent, and holds New (a chat, a build). The inspector leads with what the
+//! session asks, answerable there, then its facts, its newest transcript rows and its Details
+//! in brief. The session page itself is `screens::agents::session`.
 
+use std::rc::Rc;
+
+use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
-use crate::screens::agents;
+use crate::model::list::{self, ListKey};
+use crate::model::status::SessionState;
+use crate::model::work::Record;
+use crate::model::{Form, Id, Live, sessions};
+use crate::screens::agents::{self, Compact, ask_session, ask_view};
 use crate::state::AppState;
+use crate::ui::icons::{Icon, icon};
+use crate::ui::kit::button::{ButtonKind, button};
+use crate::ui::kit::chip::chip;
+use crate::ui::kit::list::{
+    ListPage, Row, cell_mono, cell_text, cell_title, list_page, phone_lines,
+};
+use crate::ui::kit::next::{more_button, next_button};
+use crate::ui::kit::page::head;
+use crate::ui::kit::status::{session_mark, session_word_mark};
+use crate::ui::kit::table::kv;
+use crate::ui::kit::text::{dim, mono, plain};
+use crate::ui::term;
+use crate::ui::tokens::{Token, color};
 
+/// The Sessions place on every form. With the daemon, the page settles new chats, which open
+/// their page, for as long as it stays open.
 pub fn screen(app: AppState) -> AnyElement {
-    agents::screen(app)
+    if untracked(|| app.daemon()) {
+        crate::screens::assistant::watch_ops(app);
+    }
+    let form = app.form;
+    let sections = computed(move || {
+        let scope = app.project_scope();
+        app.feed.with(|feed| {
+            app.agents
+                .with(|state| sessions::sections(feed, &scope, &state.list))
+        })
+    });
+    let selected = computed(move || {
+        let order = sections.with(|sections| list::order(sections));
+        app.nav
+            .with(|nav| list::settled(&order, nav.selection.session.as_ref()))
+    });
+    // The first row is selected on arrival, and the palette and the keys read the selection
+    // the list shows.
+    effect(move || {
+        let shown = selected.get();
+        if shown.is_some() && untracked(|| app.selection().session) != shown {
+            untracked(|| app.nav.update(|nav| nav.selection.session = shown));
+        }
+    });
+    let notice = computed(move || {
+        if !sections.with(Vec::is_empty) {
+            None
+        } else if app.feed.with(|feed| {
+            feed.topics.contains_key("agents") || feed.topics.contains_key("assistant")
+        }) {
+            Some(sessions::EMPTY.to_owned())
+        } else {
+            Some(sessions::LOADING.to_owned())
+        }
+    });
+    let summary = computed(move || {
+        let env = app.env();
+        let rows: Vec<sessions::SessionRow> = sections.with(|sections| {
+            app.feed.with(|feed| {
+                sections
+                    .iter()
+                    .filter(|section| section.key != SessionState::Gone.slug())
+                    .flat_map(|section| section.rows.iter())
+                    .filter_map(|id| sessions::row(feed, id, env))
+                    .collect()
+            })
+        });
+        sessions::summary(&rows)
+    });
+    let page_head = dynamic(move || {
+        let summary = summary.get();
+        untracked(move || {
+            let new = agents::new_menu(app);
+            let actions = match form {
+                Form::Phone => vec![new],
+                Form::Desktop | Form::Terminal => vec![
+                    button(
+                        app,
+                        "Inspector",
+                        ButtonKind::Quiet,
+                        "btn-inspector",
+                        move || app.toggle_inspector(),
+                    ),
+                    new,
+                ],
+            };
+            head(app, sessions::TITLE, Some(summary), actions)
+        })
+    });
+    let columns = sessions::columns();
+    list_page(
+        app,
+        ListPage {
+            key: "sessions",
+            head: page_head,
+            columns: columns.clone(),
+            sections,
+            selected,
+            row: Rc::new(move |id| row(app, id, &columns)),
+            inspector: Some(Rc::new(move |id| inspector(app, id))),
+            on_key: Rc::new(move |key| match key {
+                ListKey::Select(id) => app.select(Live::Session(id)),
+                ListKey::Open(id) => app.open_live(Live::Session(id)),
+                ListKey::Inspector | ListKey::More(_) => {}
+            }),
+            on_fold: Rc::new(move |key| app.agents.update(|state| state.list.toggle(key))),
+            notice,
+        },
+    )
+}
+
+/// One session's facts as the model reads them now (tracked).
+fn facts(app: AppState, id: &Id) -> Memo<Option<sessions::SessionRow>> {
+    let key = id.clone();
+    computed(move || {
+        let env = app.env();
+        app.feed.with(|feed| sessions::row(feed, &key, env))
+    })
+}
+
+/// One session's row: a cell per column, each following the session's facts.
+fn row(app: AppState, id: &Id, columns: &[list::Column]) -> Row {
+    let form = app.form;
+    let line = facts(app, id);
+    let spoken = line
+        .with_untracked(|line| line.as_ref().map(sessions::SessionRow::spoken))
+        .unwrap_or_default();
+    let record = Record::Session(id.clone());
+    let cells = if form == Form::Phone {
+        let shown = id.to_string();
+        vec![
+            dynamic(move || {
+                line.with(|line| line.as_ref().map(|line| session_mark(app, line.line.state)))
+            }),
+            dynamic(move || {
+                let (title, sub) = line.with(|line| {
+                    line.as_ref()
+                        .map(|line| {
+                            (
+                                line.title.clone(),
+                                [line.role.clone(), line.doing.clone()]
+                                    .into_iter()
+                                    .filter(|part| !part.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join(" · "),
+                            )
+                        })
+                        .unwrap_or_default()
+                });
+                let shown = line
+                    .with(|line| line.as_ref().map(|line| line.shown_id.clone()))
+                    .unwrap_or_else(|| shown.clone());
+                untracked(|| phone_lines(app, shown, title, sub))
+            }),
+            icon(Icon::Chevron, 16.0, color(Token::Ink3)),
+        ]
+    } else {
+        columns
+            .iter()
+            .map(|column| cell(app, column.key, id, &record, line))
+            .collect()
+    };
+    Row {
+        test_id: list::row_id(&Live::Session(id.clone())),
+        spoken,
+        cells,
+        menu: Some(record),
+    }
+}
+
+/// The cell of column `key` for the session.
+fn cell(
+    app: AppState,
+    key: &'static str,
+    id: &Id,
+    record: &Record,
+    line: Memo<Option<sessions::SessionRow>>,
+) -> AnyElement {
+    let fact = move |pick: fn(&sessions::SessionRow) -> Option<String>, quiet: bool| {
+        dynamic(move || {
+            let words = line
+                .with(|line| line.as_ref().and_then(pick))
+                .unwrap_or_else(|| "–".to_owned());
+            cell_text(app, words, quiet)
+        })
+    };
+    let figure = move |pick: fn(&sessions::SessionRow) -> Option<String>| {
+        dynamic(move || {
+            let words = line
+                .with(|line| line.as_ref().and_then(pick))
+                .unwrap_or_else(|| "–".to_owned());
+            cell_mono(app, words, true)
+        })
+    };
+    match key {
+        "state" => dynamic(move || {
+            line.with(|line| line.as_ref().map(|line| session_mark(app, line.line.state)))
+        }),
+        "id" => dynamic(move || {
+            let shown = line.with(|line| line.as_ref().map(|line| line.shown_id.clone()));
+            cell_mono(app, shown.unwrap_or_default(), false)
+        }),
+        "name" => dynamic(move || {
+            line.with(|line| {
+                line.as_ref()
+                    .map(|line| untracked(|| cell_title(app, line.title.clone(), Vec::new())))
+            })
+        }),
+        "role" => fact(|line| Some(line.role.clone()), true),
+        "now" => fact(
+            |line| (!line.doing.is_empty()).then(|| line.doing.clone()),
+            true,
+        ),
+        "project" => fact(|line| line.line.project.clone(), true),
+        "model" => fact(|line| line.model.clone(), true),
+        "context" => figure(|line| line.context.clone()),
+        "cost" => figure(|line| line.cost.clone()),
+        "age" => figure(|line| line.age.clone()),
+        _ => {
+            let (shown, record) = (id.to_string(), record.clone());
+            dynamic(move || {
+                let (next, remove) = line.with(|line| {
+                    line.as_ref()
+                        .map(|line| (line.next.clone(), line.remove.clone()))
+                        .unwrap_or_default()
+                });
+                let (shown, record) = (shown.clone(), record.clone());
+                untracked(move || {
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(4.0))
+                        .children(next.map(|next| next_button(app, &shown, &next, false)))
+                        .children(remove.map(|action| remove_button(app, &shown, action)))
+                        .child(more_button(app, record, true))
+                        .into_element()
+                })
+            })
+        }
+    }
+}
+
+/// `Remove…` of a build stopped here: prune's dry run first, in the Remove sheet.
+fn remove_button(app: AppState, id: &str, action: crate::model::agents::Action) -> AnyElement {
+    button(
+        app,
+        "Remove…",
+        ButtonKind::Ghost,
+        format!("btn-remove-{id}"),
+        move || agents::run_agents(app, action.clone()),
+    )
+}
+
+/// The inspector of the selected session: its state, id, name and role; what it asks, with the
+/// card that answers it, or what it does; its next step, Open page and More; then its facts,
+/// its newest transcript rows and its Details in brief.
+fn inspector(app: AppState, id: &Id) -> AnyElement {
+    let form = app.form;
+    let key = id.clone();
+    // The newest rows come from the transcript, read once for the session inspected.
+    untracked(|| {
+        app.scope().load(DetailRef::Session {
+            id: key.to_string(),
+        })
+    });
+    let shown = computed(move || {
+        let env = app.env();
+        app.feed.with(|feed| sessions::inspect(feed, &key, env))
+    });
+    let blocked = computed(move || {
+        shown.with(|shown| {
+            shown
+                .as_ref()
+                .is_some_and(|shown| shown.row.line.state == SessionState::Blocked)
+        })
+    });
+    let gap = if form == Form::Terminal { 0.0 } else { 12.0 };
+    let session = id.clone();
+    let answer = dynamic(move || {
+        blocked.get().then(|| {
+            let session = session.clone();
+            untracked(|| {
+                ask_session(app, session.clone(), ask_view(app, session), Compact::Card)
+            })
+        })
+    });
+    let top = dynamic(move || {
+        let shown = shown.get();
+        untracked(move || {
+            let shown = shown?;
+            let row = &shown.row;
+            let lead = match &shown.question {
+                Some(question) => view()
+                    .test_id("inspect-question")
+                    .child(chip(app, question.clone(), crate::model::Hue::You))
+                    .into_element(),
+                None => plain(app, shown.state.clone()).into_element(),
+            };
+            Some(
+                view()
+                    .gap(px(gap))
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(session_word_mark(app, row.line.state))
+                            .child(mono(app, row.shown_id.clone()))
+                            .child(dim(app, row.role.clone())),
+                    )
+                    .child(plain(app, row.title.clone()).font_weight(FontWeight::BOLD))
+                    .child(lead)
+                    .into_element(),
+            )
+        })
+    });
+    let record = Record::Session(id.clone());
+    let body = dynamic(move || {
+        let shown = shown.get();
+        let record = record.clone();
+        untracked(move || {
+            let shown = shown?;
+            let blank = || (form == Form::Terminal).then(term::blank);
+            let row = &shown.row;
+            let live = shown.live();
+            let actions = view()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(px(8.0))
+                .children(
+                    row.next
+                        .as_ref()
+                        .map(|next| next_button(app, row.line.id.as_str(), next, false)),
+                )
+                .children(
+                    row.remove
+                        .clone()
+                        .map(|action| remove_button(app, row.line.id.as_str(), action)),
+                )
+                .child(button(
+                    app,
+                    "Open page",
+                    ButtonKind::Ghost,
+                    "btn-open-page",
+                    move || app.open_live(live.clone()),
+                ))
+                .child(more_button(app, record, false));
+            let facts: Vec<(String, AnyElement)> = shown
+                .facts
+                .iter()
+                .map(|(label, value)| {
+                    let value = match (*label, &shown.task) {
+                        ("task", Some(task)) => {
+                            let task = task.clone();
+                            button(
+                                app,
+                                value.clone(),
+                                ButtonKind::Quiet,
+                                "btn-inspect-task",
+                                move || app.open_live(Live::Task(task.clone())),
+                            )
+                        }
+                        _ => plain(app, value.clone()).into_element(),
+                    };
+                    ((*label).to_owned(), value)
+                })
+                .collect();
+            let latest: Vec<(String, AnyElement)> = shown
+                .latest
+                .iter()
+                .map(|line| {
+                    (
+                        line.who.clone(),
+                        dim(app, line.words.clone()).number_of_lines(2u32).into_element(),
+                    )
+                })
+                .collect();
+            let details: Vec<(String, AnyElement)> = shown
+                .details
+                .iter()
+                .map(|(label, summary)| (label.clone(), dim(app, summary.clone()).into_element()))
+                .collect();
+            Some(
+                view()
+                    .gap(px(gap))
+                    .child(actions)
+                    .children(blank())
+                    .child(kv(app, facts))
+                    .when(!latest.is_empty(), |body| {
+                        body.children(blank())
+                            .child(dim(app, "Latest").font_weight(FontWeight::BOLD))
+                            .child(kv(app, latest))
+                    })
+                    .when(!details.is_empty(), |body| {
+                        body.children(blank())
+                            .child(dim(app, "Details").font_weight(FontWeight::BOLD))
+                            .child(kv(app, details))
+                    })
+                    .into_element(),
+            )
+        })
+    });
+    // What the session asks leads, with the card that answers it, before its facts.
+    let column = view().gap(px(gap)).child(top).child(answer).child(body);
+    match form {
+        Form::Terminal => column.px(term::cells(1.0)).into_element(),
+        Form::Desktop | Form::Phone => column.p(px(16.0)).into_element(),
+    }
 }

@@ -3,9 +3,8 @@
 //! question, a proposed board plan), every other waiting choice as one line (`▲ docs asks: … ·
 //! Alt+A to answer`, up to three, then `+n more`) that opens it when pressed; where a chosen exit
 //! stands; the owner questions; the queue, one header line that unfolds to its rows with small
-//! Edit, ↑, ↓ and Remove controls (a `⋯` menu on the phone); where the read of the waiting cards
-//! stands and why they cannot be answered from here; and the sidebar's summary row while the rail
-//! is not beside the main view and no choice is open. The dock never takes more than 45 % of the
+//! Edit, ↑, ↓ and Remove controls (not on the phone); where the read of the waiting cards stands
+//! and why they cannot be answered from here. The dock never takes more than 45 % of the
 //! window's height, nor so much that the tab's content keeps less than 240 pt: past that it
 //! scrolls. Also the bar standing in the composer's place while the session takes no message,
 //! with Resume or Relaunch where the host can start again.
@@ -30,7 +29,7 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 use super::super::run;
 use super::header::popup;
-use super::{cards, exit, sidebar};
+use super::{cards, exit};
 
 /// The phone's least touch target.
 const TARGET: f32 = 44.0;
@@ -44,19 +43,24 @@ const FRAME: f32 = 300.0;
 const DOCK_MIN: f32 = 96.0;
 
 /// The dock: its items stay mounted and follow their own parts; the whole is hidden while none
-/// shows. `rail` says the sidebar is beside the main view, so its summary row is not here.
-pub(super) fn dock(app: AppState, page: Memo<SessionPage>, rail: Memo<bool>) -> AnyElement {
+/// shows. The phone has no queue: what waits there is said by the composer's last-send line.
+pub(super) fn dock(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     let form = app.form;
     let dock = computed(move || page.with(|p| p.dock.clone()));
-    let row = computed(move || {
-        !rail.get() && page.with(|p| p.sidebar.is_some()) && dock.with(|d| d.choice.is_none())
-    });
     let any = computed(move || {
-        row.get()
-            || page.with(|p| p.exit.is_some())
-            || dock.with(|d| !d.is_empty() || d.read.is_some() || d.inert.is_some())
+        page.with(|p| p.exit.is_some())
+            || dock.with(|d| {
+                let queue = d.queue.is_some() && form != Form::Phone;
+                queue
+                    || d.choice.is_some()
+                    || d.decision.is_some()
+                    || !d.waiting.is_empty()
+                    || d.questions.is_some()
+                    || d.read.is_some()
+                    || d.inert.is_some()
+            })
     });
-    let side = dynamic(move || row.get().then(|| untracked(|| sidebar::summary(app, page))));
+    let queue = (form != Form::Phone).then(|| queue(app, page));
     let column = view()
         .test_id("session-dock")
         .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
@@ -64,10 +68,9 @@ pub(super) fn dock(app: AppState, page: Memo<SessionPage>, rail: Memo<bool>) -> 
         .child(waiting(app, dock))
         .child(exit::progress(app, page))
         .child(questions(app, dock))
-        .child(queue(app, page))
+        .children(queue)
         .child(reading(app, dock))
-        .child(inert(app, dock))
-        .child(side);
+        .child(inert(app, dock));
     let column = match form {
         Form::Terminal => column.px(term::cells(1.0)),
         Form::Desktop => column.px(px(18.0)).pt(px(8.0)).pb(px(2.0)),
@@ -75,7 +78,10 @@ pub(super) fn dock(app: AppState, page: Memo<SessionPage>, rail: Memo<bool>) -> 
     };
     // An opened card and the queue scroll within the dock's share of the window, so the tab's
     // content keeps its room.
+    // Where the page is short the dock gives way, scrolling, before the conversation does.
     let shown = scroll()
+        .flex_shrink(1.0)
+        .min_h(px(0.0))
         .max_h(move || {
             let height = window().height.0;
             px((height * SHARE)
@@ -92,7 +98,8 @@ pub(super) fn dock(app: AppState, page: Memo<SessionPage>, rail: Memo<bool>) -> 
         Form::Phone => view().child(shown),
     };
     shell
-        .flex_none()
+        .flex_shrink(1.0)
+        .min_h(px(0.0))
         .style_when(move || !any.get(), |s| s.hidden())
         .into_element()
 }

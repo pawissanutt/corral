@@ -392,11 +392,12 @@ pub fn legend(focus: Focus, tab: Tab, working: bool) -> Vec<(&'static str, &'sta
     } else {
         legend.extend([("⏎", "send"), ("/", "commands")]);
     }
-    legend.extend([
-        ("Alt+H", "thinking"),
-        ("Ctrl+K", "actions"),
-        ("Ctrl+O", "expand"),
-    ]);
+    legend.push(("Alt+H", "thinking"));
+    // Details' key while the line has room for it; a working agent's three keys come first.
+    if !working {
+        legend.push(("Alt+B", "details"));
+    }
+    legend.extend([("Ctrl+K", "actions"), ("Ctrl+O", "expand")]);
     legend
 }
 
