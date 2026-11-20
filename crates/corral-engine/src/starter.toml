@@ -21,8 +21,14 @@
 # watch_secs = 5            # Seconds between sync --watch passes.
 
 # [daemon]
-# listen = "127.0.0.1:7778"                       # Optional authenticated app listener.
-# web_origin = ["http://127.0.0.1:8080"]          # Exact browser origins allowed to connect.
+# listen = "127.0.0.1:7841"                       # Optional authenticated app listener; off by default.
+# web_dir = "/absolute/path/to/dedicated/web/bundle" # Optional static bundle; requires listen.
+# web_origin = ["http://127.0.0.1:7841"]          # Exact browser origins allowed to connect.
+# web_endpoint = "wss://public-host"               # Public endpoint behind an HTTPS proxy, if remote.
+# Install with `just app-web-install`; use its dedicated web directory only, never a
+# repository, workspace, home directory or a directory containing secrets. Relative
+# web_dir paths are workspace-relative; ~ is not expanded. Restart after config changes.
+# See docs/guide/daemon.md for serving, remote TLS and pairing.
 
 # [artifacts]
 # globs = ["docs/**/records/*", "**/*report*.html"]
