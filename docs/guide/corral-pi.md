@@ -128,10 +128,13 @@ told where it lives; an assistant can edit the files with normal file tools.
 ## Control and rewind
 
 Each running host has a private local Unix socket. Its version-2 protocol sends one
-JSON request and one reply per line. `hello` identifies the host and transcript;
-`get_state` shows the current turn, pending questions and pause state. Corral uses
-this socket for input and controls; the daemon uses it for live text. There is no
-per-launch secret or message receipt.
+JSON request and one reply per line, with a 64 KiB frame limit. `hello` identifies
+the host and transcript. `get_state` is a status read with an 8 KiB JSON result
+budget: it reports the turn, pause state, and pending question count and previews.
+Use `cards` for answer choices and `context`, `children`, or `jobs` for inspection;
+detail lists can have continuation cursors. Corral uses the socket for input and
+controls; the daemon uses it for live text. There is no per-launch secret or
+message receipt.
 
 **Cancel** stops the current turn without ending the session. **Pause** also holds
 automated input such as gate notes. **Resume** delivers that input in order, as does

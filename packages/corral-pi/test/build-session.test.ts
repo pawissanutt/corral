@@ -231,7 +231,8 @@ test("the real build entry binds and advertises all build tools without creating
     expect(id).toMatch(/^B-[a-z0-9]+$/);
     const state = await call("get_state");
     expect(state.bound).toBeTrue();
-    for (const tool of BUILD_TOOLS) expect(state.active_tools).toContain(tool);
+    const context = await call("context");
+    for (const tool of BUILD_TOOLS) expect(context.tools).toContain(tool);
 
     expect(await call("pause")).toMatchObject({ paused: true });
     expect((await call("submit_input", { origin: "auto", text: "Reply only BUILD_BOUND." })).disposition).toBe("queued");

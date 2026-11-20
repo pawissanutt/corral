@@ -40,7 +40,7 @@ import { cardBrief, cardDetail, questionEntries, questionStatus, sortedCards } f
 import { RemoteDialogs } from "./remote/dialogs.ts";
 import { RemoteRegistry } from "./remote/registry.ts";
 import type { TranscriptInput } from "./remote/input.ts";
-import { boardBrief, capabilities, exitBrief, jobCounts, planBrief, type SessionState, type StateProjection } from "./remote/state.ts";
+import { boardBrief, capabilities, clipText, exitBrief, jobCounts, jsonBytes, planBrief, type SessionState, type StateProjection } from "./remote/state.ts";
 import { utf8Prefix } from "../roles/assistant/owner-action.ts";
 import type { RemoteOwner } from "./remote-owner.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
@@ -65,7 +65,7 @@ import { TodoLedger, installPlanCommand } from "../ui/todo.ts";
 import type { HostCapabilities, ModelChoice, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { askUserTool, localQuestionAsk } from "./ask-user.ts";
-import { PendingQuestions, QUESTION_ENTRY, validAnswer } from "./pending-questions.ts";
+import { PENDING_MAX, PendingQuestions, QUESTION_ENTRY, validAnswer } from "./pending-questions.ts";
 import { OwnerQuestionUi } from "../ui/owner-questions.ts";
 import { registerCacheStats } from "../ui/cache-stats.ts";
 import type { HerdrLifecycle } from "./herdr.ts";
@@ -1905,6 +1905,35 @@ export class HostSession {
     return transcriptPreview(child.sessionFile, child.request);
   }
 
+  /** Protocol v2 status: at most 8 KiB of JSON, independent of diagnostic state. */
+  controlState(paused: boolean) {
+    const session = this.session;
+    const identity = { bound_id: this.boundSessionId ?? null, current_id: session.sessionId, created: this.sessionsCreated };
+    const questions = this.pendingOwnerQuestions();
+    return {
+      role: this.options.identity.role,
+      bound: this.bound,
+      interactive: this.attached === "interactive",
+      mode: this.attached ?? null,
+      // An imported transcript can have an arbitrary ID. Never pass off a prefix as its identity.
+      ...(jsonBytes(identity) <= 1024 ? { session: identity } : {}),
+      streaming: session.isStreaming,
+      turn: { current: this.turn, open: this.open },
+      paused,
+      last_error: this.turnError === null ? null : clipText(this.turnError, 512),
+      last_seq: this.options.events.last,
+      model: session.model ? clipText(`${session.model.provider}/${session.model.id}`, 512) : null,
+      owner_questions_total: questions.length,
+      owner_questions: questions.slice(0, PENDING_MAX).map(({ id, question, status }) => ({
+        // Only expose whole IDs usable by the v2 answer endpoint. Still describe the wait if
+        // an old or imported transcript contains a different ID.
+        ...(/^[A-Za-z0-9._:-]{1,160}$/.test(id) ? { id } : {}),
+        question: clipText(question, 512), status,
+      })),
+    };
+  }
+
+  /** In-process diagnostics; not a session socket response. */
   state(): Record<string, unknown> {
     const session = this.session;
     const resources = this.runtime.services.resourceLoader;
