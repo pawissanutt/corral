@@ -6,8 +6,9 @@ Paths are relative to `apps/corral-app/`.
 
 Status: **phase 1** (navigation, one scope, shared pieces), **phase 2** (Home, Tasks and the
 task page, Sessions and the session workbench) and **phase 3** (Activity's four pages, removal
-of the replaced screens) are done. The *Placeholder* notes under *Slices* below describe the
-state before phase 2 and are kept as history; *Phase 3* at the end says what is there now.
+of the replaced screens) are done. The notes under *Slices* below (*Placeholder*, *Build from*
+and the files they name, some since deleted) describe the state before phase 2 and are kept as
+history; *Phase 3* at the end says what is there now.
 
 ## What phase 1 changed
 
@@ -32,10 +33,11 @@ state before phase 2 and are kept as history; *Phase 3* at the end says what is 
   selection and the scope are not in the address.
 - **One scope** (`src/model/projects/scope.rs`, `src/state/projects.rs`). Per-screen filters,
   `FilterScreen`, the chip bar (`ui/kit/project_filter.rs`) and `shell/projects.rs` are gone.
-  Storage key **`corral.scope`** (store → `{project, now.group, agents.show}`) replaces
-  `corral.filters`, which is removed on load. AGENTS.md and README still name the old key.
+  Storage key **`corral.scope`** (store → `{project}`; phase 3 dropped `now.group` and
+  `agents.show`) replaces `corral.filters`, which is removed on load.
 - **Shells.** Sidebar: scope switcher, the four places (Activity's pages under it while one
-  shows), then Ask, Go to and Settings at the foot. Desktop title bar carries a second
+  shows), then Go to and Settings at the foot (phase 3 removed the Ask entry phase 1 kept
+  there). Desktop title bar carries a second
   switcher. Phone: tabs Home, Tasks, Sessions, Activity (its root lists the four pages); the
   head has the switcher and a gear (`nav-settings`) that pushes Settings over the tab in view.
   The desktop sidebar no longer shows the workspace name and autopilot line (the mock has
@@ -68,7 +70,8 @@ Model code has no `nsh_*` imports. Call these; do not copy them.
 | List model | `model/list.rs` | `Section { key, label, look, count, note, fold, rows }`, `order(&[Section])`, `settled(&order, selected)`, `key(key, &order, selected) -> Option<ListKey>`, `press(row, selected, inspector) -> ListKey`, `row_id(&Live)`; `Column::fixed/flex(key, title, points, cells[, grow])` with `.end()`, `.gives_way(n)`, `.short(terminal_title)`; `fitted(&columns, room, gap, terminal) -> Vec<bool>` |
 | List scaffold | `ui/kit/list.rs` | `list_page(app, ListPage { key, head, columns, sections, selected, row, inspector, on_key, on_fold, notice })`; `Row { test_id, spoken, cells, menu }`; cells: `cell_text`, `cell_mono`, `cell_title(app, title, tags)`, `phone_lines(app, id, title, sub)` |
 | Inspector toggle | `state.rs` | `app.inspector: Signal<bool>`, `app.toggle_inspector()` (`i`, `btn-inspector`); not persisted |
-| Open and select | `state/live.rs` | `app.open_live(Live)` (pushes the page), `app.select(Live)` (the list's selection, `nav.selection`), `app.back()`, `app.go(Destination)`, `app.go_area(Area)`, `app.set_task_tab(TaskTab)` |
+| Open and select | `state/live.rs` | `app.open_live(Live)` (pushes the page), `app.select(Live)` (the list's selection, `nav.selection`) |
+| | `state.rs` | `app.back()`, `app.go(Destination)`, `app.go_area(Area)`, `app.set_task_tab(TaskTab)` |
 | Place models | `model/{home,tasks,sessions}/mod.rs` | `home::{sections, row, needs_you, needs_you_count, live_of, record_of, State}`; `tasks::{sections, line, facts, columns, summary, State}`; `sessions::{sections, State}` |
 
 Test ids: rows `task-<id>` and `agent-<id>` (`list::row_id`); `section-<key>` (a status slug,
@@ -115,10 +118,12 @@ parent before changing one. Put a slice's headless tests in its own `tests/<slic
   Changes and History are one line each. Move in `screens/review/{decide,onto,diff,rounds,
   evidence,brief}.rs` (decision band, Changes tab), `screens/plans/` (children), the task's
   events (History).
-- Tests removed in phase 1 for surfaces that moved; restore them on the task page: the
-  reviewer session opens from the task (`btn-open-reviewer`, `the_reviewer_session_opens_
-  from_review`), Land anyway from the decide bar (`btn-land-anyway`; the refusal path is
-  covered by `land_anyway_over_a_red_gate_is_offered_by_the_refusal_and_lands`).
+- Tests removed in phase 1 for surfaces that moved were restored on the task page in
+  `tests/tasks.rs`: the reviewer session opens from the task (`btn-open-reviewer`,
+  `the_reviewer_session_opens_from_the_task_page`) and Land anyway from the decide bar
+  (`btn-land-anyway`, `land_anyway_from_the_decide_bar_asks_once_and_lands`; the refusal path
+  is covered by `land_anyway_over_a_red_gate_is_offered_by_the_refusal_and_lands` in
+  `tests/shell.rs`).
 
 ### Sessions and the session workbench
 
@@ -138,8 +143,8 @@ parent before changing one. Put a slice's headless tests in its own `tests/<slic
 - Placeholder: each page is the former destination's screen; the phone's Activity root is a
   plain list (`shell/phone.rs::activity_list`).
 - Done in phase 3; see *Phase 3* below. Nothing of the replaced screens is still referenced.
-- Docs still to update: AGENTS.md and README (destinations, storage keys, module map, id
-  shapes); a docs pass follows phase 3.
+- Docs: the pass after phase 3 brought `AGENTS.md`, the app's `README.md` and this
+  directory's `README.md` in line (places, storage keys, module map, id shapes).
 
 ## Phase 3: Activity and the removal of the replaced screens
 
@@ -227,8 +232,10 @@ parent before changing one. Put a slice's headless tests in its own `tests/<slic
 - In a terminal, flex weights do not make a child give way: a chip with a huge `flex_shrink`
   still pushed the title out. Measure with `on_layout` and hide whole elements
   (`cell_title`, `list::fitted`).
-- `tasks::line`/`facts` return `None` for a task the open-task list does not hold (Done,
-  Dropped). The page reads those from their detail (`work::loaded_task`, `detail_task`).
+- `tasks::line`/`facts` read a task wherever the client holds it (`tasks::task_at`: its board
+  row, else its loaded detail, `work::loaded_task` and `detail_task`, else its row on a loaded
+  closed page) and return `None` only when it holds none of them, as for a Done or Dropped
+  task whose detail has not arrived.
 - A blocked run is listed on Home by its task only; chats and builds stand for themselves
   (`home::sessions` filters `task.is_none()`).
 - On a session page a place's letter does not navigate (session views use letters); on a task

@@ -2,36 +2,37 @@
 
 Corral is a Rust app built on [NSH 0.6.0](https://nsh.dev), with desktop, web, phone-layout and terminal forms. The crate is `nsh-app-corral` (`0.1.0`); `nsh.json` currently declares package version `1.0.0`, build `1`. These are diagnostic/package versions, not protocol compatibility. The root component is `App`. Normal startup uses live daemon data or shows a disconnected, unknown or unpaired state; sample data is an explicitly selected preview only. See [Live data](#live-data).
 
-Destinations (keys in the [key table](#keys)):
+The app has four places and Settings (keys in the [key table](#keys)). Every task and every session opens one page, on every form.
 
-- **Now**: the home. One list with a Plan, Run, Gate, Review and Land loop band and a running-slots readout. Rows are grouped by who moves next: **Needs you** (Blocked tasks, and reviews ready to land), **Corral** (gate and review), **Workers** (running), then a Waiting fold and a **Closed** section (Done and Dropped, paged). Each row carries a named stage rail. A Blocked task shows the engine's reason and detail, a reply box and one button per typed next step. A side column shows the digest since the last visit, or the selected task (Story, Evidence and Session tabs). The old Inbox is the Needs you group; the `i` key and the `inbox` slug open Now.
-- **Changes**: the engine's events since this device's last visit (filters All, Needs you, Verdicts, Runs, Tasks, Forced; Mark seen). A forced step names what it skipped.
-- **Plans**: a plan is a parent task. A plan shows its members laid out by `depends_on`, its Markdown document and Path to done (the members not yet Done). There is no separate plan review.
-- **Agents**: one row per live run (state, role, project, session, what it is doing, agent, quiet time), filtered All, Workers, Reviewers or Assistant. Chat sessions are listed below under Assistant sessions, with **+ New session**. A selected session's side panel shows its summary and terminal; **Open session** opens the full page. The old Builds destination is part of Agents.
-- **Review**: candidates split into Your verdict and In verification. A candidate shows Brief (readiness chain: gate for HEAD, review for the round, your verdict), Diff, Summary and Artifacts, its rounds, an **Onto** line for the landing branch, and the decide bar: Approve and land, Request changes, Run gate, Start review.
-- **Timeline**: lanes of runs, gates, reviews, landings, waits and idle per task or run (Today, 7 days; By task, By run), the gaps worth a look and the goal burn-up.
-- **Usage**: tokens and cost that agent hosts reported with `corral usage add`, for 7 days, 30 days, this month or a custom range, grouped by profile, model, task or day. The header says how many runs the totals cover and why the rest are missing (they ran on a harness that reports no usage); requests with tokens but no price are counted apart. Quota stays unknown unless a harness reports it; an unrecorded figure reads `—`.
-- **Artifacts**: the artifact finder; see [Artifact finder](#artifact-finder).
+- **Home**: what waits on you, then what Corral is doing. On the desktop and in a terminal at least 100 columns wide it is a dashboard: six tiles, **Needs you** as cards (Blocked tasks, reviews ready to land, and chats or builds that wait on you) with one card open, and panels for what is working (lanes over today), tasks by status, the projects, today's cost, the latest events, what just finished and the burn-up. The open card holds the decision: a Blocked task's reason, the log excerpt the engine served, a reply box when the recommended step is a reply and one button per other next step; a ready review's pipeline phrase and Approve; a session's own dock and composer. Ask's composer is docked at the foot. A narrower terminal and the phone show Needs you, Working and Just finished as one list; the phone answers a reply or a chat's question in the list.
+- **Tasks**: every task in scope as one list grouped by status (Blocked, Review, Running, Ready, Backlog, Idea), with Done and Dropped in one fold at the bottom, read a page at a time. A row shows the task's status, id, title, what is happening, its pipeline (run, gate, review, land), project, profile, age and its one next step; columns give way as the list narrows. corrald serves no cost per task, and the Cost column says so. A plan is a parent task: its caret unfolds its children in place. The filter field takes id, title or project words. The inspector beside the list shows the selected task with the same decision band as its page.
+- **Task page**: the one page of a task; a plan and a review candidate open it too. Under its head and facts, the decision band holds what you decide: a Blocked task's reason, detail, reply box and next steps; a review's **Onto** line for the landing branch and its decide bar (Approve and land, Request changes, Run gate, Start review, and Land anyway while the gate is red or after Approve was refused); otherwise the task's one next step. The tabs are **Overview** (description, a plan's children, dependencies, pipeline, each round's checks, runs that open their sessions, artifacts), **Changes** (the worker's `done` summary and the stored diff) and **History** (the task's events and a Comment box). There is no separate plan review.
+- **Sessions**: every session in scope (runs of every role, chats, builds) as one list grouped Blocked, Working, Idle, then Gone folded. A row shows the session's state, id, name, role, what it does now, project, model, context share, cost, age and its one next step. The head says how many are live and what they spent, summing only reported costs, and holds **New**. The inspector leads with what the session asks, answerable there. A session opens its [session page](#agent-sessions).
+- **Activity**: four pages, with a strip between them on the desktop and in a terminal; the phone's Activity tab lists them.
+  - **Feed**: the engine's events in scope, newest first, under a heading per local day. A row opens its task's page; a forced operation's kind is drawn in the failure colour. Load older pages back, and Mark seen moves this device's seen cursor, which Home's "since your last visit" counts from.
+  - **Timeline**: lanes of runs, gates, reviews, landings, waits and idle per task or run (Today, 7 days; By task, By run), the goal burn-up and the gaps worth a look.
+  - **Usage**: tokens and cost that agent hosts reported with `corral usage add`, for 7 days, 30 days, this month or a custom range, grouped by profile, model, task or day. The header says how many runs the totals cover and why the rest are missing (they ran on a harness that reports no usage); requests with tokens but no price are counted apart. Quota stays unknown unless a harness reports it; an unrecorded figure reads `—`.
+  - **Artifacts**: the artifact finder; see [Artifact finder](#artifact-finder).
 - **Settings**: Devices, This daemon, Connection, Notifications, Configuration (edits `corral.toml`) and General (local preferences).
-- **Ask**: one composer for the one chat agent; see [Ask](#ask-and-attachments).
+- **Ask**: one composer for the one chat agent; see [Ask](#ask-and-attachments). The desktop and terminal sidebar has no Ask entry: `/` opens it, and on Home it focuses the docked composer. The phone keeps its floating Ask button.
+
+The former destinations (Now, Inbox, Plans, Review, Agents, Builds, Changes and the Project page) are gone; their slugs, addresses and the keys `n`, `p` and `r` open their new homes.
 
 Counts are an icon and number, with the sentence in a hint on hover or keyboard focus on desktop and in the status line in a terminal; phone rows keep one explanatory line. The top-bar health display is one `healthy` chip when every component is healthy and names the component otherwise. The UI shows real dates.
 
-Projects (`projects.v1`): the sidebar (phone: More › Projects) lists the workspace's
-configured projects with open, running and needs-me counts, plus Unassigned when a task
-names no project. A **Project page** is Now scoped to that project: its loop band, Needs you,
-Corral, Workers, Plans, Sessions, Waiting and Closed, followed by burn-up. The side
-column shows project facts and the scoped digest; a row opens its record rather than a side panel.
-Now, Changes, Plans, Agents and Review each
-keep their own project filter; rows show a project chip under All when there are two or
-more projects, and Now can group by project. Ask sends the project in scope as context,
-so the assistant files Ideas there unless told otherwise. A daemon without `projects.v1`
-supplies project names only from task rows, without counts. When the daemon's complete
-project list is empty the workspace has no project management: only Ask, Agents, Usage and
-Settings are offered, and the landing explains how to add a project. The palette offers
-**Preview: no projects** for that state.
+Projects (`projects.v1`): one scope switcher (the top of the sidebar, the desktop's title
+bar, the phone's head) sets the project scope of the whole app: All projects, or one of the
+workspace's configured projects, listed with its open-task count. Home, Tasks, Sessions and
+Activity all follow it; there are no per-screen filters, no sidebar project list and no
+Project page. With a project in scope Home shows that project's facts in place of the
+project list, and an old `/projects/<id>` address sets the scope and opens Home. Ask sends
+the project in scope as context, so the assistant files Ideas there unless told otherwise.
+A daemon without `projects.v1` supplies project names only from task rows, without counts.
+When the daemon's complete project list is empty the workspace has no project management:
+only Home (a landing that says how to add a project and opens Ask), Sessions, Activity ›
+Usage and Settings are offered. The palette offers **Preview: no projects** for that state.
 
-One trusted local owner: a paired browser, an enrolled native app and the owner CLI have the same authority. There are no authority classes, previews or proofs; an enrolled or paired device is the owner. Every engine operation is on every task row and the engine decides what is allowed. See [Actions, refusals and confirmation](#actions-refusals-and-confirmation).
+One trusted local owner: a paired browser, an enrolled native app and the owner CLI have the same authority. There are no authority classes, previews or proofs; an enrolled or paired device is the owner. Every engine operation is offered for every task, in its More menu, and the engine decides what is allowed. See [Actions, refusals and confirmation](#actions-refusals-and-confirmation).
 
 Disconnected screens offer **Connect** and **Preview with sample data**; see [Sample preview](#sample-preview). Settings › General › **This device** exposes local preferences even without a connection.
 
@@ -114,18 +115,23 @@ In a browser the address names the place shown, so a reload or a link opens ther
 
 | Path | Place |
 |---|---|
-| `/now`, `/changes`, `/plans`, `/agents`, `/review`, `/timeline`, `/usage`, `/artifacts` | A destination |
-| `/now/<task>`, `/plans/<plan>`, `/review/<task>` | The task, plan or candidate shown there |
-| `/agents/<session>` | A session's page; a child's conversation is `/agents/<session>/child/<id>` |
-| `/projects/<id>` | A project's page |
+| `/home`, `/tasks`, `/sessions` | A place |
+| `/activity/feed`, `/activity/timeline`, `/activity/usage`, `/activity/artifacts` | An Activity page |
+| `/task/<id>`, `/task/<id>/changes`, `/task/<id>/history` | A task's page at its tab |
+| `/session/<id>` | A session's page; a child's conversation is `/session/<session>/child/<id>` |
 | `/settings/<section>` | A Settings section: `devices`, `daemon`, `connection`, `notifications`, `config`, `general` |
 
+The former addresses still open: `/now`, `/plans`, `/review`, `/agents`, `/changes` and their
+record paths (`/now/<task>`, `/agents/<session>`) go to their new homes, and `/projects/<id>`
+sets the scope and opens Home.
+
 On the desktop every destination or page visited is an entry of the browser's history, so Back
-and Forward step through them; walking a list only rewrites the current entry. The phone's
-pushed pages are history entries already, so there the address only follows; its Settings list
-is `/settings`, and its More and Projects lists are not named (the address keeps the last
+and Forward step through them; switching a task page's tab only rewrites the current entry. The
+phone's pushed pages are history entries already, so there the address only follows; its
+Settings list is `/settings`, and its Activity list is not named (the address keeps the last
 destination).
-A page's own tabs, filters and scroll position are not in the address. The site's root opens
+A list's selection, the project scope, a session page's views, filters and scroll position are
+not in the address. The site's root opens
 the last destination, and an unpaired browser opens Settings › Connection whatever the path.
 The sample preview is not restored, so a reload at one of its records shows what corrald has
 under that id. The native and terminal forms have no address and restore the last destination.
@@ -160,12 +166,10 @@ it, after failure, or without an authenticated link, the count is loading, unava
 needs a connection, never an invented zero. Unsent drafts stay with their own quick thread
 or named session, flush on unmount, and do not return after accepted send retirement.
 
-Review uses Unified below about 1100 pt of content width; wider
-views offer side-by-side (`s` in a terminal). Below about 900 pt, Plans and Review show either the list or the
-opened record with a back control; opening a record by name from Now, a link or the
-palette shows that record.
+A task page's Changes tab shows the diff unified below about 1100 pt of content width, on a
+phone and in a terminal; a wider page can split it side by side.
 
-Opening a task that is not on the board from Changes, plans, dependencies or the palette's `Open T-<n>` shows it read-only from its detail.
+Opening a task the open-task list does not hold (a Done or Dropped one, from Activity › Feed, the Done and Dropped fold, a dependency or the palette's `Open T-<n>`) shows its page from its detail.
 
 Task bodies are selectable Markdown source, without automatic image fetches or HTML.
 
@@ -183,15 +187,15 @@ records from any paired device. Failed Forget remains retryable.
 
 ### Actions, refusals and confirmation
 
-One **Actions** menu serves every task: Now rows, Plans members, Review candidates, Project page rows, Closed rows and the task page header. It opens with `.` in a terminal, the `…` button, right-click or long-press, and the palette lists the same entries for the selected task. It lists all fifteen engine operations in a fixed order and never dims one: Edit…, Comment…, Move to…, Dispatch…, Reply…, Mark done…, Run gate, Start review…, Record verdict…, Request changes…, Approve and land…, Retry…, Stop, Drop, Reopen. An item ending in `…` opens a form prefilled from the task: Dispatch offers the profile list (the engine's default is marked) and the base; Move to offers all eight statuses. **New task…** (palette, under Workspace actions) takes title, body, status (idea, backlog or ready), project, priority, kind, size, parent, depends-on and base.
+Every task shows its one **next step**, the single press picked from its status, and **More** beside it: on a Tasks row, in the inspector, on Home and in the task page's head. More opens with `.`, its button, right-click or long-press, and the palette lists the same entries for the selected task. It lists all fifteen engine operations in a fixed order, each with a few words on what it does, marks the next step and never dims one: Edit…, Comment…, Move to…, Dispatch…, Reply…, Mark done…, Run gate, Start review…, Record verdict…, Request changes…, Approve and land…, Retry…, Stop, Drop, Reopen. An item ending in `…` opens a form prefilled from the task: Dispatch offers the profile list (the engine's default is marked) and the base; Move to offers all eight statuses. **New task…** (palette, under Workspace actions) takes title, body, status (idea, backlog or ready), project, priority, kind, size, parent, depends-on and base.
 
-Each press sends one `op.submit { op, force }` and the engine decides; the app predicts no refusal. A receipt shows the answer: sent, running (a gate or a landing can take minutes; the task shows the outcome), done, refused or failed. A refused operation opens the **refusal sheet**: the engine's reason and one button per typed next step, the first one primary. A step that forces is the "anyway" form (Dispatch anyway, Move anyway, Land anyway); it says what it skips and is its own confirmation. A Blocked task on Now shows the same next-step buttons on its card, and a reply box in place when the first step is a reply. Review's decide bar offers Land anyway when Approve was refused.
+Each press sends one `op.submit { op, force }` and the engine decides; the app predicts no refusal. A receipt shows the answer: sent, running (a gate or a landing can take minutes; the task shows the outcome), done, refused or failed. A refused operation opens the **refusal sheet**: the engine's reason and one button per typed next step, the first one primary. A step that forces is the "anyway" form (Dispatch anyway, Move anyway, Land anyway); it says what it skips and is its own confirmation. A Blocked task shows the same next-step buttons in its decision band (on its page and in the Tasks inspector) and on Home's open card, with a reply box in place when the recommended step is a reply. A review's decide bar offers Land anyway while the gate is red or after Approve was refused.
 
 Destructive or forced operations ask once, on this device, before they are sent: Drop (type `drop`), Stop, Approve and land, Retry with a fresh start, Move to Done or Dropped, anything forced, device revoke, Forget, ending a named chat session, and leaving Configuration with unsaved edits. Nothing else asks.
 
-### Agents and sessions
+### Sessions and their controls
 
-Each run is a session, keyed `<task>_<run>`. A session's menu (`.` on the roster or the session page, or its button) lists the controls that apply (Cancel turn, Pause, Resume, Rewind…, Terminate, Relaunch), then Reply… and Focus pane, then **Task ›** with the full Actions menu of its task. A worker offers Pause or Resume as its run reports; a reviewer is never paused or rewound; a lost host is relaunched, not terminated. Terminate asks once, and a refused control opens the refusal sheet with corrald's reason. Reply, and words typed on the session page, go to the task as the engine's `reply`. Focus pane works for a local herdr pane and says why when it cannot.
+Each run is a session, keyed `<task>_<run>`; a chat (`quick`, `A-n`) and a build (`B-…`) are sessions too. A session shows its one next step and **More** (`.` on a Sessions row or the session page, its button, right-click or long-press), which lists the controls that apply (Cancel turn, Pause, Resume, Rewind…, Terminate or Stop, Relaunch or Resume), then for a run Reply… and **Task T-n** with the full More menu of its task. A reviewer is never paused or rewound; a lost host is relaunched, not terminated. Terminate asks once, and a refused control opens the refusal sheet with corrald's reason. Reply… is the task's engine operation `reply`.
 
 An agent session's transcript replays the recorded session as the corral-pi terminal shows
 it, for every role: words as rendered Markdown, thinking (folding to one row), tool rows that
@@ -202,13 +206,13 @@ stop and usage. A recorded item larger than its preview shows the preview until 
 complete content arrives: words are fetched as soon as they are shown, everything else when
 its row is opened. While the page is open it watches the session's live turn, drawing the
 streamed words and running tools after the recorded messages until the transcript holds them,
-and it keeps to the newest rows unless the owner scrolled up. `` ` `` switches to the terminal: pane text for a herdr session, the tail of `session.log` for a process session. Nothing typed into a terminal is queued offline.
+and it keeps to the newest rows unless the owner scrolled up. A session without a Pi host shows a read-only log instead: the pane's screen for a run on another harness, or the kept tail of `session.log` for a headless run that has ended.
 
-**+ New session** under Assistant sessions starts a named chat session in corrald. It is disabled, with the reason beside it, while corrald serves no assistant sessions. Named sessions use the same model picker and durable transcript. Stop interrupts the current turn; End session (asks once) stops the host while retaining its record and conversation.
+**New** in Sessions' head starts a named assistant session in corrald, which opens on its page once corrald made it, or opens the New build sheet (`N`).
 
 ### Agent sessions
 
-Every agent session opens on one session page, whatever its role: a task's worker or reviewer, a chat, a build session, a child agent's conversation. The page shows the transcript as the Pi terminal shows it; above the composer, the dock holds what waits on the owner (answer cards, a docked choice such as a build's exit, a child's question or a proposed board plan, and the queue with Edit, ↑, ↓ and Remove). The tabs are the parts the host serves: **Agents** (the child agents with their details, conversations and models, the messages between them, and the background jobs with their output, older bytes on request), **Changes** (the files of each comparison and one file's hunks), **Board** with the build record for a build, and **Task** and **Proof** for a task's run. The sidebar holds Context, Files and Plan; when the page is narrow it folds into one row above the composer. The ⋯ menu lists every action, an action the host cannot run with its reason, and opens Usage. The host is the source of truth: the page reads its parts through corrald and shows a sent message until the transcript holds it under the same input id. **Agents › New** starts a build session in a project; Stop and Resume control its host, and Remove… shows prune's dry run first.
+Every agent session opens on one session page, whatever its role: a task's worker or reviewer, a chat, a build session, a child agent's conversation. The page shows the transcript as the Pi terminal shows it; above the composer, the dock holds what waits on the owner (answer cards, a docked choice such as a build's exit, a child's question or a proposed board plan, and the queue with Edit, ↑, ↓ and Remove), and one status line under the composer gives the role, cost, context, model and effort. Beside the conversation is one **Details** panel with a section per part the host serves: **Changes** (the files of each comparison and one file's hunks), **Agents** (the child agents with their details, conversations and models, the messages between them, and the background jobs with their output, older bytes on request), **Plan**, **Usage**, **Context**, **Board** with the build record for a build, and **Task** and **Proof** for a task's run. A section folds on its own, and its Open shows the part's full view in the conversation's place; Escape returns to the conversation. Details is open beside the conversation on a wide page (from about 900 pt, or 100 columns in a terminal) and closed until opened on a narrower one (`Alt B`, or Details in the head); on the phone it is a sheet, and the phone's page has no queue and no status line. The ⋯ menu lists every action, an action the host cannot run with its reason, and opens Usage. The host is the source of truth: the page reads its parts through corrald and shows a sent message until the transcript holds it under the same input id. **Sessions › New** starts a build session in a project; Stop and Resume control its host, and Remove… shows prune's dry run first.
 
 **Ask** is the same transcript, dock and composer over the quick chat, in a drawer on desktop and in the terminal and in a sheet on the phone. End thread finishes the quick chat; the next message starts a new one.
 
@@ -224,7 +228,7 @@ The sample preview carries one build session, `B-k3x9` (*parity-guide*), that se
 
 ### Artifact finder
 
-Artifacts (`f`, the sidebar, the palette, or Find in all artifacts on a task's Evidence tab) is one filter over every task's artifacts, newest first, with the kind, name, task, run, project and time. The field is always focused. Words match; `kind:`, `task:` and `project:` narrow, and every token must match. The side shows the selected artifact (Markdown, diff, log, text, image, or its facts); Enter opens it full size, **Open T-n** goes to its task and **Load older artifacts** pages. Esc leaves full size, then clears the filter.
+Activity › Artifacts (`f`, the sidebar, the palette, or **Find in Artifacts** on a task page's Overview) is one filter over every task's artifacts, newest first, with the kind, name, task, run, project and time. The field is always focused. Words match; `kind:`, `task:` and `project:` narrow, and every token must match. The side shows the selected artifact (Markdown, diff, log, text, image, or its facts); Enter opens it full size, **Open T-n** goes to its task and **Load older artifacts** pages. Esc leaves full size, then clears the filter.
 
 ### Sample preview
 
@@ -232,7 +236,7 @@ The sample preview is explicit and launch-only: **Preview with sample data** on 
 
 ### Ask and attachments
 
-Ask is one composer for the one chat agent: questions, ideas and instructions go to the same agent, so there is no target to pick (`/` opens it). The transcript is shown as the terminal UI shows it. An agent message offers **File as idea**. The quick thread can be ended; using it afterward starts a new session. The model picker (`Ctrl Shift M` cycles it) lists the profiles that name a model; changing it applies to the next message. Choices distinguish **Anthropic · API (metered)** from **Anthropic · subscription**, including when they name the same model. Conversation, launch and relaunch depend on no automation setting.
+Ask is one composer for the one chat agent: questions, ideas and instructions go to the same agent, so there is no target to pick. `/` opens it; on Home, on the desktop and in a terminal, the same composer is docked at the foot and `/` focuses it. The transcript is shown as the terminal UI shows it. An agent message offers **File as idea**. The quick thread can be ended; using it afterward starts a new session. The model picker (`Ctrl Shift M` cycles it) lists the profiles that name a model; changing it applies to the next message. Choices distinguish **Anthropic · API (metered)** from **Anthropic · subscription**, including when they name the same model. Conversation, launch and relaunch depend on no automation setting.
 
 The composer can attach a saved image or bounded UTF-8 file, or an opaque link. Native
 clients can enter a local-client file path; it is not a daemon host path. Links are not fetched
@@ -305,10 +309,10 @@ Run one cargo or NSH build at a time on this shared host.
 `scripts/tui-walk.py` starts `nsh run --target tui` in a pseudo-terminal, feeds it steps and prints the screen as text, so a change can be looked at without a terminal of one's own. From this directory:
 
 ```sh
-python3 scripts/tui-walk.py --size 140x44 fixture key:n sleep:1 screen
+python3 scripts/tui-walk.py --size 140x44 fixture key:ctrl+k type:Home key:enter sleep:1 screen
 ```
 
-`--size COLSxROWS` sets the terminal (default 140x44) and `--steps FILE` reads one step per line. Steps: `fixture` (Ctrl+K, `Data: fixture`, Enter: the sample preview), `key:NAME[*N]` (`enter tab stab esc up down left right home end pgup pgdn bs del space`, `ctrl+x`, `alt+x` or one character), `type:TEXT`, `wait:TEXT`, `gone:TEXT`, `sleep:SECS`, `screen`, `rows:A-B`, `attrs[:all]` and `diff` (the styled runs, to read focus and selection). The app restores its last destination, so start a walk with the destination's key (`n`, `r`, `p`, `a`, `t`, `u`, `f`, `,`, `/`); on Artifacts the filter takes letters, so go there with `key:ctrl+k type:Now key:enter` first. `--colors` (`truecolor`, `256`, `16`, `mono`) and `--background` set what the terminal reports. The driver keeps the app's saved state under `/tmp`, uses `pyte` from a virtual environment it creates under `/tmp`, and counts as the one NSH build at a time; see `AGENTS.md` for walking against a scratch daemon. It is a text capture, not a real owner's terminal.
+`--size COLSxROWS` sets the terminal (default 140x44) and `--steps FILE` reads one step per line. Steps: `fixture` (Ctrl+K, `Data: fixture`, Enter: the sample preview), `key:NAME[*N]` (`enter tab stab esc up down left right home end pgup pgdn bs del space`, `ctrl+x`, `alt+x` or one character), `type:TEXT`, `wait:TEXT`, `gone:TEXT`, `sleep:SECS`, `screen`, `rows:A-B`, `attrs[:all]` and `diff` (the styled runs, to read focus and selection). The app restores its last destination, and on Artifacts the filter takes letters, so start a walk with `key:ctrl+k type:Home key:enter` and go on from there with a place's key (`h`, `t`, `s`, `a`, `,`). `--colors` (`truecolor`, `256`, `16`, `mono`) and `--background` set what the terminal reports. The driver keeps the app's saved state under `/tmp`, uses `pyte` from a virtual environment it creates under `/tmp`, and counts as the one NSH build at a time; see `AGENTS.md` for walking against a scratch daemon. It is a text capture, not a real owner's terminal.
 
 ### Walking against a scratch daemon
 
@@ -323,44 +327,48 @@ Ctrl-C in the staging terminal stops the daemon and deletes the workspace.
 
 | Key | Action |
 |---|---|
-| `n . p a r t u f ,` | Now, Changes, Plans, Agents, Review, Timeline, Usage, Artifacts, Settings (`i` opens Now) |
-| `R` (Shift+R) on Now | Reply to the selected Blocked task in place |
-| `A` (Shift+A) on Review | Focus Approve and land |
-| `j k`, `J K` | Move the list selection; Plans members |
-| `/` | Open Ask |
+| `h t s a ,` | Home, Tasks, Sessions, Activity (the page last shown there), Settings |
+| `u f` | Activity › Usage, Activity › Artifacts |
+| `n p r` | The former destinations' keys: Home (`n`), Tasks (`p`, `r`) |
+| `j k` or `↓ ↑`, `Enter` | On Home, Tasks and Sessions: move the selection; open the selected one's page |
+| `i` on Tasks and Sessions | Show or hide the inspector |
+| `.` on Home, Tasks, Sessions, a task page or a session page | The More menu of the selected or open task or session |
+| `1 2 3` on a task page | Overview, Changes, History |
+| `N` (Shift+N) on Sessions | Open the New build sheet |
+| `/` | Open Ask; on Home (desktop and terminal) focus the docked composer |
 | `Ctrl K` or `?` | Open palette (`Ctrl K` also on the phone layout with a hardware keyboard) |
 | `Ctrl B` | Toggle sidebar; narrow windows fold it to a rail, not remove it |
 | `Ctrl S` in Settings › Configuration | Save the `corral.toml` draft (one `config.put`), from any field |
-| `]` | Next Now inspector tab |
-| `.` on a Now, Review, Plans or Agents list or open page | The selected task's Actions menu, or the session's menu in Agents; elsewhere it opens Changes |
-| `` ` `` | Toggle session transcript/terminal |
-| `Ctrl Shift M` | Cycle assistant model |
-| `Esc` | Close newest overlay; clear a Now or Agents selection before going back; in terminal session view, cancel an offered turn when no overlay is open |
+| `Alt B` on a session page | Show or hide Details |
+| `Ctrl Shift M` | On a session page, its model picker; elsewhere cycle Ask's model |
+| `Esc` | Close the newest sheet, menu or overlay; leave Home's docked composer; on a session page return a view to the conversation, then stop the working turn; then go back (a task page to Tasks, a session page to Sessions) |
 
 On macOS, `Ctrl` shortcuts above use Command (`mod`). Letter shortcuts do not navigate
 while editing a field. List keys (`j`/`k`, arrows, Enter) bind only
-while the destination list has focus or no control has focus, with no overlay/confirmation.
-Now moves and opens the selected task's session with Enter; Review and Agents move; Plans move with `j k` and members with `J K`.
+while the place's list has focus or no control has focus, with no overlay/confirmation.
+Enter opens the selected row's or card's page only while nothing, or that row, has the focus.
+On a session page a place's letter does not leave the page (its views use letters); on a task
+page it does.
 Tab moves focus; Enter/Space and arrows remain with focused
-controls. In a menu (the Actions or Session menu `.` opens, one opened from its button or a row,
+controls. In a menu (the More menu `.` opens, one opened from its button or a row,
 the palette's results) `↑ ↓` move, `Home`/`End` reach the ends and Enter runs the item reached;
 Tab still moves, and the list under an open menu leaves it the arrows. On the web a popup menu
 opened with the pointer does not yet take the arrows until an item has the focus. In an operation's
 form a Markdown or prose field (a body, a comment, a reply, notes) takes several lines: Enter
 breaks the line there and Tab reaches Send. A form taller than the window scrolls inside its
-sheet, with Cancel and Send kept below it. Review has `s` (split when wide enough). While a
+sheet, with Cancel and Send kept below it. While a
 menu, form, sheet or the palette is open, the key line shows that surface's keys.
 
 ## Structure
 
 - `src/lib.rs`: root `App`.
-- `src/model/`: pure Rust data, wording, state, reducers and view builders, with no `nsh_*` imports or I/O. `preview.rs`/`preview/` supplies synthetic sample data to the live models; `work/` covers Now and Changes.
+- `src/model/`: pure Rust data, wording, state, reducers and view builders, with no `nsh_*` imports or I/O. `preview.rs`/`preview/` supplies synthetic sample data to the live models; `nav.rs` holds the four places, and `home/`, `tasks/` and `sessions/` are their models (`session/` is the session page).
 - `src/state.rs`: app signals, effect dispatch and persistence; `src/state/address.rs` keeps the browser's address on the place shown (`src/model/address.rs`).
 - `src/ui/kit/`: shared pieces used to build screens, including rows, page scaffolds, buttons, notices, tables and overlays.
 - `src/ui/`: shared UI, Ask and composer surfaces, palette, tokens, icons and terminal-specific pieces in `term.rs`.
 - `src/shell/`: desktop, phone and terminal shells.
-- `src/screens/`: destination screen modules, their subdirectories and page routing.
-- `tests/shell.rs`: headless shell tests. `scripts/tui-walk.py`: the terminal walk driver.
+- `src/screens/`: the places' screens (`home/`, `tasks/`, `sessions/`, `activity/` with `timeline*`, `usage*` and `artifacts*`), the task page (`task/`), the session page (`agents/session/`), Settings and page routing.
+- `tests/shell.rs`, `tests/home.rs`, `tests/tasks.rs`, `tests/sessions.rs`: headless tests. `scripts/tui-walk.py`: the terminal walk driver.
 - `theme.json` and `nsh.json`: theme and app configuration.
 - `assets/fonts/`: one static file per face. Atkinson Hyperlegible Next and Mono set the interface; Cascadia Mono (regular, bold, italic, bold italic) sets an agent's live terminal, so it looks the same whatever the owner's own terminal font. Cascadia Mono is © Microsoft Corporation under the SIL Open Font License 1.1; its licence, `assets/fonts/CascadiaMono-LICENSE.txt`, ships with the app as a plain file of `assets!()`. `assets/icons/` holds the mock's glyphs as SVG.
 - `docs/NSH-NOTES.md`: what NSH 0.5.0 does differently from what its docs suggest, with sources.
@@ -370,7 +378,7 @@ menu, form, sheet or the palette is open, the key line shows that surface's keys
 
 | Store | Keys / contents |
 |---|---|
-| NSH Storage | `corral.destination`, `corral.settings`, `corral.theme`, `corral.sidebar`, `corral.filters` (per daemon store: each screen's project filter and Now grouping), non-secret `corral.paired` |
+| NSH Storage | `corral.destination`, `corral.settings`, `corral.theme`, `corral.sidebar`, `corral.scope` (per daemon store: the one project scope), non-secret `corral.paired` |
 | Browser IndexedDB `corral-app` v1, `credentials` | `device` (AES-GCM-wrapped credential and non-extractable key), retryable `forget` intent |
 | Browser IndexedDB `corral-local-state` v1 | `records` plus `meta` (`revision`); transactional outbox/offline cache, separate from credentials |
 | Native state directory | `$XDG_STATE_HOME/corral-app/` (fallback `$HOME/.local/state/corral-app/`): private `devices.json`, `durable.json`, retained locks |
@@ -381,7 +389,8 @@ journal are removed. Offline hints
 use `active` and `snapshot/<namespace>`; `forgotten/<namespace>` and
 `migrated/<namespace>` prevent identity resurrection and repeated legacy imports.
 The old NSH `corral.outbox.v1.<hex>` is migrated then removed; `corral.data`,
-`corral.conn` and `corral.mode` are no longer read or written. Local records are bounded to 8 MiB across namespaces;
+`corral.conn` and `corral.mode` are no longer read or written, and `corral.filters` (the
+former per-screen project filters) is removed on load. Local records are bounded to 8 MiB across namespaces;
 the outbox is bounded per namespace to 1 MiB, 128 messages and 32 drafts,
 and the offline snapshot to 2 MiB. Quota pruning never discards undelivered messages.
 Pairing secrets/proofs never go in the outbox or NSH Storage.
@@ -397,6 +406,8 @@ The build's scripts rendered the packaged web build in headless Chromium with a 
 These renders predate the move to the simple engine: they still show the Inbox, Builds and question pages, authority and previews, which no longer exist.
 
 The Now, Agents, Plans and Review desktop and phone renders and their `terminal-120x36` and `terminal-80x24` captures were re-rendered after the main-loop rebuild from the packaged web build and a private tmux; the `terminal-120x36-now-16`, `-now-bandless`, `-now-light` and `-now-mono` variants and the other destinations' renders predate it.
+
+Every render here predates the redesign into Home, Tasks, Sessions and Activity: they show Now, Plans, Review, Agents, Changes and the Project page, which no longer exist. `docs/shots/` holds no render of the redesigned places.
 
 ## Toolchain on this host
 

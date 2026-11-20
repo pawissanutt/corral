@@ -36,12 +36,20 @@ Forget ask once on the device; nothing else asks. This replaces the per-device a
 previews and proofs, and the Inbox and Builds destinations described in REQUIREMENTS.md and
 ARCHITECTURE.md (owner decisions of 2026-11-18).
 
-Destinations are Now, Changes, Plans, Agents, Review, Timeline, Usage, Artifacts and Settings.
-Now's first group, Needs you, is the old Inbox; Agents holds what Builds held. A plan is a parent
-task with children and a Markdown document, with no separate plan review. Every task row, plan
-member, review candidate and closed row has one Actions menu with all fifteen engine operations;
-every run has a Session menu (Cancel turn, Pause, Resume, Rewind, Terminate, Relaunch, Reply, Focus
-pane, then its task's Actions). The artifact finder is one filter over every task's artifacts.
+The app has four places, Home, Tasks, Sessions and Activity (with the pages Feed, Timeline, Usage
+and Artifacts), and Settings, as [REDESIGN.md](REDESIGN.md) describes. Home is what waits on the
+owner and what Corral is doing (a dashboard on the desktop and a wide terminal, one list on the
+phone); Tasks and Sessions are lists with an inspector. Every task and every session opens one
+page on every form: a plan is a parent task with children and no separate plan review, and a plan
+or a review candidate opens its task's page (tabs Overview, Changes and History under a decision
+band). The former Now, Inbox, Plans, Review, Agents, Builds and Changes destinations and the Project
+page are removed; their addresses and keys open the new homes. Every task shows one next step and a
+More menu with all fifteen engine operations; every session shows one next step and a More menu
+with its controls (Cancel turn, Pause, Resume, Rewind, Terminate or Stop, Relaunch or Resume, then
+for a run Reply and its task's menu). A session page is the conversation with one Details panel
+(Task, Changes, Agents, Plan, Usage, Context, Board, Proof, as the role and host have them), the
+queue above the composer and one status line under it. The artifact finder is one filter over
+every task's artifacts.
 Settings holds Devices, This daemon, Connection, Notifications, Configuration and General.
 Configuration edits `corral.toml` through `config.get` and `config.put`: the daemon writes the
 file only after the engine's config check passes, and a refusal's reasons land on the field they
@@ -58,10 +66,11 @@ offline boot from the last complete Tasks, Plans, Projects and Health snapshots 
 live. Operations and replies are refused offline.
 
 Projects (`projects.v1`, `Topic::Projects`) make a workspace's configured projects visible:
-a sidebar project list with Project pages, independent per-screen project filters, and the
-project in scope as Ask context, so filed Ideas default to it. A complete empty project
-list means no project management: the app offers only Ask, Agents, Usage and Settings.
-One app connection still serves one daemon; filters are keyed by daemon store so a later
+one scope switcher sets the project scope of every place, and the project in scope is Ask
+context, so filed Ideas default to it. There are no per-screen filters, no sidebar project
+list and no Project page. A complete empty project list means no project management: the app
+offers only Home (the assistant's landing), Sessions, Activity › Usage, Settings and Ask.
+One app connection still serves one daemon; the scope is keyed by daemon store so a later
 multi-daemon switcher can keep separate scopes.
 
 Usage totals the engine's usage rows (one per model request, written by `corral usage add` from
@@ -71,7 +80,7 @@ unknown. Days are the device's local calendar days. Timeline reads `runs` and `e
 counts created, landed, dropped and reopened events and does not narrow with the Timeline range.
 
 Pane sessions show pane text and process sessions the tail of `session.log`; there is no raw
-terminal for chat sessions. Review defaults to Unified below about 1100 pt of content width.
+terminal for chat sessions. A task page's diff is unified below about 1100 pt of content width.
 
 Opt-in direct LAN/Tailscale binding and browser Web Push are implemented. Remote browsers
 need an HTTPS app and operator TLS/WSS (`--web-endpoint`); there is no embedded TLS.
