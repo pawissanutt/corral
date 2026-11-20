@@ -1916,18 +1916,20 @@ export class HostSession {
       interactive: this.attached === "interactive",
       mode: this.attached ?? null,
       // An imported transcript can have an arbitrary ID. Never pass off a prefix as its identity.
-      ...(jsonBytes(identity) <= 1024 ? { session: identity } : {}),
+      ...(identity.current_id.isWellFormed() && (identity.bound_id?.isWellFormed() ?? true) && jsonBytes(identity) <= 1024
+        ? { session: identity } : {}),
       streaming: session.isStreaming,
       turn: { current: this.turn, open: this.open },
       paused,
-      last_error: this.turnError === null ? null : clipText(this.turnError, 512),
+      last_error: this.turnError === null ? null : clipText(this.turnError.toWellFormed(), 512),
       last_seq: this.options.events.last,
-      model: session.model ? clipText(`${session.model.provider}/${session.model.id}`, 512) : null,
+      model: session.model ? clipText(`${session.model.provider}/${session.model.id}`.toWellFormed(), 512) : null,
       owner_questions_total: questions.length,
       owner_questions: questions.slice(0, PENDING_MAX).map(({ id, questions: prompts, status }) => ({
         // The original `answer` command takes one choice. Use cards for multi-question records.
         ...(prompts.length === 1 && /^[A-Za-z0-9._:-]{1,160}$/.test(id) ? { id } : {}),
-        question: clipText(prompts[0]!.question, 512), status,
+        // Rust decodes Unicode scalar values, not isolated UTF-16 code units.
+        question: clipText(prompts[0]!.question.toWellFormed(), 512), status,
       })),
     };
   }

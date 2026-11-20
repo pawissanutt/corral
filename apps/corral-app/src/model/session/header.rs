@@ -233,6 +233,10 @@ pub fn state_word(cx: &Cx<'_>) -> StateWord {
         Host::NotRunning => return word(false, Some("○"), Hue::Neutral, "Not running"),
         Host::Running | Host::Unknown => {}
     }
+    // A saved exit describes an outcome, not whether an unreadable live host is idle.
+    if cx.state.is_none() && cx.row.is_some_and(status_unavailable) {
+        return word(false, None, Hue::Neutral, "Status unavailable");
+    }
     if let Some(exit) = cx.exit().and_then(exit_status) {
         let spinner = exit.hue == Hue::Corral;
         let glyph = match exit.phase {
@@ -282,9 +286,6 @@ pub fn state_word(cx: &Cx<'_>) -> StateWord {
         };
     }
     if let Some(row) = cx.row {
-        if status_unavailable(row) {
-            return word(false, None, Hue::Neutral, "Status unavailable");
-        }
         return match row.state {
             AssistantState::Working | AssistantState::Starting => {
                 word(true, None, Hue::Worker, with_elapsed("Working", cx))
