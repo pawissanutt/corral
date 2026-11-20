@@ -228,7 +228,8 @@ fn settings(shared: &Shared) -> Result<Rows> {
         Err(problem) => (Default::default(), Some(problem)),
     };
     let built_in = Config::default();
-    Ok(Rows::Settings(vec![SettingsSnapshot {
+    let (harness_facts, pi_config) = shared.harness_inventory.facts(document.revision.as_deref());
+    let mut row = SettingsSnapshot {
         config,
         listener: shared.devices().listener(),
         hostname: crate::devices::reach::hostname(),
@@ -237,7 +238,17 @@ fn settings(shared: &Shared) -> Result<Rows> {
         built_in_defaults: Some(object(&built_in)?),
         project_defaults: Some(object(&built_in.project_defaults())?),
         problem,
-    }]))
+        harness_facts,
+        pi_config,
+    };
+    // These optional facts must not make an otherwise serveable settings row too large.
+    if (row.harness_facts.is_some() || row.pi_config.is_some())
+        && super::json_len(&row)? > super::REPLY_MAX
+    {
+        row.harness_facts = None;
+        row.pi_config = None;
+    }
+    Ok(Rows::Settings(vec![row]))
 }
 
 fn object(value: &impl Serialize) -> Result<serde_json::Map<String, serde_json::Value>> {
