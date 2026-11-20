@@ -48,12 +48,10 @@ use crate::ui::kit::marks::{dot, hue_fill, hue_ink};
 use crate::ui::kit::notice::{empty, error, loading, notice};
 use crate::ui::kit::text::{dim, plain, rich};
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_MONO, FONT_TEXT, MEASURE_CONVERSATION, Token, color};
 
 use super::run;
 
-/// `.tx`: at most 820 pt wide, centred in its column.
-const MEASURE: f32 = 820.0;
 /// `.tm p`: paragraphs stop near 70 characters.
 const PARAGRAPH: f32 = 600.0;
 
@@ -269,7 +267,7 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
                     view()
                         .test_id("session-transcript-items")
                         .w_full()
-                        .max_w(px(MEASURE))
+                        .max_w(px(MEASURE_CONVERSATION))
                         .pt(px(if form == Form::Phone { 8.0 } else { 16.0 }))
                         .pb(px(10.0))
                         .children(stale.map(|notice| edge(notice).pb(px(8.0))))

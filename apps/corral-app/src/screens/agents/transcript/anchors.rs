@@ -17,7 +17,7 @@ struct Rows {
 }
 
 thread_local! {
-    static SCOPES: RefCell<BTreeMap<String, Rows>> = RefCell::new(BTreeMap::new());
+    static SCOPES: RefCell<BTreeMap<String, Rows>> = const { RefCell::new(BTreeMap::new()) };
     static TOKENS: Cell<u64> = const { Cell::new(0) };
 }
 

@@ -1,7 +1,8 @@
 //! The session page's Details panel (`session::Details`): its head (`Details`, ✕), then each
 //! section the host serves: a header that folds it (caret, name, summary in its tone, `Open` for
 //! the part's full view), and unfolded, why the host cannot serve it now, where its read stands
-//! and its rows. Beside the conversation on a wide page (desktop 350 pt, terminal 36 Cells), in
+//! and its rows. Beside the conversation on a wide page (desktop a quarter of the page within
+//! 350–460 pt, terminal 36 Cells), in
 //! the conversation's place on a narrow one, and a bottom sheet on the phone. The Plan ledger and
 //! Host events sheets are mounted with the page (`sheets`). test ids `session-details`,
 //! `details-<section>`, `btn-details-<section>`, `btn-details-close`, `session-details-sheet`.
@@ -28,9 +29,21 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 use super::super::run;
 use super::{events, hue_words, plan};
 
-/// The panel's width beside the conversation: points on desktop, Cells in a terminal.
-pub(super) const PANEL: f32 = 350.0;
+/// The panel's width beside the conversation on desktop: its share of the page's width, kept
+/// between the least that holds its rows and the most its rows can use, so a wide window gives
+/// the dense rows room rather than leaving them thin beside a wide conversation.
+const PANEL_SHARE: f32 = 0.24;
+const PANEL_MIN: f32 = 350.0;
+const PANEL_MAX: f32 = 460.0;
+/// The panel's width beside the conversation in a terminal, in Cells.
 pub(super) const PANEL_CELLS: f32 = 36.0;
+
+/// The desktop panel's width on a page `page` points wide (the least before it is measured).
+pub(super) fn panel_width(page: Option<f32>) -> f32 {
+    page.map_or(PANEL_MIN, |width| {
+        (width * PANEL_SHARE).clamp(PANEL_MIN, PANEL_MAX)
+    })
+}
 
 fn details_of(page: Memo<SessionPage>) -> Memo<Option<Details>> {
     computed(move || page.with(|p| p.details.clone()))
@@ -69,13 +82,18 @@ pub(super) fn with_cx<T>(app: AppState, id: &Id, read: impl Fn(&Cx<'_>) -> T) ->
     })
 }
 
-/// The panel framed beside the conversation (`beside`), or filling the conversation's place.
-pub(super) fn panel(app: AppState, page: Memo<SessionPage>, beside: bool) -> AnyElement {
+/// The panel framed beside the conversation (`beside`, its desktop width), or filling the
+/// conversation's place.
+pub(super) fn panel(
+    app: AppState,
+    page: Memo<SessionPage>,
+    beside: Option<Memo<f32>>,
+) -> AnyElement {
     let form = app.form;
     let body = content(app, page);
     if form == Form::Terminal {
         let column = view().flex_col().min_h(px(0.0)).child(body);
-        return if beside {
+        return if beside.is_some() {
             view()
                 .flex_row()
                 .flex_none()
@@ -92,9 +110,9 @@ pub(super) fn panel(app: AppState, page: Memo<SessionPage>, beside: bool) -> Any
         .min_h(px(0.0))
         .bg(color(Token::Surface))
         .child(body);
-    if beside {
+    if let Some(width) = beside {
         column
-            .w(px(PANEL))
+            .w(move || px(width.get()))
             .flex_none()
             .border_l(px(1.0))
             .border_l_color(color(Token::Rule))
