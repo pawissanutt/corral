@@ -50,6 +50,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 pub struct RunOptions {
     pub listen: Option<SocketAddr>,
     pub web_origins: Vec<String>,
+    pub web_dir: Option<PathBuf>,
     pub web_endpoint: Option<String>,
     pub push_key: Option<PathBuf>,
     pub push_subject: Option<String>,
@@ -81,8 +82,20 @@ fn run_with_runner(root: &Path, options: RunOptions, runner: Option<RunnerFactor
     } else {
         options.web_origins
     };
-    if let Some(endpoint) = &options.web_endpoint {
-        ensure!(device::valid_endpoint(endpoint), "invalid --web-endpoint");
+    let web_dir = options.web_dir.or(config.web_dir);
+    if let Some(path) = &web_dir {
+        ensure!(!path.as_os_str().is_empty(), "web_dir must not be empty");
+        let address =
+            listen.context("web_dir requires an app listener ([daemon] listen or --listen)")?;
+        ensure!(
+            !address.ip().is_unspecified() && !address.ip().is_multicast(),
+            "web_dir requires a concrete unicast app listen address"
+        );
+    }
+    let web_dir = web_dir.map(|path| root.join(path));
+    let web_endpoint = options.web_endpoint.or(config.web_endpoint);
+    if let Some(endpoint) = &web_endpoint {
+        ensure!(device::valid_endpoint(endpoint), "invalid web_endpoint");
     }
     let path = socket_path(&root);
     let Some((_lock, socket, listener)) = bind_socket(path)? else {
@@ -111,7 +124,8 @@ fn run_with_runner(root: &Path, options: RunOptions, runner: Option<RunnerFactor
                 listener,
                 Arc::clone(&shared),
                 origins,
-                options.web_endpoint.as_deref(),
+                web_endpoint.as_deref(),
+                web_dir,
             )?;
         }
         server::start(listener, Arc::clone(&shared))?;

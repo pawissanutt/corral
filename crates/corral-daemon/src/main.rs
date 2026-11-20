@@ -35,6 +35,9 @@ mod unix {
             listen: Option<SocketAddr>,
             #[arg(long = "web-origin")]
             web_origins: Vec<String>,
+            /// Serve a packaged app directory from the app listener
+            #[arg(long)]
+            web_dir: Option<PathBuf>,
             #[arg(long)]
             web_endpoint: Option<String>,
             #[arg(long)]
@@ -83,6 +86,7 @@ mod unix {
             Command::Run {
                 listen,
                 web_origins,
+                web_dir,
                 web_endpoint,
                 push_key,
                 push_subject,
@@ -100,6 +104,7 @@ mod unix {
                     RunOptions {
                         listen,
                         web_origins,
+                        web_dir,
                         web_endpoint,
                         push_key,
                         push_subject,

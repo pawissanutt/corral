@@ -1,6 +1,6 @@
 //! Bounded browser upgrade, authenticated Noise handshake, and encrypted frames.
 use std::{
-    io::{self, Read, Write},
+    io::{self, Cursor, Read, Write},
     net::TcpStream,
     sync::Arc,
     time::{Duration, Instant},
@@ -25,8 +25,8 @@ use crate::{
     devices::{Devices, SessionGuard},
 };
 
-const UPGRADE_MAX: usize = 8_192;
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const UPGRADE_MAX: usize = 8_192;
+pub(super) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_SLICE: Duration = Duration::from_millis(250);
 const CIPHER_MAX: usize = MESSAGE_MAX + device::NOISE_TAG;
 
@@ -38,6 +38,7 @@ pub(super) enum Mode {
 /// Deadlines apply to the entire operation, including fragmented TCP reads.
 pub(super) struct Bounded {
     stream: TcpStream,
+    replay: Cursor<Vec<u8>>,
     remaining: Option<usize>,
     read_deadline: Instant,
     write_deadline: Instant,
@@ -51,7 +52,22 @@ fn remaining(deadline: Instant) -> io::Result<Duration> {
 }
 
 impl Bounded {
-    fn budget(&mut self, read: Duration, write: Duration) {
+    pub(super) fn incoming(stream: TcpStream) -> Self {
+        let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
+        Self {
+            stream,
+            replay: Cursor::default(),
+            remaining: Some(UPGRADE_MAX),
+            read_deadline: deadline,
+            write_deadline: deadline,
+        }
+    }
+
+    pub(super) fn replay(&mut self, bytes: Vec<u8>) {
+        self.replay = Cursor::new(bytes);
+    }
+
+    pub(super) fn budget(&mut self, read: Duration, write: Duration) {
         let now = Instant::now();
         self.read_deadline = now + read;
         self.write_deadline = now + write;
@@ -63,8 +79,15 @@ impl Read for Bounded {
         if bytes.is_empty() {
             return Ok(0);
         }
-        self.stream
-            .set_read_timeout(Some(remaining(self.read_deadline)?))?;
+        let timeout = remaining(self.read_deadline)?;
+        let buffered = self.replay.read(bytes)?;
+        if buffered != 0 {
+            return Ok(buffered);
+        }
+        if !self.replay.get_ref().is_empty() {
+            self.replay = Cursor::default();
+        }
+        self.stream.set_read_timeout(Some(timeout))?;
         let len = match self.remaining {
             Some(0) => {
                 return Err(io::Error::new(
@@ -112,16 +135,8 @@ fn origin_allowed(headers: &tungstenite::http::HeaderMap, origins: &[String]) ->
     allowed && values.next().is_none()
 }
 
-pub(super) fn upgrade(stream: TcpStream, origins: &[String]) -> Result<(WebSocket<Bounded>, Mode)> {
-    stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT))?;
-    stream.set_write_timeout(Some(HANDSHAKE_TIMEOUT))?;
-    let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
-    let stream = Bounded {
-        stream,
-        remaining: Some(UPGRADE_MAX),
-        read_deadline: deadline,
-        write_deadline: deadline,
-    };
+pub(super) fn upgrade(stream: Bounded, origins: &[String]) -> Result<(WebSocket<Bounded>, Mode)> {
+    let deadline = stream.read_deadline;
     let mut mode = None;
     #[expect(
         clippy::result_large_err,
