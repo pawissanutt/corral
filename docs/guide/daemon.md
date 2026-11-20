@@ -50,7 +50,8 @@ configured path. Relative paths are relative to the workspace, and shell `~` is 
 expanded in TOML. Use only a dedicated bundle directory: never a repository, workspace,
 home directory, or any directory containing secrets. A missing bundle leaves the UI
 unavailable without stopping the daemon. Updating only the web files does not require a
-daemon restart.
+daemon restart. HTTP header reads and asset transfers have their own bounded admission,
+separate from the authenticated app-session limit.
 
 For remote access, corrald-next has no embedded TLS. Put an HTTPS reverse proxy or
 Tailscale Serve in front of the loopback daemon and forward all app traffic, including
@@ -123,6 +124,9 @@ Interrupted or aborted accepts retry; descriptor exhaustion retries after 500 ms
 Other listener failures drain and exit nonzero so the service manager can restart.
 
 ## Enrolled app connections
+
+This section uses classic `corral daemon` settings and commands. For `corrald-next`, use
+[App and Pi sessions](#app-and-pi-sessions) above (`web_origin`, singular).
 
 Native apps use the existing peer-UID-checked Unix socket and enrol a device with
 `device.v1`. Browsers need the optional app listener, off by default:

@@ -30,6 +30,12 @@ struct StaticHost {
     transfers: Arc<AtomicUsize>,
 }
 
+impl StaticHost {
+    fn acquire_transfer(&self) -> Option<HttpPermit> {
+        HttpPermit::acquire(&self.transfers, MAX_STATIC_TRANSFERS)
+    }
+}
+
 struct HttpPermit(Arc<AtomicUsize>);
 
 impl HttpPermit {

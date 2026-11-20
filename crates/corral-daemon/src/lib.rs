@@ -87,8 +87,9 @@ fn run_with_runner(root: &Path, options: RunOptions, runner: Option<RunnerFactor
         ensure!(!path.as_os_str().is_empty(), "web_dir must not be empty");
         let address =
             listen.context("web_dir requires an app listener ([daemon] listen or --listen)")?;
+        let ip = address.ip().to_canonical();
         ensure!(
-            !address.ip().is_unspecified() && !address.ip().is_multicast(),
+            !ip.is_unspecified() && !ip.is_multicast(),
             "web_dir requires a concrete unicast app listen address"
         );
     }

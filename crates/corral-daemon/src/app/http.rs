@@ -50,7 +50,7 @@ pub(super) fn route(
         stream.replay(bytes);
         return upgrade(stream, pending);
     }
-    let Some(_permit) = HttpPermit::acquire(&host.transfers, super::MAX_STATIC_TRANSFERS) else {
+    let Some(_permit) = host.acquire_transfer() else {
         return send_error(&mut stream, 503);
     };
     drop(pending);
