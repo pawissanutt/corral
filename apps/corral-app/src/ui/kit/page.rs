@@ -109,6 +109,64 @@ pub fn head(
     }
 }
 
+/// [`bar`] under a page whose content is kept to `max` points ([`measure`]): on a desktop the
+/// actions and attribution sit in the measured column while the bar's ground and rule run edge
+/// to edge. Phone and terminal bars are [`bar`]'s.
+pub fn measured_bar(
+    app: AppState,
+    max: f32,
+    actions: Vec<AnyElement>,
+    attribution: Option<AnyElement>,
+) -> AnyElement {
+    match app.form {
+        Form::Desktop => view()
+            .flex_none()
+            .bg(color(Token::Bg))
+            .border_t(px(1.0))
+            .border_color(color(Token::Rule))
+            .child(measure(
+                app,
+                max,
+                desktop_bar_row(
+                    view()
+                        .test_id("decide-bar")
+                        .role(AccessibilityRole::Toolbar)
+                        .flex_none(),
+                    actions,
+                    attribution,
+                )
+                .into_element(),
+            ))
+            .into_element(),
+        Form::Phone | Form::Terminal => bar(app, actions, attribution),
+    }
+}
+
+/// The desktop bar's row of actions and trailing attribution, without its ground and rule.
+fn desktop_bar_row(
+    root: View,
+    actions: Vec<AnyElement>,
+    attribution: Option<AnyElement>,
+) -> View {
+    root.flex_row()
+        .items_center()
+        .gap(px(10.0))
+        .px(px(24.0))
+        .py(px(12.0))
+        .children(actions)
+        .child(spacer())
+        .when_some(attribution, |row, attribution| {
+            row.child(
+                view()
+                    .flex_shrink(1.0)
+                    .min_w(px(0.0))
+                    .max_w(px(430.0))
+                    .items_end()
+                    .child(attribution),
+            )
+        })
+}
+
 /// [`head`] over a page whose content is kept to `max` points ([`measure`]): on a desktop the
 /// title and actions sit in the measured column while the rule under them runs edge to edge, as
 /// the bands under a head do. Phone and terminal heads are [`head`]'s.
@@ -448,27 +506,10 @@ pub fn bar(app: AppState, actions: Vec<AnyElement>, attribution: Option<AnyEleme
         .role(AccessibilityRole::Toolbar)
         .flex_none();
     match form {
-        Form::Desktop => root
-            .flex_row()
-            .items_center()
-            .gap(px(10.0))
-            .px(px(24.0))
-            .py(px(12.0))
+        Form::Desktop => desktop_bar_row(root, actions, attribution)
             .bg(color(Token::Bg))
             .border_t(px(1.0))
             .border_color(color(Token::Rule))
-            .children(actions)
-            .child(spacer())
-            .when_some(attribution, |row, attribution| {
-                row.child(
-                    view()
-                        .flex_shrink(1.0)
-                        .min_w(px(0.0))
-                        .max_w(px(430.0))
-                        .items_end()
-                        .child(attribution),
-                )
-            })
             .into_element(),
         Form::Phone => root
             .flex_row()
