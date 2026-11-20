@@ -1546,6 +1546,7 @@ export class HostSession {
     this.questionUi?.close();
     this.commands?.pause();
     this.unsubscribePanels?.();
+    this.modelFavorites.close();
     this.panels?.dispose();
     const released = this.options.herdr?.close();
     // Stop the parent's follow-up loop before cancelled children can return tool results.
