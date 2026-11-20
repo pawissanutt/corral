@@ -412,7 +412,11 @@ export class HostSession {
   private constructor(private readonly options: HostSessionOptions) {
     const host = this;
     this.liveEvents = new LiveEvents();
-    this.modelFavorites = new WorkspaceModelFavorites(options.client.workspaceRoot, () => this.liveEvents.stateChanged());
+    // A change here, from the app or from another session re-announces the catalog and redraws an open picker.
+    this.modelFavorites = new WorkspaceModelFavorites(options.client.workspaceRoot, () => {
+      this.liveEvents.stateChanged();
+      this.panels?.refresh();
+    });
     this.dialogs = new RemoteDialogs(() => this.liveEvents.stateChanged(), {
       entries: () => [...questionEntries(this.ownerQuestions), ...this.remoteBuild.entries()],
       absent: id => questionStatus(this.ownerQuestions?.status(id) ?? "missing"),
