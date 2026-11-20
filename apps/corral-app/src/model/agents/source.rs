@@ -12,6 +12,7 @@ use crate::model::daemon;
 use crate::model::hue::Hue;
 use crate::model::projects::ProjectFilter;
 use crate::model::session::exit_status;
+use crate::model::status::status_unavailable;
 use crate::model::{assistant, status::SessionState};
 
 use super::live;
@@ -143,7 +144,7 @@ impl<'a> Source<'a> {
         if let Some(wait) = chat
             .wait
             .as_ref()
-            .filter(|_| chat.state == AssistantState::Waiting)
+            .filter(|_| chat.state == AssistantState::Waiting || status_unavailable(chat))
         {
             return wait.text.lines().next().map(str::to_owned);
         }
