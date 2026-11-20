@@ -136,6 +136,15 @@ detail lists can have continuation cursors. Corral uses the socket for input and
 controls; the daemon uses it for live text. There is no per-launch secret or
 message receipt.
 
+When upgrading from a Pi host that reports `get_state (response_too_large)`,
+update both Corral and Pi (`just upgrade` from a [source checkout](install.md#contributors)).
+Restarting the daemon alone does not replace running Pi processes. On the updated
+engine you can retry a refused changes verdict on a still-live old worker without
+stopping the run or losing its transcript: the refusal proves the host is alive, but does not
+say whether it is idle or working. Status reconciliation for that host remains
+unavailable until its next normal launch with the updated Pi. Do not stop or
+retry the task just to record its pending verdict.
+
 **Cancel** stops the current turn without ending the session. **Pause** also holds
 automated input such as gate notes. **Resume** delivers that input in order, as does
 typing a new owner message. Pause and held input survive a host restart. See

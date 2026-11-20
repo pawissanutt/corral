@@ -138,15 +138,17 @@ test("status is bounded with a full queue of heavily escaped owner questions", a
     const question = "😀\u0001".repeat(330);
     const options = ["a", "b", "c", "d"].map(letter => letter + "\u0001".repeat(299));
     await fx.turn([{ toolCalls: Array.from({ length: PENDING_MAX }, (_, i) => ({
-      callId: `ask-${i}`, name: "ask_user", arguments: { nonBlocking: true, questions: [{ question, options }] },
+      callId: `ask-${i}`, name: "ask_user", arguments: { nonBlocking: true,
+        questions: i === 0 ? [{ question, options }, { question: "Second choice?", options: ["A", "B"] }] : [{ question, options }],
+      },
     })) }, { text: "Waiting for choices." }]);
     const pending = fx.host.pendingOwnerQuestions();
-    expect(pending).toHaveLength(PENDING_MAX);
+    expect(pending).toHaveLength(PENDING_MAX - 1);
     expect(Buffer.byteLength(JSON.stringify(pending))).toBeGreaterThan(64 * 1024);
     const status = fx.host.controlState(true);
     expect(Buffer.byteLength(JSON.stringify(status))).toBeLessThanOrEqual(8 * 1024);
     expect(status).toMatchObject({ paused: true, turn: { open: false }, owner_questions_total: PENDING_MAX });
-    expect(status.owner_questions.map(entry => entry.id)).toEqual(pending.map(entry => entry.id));
+    expect(status.owner_questions.map(entry => entry.id)).toEqual([undefined, ...pending.map(entry => entry.id)]);
     for (const entry of status.owner_questions) {
       expect(entry.question.startsWith("😀")).toBeTrue();
       expect(question.startsWith(entry.question)).toBeTrue();

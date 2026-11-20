@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::{
     Actor, Blocked, Engine, LaunchSpec, Next, Op, Origin, Outcome, Role, Run, Runner, SessionRef,
-    SessionStatus, Status, Store, Task, TaskEdit, as_refusal,
+    Status, Store, Task, TaskEdit, as_refusal,
     checkout::Checkout,
     config::{CommandContext, EffectiveProject, render_command, valid_env_key},
     events::EventKind,
@@ -646,9 +646,8 @@ impl Engine {
             && let Some(session) = &run.session
             && self
                 .session_runner()
-                .status(session)
+                .is_live(session)
                 .with_context(|| format!("read session {}:{}", run.task, run.id))?
-                != SessionStatus::Gone
         {
             return Ok(Some(session));
         }

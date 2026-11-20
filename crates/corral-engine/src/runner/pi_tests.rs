@@ -220,6 +220,36 @@ fn pi_worker_lifecycle_and_controls_use_the_socket() {
 }
 
 #[test]
+fn oversized_legacy_status_proves_liveness_without_claiming_idle_or_gone() {
+    let fixture = Fixture::new();
+    let socket = fixture.temp.path().join("legacy.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let host = thread::spawn(move || {
+        for code in ["response_too_large", "response_too_large", "starting"] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(&stream).read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["command"], "get_state");
+            let reply = json!({"version": 2, "id": request["id"], "ok": false,
+                "error": {"code": code, "reason": "legacy refusal"}});
+            writeln!(stream, "{reply}").unwrap();
+        }
+    });
+    let dir = fixture.temp.path().to_owned();
+    let session = SessionRef::Pi {
+        socket,
+        dir: dir.clone(),
+        inner: Box::new(SessionRef::Process { dir, pid: 1234 }),
+    };
+    let runner = fixture.runner();
+    assert!(runner.is_live(&session).unwrap());
+    assert!(runner.status(&session).is_err());
+    assert!(runner.is_live(&session).is_err());
+    host.join().unwrap();
+}
+
+#[test]
 fn pi_protocol_mismatch_stops_the_placement() {
     let fixture = Fixture::new();
     let runner = fixture.runner();

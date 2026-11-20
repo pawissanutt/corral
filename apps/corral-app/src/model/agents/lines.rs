@@ -1,5 +1,5 @@
-//! Every session as the four places list it: one line per session with the state the engine's
-//! `SessionStatus` names (Blocked, Working, Idle, Gone), whatever its role. Home mixes these
+//! Every session as the four places list it: one line per session, including live hosts whose
+//! status could not be read. Home mixes these
 //! with tasks; Sessions groups them by state.
 
 use super::source::{Source, scoped};

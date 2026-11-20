@@ -1909,7 +1909,7 @@ export class HostSession {
   controlState(paused: boolean) {
     const session = this.session;
     const identity = { bound_id: this.boundSessionId ?? null, current_id: session.sessionId, created: this.sessionsCreated };
-    const questions = this.pendingOwnerQuestions();
+    const questions = this.ownerQuestions?.pending() ?? [];
     return {
       role: this.options.identity.role,
       bound: this.bound,
@@ -1924,11 +1924,10 @@ export class HostSession {
       last_seq: this.options.events.last,
       model: session.model ? clipText(`${session.model.provider}/${session.model.id}`, 512) : null,
       owner_questions_total: questions.length,
-      owner_questions: questions.slice(0, PENDING_MAX).map(({ id, question, status }) => ({
-        // Only expose whole IDs usable by the v2 answer endpoint. Still describe the wait if
-        // an old or imported transcript contains a different ID.
-        ...(/^[A-Za-z0-9._:-]{1,160}$/.test(id) ? { id } : {}),
-        question: clipText(question, 512), status,
+      owner_questions: questions.slice(0, PENDING_MAX).map(({ id, questions: prompts, status }) => ({
+        // The original `answer` command takes one choice. Use cards for multi-question records.
+        ...(prompts.length === 1 && /^[A-Za-z0-9._:-]{1,160}$/.test(id) ? { id } : {}),
+        question: clipText(prompts[0]!.question, 512), status,
       })),
     };
   }
