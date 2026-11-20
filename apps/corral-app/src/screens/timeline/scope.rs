@@ -10,8 +10,8 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::timeline::{self, BURNUP_SCOPE_LABEL, ScopeOption};
-use crate::screens::plans::menu_trigger;
 use crate::state::AppState;
+use crate::ui::kit::button::menu_trigger;
 use crate::ui::kit::overlay::counted;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};

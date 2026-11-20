@@ -32,19 +32,6 @@ pub fn notice(app: AppState, hue: Hue, content: &Rich, action: Option<AnyElement
     toned(app, hue, None, content, action)
 }
 
-/// [`notice`] led by an icon in the tone's ink (the full ink when neutral), 16 pt on desktop and
-/// 18 pt on the phone, 10 pt before the sentence, as the mockup's machines note. A terminal
-/// shows no images, so it leads with the tone's mark as [`notice`] does. test_id "notice".
-pub fn notice_icon(
-    app: AppState,
-    hue: Hue,
-    glyph: Icon,
-    content: &Rich,
-    action: Option<AnyElement>,
-) -> AnyElement {
-    toned(app, hue, Some(glyph), content, action)
-}
-
 /// The body of [`notice`] and [`notice_icon`].
 fn toned(
     app: AppState,

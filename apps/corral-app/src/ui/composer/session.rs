@@ -139,7 +139,15 @@ pub(crate) fn docked_composer(
     command: Memo<Option<Vec<Action>>>,
 ) -> AnyElement {
     let ask = super::ask(app, &id);
-    build(app, id, composer, command, computed(|| false), Some(ask), false)
+    build(
+        app,
+        id,
+        composer,
+        command,
+        computed(|| false),
+        Some(ask),
+        false,
+    )
 }
 
 fn build(
@@ -176,7 +184,21 @@ fn build(
     if ask.is_some() && take_focus {
         super::focus_on_open(app, entry);
     }
-    let field = field(app, id.clone(), composer, command, entry, ask, attach);
+    let docked = ask.is_some() && !take_focus;
+    if docked {
+        // A field that goes while it has the focus leaves no Escape to take.
+        cleanup(move || app.docked_field.set(None));
+    }
+    let field = field(
+        app,
+        id.clone(),
+        composer,
+        command,
+        entry,
+        ask,
+        attach,
+        docked,
+    );
     match form {
         Form::Phone => phone(app, id, composer, field, ask, attach),
         Form::Desktop | Form::Terminal => frame(app, id, composer, field, ask, attach),
@@ -184,7 +206,9 @@ fn build(
 }
 
 /// The draft field: multiline, Enter sends with the send button's policy (or runs the matched
-/// `/` command), Shift+Enter breaks the line; a pasted image is staged for the message.
+/// `/` command), Shift+Enter breaks the line; a pasted image is staged for the message. Docked
+/// on Home, Escape leaves the field, so Home's keys walk its cards again rather than typing.
+#[allow(clippy::too_many_arguments)]
 fn field(
     app: AppState,
     id: Id,
@@ -193,6 +217,7 @@ fn field(
     entry: ElementRef,
     ask: Option<Ask>,
     attach: Attach,
+    docked: bool,
 ) -> AnyElement {
     let form = app.form;
     let draft = move || composer.with(|c| c.as_ref().map(|c| c.draft.clone()).unwrap_or_default());
@@ -252,7 +277,12 @@ fn field(
         })
         .caret_color(move || for_appearance(color(Token::Ink)))
         .selection_color(move || for_appearance(color(Token::Sel)))
-        .bg(AdaptiveColor::TRANSPARENT);
+        .bg(AdaptiveColor::TRANSPARENT)
+        .when(docked, |field| {
+            field
+                .on_focus(move || app.docked_field.set(Some(entry)))
+                .on_blur(move || app.docked_field.set(None))
+        });
     match form {
         Form::Desktop => field
             .min_h(px(44.0))

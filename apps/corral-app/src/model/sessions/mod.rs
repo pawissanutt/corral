@@ -49,10 +49,14 @@ pub fn columns() -> Vec<Column> {
         Column::flex("now", "Now", 110.0, 14.0, 1.0).gives_way(7),
         Column::fixed("project", "Project", 96.0, 12.0).gives_way(2),
         Column::fixed("model", "Model", 118.0, 16.0).gives_way(1),
-        Column::fixed("context", "Ctx", 40.0, 4.0).end().gives_way(3),
+        Column::fixed("context", "Ctx", 40.0, 4.0)
+            .end()
+            .gives_way(3),
         Column::fixed("cost", "Cost", 56.0, 7.0).end().gives_way(4),
         Column::fixed("age", "Age", 40.0, 5.0).end().gives_way(5),
-        Column::fixed("next", "Next step", 112.0, 13.0).end().short("Next"),
+        Column::fixed("next", "Next step", 112.0, 13.0)
+            .end()
+            .short("Next"),
     ]
 }
 
@@ -91,7 +95,7 @@ mod tests {
     use corral_types::{Role, SessionStatus};
 
     use super::*;
-    use crate::model::agents::roster_tests::agent;
+    use crate::model::agents::source_tests::agent;
 
     /// A stopped host listed among the live ones buried the session that waits on the owner.
     #[test]
@@ -123,7 +127,7 @@ mod tests {
     fn the_head_sums_only_the_costs_the_host_reports() {
         use corral_protocol::rows::AssistantKind;
 
-        use crate::model::agents::roster_tests::assistant;
+        use crate::model::agents::source_tests::assistant;
         use crate::model::health::daemon_env;
         use crate::model::nav::Form;
 

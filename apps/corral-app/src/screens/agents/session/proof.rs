@@ -11,7 +11,7 @@ use nsh_core::prelude::*;
 use crate::model::Form;
 use crate::model::review::Rounds;
 use crate::model::session::{Body, ProofTab, SessionPage};
-use crate::screens::review::brief::chain;
+use crate::screens::task::candidate::brief::chain;
 use crate::state::AppState;
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::hint::hinted;

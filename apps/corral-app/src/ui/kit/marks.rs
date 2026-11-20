@@ -1,15 +1,14 @@
-//! The state marks: the six one-stroke rail marks, the rail of four, the actor dot, the
-//! changed-since-your-last-visit triangle, and the colour of each [`Hue`].
+//! The state marks: the six one-stroke stage marks, the dot, and the colour of each [`Hue`].
 //!
-//! Desktop and phone draw the mock's SVG shapes (`assets/icons/mk-*.svg`, `actor-*.svg`,
-//! `delta.svg`) as tinted images, as `ui::icons` draws its icons. A terminal shows no images, so
+//! Desktop and phone draw the mock's SVG shapes (`assets/icons/mk-*.svg`, `actor-*.svg`) as
+//! tinted images, as `ui::icons` draws its icons. A terminal shows no images, so
 //! there each mark is its glyph ([`Mark::glyph`]) in one Cell, its colour carrying the meaning and
 //! its shape saying it again without colour.
 
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::board::{Actor, Mark, Rail, rail_label};
+use crate::model::board::Mark;
 use crate::model::hue::Hue;
 use crate::state::AppState;
 use crate::ui::tokens::{Token, color};
@@ -24,11 +23,7 @@ const ACTOR_SOLID: ImageAsset = asset!("icons/actor-solid.svg");
 const ACTOR_HALF: ImageAsset = asset!("icons/actor-half.svg");
 const ACTOR_RING: ImageAsset = asset!("icons/actor-ring.svg");
 const ACTOR_DIAMOND: ImageAsset = asset!("icons/actor-diamond.svg");
-const ACTOR_SQUARE: ImageAsset = asset!("icons/actor-square.svg");
-const DELTA: ImageAsset = asset!("icons/delta.svg");
 
-/// What the delta says to a screen reader (the mock's `title`).
-const DELTA_LABEL: &str = "changed since your last visit";
 /// The actor shapes are 9 points (10 on a phone) inside an 11-unit box, so the held diamond,
 /// turned 45 degrees, keeps its corners.
 const ACTOR_BOX: f32 = 11.0 / 9.0;
@@ -149,56 +144,6 @@ pub fn mark(app: AppState, mark: Mark, hue: Hue) -> AnyElement {
     }
 }
 
-/// The colour of a rail's mark: a running run stage is a worker producing, so it takes the
-/// worker colour (`.mk.active.w`); every other mark keeps its own.
-fn rail_ink(form: Form, stage: usize, mark: Mark) -> AdaptiveColor {
-    if stage == 0 && mark == Mark::Active {
-        color(Token::Worker)
-    } else {
-        mark_ink(form, mark)
-    }
-}
-
-/// Run, gate, review, land as four marks 5 pt apart (a terminal: the four glyphs a Cell apart,
-/// seven Cells). The run stage running is in the worker colour, a running gate or review in the
-/// corral colour. One element for screen readers, labelled with [`rail_label`]
-/// ("run passed, gate running, ...").
-pub fn rail(app: AppState, rail: Rail) -> AnyElement {
-    let form = app.form;
-    let label = rail_label(rail);
-    match form {
-        Form::Terminal => {
-            let mut line = text("")
-                .flex_shrink_0()
-                .number_of_lines(1u32)
-                .role(AccessibilityRole::Image)
-                .label(label);
-            for (stage, mark) in rail.into_iter().enumerate() {
-                if stage > 0 {
-                    line = line.child(" ");
-                }
-                line = line
-                    .child(text(mark.glyph().to_string()).text_color(rail_ink(form, stage, mark)));
-            }
-            line.into_element()
-        }
-        Form::Desktop | Form::Phone => {
-            let size = mark_size(form);
-            view()
-                .flex_row()
-                .items_center()
-                .flex_shrink_0()
-                .gap(px(5.0))
-                .role(AccessibilityRole::Image)
-                .label(label)
-                .children(rail.into_iter().enumerate().map(|(stage, mark)| {
-                    shape(mark_asset(mark), size, size, rail_ink(form, stage, mark))
-                }))
-                .into_element()
-        }
-    }
-}
-
 /// How an actor dot is drawn: its shape, terminal glyph and colour.
 #[derive(Clone, Copy)]
 struct Dot {
@@ -255,23 +200,6 @@ pub fn dot(app: AppState, hue: Hue) -> AnyElement {
     drawn(app.form, dot_of(hue))
 }
 
-/// The task's actor dot, as [`dot`] draws its hue, with the two actors no hue tells apart:
-/// parked is a rounded square outline (`□` in a terminal), done is blank room of the same size.
-pub fn actor(app: AppState, actor: Actor) -> AnyElement {
-    match actor {
-        Actor::Parked => drawn(
-            app.form,
-            Dot {
-                asset: ACTOR_SQUARE,
-                glyph: '□',
-                ink: Token::Ink4,
-            },
-        ),
-        Actor::Done => blank_dot(app.form),
-        _ => dot(app, actor.hue()),
-    }
-}
-
 fn dot_size(form: Form) -> f32 {
     match form {
         Form::Phone => 10.0 * ACTOR_BOX,
@@ -296,34 +224,5 @@ fn drawn(form: Form, dot: Dot) -> AnyElement {
             let size = dot_size(form);
             shape(dot.asset, size, size, color(dot.ink))
         }
-    }
-}
-
-fn blank_dot(form: Form) -> AnyElement {
-    match form {
-        Form::Terminal => glyph(' ', color(Token::Ink))
-            .accessibility_elements_hidden(true)
-            .into_element(),
-        Form::Desktop | Form::Phone => {
-            let size = dot_size(form);
-            view().size(px(size)).flex_shrink_0().into_element()
-        }
-    }
-}
-
-/// The small upward triangle (8 by 6 pt, ink-2) on a row or line that changed since the last
-/// visit. Terminal: `▲` in ink. Screen readers hear "changed since your last visit".
-pub fn delta(app: AppState) -> AnyElement {
-    match app.form {
-        Form::Terminal => glyph('▲', color(Token::Ink))
-            .role(AccessibilityRole::Image)
-            .label(DELTA_LABEL)
-            .into_element(),
-        Form::Desktop | Form::Phone => view()
-            .flex_shrink_0()
-            .role(AccessibilityRole::Image)
-            .label(DELTA_LABEL)
-            .child(shape(DELTA, 8.0, 6.0, color(Token::Ink2)))
-            .into_element(),
     }
 }

@@ -20,19 +20,21 @@ use crate::model::artifacts::{
     Query, RETRY, Row, SUBTITLE, Status, TITLE, Walk,
 };
 use crate::model::{Effect, Form, Hue};
-use crate::screens::now::list::revealing;
+use crate::screens::activity::subnav;
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::notice::notice;
 use crate::ui::kit::page::{Width, columns, context, head, pane};
-use crate::ui::kit::rows::{list_row_tall, titled, walked_row};
+use crate::ui::kit::rows::{list_row_tall, revealing, titled, walked_row};
 use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
 
-/// The results column's width on desktop (and, a Cell for every 12 points, in a terminal).
-const LIST: f32 = 680.0;
+/// The results column's width on desktop (`.split`'s first column at most 440 pt), and in a
+/// terminal, where a Cell stands for 12 points, room for a result's columns and its title.
+const LIST: f32 = 440.0;
+const TERMINAL_LIST: f32 = 680.0;
 /// Terminal Cells of a result's kind, task, run, project and date columns.
 const KIND_CELLS: f32 = 10.0;
 const TASK_CELLS: f32 = 5.0;
@@ -40,7 +42,7 @@ const RUN_CELLS: f32 = 3.0;
 const PROJECT_CELLS: f32 = 7.0;
 const DATE_CELLS: f32 = 6.0;
 
-/// The Artifacts destination.
+/// Activity › Artifacts.
 pub fn screen(app: AppState) -> AnyElement {
     let page = computed(move || {
         let state = app.artifacts.get();
@@ -112,7 +114,11 @@ fn finder(app: AppState, page: Memo<Page>) -> AnyElement {
         app,
         vec![
             (
-                Width::Fixed(LIST),
+                Width::Fixed(if form == Form::Terminal {
+                    TERMINAL_LIST
+                } else {
+                    LIST
+                }),
                 pane(app, "artifacts", results(app, page)),
             ),
             (
@@ -127,6 +133,7 @@ fn finder(app: AppState, page: Memo<Page>) -> AnyElement {
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(head(app, TITLE, Some(SUBTITLE.to_owned()), Vec::new()))
+        .children(subnav(app))
         .child(field_bar(app, page))
         .when(form == Form::Terminal, |page| page.child(term::hrule()))
         .child(cols)

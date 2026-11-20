@@ -2,7 +2,7 @@ use corral_protocol::detail::CardKind;
 use corral_protocol::session_state::{CardBrief, Counts, SessionState};
 use corral_protocol::subscription::{SessionAgentMessage, SessionChild, SessionFleet};
 
-use super::{AgentsTab, agents_tab, badge};
+use super::{AgentsTab, agents_tab};
 use crate::model::Id;
 use crate::model::daemon::{Feed, Link};
 use crate::model::health::daemon_env;
@@ -157,12 +157,7 @@ fn a_child_that_asks_is_counted_as_waiting_and_names_its_card() {
         agent: Some("a2".into()),
         ..Ui::default()
     };
-    let (tab, count) = with(&feed, &ui, |cx| {
-        (agents_tab(cx, &State::default()), badge(cx))
-    });
-    let count = count.expect("the tab counts the agents at work");
-    assert_eq!(count.hue, Hue::You, "{count:?}");
-    assert!(count.text.contains("▲1"), "{count:?}");
+    let tab = with(&feed, &ui, |cx| agents_tab(cx, &State::default()));
     let row = tab
         .rows
         .iter()

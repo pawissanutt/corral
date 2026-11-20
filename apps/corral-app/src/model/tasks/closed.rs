@@ -21,6 +21,12 @@ pub const LABEL: &str = "Done and Dropped";
 /// Load older's words.
 pub const OLDER: &str = "Load older";
 
+/// Whether the fold is offered: once a complete board arrived for an enrolled device, even an
+/// empty one, since closed history is what an empty board has left.
+pub fn offered(feed: &Feed) -> bool {
+    feed.board.complete && feed.device.board_notice().is_none()
+}
+
 /// The served pages the fold shows.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Closed {

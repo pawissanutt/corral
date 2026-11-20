@@ -250,19 +250,10 @@ impl State {
         feed: &Feed,
         selection: &Selection,
         focus: Option<&Id>,
-        env: Env,
         filter: &ProjectFilter,
     ) -> Vec<Effect> {
         match &action {
             Action::Layout(layout) => return self.rlayout(*layout),
-            Action::Pick(id) => {
-                let live = Live::Review(id.clone());
-                return vec![if env.form == Form::Phone {
-                    Effect::OpenLive(live)
-                } else {
-                    Effect::Select(live)
-                }];
-            }
             Action::Dismiss(key) => {
                 self.sent.retain(|sent| sent.key != *key);
                 return Vec::new();
@@ -331,7 +322,6 @@ impl State {
             // remaining controls were answered above.
             Action::Verb(_)
             | Action::Layout(_)
-            | Action::Pick(_)
             | Action::Dismiss(_)
             | Action::AskCandidate
             | Action::OpenSession

@@ -2,7 +2,7 @@
 //! `SessionStatus` names (Blocked, Working, Idle, Gone), whatever its role. Home mixes these
 //! with tasks; Sessions groups them by state.
 
-use super::roster::{Show, Source, scoped};
+use super::source::{Source, scoped};
 use crate::model::status::SessionState;
 use crate::model::{Id, ProjectFilter, daemon};
 
@@ -24,21 +24,10 @@ pub struct SessionLine {
     pub task: Option<Id>,
 }
 
-/// The state of a roster group: the roster orders needs-you, working, idle, then the two
-/// kinds of stopped host, which the redesign names Gone.
-fn state_of(source: Source<'_>) -> SessionState {
-    match source.state().1 {
-        0 => SessionState::Blocked,
-        1 => SessionState::Working,
-        2 => SessionState::Idle,
-        _ => SessionState::Gone,
-    }
-}
-
 fn line(source: Source<'_>, feed: &daemon::Feed) -> SessionLine {
     SessionLine {
         id: Id::new(source.id),
-        state: state_of(source),
+        state: source.state(),
         role: source.role().to_owned(),
         name: source.name(feed).unwrap_or_default(),
         doing: source.doing(feed),
@@ -51,7 +40,7 @@ fn line(source: Source<'_>, feed: &daemon::Feed) -> SessionLine {
 /// Every session in the project scope, Gone ones included, ordered by state and then by its
 /// newest activity.
 pub fn session_lines(feed: &daemon::Feed, filter: &ProjectFilter) -> Vec<SessionLine> {
-    scoped(feed, filter, Show::All)
+    scoped(feed, filter)
         .into_iter()
         .map(|source| line(source, feed))
         .collect()
@@ -59,7 +48,7 @@ pub fn session_lines(feed: &daemon::Feed, filter: &ProjectFilter) -> Vec<Session
 
 /// One session's line, whatever the scope; none when the daemon lists no such session.
 pub fn session_line(feed: &daemon::Feed, session: &str) -> Option<SessionLine> {
-    scoped(feed, &ProjectFilter::All, Show::All)
+    scoped(feed, &ProjectFilter::All)
         .into_iter()
         .find(|source| source.id == session)
         .map(|source| line(source, feed))
@@ -68,7 +57,7 @@ pub fn session_line(feed: &daemon::Feed, session: &str) -> Option<SessionLine> {
 /// Whether session `id` is a build stopped here, whose worktree, branch and record Remove…
 /// deletes after prune's dry run.
 pub fn removable(feed: &daemon::Feed, session: &str) -> bool {
-    scoped(feed, &ProjectFilter::All, Show::All)
+    scoped(feed, &ProjectFilter::All)
         .into_iter()
         .find(|source| source.id == session)
         .is_some_and(|source| source.removable())
@@ -78,7 +67,7 @@ pub fn removable(feed: &daemon::Feed, session: &str) -> bool {
 mod tests {
     use corral_types::{Role, SessionStatus};
 
-    use super::super::roster_tests::agent;
+    use super::super::source_tests::agent;
     use super::*;
 
     /// A run whose host waits on an answer is Blocked like a task is: Home's Needs you is

@@ -8,9 +8,8 @@ use crate::model::Form;
 use crate::model::hue::Hue;
 use crate::state::AppState;
 use crate::ui::kit::chip::chip;
-use crate::ui::kit::marks::hue_ink;
-use crate::ui::term::{self, cells, hrule};
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, row_height};
+use crate::ui::term::{self, cells};
+use crate::ui::tokens::{Token, color, row_height};
 
 const RING: f32 = 2.0;
 /// The phone row's least height (`.prow`).
@@ -106,116 +105,6 @@ pub fn project_chip(
         .accessibility_elements_hidden(move || !fits.get())
         .child(chip(app, project, Hue::Neutral))
         .into_element()
-}
-
-/// The header over a run of task rows (`.grp` on desktop, `.ph-sec` on a phone): the label in
-/// the hue, the count in mono ink-3, then on desktop a hairline to the trailing edge and the
-/// optional note in ink-4 ("gating · reviewing · landing"). Weights follow the mock: needs you
-/// bold, corral and worker semibold, held semibold, [`Hue::Neutral`] (queued, parked) medium in
-/// ink-2. Desktop 12 pt with 12 pt above and 4 pt below, 16 pt in from the edge; phone 13 pt bold
-/// with 18 pt above, the note right-aligned in 12.5 pt ink-3 and no line; terminal the label bold
-/// in its hue, the count, a joined `─` rule and the note. The label and count never shrink; a
-/// narrow row cuts the note with an ellipsis first. A header for screen readers.
-pub fn group_header(
-    app: AppState,
-    label: impl Into<SharedString>,
-    count: Option<u32>,
-    hue: Hue,
-    note: Option<&'static str>,
-) -> AnyElement {
-    let form = app.form;
-    let ink = match hue {
-        Hue::Neutral => color(if form == Form::Terminal {
-            Token::Ink
-        } else {
-            Token::Ink2
-        }),
-        _ => hue_ink(hue),
-    };
-    let weight = match (form, hue) {
-        (Form::Phone, _) | (_, Hue::You) => FontWeight::BOLD,
-        (_, Hue::Neutral) => FontWeight::MEDIUM,
-        _ => FontWeight::SEMIBOLD,
-    };
-    let caption = text(label.into())
-        .number_of_lines(1u32)
-        .flex_shrink_0()
-        .text_color(ink)
-        .font_weight(if form == Form::Terminal {
-            FontWeight::BOLD
-        } else {
-            weight
-        });
-    let figures = count.map(|n| text(n.to_string()).number_of_lines(1u32).flex_shrink_0());
-    let row = view()
-        .flex_row()
-        .items_center()
-        .gap(px(8.0))
-        .role(AccessibilityRole::Header);
-    match form {
-        Form::Terminal => row
-            .child(caption)
-            .children(figures.map(|t| t.text_color(color(Token::Ink3))))
-            .child(view().flex_1().min_w(px(0.0)).child(hrule()))
-            .children(note.map(|note| {
-                text(note)
-                    .truncate()
-                    .flex_shrink(1.0)
-                    .min_w(px(0.0))
-                    .text_color(color(Token::Ink3))
-            }))
-            .into_element(),
-        Form::Desktop => row
-            .pt(px(12.0))
-            .pb(px(4.0))
-            // The task rows' own edges, so the label stands over the delta column.
-            .pl(px(16.0))
-            .pr(px(14.0))
-            .child(caption.font_family(FONT_TEXT).text_size(px(12.0)))
-            .children(figures.map(|t| {
-                t.font_family(FONT_MONO)
-                    .text_size(px(11.0))
-                    .text_color(color(Token::Ink3))
-            }))
-            .child(
-                view()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .h(px(1.0))
-                    .bg(color(Token::Rule)),
-            )
-            .children(note.map(|note| {
-                text(note)
-                    .truncate()
-                    .flex_shrink(1.0)
-                    .min_w(px(0.0))
-                    .font_family(FONT_TEXT)
-                    .text_size(px(11.0))
-                    .text_color(color(Token::Ink4))
-            }))
-            .into_element(),
-        Form::Phone => row
-            .pt(px(18.0))
-            .pb(px(6.0))
-            .px(px(18.0))
-            .child(caption.font_family(FONT_TEXT).text_size(px(13.0)))
-            .children(figures.map(|t| {
-                t.font_family(FONT_MONO)
-                    .text_size(px(12.0))
-                    .text_color(color(Token::Ink3))
-            }))
-            .child(view().flex_1().min_w(px(0.0)))
-            .children(note.map(|note| {
-                text(note)
-                    .truncate()
-                    .flex_shrink(1.0)
-                    .min_w(px(0.0))
-                    .font_family(FONT_TEXT)
-                    .text_size(px(12.5))
-                    .text_color(color(Token::Ink3))
-            }))
-            .into_element(),
-    }
 }
 
 /// A selectable, pressable list row the caller fills with `content`, laid out in a row: a button
@@ -384,4 +273,18 @@ fn shell(
         }
     };
     row.children(content).into_element()
+}
+
+/// A row scrolled into view whenever it becomes the selected one, so a selection the keyboard
+/// moves never leaves the viewport. A row already in view stays where it is.
+pub fn revealing(selected: Memo<bool>, row: AnyElement) -> AnyElement {
+    let handle = element_ref();
+    effect(move || {
+        if selected.get() {
+            after_answer(move || {
+                handle.reveal(RevealOptions::default().vertical(ScrollAlignment::Nearest));
+            });
+        }
+    });
+    view().element_ref(&handle).child(row).into_element()
 }

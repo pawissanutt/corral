@@ -1,8 +1,7 @@
-//! The tab strip: which tabs a session has, from its role and what its host declares it serves
-//! (`SessionState.can`), each with its count and the Chat tab's unread mark; and the frame every
-//! tab and panel body shares before its content is drawn (`PartBody`: its summary line, why the
-//! host cannot serve it now, and where its read stands). Inbox is not a tab: the header's
-//! decisions chip opens Now instead.
+//! The tabs a session has, from its role and what its host declares it serves
+//! (`SessionState.can`); and the frame every tab and panel body shares before its content is
+//! drawn (`PartBody`: its summary line, why the host cannot serve it now, and where its read
+//! stands).
 
 use corral_protocol::detail::{DetailRef, SessionItem};
 
@@ -10,15 +9,7 @@ use crate::model::daemon::Feed;
 use crate::model::hue::Hue;
 
 use super::read_state::ReadState;
-use super::{Action, Can, Cx, Host, SessionRole, SubView, Tab, board, changes, fleet, proof};
-
-/// A tab's count or mark.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Badge {
-    /// `3`, `12`, `2 !`, `◆`, `git?`.
-    pub text: String,
-    pub hue: Hue,
-}
+use super::{Action, Can, Cx, Host, SessionRole, SubView, Tab, fleet};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TabItem {
@@ -27,11 +18,6 @@ pub struct TabItem {
     pub id: String,
     /// `Chat`, or a sub-view's `Chat › Usage`, `Agents › a2`.
     pub label: String,
-    /// The terminal UI's key, drawn before the label where keys show (`F9`).
-    pub key: Option<&'static str>,
-    pub badge: Option<Badge>,
-    /// A new transcript row arrived while another tab was open.
-    pub unread: bool,
     pub selected: bool,
     /// Shown muted with this reason: the host declared the part but cannot serve it now.
     pub unavailable: Option<String>,
@@ -166,24 +152,6 @@ pub fn rows(feed: &Feed, scope: &str) -> usize {
     served + live
 }
 
-/// A plain count, none at zero.
-pub(super) fn count(n: u32) -> Option<Badge> {
-    (n > 0).then(|| Badge {
-        text: n.to_string(),
-        hue: Hue::Neutral,
-    })
-}
-
-fn badge(tab: Tab, cx: &Cx<'_>) -> Option<Badge> {
-    match tab {
-        Tab::Agents => fleet::badge(cx),
-        Tab::Changes => changes::badge(cx),
-        Tab::Board => board::badge(cx),
-        Tab::Proof => proof::badge(cx),
-        Tab::Chat | Tab::Task => None,
-    }
-}
-
 fn label(tab: Tab, sub: Option<&SubView>) -> String {
     match (tab, sub) {
         (Tab::Chat, Some(SubView::Usage)) => "Chat › Usage".into(),
@@ -200,7 +168,6 @@ fn label(tab: Tab, sub: Option<&SubView>) -> String {
 pub fn items(cx: &Cx<'_>) -> Vec<TabItem> {
     let bare = !matches!(cx.can("board"), Can::Yes | Can::Unavailable(_));
     let tabs = tabs_for(cx.role, cx.role.task_bound() && cx.task.is_some(), bare);
-    let rows = rows(cx.feed, cx.id.as_str());
     tabs.into_iter()
         .filter_map(|tab| {
             let unavailable = match capability(tab).map(|id| cx.can(id)) {
@@ -214,9 +181,6 @@ pub fn items(cx: &Cx<'_>) -> Vec<TabItem> {
                 tab,
                 id: format!("tab-{}", tab.slug()),
                 label: label(tab, cx.ui.sub.as_ref().filter(|_| selected)),
-                key: Some(tab.key(cx.role)),
-                badge: badge(tab, cx),
-                unread: tab == Tab::Chat && !selected && cx.ui.seen.is_some_and(|seen| rows > seen),
                 selected,
                 unavailable,
                 action: Action::Tab {

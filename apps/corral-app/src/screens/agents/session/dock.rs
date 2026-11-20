@@ -19,9 +19,8 @@ use crate::model::hue::Hue;
 use crate::model::session::{
     Dock, Focus, HostBar, QuestionDock, QueueControl, QueueDock, QueueItem, SessionPage,
 };
-use crate::screens::plans::menu_trigger;
 use crate::state::AppState;
-use crate::ui::kit::button::{ButtonKind, button};
+use crate::ui::kit::button::{ButtonKind, button, menu_trigger};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::overlay::counted;
 use crate::ui::term;

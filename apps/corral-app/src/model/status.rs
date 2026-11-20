@@ -64,8 +64,6 @@ pub const OPEN: [Status; 6] = [
     Status::Backlog,
     Status::Idea,
 ];
-/// The closed statuses, folded.
-pub const CLOSED: [Status; 2] = [Status::Done, Status::Dropped];
 
 /// The status as the engine spells it, capitalised: `Blocked`.
 pub const fn status_word(status: Status) -> &'static str {
@@ -200,7 +198,8 @@ mod tests {
     #[test]
     fn every_status_and_state_differs_by_shape_as_well_as_colour() {
         use std::collections::HashSet;
-        let statuses = OPEN.into_iter().chain(CLOSED).map(status_look);
+        let closed = [Status::Done, Status::Dropped];
+        let statuses = OPEN.into_iter().chain(closed).map(status_look);
         let glyphs: HashSet<char> = statuses.clone().map(|look| look.glyph).collect();
         let shapes: HashSet<Shape> = statuses.map(|look| look.shape).collect();
         assert_eq!((glyphs.len(), shapes.len()), (8, 8));

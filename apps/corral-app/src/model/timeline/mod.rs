@@ -416,7 +416,23 @@ pub struct BurnupSeries {
     pub last: String,
     /// What the two lines count.
     pub counts: &'static str,
+    /// The burn-up's legend: how many tasks were created, landed, dropped and reopened.
+    pub tally: Vec<TallyEntry>,
 }
+/// Which of the burn-up's two lines a legend entry names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BurnupLine {
+    Scope,
+    Landed,
+}
+/// One entry of the burn-up's legend: `created 31`, with the line it names, if it draws one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TallyEntry {
+    pub words: String,
+    pub line: Option<BurnupLine>,
+}
+/// Said at the Timeline burn-up's foot: the range switch above narrows the lanes only.
+pub const BURNUP_RANGE_NOTE: &str = "counts events; it does not narrow with the range above";
 /// A plotted chart point.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
@@ -528,6 +544,7 @@ mod tests {
             first: "11-14".into(),
             last: "today".into(),
             counts: BURNUP_COUNTS,
+            tally: Vec::new(),
         };
         let chart = burnup(&series, 404.0, 150.0);
         let [scope, landed] = &chart.series_labels;

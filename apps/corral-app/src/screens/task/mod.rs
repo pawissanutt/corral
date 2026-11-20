@@ -14,7 +14,7 @@ pub(crate) mod candidate;
 mod changes;
 mod history;
 pub(crate) mod keep;
-mod overview;
+pub(crate) mod overview;
 pub(crate) mod parts;
 
 use nsh_core::prelude::*;
@@ -23,7 +23,7 @@ use crate::model::tasks::{self, page as task_page};
 use crate::model::work::Record;
 use crate::model::{Destination, Form, Id, TaskTab};
 use crate::screens::PhonePage;
-use crate::screens::now::parts::{keep_loaded, wanted_id};
+use crate::screens::task::keep::{keep_loaded, wanted_id};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button, tab_strip};
 use crate::ui::kit::next::more_button;

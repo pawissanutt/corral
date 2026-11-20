@@ -269,7 +269,11 @@ pub(super) fn projects(app: AppState, scope: Memo<Scope>) -> AnyElement {
                         .gap(px(8.0))
                         .min_w(px(0.0))
                         .when(form != Form::Terminal, |row| row.px(px(12.0)).py(px(3.0)))
-                        .child(words(form, label, 12.5, Token::Ink3).w(px(96.0)).flex_shrink_0())
+                        .child(
+                            words(form, label, 12.5, Token::Ink3)
+                                .w(px(96.0))
+                                .flex_shrink_0(),
+                        )
                         .child(words(form, value, 12.5, Token::Ink).flex_1())
                         .into_element()
                 })
@@ -290,7 +294,13 @@ pub(super) fn projects(app: AppState, scope: Memo<Scope>) -> AnyElement {
                 .into_iter()
                 .map(|project| {
                     let id = project.id.clone();
-                    let count = |n: usize| if n == 0 { "·".to_owned() } else { n.to_string() };
+                    let count = |n: usize| {
+                        if n == 0 {
+                            "·".to_owned()
+                        } else {
+                            n.to_string()
+                        }
+                    };
                     line(
                         app,
                         format!("project-{}", project.id),
@@ -302,11 +312,16 @@ pub(super) fn projects(app: AppState, scope: Memo<Scope>) -> AnyElement {
                             words(form, project.id.to_string(), 12.5, Token::Ink)
                                 .flex_1()
                                 .into_element(),
-                            figure(form, count(project.you), 12.0, if project.you > 0 {
-                                Token::You
-                            } else {
-                                Token::Ink3
-                            })
+                            figure(
+                                form,
+                                count(project.you),
+                                12.0,
+                                if project.you > 0 {
+                                    Token::You
+                                } else {
+                                    Token::Ink3
+                                },
+                            )
                             .into_element(),
                             figure(form, count(project.working), 12.0, Token::Ink2).into_element(),
                             figure(form, project.open.to_string(), 12.0, Token::Ink2)
@@ -504,7 +519,9 @@ pub(super) fn burnup(app: AppState, scope: Memo<Scope>) -> AnyElement {
             None,
             Some(go(app, "Timeline", Destination::Timeline)),
             view()
-                .when(app.form != Form::Terminal, |chart| chart.px(px(12.0)).pb(px(10.0)))
+                .when(app.form != Form::Terminal, |chart| {
+                    chart.px(px(12.0)).pb(px(10.0))
+                })
                 .child(crate::screens::timeline::scoped_burnup(app, request))
                 .into_element(),
         )

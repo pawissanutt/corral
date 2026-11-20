@@ -1,7 +1,8 @@
-//! The Timeline destination: who worked when. Desktop and phone draw the lanes on a canvas
+//! Activity › Timeline: who worked when. Desktop and phone draw the lanes on a canvas
 //! measured to its container (`timeline/chart.rs`); a terminal draws the same lanes as rows of
-//! Cells (`timeline/cells.rs`). The legend comes before the chart, the gaps worth a look and the
-//! goal burn-up after it, on every form. A daemon session and the explicit sample preview draw
+//! Cells (`timeline/cells.rs`). The lanes' legend comes under them, then the goal burn-up with
+//! its own legend at its foot (it counts events and does not narrow with the range), then the
+//! gaps worth a look, on every form. A daemon session and the explicit sample preview draw
 //! the same recorded spans from their feed (`shown`), with loading, stale and failed states said
 //! in place.
 
@@ -15,10 +16,11 @@ use nsh_core::prelude::*;
 
 use crate::model::text::span;
 use crate::model::timeline::{
-    self, Gap, GroupOption, Grouping, Head, LIVE_GAPS_NOTE, LIVE_SUBTITLE, LegendItem, Range,
-    RangeOption,
+    self, BURNUP_RANGE_NOTE, BurnupLine, Gap, GroupOption, Grouping, Head, LIVE_GAPS_NOTE,
+    LIVE_SUBTITLE, LegendItem, Range, RangeOption, TallyEntry,
 };
 use crate::model::{Form, Hue};
+use crate::screens::activity::subnav;
 use crate::state::AppState;
 use crate::ui::kit::button::seg;
 use crate::ui::kit::marks::hue_ink;
@@ -30,10 +32,8 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 use shown::{Shown, Status};
 
-/// Below this width the burn-up moves under the gaps instead of its 440 pt column beside them.
-const SIDE_BY_SIDE: f32 = 880.0;
-/// The burn-up column (`grid-template-columns: minmax(0,1fr) 440px`).
-const BURNUP_COLUMN: f32 = 440.0;
+/// The burn-up's measure on a wide page, the same as the gaps list's.
+const BURNUP_MEASURE: f32 = 880.0;
 /// The gaps list's measure (`max-width: 880px` with its 18 pt sides).
 const GAPS_MEASURE: f32 = 844.0;
 
@@ -74,15 +74,15 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
     let page = page_head(app);
     let content = view()
         .flex_col()
-        .child(legend_row(app))
         .child(status(app, data))
         .child(
             view()
-                .pt(px(8.0))
+                .pt(px(12.0))
                 .px(px(18.0))
-                .pb(px(18.0))
+                .pb(px(8.0))
                 .child(chart::lanes(app, data)),
         )
+        .child(legend_row(app))
         .child(lower(app, data));
     view()
         .flex_1()
@@ -95,6 +95,7 @@ fn desktop(app: AppState, data: Memo<Shown>) -> AnyElement {
             Some(LIVE_SUBTITLE.to_owned()),
             head_actions(app, &page),
         ))
+        .children(subnav(app))
         .child(pane(app, "timeline-pane", content.into_element()))
         .into_element()
 }
@@ -113,7 +114,6 @@ fn phone(app: AppState, data: Memo<Shown>) -> AnyElement {
                 // By task or by run: the same lanes regrouped, as on the other forms (LA-15).
                 .children(page.grouping.map(|options| grouping_switch(app, options))),
         )
-        .child(legend_row(app))
         .child(status(app, data))
         .child(
             view()
@@ -121,13 +121,15 @@ fn phone(app: AppState, data: Memo<Shown>) -> AnyElement {
                 .pb(px(10.0))
                 .child(chart::lanes(app, data)),
         )
-        .child(gaps(app, data))
+        .child(legend_row(app))
         .child(
             view()
                 .px(px(18.0))
-                .pb(px(24.0))
+                .pt(px(12.0))
+                .pb(px(18.0))
                 .child(burnup_section(app, data)),
-        );
+        )
+        .child(gaps(app, data));
     view()
         .flex_1()
         .flex_col()
@@ -142,21 +144,21 @@ fn terminal(app: AppState, data: Memo<Shown>) -> AnyElement {
     let content = view()
         .flex_col()
         .child(text(LIVE_SUBTITLE).text_color(color(Token::Ink3)))
-        .child(term::blank())
-        .child(legend_row(app))
         .child(status(app, data))
         .child(term::blank())
         .child(cells::lanes(app, data))
+        .child(legend_row(app))
         .child(term::blank())
-        .child(gaps(app, data))
+        .child(burnup_section(app, data))
         .child(term::blank())
-        .child(burnup_section(app, data));
+        .child(gaps(app, data));
     view()
         .flex_1()
         .flex_col()
         .min_w(px(0.0))
         .min_h(px(0.0))
         .child(head(app, page.title, None, head_actions(app, &page)))
+        .children(subnav(app))
         .child(body(app, "timeline-pane", content.into_element()))
         .into_element()
 }
@@ -329,34 +331,20 @@ fn legend_item(item: LegendItem, size: f32) -> AnyElement {
         .into_element()
 }
 
-/// Under the chart on desktop: the gaps and the burn-up's 440 pt column side by side when there
-/// is room, else stacked.
+/// Under the lanes and their legend on desktop: the burn-up across the page's measure, then
+/// the gaps.
 fn lower(app: AppState, data: Memo<Shown>) -> AnyElement {
-    let width = signal(0.0_f32);
-    let wide = computed(move || width.get() >= SIDE_BY_SIDE);
     view()
         .w_full()
-        .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
-        .child(dynamic(move || {
-            let burnup = view()
+        .child(
+            view()
                 .px(px(18.0))
+                .pt(px(18.0))
                 .pb(px(18.0))
-                .child(burnup_section(app, data));
-            Some(if wide.get() {
-                view()
-                    .flex_row()
-                    .items_start()
-                    .child(view().flex_1().min_w(px(0.0)).child(gaps(app, data)))
-                    .child(burnup.w(px(BURNUP_COLUMN)).flex_shrink_0())
-                    .into_element()
-            } else {
-                view()
-                    .flex_col()
-                    .child(gaps(app, data))
-                    .child(burnup.max_w(px(BURNUP_COLUMN)))
-                    .into_element()
-            })
-        }))
+                .max_w(px(BURNUP_MEASURE))
+                .child(burnup_section(app, data)),
+        )
+        .child(gaps(app, data))
         .into_element()
 }
 
@@ -517,7 +505,13 @@ fn burnup_body(
     };
     let title = series.title.clone();
     let period = series.period.clone();
-    let counts = series.counts;
+    // The Timeline's burn-up says the range above leaves it whole; elsewhere there is no range.
+    let note = if scope.is_some() {
+        BURNUP_RANGE_NOTE
+    } else {
+        series.counts
+    };
+    let tally = series.tally.clone();
     let drawn = if form == Form::Terminal {
         cells::burnup(&series)
     } else {
@@ -531,8 +525,57 @@ fn burnup_body(
         .child(
             view()
                 .pt(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
+                .gap(px(4.0))
                 .test_id("burnup-counts")
-                .child(disclosure(form, counts)),
+                .child(tally_row(form, &tally))
+                .child(disclosure(form, note)),
         )
+        .into_element()
+}
+
+/// The burn-up's legend (`.burn .legend`): each count in ink-3, the two the chart draws behind
+/// a short stroke of their line's ink, wrapping.
+fn tally_row(form: Form, tally: &[TallyEntry]) -> AnyElement {
+    let ink = |line: BurnupLine| match line {
+        BurnupLine::Scope => color(Token::Ink3),
+        BurnupLine::Landed => color(Token::Ink),
+    };
+    let items = tally.iter().map(|entry| {
+        let words = text(entry.words.clone())
+            .number_of_lines(1u32)
+            .text_color(color(Token::Ink3));
+        match form {
+            Form::Terminal => text("")
+                .number_of_lines(1u32)
+                .flex_shrink_0()
+                .children(entry.line.map(|line| text("── ").text_color(ink(line))))
+                .child(words)
+                .child(text("   "))
+                .into_element(),
+            Form::Desktop | Form::Phone => view()
+                .flex_row()
+                .items_center()
+                .gap(px(6.0))
+                .children(
+                    entry
+                        .line
+                        .map(|line| view().w(px(14.0)).h(px(2.0)).bg(ink(line))),
+                )
+                .child(
+                    words
+                        .font_family(FONT_TEXT)
+                        .text_size(px(if form == Form::Phone { 12.0 } else { 11.5 })),
+                )
+                .into_element(),
+        }
+    });
+    view()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .when(form != Form::Terminal, |row| {
+            row.gap_x(px(14.0)).gap_y(px(4.0))
+        })
+        .children(items.collect::<Vec<_>>())
         .into_element()
 }

@@ -142,7 +142,6 @@ impl AppState {
         self.feed.pinned = Some(self.feed.source());
         self.assistant.pinned = Some(self.feed.source());
         self.work.pinned = Some(self.feed.source());
-        self.plans.pinned = Some(self.feed.source());
         self.agents.pinned = Some(self.feed.source());
         self.session.pinned = Some(self.feed.source());
         self.review.pinned = Some(self.feed.source());

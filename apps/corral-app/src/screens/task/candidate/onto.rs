@@ -31,7 +31,7 @@ pub(crate) fn onto(cx: &Ctx) -> AnyElement {
         page.with(|page| {
             page.detail
                 .as_ref()
-                .map(|detail| (detail.header.task.clone(), detail.decide.target.clone()))
+                .map(|detail| (detail.task.clone(), detail.decide.target.clone()))
         })
     });
     // Keyed by the candidate: another candidate brings its own base and hint; typing does not.

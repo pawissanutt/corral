@@ -18,9 +18,8 @@ use crate::model::agents::{
 };
 use crate::model::assistant;
 use crate::model::hue::Hue;
-use crate::screens::plans::menu_trigger;
 use crate::state::AppState;
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with, menu_trigger};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::overlay::{Modal, counted, modal};
 use crate::ui::term;

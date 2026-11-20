@@ -1,4 +1,5 @@
-//! Buttons, the segmented control and the in-page tab strip, in the look of each form.
+//! Buttons, the segmented control, the in-page tab strip and the trigger of a press-opened
+//! menu, in the look of each form.
 //!
 //! Desktop follows `.btn` (30 pt high, 44 pt on a touch tablet, 12.5 pt semibold, 6 pt corners),
 //! the phone `.pbtn`
@@ -537,4 +538,81 @@ fn strip_tab(
     };
     item.child(view().test_id(&test_id).child(words))
         .into_element()
+}
+
+/// What opens a press-opened menu: outlined as a ghost button, the words then a downward
+/// chevron; 30 pt high on desktop, at least 44 on the phone, a band of Cells in a terminal. The
+/// menu owns the press, so this is a focusable button for screen readers named `spoken`, not a
+/// kit button with a press of its own.
+pub fn menu_trigger(
+    app: AppState,
+    words: impl Into<SharedString>,
+    spoken: impl Into<SharedString>,
+    test_id: &str,
+) -> AnyElement {
+    let form = app.form;
+    let spoken: SharedString = spoken.into();
+    let words = text(words.into())
+        .number_of_lines(1u32)
+        .truncate()
+        .min_w(px(0.0))
+        .text_color(color(Token::Ink));
+    let target = view()
+        .test_id(test_id)
+        .role(AccessibilityRole::Button)
+        .label(spoken)
+        .accessible(true)
+        .flex_row()
+        .items_center()
+        .flex_shrink_0()
+        .min_w(px(0.0))
+        .cursor_pointer();
+    match form {
+        Form::Terminal => target
+            .px(term::cells(1.0))
+            .bg(color(Token::Surface))
+            .child(words)
+            .child(term::space(1.0))
+            .child(term::quiet("▾"))
+            .into_element(),
+        Form::Desktop | Form::Phone => {
+            let phone = form == Form::Phone;
+            target
+                .gap(px(6.0))
+                .when(phone, |t| {
+                    t.min_h(px(TARGET)).px(px(16.0)).rounded(px(10.0))
+                })
+                .when(!phone, |t| t.h(px(30.0)).px(px(12.0)).rounded(px(6.0)))
+                .border_1()
+                .border_color(color(Token::Rule2))
+                .hover(|s| s.bg(color(Token::Hover)))
+                .active(|s| s.bg(color(Token::Sel)))
+                .focus_visible(|s| {
+                    s.outline(px(RING))
+                        .outline_color(color(Token::Focus))
+                        .outline_offset(px(RING))
+                })
+                .child(
+                    words
+                        .font_family(FONT_TEXT)
+                        .text_size(px(if phone { 15.0 } else { 12.5 }))
+                        .font_weight(if phone {
+                            FontWeight::BOLD
+                        } else {
+                            FontWeight::SEMIBOLD
+                        }),
+                )
+                .child(
+                    view()
+                        .rotate(deg(90.0))
+                        .accessibility_elements_hidden(true)
+                        .child(icon(
+                            Icon::Chevron,
+                            if phone { 14.0 } else { 12.0 },
+                            color(Token::Ink2),
+                        )),
+                )
+                .into_element()
+        }
+    }
 }

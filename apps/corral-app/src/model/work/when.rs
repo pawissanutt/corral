@@ -99,6 +99,37 @@ fn local(at: jiff::Timestamp, feed: &Feed, earlier: &str, with_clock: bool) -> S
     }
 }
 
+/// The local calendar day and `HH:MM` of an instant: in the client's zone, or before one
+/// arrives the last tick's offset.
+pub fn local_day(at: jiff::Timestamp, feed: &Feed) -> (jiff::civil::Date, String) {
+    if let Some(zone) = &feed.time_zone {
+        let at = at.to_zoned(zone.clone());
+        return (at.date(), at.strftime("%H:%M").to_string());
+    }
+    let local = at.as_second() + offset(feed);
+    let day = jiff::Timestamp::from_second(local)
+        .map(|at| at.to_zoned(jiff::tz::TimeZone::UTC).date())
+        .unwrap_or_default();
+    (day, clock(local))
+}
+
+/// A local day as a heading: `Today`, `Yesterday`, `Wed 18 Nov`, with the year when it is
+/// not this one.
+pub fn day_label(day: jiff::civil::Date, feed: &Feed) -> String {
+    let today = i64::try_from(feed.now)
+        .ok()
+        .and_then(|now| jiff::Timestamp::from_second(now).ok())
+        .map(|now| local_day(now, feed).0);
+    match today {
+        Some(today) if day == today => "Today".into(),
+        Some(today) if today.yesterday().is_ok_and(|yesterday| yesterday == day) => {
+            "Yesterday".into()
+        }
+        Some(today) if today.year() == day.year() => day.strftime("%a %-d %b").to_string(),
+        _ => day.strftime("%a %-d %b %Y").to_string(),
+    }
+}
+
 /// The CLI's elapsed-age units, including minutes for ages under a day.
 pub fn age(since: Option<u64>, now: u64) -> String {
     let Some(since) = since else {

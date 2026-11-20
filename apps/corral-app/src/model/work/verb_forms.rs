@@ -4,7 +4,7 @@
 use corral_types::{Next, Op, Status, Task};
 
 use super::verb_context::FormContext;
-use super::{Choice, Record, Sent, State, Verb, VerbField};
+use super::{Choice, Record, State, Verb, VerbField};
 use crate::model::Id;
 use crate::model::act::Act;
 use crate::model::daemon::Feed;
@@ -298,7 +298,7 @@ impl State {
         let fields = fields(verb, task, &FormContext::new(feed, task));
         if fields.is_empty() {
             return match super::verb_build::op(&record, verb, &[], &[]) {
-                Ok(op) => self.send(&record, op, false, false),
+                Ok(op) => self.send(op, false, false),
                 Err(reason) => vec![Effect::Toast(reason)],
             };
         }
@@ -346,7 +346,7 @@ impl State {
                 return Vec::new();
             }
         }
-        self.send(&record, next.op.clone(), next.force, confirmed)
+        self.send(next.op.clone(), next.force, confirmed)
     }
 
     pub(super) fn submit_verb(&mut self, values: Vec<String>) -> Vec<Effect> {
@@ -373,7 +373,7 @@ impl State {
             }
         };
         match op {
-            Ok(op) => self.send(&composer.record, op, composer.force, composer.confirmed),
+            Ok(op) => self.send(op, composer.force, composer.confirmed),
             Err(error) => {
                 composer.error = Some(error);
                 self.composer = Some(composer);
@@ -382,20 +382,9 @@ impl State {
         }
     }
 
-    fn send(&mut self, record: &Record, op: Op, force: bool, confirmed: bool) -> Vec<Effect> {
+    fn send(&mut self, op: Op, force: bool, confirmed: bool) -> Vec<Effect> {
         let mut act = Act::new(&mut self.ids, op, force);
         act.confirmed = confirmed;
-        if let Record::Task(id) = record {
-            self.sent.retain(|sent| sent.task != *id);
-            self.sent.push(Sent {
-                task: id.clone(),
-                key: act.key.clone(),
-                title: act.title.clone(),
-            });
-            if self.sent.len() > super::SENT_KEPT {
-                self.sent.remove(0);
-            }
-        }
         vec![Effect::Act(act)]
     }
 }

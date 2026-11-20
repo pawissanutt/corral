@@ -1,10 +1,10 @@
-//! Usage: the tokens and cost agent hosts reported over a period of local days, visibility
-//! only. Every form leads with the period and what the totals cover ("Covers N of M runs", and
-//! each reason the rest is missing) in the held tone when anything is missing, then the totals,
-//! the tokens of each day, one table grouped by the selected key (profile, model, task or day)
-//! with each group's own coverage, and the note on where the figures come from. Desktop puts the
-//! period and grouping switches in the page head; the terminal and the phone put them at the top
-//! of the scroll, where they wrap. Loading, stale and failed reads are said once, compactly,
+//! Activity › Usage: the tokens and cost agent hosts reported over a period of local days,
+//! visibility only. The head says which runs the totals cover ("covers N of M runs; the other K
+//! ran on a harness that reports no usage"); then the tokens of each day, one table grouped by
+//! the selected key (profile, model, task or day) with each group's own coverage and the
+//! period's total under it, that quota is unknown, and where the figures come from. Desktop puts
+//! the period and grouping switches in the page head; the terminal and the phone put them at the
+//! top of the scroll, where they wrap. Loading, stale and failed reads are said once, compactly,
 //! above the content. Every word and figure is `model::usage`'s.
 
 mod controls;
@@ -16,34 +16,31 @@ use nsh_core::element::cell_size;
 use nsh_core::prelude::*;
 
 use crate::model::text::span;
-use crate::model::usage::{Coverage, Figure, Page, SUBTITLE, Status, TITLE};
+use crate::model::usage::{Coverage, Page, Status, TITLE};
 use crate::model::{Form, Hue};
+use crate::screens::activity::subnav;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::notice::notice;
 use crate::ui::kit::page::{body, head, pane, section};
 use crate::ui::kit::text::h3;
 use crate::ui::term;
-use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-/// Below this content width the table has no room for its six columns and its groups stack
+/// Below this content width the table has no room for its five columns and its groups stack
 /// as records (a narrow window, or a collapsed sidebar on a small screen).
-const TABLE_MIN: f32 = 720.0;
+const TABLE_MIN: f32 = 600.0;
 /// A terminal below this many Cells lists the groups as records too.
-const TERM_TABLE_MIN: usize = 72;
+const TERM_TABLE_MIN: usize = 60;
 /// A desktop section's sides, as the page head's.
 const SIDES: f32 = 18.0;
 /// One Cell where the surface reports none yet.
 const COLUMN: f32 = 8.0;
-/// A total's qualifier wraps at this measure rather than stretching the row.
-const DETAIL_MEASURE: f32 = 240.0;
-/// Terminal: a total's name column, in Cells.
-const TERM_LABEL: usize = 12;
 
-/// The Usage destination on every form. test ids: "page-title" (desktop and terminal head),
+/// The Usage page on every form. test ids: "page-title" (desktop and terminal head),
 /// "usage" (the scroll), "seg-period-<n>", "seg-by-<n>", "field-usage-from", "field-usage-to",
-/// "btn-usage-apply", "usage-period", "usage-coverage", "usage-figures", "usage-days",
-/// "usage-groups", "btn-retry-usage".
+/// "btn-usage-apply", "usage-head", "usage-period", "usage-coverage", "usage-days",
+/// "usage-groups", "usage-row-<key>", "usage-quota", "btn-retry-usage".
 pub fn screen(app: AppState) -> AnyElement {
     shown::keep_loaded(app);
     let data = computed(move || shown::shown(app));
@@ -55,7 +52,7 @@ pub fn screen(app: AppState) -> AnyElement {
 }
 
 /// Above the content: the loading or stale state, then corrald's read failure said once with
-/// its Retry, then what the totals cover, held when anything is missing.
+/// its Retry, then what else the totals leave out, held.
 fn status(app: AppState, page: &Page) -> Vec<AnyElement> {
     let pad = |element: AnyElement| match app.form {
         Form::Terminal => element,
@@ -103,88 +100,20 @@ fn status(app: AppState, page: &Page) -> Vec<AnyElement> {
         .collect()
 }
 
-/// The coverage line in bold, then each reason the rest is missing as its own sentence.
+/// Each reason a figure is missing, held in tone.
 fn coverage_notice(app: AppState, coverage: &Coverage) -> AnyElement {
-    let mut words = vec![span(coverage.line.as_str()).bold()];
-    for reason in &coverage.reasons {
-        words.push(span(" "));
-        words.push(span(reason.as_str()));
-    }
+    let words: Vec<_> = coverage
+        .reasons
+        .iter()
+        .map(|reason| span(reason.as_str()))
+        .collect();
     view()
         .test_id("usage-coverage")
-        .child(notice(
-            app,
-            if coverage.partial {
-                Hue::Held
-            } else {
-                Hue::Neutral
-            },
-            &words,
-            None,
-        ))
+        .child(notice(app, Hue::Held, &words, None))
         .into_element()
 }
 
-/// The totals: each name small and quiet over its figure in tabular mono, its qualifier under
-/// it, wrapping across the width; a terminal sets one total a line.
-fn figures(app: AppState, figures: &[Figure]) -> AnyElement {
-    let form = app.form;
-    let items = figures.iter().map(|figure| match form {
-        Form::Terminal => text("")
-            .child(text(format!("{:<TERM_LABEL$}", figure.label)).text_color(color(Token::Ink3)))
-            .child(text(figure.value.clone()).text_color(color(Token::Ink)))
-            .children(
-                figure
-                    .detail
-                    .clone()
-                    .map(|detail| text(format!("  {detail}")).text_color(color(Token::Ink3))),
-            )
-            .into_element(),
-        Form::Desktop | Form::Phone => {
-            let phone = form == Form::Phone;
-            view()
-                .flex_col()
-                .gap(px(2.0))
-                .child(
-                    text(figure.label)
-                        .font_family(FONT_TEXT)
-                        .text_size(px(if phone { 12.5 } else { 11.5 }))
-                        .text_color(color(Token::Ink3)),
-                )
-                .child(
-                    text(figure.value.clone())
-                        .number_of_lines(1u32)
-                        .font_family(FONT_MONO)
-                        .text_size(px(15.0))
-                        .tabular_nums()
-                        .text_color(color(Token::Ink)),
-                )
-                .children(figure.detail.clone().map(|detail| {
-                    text(detail)
-                        .max_w(px(DETAIL_MEASURE))
-                        .font_family(FONT_TEXT)
-                        .text_size(px(if phone { 12.5 } else { 11.5 }))
-                        .line_height(px(16.0))
-                        .text_color(color(Token::Ink3))
-                }))
-                .into_element()
-        }
-    });
-    let row = view().test_id("usage-figures");
-    match form {
-        Form::Terminal => row.flex_col(),
-        Form::Desktop | Form::Phone => row
-            .flex_row()
-            .flex_wrap()
-            .items_start()
-            .gap_x(px(32.0))
-            .gap_y(px(14.0)),
-    }
-    .children(items.collect::<Vec<_>>())
-    .into_element()
-}
-
-/// Quiet small words that wrap rather than clip: the period line and the closing note.
+/// Quiet small words that wrap rather than clip: the period line and the closing notes.
 fn quiet(app: AppState, content: impl Into<SharedString>, test_id: &str) -> AnyElement {
     let words = text(content.into()).test_id(test_id);
     match app.form {
@@ -209,7 +138,7 @@ fn measured(width: Signal<Option<f32>>) -> impl Fn(&Bounds<Points>) + 'static {
 }
 
 /// The content under the controls, at `room` (desktop points, or terminal Cells): the period,
-/// the status, the totals, the days, the groups and the note.
+/// the status, the days, the groups with their total, quota and the note.
 fn content(app: AppState, page: &Page, records: bool, room: usize) -> AnyElement {
     let form = app.form;
     let block = |child: AnyElement, top: f32, bottom: f32| match form {
@@ -242,14 +171,31 @@ fn content(app: AppState, page: &Page, records: bool, room: usize) -> AnyElement
         .child(period)
         .children(status(app, page))
         .children((form == Form::Terminal).then(term::blank))
-        .children((!page.figures.is_empty()).then(|| block(figures(app, &page.figures), 16.0, 4.0)))
         .children(
             page.days
                 .as_ref()
-                .map(|strip| block(days::strip(app, strip, room), 4.0, 4.0)),
+                .map(|strip| block(days::strip(app, strip, room), 12.0, 4.0)),
         )
         .child(groups)
-        .child(block(quiet(app, page.disclaimer, "usage-note"), 8.0, 24.0))
+        .child(block(quiet(app, page.quota, "usage-quota"), 0.0, 4.0))
+        .child(block(quiet(app, page.disclaimer, "usage-note"), 4.0, 24.0))
+        .into_element()
+}
+
+/// The head with what the totals cover as its line, made again when that line changes.
+fn page_head(
+    app: AppState,
+    data: Memo<Page>,
+    actions: fn(AppState) -> Vec<AnyElement>,
+) -> AnyElement {
+    let line = computed(move || data.with(|page| page.head.clone()));
+    view()
+        .flex_none()
+        .test_id("usage-head")
+        .child(dynamic(move || {
+            let line = line.get();
+            untracked(|| head(app, TITLE, Some(line), actions(app)))
+        }))
         .into_element()
 }
 
@@ -269,12 +215,10 @@ fn desktop(app: AppState, data: Memo<Page>) -> AnyElement {
         .flex_1()
         .min_w(px(0.0))
         .min_h(px(0.0))
-        .child(head(
-            app,
-            TITLE,
-            Some(SUBTITLE.to_owned()),
-            vec![controls::period_seg(app), controls::grouping_seg(app)],
-        ))
+        .child(page_head(app, data, |app| {
+            vec![controls::period_seg(app), controls::grouping_seg(app)]
+        }))
+        .children(subnav(app))
         .child(pane(app, "usage", scroll))
         .into_element()
 }
@@ -311,7 +255,8 @@ fn terminal(app: AppState, data: Memo<Page>) -> AnyElement {
         .flex_1()
         .min_w(px(0.0))
         .min_h(px(0.0))
-        .child(head(app, TITLE, Some(SUBTITLE.to_owned()), Vec::new()))
+        .child(page_head(app, data, |_| Vec::new()))
+        .children(subnav(app))
         .child(body(app, "usage", scroll))
         .into_element()
 }

@@ -68,21 +68,6 @@ pub fn hint_on<E: Interactive + Accessible>(
     }
 }
 
-/// [`hint_on`] for a hint that follows the feed (a project chip's counts): `hint` is read again
-/// whenever what it reads changes, so the element keeps its place and its focus. Tooltip only:
-/// the caller's label or accessibility label carries the words for screen readers. Phone:
-/// `element` unchanged.
-pub fn hint_on_live<E: Interactive>(
-    app: AppState,
-    element: E,
-    hint: impl Fn() -> SharedString + 'static,
-) -> E {
-    match app.form {
-        Form::Phone => element,
-        Form::Desktop | Form::Terminal => element.tooltip(bubble(app.form, text(hint))),
-    }
-}
-
 /// `element` with the tooltip only, for an element whose own label already says the hint (a
 /// count's label is its sentence). Phone or an empty hint: `element` unchanged.
 pub(crate) fn tip<E: Interactive>(form: Form, element: E, hint: SharedString) -> E {

@@ -315,7 +315,8 @@ impl AppState {
         match key {
             // Home docks Ask's composer at its foot: there `/` goes to that field.
             "/" if self.home_docks_composer() => {
-                self.focus_to.set(Some(crate::model::assistant::COMPOSER_FIELD));
+                self.focus_to
+                    .set(Some(crate::model::assistant::COMPOSER_FIELD));
                 return;
             }
             "/" => {
@@ -370,9 +371,7 @@ impl AppState {
                 })
             }
             // A session's page: `.` opens its More menu.
-            (_, Some(Live::Session(id))) => {
-                Some(vec![Effect::VerbMenu(work::Record::Session(id))])
-            }
+            (_, Some(Live::Session(id))) => Some(vec![Effect::VerbMenu(work::Record::Session(id))]),
             (Destination::Sessions, None) => {
                 if key == "N" {
                     self.agents.update(|state| state.start.open = true);

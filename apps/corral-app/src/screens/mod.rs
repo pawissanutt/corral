@@ -4,23 +4,14 @@
 //! connection that frame offers Settings › Connection and the labelled sample-data preview, and
 //! Settings itself stays available (its Connection page and this device's own preferences need
 //! no connection).
-//!
-//! `now`, `plans`, `review`, `changes` and `projects` are the former destinations' screens. No
-//! route shows Now's, Plans', Review's or the Project page any more; their parts are what the
-//! task page and the places are built from, and each module goes once its parts have moved.
 
 pub mod activity;
 pub mod agents;
 pub mod artifacts;
 pub mod assistant;
-pub mod changes;
 pub mod home;
 pub mod landing;
 pub(crate) mod markdown;
-pub mod now;
-pub mod plans;
-pub mod projects;
-pub mod review;
 pub mod sessions;
 pub mod settings;
 pub mod task;

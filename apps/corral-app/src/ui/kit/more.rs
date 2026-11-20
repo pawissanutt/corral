@@ -14,8 +14,8 @@ use nsh_core::prelude::*;
 
 use crate::model::commands::CONFIRM_CANCEL;
 use crate::model::projects;
-use crate::model::work::{self, Button, Press, Record, VerbAction};
-use crate::model::{Form, Hue, Live};
+use crate::model::work::{self, Press, Record, VerbAction};
+use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -43,15 +43,6 @@ const TARGET: f32 = 44.0;
 /// never a line as wide as the inspector.
 const MENU_MIN: f32 = 220.0;
 const MENU_MAX: f32 = 340.0;
-
-/// The record a list row's press is about: a task's select or open. Local presses (a tab, a
-/// group's rows) carry no commands, so they get no menu.
-pub fn row_record(action: &Press) -> Option<Record> {
-    match action {
-        Press::Select(id) | Press::Open(Live::Task(id)) => Some(Record::Task(id.clone())),
-        _ => None,
-    }
-}
 
 /// `row` with the verb menu of `record`. The menu's items are made when it opens, from the feed
 /// as it stands then, so a row costs nothing until the owner asks for its commands.
@@ -290,54 +281,6 @@ fn item(app: AppState, verb: VerbAction, next: bool) -> AnyElement {
         .focus(|s| s.bg(color(Token::Hover)))
         .child(content.test_id(&format!("btn-{slug}")))
         .into_element()
-}
-
-/// Why the commands of `buttons` that cannot run now cannot: the commands sharing a reason
-/// named together, then the model's reason, one wrapping line per reason under the action row,
-/// so a held task's many waiting commands read as one fact. Nothing when every command can run.
-pub fn reasons(app: AppState, buttons: &[Button]) -> Option<AnyElement> {
-    let form = app.form;
-    let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
-    for button in buttons.iter().filter(|button| !button.enabled) {
-        let Some(reason) = &button.reason else {
-            continue;
-        };
-        let label = button.label.to_string();
-        match grouped.iter_mut().find(|(known, _)| known == reason) {
-            Some((_, labels)) => labels.push(label),
-            None => grouped.push((reason.clone(), vec![label])),
-        }
-    }
-    let size = match form {
-        Form::Terminal => None,
-        Form::Desktop => Some(12.0),
-        Form::Phone => Some(13.5),
-    };
-    let lines: Vec<AnyElement> = grouped
-        .into_iter()
-        .map(|(reason, labels)| {
-            let names = text(labels.join(", "))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(color(Token::Ink2));
-            let why = text(format!("  {reason}")).text_color(color(Token::Ink3));
-            let line = text("").min_w(px(0.0)).children([names, why]);
-            match size {
-                Some(size) => line
-                    .font_family(FONT_TEXT)
-                    .text_size(px(size))
-                    .line_height(px((size * 1.45).round()))
-                    .into_element(),
-                None => line.into_element(),
-            }
-        })
-        .collect();
-    (!lines.is_empty()).then(|| {
-        view()
-            .gap(px(if form == Form::Terminal { 0.0 } else { 4.0 }))
-            .pt(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
-            .children(lines)
-            .into_element()
-    })
 }
 
 /// Which of the work state's overlays shows: the record's command menu the keyboard opened
@@ -846,26 +789,4 @@ fn choice_row(
                 .children(buttons),
         )
         .into_element()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::model::Id;
-
-    /// RC-03: a task's row, selected in place or opened on the phone, offers its commands; a
-    /// local press offers none.
-    #[test]
-    fn task_rows_carry_their_command_menu_and_local_presses_none() {
-        let id = Id::new("T-141");
-        assert_eq!(
-            row_record(&Press::Select(id.clone())),
-            Some(Record::Task(id.clone()))
-        );
-        assert_eq!(
-            row_record(&Press::Open(Live::Task(id.clone()))),
-            Some(Record::Task(id))
-        );
-        assert_eq!(row_record(&Press::Work(work::Action::Back)), None);
-    }
 }

@@ -19,7 +19,7 @@ use crate::ui::kit::{notice, page_phone};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-pub use crate::ui::kit::page_phone::{card, group_head, pushed_head, search, section};
+pub use crate::ui::kit::page_phone::{group_head, pushed_head, search, section};
 
 /// Room the phone leaves under scrolling content for the floating Ask button (`.askfab`), so the
 /// last row stays pressable above it.
@@ -142,93 +142,6 @@ pub(super) fn phone_head(title: SharedString, actions: Vec<AnyElement>) -> AnyEl
         .child(spacer())
         .child(actions_row(Form::Phone, actions, 2.0))
         .into_element()
-}
-
-/// The handover head (`.qhead`): a meta row of chips and short texts, the title, an optional
-/// note under it, the actions beside them. Desktop: padding 14 24 11 under a rule, meta
-/// 12 pt wrapping (6 pt rows, 10 pt apart) with the actions at its trailing edge, as the
-/// mockup's "Ask about this" sits, title 19 pt bold at line height 1.3, wrapping.
-/// Phone: a page band (`.pband`): meta chips wrapping 6 pt apart, title 20 pt bold at line
-/// height 1.25, wrapping, the note 13 pt quiet (the mockup moves "from worker … ago" there),
-/// actions in a row under it. Terminal: the meta row, the title in bold, wrapping, the note
-/// quiet, a joined rule under them. Where the terminal's title and its actions do not fit on
-/// one line the actions move under the title, and wrap among themselves, rather than
-/// squeezing the title to a few letters a line. The title has test_id "qhead-title".
-pub fn qhead(
-    app: AppState,
-    meta: Vec<AnyElement>,
-    title: impl Into<SharedString>,
-    note: Option<String>,
-    actions: Vec<AnyElement>,
-) -> AnyElement {
-    let form = app.form;
-    let title = title_text(
-        form,
-        Into::<SharedString>::into(title),
-        "qhead-title",
-        Title::Handover,
-    );
-    match form {
-        Form::Desktop => view()
-            .flex_none()
-            .px(px(24.0))
-            .pt(px(14.0))
-            .pb(px(11.0))
-            .border_b(px(1.0))
-            .border_color(color(Token::Rule))
-            .child(
-                view()
-                    .flex_row()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_x(px(10.0))
-                    .gap_y(px(6.0))
-                    .children(meta)
-                    .when(!actions.is_empty(), |row| {
-                        row.child(spacer()).child(head_actions(form, actions, 8.0))
-                    }),
-            )
-            .child(view().mt(px(6.0)).child(title))
-            .when_some(note, |head, note| {
-                head.child(view().mt(px(4.0)).child(quiet(form, note, 12.0)))
-            })
-            .into_element(),
-        Form::Phone => view()
-            .flex_none()
-            .px(px(18.0))
-            .pt(px(14.0))
-            .pb(px(16.0))
-            .border_b(px(1.0))
-            .border_color(color(Token::Rule))
-            .child(view().mb(px(8.0)).child(meta_row(form, meta)))
-            .child(title)
-            .when_some(note, |head, note| {
-                head.child(view().mt(px(4.0)).child(quiet(form, note, 13.0)))
-            })
-            .when(!actions.is_empty(), |head| {
-                head.child(view().mt(px(12.0)).child(head_actions(form, actions, 8.0)))
-            })
-            .into_element(),
-        Form::Terminal => view()
-            .flex_none()
-            .child(
-                view()
-                    .px(term::cells(1.0))
-                    .child(meta_row(form, meta))
-                    .child(
-                        view()
-                            .flex_row()
-                            .flex_wrap()
-                            .items_center()
-                            .child(title)
-                            .child(spacer())
-                            .child(head_actions(form, actions, 2.0)),
-                    )
-                    .when_some(note, |head, note| head.child(term::quiet(note))),
-            )
-            .child(term::hrule())
-            .into_element(),
-    }
 }
 
 /// Columns of panes side by side (`.cols`): each `(width, pane)` in order, a rule between
@@ -425,18 +338,6 @@ pub fn context(app: AppState, test_id: &str, content: AnyElement) -> AnyElement 
     }
 }
 
-/// A scrolling pane with a pinned bar under it: `content` scrolls, `bar` (usually [`bar`])
-/// stays at the bottom. On the phone the pair fills the page and the bar replaces the tab bar,
-/// so the shell hides its tabs while such a page is on top.
-pub fn bar_pane(app: AppState, test_id: &str, content: AnyElement, bar: AnyElement) -> AnyElement {
-    view()
-        .flex_1()
-        .min_h(px(0.0))
-        .child(pane(app, test_id, content))
-        .child(bar)
-        .into_element()
-}
-
 /// The decision bar (`.decide`, `.pdecide`): the actions in a row and, on desktop and in a
 /// terminal, an attribution at the trailing edge. Desktop: padding 12 24, 10 pt apart, a rule
 /// above, the attribution right-aligned in 11.5 pt quiet text at most 430 pt wide. Phone: the
@@ -517,50 +418,6 @@ pub fn bar(app: AppState, actions: Vec<AnyElement>, attribution: Option<AnyEleme
     }
 }
 
-/// A raised panel around related content (`.pairflow` on desktop, `.pcard-q` on the phone),
-/// with an optional title. Desktop: surface, 1 pt `rule-2` line, radius 10, padding 16, the
-/// title 13 pt bold 10 pt above the content. Phone: surface, radius 14, padding 14 16, the
-/// title 16 pt bold. Terminal: a framed region with the title set into its top line.
-pub fn panel(app: AppState, title: Option<String>, content: AnyElement) -> AnyElement {
-    let form = app.form;
-    match form {
-        Form::Desktop | Form::Phone => {
-            let phone = form == Form::Phone;
-            view()
-                .bg(color(Token::Surface))
-                .border_1()
-                .border_color(color(Token::Rule2))
-                .rounded(px(if phone { 14.0 } else { 10.0 }))
-                .px(px(16.0))
-                .py(px(if phone { 14.0 } else { 16.0 }))
-                .when_some(title, |panel, title| {
-                    panel.child(
-                        text(title)
-                            .role(AccessibilityRole::Header)
-                            .mb(px(10.0))
-                            .font_family(FONT_TEXT)
-                            .text_size(px(if phone { 16.0 } else { 13.0 }))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(color(Token::Ink)),
-                    )
-                })
-                .child(content)
-                .into_element()
-        }
-        Form::Terminal => term::framed(view().px(term::cells(1.0)).child(content))
-            .when_some(title, |frame, title| {
-                frame.child(term::top_title(
-                    text(title)
-                        .role(AccessibilityRole::Header)
-                        .number_of_lines(1u32)
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(color(Token::Ink)),
-                ))
-            })
-            .into_element(),
-    }
-}
-
 /// Which head a title leads: a page's, on one line, or a handover's, which wraps.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Title {
@@ -606,41 +463,6 @@ pub(super) fn title_text(
         .into_element()
 }
 
-/// Quiet secondary text at `size` (desktop and phone), muted in a terminal.
-fn quiet(form: Form, content: String, size: f32) -> AnyElement {
-    if form == Form::Terminal {
-        return term::quiet(content).into_element();
-    }
-    text(content)
-        .flex_shrink(1.0)
-        .min_w(px(0.0))
-        .font_family(FONT_TEXT)
-        .text_size(px(size))
-        .line_height(px(size * 1.4))
-        .text_color(color(Token::Ink3))
-        .into_element()
-}
-
-/// The meta row of a handover head: chips and short texts wrapping onto further rows.
-fn meta_row(form: Form, meta: Vec<AnyElement>) -> AnyElement {
-    match form {
-        Form::Terminal => view()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .children(spaced(meta, 1.0))
-            .into_element(),
-        Form::Desktop | Form::Phone => view()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .gap_y(px(6.0))
-            .gap_x(px(if form == Form::Phone { 6.0 } else { 10.0 }))
-            .children(meta)
-            .into_element(),
-    }
-}
-
 /// Actions in a row at the trailing edge; in a terminal `gap` Cells apart.
 pub(super) fn actions_row(form: Form, actions: Vec<AnyElement>, gap: f32) -> AnyElement {
     if form == Form::Terminal {
@@ -656,25 +478,6 @@ pub(super) fn actions_row(form: Form, actions: Vec<AnyElement>, gap: f32) -> Any
         .items_center()
         .flex_shrink_0()
         .gap(px(gap))
-        .children(actions)
-        .into_element()
-}
-
-/// A handover head's actions: they shrink to the line they are given and wrap among
-/// themselves there, so every one stays reachable however narrow the head; in a terminal `gap`
-/// Cells apart. (A page head keeps [`actions_row`]: its single fixed-height row never wraps.)
-fn head_actions(form: Form, actions: Vec<AnyElement>, gap: f32) -> AnyElement {
-    let row = view()
-        .flex_row()
-        .flex_wrap()
-        .items_center()
-        .flex_shrink(1.0)
-        .min_w(px(0.0));
-    if form == Form::Terminal {
-        return row.children(spaced(actions, gap)).into_element();
-    }
-    row.gap_x(px(gap))
-        .gap_y(px(6.0))
         .children(actions)
         .into_element()
 }
@@ -736,44 +539,6 @@ fn desktop_sub(content: String) -> AnyElement {
             }
         })
         .style_when(move || cramped.get(), |s| s.invisible())
-        .into_element()
-}
-
-/// A part of a head row that shows whole or not at all: it gives up its width before anything
-/// else in the row and hides, for sight and for screen readers, as soon as the row has less room
-/// than it needs; it comes back once the room is there. For aids another place also offers,
-/// such as a key legend the palette and `?` list too, which a cut would turn into nonsense.
-pub fn give_way(content: AnyElement) -> AnyElement {
-    let room = signal(None::<f32>);
-    let needed = signal(0.0_f32);
-    let gone = computed(move || room.get().is_some_and(|room| room + 0.5 < needed.get()));
-    view()
-        .flex_row()
-        .items_center()
-        .flex_shrink(GIVE_WAY_SHRINK)
-        .min_w(px(0.0))
-        .overflow_hidden()
-        .on_layout(move |frame: &Bounds<Points>| {
-            let width = Some(frame.size.width.0);
-            if room.get_untracked() != width {
-                room.set(width);
-            }
-        })
-        .style_when(move || gone.get(), |s| s.invisible())
-        .accessibility_elements_hidden(move || gone.get())
-        .child(
-            view()
-                .flex_row()
-                .items_center()
-                .flex_shrink_0()
-                .on_layout(move |frame: &Bounds<Points>| {
-                    let width = frame.size.width.0;
-                    if needed.get_untracked() != width {
-                        needed.set(width);
-                    }
-                })
-                .child(content),
-        )
         .into_element()
 }
 

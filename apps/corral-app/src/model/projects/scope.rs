@@ -1,9 +1,11 @@
 //! The one project scope of the whole app: All projects, or one. It applies to Home, Tasks,
 //! Sessions and Activity together and is kept per daemon store, so several daemons keep
-//! separate scopes. The `corral.scope` payload is store → `{ "project": null | "<id>" }` with
-//! the two list choices kept beside it (`now.group`, `agents.show`).
-use super::{ProjectFilter, Projects, contains_project};
-use crate::model::{Id, daemon::Feed};
+//! separate scopes. The `corral.scope` payload is store → `{ "project": null | "<id>" }`.
+use super::{ProjectFilter, contains_project};
+use crate::model::{
+    Id,
+    daemon::{Feed, Group},
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 
@@ -78,29 +80,12 @@ impl<'de> Deserialize<'de> for Scope {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NowGroup {
-    #[default]
-    State,
-    Project,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NowScope<'a> {
-    pub filter: &'a ProjectFilter,
-    pub grouping: NowGroup,
-}
-
-/// Unknown keys are ignored on read and dropped on the next write.
+/// Unknown keys (the former `now.group` and `agents.show` among them) are ignored on read and
+/// dropped on the next write.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct StoreScope {
     project: Scope,
-    #[serde(rename = "now.group")]
-    now_group: NowGroup,
-    #[serde(rename = "agents.show")]
-    agents_show: crate::model::agents::Show,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -121,25 +106,6 @@ impl Scopes {
     }
     pub fn set(&mut self, store: &str, scope: Scope) {
         self.0.entry(store.to_owned()).or_default().project = scope;
-    }
-    pub fn now_group(&self, store: &str) -> NowGroup {
-        self.0
-            .get(store)
-            .map(|saved| saved.now_group)
-            .unwrap_or_default()
-    }
-    pub fn set_now_group(&mut self, store: &str, group: NowGroup) {
-        self.0.entry(store.to_owned()).or_default().now_group = group;
-    }
-    /// Whether Sessions lists only live sessions or all of them, per store.
-    pub fn agents_show(&self, store: &str) -> crate::model::agents::Show {
-        self.0
-            .get(store)
-            .map(|saved| saved.agents_show)
-            .unwrap_or_default()
-    }
-    pub fn set_agents_show(&mut self, store: &str, show: crate::model::agents::Show) {
-        self.0.entry(store.to_owned()).or_default().agents_show = show;
     }
 }
 
@@ -168,23 +134,36 @@ pub fn scope_menu(feed: &Feed, scope: &Scope) -> Vec<ScopeEntry> {
         needs: None,
         selected: scope == Scope::All,
     }];
-    entries.extend(
-        Projects::build(feed, &scope.filter())
-            .entries
-            .into_iter()
-            .filter_map(|entry| {
-                let id = entry.project()?.clone();
-                Some(ScopeEntry {
-                    id: format!("scope-{id}"),
-                    label: entry.label,
-                    note: entry.open.map(|open| format!("{open} open")),
-                    needs: entry.needs_me.filter(|n| *n > 0),
-                    selected: entry.selected,
-                    scope: Scope::Project(id),
-                })
-            }),
-    );
+    entries.extend(super::known_projects(feed).into_iter().map(|id| {
+        let open = feed
+            .projects
+            .get(&id)
+            .filter(|_| feed.capable(corral_protocol::PROJECTS_V1))
+            .map(|row| row.open);
+        ScopeEntry {
+            id: format!("scope-{id}"),
+            label: id.to_string(),
+            note: open.map(|open| format!("{open} open")),
+            needs: needs_you(feed, &id).filter(|n| *n > 0),
+            selected: scope == Scope::Project(id.clone()),
+            scope: Scope::Project(id),
+        }
+    }));
     entries
+}
+
+/// How many of the project's open tasks wait on the owner, once the open-task list is
+/// complete.
+fn needs_you(feed: &Feed, id: &str) -> Option<u32> {
+    feed.board.complete.then(|| {
+        let count = feed
+            .board
+            .tasks()
+            .iter()
+            .filter(|task| task.project() == Some(id) && task.group == Group::NeedsYou)
+            .count();
+        u32::try_from(count).unwrap_or(u32::MAX)
+    })
 }
 
 /// What the switcher says under the scope: how many projects All covers, or that one is in

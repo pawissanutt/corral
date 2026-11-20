@@ -77,7 +77,12 @@ fn latest_of(message: &Message) -> Option<Latest> {
 
 /// The newest rows of a transcript the app has read, oldest first.
 pub fn latest(messages: &[Message]) -> Vec<Latest> {
-    let mut rows: Vec<Latest> = messages.iter().rev().filter_map(latest_of).take(LATEST).collect();
+    let mut rows: Vec<Latest> = messages
+        .iter()
+        .rev()
+        .filter_map(latest_of)
+        .take(LATEST)
+        .collect();
     rows.reverse();
     rows
 }
@@ -101,7 +106,12 @@ pub fn inspect(feed: &Feed, id: &Id, env: Env) -> Option<Inspect> {
         _ => row.line.state.word().to_owned(),
     };
     let mut listed: Vec<(&'static str, String)> = vec![("role", row.role.clone())];
-    listed.extend(row.line.task.as_ref().map(|task| ("task", task.to_string())));
+    listed.extend(
+        row.line
+            .task
+            .as_ref()
+            .map(|task| ("task", task.to_string())),
+    );
     listed.extend(row.line.project.clone().map(|project| ("project", project)));
     listed.extend(row.branch.clone().map(|branch| ("branch", branch)));
     listed.extend(row.model_effort().map(|model| ("model", model)));

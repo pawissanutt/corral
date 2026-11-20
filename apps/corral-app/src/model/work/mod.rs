@@ -1,16 +1,6 @@
-mod closed;
-mod data;
-mod inspector;
-mod list;
 mod live_changes;
 mod live_context;
 mod live_task;
-mod now_digest;
-mod now_keys;
-mod now_page;
-#[cfg(test)]
-mod now_page_tests;
-mod served;
 mod served_facts;
 mod task_page;
 mod verb_build;
@@ -26,24 +16,9 @@ pub use verbs::{
     Choice, Record, Verb, VerbAction, VerbField, palette_record, record_verbs, session_task,
 };
 
-/// Shared loading caption for an inspector awaiting its task detail.
-pub const INSPECTOR_LOADING: &str = "Loading task…";
-pub const VERB_MENU_LABEL: &str = "Actions";
-
-pub use closed::*;
-pub use data::*;
-pub use inspector::*;
-pub use list::*;
 pub use live_changes::*;
 pub use live_context::*;
 pub use live_task::*;
-pub use now_digest::{NowDigest, NowDigestRow};
-pub use now_keys::now_walk_order;
-pub use now_page::{
-    NowPage, NowPanel, NowScopeAction, NowSection, NowTaskRow, NowWaiting, NowWaitingGroup,
-    now_page,
-};
-pub use served::*;
 pub use served_facts::*;
 pub use task_page::*;
 pub use views::*;
@@ -53,201 +28,29 @@ use std::borrow::Cow;
 
 use crate::model::daemon;
 use crate::model::effect::{Effect, Env};
-use crate::model::nav::Destination;
 use crate::model::{Id, Live};
 use corral_protocol::app::{ChangesQuery, SeenAdvance};
 use corral_types::{Next, Op};
 
-/// The selected inspector tab, in the mockup's cycling order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum NowTab {
-    /// Task progress, dependencies and next actor.
-    #[default]
-    Story,
-    /// Artifact list.
-    Evidence,
-    /// Link to the structured session and terminal tail.
-    Session,
-}
-
-impl NowTab {
-    /// The inspector's tab strip.
-    pub const ALL: [Self; 3] = [Self::Story, Self::Evidence, Self::Session];
-
-    /// The tab's visible label.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Story => "Story",
-            Self::Evidence => "Evidence",
-            Self::Session => "Session",
-        }
-    }
-}
-
-/// Which kind of change the Changes feed shows. Every event kind belongs to exactly one filter
-/// besides All, so the filters split the feed rather than overlap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ChangeFilter {
-    #[default]
-    All,
-    /// Blocked tasks, landings that wait, and errors: what waits on the owner.
-    NeedsYou,
-    /// Gate results, reviews, verdicts and landings.
-    Verdicts,
-    /// Worker runs: dispatched, resumed, replied to, done, stopped.
-    Runs,
-    /// The tasks themselves: created, edited, commented, moved, dropped, reopened, artifacts.
-    Tasks,
-    /// Operations forced past a rule, each naming what it skipped.
-    Forced,
-}
-
-impl ChangeFilter {
-    /// Every filter in display order, the same on every form.
-    pub const ALL: [Self; 6] = [
-        Self::All,
-        Self::NeedsYou,
-        Self::Verdicts,
-        Self::Runs,
-        Self::Tasks,
-        Self::Forced,
-    ];
-
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::All => "All",
-            Self::NeedsYou => "Needs you",
-            Self::Verdicts => "Verdicts",
-            Self::Runs => "Runs",
-            Self::Tasks => "Tasks",
-            Self::Forced => "Forced",
-        }
-    }
-
-    /// Whether an engine event of `kind` passes.
-    pub fn admits(self, kind: corral_types::EventKind) -> bool {
-        use corral_types::EventKind as Kind;
-        match self {
-            Self::All => true,
-            Self::NeedsYou => matches!(kind, Kind::Blocked | Kind::Ready | Kind::Error),
-            Self::Verdicts => matches!(
-                kind,
-                Kind::Gate | Kind::ReviewStarted | Kind::Verdict | Kind::SentBack | Kind::Landed
-            ),
-            Self::Runs => matches!(
-                kind,
-                Kind::Dispatched | Kind::Resumed | Kind::Replied | Kind::Done | Kind::Stopped
-            ),
-            Self::Tasks => matches!(
-                kind,
-                Kind::Created
-                    | Kind::Edited
-                    | Kind::Commented
-                    | Kind::Moved
-                    | Kind::Dropped
-                    | Kind::Reopened
-                    | Kind::Artifact
-            ),
-            Self::Forced => kind == Kind::Forced,
-        }
-    }
-}
-
-/// The task command this device last sent from Now for one task, kept to show its status.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Sent {
-    pub task: Id,
-    /// The operation's request id.
-    pub key: Id,
-    pub title: String,
-}
-
-/// How many tasks' last commands Now keeps.
-const SENT_KEPT: usize = 16;
-
 /// Changes fetched per page.
 pub const CHANGES_PER_PAGE: u16 = 100;
 
-/// Selection, the inspector tab, the daemon list's expanded groups and filters. The Daemon
-/// state's selected task is the root's live selection.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The operations' state: the ids requests go out under, the open operation composer and the
+/// keyboard's More menu.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct State {
     pub ids: crate::model::id::IdSupply,
-    /// Selected inspector tab.
-    pub now_tab: NowTab,
-    /// The daemon list shows every queued task, not only the first few.
-    pub all_queued: bool,
-    /// The daemon list shows every backlog task, not only the first few.
-    pub all_backlog: bool,
-    /// The daemon list shows every idea, not only the first few.
-    pub all_ideas: bool,
-    /// Now's Waiting line is open: its queued, backlog and idea rows show and the keys walk them.
-    pub waiting_open: bool,
-    /// The Changes feed's filter.
-    pub filter: ChangeFilter,
-    /// Task commands sent from Now, newest last.
-    pub sent: Vec<Sent>,
     /// A structured action bound to the record revision at the time it was opened.
     pub composer: Option<VerbComposer>,
     /// The selected record's keyboard-opened action menu.
     pub menu: Option<Record>,
-    /// Now's Closed section, read from corrald on request.
-    pub closed: ClosedState,
-    /// Escape dismisses the shared task selection locally without changing other pages.
-    pub digest_only: bool,
 }
 
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            ids: Default::default(),
-            now_tab: NowTab::Story,
-            all_queued: false,
-            all_backlog: false,
-            all_ideas: false,
-            waiting_open: false,
-            filter: ChangeFilter::All,
-            sent: Vec::new(),
-            composer: None,
-            menu: None,
-            closed: ClosedState::default(),
-            digest_only: false,
-        }
-    }
-}
-
-/// Local controls shared by Now, Changes and More.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Action {
-    /// Switch the inspector tab.
-    NowTab(NowTab),
-    /// Open or fold Now's Waiting rows.
-    ToggleWaiting,
-    /// Open a destination, including entries on the More page.
-    Go(Destination),
-    /// Return from a pushed task or Changes page.
-    Back,
-    /// Show every row of a collapsed daemon group (Queued, Backlog or Ideas).
-    ShowAll(GroupKey),
-    /// Narrow the Changes feed.
-    Filter(ChangeFilter),
-}
-
-/// Local interaction or a canonical record action against owned feed identities.
+/// A canonical record action against owned feed identities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Press {
-    Work(Action),
-    /// Select a task in place.
-    Select(Id),
-    /// Return the redesigned Now side panel to its digest.
-    ClearSelection,
     /// Open a live record (a task page, a session, a question, a plan, a review).
     Open(Live),
-    /// Open Ask about a record, at the revision the app shows.
-    Ask {
-        about: Live,
-        rev: Option<u64>,
-    },
     /// Start an engine operation, opening its composer when it asks for input.
     Verb {
         record: Record,
@@ -285,16 +88,8 @@ pub enum Press {
     Older(u64),
     /// Reopen the failed tasks subscription.
     RetryBoard,
-    /// The Closed section's toggle and pager.
-    Closed(ClosedPress),
     /// Open the artifact finder with this task's token filled in.
     FindArtifacts(Id),
-}
-
-impl From<Action> for Press {
-    fn from(action: Action) -> Press {
-        Press::Work(action)
-    }
 }
 
 /// A status's own next step: an operation that needs no words, sent on one press.
@@ -373,49 +168,11 @@ impl Button {
     }
 }
 
-/// Worker-hue feed glyph for a worker-start event.
-pub const START_MARK: &str = "▶";
-
-/// Now's letter commands, bound wherever the focus is outside a text field: `]` brings the
-/// inspector's next tab forward (Tab stays the platform's focus key); `R` (Shift+R) puts the
-/// focus in the selected Blocked card's reply box, which Tab reaches only after the whole list.
-/// The list keys (moves, Enter) are `commands::list_keys`, bound only while the list has the
-/// focus.
-pub const KEYS: &[&str] = &["]", "R"];
-
 impl State {
-    /// Apply form-independent local controls.
-    pub fn act(&mut self, action: Action) -> Vec<Effect> {
-        match action {
-            Action::NowTab(tab) => self.now_tab = tab,
-            Action::ToggleWaiting => self.waiting_open = !self.waiting_open,
-            Action::Go(to) => return vec![Effect::Go(to)],
-            Action::Back => return vec![Effect::Back],
-            Action::ShowAll(GroupKey::Backlog) => self.all_backlog = true,
-            Action::ShowAll(GroupKey::Ideas) => self.all_ideas = true,
-            Action::ShowAll(_) => self.all_queued = true,
-            Action::Filter(filter) => self.filter = filter,
-        }
-        Vec::new()
-    }
-
     /// Apply local interactions or dispatch canonical record effects against the feed.
     pub fn press(&mut self, press: Press, feed: &daemon::Feed, _env: Env) -> Vec<Effect> {
         match press {
-            Press::Work(action) => self.act(action),
-            Press::Select(id) => {
-                self.digest_only = false;
-                vec![Effect::Select(Live::Task(id))]
-            }
-            Press::ClearSelection => {
-                self.digest_only = true;
-                Vec::new()
-            }
             Press::Open(live) => vec![Effect::OpenLive(live)],
-            Press::Ask { about, rev } => vec![Effect::AskAbout {
-                context: Some(about.context(rev)),
-                text: None,
-            }],
             Press::Verb { record, verb } => self.start_verb(record, verb, feed),
             Press::SubmitVerb(values) => self.submit_verb(values),
             Press::CancelVerb => {
@@ -466,23 +223,8 @@ impl State {
                 after: None,
                 limit: CHANGES_PER_PAGE,
             })],
-            Press::Closed(press) => self.closed.press(press),
             Press::FindArtifacts(task) => vec![Effect::FindArtifacts(task)],
         }
-    }
-
-    /// The last command sent from Now for `task`, if any.
-    pub fn sent_for(&self, task: &str) -> Option<&Sent> {
-        self.sent.iter().rev().find(|sent| sent.task == *task)
-    }
-
-    /// Moves the inspector to its next tab, wrapping from Session back to Story.
-    pub(super) fn cycle_tab(&mut self) {
-        self.now_tab = match self.now_tab {
-            NowTab::Story => NowTab::Evidence,
-            NowTab::Evidence => NowTab::Session,
-            NowTab::Session => NowTab::Story,
-        };
     }
 }
 

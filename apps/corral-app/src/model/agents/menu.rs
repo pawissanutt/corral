@@ -1,4 +1,4 @@
-//! A session's Session menu, on its roster row and its page head: the run controls that apply to
+//! A session's Session menu, on its list row and its page head: the run controls that apply to
 //! it (Cancel turn, Pause, Resume, Rewind…, Terminate or Stop, Relaunch or Resume), then for a
 //! run Reply (its task's engine operation) and its task's whole Actions menu. A chat's or a
 //! build's menu holds its controls.
@@ -44,7 +44,7 @@ mod tests {
     use corral_protocol::rows::{AssistantKind, AssistantState};
     use corral_types::{Role, SessionStatus};
 
-    use super::super::roster_tests::{agent, assistant};
+    use super::super::source_tests::{agent, assistant};
     use super::session_verbs;
     use crate::model::Id;
     use crate::model::daemon::Feed;

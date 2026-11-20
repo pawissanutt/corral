@@ -140,7 +140,10 @@ fn tiles(app: AppState, scope: Memo<Scope>) -> AnyElement {
 
 fn tile(app: AppState, tile: Tile) -> AnyElement {
     let form = app.form;
-    let spoken = format!("{}: {}, {}. {}", tile.label, tile.value, tile.sub, tile.hint);
+    let spoken = format!(
+        "{}: {}, {}. {}",
+        tile.label, tile.value, tile.sub, tile.hint
+    );
     let ink = if tile.you { Token::You } else { Token::Ink };
     let value = text(tile.value)
         .number_of_lines(1u32)
@@ -220,7 +223,10 @@ fn tile(app: AppState, tile: Tile) -> AnyElement {
             .role(AccessibilityRole::Link)
             .cursor_pointer()
             .when(form != Form::Terminal, |frame| {
-                frame.hover(|s| s.bg(color(Token::Surface2)).border_color(color(Token::Rule2)))
+                frame.hover(|s| {
+                    s.bg(color(Token::Surface2))
+                        .border_color(color(Token::Rule2))
+                })
             })
             .on_press(move || app.go(to))
             .into_element(),
@@ -240,7 +246,11 @@ fn meter((used, limit): (u64, u64)) -> AnyElement {
                 .w(px(6.0))
                 .h(px(8.0))
                 .rounded(px(1.0))
-                .bg(color(if at < used { Token::Worker } else { Token::Rule2 }))
+                .bg(color(if at < used {
+                    Token::Worker
+                } else {
+                    Token::Rule2
+                }))
                 .into_element()
         }))
         .into_element()

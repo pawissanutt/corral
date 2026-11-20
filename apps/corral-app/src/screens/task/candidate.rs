@@ -1,15 +1,12 @@
 //! A task's review candidate as the task page draws it: the decide bar with its Onto target, the
 //! done summary, the stored diff and the checks, each read from `model::review` for the one task
 //! the page shows (`loop_page_filtered` with that task as its focus) and each control sent back
-//! through the review reducer (`apply_live_filtered`). The former Review destination draws the
-//! same pieces from here until it goes.
+//! through the review reducer (`apply_live_filtered`).
 
 pub(crate) mod brief;
 pub(crate) mod decide;
 pub(crate) mod diff;
-pub(crate) mod evidence;
 mod onto;
-pub(crate) mod rounds;
 mod status;
 
 use corral_protocol::detail::DetailRef;
@@ -22,12 +19,12 @@ use crate::model::projects::ProjectFilter;
 use crate::model::review::{self, Action, ButtonStyle, Layout, LoopPage, Tab};
 use crate::model::work::{Press, Record};
 use crate::model::{Form, Hue, Id, Rich, Selection};
-use crate::screens::now::parts::press;
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with, seg};
 use crate::ui::kit::hint::hint_on;
 use crate::ui::kit::marks::hue_ink;
+use crate::ui::kit::more::press;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 /// `.mono` is 0.93 of the text around it.
@@ -87,7 +84,7 @@ impl Ctx {
     }
 }
 
-/// The former Review screen's own project scope, tracked.
+/// The one project scope, tracked.
 pub(crate) fn scope(app: AppState) -> ProjectFilter {
     app.scope_filter()
 }
@@ -146,8 +143,8 @@ pub(crate) fn act(cx: &Ctx, action: Action) -> impl Fn() + 'static {
         }
         let action = action.clone();
         let focus = focus.clone();
-        app.reduce(app.review, move |state, feed, selection, env| {
-            state.apply_live_filtered(action, feed, selection, focus.as_ref(), env, &filter)
+        app.reduce(app.review, move |state, feed, selection, _| {
+            state.apply_live_filtered(action, feed, selection, focus.as_ref(), &filter)
         });
     }
 }
@@ -360,7 +357,6 @@ pub(crate) fn button_id(action: &Action) -> String {
         Action::AskAbout { path, .. } => format!("btn-ask-{}", slug(path)),
         Action::Expand(path) => format!("btn-expand-{}", slug(path)),
         Action::Collapse(path) => format!("btn-collapse-{}", slug(path)),
-        Action::Pick(id) => format!("task-{id}"),
         Action::Tab(_) => "seg-review".to_owned(),
         Action::Layout(_) => "seg-layout".to_owned(),
         Action::Dismiss(_) => "btn-dismiss".to_owned(),

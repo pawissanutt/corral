@@ -15,8 +15,8 @@ mod lanes;
 
 pub use cards::{Card, Decision, card, decision};
 pub use dash::{
-    Cost, CostRow, ProjectLine, StatusBar, Tile, cost, cost_request, project_facts, projects,
-    tiles, by_status,
+    Cost, CostRow, ProjectLine, StatusBar, Tile, by_status, cost, cost_request, project_facts,
+    projects, tiles,
 };
 pub use digest::{EventLine, Since, latest, since};
 pub use lanes::{Lane, Segment, lanes, lanes_request};
@@ -175,7 +175,10 @@ pub fn summary(feed: &Feed, scope: &Scope) -> String {
         Some(at) => format!("{} finished since {at}", since.finished.len()),
         None => format!("{} finished since your last visit", since.finished.len()),
     };
-    format!("{need} · {} working · {finished}", working(feed, scope).len())
+    format!(
+        "{need} · {} working · {finished}",
+        working(feed, scope).len()
+    )
 }
 
 /// The dashboard's head: what needs the owner and since when the numbers count.
@@ -274,7 +277,7 @@ mod tests {
     use corral_protocol::rows::AssistantState;
 
     use super::*;
-    use crate::model::agents::roster_tests::assistant;
+    use crate::model::agents::source_tests::assistant;
     use crate::model::daemon::{bare_task, task_row};
 
     fn task(id: &str, status: Status, ready: bool) -> Task {

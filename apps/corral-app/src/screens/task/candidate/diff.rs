@@ -1,6 +1,6 @@
-//! The Diff tab (`.diff`) and a Brief file's patch shown in place: each file's head, its hunks
-//! with their headers, unified or side-by-side rows with their add/del tints and the
-//! highlighted word, and collapsed, loading or unavailable files.
+//! The task page's diff (`.diff`): each file's head, its hunks with their headers, unified or
+//! side-by-side rows with their add/del tints and the highlighted word, and collapsed, loading
+//! or unavailable files.
 
 use nsh_core::EllipsizeMode;
 use nsh_core::prelude::*;
@@ -58,27 +58,6 @@ fn file_block(cx: &Ctx, file: &FileView) -> AnyElement {
         .child(file_head(cx, file))
         .child(file_patch(cx, file))
         .when(terminal, |block| block.child(term::blank()))
-        .into_element()
-}
-
-/// An expanded file's patch in place under its Brief row, which carries its name, counts and
-/// collapse: Ask at the trailing edge, then the hunks.
-pub(crate) fn file_body(cx: &Ctx, file: &FileView) -> AnyElement {
-    let terminal = cx.app.form == Form::Terminal;
-    view()
-        .when(!terminal, |block| {
-            block.gap(px(8.0)).pt(px(8.0)).pb(px(4.0))
-        })
-        .children(file.ask.as_ref().map(|ask| {
-            view()
-                .flex_row()
-                .items_center()
-                .justify_end()
-                .gap(px(8.0))
-                .child(command(cx, ask))
-                .into_element()
-        }))
-        .child(file_patch(cx, file))
         .into_element()
 }
 

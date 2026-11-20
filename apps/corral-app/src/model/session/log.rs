@@ -186,7 +186,7 @@ mod tests {
 
     use super::log;
     use crate::model::Id;
-    use crate::model::agents::roster_tests::agent;
+    use crate::model::agents::source_tests::agent;
     use crate::model::daemon::{self, ClientError, DetailCache, bare_task, detail_key};
     use crate::model::hue::Hue;
     use crate::model::work::task_ref;

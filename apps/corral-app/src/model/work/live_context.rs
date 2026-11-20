@@ -1,17 +1,11 @@
-//! What a task's context and the changes feed show in the Daemon state: the plan a task belongs
-//! to (its parent task; the phone task page's plan section) and each engine event as a feed row,
-//! with why changes cannot be shown.
+//! What each engine event says, in a task's history and in Activity › Feed, the project it is
+//! filed under, and why changes cannot be shown.
 
 use corral_protocol::app::{CHANGES_PAGE, CHANGES_V1};
 use corral_types::{Actor, Event, EventKind};
 use serde_json::Value;
 
-use crate::model::board::{ChangeKind, Mark};
 use crate::model::daemon::{Feed, Link};
-use crate::model::projects::ProjectFilter;
-use crate::model::{Id, Live};
-
-use super::{FeedRow, Press, stamp_at};
 
 /// One quiet line in place of a panel's content, owned or fixed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,36 +26,6 @@ impl Notice {
 /// Said when corrald serves no changes feed.
 pub const CHANGES_NOT_SERVED: &str = "corrald does not serve changes.";
 
-/// The plan graph's hand-off in the Daemon state: the plan the selected task belongs to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LivePlan {
-    pub plan: Option<Id>,
-    /// The highlighted member.
-    pub member: Option<Id>,
-    /// `Plan T-885`.
-    pub heading: String,
-    /// Said instead of a graph.
-    pub empty: Option<Notice>,
-    /// Open the plan.
-    pub action: Option<Press>,
-}
-
-/// The plan hand-off for task `id`: a plan is its parent task.
-pub fn plan_context(id: &Id, parent: Option<&str>) -> LivePlan {
-    let plan = parent.map(Id::new);
-    LivePlan {
-        heading: plan
-            .as_ref()
-            .map_or_else(|| "Plan".to_owned(), |plan| format!("Plan {plan}")),
-        empty: plan
-            .is_none()
-            .then_some(Notice::Quiet("Not part of a plan.")),
-        action: plan.clone().map(|plan| Press::Open(Live::Plan(plan))),
-        member: Some(id.clone()),
-        plan,
-    }
-}
-
 /// A string field of an event's detail.
 fn field<'a>(event: &'a Event, key: &str) -> Option<&'a str> {
     event.detail.get(key).and_then(Value::as_str)
@@ -77,27 +41,8 @@ pub(super) fn failed(event: &Event) -> bool {
     }
 }
 
-/// The mark the feed draws for an event: a failure's cross, a message dot for what needs the
-/// owner, a pass for a landing or a green check, a start for runs and moves, a note otherwise.
-fn event_mark(event: &Event) -> ChangeKind {
-    if failed(event) {
-        return ChangeKind::Mark(Mark::Fail);
-    }
-    match event.kind {
-        EventKind::Blocked | EventKind::Ready => ChangeKind::Message,
-        EventKind::Landed | EventKind::Gate | EventKind::Verdict => ChangeKind::Mark(Mark::Done),
-        EventKind::ReviewStarted | EventKind::SentBack => ChangeKind::Mark(Mark::Na),
-        EventKind::Created
-        | EventKind::Moved
-        | EventKind::Dispatched
-        | EventKind::Resumed
-        | EventKind::Reopened => ChangeKind::Start,
-        _ => ChangeKind::Note,
-    }
-}
-
 /// `owner`, `agent`, `reviewer`, `assistant`, `auto`.
-pub(super) const fn actor_word(actor: Actor) -> &'static str {
+pub(crate) const fn actor_word(actor: Actor) -> &'static str {
     match actor {
         Actor::Owner => "owner",
         Actor::Agent => "agent",
@@ -170,6 +115,44 @@ pub fn event_text(event: &Event) -> String {
     }
 }
 
+/// What an event says beside its kind, from its detail: `backlog → ready`, `failed`,
+/// `9d2f1c0 onto main`; empty when the kind says it all.
+pub fn event_detail(event: &Event) -> String {
+    let status = |key| field(event, key).map(|status| status.replace('_', " "));
+    let first = |key| field(event, key).map(|text| line(text).to_owned());
+    match event.kind {
+        EventKind::Created => status("status").map(|status| format!("as {status}")),
+        EventKind::Moved => match (status("from"), status("to")) {
+            (Some(from), Some(to)) => Some(format!("{from} → {to}")),
+            (None, Some(to)) => Some(format!("to {to}")),
+            _ => None,
+        },
+        EventKind::Commented => first("text"),
+        EventKind::Blocked | EventKind::Error => first("reason"),
+        EventKind::Dispatched => {
+            field(event, "profile").map(|profile| format!("profile {profile}"))
+        }
+        EventKind::Gate => Some(if failed(event) { "failed" } else { "passed" }.to_owned()),
+        EventKind::Verdict => Some(if failed(event) { "changes" } else { "approve" }.to_owned()),
+        EventKind::SentBack => event
+            .detail
+            .get("round")
+            .and_then(Value::as_u64)
+            .map(|round| format!("round {round}")),
+        EventKind::Landed => {
+            let sha: Option<String> = field(event, "sha").map(|sha| sha.chars().take(7).collect());
+            match (sha, field(event, "base")) {
+                (Some(sha), Some(base)) => Some(format!("{sha} onto {base}")),
+                (sha, _) => sha,
+            }
+        }
+        EventKind::Forced => Some(forced_detail(event)),
+        EventKind::Artifact => first("title"),
+        _ => None,
+    }
+    .unwrap_or_default()
+}
+
 /// What a rule the engine names in a `forced` event's `skipped` list means, in the words the
 /// refusal sheet uses for what force skips; a rule this app does not know stays as recorded.
 fn skipped_rule(operation: &str, rule: &str, event: &Event) -> String {
@@ -193,6 +176,11 @@ fn skipped_rule(operation: &str, rule: &str, event: &Event) -> String {
 /// `forced dispatch · skipped unfinished dependencies and the running-slot limit`: the operation
 /// and every rule force skipped, as recorded.
 fn forced_text(event: &Event) -> String {
+    format!("forced {}", forced_detail(event))
+}
+
+/// `dispatch · skipped unfinished dependencies and the running-slot limit`.
+fn forced_detail(event: &Event) -> String {
     let operation = field(event, "operation").unwrap_or("operation");
     let skipped: Vec<String> = event
         .detail
@@ -207,12 +195,9 @@ fn forced_text(event: &Event) -> String {
         })
         .unwrap_or_default();
     match skipped.as_slice() {
-        [] => format!("forced {operation} · no rule recorded as skipped"),
-        [only] => format!("forced {operation} · skipped {only}"),
-        [rest @ .., last] => format!(
-            "forced {operation} · skipped {} and {last}",
-            rest.join(", ")
-        ),
+        [] => format!("{operation} · no rule recorded as skipped"),
+        [only] => format!("{operation} · skipped {only}"),
+        [rest @ .., last] => format!("{operation} · skipped {} and {last}", rest.join(", ")),
     }
 }
 
@@ -227,32 +212,6 @@ pub(crate) fn event_project<'a>(event: &'a Event, feed: &'a Feed) -> Option<Opti
             .as_deref()
             .and_then(|id| feed.board.task(id))
             .map(|task| task.project()),
-    }
-}
-
-/// One engine event as a feed row: its local time, its task (opening it), what it says and who
-/// did it.
-pub fn change_row_filtered(
-    event: &Event,
-    feed: &Feed,
-    unseen: bool,
-    filter: &ProjectFilter,
-) -> FeedRow {
-    FeedRow {
-        at: stamp_at(event.ts, feed),
-        project_chip: event_project(event, feed)
-            .and_then(|project| crate::model::projects::project_chip(feed, filter, project)),
-        action: event
-            .task
-            .as_deref()
-            .map(|task| Press::Open(Live::Task(Id::new(task)))),
-        id: event.task.clone().unwrap_or_default(),
-        kind: event_mark(event),
-        text: event_text(event),
-        by: Some(actor_word(event.actor).to_owned()),
-        unseen,
-        dim: !unseen,
-        illustrative: false,
     }
 }
 

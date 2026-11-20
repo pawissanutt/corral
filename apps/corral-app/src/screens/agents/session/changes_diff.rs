@@ -16,11 +16,11 @@ use crate::model::hue::Hue;
 use crate::model::review::NumberedLine;
 use crate::model::session::{Action, ChangesTab, FileDiff, HunkView};
 use crate::model::text::span;
-use crate::screens::now::list::revealing;
-use crate::screens::review::diff::unified_line;
+use crate::screens::task::candidate::diff::unified_line;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::notice::notice;
+use crate::ui::kit::rows::revealing;
 use crate::ui::kit::text::{dim, mono};
 use crate::ui::tokens::{FONT_MONO, Token, color};
 

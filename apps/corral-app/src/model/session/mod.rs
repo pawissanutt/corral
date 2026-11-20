@@ -137,13 +137,11 @@ pub use queue::{QueueControl, QueueDock, QueueItem};
 pub use read_state::ReadState;
 pub use sidebar::{
     ContextFact, ContextList, ContextTab, DetailSection, Details, FilesTab, McpRow, Panel,
-    Section as DetailKind, SectionContent, SideAgent, SideFile, SideJob, SidebarAction,
-    SidebarUi, brief as details_brief, details,
+    Section as DetailKind, SectionContent, SideAgent, SideFile, SideJob, SidebarAction, SidebarUi,
+    brief as details_brief, details,
 };
-pub use status::{
-    Alert, ContextMeter, Cost, RolePill, StatusBar, cost_text, quiet, spent, status,
-};
-pub use tabs::{Badge, PartBody, TabItem, tabs_for};
+pub use status::{Alert, ContextMeter, Cost, RolePill, StatusBar, cost_text, quiet, spent, status};
+pub use tabs::{PartBody, TabItem, tabs_for};
 pub use task::{Attempt, TaskAction, TaskLink, TaskTab, TaskUi, task_tab};
 pub use transcript::{Fill, Transcript};
 pub use usage::{UsageAction, UsageLine, UsageTotalLine, UsageUi, UsageView, usage_view};
@@ -262,7 +260,6 @@ pub enum Focus {
     #[default]
     Composer,
     Main,
-    Sidebar,
     Queue,
     Questions,
     Dock,

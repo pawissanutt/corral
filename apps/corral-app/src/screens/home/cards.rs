@@ -33,7 +33,10 @@ pub(super) fn needs_you(app: AppState, scope: Memo<Scope>) -> AnyElement {
         app.feed.with(|feed| home::needs_you(feed, &scope))
     });
     let open = computed(move || {
-        ids.with(|ids| app.home.with(|state| list::settled(ids, state.selected.as_ref())))
+        ids.with(|ids| {
+            app.home
+                .with(|state| list::settled(ids, state.selected.as_ref()))
+        })
     });
     let body = dynamic(move || {
         let ids = ids.get();
@@ -517,7 +520,10 @@ pub(super) fn reply_box(app: AppState, reply: ReplyBox) -> AnyElement {
 fn session_decision(app: AppState, id: Id, facts: Memo<Option<Card>>) -> AnyElement {
     let form = app.form;
     let why = dynamic(move || {
-        let said = facts.with(|card| card.as_ref().map(|card| (card.why.clone(), card.facts.clone())));
+        let said = facts.with(|card| {
+            card.as_ref()
+                .map(|card| (card.why.clone(), card.facts.clone()))
+        });
         untracked(move || {
             said.map(|(why, facts)| {
                 view()

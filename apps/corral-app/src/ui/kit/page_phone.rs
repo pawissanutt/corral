@@ -425,39 +425,6 @@ pub fn group_head(
     }
 }
 
-/// Rows in one rounded group with a hairline between them (the phone's grouped list). Phone:
-/// surface, radius 14, a `rule` line, as `shell/phone.rs` groups its rows. Desktop: the same at
-/// radius 8. Terminal: a framed region with a joined line between the rows.
-pub fn card(app: AppState, rows: Vec<AnyElement>) -> AnyElement {
-    match app.form {
-        Form::Desktop | Form::Phone => view()
-            .bg(color(Token::Surface))
-            .rounded(px(if app.form == Form::Phone { 14.0 } else { 8.0 }))
-            .border_1()
-            .border_color(color(Token::Rule))
-            .overflow_hidden()
-            .children(rows.into_iter().enumerate().map(|(at, row)| {
-                view()
-                    .when(at > 0, |v| {
-                        v.border_t_1().border_t_color(color(Token::Rule))
-                    })
-                    .child(row)
-                    .into_element()
-            }))
-            .into_element(),
-        Form::Terminal => {
-            let mut parts = Vec::new();
-            for (at, row) in rows.into_iter().enumerate() {
-                if at > 0 {
-                    parts.push(term::hrule());
-                }
-                parts.push(row);
-            }
-            term::framed(view().children(parts)).into_element()
-        }
-    }
-}
-
 /// A count or short figure beside a group label: mono and quiet.
 fn figure(form: Form, content: String) -> AnyElement {
     let size = match form {

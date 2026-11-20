@@ -211,9 +211,8 @@ fn sections(app: AppState, details: Memo<Option<Details>>) -> AnyElement {
                                     })
                                 })
                             });
-                            let folded = computed(move || {
-                                section.with(|s| s.as_ref().map(|s| s.folded))
-                            });
+                            let folded =
+                                computed(move || section.with(|s| s.as_ref().map(|s| s.folded)));
                             dynamic(move || {
                                 folded
                                     .get()
@@ -266,12 +265,8 @@ fn face(app: AppState, shown: Memo<Option<DetailSection>>, folded: bool) -> AnyE
     let fold = section.fold.clone();
     let name = section.label;
     let spoken = move || {
-        words.with(|(said, _)| {
-            format!(
-                "{name}, {said}, {}",
-                if folded { "folded" } else { "open" }
-            )
-        })
+        words
+            .with(|(said, _)| format!("{name}, {said}, {}", if folded { "folded" } else { "open" }))
     };
     let header = view()
         .test_id(&section.id)
@@ -324,10 +319,7 @@ fn face(app: AppState, shown: Memo<Option<DetailSection>>, folded: bool) -> AnyE
                 })
             })
         });
-        dynamic(move || {
-            facts
-                .with(|s| s.as_ref().map(|s| untracked(|| frame(app, s))))
-        })
+        dynamic(move || facts.with(|s| s.as_ref().map(|s| untracked(|| frame(app, s)))))
     });
     let column = view().child(line).children(body);
     match form {
@@ -356,7 +348,9 @@ fn frame(app: AppState, section: &DetailSection) -> AnyElement {
         )
     });
     let read = match &body.read {
-        ReadState::Reading | ReadState::ReadingKept | ReadState::Stale { .. }
+        ReadState::Reading
+        | ReadState::ReadingKept
+        | ReadState::Stale { .. }
         | ReadState::Failed(_) => {
             let retry = body.reread.clone().map(|action| {
                 button(
@@ -379,9 +373,7 @@ fn frame(app: AppState, section: &DetailSection) -> AnyElement {
                             .flex_1()
                             .min_w(px(0.0)),
                     )
-                    .children(
-                        retry.filter(|_| matches!(body.read, ReadState::Failed(_))),
-                    ),
+                    .children(retry.filter(|_| matches!(body.read, ReadState::Failed(_)))),
             ))
         }
         ReadState::NotRead | ReadState::Read { .. } | ReadState::DoesNotApply(_) => None,

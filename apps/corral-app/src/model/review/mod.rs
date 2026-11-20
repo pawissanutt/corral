@@ -7,7 +7,7 @@
 //! and the app never predicts a refusal. Request changes needs words, so it opens the shared
 //! verb composer through the work state (`Action::Verb`, routed by the screen).
 //! Project filters scope the candidate list, not an explicitly pushed candidate page or its actions.
-//! `loop_page_filtered` is the page: the one-line outline, then the Brief-first candidate with
+//! `loop_page_filtered` is a candidate's page: the Brief-first candidate with
 //! its evidence tabs and decide bar.
 
 mod brief;
@@ -33,29 +33,21 @@ pub use diff::{
     split_rows, unified_rows, word_mark,
 };
 pub(crate) use live::actor;
-pub use live::{candidates_filtered, selected_filtered};
+pub use live::selected_filtered;
 pub use loop_page::{LoopCandidate, LoopContent, LoopPage, loop_page_filtered};
-pub use outline::{CandidateHeader, OutlineGroup, OutlineRow, candidate_header, outline_filtered};
 pub use readiness::{ReadyLink, ReviewQuote};
 pub use rounds::{ReviewerLine, Round, Rounds};
 pub use view::{
-    ArtifactContent, ArtifactView, ArtifactsView, Body, Button, ButtonStyle, Chip, DecideBar,
+    ArtifactContent, ArtifactView, ArtifactsView, Body, Button, ButtonStyle, DecideBar,
     DiffContent, DiffView, FileBody, FileView, HunkView, LayoutChoice, LogView, Notice, ReportView,
     StatusLine, TabView, Target, effective_layout,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::model::daemon::Feed;
-use crate::model::effect::{Effect, Env};
+use crate::model::effect::Effect;
 use crate::model::id::Id;
-use crate::model::live::{Live, Selection};
-use crate::model::work::{Record, Verb};
-
-/// Review's keyboard shortcuts: `s` toggles the stored split/unified preference; `A`
-/// (Shift+A) puts the focus on the shown candidate's Approve, which Tab reaches only after the
-/// list and the brief.
-pub const KEYS: &[&str] = &["s", "A"];
+use crate::model::work::Verb;
 
 /// The decide bar's Approve (`btn-approve`), which `A` focuses.
 pub const APPROVE: &str = "btn-approve";
@@ -138,8 +130,6 @@ pub enum Action {
     /// A shared Actions verb on the shown task (Request changes opens its composer); the
     /// screen runs it through the work state, where the shared composer lives.
     Verb(Verb),
-    /// Show a served candidate.
-    Pick(Id),
     /// Show a served file's patch, fetching it once.
     Expand(String),
     Collapse(String),
@@ -174,67 +164,5 @@ impl State {
     pub fn rlayout(&mut self, layout: Layout) -> Vec<Effect> {
         self.layout = layout;
         Vec::new()
-    }
-
-    /// Served: `s` toggles the layout on Review itself, not under a pushed focus page.
-    /// `filter` is the Review screen's own scope.
-    pub fn key_live_filtered(
-        &mut self,
-        key: &str,
-        top: Option<&Live>,
-        selection: &Selection,
-        feed: &Feed,
-        _env: Env,
-        filter: &crate::model::projects::ProjectFilter,
-    ) -> Option<Vec<Effect>> {
-        if top.is_some_and(|live| !matches!(live, Live::Review(_))) {
-            return None;
-        }
-        if top.is_none() && matches!(key, "j" | "down" | "ArrowDown" | "k" | "up" | "ArrowUp") {
-            let rows = candidates_filtered(feed, filter);
-            if rows.is_empty() {
-                return Some(Vec::new());
-            }
-            let index = selection
-                .review
-                .as_ref()
-                .and_then(|id| rows.iter().position(|task| task.id == *id))
-                .unwrap_or(0);
-            let next = if matches!(key, "j" | "down" | "ArrowDown") {
-                (index + 1).min(rows.len() - 1)
-            } else {
-                index.saturating_sub(1)
-            };
-            return Some(vec![Effect::Select(Live::Review(rows[next].id.clone()))]);
-        }
-        if key == "A" {
-            let shown = matches!(top, Some(Live::Review(_)))
-                || selected_filtered(selection, feed, filter).is_some();
-            return Some(if shown {
-                vec![Effect::Focus(APPROVE)]
-            } else {
-                Vec::new()
-            });
-        }
-        if key == "." {
-            let id = match top {
-                Some(Live::Review(id)) => id.clone(),
-                _ => selected_filtered(selection, feed, filter)?.id.clone(),
-            };
-            return Some(vec![Effect::VerbMenu(Record::Task(id))]);
-        }
-        self.toggle(key)
-    }
-
-    /// Toggling on phone or terminal changes the preference, not their unified output.
-    fn toggle(&mut self, key: &str) -> Option<Vec<Effect>> {
-        if key != "s" {
-            return None;
-        }
-        self.layout = match self.layout {
-            Layout::Split => Layout::Unified,
-            Layout::Unified => Layout::Split,
-        };
-        Some(Vec::new())
     }
 }

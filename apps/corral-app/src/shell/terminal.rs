@@ -11,7 +11,7 @@ use crate::{
     model::{
         Area, Overlay, SettingsSection, Workspace,
         commands::area_key,
-        nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, THIS_DEVICE},
+        nav::{PALETTE_LABEL, THIS_DEVICE},
     },
     screens,
     shell::{
@@ -162,7 +162,7 @@ fn content(app: AppState, focus: Focus) -> AnyElement {
 
 /// The workspace in the top line, its autopilot state under it; the scope switcher; the
 /// places this workspace has with their counts and keys in columns, Activity's pages under
-/// Activity while one shows; Ask, Go to and Settings (its sections under it while it is
+/// Activity while one shows; Go to and Settings (its sections under it while it is
 /// selected) under a rule; this device in the bottom line. The rows scroll, so every one stays
 /// reachable on a short grid.
 fn sidebar(
@@ -201,14 +201,6 @@ fn sidebar(
                     .child(term::hrule())
                     .child(atoms::nav_row(
                         app,
-                        ASK_LABEL,
-                        String::from("ask-open"),
-                        move || app.is_open(Overlay::Ask),
-                        Some(trailing(None, String::from(ASK_KEY))),
-                        move || app.open_ask(),
-                    ))
-                    .child(atoms::nav_row(
-                        app,
                         PALETTE_LABEL,
                         String::from("palette-open"),
                         move || app.is_open(Overlay::Palette),
@@ -236,7 +228,7 @@ fn sidebar(
 }
 
 /// The folded sidebar: the scope's name, each place as its key with its count beside it, then
-/// Ask, Go to and Settings as their keys, the Settings sections' short names under Settings
+/// Go to and Settings as their keys, the Settings sections' short names under Settings
 /// while it is selected. Activity's pages need their names, so the folded sidebar leaves them
 /// to the unfolded one (`^B`) and to Go to.
 fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElement {
@@ -283,14 +275,6 @@ fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElemen
         view()
             .child(rows)
             .child(term::hrule())
-            .child(atoms::nav_row(
-                app,
-                ASK_KEY,
-                String::from("ask-open"),
-                move || app.is_open(Overlay::Ask),
-                None,
-                move || app.open_ask(),
-            ))
             .child(atoms::nav_row(
                 app,
                 PALETTE_CHORD,

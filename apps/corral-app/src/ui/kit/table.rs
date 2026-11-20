@@ -4,10 +4,8 @@
 
 use nsh_core::prelude::*;
 
-use crate::model::board::Mark;
-use crate::model::{Form, Hue};
+use crate::model::Form;
 use crate::state::AppState;
-use crate::ui::kit::marks::mark;
 use crate::ui::kit::page::Width;
 use crate::ui::kit::text::label_value;
 use crate::ui::term;
@@ -23,12 +21,6 @@ struct Headed {
     cell: (f32, f32),
 }
 
-/// `.devtable th, td`: 9 12 both.
-const DEVTABLE: Headed = Headed {
-    test_id: "devtable",
-    head: (12.0, 9.0),
-    cell: (12.0, 9.0),
-};
 /// `.utable th` 8 12, `td` 7 12.
 const UTABLE: Headed = Headed {
     test_id: "utable",
@@ -81,34 +73,6 @@ pub fn qtable(app: AppState, widths: &[Width], rows: Vec<Vec<AnyElement>>) -> An
         .into_element()
 }
 
-/// The device table (`.devtable`): a header row of column names over rows of cells, a rule
-/// under every row. Desktop: cells padded 9 12; the header in 11 pt semibold spaced capitals in
-/// the quiet ink. Phone: no grid, as a 390 pt screen has no room for one: each row is a block
-/// (padding 10 18, a rule under it) with its first cell on top and every other cell under it
-/// as a `label_value` row named by its column. Terminal: the header in bold capitals, a joined
-/// rule under it, then one line per row as [`qtable`] lays them out. Roles table, row, column
-/// header and cell; test_id "devtable".
-pub fn devtable(
-    app: AppState,
-    widths: &[Width],
-    header: &[&str],
-    rows: Vec<Vec<AnyElement>>,
-) -> AnyElement {
-    headed(app, &DEVTABLE, widths, header, &[], rows)
-}
-
-/// [`devtable`] with columns set against their trailing edge where `align_end` holds (missing
-/// entries start-align), header and cells alike: figures, the trailing action column.
-pub fn devtable_aligned(
-    app: AppState,
-    widths: &[Width],
-    header: &[&str],
-    align_end: &[bool],
-    rows: Vec<Vec<AnyElement>>,
-) -> AnyElement {
-    headed(app, &DEVTABLE, widths, header, align_end, rows)
-}
-
 /// The usage table (`.utable`): [`devtable_aligned`] at its tighter paddings, header cells 8 12
 /// and body cells 7 12; columns where `align_end` holds sit at the trailing edge, as its
 /// `.n` figure columns. Phone and terminal as [`devtable`]. test_id "utable".
@@ -159,45 +123,6 @@ fn headed(
             .collect::<Vec<_>>(),
     )
     .into_element()
-}
-
-/// The marked step list (`.steps`): each item's mark in its hue, then its content. Desktop:
-/// items 4 pt apart, the mark 8 pt before the content on its first line. Phone: 8 pt apart.
-/// Terminal: the mark's glyph, a Cell, the content. Pass a quiet content for items still to
-/// come (the mockup's `li.next`). Role list; test_id "steps".
-pub fn steps(app: AppState, items: Vec<(Mark, Hue, AnyElement)>) -> AnyElement {
-    let form = app.form;
-    let (gap, line) = match form {
-        Form::Desktop => (4.0, 19.0),
-        Form::Phone => (8.0, 22.0),
-        Form::Terminal => (0.0, 16.0),
-    };
-    view()
-        .test_id("steps")
-        .role(AccessibilityRole::List)
-        .gap(px(gap))
-        .children(
-            items
-                .into_iter()
-                .map(|(state, hue, content)| {
-                    view()
-                        .flex_row()
-                        .items_start()
-                        .gap(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
-                        .child(
-                            view()
-                                .h(px(line))
-                                .flex_shrink_0()
-                                .justify_center()
-                                .child(mark(app, state, hue)),
-                        )
-                        .when(form == Form::Terminal, |item| item.child(term::space(1.0)))
-                        .child(view().flex_1().min_w(px(0.0)).child(content))
-                        .into_element()
-                })
-                .collect::<Vec<_>>(),
-        )
-        .into_element()
 }
 
 /// The numbered step list (`.steps4`): a numbered disc, the step's title in bold and a quiet
