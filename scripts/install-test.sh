@@ -24,7 +24,7 @@ mkdir -p "$suite/bin" "$suite/fixtures"
 # Restrict PATH so an installed herdr (or real downloader) cannot be reached.
 export TEST_REAL_MV
 TEST_REAL_MV=$(command -v mv)
-for cmd in sh awk mktemp rm tar gzip mkdir rmdir cp chmod cmp ln sha256sum script sleep; do
+for cmd in sh awk mktemp rm tar gzip mkdir rmdir cp chmod cmp ln ls sha256sum script sleep; do
     ln -s "$(command -v "$cmd")" "$suite/bin/$cmd"
 done
 cat >"$suite/bin/mv" <<'SH'
@@ -34,6 +34,21 @@ case "$1:$2" in
 -f:*/new/corrald-next)
     [ "${TEST_FAIL_PROMOTION:-0}" = 0 ] || exit 47
     ;;
+"$CORRAL_APP_INSTALL_DIR":*/.corral-app-install.*/old)
+    # This runs after preflight and just before the independent writer's site
+    # would be moved into the installer's transaction.
+    case "${TEST_BACKUP_RACE:-}" in
+    fill)
+        entry=$(printf '\n.')
+        printf 'unrelated\n' >"$1/${entry%.}"
+        ;;
+    replace | replace-blocked)
+        "$TEST_REAL_MV" "$1" "$TEST_ROOT/original-site"
+        mkdir "$1"
+        printf 'unrelated\n' >"$1/index.html"
+        ;;
+    esac
+    ;;
 */.corral-app-install.*/new/site:*)
     if [ "${TEST_PROMOTION_COLLISION:-0}" = 1 ]; then
         mkdir "$CORRAL_APP_INSTALL_DIR"
@@ -42,6 +57,10 @@ case "$1:$2" in
     ;;
 esac
 "$TEST_REAL_MV" "$@"
+if [ "$1" = "$CORRAL_APP_INSTALL_DIR" ] && [ "${TEST_BACKUP_RACE:-}" = replace-blocked ]; then
+    mkdir "$1"
+    printf 'new arrival\n' >"$1/index.html"
+fi
 if [ "$1" = "$CORRAL_APP_INSTALL_DIR" ] && [ "${TEST_PAUSE_BACKUP:-0}" = 1 ]; then
     # The live site is now absent, but the first installer still owns the locks.
     : >"$TEST_ROOT/paused"
@@ -155,7 +174,7 @@ new_case() {
     export HOME="$TEST_ROOT/home" CORRAL_INSTALL_DIR="$TEST_ROOT/install"
     export CORRAL_APP_INSTALL_DIR="$TEST_ROOT/site"
     export CORRAL_BASE_URL=https://fixture.invalid/releases CORRAL_VERSION=latest
-    unset TEST_CURRENT_FIXTURE TEST_FAIL_PROMOTION TEST_PAUSE_BACKUP TEST_PROMOTION_COLLISION
+    unset TEST_CURRENT_FIXTURE TEST_FAIL_PROMOTION TEST_PAUSE_BACKUP TEST_PROMOTION_COLLISION TEST_BACKUP_RACE
     unset TEST_HERDR_VERSION TEST_VERSION_EXIT TEST_ENGINE_DOWNLOAD_FAIL TEST_ENGINE_EXIT
     unset TEST_BAD_CHECKSUM TEST_ARCH TEST_OS CORRAL_REPO
     unset TEST_CORRAL_VERSION TEST_BINARY_EXIT TEST_WRONG_CHECKSUM_NAME
@@ -436,8 +455,49 @@ for prior in existing absent; do
     fi
 done
 
-# An unrelated writer is not bound by the lock. If it recreates the destination
-# after backup, do not replace it or throw away the old installation.
+# An unrelated writer can fill an empty directory or replace a managed site
+# after preflight. Reject the actual backup and restore it, or retain it if
+# another arrival prevents restoration.
+for race in fill replace replace-blocked; do
+    new_case
+    entry=index.html
+    case "$race" in
+    fill)
+        mkdir "$CORRAL_APP_INSTALL_DIR"
+        entry=$(printf '\n.')
+        entry=${entry%.}
+        ;;
+    *) run; ;;
+    esac
+    if TEST_CURRENT_FIXTURE=2 TEST_BACKUP_RACE=$race run; then
+        echo "unexpected success after the backup changed: $race" >&2
+        exit 1
+    fi
+    PATH=$original_path grep -F 'destination is nonempty and not managed' "$TEST_ROOT/output" >/dev/null
+    recovered=$CORRAL_APP_INSTALL_DIR
+    set -- "$TEST_ROOT"/.corral-app-install.*
+    [ "$#" -eq 1 ]
+    if [ "$race" = replace-blocked ]; then
+        PATH=$original_path grep -F 'could not roll back' "$TEST_ROOT/output" >/dev/null
+        printf 'new arrival\n' | cmp -s - "$CORRAL_APP_INSTALL_DIR/index.html"
+        recovered=$1/old/site
+    else
+        [ ! -e "$1" ]
+    fi
+    printf 'unrelated\n' | cmp -s - "$recovered/$entry"
+    [ ! -e "$recovered/.corral-web-install" ]
+    if [ "$race" = fill ]; then
+        [ ! -e "$CORRAL_INSTALL_DIR/corral-next" ]
+    else
+        printf 'site 1\n' | cmp -s - "$TEST_ROOT/original-site/index.html"
+        [ "$("$CORRAL_INSTALL_DIR/corral-next" --version)" = 'corral-next 7.8.1' ]
+    fi
+    [ ! -e "$CORRAL_INSTALL_DIR/.corral-next-install.lock" ]
+    [ ! -e "$TEST_ROOT/.corral-web-install.lock" ]
+done
+
+# If an unrelated writer recreates the destination after a valid backup, do not
+# replace it or throw away the old installation.
 new_case
 run --app-only
 if TEST_CURRENT_FIXTURE=2 TEST_PROMOTION_COLLISION=1 run --app-only; then
