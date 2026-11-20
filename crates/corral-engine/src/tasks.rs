@@ -90,8 +90,6 @@ impl Engine {
             if let Some(value) = edit.depends_on {
                 task.depends_on = value;
             }
-            // An owner edit restarts the review rounds, as reopening does.
-            task.round = 0;
             self.touch(&mut task);
             store.update_task(&task)?;
             self.task_event(store, id, EventKind::Edited, detail)?;
