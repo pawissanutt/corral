@@ -33,6 +33,7 @@ import { DialogAdoption, ownerDialogPresentation, type OwnerDialogHost } from ".
 import { statusPresenter } from "./notice-route.ts";
 import { quietNote } from "./mark-rows.ts";
 import { effortPicker, modelPicker, optionPicker } from "./model-picker.ts";
+import type { FavoriteModels } from "../host/model-favorites.ts";
 import { settingsCard } from "./settings-card.ts";
 import { ownerBashPresenter } from "./owner-bash.ts";
 import { planLedger } from "./plan-detail.ts";
@@ -85,6 +86,8 @@ export interface NativePanelsOptions {
    * answer the same card and whichever side answers first closes the other's. Absent: dialogs answer only here.
    */
   readonly dialogs?: RemoteDialogs;
+  /** The workspace's favorite models, which the model picker lists first and marks; absent: no favorites. */
+  readonly modelFavorites?: FavoriteModels;
 }
 /** Views a tool row's clickable label can open by name; `plan` is the sidebar's Plan tab. */
 export type PanelView = "chat" | "agents" | "changes" | "task" | "proof" | "artifacts" | "usage" | "board" | "plan";
@@ -277,7 +280,7 @@ export class NativePanels implements PanelSurface {
         row: quietNote,
       }),
       selectorPresentation: {
-        model: request => modelPicker(request, host),
+        model: request => modelPicker(request, host, this.options.modelFavorites),
         thinking: request => effortPicker(request, host),
         settings: request => settingsCard(request, host),
         options: request => optionPicker(request, host),

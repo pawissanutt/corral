@@ -33,6 +33,7 @@ import { archivedChildren, childDetailsChanged, registerChildren } from "./remot
 import { commandsPart, registerCommands, typedSessionAction } from "./remote/commands.ts";
 import { jobsPart, registerJobs } from "./remote/jobs.ts";
 import { ModelCatalogStatus, modelsPart, registerModels } from "./remote/models.ts";
+import { WorkspaceModelFavorites } from "./model-favorites.ts";
 import { usagePart, usageTotal, type ParentUsage } from "./remote/usage.ts";
 import { contextPart, planHistory, registerWorkspace, WorkspaceGit, type WorkspaceInputs } from "./remote/workspace.ts";
 import { RemoteBuild } from "./remote/build.ts";
@@ -330,6 +331,7 @@ export class HostSession {
   private readonly archivedFleet: readonly ChildSnapshot[];
   private readonly remoteDefaultModel: string;
   private readonly remoteCatalog = new ModelCatalogStatus();
+  private readonly modelFavorites: WorkspaceModelFavorites;
   private remoteJobSample: ReturnType<typeof setTimeout> | undefined;
   readonly dialogs: RemoteDialogs;
   readonly panels: NativePanels | undefined;
@@ -410,6 +412,7 @@ export class HostSession {
   private constructor(private readonly options: HostSessionOptions) {
     const host = this;
     this.liveEvents = new LiveEvents();
+    this.modelFavorites = new WorkspaceModelFavorites(options.client.workspaceRoot, () => this.liveEvents.stateChanged());
     this.dialogs = new RemoteDialogs(() => this.liveEvents.stateChanged(), {
       entries: () => [...questionEntries(this.ownerQuestions), ...this.remoteBuild.entries()],
       absent: id => questionStatus(this.ownerQuestions?.status(id) ?? "missing"),
@@ -484,6 +487,7 @@ export class HostSession {
     const ownerDialogs = { dialogs: this.dialogs };
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       ...ownerDialogs,
+      modelFavorites: this.modelFavorites,
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
       sidebarKey: sidebarToggleKey(process.env),
       marks: this.marks,
@@ -1443,7 +1447,8 @@ export class HostSession {
       context: () => this.remoteContext(), git: this.workspaceGit, ledger: ledger ? () => this.ledger ?? ledger : undefined,
       history: () => planHistory(join(this.options.build?.dir ?? this.options.runtimeDir ?? this.options.agentDir, "todo.json")),
     });
-    registerModels(registry, () => modelsPart(this.session, this.remoteDefaultModel, interactiveModels(this.options.identity.role), this.remoteCatalog));
+    registerModels(registry, () => modelsPart(this.session, this.remoteDefaultModel, interactiveModels(this.options.identity.role), this.remoteCatalog,
+      this.modelFavorites), this.modelFavorites);
     if (build) registerBoard(registry, {
       board: build.board, record: build.liveRecord, ready: () => this.remoteActionsReady,
       unavailable: build.board && this.options.build?.session.workspaceRoot ? undefined : "This build has no board connection",
@@ -1828,7 +1833,7 @@ export class HostSession {
       plan: this.ledger ? [this.ledger.current, this.ledger.unavailable, this.ledger.continued] : undefined,
       board: build?.board ? [build.board.tasks(), build.board.proposed()] : undefined,
       record: journal ? [journal.ino, journal.mtimeMs, journal.size, this.session.sessionManager.getLeafId()] : undefined,
-      models: modelsPart(session, this.remoteDefaultModel, interactiveModels(this.options.identity.role), this.remoteCatalog),
+      models: modelsPart(session, this.remoteDefaultModel, interactiveModels(this.options.identity.role), this.remoteCatalog, this.modelFavorites),
       commands: this.remoteCommands(),
     } };
   }

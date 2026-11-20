@@ -141,6 +141,7 @@ const REMOTE_CAPABILITIES: Readonly<Record<string, string | undefined>> = {
   changes: "changes", usage: "usage", plan: "plan", context: "context", commands: "commands", board: "board",
   board_plan_task: "board_plan_task",
   record: "record", exit_open: "exit", compact: "compact", export: "export", owner_bash: "shell",
+  model_favorite: "model_favorite",
 };
 
 export function capabilities(registry: RemoteRegistry, options: { open: boolean; closing: boolean; rewind: boolean }): Capability[] {

@@ -428,8 +428,8 @@ fn exit_card(feed: &Feed, id: &str, at: &str) -> Result<SessionCard, String> {
     })
 }
 
-/// A session action: Finish docks the exit choice; Compact and the board's refresh run on the
-/// build's parts; Export and a shell command are refused with the host's reason.
+/// A session action: Finish docks the exit choice; Compact, the board's refresh and a model's
+/// favorite mark run on the build's parts; Export and a shell command are refused with the host's reason.
 pub(super) fn action(feed: &mut Feed, request: &SessionActionRequest) -> Result<Value, String> {
     let id = running(feed, &request.id)?;
     match &request.action {
@@ -438,6 +438,9 @@ pub(super) fn action(feed: &mut Feed, request: &SessionActionRequest) -> Result<
             return parts_ops::compact(feed, &id, instructions.as_deref());
         }
         SessionAction::BoardRefresh => return parts_ops::board_refresh(feed, &id),
+        SessionAction::ModelFavorite { model, favorite } => {
+            return parts_ops::favorite(feed, &id, model, *favorite);
+        }
         SessionAction::Export => return Err("this session's host does not export sessions".into()),
         SessionAction::Shell { .. } => {
             return Err("this session's host runs no owner shell commands".into());

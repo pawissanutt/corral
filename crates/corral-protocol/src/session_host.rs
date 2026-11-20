@@ -202,6 +202,12 @@ pub enum SessionAction {
         command: String,
         exclude_from_context: bool,
     },
+    /// Marks or unmarks a model as a favorite of the workspace; the session's model is unchanged.
+    ModelFavorite {
+        /// `<provider>/<model>`, as `ModelChoice::id`.
+        model: String,
+        favorite: bool,
+    },
     #[serde(other)]
     Other,
 }
