@@ -33,7 +33,7 @@ use super::session::popup;
 const TARGET: f32 = 44.0;
 
 /// The New menu at the page head's trailing edge.
-pub(super) fn new_menu(app: AppState) -> AnyElement {
+pub(crate) fn new_menu(app: AppState) -> AnyElement {
     let form = app.form;
     let new = agents::new_menu();
     let items: Vec<AnyElement> = new

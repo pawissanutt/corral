@@ -4,13 +4,13 @@
 //! leaves the page.
 
 use crate::model::session::{self, Cx, Facts};
-use crate::model::{Destination, Live, agents};
+use crate::model::{Destination, Live};
 
 use super::AppState;
 
 impl AppState {
-    /// Clears the Sessions roster's selection while that page is in view (no page pushed over
-    /// it), or backs the finder out of full size or its filter; whether there was one to clear.
+    /// Backs the finder out of full size or its filter while that page is in view (no page
+    /// pushed over it); whether there was one to clear.
     pub(super) fn clear_page_selection(&self) -> bool {
         let (destination, bare) = self
             .nav
@@ -19,17 +19,6 @@ impl AppState {
             return false;
         }
         match destination {
-            Destination::Sessions
-                if self
-                    .agents
-                    .with_untracked(|state| state.roster_session.is_some()) =>
-            {
-                let filter = nsh_core::prelude::untracked(|| self.scope_filter());
-                self.reduce(self.agents, |state, feed, _, _| {
-                    state.act(agents::Action::ClearRoster, feed, &filter)
-                });
-                true
-            }
             Destination::Artifacts => self.escape_artifacts(),
             _ => false,
         }

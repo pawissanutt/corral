@@ -117,7 +117,9 @@ pub use fleet::{
     JobOutputView, JobRowView, MessageLine, MessageList, ModelChoiceRow, ModelPicker, Opened,
     Timeline, TimelineRow, agents_tab,
 };
-pub use header::{DecisionsChip, ExitStatus, Header, NeedsChip, StateWord, exit_status, header};
+pub use header::{
+    DecisionsChip, ExitStatus, Header, Meta, NeedsChip, StateWord, exit_status, header, role_word,
+};
 pub use keys::{KeyAction, KeyBinding, WEB_RESERVED, bound, keys, legend, legend_of, press};
 pub use land::GateLog;
 pub use log::{SessionLog, ended_run, log};
@@ -134,11 +136,13 @@ pub use questions::{
 pub use queue::{QueueControl, QueueDock, QueueItem};
 pub use read_state::ReadState;
 pub use sidebar::{
-    ContextFact, ContextList, ContextTab, FilesTab, McpRow, SideAgent, SideContent, SideFile,
-    SideJob, SideTab, SideTabItem, Sidebar, SidebarAction, SidebarSummary, SidebarUi,
-    SummarySegment, sidebar,
+    ContextFact, ContextList, ContextTab, DetailSection, Details, FilesTab, McpRow, Panel,
+    Section as DetailKind, SectionContent, SideAgent, SideFile, SideJob, SidebarAction,
+    SidebarUi, brief as details_brief, details,
 };
-pub use status::{Alert, ContextMeter, Cost, RolePill, StatusBar, cost_text, status};
+pub use status::{
+    Alert, ContextMeter, Cost, RolePill, StatusBar, cost_text, quiet, spent, status,
+};
 pub use tabs::{Badge, PartBody, TabItem, tabs_for};
 pub use task::{Attempt, TaskAction, TaskLink, TaskTab, TaskUi, task_tab};
 pub use transcript::{Fill, Transcript};
@@ -348,6 +352,8 @@ static EMPTY_UI: Ui = Ui::EMPTY;
 pub struct State {
     pub ids: IdSupply,
     pub sessions: BTreeMap<Id, Ui>,
+    /// The Details panel on this device, the same for every session page.
+    pub panel: Panel,
     /// The concrete chat Ask shows (`A-n`), once a send to `quick` was acknowledged under it;
     /// none while Ask is on `quick` (before its first send, and again once that chat ended).
     pub ask: Option<Id>,
@@ -704,8 +710,8 @@ pub struct SessionPage {
     /// In the composer's place when the session takes no message now.
     pub bar: Option<HostBar>,
     pub status: StatusBar,
-    /// The rail beside the main view, or its summary row; none for a child or a log.
-    pub sidebar: Option<Sidebar>,
+    /// The Details panel beside the conversation; none for a child or a log.
+    pub details: Option<Details>,
     pub actions: SessionActions,
     /// The open model or effort list over the composer.
     pub picker: Option<Picker>,
@@ -798,7 +804,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         (None, Tab::Proof) => Body::Proof(proof_tab(&cx)),
         (None, Tab::Chat) => Body::Chat(chat(&cx)),
     };
-    let sidebar = sidebar(&cx);
+    let details = details(&cx, &state.panel);
     let mut fetches: Vec<Action> = transcript::fetches(feed, id)
         .into_iter()
         .map(|token| Action::Fetch {
@@ -818,8 +824,8 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         Body::Agents(_) => fleet::fetches(&cx),
         Body::Chat(_) | Body::Log(_) => Vec::new(),
     });
-    if sidebar.is_some() {
-        fetches.extend(sidebar::fetches(&cx));
+    if details.is_some() {
+        fetches.extend(sidebar::fetches(&cx, &state.panel));
     }
     let streams = *cx.role != SessionRole::Child && !cx.log_only() && feed.capable(SESSION_V1);
     let concrete = cx
@@ -842,7 +848,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         composer: composer(&cx),
         bar: host_bar(&cx),
         status: status(&cx),
-        sidebar,
+        details,
         picker: model_picker(&cx),
         slash,
         jump: ui.jump,

@@ -1,23 +1,27 @@
-//! The session page's head (`session::Header`): back to Agents, who the session is (`build ·
-//! auth-refactor`) with its id, the needs-you and decisions chips, the state word with its mark
-//! (a current notice in its place, with × to dismiss it), and the ⋯ menu of the session's actions;
-//! under it the muted second line. Pressing the needs-you chip docks the oldest waiting card; a
+//! The session page's head (`session::Header`): back to Sessions, the session's id, name and
+//! role word, the needs-you and decisions chips, the state word with its mark (a current notice
+//! in its place, with × to dismiss it), Details, More (the session's controls, as on its row)
+//! and the ⋯ menu of everything its host offers; under it the meta line (project, branch, task,
+//! model and effort, what it does). Pressing the needs-you chip docks the oldest waiting card; a
 //! build's `choose exit` presses to Finish…, which docks the exit choice. Desktop: one 46 pt row
 //! and the line under it; terminal: the same as two rows of Cells; phone: the shell's head names
-//! the session and holds ⋯, the page leads with one state line. The facts redraw on their own,
-//! so the open menu and its trigger stay mounted while the state word ticks. test ids
-//! `btn-needs-you`, `btn-choose-exit`, `btn-dismiss-notice`.
+//! the session and holds ⋯, the page leads with one state line with Details. The facts redraw on
+//! their own, so the open menu and its trigger stay mounted while the state word ticks. test ids
+//! `btn-needs-you`, `btn-choose-exit`, `btn-dismiss-notice`, `btn-details`, `more-<session>`,
+//! `session-meta`, `meta-task`.
 
 use corral_protocol::session_state::ExitPhase;
 use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
-use crate::model::session::{Action, CommandAction, DockAction, Header, SessionPage};
+use crate::model::session::{Action, CommandAction, DockAction, Header, Meta, SessionPage};
+use crate::model::work::Record;
 use crate::model::{Form, Hue, Id};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
+use crate::ui::kit::next::more_button;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
@@ -35,14 +39,127 @@ const TARGET: f32 = 44.0;
 const MENU_MIN: f32 = 220.0;
 const MENU_MAX: f32 = 340.0;
 
-/// The page head on desktop and in a terminal.
+/// `Details`, which opens and closes the panel, while the session has one.
+fn details_button(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+    let toggle = computed(move || {
+        page.with(|p| p.details.as_ref().map(|d| (d.toggle.clone(), d.shown)))
+    });
+    dynamic(move || {
+        toggle.get().map(|(action, shown)| {
+            untracked(|| {
+                button_with(
+                    app,
+                    "Details",
+                    // Outlined while open, as a pressed toggle reads.
+                    if shown {
+                        ButtonKind::Ghost
+                    } else {
+                        ButtonKind::Quiet
+                    },
+                    ButtonOptions {
+                        // A terminal's key line names Alt+B; its head keeps the room.
+                        key_hint: (app.form == Form::Desktop).then_some("Alt+B"),
+                        ..ButtonOptions::default()
+                    },
+                    "btn-details",
+                    move || run(app, action.clone()),
+                )
+            })
+        })
+    })
+}
+
+/// The session's More menu: its controls, then for a run its task's.
+fn more(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+    let id = untracked(|| page.with(|p| p.id.clone()));
+    more_button(app, Record::Session(id), app.form == Form::Phone)
+}
+
+/// The meta line under the head: project, branch, task (opening its page), model and effort,
+/// what the session does.
+fn meta(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+    let form = app.form;
+    let facts = computed(move || page.with(|p| p.header.meta.clone()));
+    dynamic(move || {
+        let facts = facts.get();
+        (!facts.is_empty()).then(|| {
+            untracked(|| {
+                let parts: Vec<AnyElement> = facts
+                    .into_iter()
+                    .map(|fact| meta_fact(app, fact))
+                    .collect();
+                let line = view()
+                    .test_id("session-meta")
+                    .flex_row()
+                    .items_center()
+                    .overflow_hidden()
+                    .gap(px(if form == Form::Terminal { 16.0 } else { 14.0 }))
+                    .children(parts);
+                match form {
+                    Form::Terminal => line.px(term::cells(1.0)).into_element(),
+                    _ => line.px(px(18.0)).pb(px(8.0)).into_element(),
+                }
+            })
+        })
+    })
+}
+
+fn meta_fact(app: AppState, fact: Meta) -> AnyElement {
+    let form = app.form;
+    let sized = |words: Text, mono: bool| match form {
+        Form::Terminal => words,
+        _ => words
+            .font_family(if mono { FONT_MONO } else { FONT_TEXT })
+            .text_size(px(12.0)),
+    };
+    let value = sized(
+        text(fact.value.clone())
+            .number_of_lines(1u32)
+            .truncate()
+            .min_w(px(0.0))
+            .text_color(color(if fact.label.is_some() {
+                Token::Ink2
+            } else {
+                Token::Ink3
+            })),
+        fact.mono,
+    );
+    let face = view()
+        .flex_row()
+        .items_center()
+        .min_w(px(0.0))
+        .flex_shrink(if fact.label.is_some() { 0.0 } else { 1.0 })
+        .gap(px(if form == Form::Terminal { 8.0 } else { 4.0 }))
+        .children(fact.label.map(|label| {
+            sized(
+                text(label)
+                    .number_of_lines(1u32)
+                    .text_color(color(Token::Ink3)),
+                false,
+            )
+        }))
+        .child(value);
+    match fact.action {
+        Some(action) => face
+            .test_id(&format!("meta-{}", fact.label.unwrap_or("link")))
+            .role(AccessibilityRole::Link)
+            .label(format!("{} {}", fact.label.unwrap_or_default(), fact.value))
+            .cursor_pointer()
+            .on_press(move || run(app, action.clone()))
+            .into_element(),
+        None => face.into_element(),
+    }
+}
+
+/// The page head on desktop and in a terminal: back to Sessions, the session's id, name and
+/// role, its state, Details, More and the session's actions; the meta line under it.
 pub(super) fn head(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     let form = app.form;
     let header = computed(move || page.with(|p| p.header.clone()));
     let back = untracked(|| header.with(|h| h.back.clone()));
-    let target = move || header.with(|h| h.target.clone());
+    let name = move || header.with(|h| h.name.clone());
+    let role = move || header.with(|h| h.role.clone());
     let shown_id = move || header.with(|h| h.shown_id.clone());
-    let line2 = computed(move || header.with(|h| h.line2.clone()));
     let back_action = back.1.clone();
     if form == Form::Terminal {
         let first = view()
@@ -64,7 +181,14 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             )
             .child(term::space(2.0))
             .child(
-                text(target)
+                text(shown_id)
+                    .number_of_lines(1u32)
+                    .flex_shrink_0()
+                    .text_color(color(Token::Ink3)),
+            )
+            .child(term::space(1.0))
+            .child(
+                text(name)
                     .test_id("page-title")
                     .role(AccessibilityRole::Header)
                     .number_of_lines(1u32)
@@ -76,7 +200,7 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             )
             .child(term::space(1.0))
             .child(
-                text(shown_id)
+                text(role)
                     .number_of_lines(1u32)
                     .flex_shrink_0()
                     .text_color(color(Token::Ink3)),
@@ -84,18 +208,13 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             .child(view().flex_1().min_w(px(0.0)))
             .child(facts(app, page, header))
             .child(term::space(1.0))
+            .child(details_button(app, page))
+            .child(more(app, page))
             .child(actions(app, page));
         return view()
             .flex_none()
             .child(first)
-            .child(dynamic(move || {
-                line2.get().map(|words| {
-                    view()
-                        .px(term::cells(1.0))
-                        .child(term::quiet(words).number_of_lines(1u32).truncate())
-                        .into_element()
-                })
-            }))
+            .child(meta(app, page))
             .into_element();
     }
     let first = view()
@@ -116,7 +235,16 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             move || run(app, back_action.clone()),
         ))
         .child(
-            text(target)
+            text(shown_id)
+                .number_of_lines(1u32)
+                .flex_shrink_0()
+                .font_family(FONT_MONO)
+                .text_size(px(12.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(color(Token::Ink2)),
+        )
+        .child(
+            text(name)
                 .test_id("page-title")
                 .role(AccessibilityRole::Header)
                 .number_of_lines(1u32)
@@ -130,37 +258,24 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                 .text_color(color(Token::Ink)),
         )
         .child(
-            text(shown_id)
+            text(role)
                 .number_of_lines(1u32)
                 .flex_shrink_0()
-                .font_family(FONT_MONO)
-                .text_size(px(12.5))
+                .font_family(FONT_TEXT)
+                .text_size(px(13.0))
                 .text_color(color(Token::Ink3)),
         )
         .child(view().flex_1().min_w(px(0.0)))
         .child(facts(app, page, header))
+        .child(details_button(app, page))
+        .child(more(app, page))
         .child(actions(app, page));
     view()
         .flex_none()
         .border_b(px(1.0))
         .border_color(color(Token::Rule))
         .child(first)
-        .child(dynamic(move || {
-            line2.get().map(|words| {
-                view()
-                    .px(px(18.0))
-                    .pb(px(8.0))
-                    .child(
-                        text(words)
-                            .number_of_lines(1u32)
-                            .truncate()
-                            .font_family(FONT_TEXT)
-                            .text_size(px(12.0))
-                            .text_color(color(Token::Ink3)),
-                    )
-                    .into_element()
-            })
-        }))
+        .child(meta(app, page))
         .into_element()
 }
 
@@ -190,6 +305,17 @@ pub(super) fn phone_line(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                 .text_size(px(13.0))
                 .text_color(color(Token::Ink3)),
         )
+        .into_element()
+}
+
+/// The phone head's trailing controls: Details, which opens as a sheet, and ⋯.
+pub(super) fn phone_trailing(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(4.0))
+        .child(details_button(app, page))
+        .child(actions(app, page))
         .into_element()
 }
 

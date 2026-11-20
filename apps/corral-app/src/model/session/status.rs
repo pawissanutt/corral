@@ -1,7 +1,8 @@
-//! The status bar under the composer: the role pill, the session's cost, the context meter, the
-//! model and effort while the composer bar is folded, and the host's standing alerts. A cost the
-//! host did not report is `$–`, never `$0.00`; a cost with an unpriced member carries `+`; a
-//! context window the host did not report is `ctx –`.
+//! The status line under the composer: the role pill, the session's cost, the context meter, the
+//! model and effort, how long the agent has been quiet, how much input is queued, and the host's
+//! standing alerts. A cost the host did not report is `$–`, never `$0.00`; a cost with an
+//! unpriced member carries `+`; a context window the host did not report is `ctx –`; a quiet
+//! time or a queue the host did not report is not shown.
 
 use corral_protocol::session_state::UsageBrief;
 
@@ -27,8 +28,12 @@ pub struct StatusBar {
     pub role: RolePill,
     pub cost: Cost,
     pub meter: ContextMeter,
-    /// `<provider>/<model> · effort high`, shown only while the composer bar is folded.
+    /// `<provider>/<model> · effort high`.
     pub model_effort: Option<String>,
+    /// `quiet 12s`: a run's time since its last output, as corrald reports it.
+    pub quiet: Option<String>,
+    /// `2 queued`: the host's queue, while it holds input.
+    pub queued: Option<String>,
     pub alerts: Vec<Alert>,
     /// The values are the last ones received while corrald is unreachable.
     pub stale: bool,
@@ -55,6 +60,8 @@ pub struct Cost {
 pub struct ContextMeter {
     /// Filled cells of `METER_CELLS`; none when the window is unknown.
     pub filled: Option<u8>,
+    /// The share of the window in use, rounded; none when the window is unknown.
+    pub percent: Option<u32>,
     /// `ctx ▰▰▰▱▱▱▱▱▱▱▱▱ 24% · 48.0k / 200k`, `ctx –`.
     pub full: String,
     /// `ctx 24%`, never dropped.
@@ -140,6 +147,7 @@ fn meter_of(id: &Id, percent: Option<f32>, window: Option<(u64, u64)>) -> Contex
     let Some(percent) = percent.filter(|value| value.is_finite()) else {
         return ContextMeter {
             filled: None,
+            percent: None,
             full: "ctx –".into(),
             short: "ctx –".into(),
             hue: Hue::Neutral,
@@ -154,6 +162,7 @@ fn meter_of(id: &Id, percent: Option<f32>, window: Option<(u64, u64)>) -> Contex
     let shown = clamped.round() as u32;
     ContextMeter {
         filled: Some(filled),
+        percent: Some(shown),
         full: match window {
             Some((used, window)) => {
                 format!("ctx {bar} {shown}% · {} / {}", tokens(used), tokens(window))
@@ -175,10 +184,7 @@ fn meter_of(id: &Id, percent: Option<f32>, window: Option<(u64, u64)>) -> Contex
 /// The status bar of the session `cx` reads. Without a host state, the row's recorded cost.
 pub fn status(cx: &Cx<'_>) -> StatusBar {
     let usage = cx.state.map(|state| &state.usage);
-    let (cost, partial) = match super::usage::total(cx) {
-        Some(total) => (total.cost_usd, total.partial),
-        None => (cx.row.and_then(|row| row.cost_usd), false),
-    };
+    let (cost, partial) = spent(cx);
     let mut alerts = Vec::new();
     if let Some(error) = cx.state.and_then(|state| state.last_error.as_deref()) {
         alerts.push(Alert {
@@ -227,7 +233,36 @@ pub fn status(cx: &Cx<'_>) -> StatusBar {
         },
         meter,
         model_effort,
+        quiet: quiet(cx),
+        queued: cx
+            .state
+            .map(|state| state.queue_total)
+            .filter(|queued| *queued > 0)
+            .map(|queued| format!("{queued} queued")),
         alerts,
         stale: cx.feed.link != crate::model::daemon::Link::Up,
     }
+}
+
+/// What the session spent, and whether a member's cost is unknown so the sum is a lower bound:
+/// the host's usage, else the row's recorded cost.
+pub fn spent(cx: &Cx<'_>) -> (Option<f64>, bool) {
+    match super::usage::total(cx) {
+        Some(total) => (total.cost_usd, total.partial),
+        None => (cx.row.and_then(|row| row.cost_usd), false),
+    }
+}
+
+/// `quiet 12s`: how long a working run has said nothing, from corrald's row.
+pub fn quiet(cx: &Cx<'_>) -> Option<String> {
+    let run = cx
+        .run
+        .filter(|run| matches!(run.status, corral_types::SessionStatus::Working))?;
+    let since = u64::try_from(run.run.quiet_since?.as_second()).ok()?;
+    (cx.feed.now > 0 && since <= cx.feed.now).then(|| {
+        format!(
+            "quiet {}",
+            crate::model::daemon::age(Some(since), cx.feed.now)
+        )
+    })
 }

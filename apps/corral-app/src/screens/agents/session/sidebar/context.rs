@@ -43,14 +43,14 @@ impl Captions {
     }
 }
 
-pub(super) fn context(app: AppState, tab: &ContextTab) -> AnyElement {
+/// The Agents section's rows: the agents at work, the completed ones, the jobs.
+pub(super) fn agents(app: AppState, tab: &ContextTab) -> AnyElement {
     let mut captions = Captions { first: true };
     let mut out: Vec<AnyElement> = Vec::new();
     if let Some(empty) = &tab.empty {
         out.push(inset(app, dim(app, empty.clone())));
     }
     if !tab.agents.is_empty() || tab.agents_note.is_some() {
-        out.push(captions.next(app, "Agents", None));
         out.extend(tab.agents.iter().map(|row| agent(app, row)));
         if let Some(note) = &tab.agents_note {
             out.push(inset(app, dim(app, note.clone())));
@@ -73,8 +73,13 @@ pub(super) fn context(app: AppState, tab: &ContextTab) -> AnyElement {
             ));
         }
     }
-    out.push(captions.next(app, "Session", None));
-    out.push(inset(app, facts(app, &tab.facts)));
+    column(app, out)
+}
+
+/// The Context section's rows: what the session works with, as its host reports it.
+pub(super) fn context(app: AppState, tab: &ContextTab) -> AnyElement {
+    let mut captions = Captions { first: false };
+    let mut out: Vec<AnyElement> = vec![inset(app, facts(app, &tab.facts))];
     for list in &tab.lists {
         out.push(captions.next(
             app,
@@ -91,6 +96,10 @@ pub(super) fn context(app: AppState, tab: &ContextTab) -> AnyElement {
         ));
         out.push(inset(app, mcp(app, servers)));
     }
+    column(app, out)
+}
+
+fn column(app: AppState, out: Vec<AnyElement>) -> AnyElement {
     view()
         .gap(px(if app.form == Form::Terminal { 0.0 } else { 2.0 }))
         .pb(px(if app.form == Form::Terminal { 0.0 } else { 8.0 }))

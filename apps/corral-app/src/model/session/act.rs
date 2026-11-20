@@ -178,6 +178,7 @@ impl State {
     pub fn act(&mut self, action: Action, feed: &Feed) -> Vec<Effect> {
         match action {
             Action::Tab { session, tab } => {
+                self.panel.give_way(tab != Tab::Chat);
                 let rows = tabs::rows(feed, session.as_str());
                 let ui = self.ui_mut(&session);
                 if tab == Tab::Chat {
@@ -196,6 +197,7 @@ impl State {
                 Vec::new()
             }
             Action::Sub { session, sub } => {
+                self.panel.give_way(sub.is_some());
                 let ui = self.ui_mut(&session);
                 match &sub {
                     Some(SubView::Usage) => ui.tab = Tab::Chat,

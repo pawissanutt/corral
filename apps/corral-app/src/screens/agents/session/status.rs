@@ -1,9 +1,10 @@
-//! The status bar under the composer (`session::StatusBar`): the role pill, the session's cost
+//! The status line under the composer (`session::StatusBar`): the role pill, the session's cost
 //! (`$–` while unknown, `+` when a member's is), the context meter in its tone from 80 % and
-//! 95 % (`ctx –` without a window), and the host's standing alerts and last error in the held
-//! colour, wrapping, never dropped. Values received before corrald became unreachable are marked
-//! stale. Desktop: one 26 pt row of quiet 11.5 pt words split by hairlines; phone: the short
-//! pill and meter in one compact row; terminal: one row of Cells split by `│`.
+//! 95 % (`ctx –` without a window), the model and effort, the quiet time and the queued count
+//! where reported, and the host's standing alerts and last error in the held colour, wrapping,
+//! never dropped. Values received before corrald became unreachable are marked stale. Desktop:
+//! one 26 pt row of quiet 11.5 pt words split by hairlines; terminal: one row of Cells split by
+//! `│`. The phone's page has none; Ask's sheet keeps the short pill and meter.
 
 use nsh_core::prelude::*;
 
@@ -77,29 +78,50 @@ fn face(app: AppState, status: &StatusBar) -> AnyElement {
             true,
         ),
     ];
+    if !phone {
+        parts.extend(
+            [&status.model_effort, &status.quiet, &status.queued]
+                .into_iter()
+                .flatten()
+                .map(|fact| words(fact.clone(), quiet, true)),
+        );
+    }
     if status.stale {
         parts.push(words("stale".into(), hue_ink(Hue::Held), false));
     }
-    parts.extend(
-        status
-            .alerts
-            .iter()
-            .map(|alert| words(alert.text.clone(), hue_ink(alert.hue), false)),
-    );
     let mut row = Vec::with_capacity(parts.len() * 2);
     for (at, part) in parts.into_iter().enumerate() {
         if at > 0 {
             row.push(separator(form));
         }
-        row.push(part);
+        row.push(view().flex_shrink_0().child(part).into_element());
     }
-    let line = view()
-        .test_id("session-status")
+    // The facts keep one row, their tail clipped where the page is narrow, so the conversation
+    // keeps its room; the alerts wrap under them and are never dropped.
+    let facts = view()
         .flex_row()
-        .flex_wrap()
         .items_center()
+        .overflow_hidden()
         .gap(px(8.0))
         .children(row);
+    let alerts: Vec<AnyElement> = status
+        .alerts
+        .iter()
+        .map(|alert| words(alert.text.clone(), hue_ink(alert.hue), false))
+        .collect();
+    let line = view()
+        .test_id("session-status")
+        .child(facts)
+        .when(!alerts.is_empty(), |line| {
+            line.child(
+                view()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(8.0))
+                    .children(alerts),
+            )
+        });
     match form {
         Form::Terminal => view()
             .flex_none()

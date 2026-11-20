@@ -65,6 +65,15 @@ pub fn session_line(feed: &daemon::Feed, session: &str) -> Option<SessionLine> {
         .map(|source| line(source, feed))
 }
 
+/// Whether session `id` is a build stopped here, whose worktree, branch and record Remove…
+/// deletes after prune's dry run.
+pub fn removable(feed: &daemon::Feed, session: &str) -> bool {
+    scoped(feed, &ProjectFilter::All, Show::All)
+        .into_iter()
+        .find(|source| source.id == session)
+        .is_some_and(|source| source.removable())
+}
+
 #[cfg(test)]
 mod tests {
     use corral_types::{Role, SessionStatus};

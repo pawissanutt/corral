@@ -26,7 +26,7 @@ pub use control::{
     Control, ControlAsk, Kind, RewindPoint, RewindSheet, ask, control_label, control_verbs,
     controls, kind, rewind_sheet, status as control_status,
 };
-pub use lines::{SessionLine, session_line, session_lines};
+pub use lines::{SessionLine, removable, session_line, session_lines};
 pub(crate) use live::{clock, placement, unix};
 pub use menu::{SESSION_MENU_LABEL, session_verbs};
 pub use roster::{RoleTab, Roster, RosterRole, RosterRow, RowState, Show, ShowTab, roster};
@@ -40,8 +40,8 @@ pub use start::{
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct State {
     pub ids: crate::model::id::IdSupply,
-    /// Roster selection belongs to this screen, not the session route.
-    pub roster_session: Option<Id>,
+    /// The Sessions list's folds (its selection is the navigation's, `selection.session`).
+    pub list: crate::model::sessions::State,
     pub roster_role: RosterRole,
     pub show: Show,
     /// The latest session control per session, whose outcome it shows.
@@ -169,8 +169,6 @@ pub fn remove_sheet(state: &State, feed: &Feed) -> Option<RemoveSheet> {
 /// sheet do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    SelectRoster(Id),
-    ClearRoster,
     SetRosterRole(RosterRole),
     SetShow(Show),
     OpenSession(Id),
@@ -196,14 +194,6 @@ impl State {
     /// Handles an action. Every operation goes out as an effect; nothing is simulated here.
     pub fn act(&mut self, action: Action, feed: &Feed, filter: &ProjectFilter) -> Vec<Effect> {
         match action {
-            Action::SelectRoster(id) => {
-                self.roster_session = Some(id);
-                Vec::new()
-            }
-            Action::ClearRoster => {
-                self.roster_session = None;
-                Vec::new()
-            }
             Action::SetRosterRole(role) => {
                 self.roster_role = role;
                 Vec::new()

@@ -11,12 +11,10 @@ use corral_types::SessionStatus;
 
 use crate::model::board::Mark;
 use crate::model::daemon;
-use crate::model::effect::Effect;
 use crate::model::glance::{Stat, StatIcon};
 use crate::model::projects::ProjectFilter;
 use crate::model::session::{Fill, cost_text, exit_status};
-use crate::model::work::{Record, session_task};
-use crate::model::{Hue, Id, Live, assistant};
+use crate::model::{Hue, Id, assistant};
 
 use super::start::{NewMenu, new_menu};
 use super::{Action, State, live};
@@ -152,7 +150,6 @@ pub struct RosterRow {
     pub resumable: bool,
     /// `Remove…`: a stopped build's worktree, branch and record, after its dry run.
     pub remove: Option<Action>,
-    pub selected: bool,
     /// Opens the session page.
     pub action: Action,
 }
@@ -244,7 +241,7 @@ impl<'a> Source<'a> {
         }
     }
     /// A build whose host is stopped here: its worktree, branch and record can be removed.
-    fn removable(self) -> bool {
+    pub(super) fn removable(self) -> bool {
         self.chat.is_some_and(|chat| {
             chat.kind == AssistantKind::Build
                 && matches!(chat.state, AssistantState::Cold | AssistantState::Ended)
@@ -542,7 +539,7 @@ fn project_words(source: Source<'_>, feed: &daemon::Feed) -> String {
     }
 }
 
-pub(super) fn row(source: Source<'_>, state: &State, feed: &daemon::Feed) -> RosterRow {
+pub(super) fn row(source: Source<'_>, feed: &daemon::Feed) -> RosterRow {
     let (row_state, _) = source.state();
     let doing = source.doing(feed);
     let quiet = source.run.and_then(|row| live::quiet(row, feed));
@@ -588,10 +585,6 @@ pub(super) fn row(source: Source<'_>, state: &State, feed: &daemon::Feed) -> Ros
         remove: source
             .removable()
             .then(|| Action::Remove(Id::from(source.id))),
-        selected: state
-            .roster_session
-            .as_ref()
-            .is_some_and(|id| id.as_str() == source.id),
         state: row_state,
         action: Action::OpenSession(Id::from(source.id)),
     }
@@ -700,7 +693,7 @@ pub fn roster(state: &State, feed: &daemon::Feed, filter: &ProjectFilter) -> Ros
         .iter()
         .copied()
         .filter(|source| visible(*source, &state.roster_role))
-        .map(|source| row(source, state, feed))
+        .map(|source| row(source, feed))
         .collect();
     let fill = if !rows.is_empty() {
         Fill::Ready
@@ -760,72 +753,5 @@ pub fn roster(state: &State, feed: &daemon::Feed, filter: &ProjectFilter) -> Ros
                 feed.synced.as_deref().unwrap_or("an unknown time")
             )
         }),
-    }
-}
-
-impl State {
-    /// The roster's keys: j/k (and the arrows) move the selection, Enter opens it, Escape clears
-    /// it, `N` opens the New build sheet, and `.` opens the Session menu of the selected run, or
-    /// of the run whose page is open.
-    pub fn key(
-        &mut self,
-        key: &str,
-        top: Option<&Live>,
-        feed: &daemon::Feed,
-        filter: &ProjectFilter,
-    ) -> Option<Vec<Effect>> {
-        if key == "." {
-            let session = match top {
-                Some(Live::Session(id)) => Some(id.clone()),
-                Some(_) => return None,
-                None => self.roster_session.clone(),
-            };
-            return Some(
-                session
-                    .filter(|id| session_task(id).is_some())
-                    .map(|id| vec![Effect::VerbMenu(Record::Session(id))])
-                    .unwrap_or_default(),
-            );
-        }
-        if top.is_some() {
-            return None;
-        }
-        match key {
-            "escape" if self.roster_session.take().is_some() => return Some(Vec::new()),
-            "N" | "shift+n" => {
-                self.start.open = true;
-                return Some(Vec::new());
-            }
-            "enter" => {
-                return self
-                    .roster_session
-                    .clone()
-                    .map(|id| vec![Effect::OpenLive(Live::Session(id))]);
-            }
-            _ => {}
-        }
-        let direction = match key {
-            "j" | "down" => 1,
-            "k" | "up" => -1,
-            _ => return None,
-        };
-        let visible: Vec<_> = scoped(feed, filter, self.show)
-            .into_iter()
-            .filter(|source| visible(*source, &self.roster_role))
-            .collect();
-        if visible.is_empty() {
-            return Some(Vec::new());
-        }
-        let current = self
-            .roster_session
-            .as_ref()
-            .and_then(|id| visible.iter().position(|source| source.id == id.as_str()));
-        let at = match (current, direction) {
-            (Some(at), 1) => (at + 1).min(visible.len() - 1),
-            (Some(at), _) => at.saturating_sub(1),
-            (None, _) => 0,
-        };
-        self.roster_session = Some(Id::from(visible[at].id));
-        Some(Vec::new())
     }
 }
