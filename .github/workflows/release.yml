@@ -138,6 +138,8 @@ jobs:
             tar -xzf "$asset"
           )
           "$RUNNER_TEMP/nsh/bin/nsh" --version
+          # Match the wasm-bindgen version in apps/corral-app/Cargo.lock.
+          cargo install wasm-bindgen-cli --version 0.2.130 --locked </dev/null
       - name: Build and package the portable web app
         run: |
           # The checked-in app config contains force=true absolute tool paths for
