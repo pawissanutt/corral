@@ -14,13 +14,12 @@
 <div class="tabs" aria-label="Configuration sections (context only)"><span>Workspace</span><span>Projects</span><span>Profiles</span><b>Harnesses</b><span>Routing</span><span>Artifacts</span><span>File</span></div>
 <div class="layout"><aside class="panel"><div class="pad spread"><strong>Supported harnesses</strong><span class="tag">05</span></div><div class="catalog" id="catalog" aria-label="Select a harness"></div>
 <div class="pad" style="border-top:1px solid var(--line)"><details style="border:0;padding:0"><summary>Custom harness</summary><p>Add a named command in <code>corral.toml</code>.</p><pre>[harnesses.my-agent]
-command = "my-agent --prompt-file '{prompt_file}'"
-flags = "generic"</pre></details></div></aside>
-<div><article class="panel pad" aria-labelledby="name"><div class="hero"><span class="mark big" id="mark" aria-hidden="true"></span><div><div class="kicker">Built-in harness</div><h2 id="name"></h2></div></div><p id="desc" style="margin-top:12px"></p><dl class="facts"><div><dt>Daemon detection</dt><dd id="detect"></dd></div><div><dt>Executable</dt><dd><code id="binary"></code></dd></div><div><dt>Used by</dt><dd id="used"></dd></div></dl></article>
+command = "my-agent --prompt-file '{prompt_file}'"</pre></details></div></aside>
+<div><article class="panel pad" aria-labelledby="name"><div class="hero"><span class="mark big" id="mark" aria-hidden="true"></span><div><div class="kicker">Built-in harness</div><h2 id="name"></h2></div></div><p id="desc" style="margin-top:12px"></p><dl class="facts"><div><dt>Daemon detection</dt><dd id="detect"></dd></div><div><dt>Executable</dt><dd><code id="binary"></code></dd></div><div><dt>Workspace-defined profiles</dt><dd id="used"></dd></div></dl></article>
 <h3 class="sectionhead">Setup &amp; configuration</h3>
 <div class="stack" id="pi"><div class="panel pad"><div class="spread"><h3>Provider access</h3><span class="tag good">Signed in · openai-codex</span></div><p>Connect another provider from the daemon host’s terminal.</p><pre>corral-pi login --provider anthropic</pre></div>
 <div class="panel pad"><div class="spread"><h3>Task profile</h3><span class="source">.corral-next/corral.toml</span></div><p>Used when dispatching a task with this profile.</p><details open><summary>pi-worker <small>high effort</small></summary><pre>[profiles.pi-worker]
-harness = "corral-pi"
+harness = "pi"
 model = "openai-codex/gpt-6.1-sol"
 effort = "high"</pre></details></div>
 <div class="panel pad"><div class="spread"><h3>Pi child profiles</h3><span class="source">.corral-next/pi.toml</span></div><p>Available to child agents; does not change the task worker’s model.</p><details><summary>code-reader <small>medium effort</small></summary><pre>[build.profiles.code-reader]
@@ -35,15 +34,15 @@ effort = "medium"</pre></details></div>
 const rows = [
  {name:'corral-pi',icon:'π',desc:'Native Pi sessions for task work, builds, and independent review.',state:'Detected',exe:'/usr/local/bin/corral-pi',used:'1 task profile'},
  {name:'Claude',key:'claude',icon:'✳',desc:'Run tasks with the Claude CLI.',state:'Detected',exe:'/usr/local/bin/claude',used:'1 task profile',cmd:'claude {model_args} {prompt_ref}'},
- {name:'OMO',key:'omo',icon:'om',desc:'Launch the omo command with a named session and profile arguments.',state:'Not installed',exe:'omo (not found)',used:'No profiles',cmd:"omo -n '{name}' {model_args} {prompt_ref}"},
+ {name:'OMO',key:'omo',icon:'om',desc:'Launch the omo command with a named session and profile arguments.',state:'Not installed',exe:'omo (not found)',used:'No profiles',cmd:'omo -n {name} {model_args} {prompt_ref}'},
  {name:'OMP',key:'omp',icon:'op',desc:'Launch the omp command with the model and effort from a task profile.',state:'Not checked',exe:'omp (configured)',used:'No profiles',cmd:'omp {model_args} {prompt_ref}'},
- {name:'Generic',key:'generic',icon:'>_',desc:'A minimal command template. The default prints the assignment instead of running an agent.',state:'Detected',exe:'/usr/bin/cat',used:'No profiles',cmd:"cat '{prompt_file}'"}
+ {name:'Generic',key:'generic',icon:'>_',desc:'A minimal command template. The default prints the assignment instead of running an agent.',state:'Detected',exe:'/usr/bin/cat',used:'No profiles',cmd:'cat {prompt_file}'}
 ];
 const el=id=>document.getElementById(id);
 function choose(i){const r=rows[i];Array.from(el('catalog').children).forEach((b,n)=>b.setAttribute('aria-pressed',String(n===i)));
  for(const [id,value] of Object.entries({name:r.name,desc:r.desc,mark:r.icon,detect:r.state,binary:r.exe,used:r.used}))el(id).textContent=value;
  el('detect').className=r.state==='Detected'?'good':'warn'; el('pi').hidden=i!==0;el('other').hidden=i===0;
- if(i){el('setup').textContent=(r.state==='Not installed'?'Put the executable on the daemon’s PATH. ':r.state==='Not checked'?'Detection has not run. ':'')+'The built-in command needs no config. To override it, add this table:';el('command').textContent=`[harnesses.${r.key}]\ncommand = "${r.cmd}"`;}}
+ if(i){el('setup').textContent=(r.state==='Not installed'?'Put the executable on the daemon’s PATH. ':r.state==='Not checked'?'Detection has not run. ':'')+'The built-in command needs no config. To override it, add this table:';el('command').textContent=`[harnesses.${r.key}]\ncommand = "${r.cmd}"${r.key==='generic'?'':'\nmodel_flag = "--model"\neffort_flag = "--effort"'}`;}}
 rows.forEach((r,i)=>{const b=document.createElement('button');b.className='item';b.innerHTML=`<span class="mark" aria-hidden="true">${r.icon}</span><span><strong>${r.name}</strong><small>${r.state} · ${r.used}</small></span>`;b.onclick=()=>choose(i);el('catalog').append(b)});choose(0);
 let phase=0;
 function paintThread(){el('fix').hidden=phase<1;el('verdict').hidden=phase<2;el('status').textContent=['Changes requested','Awaiting recheck','Resolved · b29d410'][phase];el('status').className='tag '+(phase===2?'good':'warn');el('advance').textContent=['Simulate worker fix →','Simulate reviewer recheck →','Replay finding'][phase]}

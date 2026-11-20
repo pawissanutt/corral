@@ -55,11 +55,6 @@ effort_flag = "--thinking"
 command = "codex exec {prompt_ref}"
 model_flag = "-m"
 
-[harnesses.pi]
-command = "corral pi {prompt_ref}"
-model_flag = "--model"
-effort_flag = "--thinking"
-
 [profiles.omp-sol]
 harness = "omp"
 model = "sol"
@@ -110,6 +105,13 @@ fn built_in() -> Map<String, Value> {
         "defaults": {
             "base": null, "branch_prefix": "corral/", "max_rounds": 2, "profile": "omp-sol",
             "auto_dispatch": false, "auto_land": false
+        },
+        "harnesses": {
+            "pi": { "command": "corral-pi run {model_args} --prompt-file {prompt_file} --corral {corral}", "model_flag": "--model", "effort_flag": "--effort" },
+            "claude": { "command": "claude {model_args} {prompt_ref}", "model_flag": "--model", "effort_flag": "--effort" },
+            "omo": { "command": "omo -n {name} {model_args} {prompt_ref}", "model_flag": "--model", "effort_flag": "--effort" },
+            "omp": { "command": "omp {model_args} {prompt_ref}", "model_flag": "--model", "effort_flag": "--effort" },
+            "generic": { "command": "cat {prompt_file}", "model_flag": null, "effort_flag": null }
         },
         "profiles": {
             "omo": { "harness": "omo" },
