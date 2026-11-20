@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 use crate::model::Id;
 use crate::model::agents::session_lines;
-use crate::model::daemon::Feed;
+use crate::model::daemon::{Feed, Link};
 use crate::model::list::{Column, Section};
 use crate::model::projects::Scope;
 use crate::model::status::{SessionState, session_look};
@@ -21,6 +21,8 @@ pub use row::{SessionRow, row, summary};
 pub const TITLE: &str = "Sessions";
 pub const EMPTY: &str = "No sessions in this scope. Start a chat or a build with New.";
 pub const LOADING: &str = "Reading sessions…";
+/// The subscriptions the list's sessions come from, as the feed keys them.
+const SOURCES: [&str; 2] = ["agents", "assistant"];
 
 /// The list's own state: which of the folding sections are open.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -58,6 +60,74 @@ pub fn columns() -> Vec<Column> {
             .end()
             .short("Next"),
     ]
+}
+
+/// What stands in for the rows while the list has none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fill {
+    /// Nothing has arrived from corrald yet.
+    Loading,
+    /// Corrald reported no session in this scope.
+    Empty,
+    /// A subscription failed: corrald's message and code.
+    Failed(String),
+}
+
+impl Fill {
+    /// What the list says in its rows' place.
+    pub fn words(&self) -> String {
+        match self {
+            Self::Loading => LOADING.to_owned(),
+            Self::Empty => EMPTY.to_owned(),
+            Self::Failed(words) => words.clone(),
+        }
+    }
+}
+
+/// What the list says besides its rows: the fill while it has none, and whether the rows shown
+/// are the last known ones.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Standing {
+    pub fill: Option<Fill>,
+    pub stale: Option<String>,
+}
+
+/// The list's standing from the two subscriptions its sessions come from: runs (`agents`) and
+/// chats and builds (`assistant`). Without rows, a failed subscription says why before
+/// anything else, since the sessions it would have listed are unknown, not absent; the list is
+/// loading until one has answered and while either reads again. A stale line stands over what the list shows from the
+/// last update while the link is down or a subscription is out of date.
+pub fn standing(feed: &Feed, has_rows: bool) -> Standing {
+    let topics = SOURCES.map(|topic| feed.topics.get(topic));
+    let failed = topics
+        .iter()
+        .flatten()
+        .find_map(|topic| topic.error.as_ref());
+    let fill = if has_rows {
+        None
+    } else if let Some(error) = failed {
+        Some(Fill::Failed(format!(
+            "Sessions unavailable: {} ({})",
+            error.message, error.code
+        )))
+    } else if topics.iter().all(Option::is_none)
+        || topics.iter().flatten().any(|topic| topic.loading)
+    {
+        Some(Fill::Loading)
+    } else {
+        Some(Fill::Empty)
+    };
+    let stale = (fill.is_none() || fill == Some(Fill::Empty))
+        && (feed.link != Link::Up || topics.iter().flatten().any(|topic| topic.stale));
+    Standing {
+        fill,
+        stale: stale.then(|| {
+            format!(
+                "! Showing sessions from {} · corrald unreachable",
+                feed.synced.as_deref().unwrap_or("an unknown time")
+            )
+        }),
+    }
 }
 
 /// The list's sections: a group per state that has a session, Gone folding.
@@ -118,6 +188,29 @@ mod tests {
         assert_eq!(shape, [("blocked", 1, 1), ("gone", 1, 0)]);
         state.unfolded.insert("gone".into());
         assert_eq!(sections(&feed, &Scope::All, &state)[1].rows.len(), 1);
+    }
+
+    /// A failed sessions subscription read as an empty list, so the owner was told there were
+    /// no sessions when corrald could not say.
+    #[test]
+    fn a_failed_subscription_is_not_an_empty_list() {
+        use crate::model::daemon::{ClientError, TopicState};
+
+        let mut feed = Feed::default();
+        feed.topics
+            .insert("assistant".into(), TopicState::default());
+        feed.topics.insert(
+            "agents".into(),
+            TopicState {
+                loading: false,
+                stale: true,
+                error: Some(ClientError {
+                    code: "unavailable".into(),
+                    message: "agents unavailable".into(),
+                }),
+            },
+        );
+        assert!(matches!(standing(&feed, false).fill, Some(Fill::Failed(_))));
     }
 
     /// A head that counted an unreported cost as $0.00 said the live sessions spent less than
