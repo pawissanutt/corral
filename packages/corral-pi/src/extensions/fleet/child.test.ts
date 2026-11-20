@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -127,6 +127,24 @@ test("quick research reserves its fourth turn, uses canonical transcript identit
     expect(handle.usage().turns).toBe(4);
     expect(f.aborted).toBe(false);
   } finally { proceed.resolve(); await handle.done; f.cleanup(); }
+});
+
+test("a bound worker slice may write in its task checkout but not a sibling checkout", async () => {
+  const f = fixture();
+  const worktree = join(f.dir, ".worktrees", "T-17");
+  mkdirSync(worktree, { recursive: true });
+  f.body(async () => {
+    expect(await f.emit("tool_call", { toolName: "edit", input: { path: "src/file.ts" } })).toBeUndefined();
+    expect(await f.emit("tool_call", { toolName: "write", input: { path: "../T-18/src/file.ts" } })).toMatchObject({ block: true });
+    f.messages.push(answer("Finished"));
+  });
+  try {
+    const handle = createSdkRunner({ ...f.options, bound: true, parentLoadout: ["edit", "write"],
+      context: { ...f.options.context, session: { worktree, name: "parent worker", task: "T-17" } } })
+      .run({ id: "slice", title: "Write", brief: "Edit src/file.ts", owns: ["src/file.ts"], kind: "slice" },
+        { profile: "fixture", provider: "openai-codex", model: "fixture" }, f.hooks, new AbortController().signal);
+    expect(await handle.done).toMatchObject({ report: "Finished" });
+  } finally { f.cleanup(); }
 });
 
 test("bound slices intersect SDK base tools and honor the supplied write refusal without loading local overrides", async () => {
