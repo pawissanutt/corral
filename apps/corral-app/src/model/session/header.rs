@@ -11,6 +11,7 @@ use corral_types::SessionStatus;
 use crate::model::Live;
 use crate::model::daemon::{Group, Link};
 use crate::model::hue::Hue;
+use crate::model::status::status_unavailable;
 
 use super::activity::{self, duration};
 use super::notices::{self, Notice};
@@ -281,6 +282,9 @@ pub fn state_word(cx: &Cx<'_>) -> StateWord {
         };
     }
     if let Some(row) = cx.row {
+        if status_unavailable(row) {
+            return word(false, None, Hue::Neutral, "Status unavailable");
+        }
         return match row.state {
             AssistantState::Working | AssistantState::Starting => {
                 word(true, None, Hue::Worker, with_elapsed("Working", cx))

@@ -2,9 +2,25 @@
 //! the standing of a pipeline stage. Colour says state only and every mark also differs by
 //! shape, so a row reads without colour and in a terminal.
 
+use corral_protocol::rows::{AssistantRow, AssistantState};
 use corral_types::Status;
 
 use crate::model::hue::Hue;
+
+/// The wait code corrald gives a live Pi host whose status read was refused (an older host's
+/// oversized `get_state`).
+const STATUS_UNAVAILABLE: &str = "status_unavailable";
+
+/// The host is live but its status could not be read, so nothing says whether it works,
+/// waits on the owner or is idle. Other rows in state `Other` are unknown to this app and
+/// keep their usual reading.
+pub fn status_unavailable(row: &AssistantRow) -> bool {
+    row.state == AssistantState::Other
+        && row
+            .wait
+            .as_ref()
+            .is_some_and(|wait| wait.code == STATUS_UNAVAILABLE)
+}
 
 /// A session's state as the engine's `SessionStatus` names it: Blocked waits on the owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
