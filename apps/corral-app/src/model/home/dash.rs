@@ -156,6 +156,7 @@ pub fn tiles(feed: &Feed, scope: &Scope, since: &Since, cost: &Cost) -> Vec<Tile
                     SessionState::Blocked,
                     SessionState::Working,
                     SessionState::Idle,
+                    SessionState::Unavailable,
                 ]
                 .into_iter()
                 .map(|state| format!("{} {}", by(state), state.word().to_lowercase()))

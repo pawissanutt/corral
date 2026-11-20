@@ -2,8 +2,10 @@ use super::{Control, controls, session_lines};
 use crate::model::Id;
 use crate::model::daemon::{Feed, Link, Task, TopicState, bare_task, task_row};
 use crate::model::projects::ProjectFilter;
+use crate::model::status::{SessionState, status_unavailable};
 use corral_protocol::rows::{
     AgentRow, AssistantKind, AssistantLocation, AssistantRow, AssistantState, BuildFacts,
+    WaitReason,
 };
 use corral_protocol::session_state::Counts;
 use corral_types::{Role, Run, SessionRef, SessionStatus, Status};
@@ -153,6 +155,40 @@ fn a_build_open_in_another_terminal_is_not_resumable() {
     build.live_in = AssistantLocation::Pane;
     feed.assistants.insert("B-k3x9".into(), build);
     assert!(controls(&feed, "B-k3x9").is_empty());
+}
+
+/// A live Pi host whose status read was refused (an older host's oversized `get_state`) is
+/// neither waiting on the owner nor quietly idle nor gone: it has its own state and group, and
+/// its line says the status is unavailable.
+#[test]
+fn a_chat_whose_status_is_unavailable_says_so_and_is_not_idle_gone_or_blocked() {
+    let mut feed = feed(Vec::new());
+    let mut chat = assistant("A-7", AssistantKind::Quick);
+    chat.state = AssistantState::Other;
+    chat.wait = Some(WaitReason {
+        code: "status_unavailable".into(),
+        text: "Pi status unavailable: response too large".into(),
+        retry_at: None,
+    });
+    assert!(status_unavailable(&chat));
+    feed.assistants.insert("A-7".into(), chat);
+    let lines = session_lines(&feed, &ProjectFilter::All);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].state, SessionState::Unavailable);
+    let groups = crate::model::sessions::sections(
+        &feed,
+        &crate::model::projects::Scope::All,
+        &crate::model::sessions::State::default(),
+    );
+    let groups: Vec<_> = groups
+        .iter()
+        .map(|group| (group.key.as_str(), group.count))
+        .collect();
+    assert_eq!(groups, [("unavailable", 1)]);
+    assert_eq!(
+        lines[0].doing.as_deref(),
+        Some("Pi status unavailable: response too large")
+    );
 }
 
 #[test]
