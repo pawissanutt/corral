@@ -288,7 +288,7 @@ fn row(
     })
     .into_element();
     let framed = view()
-        .test_id(format!("config-rule-{index}"))
+        .test_id(&format!("config-rule-{index}"))
         .min_w(px(0.0))
         .gap(gap(app.form, 12.0))
         .child(head)
@@ -477,7 +477,7 @@ fn editor(
         },
     );
     view()
-        .test_id(format!("config-rule-{index}-editor"))
+        .test_id(&format!("config-rule-{index}-editor"))
         .min_w(px(0.0))
         .gap(gap(app.form, 14.0))
         .child(hint)
