@@ -404,3 +404,51 @@ impl Runner for Placement {
         self.tasks.focus(session)
     }
 }
+
+#[test]
+fn oversized_chat_status_preserves_location_without_inventing_lifecycle() {
+    use super::Fixture;
+    use corral_protocol::{
+        assistant::AssistantWarm,
+        rows::{AssistantLocation, AssistantState},
+    };
+
+    let placement = Placement::new(|command, dir| {
+        let args: Vec<_> = command.get_args().collect();
+        let host = Host::start(
+            PathBuf::from(args[4]),
+            dir.file_name().unwrap().to_str().unwrap().into(),
+            "assistant",
+            dir,
+            Script::default().reply_result("get_state", |_, _, _| {
+                Err(("response_too_large", "status exceeds frame limit"))
+            }),
+        );
+        fs::write(
+            dir.join("session.json"),
+            json!({"pid": PID, "sessionFile": host.transcript}).to_string(),
+        )
+        .unwrap();
+        Some(host)
+    });
+    let fixture = Fixture::with_runner(Arc::new(move || Box::new(placement.clone())));
+    fs::write(
+        fixture.root().join(crate::STATE_DIR).join("corral.toml"),
+        "[profiles.pi]\nharness = \"pi\"\n",
+    )
+    .unwrap();
+    crate::assistant::warm(
+        fixture.shared(),
+        AssistantWarm {
+            thread: "quick".into(),
+        },
+    )
+    .unwrap();
+    let rows = crate::assistant::rows(fixture.shared(), false).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].state, AssistantState::Other);
+    assert_eq!(rows[0].live_in, AssistantLocation::Daemon);
+    assert_eq!(rows[0].wait.as_ref().unwrap().code, "status_unavailable");
+    assert_eq!(rows[0].turn, None);
+    assert_eq!(rows[0].question_id, None);
+}
