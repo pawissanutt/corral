@@ -58,13 +58,15 @@ canonical symlink escape, requires a host-issued once-only owner allow. Protecte
 `.corral`, `.corral-next` and `.worktrees` paths are hard blocks, except for the scoped
 worktree and workspace memory exceptions.
 
-When enabled, `bash_rules` apply to both `bash` and `job_start`. For example, the role's
-capability settings can allow known commands and ask about unmatched ones:
+To enable `bash_rules` for `bash` and `job_start`, add this top-level table to
+`.corral-next/pi.toml` in the workspace (or the repository root for a bare build). This
+example allows known commands and asks about unmatched ones:
 
 ```toml
-[agent.capabilities.build.bash_rules]
-enabled = true
+[bash_rules]
 allow = ["git status*", "git diff*"]
+ask = []
+deny = []
 default = "ask"
 ```
 

@@ -54,6 +54,9 @@ test("assistant writes outside its directory only on an exact owner-approved ret
     await host.session.waitForIdle();
     await host.drained();
     expect(readFileSync(external, "utf8")).toBe("original");
+    const notice = host.session.messages.find(message => message.role === "user" && JSON.stringify(message.content).includes(question!.id));
+    expect(notice).toMatchObject({ corralInput: { origin: "auto" } });
+    expect(JSON.stringify(notice)).not.toContain(external);
     const again = host.pendingOwnerQuestions();
     expect(again).toHaveLength(1);
     expect(again[0]?.id).not.toBe(question?.id);

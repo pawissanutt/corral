@@ -20,7 +20,7 @@ function fixture(run: (workspace: string, root: string) => void): void {
 test("write scope resolves from the tool cwd and asks for ordinary paths outside the root", () => fixture((workspace, root) => {
   const cwd = join(root, "src");
   mkdirSync(cwd);
-  const scope = { cwd, root, workspace };
+  const scope = { cwd, root, workspace, buildWorktree: true };
   expect(classifyWriteScope("@a\u00A0b/new.ts", scope)).toEqual({ action: "allow" });
   const outside = join(workspace, "note.md");
   expect(classifyWriteScope(pathToFileURL(outside).href, scope)).toEqual({ action: "ask", path: outside, canonical: outside });
@@ -33,7 +33,7 @@ test("write scope asks for ordinary symlink crossings in either direction", () =
   mkdirSync(outside);
   symlinkSync(outside, outbound, "dir");
   symlinkSync(root, inbound, "dir");
-  const scope = { cwd: root, root };
+  const scope = { cwd: root, root, buildWorktree: true };
   for (const [link, destination] of [[outbound, outside], [inbound, root]] as const) {
     const path = join(link, "new", "file.ts");
     expect(classifyWriteScope(path, scope)).toEqual({ action: "ask", path, canonical: join(destination, "new", "file.ts") });
@@ -41,7 +41,7 @@ test("write scope asks for ordinary symlink crossings in either direction", () =
 }));
 
 test("write scope denies protected components on either side even outside the role root", () => fixture((workspace, root) => {
-  const scope = { cwd: root, root, workspace };
+  const scope = { cwd: root, root, workspace, buildWorktree: true };
   for (const directory of [".git", ".corral", ".corral-next", ".worktrees"]) {
     expect(classifyWriteScope(join(workspace, "other", directory, "state"), scope).action).toBe("deny");
   }
@@ -52,6 +52,18 @@ test("write scope denies protected components on either side even outside the ro
   expect(classifyWriteScope("alias/config", scope).action).toBe("deny");
   expect(classifyWriteScope(join(state, "alias", "file.ts"), scope).action).toBe("deny");
   expect(classifyWriteScope(join(workspace, ".worktrees", "sibling", "file.ts"), scope).action).toBe("deny");
+}));
+
+test("a starting directory does not exempt its protected ancestors", () => fixture((workspace, root) => {
+  const state = join(workspace, ".corral-next");
+  const fakeWorktree = join(state, ".worktrees", "nested");
+  mkdirSync(fakeWorktree, { recursive: true });
+  const alias = join(workspace, "state-alias");
+  symlinkSync(state, alias, "dir");
+  for (const cwd of [state, alias, root, fakeWorktree]) {
+    expect(classifyWriteScope("corral.toml", { cwd, root: cwd, workspace }).action).toBe("deny");
+  }
+  expect(classifyWriteScope("config", { cwd: fakeWorktree, root: fakeWorktree, buildWorktree: true }).action).toBe("deny");
 }));
 
 test("write scope allows only bound Markdown memory with safe lexical and canonical suffixes", () => fixture((workspace, root) => {
@@ -75,7 +87,7 @@ test("write scope allows only bound Markdown memory with safe lexical and canoni
 }));
 
 test("write scope denies destinations that cannot resolve to regular files or new file locations", () => fixture((workspace, root) => {
-  const scope = { cwd: root, root };
+  const scope = { cwd: root, root, buildWorktree: true };
   symlinkSync("./loop", join(root, "loop"));
   symlinkSync(join(workspace, "missing"), join(root, "dangling"));
   writeFileSync(join(root, "file"), "");

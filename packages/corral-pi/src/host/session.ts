@@ -661,8 +661,8 @@ export class HostSession {
         this.questionUi?.changed(question);
         this.liveEvents.stateChanged();
       },
-      deliver: async text => {
-        const result = await this.submitLocal({ text, origin: "owner", busyPolicy: "steer" });
+      deliver: async (text, question) => {
+        const result = await this.submitLocal({ text, origin: isToolApproval(question) ? "auto" : "owner", busyPolicy: "steer" });
         return result.disposition === "started" || result.disposition === "queued";
       },
     }) : undefined;
@@ -1115,7 +1115,7 @@ export class HostSession {
     const shellRefusal = this.options.modules.role.shellRefusal;
     const { cwd, workspaceRoot, identity, build } = this.roleContext;
     const writeScope = identity.role === "assistant" ? { cwd, root: cwd, workspace: workspaceRoot }
-      : identity.role === "build" ? build ? { cwd, root: build.session.worktree,
+      : identity.role === "build" ? build ? { cwd, root: build.session.worktree, buildWorktree: true,
         workspace: build.session.bare ? undefined : build.session.workspaceRoot } : null : undefined;
     installToolControls(pi, {
       ...(shellRefusal ? { fixed: (command) => shellRefusal(command, build?.session.bare === true) } : {}),

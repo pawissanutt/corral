@@ -294,12 +294,14 @@ cwd, including an ordinary canonical symlink escape, requires a host-issued once
 allow. Protected `.git`, `.corral`, `.corral-next` and `.worktrees` paths are hard blocks,
 except for the scoped worktree and workspace memory exceptions.
 
-When enabled, configured `bash_rules` apply to both `bash` and `job_start`. For example:
+For `corral-pi chat`, enable rules for both `bash` and `job_start` by adding a top-level
+`[bash_rules]` table to the workspace's `.corral-next/pi.toml`. For example:
 
 ```toml
-[agent.capabilities.assistant.bash_rules]
-enabled = true
+[bash_rules]
 allow = ["git status*", "git diff*"]
+ask = []
+deny = []
 default = "ask"
 ```
 
