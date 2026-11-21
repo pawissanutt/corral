@@ -16,7 +16,7 @@ import { resolveModel, resolveProfiles, type ResolvedModel } from "./profiles.ts
 import { formatChildReport } from "./tools.ts";
 /** The runtime needs no build exit, board, launcher or Git metadata. */
 export interface FleetContext {
-  readonly session: { readonly worktree: string; readonly name: string; readonly task?: string };
+  readonly session: { readonly worktree: string; readonly name: string };
   readonly dir: string;
   readonly settings: { readonly maxParallel: number; readonly profiles: readonly BuildProfile[] };
 }
@@ -38,6 +38,8 @@ export interface FleetOptions {
   readonly bound?: boolean;
   readonly parentLoadout?: readonly string[];
   readonly writeRefusal?: (path: string) => string | undefined;
+  /** Exempt only the host-bound checkout's direct containing .worktrees marker. */
+  readonly buildWorktree?: boolean;
   readonly maxTurns?: number;
   readonly timeoutSecs?: number;
   readonly research?: { readonly settings: ExploreSettings };

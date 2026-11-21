@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -55,6 +55,7 @@ export interface SdkRunnerOptions {
   /** Bound children intersect their fixed ceiling with the parent's enabled capabilities. */
   readonly parentLoadout?: readonly string[];
   readonly writeRefusal?: (path: string) => string | undefined;
+  /** Exempt only the host-bound checkout's direct containing .worktrees marker. */
   readonly buildWorktree?: boolean;
   readonly bound?: boolean;
   readonly now?: () => number;
@@ -353,9 +354,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
               if (typeof path !== "string") reason = "Build writes require a path";
               else if (options.writeRefusal) reason = options.writeRefusal(path);
               else {
-                const task = options.context.session.task;
-                const managedWorktree = options.buildWorktree || (task !== undefined && /^T-\d+$/.test(task) && basename(cwd) === task);
-                const decision = classifyBuildWrite(path, cwd, undefined, managedWorktree);
+                const decision = classifyBuildWrite(path, cwd, undefined, options.buildWorktree);
                 if (!decision.allowed) reason = decision.reason;
               }
             } else if (event.toolName === "bash" || event.toolName === "job_start" || Object.hasOwn(event.input, "command")) {
