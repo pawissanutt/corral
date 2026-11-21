@@ -402,7 +402,10 @@ fn hunk(app: AppState, opened: Memo<Option<FileDiff>>, n: usize, shape: &Shape) 
         .map(|line| unified_line(app, line))
         .collect();
     let block = if form == Form::Terminal {
-        view().child(bar).children(rows).into_element()
+        view()
+            .child(bar)
+            .child(view().selectable(true).children(rows))
+            .into_element()
     } else {
         view()
             .rounded(px(6.0))

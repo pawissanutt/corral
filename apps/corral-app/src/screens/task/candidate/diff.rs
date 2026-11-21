@@ -146,6 +146,7 @@ fn hunk(cx: &Ctx, part: &HunkView) -> AnyElement {
     };
     if app.form == Form::Terminal {
         return view()
+            .selectable(true)
             .child(clip(term::quiet(part.header.clone())))
             .children(rows)
             .into_element();
@@ -240,21 +241,30 @@ fn terminal_line(line: &NumberedLine) -> AnyElement {
     });
     let number = |n: Option<u32>| n.map_or_else(|| "    ".to_owned(), |n| format!("{n:>4}"));
     let (before, word, after) = pieces(line);
-    clip(
-        text("")
-            .child(
-                text(format!("{} {} ", number(line.old), number(line.new)))
-                    .text_color(color(Token::Ink3)),
-            )
-            .child(text(format!("{:<1} ", line.sign)).text_color(ink))
-            .child(text(before.to_owned()).text_color(ink))
-            .children(word.map(|word| {
-                text(word.to_owned())
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(ink)
-            }))
-            .child(text(after.to_owned()).text_color(ink)),
-    )
+    view()
+        .flex_row()
+        .child(
+            text(format!(
+                "{} {} {:<1} ",
+                number(line.old),
+                number(line.new),
+                line.sign
+            ))
+            .flex_shrink_0()
+            .text_color(color(Token::Ink3)),
+        )
+        .child(clip(
+            text("")
+                .select_text()
+                .child(text(before.to_owned()).text_color(ink))
+                .children(word.map(|word| {
+                    text(word.to_owned())
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(ink)
+                }))
+                .child(text(after.to_owned()).text_color(ink)),
+        ))
+        .into_element()
 }
 
 /// One line of code that never wraps: laid out wider than any line of the patch, then clipped
