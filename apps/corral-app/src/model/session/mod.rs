@@ -582,13 +582,11 @@ impl<'a> Cx<'a> {
         self.ended.is_some() || self.run.is_some_and(log::without_pi)
     }
 
-    /// The session's name: the build's, the chat's title, the task's title; `untitled` when the
-    /// host recorded none.
+    /// The session's served title, or the task's title; `untitled` when neither is available.
     pub fn title(&self) -> String {
         let named = self
-            .build()
-            .map(|build| build.name.clone())
-            .or_else(|| self.row.map(|row| row.title.clone()))
+            .row
+            .map(|row| row.title.clone())
             .or_else(|| {
                 self.task
                     .and_then(|task| self.feed.board.task(task))

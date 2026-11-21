@@ -580,7 +580,7 @@ export class NativeWorkbench {
     const elsewhere = r.scopeRequired || this.realRoot(r.root) !== this.realRoot(session.worktree);
     const scope = elsewhere ? `Changes: ${this.scopeLabel} · ` : "";
     return {
-      title: `build · ${plainLabel(session.name)}`, state: snapshot.streaming || live ? "Working" : "Idle",
+      title: `build · ${plainLabel(build.record.title)}`, state: snapshot.streaming || live ? "Working" : "Idle",
       context: { left: `${plainLabel(session.project ?? basename(session.repoRoot))} · ${place}`, right: scope + policy.long, rightShort: scope + policy.short },
       ...(asking ? { attention: { text: `▲ ${asking} needs you`, short: `▲ ${asking}`, tone: "warning" as const } } : {}),
       ...(status ? { status } : {}),

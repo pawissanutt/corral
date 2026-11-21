@@ -1633,7 +1633,7 @@ export class HostSession {
   }): Promise<SubmitResult> {
     if (!this.bound || this.closing) return Promise.resolve({ disposition: "rejected", reason: "host_not_ready" });
     if (this.rewinding) return Promise.resolve({ disposition: "rejected", reason: "rewind_in_progress" });
-    if (input.origin === "owner") this.buildControls?.noteOwnerInput(source?.text ?? input.text);
+    if (input.origin === "owner" && !(source?.text ?? input.text).startsWith("/")) this.buildControls?.noteOwnerInput(source?.text ?? input.text);
     const socketId = input.inputId ?? source?.requestId;
     const transcriptId = input.inputId ?? (input.origin === "owner" ? source?.requestId : undefined);
     if (input.origin === "owner" && (input.inputId || source?.requestId) && !source?.pane && !images?.length && !input.attachments?.length) {

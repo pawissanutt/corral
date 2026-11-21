@@ -49,8 +49,9 @@ const iso = (at: number) => new Date(at).toISOString();
 function requestTitle(text: string): string | undefined {
   const line = text.split(/\r?\n/).map(value => value.trim()).find(Boolean)?.replace(/\s+/g, " ");
   if (!line) return undefined;
-  if (line.length <= 120) return line;
-  const prefix = line.slice(0, 119);
+  const characters = Array.from(line);
+  if (characters.length <= 120) return line;
+  const prefix = characters.slice(0, 119).join("");
   const boundary = prefix.lastIndexOf(" ");
   return `${boundary >= 60 ? prefix.slice(0, boundary) : prefix}…`;
 }
@@ -138,7 +139,7 @@ export function createJournal(options: {
     const children = sum(data.children.filter(child => child.kind !== "review").map(child => child.usage));
     const reviewers = sum(data.children.filter(child => child.kind === "review").map(child => child.usage));
     return { version: 1, id: current.id, kind: "build", project: current.project,
-      title: (current.title?.trim() || data.title?.trim() || data.intent.map(entry => requestTitle(entry.text)).find(Boolean) || "Build session").slice(0, 120),
+      title: Array.from(current.title?.trim() || data.title?.trim() || data.intent.map(entry => requestTitle(entry.text)).find(Boolean) || "Build session").slice(0, 120).join(""),
       intent: data.intent.slice(0, 32).map(prompt => ({ ...prompt, text: prompt.text.slice(0, 4096) })),
       created: current.created, updated: data.updated, repo_root: current.repoRoot, worktree: current.worktree,
       branch: data.branch === undefined ? current.branch : data.branch, base: current.base, outcome: data.outcome, diff: data.diff,

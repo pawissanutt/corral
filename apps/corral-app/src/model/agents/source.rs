@@ -116,11 +116,7 @@ impl<'a> Source<'a> {
     pub fn name(self, feed: &daemon::Feed) -> Option<String> {
         let named = match (self.run, self.chat) {
             (Some(_), _) => self.task(feed).map(|task| task.title().to_owned()),
-            (None, Some(chat)) => Some(
-                chat.build
-                    .as_ref()
-                    .map_or_else(|| chat.title.clone(), |build| build.name.clone()),
-            ),
+            (None, Some(chat)) => Some(chat.title.clone()),
             (None, None) => None,
         };
         named.filter(|name| !name.trim().is_empty())
