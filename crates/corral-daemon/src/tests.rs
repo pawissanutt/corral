@@ -268,22 +268,69 @@ fn socket_review_before_done_is_not_found() {
 }
 
 #[test]
-fn socket_usage_add_preserves_reported_harness() {
+fn socket_usage_add_preserves_harness_and_token_evidence() {
+    use corral_types::UsageToken;
+    use wire::detail::{DetailBody, DetailGet, DetailRef, DetailReply};
+
     let fixture = Fixture::new();
     let mut client = Client::connect(&fixture.unix_server());
-    let reply: OpReply = client.ok(
-        wire::op::OP_SUBMIT,
+    for usage in [
         json!({
-            "op": {"usage_add":{"usage":{
-                "model":"model", "at":"2026-02-03T00:00:00Z", "input":1, "output":1,
-                "cache_read":0, "cache_write":0, "harness":"reported-harness"
-            }}}
+            "model": "anthropic-api/claude-sonnet-4-6", "at": "2026-02-03T00:00:00Z",
+            "harness": "reported-harness", "billing": "api", "usd": 0.125,
         }),
-    );
-    assert_eq!(reply, OpReply::Done { seq: 0, task: None });
+        json!({
+            "model": "openai-codex/gpt-6.2-sol", "at": "2026-02-03T01:00:00Z",
+            "billing": "subscription", "input": 1, "output": 0,
+            "cache_read": 0, "cache_write": 0,
+        }),
+        json!({
+            "model": "openai-codex/gpt-6.2-sol", "at": "2026-02-03T02:00:00Z",
+            "billing": "subscription", "input": 0, "output": 0,
+            "cache_read": 0, "cache_write": 0,
+            "explicit_zero_tokens": ["input", "output", "cache_read", "cache_write"],
+        }),
+    ] {
+        let reply: OpReply = client.ok(
+            wire::op::OP_SUBMIT,
+            json!({ "op": { "usage_add": { "usage": usage } } }),
+        );
+        assert_eq!(reply, OpReply::Done { seq: 0, task: None });
+    }
     let engine = fixture.shared.engine().unwrap();
     let rows = engine.store.list_usage().unwrap();
     assert_eq!(rows[0].harness.as_deref(), Some("reported-harness"));
+    assert_eq!(rows[0].token_count(UsageToken::Input), None);
+    assert_eq!(rows[1].token_count(UsageToken::Output), None);
+    assert_eq!(rows[2].token_count(UsageToken::Output), Some(0));
+
+    let reply: DetailReply = client.ok(
+        wire::app::DETAIL_GET,
+        DetailGet {
+            target: DetailRef::UsageSeries {
+                from: "2026-02-03".into(),
+                to: "2026-02-04".into(),
+                by: None,
+                utc_offset_minutes: 0,
+                time_zone: None,
+            },
+            etag: None,
+            page: None,
+        },
+    );
+    let Some(DetailBody::UsageSeries(series)) = reply.body else {
+        panic!("expected usage series");
+    };
+    let total = &series.days[0].summary.total;
+    assert_eq!(
+        (total.requests, total.estimate_missing_token_requests),
+        (3, 2)
+    );
+    assert_eq!(
+        (total.estimate_usd, total.estimated_requests),
+        (Some(0.0), 1)
+    );
+    assert_eq!((total.usd, total.priced_requests), (Some(0.125), 1));
 }
 
 #[test]

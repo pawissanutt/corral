@@ -89,13 +89,14 @@ fn commands_render_documented_flags_and_escape_shell_arguments() {
                     model: "model".into(),
                     input: 12,
                     output: 0,
-                    cache_read: 10,
+                    cache_read: 0,
                     cache_write: 2,
+                    explicit_zero_tokens: [UsageToken::Output].into(),
                     usd: Some(0.25),
                     billing: Some("api".into()),
                 },
             }),
-            "corral usage add --model model --task T-042 --run R1 --input 12 --cache-read 10 --cache-write 2 --usd 0.25 --billing api",
+            "corral usage add --model model --task T-042 --run R1 --input 12 --output 0 --cache-write 2 --usd 0.25 --billing api",
         ),
     ];
 

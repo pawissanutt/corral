@@ -213,31 +213,39 @@ fn usage_delta_observes_usage_without_a_new_event() {
         panic!("expected usage");
     };
     assert_eq!(delta.rows[0].total.requests, 0);
-    ack(&mut subs, Topic::Usage, delta.cursor);
-    let seq = fixture
-        .apply(Op::UsageAdd {
-            usage: Usage {
-                task: None,
-                run: None,
-                at: jiff::Timestamp::now(),
-                profile: None,
-                harness: None,
-                model: "model".into(),
-                input: 100,
-                output: 20,
-                cache_read: 0,
-                cache_write: 0,
-                usd: Some(0.02),
-                billing: Some("api".into()),
-            },
-        })
-        .seq;
-    assert_eq!(seq, 0);
-    let Some(SubDelta::Usage { delta }) = receive(&mut subs) else {
-        panic!("expected usage delta");
-    };
-    assert_eq!(delta.rows[0].total.input, 100);
-    assert_eq!(delta.rows[0].total.requests, 1);
+    let mut cursor = delta.cursor;
+    for (model, billing, usd, requests) in [
+        ("anthropic-api/claude-sonnet-4-6", "api", Some(0.02), 1),
+        ("openai-codex/gpt-6.2-sol", "subscription", None, 2),
+    ] {
+        ack(&mut subs, Topic::Usage, cursor);
+        let seq = fixture
+            .apply(Op::UsageAdd {
+                usage: Usage {
+                    at: jiff::Timestamp::now(),
+                    model: model.into(),
+                    input: 100,
+                    output: 20,
+                    usd,
+                    billing: Some(billing.into()),
+                    ..Usage::default()
+                },
+            })
+            .seq;
+        assert_eq!(seq, 0);
+        let Some(SubDelta::Usage { delta }) = receive(&mut subs) else {
+            panic!("expected usage delta");
+        };
+        let total = &delta.rows[0].total;
+        assert_eq!(total.input, 100 * requests);
+        assert_eq!(total.requests, requests);
+        assert_eq!(total.estimate_missing_token_requests, requests);
+        assert_eq!(total.estimated_requests, 0);
+        assert_eq!(total.estimate_usd, None);
+        assert!(total.estimate_sources.is_empty());
+        assert_eq!((total.usd, total.priced_requests), (Some(0.02), 1));
+        cursor = delta.cursor;
+    }
 }
 
 #[test]

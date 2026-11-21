@@ -257,6 +257,7 @@ pub(crate) enum ArtifactCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum UsageCommand {
+    /// Record a request. API estimates require all four token counts; pass 0 explicitly when known.
     Add {
         #[arg(long)]
         model: String,
@@ -264,14 +265,14 @@ pub(crate) enum UsageCommand {
         task: Option<String>,
         #[arg(long)]
         run: Option<String>,
-        #[arg(long, default_value_t)]
-        input: u64,
-        #[arg(long, default_value_t)]
-        output: u64,
-        #[arg(long, default_value_t)]
-        cache_read: u64,
-        #[arg(long, default_value_t)]
-        cache_write: u64,
+        #[arg(long)]
+        input: Option<u64>,
+        #[arg(long)]
+        output: Option<u64>,
+        #[arg(long)]
+        cache_read: Option<u64>,
+        #[arg(long)]
+        cache_write: Option<u64>,
         #[arg(long, allow_negative_numbers = true)]
         usd: Option<f64>,
         #[arg(long)]

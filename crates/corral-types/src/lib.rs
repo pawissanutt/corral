@@ -369,12 +369,44 @@ pub struct Usage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
     pub model: String,
+    #[serde(default)]
     pub input: u64,
+    #[serde(default)]
     pub output: u64,
+    #[serde(default)]
     pub cache_read: u64,
+    #[serde(default)]
     pub cache_write: u64,
+    /// Identifies which zero counters were explicitly reported. For example,
+    /// `"explicit_zero_tokens":["cache_read","cache_write"]` attests to both cache zeros.
+    /// The numeric fields retain their existing wire/storage shape: positive counts are
+    /// evidence on their own, while unmarked zeros (including legacy ones) are unknown.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub explicit_zero_tokens: BTreeSet<UsageToken>,
     pub usd: Option<f64>,
     pub billing: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageToken {
+    Input,
+    Output,
+    CacheRead,
+    CacheWrite,
+}
+
+impl Usage {
+    /// A count backed by evidence, including an explicitly reported zero.
+    pub fn token_count(&self, token: UsageToken) -> Option<u64> {
+        let count = match token {
+            UsageToken::Input => self.input,
+            UsageToken::Output => self.output,
+            UsageToken::CacheRead => self.cache_read,
+            UsageToken::CacheWrite => self.cache_write,
+        };
+        (count != 0 || self.explicit_zero_tokens.contains(&token)).then_some(count)
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -476,6 +508,10 @@ pub struct UsageTotal {
     pub estimate_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub estimated_requests: u64,
+    /// Requests omitted from the estimate because at least one token count lacks evidence.
+    /// The remaining unestimated requests have complete counts but no applicable API quote.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub estimate_missing_token_requests: u64,
     /// Sources used for the known estimates, not for the reported prices.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub estimate_sources: BTreeSet<String>,

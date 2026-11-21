@@ -16,7 +16,8 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, error::ErrorKind};
 use corral_engine::{
-    Config, Engine, NewTask, Op, Status, Usage, events::EventFilter, refuse, store::TaskFilter,
+    Config, Engine, NewTask, Op, Status, Usage, UsageToken, events::EventFilter, refuse,
+    store::TaskFilter,
 };
 use jiff::Timestamp;
 
@@ -269,6 +270,15 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                 }),
             ..
         } => {
+            let explicit_zero_tokens = [
+                (UsageToken::Input, input),
+                (UsageToken::Output, output),
+                (UsageToken::CacheRead, cache_read),
+                (UsageToken::CacheWrite, cache_write),
+            ]
+            .into_iter()
+            .filter_map(|(token, count)| (count == Some(0)).then_some(token))
+            .collect();
             apply(
                 &engine,
                 out,
@@ -280,10 +290,11 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                         profile: None,
                         harness: None,
                         model,
-                        input,
-                        output,
-                        cache_read,
-                        cache_write,
+                        input: input.unwrap_or_default(),
+                        output: output.unwrap_or_default(),
+                        cache_read: cache_read.unwrap_or_default(),
+                        cache_write: cache_write.unwrap_or_default(),
+                        explicit_zero_tokens,
                         usd,
                         billing,
                     },

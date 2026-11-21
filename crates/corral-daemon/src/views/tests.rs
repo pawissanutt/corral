@@ -505,7 +505,7 @@ fn review_uses_immutable_submitted_patch_and_includes_all_checks() {
 
 #[test]
 fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
-    use corral_types::{Usage, UsageBy};
+    use corral_types::{Usage, UsageBy, UsageToken};
 
     let fixture = Fixture::new();
     fixture.project();
@@ -556,6 +556,16 @@ fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
             0,
         ),
     ] {
+        let explicit_zero_tokens = if billing == "api" {
+            [
+                UsageToken::Output,
+                UsageToken::CacheRead,
+                UsageToken::CacheWrite,
+            ]
+            .into()
+        } else {
+            Default::default()
+        };
         fixture.apply(Op::UsageAdd {
             usage: Usage {
                 task: Some(task.clone()),
@@ -566,6 +576,7 @@ fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
                 output,
                 cache_read,
                 cache_write,
+                explicit_zero_tokens,
                 usd,
                 billing: Some(billing.into()),
                 ..Usage::default()
@@ -599,6 +610,7 @@ fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
     // the unknown model and the separately reported USD aren't added to it.
     assert!((total.estimate_usd.unwrap() - 27.55).abs() < 1e-9);
     assert_eq!(total.estimated_requests, 2);
+    assert_eq!(total.estimate_missing_token_requests, 1);
     assert_eq!(
         total.estimate_sources,
         [
@@ -623,6 +635,7 @@ fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
     assert_eq!(day.summary.total.input, 19);
     assert_eq!(day.summary.total.estimate_usd, None);
     assert_eq!(day.summary.total.estimated_requests, 0);
+    assert_eq!(day.summary.total.estimate_missing_token_requests, 1);
     assert_eq!((day.summary.covered_runs, day.summary.total_runs), (1, 2));
     let group = &day.summary.groups[0];
     assert_eq!((group.covered_runs, group.total_runs), (Some(1), Some(2)));

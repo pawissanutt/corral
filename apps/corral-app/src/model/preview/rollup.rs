@@ -362,6 +362,7 @@ pub(super) fn usage_rows(feed: &Feed, runs: &[Run]) -> Vec<corral_types::Usage> 
                 output: 2_100 * scale,
                 cache_read: 64_000 * scale,
                 cache_write: 4_000 * scale,
+                explicit_zero_tokens: Default::default(),
                 usd: (request + 1 < 2 + spin % 3 || spin % 2 == 0).then_some(0.04 * scale as f64),
                 billing: Some("subscription".into()),
             });

@@ -1,5 +1,5 @@
 use crate::{
-    Engine, Op, Role, Store, Usage,
+    Engine, Op, Role, Store, Usage, UsageToken,
     tests::{run, task, tempdir},
 };
 
@@ -17,6 +17,7 @@ fn request(at: &str) -> Usage {
         output: 2,
         cache_read: 3,
         cache_write: 4,
+        explicit_zero_tokens: Default::default(),
         usd: None,
         billing: None,
     }
@@ -450,6 +451,72 @@ fn usage_series_buckets_by_local_midnight_and_covers_only_same_day_cohorts() {
             Some(day.summary.covered_runs)
         );
     }
+}
+
+#[test]
+fn historical_usage_estimates_only_when_each_counter_has_evidence() {
+    let root = tempdir();
+    let engine = Engine::init(root.path(), None).unwrap();
+    let model = "gpt-6.2-sol";
+    for (model, cache_write) in [(model, 0), (model, 1), ("no-rate", 1)] {
+        // Old documents persisted numeric zero for either omitted or explicit zero.
+        let document = serde_json::json!({
+            "model": model, "at": "2026-11-17T12:00:00Z",
+            "input": 1, "output": 1, "cache_read": 1, "cache_write": cache_write,
+            "billing": "api", "usd": 0.125,
+        });
+        engine
+            .store
+            .connection
+            .execute(
+                "INSERT INTO usage(document) VALUES (?1)",
+                [document.to_string()],
+            )
+            .unwrap();
+    }
+    let zero = Usage {
+        at: "2026-11-17T13:00:00Z".parse().unwrap(),
+        model: model.into(),
+        explicit_zero_tokens: [
+            UsageToken::Input,
+            UsageToken::Output,
+            UsageToken::CacheRead,
+            UsageToken::CacheWrite,
+        ]
+        .into(),
+        ..Usage::default()
+    };
+    engine.record_usage(&zero).unwrap();
+    let rows = engine.store.list_usage().unwrap();
+    assert_eq!(rows[0].token_count(UsageToken::CacheWrite), None);
+    assert_eq!(rows[1].token_count(UsageToken::CacheWrite), Some(1));
+    assert_eq!(rows[3], zero);
+
+    let summary = engine.usage_summary(Some(UsageBy::Model)).unwrap();
+    let ungrouped = engine.usage_summary(None).unwrap();
+    assert_eq!(summary.total, ungrouped.total);
+    let total = &summary.total;
+    assert_eq!(total.requests, 4);
+    assert_eq!(total.cache_write, 2);
+    assert_eq!(total.estimated_requests, 2);
+    assert_eq!(total.estimate_missing_token_requests, 1);
+    assert_eq!((total.usd, total.priced_requests), (Some(0.375), 3));
+    let price = &corral_types::pricing::catalog_prices()[model];
+    assert_eq!(total.estimate_usd, price.cost(1, 1, 1, 1));
+    assert_eq!(summary.groups[0].total.estimate_missing_token_requests, 1);
+    let no_rate = &summary.groups[1].total;
+    assert_eq!(no_rate.requests, 1);
+    assert_eq!(no_rate.estimate_missing_token_requests, 0);
+    assert_eq!(no_rate.estimated_requests, 0);
+    assert_eq!(no_rate.estimate_usd, None);
+
+    let series = engine
+        .usage_series(
+            UsageWindow::parse("2026-11-17", "2026-11-18", 0, None).unwrap(),
+            Some(UsageBy::Model),
+        )
+        .unwrap();
+    assert_eq!(series[0].summary, summary);
 }
 
 #[test]

@@ -10,7 +10,7 @@ use jiff::{
 };
 use rusqlite::{OptionalExtension, Row, params, params_from_iter};
 
-use crate::{Engine, Store, Usage, store::encode};
+use crate::{Engine, Store, Usage, UsageToken, store::encode};
 
 // Jiff stores UTC timestamps with optional fractional seconds. Sort by a
 // biased unsigned year (including BCE), then by the remaining ISO text.
@@ -161,7 +161,12 @@ impl Bucket {
     }
 }
 
-type Estimate = Option<(f64, &'static str)>;
+#[derive(Clone, Copy)]
+enum Estimate {
+    Known(f64, &'static str),
+    MissingTokens,
+    NoQuote,
+}
 
 fn add(total: &mut UsageTotal, usage: &Usage, estimate: Estimate) -> Result<()> {
     total.requests += 1;
@@ -187,17 +192,21 @@ fn add(total: &mut UsageTotal, usage: &Usage, estimate: Estimate) -> Result<()> 
         total.priced_requests += 1;
         total.usd = Some(usd);
     }
-    if let Some((estimate, source)) = estimate {
-        let usd = total.estimate_usd.unwrap_or_default() + estimate;
-        ensure!(
-            usd.is_finite(),
-            "usage API-equivalent estimate total overflow"
-        );
-        total.estimated_requests += 1;
-        total.estimate_usd = Some(usd);
-        if !total.estimate_sources.contains(source) {
-            total.estimate_sources.insert(source.to_owned());
+    match estimate {
+        Estimate::Known(estimate, source) => {
+            let usd = total.estimate_usd.unwrap_or_default() + estimate;
+            ensure!(
+                usd.is_finite(),
+                "usage API-equivalent estimate total overflow"
+            );
+            total.estimated_requests += 1;
+            total.estimate_usd = Some(usd);
+            if !total.estimate_sources.contains(source) {
+                total.estimate_sources.insert(source.to_owned());
+            }
         }
+        Estimate::MissingTokens => total.estimate_missing_token_requests += 1,
+        Estimate::NoQuote => {}
     }
     Ok(())
 }
@@ -308,15 +317,31 @@ impl Engine {
     }
 
     fn usage_estimate(&self, usage: &Usage) -> Estimate {
-        let (price, source) = request_price_with_source(&self.config.pricing, &usage.model)?;
-        // Requests report disjoint token categories; usd is independent evidence.
-        let usd = price.cost(
-            usage.input,
-            usage.output,
-            usage.cache_read,
-            usage.cache_write,
-        )?;
-        Some((usd, source))
+        // Require evidence for all four disjoint token categories before quoting.
+        // Missing tokens take precedence over a missing rate; reported USD is independent.
+        let [
+            Some(input),
+            Some(output),
+            Some(cache_read),
+            Some(cache_write),
+        ] = [
+            UsageToken::Input,
+            UsageToken::Output,
+            UsageToken::CacheRead,
+            UsageToken::CacheWrite,
+        ]
+        .map(|token| usage.token_count(token))
+        else {
+            return Estimate::MissingTokens;
+        };
+        let Some((price, source)) = request_price_with_source(&self.config.pricing, &usage.model)
+        else {
+            return Estimate::NoQuote;
+        };
+        match price.cost(input, output, cache_read, cache_write) {
+            Some(usd) => Estimate::Known(usd, source),
+            None => Estimate::NoQuote,
+        }
     }
 
     /// Roll up all recorded requests. Grouping does not change overall run coverage.

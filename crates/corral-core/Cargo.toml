@@ -13,7 +13,7 @@ test-skew-barrier = []
 
 [dependencies]
 anyhow.workspace = true
-corral-types.workspace = true
+corral-types = { path = "../corral-types" }
 base64.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip"] }

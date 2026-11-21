@@ -60,9 +60,21 @@ fn covers(summary: &UsageSummary) -> String {
     }
 }
 
-/// Requests left out of the API-equivalent estimate: no applicable rate was known.
-fn unestimated(total: &UsageTotal) -> u64 {
-    total.requests.saturating_sub(total.estimated_requests)
+/// Requests left out of the API-equivalent estimate because their token evidence was
+/// incomplete; they are not evidence that no rate exists.
+fn missing_tokens(total: &UsageTotal) -> u64 {
+    total
+        .estimate_missing_token_requests
+        .min(total.requests.saturating_sub(total.estimated_requests))
+}
+
+/// Requests left out of the estimate with complete token evidence: no applicable rate was
+/// known. Requests with incomplete token evidence are counted by [`missing_tokens`] instead.
+fn unrated(total: &UsageTotal) -> u64 {
+    total
+        .requests
+        .saturating_sub(total.estimated_requests)
+        .saturating_sub(missing_tokens(total))
 }
 
 /// Explain missing prices and the start-day limitation of run coverage.
@@ -78,14 +90,27 @@ fn coverage(summary: &UsageSummary) -> Option<Coverage> {
             count(total.requests)
         ));
     }
-    let left_out = unestimated(total);
-    if left_out > 0 {
+    let no_tokens = missing_tokens(total);
+    let no_rate = unrated(total);
+    if no_tokens > 0 || no_rate > 0 {
+        let mut why = Vec::new();
+        if no_tokens > 0 {
+            why.push(format!(
+                "{} had incomplete token evidence",
+                count(no_tokens)
+            ));
+        }
+        if no_rate > 0 {
+            why.push(format!(
+                "{} had no API rate known for their model",
+                count(no_rate)
+            ));
+        }
         reasons.push(format!(
-            "The API-equivalent estimate covers {} of the {} requests; {} had no API rate \
-             known for their model.",
+            "The API-equivalent estimate covers {} of the {} requests; {}.",
             count(total.estimated_requests),
             count(total.requests),
-            count(left_out)
+            why.join(" and ")
         ));
     }
     if summary.covered_runs < summary.total_runs && total.estimate_usd.is_some() {
@@ -124,6 +149,7 @@ fn add(sum: &mut UsageTotal, total: &UsageTotal) {
     sum.cache_write += total.cache_write;
     sum.priced_requests += total.priced_requests;
     sum.estimated_requests += total.estimated_requests;
+    sum.estimate_missing_token_requests += total.estimate_missing_token_requests;
     sum.estimate_sources
         .extend(total.estimate_sources.iter().cloned());
     if let Some(usd) = total.usd {
@@ -230,11 +256,18 @@ fn group_coverage(group: &UsageGroup) -> (String, bool, Option<String>) {
             plural(unpriced, "request", "requests")
         ));
     }
-    let left_out = unestimated(&group.total);
-    if left_out > 0 {
+    let no_tokens = missing_tokens(&group.total);
+    if no_tokens > 0 {
+        reasons.push(format!(
+            "{} not in the estimate (incomplete token evidence)",
+            plural(no_tokens, "request", "requests")
+        ));
+    }
+    let no_rate = unrated(&group.total);
+    if no_rate > 0 {
         reasons.push(format!(
             "{} not in the estimate (no API rate known)",
-            plural(left_out, "request", "requests")
+            plural(no_rate, "request", "requests")
         ));
     }
     let reasons = (!reasons.is_empty()).then(|| reasons.join(" · "));
@@ -628,6 +661,72 @@ mod tests {
             days.bars.iter().filter(|bar| bar.fraction == 1.0).count(),
             1
         );
+    }
+
+    /// A request left out of the estimate for incomplete token evidence is never described as
+    /// having no rate; only requests with complete tokens and no rate say that. Both the
+    /// missing-token count and the split survive the sum across days.
+    #[test]
+    fn missing_token_evidence_is_not_reported_as_a_missing_rate() {
+        let group = |requests, estimated, missing_tokens| UsageGroup {
+            key: Some("pi".into()),
+            total: UsageTotal {
+                requests,
+                estimated_requests: estimated,
+                estimate_missing_token_requests: missing_tokens,
+                estimate_usd: (estimated > 0).then_some(1.0),
+                ..UsageTotal::default()
+            },
+            covered_runs: Some(1),
+            total_runs: Some(1),
+        };
+        let day = |day: &str, group: UsageGroup| UsageDay {
+            day: day.into(),
+            summary: UsageSummary {
+                total: group.total.clone(),
+                groups: vec![group],
+                covered_runs: 1,
+                total_runs: 1,
+            },
+        };
+        // Day one: 1 estimated, 2 missing tokens. Day two: 1 estimated, 1 missing tokens, 1 no rate.
+        let series = UsageSeries {
+            days: vec![
+                day("2025-11-14", group(3, 1, 2)),
+                day("2025-11-15", group(3, 1, 1)),
+            ],
+        };
+        let merged = merged(&series);
+        assert_eq!(merged.total.estimate_missing_token_requests, 3);
+        assert_eq!(missing_tokens(&merged.total), 3);
+        assert_eq!(unrated(&merged.total), 1);
+        let reasons = coverage(&merged).unwrap().reasons.join(" ");
+        assert!(
+            reasons.contains("covers 2 of the 6 requests; 3 had incomplete token evidence and 1 had no API rate known"),
+            "{reasons}"
+        );
+        let (_, _, row) = group_coverage(&merged.groups[0]);
+        let row = row.unwrap();
+        assert!(
+            row.contains("3 requests not in the estimate (incomplete token evidence)"),
+            "{row}"
+        );
+        assert!(
+            row.contains("1 request not in the estimate (no API rate known)"),
+            "{row}"
+        );
+        // Only missing tokens: nothing claims a rate is missing.
+        let only = group_coverage(&group(2, 0, 2)).2.unwrap();
+        assert!(only.contains("incomplete token evidence"), "{only}");
+        assert!(!only.contains("no API rate"), "{only}");
+        let only = coverage(&UsageSummary {
+            total: group(2, 0, 2).total,
+            ..UsageSummary::default()
+        })
+        .unwrap()
+        .reasons
+        .join(" ");
+        assert!(!only.contains("no API rate"), "{only}");
     }
 
     /// The estimate is its own column: it sums across days without ever joining the

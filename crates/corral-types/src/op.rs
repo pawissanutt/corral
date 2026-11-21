@@ -2,7 +2,7 @@ use std::{fmt, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{NewTask, Priority, Status, TaskEdit, Usage};
+use crate::{NewTask, Priority, Status, TaskEdit, Usage, UsageToken};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -209,13 +209,13 @@ impl Next {
                 option(f, "--model", &usage.model)?;
                 optional(f, "--task", usage.task.as_deref())?;
                 optional(f, "--run", usage.run.as_deref())?;
-                for (name, count) in [
-                    ("--input", usage.input),
-                    ("--output", usage.output),
-                    ("--cache-read", usage.cache_read),
-                    ("--cache-write", usage.cache_write),
+                for (name, token) in [
+                    ("--input", UsageToken::Input),
+                    ("--output", UsageToken::Output),
+                    ("--cache-read", UsageToken::CacheRead),
+                    ("--cache-write", UsageToken::CacheWrite),
                 ] {
-                    if count != 0 {
+                    if let Some(count) = usage.token_count(token) {
                         write!(f, " {name} {count}")?;
                     }
                 }
