@@ -54,12 +54,28 @@ export function mapStopReason(reason: string | null | undefined): StopReason {
   return "stop";
 }
 
+const tokenFields = {
+  input: "input_tokens", output: "output_tokens",
+  cacheRead: "cache_read_input_tokens", cacheWrite: "cache_creation_input_tokens",
+} as const;
+type TokenField = keyof typeof tokenFields;
+
+// Pi requires numeric counts; keep provider presence separate from the normalized message.
+const usageEvidence = new WeakMap<AssistantMessage, Set<TokenField>>();
+
+export function claudeUsageEvidence(output: AssistantMessage): ReadonlySet<TokenField> | undefined {
+  return usageEvidence.get(output);
+}
+
 export function updateUsage(model: Model<string>, output: AssistantMessage, usage: SdkUsage | undefined): void {
   if (!usage) return;
-  if (usage.input_tokens != null) output.usage.input = usage.input_tokens;
-  if (usage.output_tokens != null) output.usage.output = usage.output_tokens;
-  if (usage.cache_read_input_tokens != null) output.usage.cacheRead = usage.cache_read_input_tokens;
-  if (usage.cache_creation_input_tokens != null) output.usage.cacheWrite = usage.cache_creation_input_tokens;
+  const evidence = usageEvidence.get(output);
+  for (const field of Object.keys(tokenFields) as TokenField[]) {
+    const count = usage[tokenFields[field]];
+    if (count == null) continue;
+    output.usage[field] = count;
+    evidence?.add(field);
+  }
   if (usage.cache_creation?.ephemeral_1h_input_tokens != null) {
     output.usage.cacheWrite1h = usage.cache_creation.ephemeral_1h_input_tokens;
   }
@@ -97,7 +113,7 @@ export function recordClaudeCache(
 }
 
 export function emptyOutput(model: Model<string>): AssistantMessage {
-  return {
+  const output: AssistantMessage = {
     role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id,
     usage: {
       input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
@@ -105,6 +121,8 @@ export function emptyOutput(model: Model<string>): AssistantMessage {
     },
     stopReason: "stop", timestamp: Date.now(),
   };
+  usageEvidence.set(output, new Set());
+  return output;
 }
 
 function open(context: EventContext, block: OpenBlock, kind: "text" | "thinking" | "toolcall"): void {

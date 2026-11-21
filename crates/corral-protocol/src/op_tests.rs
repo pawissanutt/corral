@@ -1,4 +1,4 @@
-use corral_types::{Next, Op, Refusal, Status};
+use corral_types::{Next, Op, Refusal, Status, Usage, UsageToken};
 use serde_json::json;
 
 use super::*;
@@ -31,6 +31,43 @@ fn op_submit_round_trips_with_both_force_values_and_defaults_to_false() {
             serde_json::from_value::<OpSubmit>(wire.clone()).unwrap(),
             submit
         );
+    }
+}
+
+#[test]
+fn op_submit_round_trips_known_zeros_without_serializing_unknown_counters() {
+    // The CLI represents a supplied zero with a marker, and an omitted
+    // count as an unmarked zero in the shared Usage model.
+    for (zeros, expected_keys) in [
+        (vec![UsageToken::Output], [true, true, false, false]),
+        (
+            vec![UsageToken::Output, UsageToken::CacheWrite],
+            [true, true, true, true],
+        ),
+    ] {
+        let submit = OpSubmit {
+            op: Op::UsageAdd {
+                usage: Usage {
+                    at: "2026-02-03T00:00:00Z".parse().unwrap(),
+                    model: "test-model".into(),
+                    input: 10,
+                    cache_read: u64::from(expected_keys[2]),
+                    explicit_zero_tokens: zeros.into_iter().collect(),
+                    ..Usage::default()
+                },
+            },
+            force: false,
+        };
+        let wire = serde_json::to_value(&submit).unwrap();
+        let fields = wire["op"]["usage_add"]["usage"].as_object().unwrap();
+        for (field, expected) in ["input", "output", "cache_read", "cache_write"]
+            .into_iter()
+            .zip(expected_keys)
+        {
+            assert_eq!(fields.contains_key(field), expected, "{field}");
+        }
+        assert_eq!(fields["output"], 0);
+        assert_eq!(serde_json::from_value::<OpSubmit>(wire).unwrap(), submit);
     }
 }
 

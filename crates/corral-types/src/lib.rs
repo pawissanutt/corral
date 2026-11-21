@@ -379,8 +379,9 @@ pub struct Usage {
     pub cache_write: u64,
     /// Identifies which zero counters were explicitly reported. For example,
     /// `"explicit_zero_tokens":["cache_read","cache_write"]` attests to both cache zeros.
-    /// The numeric fields retain their existing wire/storage shape: positive counts are
-    /// evidence on their own, while unmarked zeros (including legacy ones) are unknown.
+    /// Shared `Usage` serde treats positive counts as evidence on their own and
+    /// unmarked zeros (including legacy stored ones) as unknown. Submission
+    /// protocols can record zero evidence when the incoming field was supplied.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub explicit_zero_tokens: BTreeSet<UsageToken>,
     pub usd: Option<f64>,

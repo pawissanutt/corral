@@ -3,7 +3,9 @@ import { afterEach, expect, test } from "bun:test";
 import { Type } from "typebox";
 import { CLAUDE_SDK_API } from "../src/claude/stream.ts";
 import { PRE_TOOL_USE_DENIAL, TOOL_EXECUTION_DENIED_MESSAGE, mapToolArgs } from "../src/claude/tools.ts";
+import { CorralClient, type ModelUsage } from "../src/tools/corral.ts";
 import { OAUTH, PAID, anthropic, fakeSdk, resetSdkFixture, textReply, user } from "./support/claude-sdk-fixture.ts";
+import { writeFakeEngine } from "./support/fake-engine.ts";
 
 afterEach(resetSdkFixture);
 
@@ -41,6 +43,35 @@ test("a streamed text reply becomes one Pi assistant message", async () => {
   expect(before).toBeGreaterThanOrEqual(0);
   expect(after - before + 1).toBeLessThanOrEqual(20);
   expect(after).toBeGreaterThan(before);
+});
+
+test("Claude usage argv includes observed zeros but not omitted or null counts", async () => {
+  fakeSdk(async function* (_options, { query }) {
+    if (query === 0) {
+      yield { type: "stream_event", event: { type: "message_start", message: {
+        usage: { input_tokens: 12, cache_read_input_tokens: 0, cache_creation_input_tokens: null },
+      } } };
+      yield { type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } } };
+    }
+    yield { type: "result", subtype: "success", result: "ok", ...(query === 1 ? { usage: { cache_creation_input_tokens: 0 } } : {}) };
+  });
+  const rows: ModelUsage[] = [];
+  const { send, config } = await anthropic({ PATH: "/bin", CORRAL_CLAUDE_RESIDENT: "0" }, row => rows.push(row));
+  const cwd = config.cwd!;
+  const engine = writeFakeEngine(cwd);
+  const client = new CorralClient({ corral: engine.path, root: cwd, cwd,
+    identity: { role: "worker", store: "st-demo", project: "demo", task: "T-1", run: "R1" } });
+  const context = { messages: [user("hi")] };
+  const { message } = await send(context);
+  expect(message.usage).toMatchObject({ input: 12, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 17 });
+  await send(context); // Zero is the only evidence.
+  await send(context); // No provider evidence: don't write a row.
+  for (const row of rows) await client.usage(row);
+  const prefix = ["--root", cwd, "--json", "usage", "add", "--model", "anthropic/claude-sonnet-5-5", "--task", "T-1", "--run", "R1"];
+  expect(engine.calls()).toEqual([
+    [...prefix, "--input", "12", "--output", "5", "--cache-read", "0", "--billing", "subscription"],
+    [...prefix, "--cache-write", "0", "--billing", "subscription"],
+  ]);
 });
 
 test("streamed tool_use blocks become Pi tool calls that Claude Code is denied from executing", async () => {

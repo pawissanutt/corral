@@ -286,6 +286,10 @@ fn socket_usage_add_preserves_harness_and_token_evidence() {
         }),
         json!({
             "model": "openai-codex/gpt-6.2-sol", "at": "2026-02-03T02:00:00Z",
+            "billing": "subscription", "input": 1, "output": 0, "cache_read": 0,
+        }),
+        json!({
+            "model": "openai-codex/gpt-6.2-sol", "at": "2026-02-03T03:00:00Z",
             "billing": "subscription", "input": 0, "output": 0,
             "cache_read": 0, "cache_write": 0,
             "explicit_zero_tokens": ["input", "output", "cache_read", "cache_write"],
@@ -303,6 +307,9 @@ fn socket_usage_add_preserves_harness_and_token_evidence() {
     assert_eq!(rows[0].token_count(UsageToken::Input), None);
     assert_eq!(rows[1].token_count(UsageToken::Output), None);
     assert_eq!(rows[2].token_count(UsageToken::Output), Some(0));
+    assert_eq!(rows[2].token_count(UsageToken::CacheRead), Some(0));
+    assert_eq!(rows[2].token_count(UsageToken::CacheWrite), None);
+    assert_eq!(rows[3].token_count(UsageToken::Output), Some(0));
 
     let reply: DetailReply = client.ok(
         wire::app::DETAIL_GET,
@@ -324,7 +331,7 @@ fn socket_usage_add_preserves_harness_and_token_evidence() {
     let total = &series.days[0].summary.total;
     assert_eq!(
         (total.requests, total.estimate_missing_token_requests),
-        (3, 2)
+        (4, 3)
     );
     assert_eq!(
         (total.estimate_usd, total.estimated_requests),

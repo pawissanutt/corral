@@ -37,7 +37,7 @@ fn status(cache: Option<&DetailCache>) -> Status {
     }
 }
 
-/// Requests that reported tokens but no price.
+/// Requests with no reported cost.
 fn unpriced(total: &UsageTotal) -> u64 {
     total.requests.saturating_sub(total.priced_requests)
 }
@@ -84,8 +84,8 @@ fn coverage(summary: &UsageSummary) -> Option<Coverage> {
     let missing = unpriced(total);
     if missing > 0 {
         reasons.push(format!(
-            "{} of the {} requests reported tokens but no price: their tokens are counted, \
-             their reported cost is not.",
+            "{} of the {} requests reported no cost; any available tokens are counted, \
+             but their reported cost is unknown.",
             count(missing),
             count(total.requests)
         ));
@@ -252,7 +252,7 @@ fn group_coverage(group: &UsageGroup) -> (String, bool, Option<String>) {
     let unpriced = unpriced(&group.total);
     if unpriced > 0 {
         reasons.push(format!(
-            "{} with tokens but no price",
+            "{} with no reported cost",
             plural(unpriced, "request", "requests")
         ));
     }
@@ -638,7 +638,7 @@ mod tests {
         let page = page(&state, &feed);
         assert!(page.head.contains("1 of 3 runs"), "{}", page.head);
         assert!(page.head.contains("reported usage on their start day"));
-        assert!(page.coverage.unwrap().reasons[0].contains("no price"));
+        assert!(page.coverage.unwrap().reasons[0].contains("no cost"));
         let total = page.total.as_ref().unwrap();
         assert_eq!(total.covered, "1 of 3");
         let claude = page.rows.iter().find(|row| row.key == "claude").unwrap();
@@ -653,7 +653,7 @@ mod tests {
         );
         let pi = page.rows.iter().find(|row| row.key == "pi").unwrap();
         assert_eq!(pi.covered, "1 of 1");
-        assert!(pi.reasons.as_deref().unwrap().contains("no price"));
+        assert!(pi.reasons.as_deref().unwrap().contains("no reported cost"));
         assert!(!page.headers.contains(&"Run time"));
         let days = page.days.unwrap();
         assert_eq!(days.bars.len(), 30);

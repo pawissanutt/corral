@@ -4126,6 +4126,7 @@
         ]
       },
       "OpSubmit": {
+        "description": "For `usage_add`, absent token counters are unknown unless listed in\n`explicit_zero_tokens`. A sparse payload's supplied zero counters are evidence.\nLegacy clients serialized all four counters even when unknown, so an all-four\npayload must list its reported zeros in `explicit_zero_tokens` to disambiguate.",
         "properties": {
           "force": {
             "default": false,

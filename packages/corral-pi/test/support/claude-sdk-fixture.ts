@@ -11,8 +11,10 @@ import { type AssistantMessage, type Context, type Credential, normalizeContext 
 
 import { type SdkBoundary, overrideSdk } from "../../src/claude/sdk.ts";
 import { closeResidentSessions } from "../../src/claude/resident.ts";
+import { observeUsage } from "../../src/host/model-usage.ts";
 import { guardedFetch } from "../../src/host/restrict.ts";
 import { restrictProvider } from "../../src/host/session.ts";
+import type { ModelUsage } from "../../src/tools/corral.ts";
 
 export const OAUTH = "sk-ant-oat01-SYNTHETIC-SUBSCRIPTION";
 export const PAID = "sk-ant-api03-SYNTHETIC-PAID-KEY";
@@ -77,7 +79,7 @@ export function fakeSdk(script: Script, setup?: Promise<void>): FakeRun {
   return run;
 }
 
-export async function anthropic(env: NodeJS.ProcessEnv = { PATH: "/bin" }) {
+export async function anthropic(env: NodeJS.ProcessEnv = { PATH: "/bin" }, report?: (usage: ModelUsage) => void) {
   const root = mkdtempSync(join(tmpdir(), "corral-pi-claude-sdk-"));
   temps.push(root);
   const credential: Credential = { type: "oauth", access: OAUTH, refresh: "r", expires: Date.now() + 3_600_000 };
@@ -97,9 +99,11 @@ export async function anthropic(env: NodeJS.ProcessEnv = { PATH: "/bin" }) {
   restrictProvider(models, "anthropic", guard.fetch as typeof fetch, config);
   const model = models.getModel("anthropic", "claude-sonnet-5-5")!;
   const provider = models.getProvider("anthropic")!;
+  const nativeStream = provider.streamSimple.bind(provider);
+  const streamSimple = report ? observeUsage(nativeStream, "subscription", report) : nativeStream;
   const send = async (context: Context, options: Record<string, unknown> = {}) => {
     const auth = await models.getAuth("anthropic");
-    const stream = provider.streamSimple(model, normalizeContext(context),
+    const stream = streamSimple(model, normalizeContext(context),
       { apiKey: auth?.auth.apiKey, ...options } as never);
     const events: string[] = [];
     for await (const event of stream) events.push(event.type);

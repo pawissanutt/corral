@@ -40,10 +40,10 @@ export class CorralCommandError extends Error {
 
 export interface ModelUsage {
   readonly model: string;
-  readonly input: number;
-  readonly output: number;
-  readonly cache_read: number;
-  readonly cache_write: number;
+  readonly input?: number;
+  readonly output?: number;
+  readonly cache_read?: number;
+  readonly cache_write?: number;
   readonly usd?: number;
   readonly billing?: "subscription" | "api";
 }
@@ -101,8 +101,10 @@ export class CorralClient {
     // Usage is workspace data, even if a concurrent landing removes this run's worktree.
     return this.command(["usage", "add", "--model", usage.model,
       ...(task ? ["--task", task] : []), ...(run ? ["--run", run] : []),
-      "--input", String(usage.input), "--output", String(usage.output),
-      "--cache-read", String(usage.cache_read), "--cache-write", String(usage.cache_write),
+      ...(usage.input === undefined ? [] : ["--input", String(usage.input)]),
+      ...(usage.output === undefined ? [] : ["--output", String(usage.output)]),
+      ...(usage.cache_read === undefined ? [] : ["--cache-read", String(usage.cache_read)]),
+      ...(usage.cache_write === undefined ? [] : ["--cache-write", String(usage.cache_write)]),
       ...(usage.usd === undefined ? [] : ["--usd", String(usage.usd)]),
       ...(usage.billing ? ["--billing", usage.billing] : [])], this.options.root);
   }

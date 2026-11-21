@@ -192,7 +192,7 @@ test("Claude executes only native WebSearch, scrubs ambient auth and accounts th
   const fx = await fixture("anthropic", async () => { throw new Error("Claude must not use host HTTP"); });
   expect(JSON.parse((await fx.run("claude")).text)).toMatchObject({ provider: "anthropic", answer: "Rust documentation",
     results: [{ title: "Rust", url: "https://www.rust-lang.org/" }] });
-  expect(fx.usage).toMatchObject([{ input: 23, output: 5, billing: "subscription" }]);
+  expect(fx.usage).toEqual([{ model: "anthropic/claude-sonnet-5-5", input: 23, output: 5, billing: "subscription" }]);
   expect(run.closes).toBe(1);
 });
 
@@ -214,7 +214,7 @@ test("Claude terminal failures retain reported usage instead of becoming zero-to
   expect(record(assistant?.usage)).toMatchObject({ input: 30, output: 5, totalTokens: 35 });
   expect(JSON.stringify(assistant)).not.toContain("sk-SYNTHETIC-SECRET");
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
-  expect(fx.usage).toMatchObject([{ input: 30, output: 5, billing: "subscription" }]);
+  expect(fx.usage).toEqual([{ model: "anthropic/claude-sonnet-5-5", input: 30, output: 5, billing: "subscription" }]);
 });
 
 test("Claude search cancellation interrupts and closes its subprocess query", async () => {
