@@ -645,7 +645,10 @@ pub(super) fn finish(row: Row, key: &str, raw: Raw<'_>, rest: Rest<'_>, cx: Cx<'
         note: row.right.or_else(|| raw.note.map(str::to_owned)),
         hidden: hidden.filter(|_| !open),
         time: raw.ms.and_then(elapsed),
-        view: row.view,
+        view: (row.state == ToolState::Ok)
+            .then(|| tool_files::open_file(&raw, cx))
+            .flatten()
+            .or(row.view),
         tail: if open {
             Vec::new()
         } else {

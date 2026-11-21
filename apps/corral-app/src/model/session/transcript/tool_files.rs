@@ -57,6 +57,49 @@ fn changes_at(call: &Call<'_>) -> ToolView {
     }
 }
 
+/// A completed read or write can open the current worktree copy directly. Do not
+/// reinterpret absolute paths outside the recorded cwd as worktree-relative paths.
+pub(super) fn open_file(raw: &super::tool::Raw<'_>, cx: super::replay::Cx<'_>) -> Option<ToolView> {
+    use crate::model::session::FilesAction;
+    if !matches!(raw.tool, "read" | "write")
+        || !cx.feed.capable(corral_protocol::app::SESSION_FILES_V1)
+        || !(cx.feed.agents.contains_key(cx.id)
+            || cx
+                .feed
+                .assistants
+                .get(cx.id)?
+                .build
+                .as_ref()
+                .is_some_and(|b| !b.here))
+    {
+        return None;
+    }
+    let args: Value = serde_json::from_str(raw.arguments).ok()?;
+    let raw_path = str_of(&args, "path").or_else(|| str_of(&args, "file_path"))?;
+    let path = std::path::Path::new(raw_path);
+    let path = if path.is_absolute() {
+        path.strip_prefix(cx.journal.cwd.as_deref()?).ok()?
+    } else {
+        path
+    };
+    let mut parts = Vec::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(name) => parts.push(name.to_str()?),
+            _ => return None,
+        }
+    }
+    (!parts.is_empty()).then(|| ToolView {
+        label: "View file",
+        action: Action::Files(FilesAction::Open {
+            session: cx.id.clone(),
+            path: parts.join("/"),
+            directory: false,
+        }),
+    })
+}
+
 /// A byte count as the file rows say it: `820 B`, `1.2 KB`, `3.4 MB`.
 fn size(bytes: usize) -> String {
     let value = bytes as f64;
