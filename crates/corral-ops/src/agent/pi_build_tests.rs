@@ -631,6 +631,28 @@ fn list_sessions_resolves_display_titles_without_changing_identity() {
     record["title"] = json!("  ");
     session_file(data.path(), id, &record.to_string());
     assert_eq!(read().title, "checkout-copy");
+
+    // A journal can exceed the old 16 MiB cap with valid retained evidence.
+    use std::io::Write;
+    let mut file = std::fs::File::create(&journal).unwrap();
+    file.write_all(b"{\"padding\":\"").unwrap();
+    for _ in 0..257 {
+        file.write_all(&[b'x'; 65536]).unwrap();
+    }
+    file.write_all(b"\",\"sessionTitle\":\"Large journal title\"}")
+        .unwrap();
+    drop(file);
+    assert_eq!(read().title, "Large journal title");
+
+    // A non-regular optional journal must not block a Resume listing.
+    std::fs::remove_file(&journal).unwrap();
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &journal,
+        rustix::fs::Mode::from_bits_truncate(0o600),
+    )
+    .unwrap();
+    assert_eq!(read().title, "checkout-copy");
 }
 
 #[test]

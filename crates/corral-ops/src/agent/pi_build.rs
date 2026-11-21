@@ -158,7 +158,7 @@ fn workspace_for(path: &Path) -> Result<Option<PathBuf>> {
 }
 
 fn resume_session(data_root: &Path, id: &str) -> Result<BuildSessionSummary> {
-    let (_, session) = read_session(&data_root.join("build").join(id)).ok_or_else(|| {
+    let (_, session) = read_session(&data_root.join("build").join(id), false).ok_or_else(|| {
         refuse(
             "build_session_unknown",
             format!("cannot read build session {id}"),
@@ -656,8 +656,6 @@ pub struct BuildSessionSummary {
 
 /// The largest `session.json` [`list_sessions`] reads.
 const SESSION_MAX_BYTES: u64 = 64 * 1024;
-/// A journal may include build evidence as well as its title; keep launcher reads bounded.
-const JOURNAL_MAX_BYTES: u64 = 16 * 1024 * 1024;
 /// The most recently modified session directories [`list_sessions`] reads.
 const SESSION_DIRS: usize = 32;
 
@@ -710,13 +708,13 @@ pub fn list_sessions(data_root: &Path) -> Vec<BuildSessionSummary> {
     let mut sessions: Vec<_> = dirs
         .into_iter()
         .take(SESSION_DIRS)
-        .filter_map(|(_, dir)| read_session(&dir))
+        .filter_map(|(_, dir)| read_session(&dir, true))
         .collect();
     sessions.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.id.cmp(&a.1.id)));
     sessions.into_iter().map(|(_, session)| session).collect()
 }
 
-fn read_session(dir: &Path) -> Option<(jiff::Timestamp, BuildSessionSummary)> {
+fn read_session(dir: &Path, include_title: bool) -> Option<(jiff::Timestamp, BuildSessionSummary)> {
     use std::io::Read;
     let mut bytes = Vec::new();
     std::fs::File::open(dir.join("session.json"))
@@ -732,18 +730,9 @@ fn read_session(dir: &Path) -> Option<(jiff::Timestamp, BuildSessionSummary)> {
         return None;
     }
     let updated = record.updated.parse::<jiff::Timestamp>().ok()?;
-    let journal = std::fs::File::open(dir.join("journal.json"))
-        .ok()
-        .and_then(|file| {
-            let mut bytes = Vec::new();
-            file.take(JOURNAL_MAX_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .ok()?;
-            if bytes.len() as u64 > JOURNAL_MAX_BYTES {
-                return None;
-            }
-            serde_json::from_slice::<SessionJournal>(&bytes).ok()
-        })
+    let journal = include_title
+        .then(|| read_journal(&dir.join("journal.json")))
+        .flatten()
         .unwrap_or_default();
     let title = [
         journal.session_title.as_deref(),
@@ -771,6 +760,21 @@ fn read_session(dir: &Path) -> Option<(jiff::Timestamp, BuildSessionSummary)> {
             exited: record.exit.map(|exit| exit.choice),
         },
     ))
+}
+
+fn read_journal(path: &Path) -> Option<SessionJournal> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    let file = options.open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    serde_json::from_reader(std::io::BufReader::new(file)).ok()
 }
 
 #[cfg(all(test, target_os = "linux"))]
