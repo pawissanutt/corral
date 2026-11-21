@@ -39,7 +39,9 @@ fn sas_code(app: AppState, sas: &str) -> AnyElement {
         .font_weight(FontWeight::BOLD)
         .text_color(color(Token::Ink));
     if app.form == Form::Terminal {
-        return code.into_element();
+        return crate::ui::composer::terminal_selectable(app, view().selectable(true))
+            .child(code.select_text())
+            .into_element();
     }
     view()
         .flex_row()
@@ -113,7 +115,10 @@ fn code_block(app: AppState, code: &str) -> AnyElement {
         .select_text()
         .text_color(color(Token::Ink));
     if form == Form::Terminal {
-        return view().pl(term::cells(2.0)).child(words).into_element();
+        return crate::ui::composer::terminal_selectable(app, view().selectable(true))
+            .pl(term::cells(2.0))
+            .child(words)
+            .into_element();
     }
     let size = text_size(form) * 0.93;
     view()

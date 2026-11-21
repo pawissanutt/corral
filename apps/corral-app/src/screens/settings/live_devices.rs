@@ -114,7 +114,16 @@ fn pairing(app: AppState, v: &devices::LiveDevices) -> AnyElement {
                 .min_w(px(0.0))
                 .gap(px(8.0))
                 .child(cell(app, line.clone(), Token::Ink, false))
-                .child(mono_cell(app, offer, Token::Ink).test_id(id).select_text())
+                .child({
+                    let words = mono_cell(app, offer, Token::Ink).test_id(id).select_text();
+                    if app.form == Form::Terminal {
+                        crate::ui::composer::terminal_selectable(app, view().selectable(true))
+                            .child(words)
+                            .into_element()
+                    } else {
+                        words.into_element()
+                    }
+                })
                 .children(reach.iter().map(|hint| {
                     cell(app, format!("Reachable at {hint}"), Token::Ink3, false).into_element()
                 }))
