@@ -10,6 +10,22 @@ use super::{Action, DockAction, ExitProgress, State, StepState};
 use crate::model::Id;
 use crate::model::daemon::Feed;
 
+#[test]
+fn explicit_finish_retries_preparation_instead_of_only_showing_the_old_exit_card() {
+    let feed = feed_with(
+        card(
+            "previous-offer",
+            CardKind::Exit,
+            vec![question(vec![option("keep"), option("iterate")], false)],
+        ),
+        SessionState::default(),
+    );
+    let effects = State::default().act(Action::Dock(DockAction::Finish(Id::from(SESSION))), &feed);
+    assert!(
+        matches!(&effects[..], [crate::model::Effect::SessionAction { request, .. }] if matches!(request.action, corral_protocol::session_host::SessionAction::ExitOpen))
+    );
+}
+
 fn land_step(id: LandStepId, state: LandStepState, note: Option<&str>) -> LandStep {
     LandStep {
         id,

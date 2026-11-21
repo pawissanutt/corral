@@ -285,8 +285,8 @@ fn land_steps(rows: Vec<land::LandRow>) -> Vec<ExitStep> {
         .collect()
 }
 
-/// Finish…: docks the exit choice the host already holds pending, else asks the host to open
-/// it. Reopening it leaves reason mode.
+/// Explicit Finish asks the host to prepare again even if a previous blocked card remains.
+/// Simply displaying a pending card never sends this action.
 pub(super) fn finish(state: &mut State, session: &Id, feed: &Feed) -> Vec<Effect> {
     let pending = dock::briefs(feed, session.as_str())
         .iter()
@@ -297,7 +297,6 @@ pub(super) fn finish(state: &mut State, session: &Id, feed: &Feed) -> Vec<Effect
         dock::leave(ui, feed.now);
         ui.dock.opened.insert(card);
         ui.focus = Focus::Dock;
-        return Vec::new();
     }
     let key = state.ids.next_id();
     let dock = &mut state.ui_mut(session).dock;
