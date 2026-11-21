@@ -500,7 +500,9 @@ pub(super) fn detail(cx: &Cx<'_>, child: &SessionChild) -> AgentDetail {
                     format!("report:{}", child.id),
                     "btn-more-report",
                     report,
-                    detail.report_more.then_some(preview_note(detail.transcript)),
+                    detail
+                        .report_more
+                        .then_some(preview_note(detail.transcript)),
                 )
             }),
         verdict,
