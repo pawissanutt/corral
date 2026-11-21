@@ -55,8 +55,8 @@ browser. [Install it](apps/corral-app/README.md#install-and-upgrade) with one sc
 Git and an authenticated agent provider; the installer can offer to install herdr, the terminal
 engine Corral uses.
 
-**Windows:** run the Linux build in Ubuntu 24.04 on WSL 2 and open Corral in your Windows
-browser. There is no Windows desktop installer in the current release.
+**Windows:** use [Corral Desktop](apps/corral-app/README.md#windows-desktop) or your browser.
+Run the daemon in Ubuntu 24.04 on WSL 2 or on another Linux or macOS machine.
 
 **Use sample data:** once the app is open locally and before you pair, it offers **Preview with
 sample data**: the real screens on sample tasks, never your workspace. It is an option inside
