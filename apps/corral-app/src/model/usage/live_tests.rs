@@ -113,6 +113,7 @@ fn missing_token_evidence_is_not_reported_as_a_missing_rate() {
         key: Some("pi".into()),
         total: UsageTotal {
             requests,
+            estimate_metadata_available: true,
             estimated_requests: estimated,
             estimate_missing_token_requests: missing_tokens,
             estimate_usd: (estimated > 0).then_some(1.0),
@@ -139,8 +140,8 @@ fn missing_token_evidence_is_not_reported_as_a_missing_rate() {
     };
     let merged = merged(&series);
     assert_eq!(merged.total.estimate_missing_token_requests, 3);
-    assert_eq!(missing_tokens(&merged.total), 3);
-    assert_eq!(unrated(&merged.total), 1);
+    assert_eq!(missing_tokens(&merged.total), Some(3));
+    assert_eq!(unrated(&merged.total), Some(1));
     let reasons = coverage(&merged).unwrap().reasons.join(" ");
     assert!(
             reasons.contains("covers 2 of the 6 requests; 3 had incomplete token evidence and 1 had no API rate known"),
@@ -181,6 +182,7 @@ fn estimate_is_kept_apart_from_reported_cost_and_its_coverage_is_stated() {
             requests,
             priced_requests: priced,
             usd,
+            estimate_metadata_available: true,
             estimated_requests: estimated,
             estimate_usd: estimate,
             ..UsageTotal::default()
@@ -192,6 +194,7 @@ fn estimate_is_kept_apart_from_reported_cost_and_its_coverage_is_stated() {
         key: Some("codex".into()),
         total: UsageTotal {
             requests: 1,
+            estimate_metadata_available: true,
             ..UsageTotal::default()
         },
         covered_runs: Some(1),
@@ -364,6 +367,19 @@ fn token_totals_follow_their_evidence_not_their_sum() {
         notes.contains("Input and output tokens are incomplete"),
         "{notes}"
     );
+    // These fixtures predate the estimate metadata: every group and the period say their
+    // estimate coverage is unknown, and none claims a count of covered, token-less or
+    // rate-less requests.
+    for key in ["zero", "silent", "mixed", "legacy", "legacy-zero", "split"] {
+        let reasons = reasons(key);
+        assert!(reasons.contains("estimate coverage unknown"), "{reasons}");
+        assert!(!reasons.contains("not in the estimate"), "{reasons}");
+        assert_eq!(row(key).estimate, UNKNOWN);
+    }
+    assert_eq!(total.estimate, UNKNOWN);
+    assert!(notes.contains("estimate coverage is unknown"), "{notes}");
+    assert!(!notes.contains("covers"), "{notes}");
+    assert!(!notes.contains("no API rate"), "{notes}");
     // The day strip says the same.
     assert_eq!(used_words(&group("zero", 2, 0, 0, both(2)).total), "0");
     assert_eq!(
@@ -448,6 +464,76 @@ fn day_strip_note_follows_token_evidence() {
     assert_eq!(figure_of(Evidence::Partial(None), 1_051), "≥1.0k");
     assert_eq!(floor_tokens(999_999), "999.9k");
     assert_eq!(floor_tokens(1_999_999), "1.9M");
+}
+
+/// A day from before the estimate metadata merged with a day that has it leaves the period and
+/// the group unknown: the new day's counts are not presented as the whole coverage, and its
+/// estimate is only a lower bound. A day without requests changes nothing.
+#[test]
+fn legacy_and_new_days_merge_to_unknown_estimate_coverage() {
+    let group = |requests, available, estimated| UsageGroup {
+        key: Some("pi".into()),
+        total: UsageTotal {
+            requests,
+            estimate_metadata_available: available,
+            estimated_requests: estimated,
+            estimate_missing_token_requests: estimated.min(1),
+            estimate_usd: (estimated > 0).then_some(12.75),
+            ..UsageTotal::default()
+        },
+        covered_runs: Some(1),
+        total_runs: Some(1),
+    };
+    let day = |day: &str, group: UsageGroup| UsageDay {
+        day: day.into(),
+        summary: UsageSummary {
+            total: group.total.clone(),
+            groups: vec![group],
+            covered_runs: 1,
+            total_runs: 1,
+        },
+    };
+    let series = |days: Vec<UsageDay>| merged(&UsageSeries { days });
+    let reasons = |summary: &UsageSummary| coverage(summary).unwrap().reasons.join(" ");
+    for order in [[(2, false, 0), (3, true, 2)], [(3, true, 2), (2, false, 0)]] {
+        let [first, second] = order;
+        let summary = series(vec![
+            day("2025-11-14", group(first.0, first.1, first.2)),
+            day("2025-11-15", group(second.0, second.1, second.2)),
+        ]);
+        assert!(!summary.total.estimate_metadata_available);
+        assert_eq!(missing_tokens(&summary.total), None);
+        assert_eq!(unrated(&summary.total), None);
+        assert_eq!(estimate(&summary.total), "≥$12");
+        let notes = reasons(&summary);
+        assert!(notes.contains("estimate coverage is unknown"), "{notes}");
+        assert!(!notes.contains("covers"), "{notes}");
+        let (_, _, row) = group_coverage(&summary.groups[0]);
+        let row = row.unwrap();
+        assert!(row.contains("estimate coverage unknown"), "{row}");
+        assert!(!row.contains("not in the estimate"), "{row}");
+    }
+    // A day with no requests is neutral, in either order: known stays known.
+    for days in [
+        vec![
+            day("2025-11-14", group(0, false, 0)),
+            day("2025-11-15", group(3, true, 2)),
+        ],
+        vec![
+            day("2025-11-14", group(3, true, 2)),
+            day("2025-11-15", group(0, false, 0)),
+        ],
+    ] {
+        let summary = series(days);
+        assert!(summary.total.estimate_metadata_available);
+        assert_eq!(estimate(&summary.total), "$13");
+        assert_eq!(missing_tokens(&summary.total), Some(1));
+        assert!(
+            reasons(&summary).contains("covers 2 of the 3 requests"),
+            "{}",
+            reasons(&summary)
+        );
+    }
 }
 
 /// A legacy part merged with an explicit-zero part is unknown, not "no request reported".

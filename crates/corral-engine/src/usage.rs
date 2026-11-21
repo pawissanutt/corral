@@ -129,6 +129,7 @@ fn empty_total() -> UsageTotal {
     // Locally calculated rollups always have a known coverage count, even for
     // an empty day or a group containing only runs with no usage reports.
     UsageTotal {
+        estimate_metadata_available: true,
         input_requests: Some(0),
         output_requests: Some(0),
         cache_read_requests: Some(0),

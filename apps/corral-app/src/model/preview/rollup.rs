@@ -430,6 +430,8 @@ pub(super) fn summarize(
 
 fn add(total: &mut UsageTotal, row: &corral_types::Usage) {
     total.requests += 1;
+    // The sample computes its estimate for every request, so its coverage is always known.
+    total.estimate_metadata_available = true;
     total.input += row.input;
     total.output += row.output;
     total.cache_read += row.cache_read;

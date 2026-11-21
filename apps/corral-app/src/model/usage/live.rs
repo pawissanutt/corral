@@ -60,22 +60,40 @@ fn covers(summary: &UsageSummary) -> String {
     }
 }
 
+/// Whether the estimate's coverage is known: a total from before the estimate metadata (or
+/// merged with one) has no honest count of what the estimate covers or why requests are out.
+/// A total without requests has nothing to cover.
+fn estimate_known(total: &UsageTotal) -> bool {
+    total.requests == 0 || total.estimate_metadata_available
+}
+
 /// Requests left out of the API-equivalent estimate because their token evidence was
-/// incomplete; they are not evidence that no rate exists.
-fn missing_tokens(total: &UsageTotal) -> u64 {
-    total
-        .estimate_missing_token_requests
-        .min(total.requests.saturating_sub(total.estimated_requests))
+/// incomplete; they are not evidence that no rate exists. `None` where the coverage is unknown.
+fn missing_tokens(total: &UsageTotal) -> Option<u64> {
+    estimate_known(total).then(|| {
+        total
+            .estimate_missing_token_requests
+            .min(total.requests.saturating_sub(total.estimated_requests))
+    })
 }
 
 /// Requests left out of the estimate with complete token evidence: no applicable rate was
 /// known. Requests with incomplete token evidence are counted by [`missing_tokens`] instead.
-fn unrated(total: &UsageTotal) -> u64 {
-    total
-        .requests
-        .saturating_sub(total.estimated_requests)
-        .saturating_sub(missing_tokens(total))
+/// `None` where the coverage is unknown.
+fn unrated(total: &UsageTotal) -> Option<u64> {
+    Some(
+        total
+            .requests
+            .saturating_sub(total.estimated_requests)
+            .saturating_sub(missing_tokens(total)?),
+    )
 }
+
+/// Said where the estimate's coverage is unknown, in place of any count or rate claim.
+const ESTIMATE_UNKNOWN: &str = "API-equivalent estimate coverage is unknown: some usage \
+                                predates estimate metadata, so how many requests the figure \
+                                includes, and why the rest are left out, is not known; any \
+                                figure shown is a lower bound";
 
 /// How much of a total's requests carried evidence for one token count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,8 +226,11 @@ fn coverage(summary: &UsageSummary) -> Option<Coverage> {
             count(total.requests)
         ));
     }
-    let no_tokens = missing_tokens(total);
-    let no_rate = unrated(total);
+    if !estimate_known(total) {
+        reasons.push(format!("{ESTIMATE_UNKNOWN}."));
+    }
+    let no_tokens = missing_tokens(total).unwrap_or(0);
+    let no_rate = unrated(total).unwrap_or(0);
     if no_tokens > 0 || no_rate > 0 {
         let mut why = Vec::new();
         if no_tokens > 0 {
@@ -245,9 +266,23 @@ fn cost(total: &UsageTotal) -> String {
     total.usd.map_or_else(|| UNKNOWN.to_owned(), money)
 }
 
-/// The API-equivalent estimate, or [`UNKNOWN`] where no request could be priced.
+/// The API-equivalent estimate, or [`UNKNOWN`] where no request could be priced. Where the
+/// coverage is unknown the sum is only a lower bound, shown floored after `≥`.
 fn estimate(total: &UsageTotal) -> String {
-    total.estimate_usd.map_or_else(|| UNKNOWN.to_owned(), money)
+    match total.estimate_usd {
+        None => UNKNOWN.to_owned(),
+        Some(usd) if estimate_known(total) => money(usd),
+        Some(usd) => format!("≥{}", floor_money(usd)),
+    }
+}
+
+/// Dollars rounded down to the precision [`money`] shows, for a `≥` lower bound.
+fn floor_money(value: f64) -> String {
+    if value >= 10.0 {
+        format!("${}", count(value.floor() as u64))
+    } else {
+        format!("${:.2}", (value * 100.0).floor() / 100.0)
+    }
 }
 
 /// Said under the table: what the estimate column is and is not, beside the reported one.
@@ -262,6 +297,13 @@ const QUOTA: &str = "Quota is unknown: no harness reports quota or remaining all
 fn add(sum: &mut UsageTotal, total: &UsageTotal) {
     // The evidence counts are joined before the request counts they qualify change.
     let join = |a: Option<u64>, b: Option<u64>| joined((a, sum.requests), (b, total.requests));
+    // Estimate coverage is known only where every part with requests knows it; a part without
+    // requests has nothing to cover and is neutral.
+    let estimate_metadata_available = match (sum.requests, total.requests) {
+        (_, 0) => sum.estimate_metadata_available,
+        (0, _) => total.estimate_metadata_available,
+        _ => sum.estimate_metadata_available && total.estimate_metadata_available,
+    };
     let input_requests = join(sum.input_requests, total.input_requests);
     let output_requests = join(sum.output_requests, total.output_requests);
     let cache_read_requests = join(sum.cache_read_requests, total.cache_read_requests);
@@ -276,6 +318,7 @@ fn add(sum: &mut UsageTotal, total: &UsageTotal) {
     sum.cache_read_requests = cache_read_requests;
     sum.cache_write_requests = cache_write_requests;
     sum.priced_requests += total.priced_requests;
+    sum.estimate_metadata_available = estimate_metadata_available;
     sum.estimated_requests += total.estimated_requests;
     sum.estimate_missing_token_requests += total.estimate_missing_token_requests;
     sum.estimate_sources
@@ -385,14 +428,17 @@ fn group_coverage(group: &UsageGroup) -> (String, bool, Option<String>) {
             plural(unpriced, "request", "requests")
         ));
     }
-    let no_tokens = missing_tokens(&group.total);
+    if !estimate_known(&group.total) {
+        reasons.push("estimate coverage unknown (usage predates estimate metadata)".to_owned());
+    }
+    let no_tokens = missing_tokens(&group.total).unwrap_or(0);
     if no_tokens > 0 {
         reasons.push(format!(
             "{} not in the estimate (incomplete token evidence)",
             plural(no_tokens, "request", "requests")
         ));
     }
-    let no_rate = unrated(&group.total);
+    let no_rate = unrated(&group.total).unwrap_or(0);
     if no_rate > 0 {
         reasons.push(format!(
             "{} not in the estimate (no API rate known)",

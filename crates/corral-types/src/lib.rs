@@ -520,19 +520,28 @@ pub struct UsageTotal {
     pub priced_requests: u64,
     /// Sum of reported prices; `None` if no requests reported a price.
     pub usd: Option<f64>,
+    /// Whether estimate coverage metadata was calculated. False means unknown,
+    /// including responses from servers predating estimate metadata.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub estimate_metadata_available: bool,
     /// Sum of known API-equivalent estimates, not a reported charge or subscription bill.
-    /// `None` means no estimate is available; coverage is `estimated_requests` of `requests`.
+    /// `None` means no estimate is available. Coverage is `estimated_requests` of
+    /// `requests` only when `estimate_metadata_available` is true; otherwise counts may be partial.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimate_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub estimated_requests: u64,
     /// Requests omitted from the estimate because at least one token count lacks evidence.
-    /// The remaining unestimated requests have complete counts but no applicable API quote.
+    /// When metadata is available, remaining unestimated requests have complete counts but no applicable API quote.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub estimate_missing_token_requests: u64,
     /// Sources used for the known estimates, not for the reported prices.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub estimate_sources: BTreeSet<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn is_zero(value: &u64) -> bool {
@@ -595,9 +604,13 @@ mod usage_tests {
             ],
             [None; 4]
         );
+        assert!(!old.estimate_metadata_available);
+        assert_eq!(old.estimated_requests, 0);
+        assert_eq!(old.estimate_missing_token_requests, 0);
         assert_eq!(to_value(&old).unwrap(), legacy);
 
         let current = UsageTotal {
+            estimate_metadata_available: true,
             input_requests: Some(2),
             output_requests: Some(0),
             cache_read_requests: Some(1),
@@ -605,6 +618,8 @@ mod usage_tests {
             ..old
         };
         let wire = to_value(&current).unwrap();
+        assert_eq!(wire["estimate_metadata_available"], json!(true));
+        assert!(wire.get("estimated_requests").is_none());
         assert_eq!(wire["input_requests"], json!(2));
         assert_eq!(wire["output_requests"], json!(0));
         assert_eq!(wire["cache_read_requests"], json!(1));

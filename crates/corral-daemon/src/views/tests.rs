@@ -661,6 +661,7 @@ fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
         last.days[0].summary,
         corral_types::UsageSummary {
             total: corral_types::UsageTotal {
+                estimate_metadata_available: true,
                 input_requests: Some(0),
                 output_requests: Some(0),
                 cache_read_requests: Some(0),

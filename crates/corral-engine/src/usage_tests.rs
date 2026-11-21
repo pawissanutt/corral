@@ -138,6 +138,7 @@ fn usage_rollups_keep_unassociated_requests_but_count_only_exact_run_matches() {
         ungrouped,
         UsageSummary {
             total: UsageTotal {
+                estimate_metadata_available: true,
                 requests: 5,
                 input: 50,
                 output: 10,
@@ -160,6 +161,12 @@ fn usage_rollups_keep_unassociated_requests_but_count_only_exact_run_matches() {
     let summary = |by| {
         let summary = engine.usage_summary(Some(by)).unwrap();
         assert_eq!(summary.total, ungrouped.total);
+        assert!(
+            summary
+                .groups
+                .iter()
+                .all(|group| group.total.estimate_metadata_available)
+        );
         assert_eq!(summary.covered_runs, ungrouped.covered_runs);
         assert_eq!(summary.total_runs, ungrouped.total_runs);
         summary.groups
@@ -205,6 +212,7 @@ fn usage_rollups_keep_unassociated_requests_but_count_only_exact_run_matches() {
     assert_eq!(
         by_profile[0].total,
         UsageTotal {
+            estimate_metadata_available: true,
             requests: 2,
             input: 20,
             output: 4,
@@ -413,6 +421,16 @@ fn usage_series_buckets_by_local_midnight_and_covers_only_same_day_cohorts() {
     }
     let window = || UsageWindow::parse("2026-11-17", "2026-11-21", 120, None).unwrap();
     let series = engine.usage_series(window(), Some(UsageBy::Model)).unwrap();
+    for day in &series {
+        assert!(day.summary.total.estimate_metadata_available);
+        assert!(
+            day.summary
+                .groups
+                .iter()
+                .all(|group| group.total.estimate_metadata_available)
+        );
+    }
+    assert!(series.iter().any(|day| day.summary.total.requests == 0));
     let counts = |day: usize| {
         let summary = &series[day].summary;
         (
