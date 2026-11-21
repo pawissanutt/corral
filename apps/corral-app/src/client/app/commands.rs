@@ -119,6 +119,15 @@ impl AppState {
                 request_id,
                 request,
             } => self.operation(feed, request_id, CONFIG_PUT, value(request)),
+            ClientRequest::PiStartup {
+                request_id,
+                request,
+            } => self.operation(
+                feed,
+                request_id,
+                corral_protocol::config::PI_STARTUP,
+                value(request),
+            ),
             ClientRequest::Detail {
                 request_id,
                 request,

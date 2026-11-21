@@ -130,6 +130,12 @@ fn document() -> Value {
             &common,
         ),
         method::<config::ConfigDocument, ()>(&mut generator, config::CONFIG_PUT, false, &common),
+        method::<config::PiStartupRequest, config::PiStartupConfig>(
+            &mut generator,
+            config::PI_STARTUP,
+            false,
+            &common,
+        ),
         method::<pane::PaneFocus, ()>(
             &mut generator,
             pane::PANE_FOCUS,

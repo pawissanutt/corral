@@ -4508,6 +4508,59 @@
           }
         ]
       },
+      "PiStartupChange": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "description": "Null clears the workspace override.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "PiStartupConfig": {
+        "properties": {
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "PiStartupRequest": {
+        "additionalProperties": false,
+        "description": "Read the startup setting, or update the single key without exposing raw Pi TOML.",
+        "properties": {
+          "change": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PiStartupChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "Ping": {
         "type": "object"
       },
@@ -9838,6 +9891,49 @@
       "x-notification": false,
       "x-params-schema": {
         "$ref": "#/components/schemas/ConfigDocument"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "config.pi_startup",
+      "params": [
+        {
+          "name": "change",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PiStartupChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/PiStartupConfig"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/PiStartupRequest"
       },
       "x-wire-errors": [
         {

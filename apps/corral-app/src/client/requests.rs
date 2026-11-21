@@ -72,6 +72,10 @@ pub enum ClientRequest {
         request_id: String,
         request: ConfigDocument,
     },
+    PiStartup {
+        request_id: String,
+        request: corral_protocol::config::PiStartupRequest,
+    },
     /// Owner input to a session (`session.send`), kept in this device's outbox until corrald
     /// answered it; its command id is its input id and the key its reply is read under.
     SessionSend(SessionSend),
