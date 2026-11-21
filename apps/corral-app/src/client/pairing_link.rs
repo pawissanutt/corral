@@ -1,13 +1,32 @@
 //! Pairing links are transient drafts, never implicit permission to contact a daemon.
 
+fn fragment_code(fragment: &str) -> Option<&str> {
+    fragment.strip_prefix(corral_protocol::device::PAIR_LINK_FRAGMENT)
+}
+
+#[cfg(windows)]
+pub(super) fn from_input(text: &str) -> Result<corral_protocol::device::PairCode, String> {
+    use corral_protocol::device::PairCode;
+
+    let text = text.trim();
+    if text.starts_with("http://") || text.starts_with("https://") {
+        let link = url::Url::parse(text).map_err(|_| "the Corral pairing link is invalid")?;
+        let code = link
+            .fragment()
+            .and_then(fragment_code)
+            .ok_or("the URL does not contain a Corral pairing code")?;
+        PairCode::decode(code)
+    } else {
+        PairCode::decode(text)
+    }
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
 fn take_fragment(
     hash: &str,
     clear: impl FnOnce() -> Result<(), &'static str>,
 ) -> Result<Option<String>, &'static str> {
-    let Some(code) = hash
-        .strip_prefix('#')
-        .and_then(|fragment| fragment.strip_prefix(corral_protocol::device::PAIR_LINK_FRAGMENT))
-    else {
+    let Some(code) = hash.strip_prefix('#').and_then(fragment_code) else {
         return Ok(None);
     };
     clear()?;

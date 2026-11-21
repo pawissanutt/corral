@@ -32,7 +32,7 @@ When the daemon's complete project list is empty the workspace has no project ma
 only Home (a landing that says how to add a project and opens Ask), Sessions, Activity ›
 Usage and Settings are offered. The palette offers **Preview: no projects** for that state.
 
-One trusted local owner: a paired browser, an enrolled native app and the owner CLI have the same authority. There are no authority classes, previews or proofs; an enrolled or paired device is the owner. Every engine operation is offered for every task, in its More menu, and the engine decides what is allowed. See [Actions, refusals and confirmation](#actions-refusals-and-confirmation).
+One trusted local owner: a paired browser or Windows desktop app, an enrolled Unix app and the owner CLI have the same authority. There are no authority classes, previews or proofs; an enrolled or paired device is the owner. Every engine operation is offered for every task, in its More menu, and the engine decides what is allowed. See [Actions, refusals and confirmation](#actions-refusals-and-confirmation).
 
 Disconnected screens offer **Connect** and **Preview with sample data**; see [Sample preview](#sample-preview). Settings › General › **This device** exposes local preferences even without a connection.
 
@@ -49,13 +49,14 @@ or upgrade can succeed; older releases do not necessarily contain them.
 |---|---|---|
 | `corral-next`, `corrald-next`, `corral-pi` | Linux glibc x86_64 and aarch64; macOS x86_64 and arm64 | `corral-next-<Rust target>.tar.gz`, with a `.sha256` sidecar. The daemon requires Unix sockets; native Windows is not supported. |
 | Web app | Browser with WebAssembly, WebSocket, IndexedDB and WebCrypto; independent of host CPU | `corral-app-web.tar.gz` and `.sha256`; static files, no Rust or NSH at runtime. Pairing and remote use have the secure-origin requirements below. |
-| Native desktop / terminal app | Source targets include Linux and macOS; desktop backend also names Windows | No native app release artifact is promised. Native live connection needs Unix peer credentials; Windows native connection is unavailable. Desktop builds and platform integrations require verification on the target host. |
+| Corral Desktop | Windows 10 1809 or later, x86_64 | `corral-app-windows-x86_64-setup.exe` with a SHA-256 sidecar. Pairs to a Unix daemon, including in WSL 2; does not install the daemon. |
+| Native desktop / terminal app | Linux and macOS source targets | No packaged desktop or terminal client is provided here. Live connection uses Unix peer credentials. |
 | Phone layout | Browser on a compatible phone | Responsive web UI, not a promised Android or iOS packaged release. |
 
 Linux release targets are `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`;
 macOS targets are `x86_64-apple-darwin` and `aarch64-apple-darwin`. Linux packages are built
 and tested on Ubuntu 24.04 (glibc 2.39); older glibc distributions are not verified. macOS
-packages target macOS 14 or later. There is no new-engine Windows or Linux musl artifact in this matrix. The classic CLI's separate Windows installer
+packages target macOS 14 or later. There is no Windows daemon or Linux musl artifact in this matrix. The classic CLI's separate Windows installer
 and musl archives do not install this app's daemon.
 
 ## Install and upgrade
@@ -85,7 +86,7 @@ directory; the static site goes to `$XDG_DATA_HOME/corral-next/web`, or
 marked site wholesale, and nonempty unrelated or manually unpacked directories are not adopted.
 `sh install-corral.sh --app-only` installs only
 the static site; `--dry-run` shows the plan. On native Windows, the PowerShell installer
-can install just the web site, not the new daemon:
+installs just the web site; it is separate from the desktop installer:
 
 ```powershell
 Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install-corral.ps1
@@ -104,6 +105,23 @@ upgrading its binary. The installer replaces its own web bundle; update separate
 web files yourself. Back up your workspace and configuration before
 upgrading; no automatic rollback or downgrade compatibility is promised.
 `CORRAL_VERSION=v0.2.0 sh install-corral.sh --legacy` selects the published classic CLI instead. That classic release does not include the Pi host; the new engine's `corral-pi` artifact is separate and requires a release that actually contains it.
+
+### Windows desktop
+
+1. Install Corral's Linux build in Ubuntu 24.04 on WSL 2, or use a daemon on another Linux/macOS host. In the intended workspace, run `corral-next init` if it is new. For WSL 2 on the same PC, enable the daemon's loopback listener in `.corral-next/corral.toml`:
+
+   ```toml
+   [daemon]
+   listen = "127.0.0.1:7841"
+   web_origin = ["http://127.0.0.1:7841"]
+   ```
+
+   Start `corrald-next --root <workspace> run` in WSL. The Windows client connects to `ws://127.0.0.1:7841` using WSL's localhost forwarding; no Windows firewall exception or web bundle is required. For a remote daemon, configure [TLS and the advertised endpoint](#browser), use its `wss://` endpoint, and allow its matching `https://` origin.
+2. On Windows, download `corral-app-windows-x86_64-setup.exe` and its `.sha256` file from a [GitHub release](https://github.com/pawissanutt/corral/releases) that includes them. Verify the download with `Get-FileHash -Algorithm SHA256 .\corral-app-windows-x86_64-setup.exe` and compare it with the sidecar. Run the installer and open **Corral** from Start. The installer is per-user and does not install WSL or the daemon.
+3. On the daemon host, run `corrald-next --root <workspace> pair`. In the Windows app's **Settings › Connection**, enter the daemon address and paste the link or code printed by that command. Press **Pair**, compare the six-digit confirmation codes, then approve on the daemon side.
+4. Reopen Corral normally. It reconnects to the paired daemon when available. Re-running the installer upgrades the app without removing the user data in `%LOCALAPPDATA%\corral-app`; the paired credential is protected by Windows DPAPI for the current user. To revoke access, remove the device on the daemon; uninstalling the client alone does not revoke it.
+
+### Serve the web app
 
 In the intended Unix workspace, run `corral-next init`. In `.corral-next/corral.toml`,
 set the absolute path of the installed dedicated bundle (use your `CORRAL_APP_INSTALL_DIR`
@@ -323,7 +341,7 @@ shown separately. Receipt order still orders the conversation.
 
 Revoking a device in Settings › Devices (asks once) closes its live sessions and stops
 its automatic reconnect. Native devices can explicitly enrol again.
-Browsers recover with **Forget this browser** (also asks once), which returns to Connection for pairing.
+Browsers and the Windows app recover with **Forget this browser** / **Forget this device** (also asks once), which returns to Connection for pairing.
 Forget removes local credentials and local state, not the daemon's record; revoke obsolete
 records from any paired device. Failed Forget remains retryable.
 
@@ -526,7 +544,8 @@ menu, form, sheet or the palette is open, the key line shows that surface's keys
 | NSH Storage | `corral.destination`, `corral.settings`, `corral.theme`, `corral.sidebar`, `corral.scope` (per daemon store: the one project scope), non-secret `corral.paired` |
 | Browser IndexedDB `corral-app` v1, `credentials` | `device` (AES-GCM-wrapped credential and non-extractable key), retryable `forget` intent |
 | Browser IndexedDB `corral-local-state` v1 | `records` plus `meta` (`revision`); transactional outbox/offline cache, separate from credentials |
-| Native state directory | `$XDG_STATE_HOME/corral-app/` (fallback `$HOME/.local/state/corral-app/`): private `devices.json`, `durable.json`, retained locks |
+| Unix state directory | `$XDG_STATE_HOME/corral-app/` (fallback `$HOME/.local/state/corral-app/`): private `devices.json`, `durable.json`, retained locks |
+| Windows state directory | `%LOCALAPPDATA%\corral-app\`: DPAPI-protected `pairing.dpapi`, revision-checked `durable.json`, retained locks |
 
 Transactional records use `namespace/<hex(store + NUL + device)>/` with `meta`,
 `draft/<id>`, `message/<id>` and `cancelled/<id>` entries; records of the retired command
@@ -569,7 +588,7 @@ NSH installs under `~/.nsh` and is linked at `~/.local/bin/nsh`. NSH 0.6.1 crate
 
 `.cargo/config.toml` disables the host's crashing global sccache wrapper and sets `CC_wasm32_unknown_unknown` and `AR_wasm32_unknown_unknown` to clang 18 unpacked under `~/.local/opt/llvm18`. This host has no system clang and no sudo. On a machine where `sudo apt install clang llvm` is available, the `[env]` table can be removed.
 
-Native desktop backends are behind the off-by-default `desktop` Cargo feature because this host lacks GTK 4 development packages. On a machine with them (`sudo apt install libgtk-4-dev`), or on Windows or macOS, `cargo run --features desktop` starts the window. Whether `nsh run --target linux`, `windows` or `macos` works with the gated dependency is not verified. Do not build the `desktop` feature or the Linux or GPUI targets on this host.
+Native desktop backends are behind the off-by-default `desktop` Cargo feature because this host lacks GTK 4 development packages. On macOS or a Linux machine with them (`sudo apt install libgtk-4-dev`), `cargo run --features desktop` starts the window. For a direct Windows Cargo build, stage the contents of `assets/` under `assets\@nsh-app-corral\` beside the executable; the release installer does this automatically. Do not build the `desktop` feature or the Linux or GPUI targets on this WSL host.
 
 ## Not built
 
@@ -579,7 +598,6 @@ NSH 0.5.0 as evidenced above. Native global Ask shortcut and tray are implemente
 unverified on this host; Web Push and opt-in direct LAN/Tailscale reach are implemented,
 not evidence of exercised remote delivery.
 
-Biometric confirmation, release installer packaging and native window chrome remain
-unverified or unbuilt; `com.example.corral` is a placeholder before release. GTK desktop
+Biometric confirmation and native window chrome remain unverified or unbuilt. GTK desktop
 and physical phone builds have not been exercised here. Existing headless/Chromium and
 terminal captures do not establish real-device parity or a full release gate.

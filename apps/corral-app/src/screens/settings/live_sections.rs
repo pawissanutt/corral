@@ -8,6 +8,7 @@ use nsh_core::prelude::*;
 
 use super::parts::{button_row, cell, frame, mono_cell, space};
 use crate::model::daemon::Feed;
+use crate::model::devices::PairClient;
 use crate::model::settings::live::{self, Fact, Standing};
 use crate::model::settings::push;
 use crate::model::text::span;
@@ -135,9 +136,10 @@ pub fn daemon(app: AppState) -> AnyElement {
 
 /// Notifications: where this browser's Web Push stands, the switch that turns it on or off,
 /// a switch per kind while it is on, and what corrald reports of the last send. A device that
-/// cannot receive push says why and offers nothing to switch.
+/// cannot receive push (a native app, the Windows app included) says why and offers nothing to
+/// switch.
 pub fn notifications(app: AppState) -> AnyElement {
-    let web = crate::client::pairing_supported();
+    let web = PairClient::here() == Some(PairClient::Browser);
     let supported = crate::client::push_supported();
     let shown = computed(move || app.feed.with(|feed| push::view(feed, supported, web)));
     let body = dynamic(move || {

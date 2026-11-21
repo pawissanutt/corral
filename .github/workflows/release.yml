@@ -168,6 +168,53 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  windows-desktop:
+    needs: validate
+    runs-on: windows-2022
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.97.1"
+      - name: Test the native Windows client
+        working-directory: apps/corral-app
+        run: cargo test --locked --release --target x86_64-pc-windows-msvc --features desktop --lib "client::"
+      - name: Build Corral Desktop
+        working-directory: apps/corral-app
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc --features desktop --bin nsh-app-corral
+      - name: Package the per-user installer
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          $app = Join-Path $PWD 'apps\corral-app\target\x86_64-pc-windows-msvc\release\nsh-app-corral.exe'
+          $license = Join-Path $PWD 'LICENSE'
+          $script = Join-Path $PWD 'apps\corral-app\scripts\windows-desktop.iss'
+          $out = Join-Path $PWD 'dist'
+          & $iscc /Qp "/DReleaseVersion=$env:RELEASE_VERSION" "/DAppExe=$app" "/DLicensePath=$license" "/O$out" $script
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup exited with $LASTEXITCODE" }
+          $name = 'corral-app-windows-x86_64-setup.exe'
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $out $name)).Hash.ToLowerInvariant()
+          Set-Content -LiteralPath (Join-Path $out "$name.sha256") -Value "$hash  $name`n" -Encoding ascii -NoNewline
+      - name: Exercise install, launch, upgrade and uninstall
+        shell: powershell
+        run: |
+          ./apps/corral-app/scripts/windows-desktop-smoke.ps1 `
+            -Installer (Join-Path $PWD 'dist\corral-app-windows-x86_64-setup.exe') `
+            -Candidate (Join-Path $PWD 'apps\corral-app\target\x86_64-pc-windows-msvc\release\nsh-app-corral.exe')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-desktop
+          path: dist/*
+          if-no-files-found: error
+
   smoke:
     needs: [validate, native, web]
     strategy:
@@ -443,7 +490,7 @@ jobs:
 
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
-    needs: [validate, native, web, smoke]
+    needs: [validate, native, web, windows-desktop, smoke]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -464,12 +511,13 @@ jobs:
             corral-next-x86_64-apple-darwin.tar.gz
             corral-next-aarch64-apple-darwin.tar.gz
             corral-app-web.tar.gz
+            corral-app-windows-x86_64-setup.exe
           )
           files=()
-          for archive in "${assets[@]}"; do
+          for asset in "${assets[@]}"; do
             # Require the sidecar to name and hash exactly this asset.
-            sha256sum "$archive" | diff - "$archive.sha256"
-            files+=("$archive" "$archive.sha256")
+            sha256sum "$asset" | diff - "$asset.sha256"
+            files+=("$asset" "$asset.sha256")
           done
           gh release create "$GITHUB_REF_NAME" "${files[@]}" \
             --verify-tag --repo "$GITHUB_REPOSITORY" \

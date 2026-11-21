@@ -8,7 +8,7 @@ use nsh_core::prelude::*;
 
 use super::parts::{button_row, cell, ring, space};
 use crate::model::Form;
-use crate::model::devices::{self, DeviceOp, PairBrowser, ThisDevice};
+use crate::model::devices::{self, DeviceOp, PairBrowser, PairClient, ThisDevice};
 use crate::model::settings::Pending;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -21,8 +21,8 @@ fn run(app: AppState, op: DeviceOp) {
 }
 
 pub fn this_device(app: AppState) -> AnyElement {
-    let web = crate::client::pairing_supported();
-    let state = computed(move || app.feed.with(|feed| devices::this_device(feed, web)));
+    let client = PairClient::here();
+    let state = computed(move || app.feed.with(|feed| devices::this_device(feed, client)));
     let name = signal(untracked(|| {
         state.with(|state| match state {
             ThisDevice::Enrol { default_name, .. } => default_name.clone(),
@@ -37,7 +37,7 @@ pub fn this_device(app: AppState) -> AnyElement {
             let parts = match state {
                 ThisDevice::Enrol { line, .. } => vec![
                     cell(app, line, Token::Ink3, false).into_element(),
-                    if web {
+                    if client.is_some() {
                         forget(app)
                     } else {
                         enrol_form(app, name)
@@ -50,13 +50,13 @@ pub fn this_device(app: AppState) -> AnyElement {
                 ThisDevice::Enrolled { line } => {
                     vec![cell(app, line, Token::Ink, false).into_element()]
                 }
-                ThisDevice::Browser { line } => vec![
+                ThisDevice::Paired { line } => vec![
                     cell(app, line, Token::Ink, false).into_element(),
                     forget(app),
                 ],
                 ThisDevice::Revoked { line } | ThisDevice::Failed { line } => vec![
                     cell(app, line, Token::Fail, false).into_element(),
-                    if web {
+                    if client.is_some() {
                         forget(app)
                     } else {
                         enrol_form(app, name)
@@ -96,9 +96,11 @@ fn enrol_form(app: AppState, name: Signal<String>) -> AnyElement {
     )
 }
 
-/// Forget this browser's pairing, after one question in its place: its stored credential goes,
+/// Forget this device's pairing, after one question in its place: its stored credential goes,
 /// and the app returns to the disconnected Connection page to pair again.
 pub fn forget(app: AppState) -> AnyElement {
+    let noun = PairClient::here().map_or("device", PairClient::noun);
+    let label = format!("Forget this {noun}");
     let asking = computed(move || {
         app.settings
             .with(|state| state.edits.confirming == Some(Pending::Forget))
@@ -107,12 +109,13 @@ pub fn forget(app: AppState) -> AnyElement {
         if asking.get() {
             return untracked(|| super::live_devices::confirmation(app, &Pending::Forget));
         }
-        untracked(|| {
+        let label = label.clone();
+        untracked(move || {
             button_row(
                 app,
                 vec![button_with(
                     app,
-                    "Forget this browser",
+                    label,
                     ButtonKind::Ghost,
                     ButtonOptions {
                         danger: true,
@@ -131,17 +134,20 @@ pub fn forget(app: AppState) -> AnyElement {
     .into_element()
 }
 
-/// The browser's pairing form while a code may be entered (before pairing, or after it
-/// failed); nothing while pairing runs or once paired, which Connection's status says.
-pub fn pair_form(app: AppState) -> AnyElement {
-    if !crate::client::pairing_supported() || untracked(|| app.daemon()) {
+/// The pairing form while a code may be entered (before pairing, or after it failed); nothing
+/// while pairing runs or once paired, which Connection's status says. A browser's code names
+/// where corrald is; the Windows app also takes the daemon's address.
+pub fn pair_form(app: AppState, client: PairClient) -> AnyElement {
+    if untracked(|| app.daemon()) {
         return view().into_element();
     }
+    let native = client == PairClient::Native;
+    let endpoint = signal(String::new());
     let code = signal(
         app.feed
             .with_untracked(|feed| feed.pairing_code.clone().unwrap_or_default()),
     );
-    let name = signal(String::from("Browser"));
+    let name = signal(client.default_name());
     let open = computed(move || {
         app.feed.with(|feed| {
             matches!(
@@ -155,40 +161,66 @@ pub fn pair_form(app: AppState) -> AnyElement {
             return view().into_element();
         }
         untracked(move || {
-            section(
-                app,
-                vec![group(
+            let mut fields = Vec::new();
+            if native {
+                fields.push(field(
                     app,
-                    vec![
-                        field(
-                            app,
-                            "pair-code",
-                            "Pairing code",
-                            Some("corral-pair-… from the trusted device"),
-                            Entry::Code,
-                            code,
-                        ),
-                        field(
-                            app,
-                            "device-name",
-                            "Name for this browser",
-                            Some("how it appears in Settings › Devices"),
-                            Entry::Text,
-                            name,
-                        ),
-                        pair_button(app, code, name),
-                    ],
-                )],
-            )
+                    "pair-endpoint",
+                    "Daemon address",
+                    Some("ws://127.0.0.1:7841 for WSL2 or this PC; wss://host for a remote daemon"),
+                    Entry::Text,
+                    endpoint,
+                ));
+            }
+            fields.push(if native {
+                field(
+                    app,
+                    "pair-code",
+                    "Pairing code or link",
+                    Some("the corral-pair-… code, or the whole link corrald-next pair printed"),
+                    Entry::Code,
+                    code,
+                )
+            } else {
+                field(
+                    app,
+                    "pair-code",
+                    "Pairing code",
+                    Some("corral-pair-… from the trusted device"),
+                    Entry::Code,
+                    code,
+                )
+            });
+            fields.push(field(
+                app,
+                "device-name",
+                if native {
+                    "Name for this device"
+                } else {
+                    "Name for this browser"
+                },
+                Some("how it appears in Settings › Devices"),
+                Entry::Text,
+                name,
+            ));
+            fields.push(pair_button(app, native.then_some(endpoint), code, name));
+            section(app, vec![group(app, fields)])
         })
     })
     .into_element()
 }
 
-fn pair_button(app: AppState, code: Signal<String>, name: Signal<String>) -> AnyElement {
+/// `endpoint` is the address the Windows app asks for; a browser has none and sends `None`.
+fn pair_button(
+    app: AppState,
+    endpoint: Option<Signal<String>>,
+    code: Signal<String>,
+    name: Signal<String>,
+) -> AnyElement {
     dynamic(move || {
-        let disabled =
-            code.with(|code| code.trim().is_empty()) || name.with(|name| name.trim().is_empty());
+        let disabled = code.with(|code| code.trim().is_empty())
+            || name.with(|name| name.trim().is_empty())
+            || endpoint.is_some_and(|endpoint| endpoint.with(|text| text.trim().is_empty()));
         untracked(move || {
             button_row(
                 app,
@@ -207,6 +239,7 @@ fn pair_button(app: AppState, code: Signal<String>, name: Signal<String>) -> Any
                             DeviceOp::Pair {
                                 code: code.get(),
                                 name: name.get(),
+                                endpoint: endpoint.map(|endpoint| endpoint.get()),
                             },
                         )
                     },

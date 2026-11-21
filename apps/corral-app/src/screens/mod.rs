@@ -282,7 +282,7 @@ pub(crate) fn unavailable_body(app: AppState, destination: Destination) -> AnyEl
     } else {
         Token::Ink3
     };
-    let web = crate::client::pairing_supported();
+    let client = crate::model::devices::PairClient::here();
     dynamic(move || {
         if app.data.get() != DataState::Disconnected {
             let line = app
@@ -296,7 +296,7 @@ pub(crate) fn unavailable_body(app: AppState, destination: Destination) -> AnyEl
                     .into_element()
             });
         }
-        let view_model = app.feed.with(|feed| connect::unavailable(feed, web));
+        let view_model = app.feed.with(|feed| connect::unavailable(feed, client));
         untracked(move || {
             let connect = button_with(
                 app,

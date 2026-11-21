@@ -1,9 +1,9 @@
-//! Optional enrolled native and browser daemon connections.
+//! Optional Unix enrollment and authenticated WebSocket/Noise connections.
 mod app;
 mod core;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
 mod credentials;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
 mod driver;
 mod durable;
 #[cfg(not(target_arch = "wasm32"))]
@@ -13,16 +13,16 @@ mod durable_web;
 mod map;
 mod offline;
 mod outbox;
-#[cfg(any(test, target_arch = "wasm32"))]
+#[cfg(any(test, target_arch = "wasm32", windows))]
 mod pairing_link;
 pub mod requests;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
 mod session;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
 mod socket;
-#[cfg(all(not(target_arch = "wasm32"), unix))]
+#[cfg(unix)]
 mod transport;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", windows))]
 mod web;
 #[cfg(test)]
 #[path = "web/source_tests.rs"]
@@ -31,7 +31,7 @@ mod web_source_tests;
 pub const PAIRED_KEY: &str = "corral.paired";
 
 pub fn pairing_supported() -> bool {
-    cfg!(target_arch = "wasm32")
+    cfg!(any(target_arch = "wasm32", windows))
 }
 
 /// Read an explicit browser pairing link, clearing its secret fragment before using it.
@@ -47,36 +47,34 @@ pub fn pairing_link() -> Result<Option<String>, &'static str> {
     }
 }
 
-/// Whether there is something to connect to: a native socket, or a browser's saved pairing.
+/// Whether there is something to connect to: a Unix socket or a saved pairing.
 pub fn configured() -> bool {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(unix)]
     {
         std::env::var_os("CORRAL_SOCKET").is_some_and(|value| !value.is_empty())
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", windows))]
     {
         saved_pairing(nsh_core::storage::Storage::get_item(PAIRED_KEY).as_deref())
     }
 }
 
-/// A browser has a pairing to resume when NSH Storage holds the paired marker, which a
-/// confirmed pairing writes and Forget, revocation or a missing credential remove. Without it
-/// the browser opens on the pairing form at once rather than dialing nothing. The credential in
-/// IndexedDB stays the authority: one found without the marker is still resumed, and the marker
-/// is written again.
+/// The NSH Storage marker hints that there is a pairing to resume. Confirmed pairing
+/// writes it; Forget, revocation and missing credentials remove it. The saved credential
+/// is authoritative: one found without the marker is still resumed and restores the marker.
 pub fn saved_pairing(marker: Option<&str>) -> bool {
     marker.is_some_and(|marker| !marker.is_empty())
 }
 
 /// Start once under the app owner; load authenticated cached data before dialing.
 pub fn start(feed: nsh_core::prelude::Signal<crate::model::daemon::Feed>) {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(unix)]
     driver::start(
         feed,
         socket::resolve(std::env::var_os("CORRAL_SOCKET"))
             .unwrap_or_else(|| Err("No daemon socket configured.".into())),
     );
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", windows))]
     web::start(feed);
 }
 

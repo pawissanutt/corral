@@ -1,15 +1,13 @@
 use std::{cell::Cell, rc::Rc};
 
-use corral_protocol::{device::NOISE_TAG, frame::MESSAGE_MAX};
 use futures_channel::mpsc::UnboundedSender;
 use js_sys::{ArrayBuffer, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{BinaryType, CloseEvent, MessageEvent, WebSocket};
 
-use super::Input;
+use super::{Input, MAX_MESSAGE_BYTES, MAX_QUEUED_MESSAGES};
 
-const MAX_QUEUED_MESSAGES: usize = 256;
-const MAX_MESSAGE_BYTES: usize = MESSAGE_MAX + NOISE_TAG;
+pub(super) type MessageBytes = Vec<u8>;
 const CLIENT_CLOSE: u16 = 4000;
 
 pub(super) struct Socket {

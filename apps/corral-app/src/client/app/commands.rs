@@ -36,7 +36,7 @@ impl AppState {
                 });
                 vec![]
             }
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(unix)]
             ClientRequest::Forget => {
                 let namespace = self.namespace.clone();
                 match self.forget_local(feed).await {

@@ -1,13 +1,16 @@
 use corral_protocol::device::{NOISE_PAIR, NOISE_SESSION};
+use snow::{Builder, HandshakeState, Keypair};
+#[cfg(target_arch = "wasm32")]
 use snow::{
-    Builder, HandshakeState, Keypair,
     params::{CipherChoice, DHChoice, HashChoice},
     resolvers::{CryptoResolver, DefaultResolver},
     types::{Cipher, Dh, Hash, Random},
 };
 
+#[cfg(target_arch = "wasm32")]
 struct BrowserRandom;
 
+#[cfg(target_arch = "wasm32")]
 impl Random for BrowserRandom {
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), snow::Error> {
         let window = web_sys::window().ok_or(snow::Error::Rng)?;
@@ -19,8 +22,10 @@ impl Random for BrowserRandom {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 struct BrowserResolver;
 
+#[cfg(target_arch = "wasm32")]
 impl CryptoResolver for BrowserResolver {
     fn resolve_rng(&self) -> Option<Box<dyn Random>> {
         Some(Box::new(BrowserRandom))
@@ -71,13 +76,23 @@ pub(super) fn initiator_pair(
 
 fn builder<'a>(pattern: &str) -> Result<Builder<'a>, String> {
     let params = pattern.parse().map_err(crypto_error)?;
-    Ok(Builder::with_resolver(params, Box::new(BrowserResolver)))
+    #[cfg(target_arch = "wasm32")]
+    let builder = Builder::with_resolver(params, Box::new(BrowserResolver));
+    #[cfg(windows)]
+    let builder = Builder::new(params);
+    Ok(builder)
 }
 
+#[cfg(target_arch = "wasm32")]
 fn crypto_error(error: snow::Error) -> String {
     if matches!(error, snow::Error::Rng) {
         "Browser cryptographic randomness is unavailable; open Corral on HTTPS or localhost in a browser with WebCrypto support.".into()
     } else {
         format!("Could not initialise browser encryption: {error}")
     }
+}
+
+#[cfg(windows)]
+fn crypto_error(error: snow::Error) -> String {
+    format!("Could not initialise device encryption: {error}")
 }

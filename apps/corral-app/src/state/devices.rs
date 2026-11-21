@@ -37,9 +37,11 @@ impl AppState {
             DeviceOp::Enrol { .. } if !crate::client::pairing_supported() => (!feed
                 .transport_ready)
                 .then_some("Refused: connect to corrald before enrolling this device."),
-            DeviceOp::Enrol { .. } => Some("Use browser pairing to enrol this browser."),
+            DeviceOp::Enrol { .. } => Some("Use pairing with a code to enrol this device."),
             DeviceOp::Pair { .. } if crate::client::pairing_supported() => None,
-            DeviceOp::Pair { .. } => Some("Browser pairing is only available in a browser."),
+            DeviceOp::Pair { .. } => {
+                Some("Pairing with a code is only available in a browser or the Windows app.")
+            }
             DeviceOp::PushSubscribe { .. } | DeviceOp::PushUnsubscribe
                 if !crate::client::push_supported() =>
             {
@@ -77,7 +79,15 @@ impl AppState {
                 }
                 return;
             }
-            DeviceOp::Pair { code, name } => ClientRequest::Pair { code, name },
+            DeviceOp::Pair {
+                code,
+                name,
+                endpoint,
+            } => ClientRequest::Pair {
+                code,
+                name,
+                endpoint,
+            },
             DeviceOp::PairBegin => ClientRequest::PairBegin,
             DeviceOp::PairConfirm { pair_id } => ClientRequest::PairConfirm { pair_id },
             DeviceOp::PairCancel { pair_id } => ClientRequest::PairCancel { pair_id },

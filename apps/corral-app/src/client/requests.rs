@@ -42,6 +42,7 @@ pub enum ClientRequest {
     Pair {
         code: String,
         name: String,
+        endpoint: Option<String>,
     },
     Forget,
     DetailWatch {
@@ -139,12 +140,12 @@ pub enum ClientRequest {
     },
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
 static SENDER: std::sync::OnceLock<
     std::sync::Mutex<Option<std::sync::mpsc::Sender<ClientRequest>>>,
 > = std::sync::OnceLock::new();
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
 pub(super) fn install(sender: std::sync::mpsc::Sender<ClientRequest>) {
     *SENDER
         .get_or_init(Default::default)
@@ -153,7 +154,7 @@ pub(super) fn install(sender: std::sync::mpsc::Sender<ClientRequest>) {
 }
 
 pub fn send(request: ClientRequest) -> bool {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(unix)]
     {
         SENDER
             .get()
@@ -166,7 +167,7 @@ pub fn send(request: ClientRequest) -> bool {
             })
             .unwrap_or(false)
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", windows))]
     {
         super::web::send(request)
     }
@@ -176,13 +177,22 @@ pub fn send(request: ClientRequest) -> bool {
 pub fn new_id() -> String {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(unix)]
     let random = {
         use std::io::Read;
         let mut bytes = [0u8; 16];
         let read =
             std::fs::File::open("/dev/urandom").and_then(|mut file| file.read_exact(&mut bytes));
         if read.is_ok() {
+            u128::from_ne_bytes(bytes)
+        } else {
+            jiff::Timestamp::now().as_nanosecond() as u128 ^ u128::from(std::process::id())
+        }
+    };
+    #[cfg(windows)]
+    let random = {
+        let mut bytes = [0u8; 16];
+        if getrandom::fill(&mut bytes).is_ok() {
             u128::from_ne_bytes(bytes)
         } else {
             jiff::Timestamp::now().as_nanosecond() as u128 ^ u128::from(std::process::id())

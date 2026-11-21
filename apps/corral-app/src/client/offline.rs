@@ -106,17 +106,17 @@ pub(super) struct Cache {
 }
 
 impl Cache {
-    /// Restore only the paired browser device or the native credential for the saved store.
+    /// Restore only the paired device or the Unix credential for the saved store.
     pub(super) async fn restore(
         feed: Signal<Feed>,
         expected_device: Option<&str>,
     ) -> Result<Option<((String, String), Self)>, String> {
         Self::restore_using(feed, async |marker| {
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(any(target_arch = "wasm32", windows))]
             {
                 Ok(expected_device.is_some_and(|device| device == marker.device))
             }
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(unix)]
             {
                 let _ = expected_device;
                 let store = marker.store.clone();

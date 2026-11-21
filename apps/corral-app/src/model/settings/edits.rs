@@ -88,14 +88,21 @@ impl State {
                 }
                 DeviceOp::Enrol { name: name.into() }
             }
-            DeviceOp::Pair { code, name } => {
+            DeviceOp::Pair {
+                code,
+                name,
+                endpoint,
+            } => {
                 let (code, name) = (code.trim(), name.trim());
-                if code.is_empty() || name.is_empty() {
+                let endpoint = endpoint.as_deref().map(str::trim);
+                // A typed address that is empty sends nothing; a browser has none to type.
+                if code.is_empty() || name.is_empty() || endpoint == Some("") {
                     return Vec::new();
                 }
                 DeviceOp::Pair {
                     code: code.into(),
                     name: name.into(),
+                    endpoint: endpoint.map(Into::into),
                 }
             }
             op => op,
