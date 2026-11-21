@@ -1,5 +1,5 @@
 //! The Agents switcher's state: open or not, this device's pins and the conversation last
-//! opened per daemon store (`corral.agents`; the explicit preview's stay in memory, so no sample
+//! opened per authenticated enrollment and daemon store (`corral.agents.v2`; preview stays in memory, so no sample
 //! id is ever saved), and New assistant, which keys Ask to the chat it starts once corrald
 //! answers with it.
 
@@ -9,7 +9,25 @@ use super::AppState;
 use crate::model::agents::{self, Pins, Switcher};
 use crate::model::{DataState, Id, Live, Overlay, assistant};
 
-const AGENTS_KEY: &str = "corral.agents";
+// Store-only preferences cannot be attributed to an authenticated daemon safely.
+const AGENTS_KEY: &str = "corral.agents.v2";
+
+fn pin_key(feed: &crate::model::daemon::Feed, preview: bool) -> Option<String> {
+    let store = feed.store.as_deref()?;
+    let identity = if preview {
+        "preview"
+    } else {
+        // The daemon issues this enrollment identity; a welcome alone is not enough.
+        if !feed.ready() {
+            return None;
+        }
+        feed.session.as_ref()?.device.id.as_str()
+    };
+    if identity.is_empty() || store.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&(identity, store)).ok()
+}
 
 pub(super) fn load_pins() -> Pins {
     Storage::get_item(AGENTS_KEY)
@@ -33,7 +51,9 @@ impl AppState {
         let ask = self.ask_id();
         self.feed.with(|feed| {
             pins.with(|pins| {
-                let saved = feed.store.as_deref().and_then(|store| pins.get(store));
+                let saved = pin_key(feed, self.data.get() == DataState::Fixture)
+                    .as_deref()
+                    .and_then(|key| pins.get(key));
                 agents::switcher(feed, saved, ask.as_str())
             })
         })
@@ -43,9 +63,9 @@ impl AppState {
     pub fn agent_pinned(&self, id: &str) -> bool {
         let pins = self.pins_in_view();
         self.feed.with(|feed| {
-            feed.store
+            pin_key(feed, self.data.get() == DataState::Fixture)
                 .as_deref()
-                .is_some_and(|store| pins.with(|pins| pins.pinned(store, id)))
+                .is_some_and(|key| pins.with(|pins| pins.pinned(key, id)))
         })
     }
 
@@ -84,11 +104,11 @@ impl AppState {
         self.open_live(Live::Session(id));
     }
 
-    /// Pins or unpins the exact conversation for the store in view; nothing before the daemon
-    /// names its store.
+    /// Pins or unpins the exact conversation only for a ready authenticated store.
     pub fn toggle_agent_pin(&self, id: &Id) {
-        let Some(store) = self.feed.with_untracked(|feed| feed.store.clone()) else {
-            self.toast("Not pinned: corrald has not named its store yet.");
+        let preview = self.data.get_untracked() == DataState::Fixture;
+        let Some(store) = self.feed.with_untracked(|feed| pin_key(feed, preview)) else {
+            self.toast("Not pinned: no authenticated daemon store is ready.");
             return;
         };
         untracked(|| self.pins_in_view()).update(|pins| _ = pins.toggle(&store, id.as_str()));
@@ -120,22 +140,32 @@ impl AppState {
             let Some(Live::Session(id)) = self.live_page() else {
                 return None;
             };
+            let preview = self.data.get() == DataState::Fixture;
             self.feed.with(|feed| {
-                let exact = agents::exact(feed, id.as_str())?;
-                Some((feed.store.clone()?, exact))
+                let exact = agents::exact(feed, id.as_str());
+                Some((id.to_string(), pin_key(feed, preview), exact, preview))
             })
         });
+        // An already-open page can survive a source change. Its id does not mean that the
+        // user opened the same-named conversation on the newly authenticated daemon.
+        let last_page = signal(None::<String>);
         effect(move || {
-            if let Some((store, id)) = opened.get() {
-                untracked(|| {
-                    let pins = self.pins_in_view();
+            let current = opened.get();
+            untracked(|| {
+                let previous = last_page.get_untracked();
+                last_page.set(current.as_ref().map(|(page, _, _, _)| page.clone()));
+                if let Some((page, Some(store), Some(id), preview)) = current {
+                    if previous.as_ref() == Some(&page) {
+                        return;
+                    }
+                    let pins = if preview { self.preview_pins } else { self.pins };
                     if pins.with_untracked(|pins| pins.get(&store)?.last.clone())
                         != Some(id.clone())
                     {
                         pins.update(|pins| _ = pins.used(&store, &id));
                     }
-                });
-            }
+                }
+            });
         });
         effect(move || {
             let Some(key) = self.switch_new.get() else {
@@ -164,5 +194,60 @@ impl AppState {
             });
         });
         crate::screens::assistant::watch_ops(self);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::daemon::{Feed, Link};
+    use corral_protocol::{
+        app::{AppSession, SeenCursor},
+        device::{DeviceInfo, DevicePlatform},
+    };
+
+    fn ready(device: &str, store: &str) -> Feed {
+        Feed {
+            link: Link::Up,
+            transport_ready: true,
+            projection_ready: true,
+            store: Some(store.into()),
+            session: Some(AppSession {
+                device: DeviceInfo {
+                    id: device.into(),
+                    name: String::new(),
+                    platform: DevicePlatform::Native,
+                    app_version: String::new(),
+                    enrolled_at: String::new(),
+                    revoked_at: None,
+                    last_seen: None,
+                    reach: None,
+                },
+                seen: SeenCursor::default(),
+                server_time: String::new(),
+                local: Some(true),
+            }),
+            ..Feed::default()
+        }
+    }
+
+    #[test]
+    fn pins_do_not_cross_daemons_or_transition_through_unauthenticated_feed() {
+        let a = ready("dev-a", "/same");
+        let b = ready("dev-b", "/same");
+        let key_a = pin_key(&a, false).unwrap();
+        let key_b = pin_key(&b, false).unwrap();
+        let mut pins = Pins::default();
+        pins.toggle(&key_a, "A-1");
+        pins.used(&key_a, "A-1");
+        assert!(pins.get(&key_b).is_none());
+        let mut transitioning = a.clone();
+        transitioning.transport_ready = false;
+        assert!(pin_key(&transitioning, false).is_none());
+        transitioning.session = None;
+        transitioning.transport_ready = true;
+        assert!(pin_key(&transitioning, false).is_none());
+        assert_ne!(pin_key(&ready("dev-a", "/other"), false), Some(key_a));
+        assert_ne!(pin_key(&ready("dev-a", "/same"), true), Some(key_b));
     }
 }

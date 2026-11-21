@@ -3,7 +3,7 @@
 //! activity; the conversation last opened here is selected, so Enter opens it again. New
 //! assistant is an entry of its own: it starts a new chat and keys Ask to it, and the chat Ask
 //! was on stays listed and readable; nothing is ended. Pins and the last opened conversation
-//! are kept per daemon store (`corral.agents`), each by its exact `A-n` or `B-…`: never `quick`,
+//! are kept per authenticated enrollment and daemon store (`corral.agents.v2`), each by its exact `A-n` or `B-…`: never `quick`,
 //! which moves to the next chat once the current one ends.
 
 use std::collections::BTreeMap;
@@ -38,7 +38,7 @@ pub struct StoreAgents {
     pub last: Option<String>,
 }
 
-/// The pins of every daemon store this device has seen, keyed by store.
+/// Pins keyed by an unambiguous authenticated enrollment and store pair.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Pins(BTreeMap<String, StoreAgents>);
