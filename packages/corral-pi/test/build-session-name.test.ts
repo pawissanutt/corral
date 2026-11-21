@@ -68,6 +68,11 @@ test("Pi /name overrides a Build's request title and reprojects session_info on 
       expect(await within(renamed.promise, 10_000, "Pi session_info_changed")).toBe("Owner's chosen title");
     } finally { unsubscribe(); }
     expect(await record()).toMatchObject({ title: "Owner's chosen title" });
+    mode.stop();
+    mode = undefined;
+    await host.close();
+    host = await start(file);
+    expect(await record()).toMatchObject({ title: "Owner's chosen title" });
     const turnEnded = nextEvent(events, event => event.kind === "turn_ended");
     expect(await host.submitLocal({ text: "Fix the parser", busyPolicy: "follow_up", origin: "owner" }))
       .toMatchObject({ disposition: "started" });
@@ -77,8 +82,6 @@ test("Pi /name overrides a Build's request title and reprojects session_info on 
     expect(readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line)).findLast(entry => entry.type === "session_info"))
       .toMatchObject({ name: "Owner's chosen title" });
     expect(await record()).toMatchObject({ title: "Owner's chosen title" });
-    mode.stop();
-    mode = undefined;
     await host.close();
 
     // A transcript created before this projection existed still supplies the name on resume.
