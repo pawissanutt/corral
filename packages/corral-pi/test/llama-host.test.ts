@@ -46,7 +46,8 @@ test("a local host binds, answers, reloads and persists token usage without clou
     const sdk = await import("@earendil-works/pi-coding-agent");
     const modules = await loadModules(assets.dir, "worker");
     const events = new EventLog();
-    const client = new CorralClient({ corral: writeFakeEngine(work).path, root: work, cwd: work, identity });
+    const corral = writeFakeEngine(work);
+    const client = new CorralClient({ corral: corral.path, root: work, cwd: work, identity });
     host = await HostSession.create({
       sdk, identity, cwd: work, agentDir: join(work, "agent"), provider: "llama.cpp",
       model: "new-family/new.gguf", capabilities, client, events, network,
@@ -75,6 +76,11 @@ test("a local host binds, answers, reloads and persists token usage without clou
     expect(answers).toHaveLength(2);
     expect(answers.map((answer) => answer.role === "assistant" && [answer.usage.input, answer.usage.output, answer.usage.cost.total]))
       .toEqual([[19, 5, 0], [19, 5, 0]]);
+    // Local OpenAI-compatible replies with no cache breakdown cannot attest uncached input.
+    expect(corral.calls().filter(argv => argv[3] === "usage" && argv[4] === "add").map(argv => argv.slice(5)))
+      .toEqual(Array.from({ length: 2 }, () => [
+        "--model", "llama.cpp/new-family/new.gguf", "--task", "T-578", "--run", "R1", "--output", "5",
+      ]));
     const file = host.session.sessionFile;
     if (!file) throw new Error("bound local host needs a durable transcript");
     const records: unknown[] = readFileSync(file, "utf8").trim().split("\n").map((line) => JSON.parse(line));

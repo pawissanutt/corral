@@ -171,7 +171,7 @@ export function fakeCodexTransport(): FakeTransport {
       }
       const usage = step.usage ?? { input: 32, output: 3 };
       yield { type: "response.completed", response: { id, status: "completed", usage: {
-        input_tokens: usage.input, input_tokens_details: { cached_tokens: 0 }, output_tokens: usage.output,
+        input_tokens: usage.input, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 }, output_tokens: usage.output,
         output_tokens_details: { reasoning_tokens: 0 }, total_tokens: usage.input + usage.output } } };
     }
     const messages = new URL(input instanceof Request ? input.url : input).pathname === "/v1/messages";

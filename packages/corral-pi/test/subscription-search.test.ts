@@ -39,7 +39,7 @@ function body(init?: RequestInit) {
   if (new Headers(init?.headers).get("content-encoding") === "zstd") bytes = zstdDecompressSync(bytes);
   return record(JSON.parse(bytes.toString()));
 }
-function codexReply(search = true): Response {
+function codexReply(search = true, inputDetails: Record<string, number> = { cached_tokens: 2, cache_write_tokens: 0 }): Response {
   const item = { type: "message", id: "msg", role: "assistant", status: "completed",
     content: [{ type: "output_text", text: "A sourced answer", annotations: [
       { type: "url_citation", title: "Guide", url: "https://docs.example.org/guide" },
@@ -57,7 +57,7 @@ function codexReply(search = true): Response {
     { type: "response.output_text.delta", output_index: 1, delta: "A sourced answer" },
     { type: "response.output_item.done", output_index: 1, item },
     { type: "response.completed", response: { id: "resp_search", status: "completed", usage: {
-      input_tokens: 32, input_tokens_details: { cached_tokens: 2 }, output_tokens: 3, total_tokens: 35,
+      input_tokens: 32, input_tokens_details: inputDetails, output_tokens: 3, total_tokens: 35,
     } } },
   ];
   return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
@@ -113,16 +113,26 @@ test("Codex forces hosted search through OAuth, returns deduplicated sources and
   ]);
   const assistant = fx.transcript().map((entry) => record(entry.message)).find((m) => m.role === "assistant");
   expect(record(assistant?.usage)).toMatchObject({ input: 30, output: 3, cacheRead: 2, totalTokens: 35 });
-  expect(fx.usage).toMatchObject([{ input: 30, output: 3, cache_read: 2, cache_write: 0, billing: "subscription" }]);
+  expect(fx.usage).toEqual([{ model: "openai-codex/gpt-6.1-sol", input: 30, output: 3, cache_read: 2, cache_write: 0,
+    billing: "subscription" }]);
+  await fx.runtime.close();
+});
+
+test("Codex omits absent cache counters and input with unknown deductions", async () => {
+  const fx = await fixture("openai-codex", async () => codexReply(true, {}));
+  await fx.run("missing-cache-usage");
+  const assistant = fx.transcript().map((entry) => record(entry.message)).find((m) => m.role === "assistant");
+  expect(record(assistant?.usage)).toMatchObject({ input: 32, output: 3, cacheRead: 0, cacheWrite: 0 });
+  expect(fx.usage).toEqual([{ model: "openai-codex/gpt-6.1-sol", output: 3, billing: "subscription" }]);
   await fx.runtime.close();
 });
 
 test("a completion without search evidence is refused, while its usage remains attributable", async () => {
-  const fx = await fixture("openai-codex", async () => codexReply(false));
+  const fx = await fixture("openai-codex", async () => codexReply(false, { cached_tokens: 2 }));
   await expect(fx.run("not-search")).rejects.toThrow("verified hosted search");
   expect(fx.refs.at(-1)?.outcome).toBe("uncertain");
   expect(fx.transcript().some((entry) => record(entry.message).role === "assistant")).toBeTrue();
-  expect(fx.usage).toHaveLength(1);
+  expect(fx.usage).toEqual([{ model: "openai-codex/gpt-6.1-sol", output: 3, cache_read: 2, billing: "subscription" }]);
 });
 
 test("provider errors do not retry or fall back to another transport", async () => {

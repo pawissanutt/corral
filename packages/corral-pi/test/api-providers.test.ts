@@ -59,13 +59,20 @@ for (const provider of ["anthropic-api", "openai"] as const) test(`${provider}: 
     expect(models.getProvider(provider)?.classify).toBeUndefined();
     const model = models.getModel(provider, modelId)!;
     expect(() => assertApiEffort(model, "unsupported")).toThrow("model_unavailable");
-    const response = await models.streamSimple(model, context, { apiKey: "sk-IGNORED-runtime-key", maxRetries: 9 }).result();
+    const rawEventTypes: unknown[] = [];
+    const response = await models.streamSimple(model, context, {
+      apiKey: "sk-IGNORED-runtime-key", maxRetries: 9,
+      onProviderStreamEvent(event) {
+        if (event && typeof event === "object" && "type" in event) rawEventTypes.push(event.type);
+      },
+    }).result();
     expect(response.stopReason).toBe("stop");
     // OpenAI attaches a provider-private text signature; this contract checks public text only.
     expect(response.content).toMatchObject([{ type: "text", text: "API_OK" }]);
     expect(sent).toBe(1);
     expect(guard.ledger().allowed).toBe(1);
-    expect(usage).toMatchObject([{ model: `${provider}/${modelId}`, input: 3, output: 2, billing: "api" }]);
+    expect(rawEventTypes).toContain(provider === "openai" ? "response.completed" : "message_delta");
+    expect(usage).toMatchObject([{ model: `${provider}/${modelId}`, input: 3, output: 2, cache_read: 0, cache_write: 0, billing: "api" }]);
     expect(usage[0]!.usd).toBeGreaterThan(0);
     fail = true;
     const failure = await models.streamSimple(model, context, { maxRetries: 9 }).result();
