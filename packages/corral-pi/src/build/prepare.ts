@@ -2,7 +2,7 @@
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { checked, type Run } from "./corral-cli.ts";
-import { buildProject } from "./gate.ts";
+import { buildProject, gateInputFingerprint } from "./gate.ts";
 import { landingBaseFromRef, landingBaseLookups } from "./git.ts";
 import type { BuildContext, LandCandidate } from "./types.ts";
 
@@ -22,6 +22,7 @@ export interface LandingTarget {
   readonly ref: string;
   readonly configuredName?: string;
   readonly commands: readonly string[];
+  readonly gateInputFingerprint: string;
 }
 export function sameCommands(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((command, i) => command === b[i]);
@@ -36,19 +37,19 @@ export function landingDisabled(context: BuildContext): string | undefined {
   return undefined;
 }
 
-function targetConfig({ session }: BuildContext): Pick<LandingTarget, "configuredName" | "commands"> {
+function targetConfig({ session }: BuildContext): Pick<LandingTarget, "configuredName" | "commands" | "gateInputFingerprint"> {
   const project = session.bare ? {} : buildProject(session);
   const commands = project.gate ?? [];
   if (!Array.isArray(commands) || commands.some(command => typeof command !== "string")) throw new Error("The project gate must be an array of commands.");
   const configuredName = session.bare ? session.baseBranch : project.base;
   if (configuredName != null && typeof configuredName !== "string") throw new Error("The configured base branch must be a branch name.");
-  return { configuredName: configuredName || undefined, commands: [...commands] };
+  return { configuredName: configuredName || undefined, commands: [...commands], gateInputFingerprint: gateInputFingerprint(project) };
 }
 
 export function checkTargetConfig(context: BuildContext, target: LandingTarget): void {
   const current = targetConfig(context);
   if (current.configuredName !== target.configuredName) throw new PreparationError(`The configured base branch changed. ${PREPARATION_NEEDED}`);
-  if (!sameCommands(target.commands, current.commands)) throw new PreparationError(`The configured gate commands changed. ${PREPARATION_NEEDED} Run build_verify for the new commands.`);
+  if (target.gateInputFingerprint !== current.gateInputFingerprint) throw new PreparationError(`The configured gate inputs changed. ${PREPARATION_NEEDED} Run build_verify for the new commands.`);
 }
 
 export async function landingTarget(git: Run, context: BuildContext): Promise<LandingTarget> {

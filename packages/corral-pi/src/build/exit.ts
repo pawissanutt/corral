@@ -3,7 +3,7 @@ import { checked, type Run } from "./corral-cli.ts";
 import { LandTracker, TAIL_FAILED } from "./land-progress.ts";
 import { summarize } from "./git.ts";
 import { ancestor, baseMoved, CandidateMoved, checkDestination, checkSource, checkTargetConfig, commit, landingDisabled, landingTarget, message, PreparationError,
-  PREPARATION_NEEDED, rebaseCandidate, sameCommands, short, sourceBranch, type LandingTarget } from "./prepare.ts";
+  PREPARATION_NEEDED, rebaseCandidate, short, sourceBranch, type LandingTarget } from "./prepare.ts";
 import type { BuildJournal } from "./record.ts";
 import type { BuildGateResult } from "./record-types.ts";
 import { LIVE_CHILD_STATES, type BuildContext, type BuildSummary, type ExitChoice, type ExitControl, type ExitOption, type ExitRecord,
@@ -119,7 +119,7 @@ export function createExit(options: {
     }
   }
   function gateReceipt(pin: Pin) {
-    return session.bare ? undefined : journal.passedGate(pin.candidate.head, pin.target.commands);
+    return session.bare ? undefined : journal.passedGate(pin.candidate.head, pin.target.gateInputFingerprint);
   }
   function evidenceStatus(pin: Pin): LandCandidate {
     const status = pinStatus(pin);
@@ -127,7 +127,7 @@ export function createExit(options: {
     if (pin.target.commands.length && !passed) {
       const latest = journal.latestGate();
       const action = `build_verify on the prepared head ${short(pin.candidate.head)} before landing.`;
-      return latest?.result === "fail" && latest.head === pin.candidate.head && sameCommands(latest.commands, pin.target.commands)
+      return latest?.result === "fail" && latest.head === pin.candidate.head && latest.input_fingerprint === pin.target.gateInputFingerprint
         ? { ...status, state: "gate_failed", gateAttempt: latest.attempt,
           detail: `Gate ${latest.attempt} failed${latest.failed_command ? `: ${latest.failed_command}` : ""}. Fix the failure, then run ${action}` }
         : { ...status, state: "needs_gate", detail: `Run ${action}` };
@@ -175,7 +175,7 @@ export function createExit(options: {
     const { candidate, target } = pin;
     const current = await landingTarget(git, context);
     if (target.ref !== current.ref) throw new PreparationError(`The configured base branch changed from ${target.name} to ${current.name}. ${PREPARATION_NEEDED}`);
-    if (!sameCommands(target.commands, current.commands)) throw new PreparationError(`The configured gate commands changed. ${PREPARATION_NEEDED} Run build_verify for the new commands.`);
+    if (target.gateInputFingerprint !== current.gateInputFingerprint) throw new PreparationError(`The configured gate inputs changed. ${PREPARATION_NEEDED} Run build_verify for the new commands.`);
     const tip = await commit(git, target.ref, cwd);
     if (tip !== candidate.base) throw baseMoved(target, candidate.base, tip);
     if (await sourceBranch(git, cwd) !== pin.branch) throw new PreparationError(`The build branch changed since preparation. ${PREPARATION_NEEDED}`);
@@ -251,7 +251,7 @@ export function createExit(options: {
       if (summary.head !== head) throw new Error("Build HEAD changed while reading the prepared candidate. Try preparing again.");
       const current = prepared;
       const pin: Pin = current?.candidate.head === head && current.candidate.base === base && current.branch === branch
-        && current.target.ref === target.ref && current.target.configuredName === target.configuredName && sameCommands(current.target.commands, target.commands)
+        && current.target.ref === target.ref && current.target.configuredName === target.configuredName && current.target.gateInputFingerprint === target.gateInputFingerprint
         ? current : { candidate: Object.freeze({ head, base }), target, branch, source };
       if (offered?.pin !== pin) offered = undefined;
       if (tracker) trackedPin = pin;
