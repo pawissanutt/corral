@@ -97,7 +97,7 @@ pub(crate) fn child_scope(id: &str) -> Result<Option<(&str, &str)>> {
     Ok(Some((parent, child)))
 }
 
-fn run_target(scope: &str) -> Result<(&str, Option<&str>)> {
+pub(crate) fn run_target(scope: &str) -> Result<(&str, Option<&str>)> {
     if let Some(task) = scope.strip_suffix("/reviewer") {
         // Use the same bounds and task-id validation as an Agents row.
         views::run_scope(&format!("{task}_R1"))?;

@@ -209,11 +209,12 @@ pub fn switcher(feed: &Feed, saved: Option<&StoreAgents>, ask: &str) -> Switcher
         selected: None,
     };
     let last = saved.and_then(|saved| saved.last.as_deref());
-    shown.selected = shown
+    let selected = shown
         .entries()
         .find(|entry| Some(entry.id.as_str()) == last)
         .or_else(|| shown.entries().next())
         .map(|entry| entry.id.clone());
+    shown.selected = selected;
     shown
 }
 

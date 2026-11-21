@@ -151,16 +151,22 @@ mod linux {
         let missing = NotFound("session worktree is unavailable");
         if !id.starts_with("B-") {
             let run = sessions::run(engine, id)?;
-            let valid = run
-                .worktree
-                .file_name()
-                .is_some_and(|name| name == run.task.as_str())
-                && run
-                    .worktree
-                    .parent()
-                    .and_then(Path::file_name)
-                    .is_some_and(|name| name == ".worktrees");
-            ensure!(valid, missing);
+            let (task_id, _) = sessions::run_target(id)?;
+            ensure!(run.task == task_id, missing);
+            let task = engine.store.get_task(task_id)?.ok_or(missing)?;
+            let project = engine
+                .config
+                .effective_project(task.project.as_deref().ok_or(missing)?)
+                .map_err(|_| missing)?;
+            let repo = shared
+                .root()
+                .join(project.path)
+                .canonicalize()
+                .map_err(|_| missing)?;
+            ensure!(
+                run.worktree == repo.join(".worktrees").join(task_id),
+                missing
+            );
             return Ok(run.worktree);
         }
         ensure!(
