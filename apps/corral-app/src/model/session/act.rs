@@ -58,8 +58,6 @@ pub enum Action {
     },
     /// Show the page of messages before the shown ones.
     Older(Id),
-    /// Return to the latest messages.
-    Newer(Id),
     /// Revalidate a session page or a log capture.
     Refresh(DetailRef),
     /// Acquire or release one watcher of the session's live topic.
@@ -253,29 +251,8 @@ impl State {
                     Vec::new()
                 }
             }
-            Action::Older(session) => match older(feed, &session) {
-                Some(effect) => {
-                    self.ui_mut(&session).earlier = true;
-                    vec![effect]
-                }
-                None => Vec::new(),
-            },
-            Action::Newer(session) => {
-                self.ui_mut(&session).earlier = false;
-                vec![Effect::Detail(DetailGet {
-                    target: DetailRef::Session {
-                        id: session.to_string(),
-                    },
-                    etag: None,
-                    page: None,
-                })]
-            }
-            Action::Refresh(target) => {
-                if let DetailRef::Session { id } = &target {
-                    self.ui_mut(&Id::from(id.as_str())).earlier = false;
-                }
-                vec![reread(feed, target)]
-            }
+            Action::Older(session) => older(feed, &session).into_iter().collect(),
+            Action::Refresh(target) => vec![reread(feed, target)],
             Action::Watch { session, on } => vec![Effect::Watch { session, on }],
             Action::Draft { session, text } => {
                 let ui = self.ui_mut(&session);

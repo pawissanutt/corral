@@ -283,8 +283,6 @@ pub struct Ui {
     /// Transcript rows the owner opened, by stable item key. A thinking block shows by default,
     /// so its key here folds it instead.
     pub expanded: BTreeSet<String>,
-    /// An earlier page of the transcript shows rather than the latest messages.
-    pub earlier: bool,
     /// Every thinking block is hidden (`Alt+H`).
     pub hide_thinking: bool,
     pub draft: String,
@@ -324,7 +322,6 @@ impl Ui {
         sub: None,
         focus: Focus::Composer,
         expanded: BTreeSet::new(),
-        earlier: false,
         hide_thinking: false,
         draft: String::new(),
         to: None,
