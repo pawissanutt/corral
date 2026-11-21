@@ -137,7 +137,7 @@ export class ToolApprovals {
         + "Allow once applies only to the original change.";
     }
     if (!fitsPrompt(question)) return `The full command or destination does not fit in the owner prompt; ${effect}.`;
-    const options = this.reusable ? [CHOICE.deny, CHOICE.once, CHOICE.timed, CHOICE.session] : [CHOICE.deny, CHOICE.legacyOnce];
+    const options = this.reusable ? [CHOICE.deny, CHOICE.once, CHOICE.timed, CHOICE.session] : [CHOICE.legacyOnce, CHOICE.deny];
     const record = this.questions.ask(randomUUID(), [{ question, options, freeText: false }], kind);
     this.requests.set(key, { id: record.id, scope, ...(destination === undefined ? {} : { destination }) });
     return waiting(record.id);
