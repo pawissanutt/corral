@@ -111,8 +111,10 @@ export function createJournal(options: {
     // Resume only needs these bounded fields, not the evidence retained in the journal.
     const titles = JSON.stringify({ sessionTitle: displayTitle(data.sessionTitle), title: displayTitle(data.title) });
     if (titles !== savedTitles) {
-      writePrivateJson(join(context.dir, "title.json"), titles);
-      savedTitles = titles;
+      try {
+        writePrivateJson(join(context.dir, "title.json"), titles);
+        savedTitles = titles;
+      } catch { /* The journal is already saved; retry the optional projection on the next write. */ }
     }
     try { options.changed?.(); } catch { /* Observers do not own journal persistence. */ }
   }

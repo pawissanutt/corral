@@ -427,11 +427,15 @@ test("request titles persist, fall back for empty input, and preserve an explici
   try {
     const journal = createJournal({ context: ctx, git: git(), fleet: () => fleet });
     expect(journal.record().title).toBe("Build session");
+    const titlePath = join(dir, "title.json");
+    mkdirSync(titlePath);
     journal.noteOwnerInput("  \n  ");
     expect(journal.record().title).toBe("Build session");
     journal.noteOwnerInput("\n  Fix   the parser\nMore detail");
     expect(JSON.parse(readFileSync(join(dir, "journal.json"), "utf8")).title).toBe("Fix the parser");
+    rmSync(titlePath, { recursive: true });
     journal.noteOwnerInput("Another request");
+    expect(JSON.parse(readFileSync(titlePath, "utf8"))).toEqual({ title: "Fix the parser" });
     expect(createJournal({ context: ctx, git: git(), fleet: () => fleet }).record().title).toBe("Fix the parser");
     const unicode = createJournal({ context: { ...ctx, dir: join(dir, "unicode") }, git: git(), fleet: () => fleet });
     unicode.noteOwnerInput("a".repeat(118) + "😀rest");
