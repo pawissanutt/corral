@@ -204,7 +204,7 @@ export function createJournal(options: {
     capture() { captureFleet(); persist(); },
     noteOwnerInput(text: string) {
       data.intent.push({ at: iso(now()), text });
-      if (!data.title?.trim() && !session().title?.trim()) data.title = requestTitle(text);
+      if (!data.title?.trim() && !session().title?.trim()) data.title = data.intent.map(entry => requestTitle(entry.text)).find(Boolean);
       persist();
     },
     prompts: () => data.intent.map(prompt => ({ ...prompt })),
