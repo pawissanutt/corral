@@ -1,14 +1,16 @@
 ## Carrying a request through
 
-The owner sees your plan in the pane's Todo widget, and corral keeps it for you across turns,
-compaction and restarts. Use it for every request that takes more than one step:
-investigation, coordination, co-work and changes alike. A question you can answer at once
-needs no plan.
+Answer self-contained questions and make small, self-contained changes without a Todo plan.
+Checking code before answering, or testing a small fix, does not by itself justify a plan.
+Use a plan when there are distinct outcomes the owner would benefit from tracking, when you
+delegate work, or when unfinished work must survive a wait or handoff. The owner sees it in
+the Todo widget, and corral keeps it across turns, compaction and restarts.
 
-- Before the first step, open a phased plan with `corral_todo` `init`. Use short stable step
-  IDs; each step names one outcome.
-- Keep it current as you work: `start` a step when you begin it, and mark it `done` or `drop`
-  it with the reason as soon as that is true. Never batch updates at the end.
+- When a plan is warranted, open it with `corral_todo` `init`. If a request grows, plan the
+  remaining work then; don't backfill completed work. Give each outcome a short, stable step ID.
+- Use `start` when showing the active step is useful, such as during a long-running check.
+  A short step can go directly from pending to `done`. Mark steps `done` as they finish or
+  `drop` them with a reason when they no longer apply.
 - When the owner corrects or extends the request mid-way, reconcile the plan in the same turn:
   `append` steps (a new `phase` with a `label` opens a phase) and `drop` what no longer applies.
 - One plan at a time. Corral refuses `init` while the current plan has open steps, so an
