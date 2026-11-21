@@ -20,9 +20,9 @@ use nsh_core::prelude::*;
 use crate::model::Form;
 use crate::model::commands::{MENU_WALK, menu_step};
 use crate::model::hue::Hue;
-use crate::model::session::{Action, ChoiceCard, ChoiceOption, Focus, SessionPage};
+use crate::model::session::{Action, CardsRead, ChoiceCard, ChoiceOption, Focus, SessionPage};
 use crate::state::AppState;
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
@@ -476,20 +476,44 @@ pub(super) fn foot_row(
         .into_element()
 }
 
-/// `reading…`, `sending…` or why the card cannot be answered from here, quiet.
+/// Why the card cannot be answered from here, `sending…`, or, while its body is not here,
+/// where the read stands (`reading…`, the failure) with Retry after a failure (`btn-cards-retry`).
 pub(super) fn standing(
-    form: Form,
-    reading: bool,
+    app: AppState,
+    read: Option<CardsRead>,
     sending: bool,
     inert: Option<&str>,
 ) -> Option<AnyElement> {
-    let said = match (inert, sending, reading) {
-        (Some(why), _, _) => why.to_owned(),
-        (None, true, _) => "sending…".to_owned(),
-        (None, false, true) => "reading…".to_owned(),
-        (None, false, false) => return None,
+    let form = app.form;
+    let read = match (inert, sending, read) {
+        (Some(why), _, _) => return Some(quiet(form, why.to_owned()).into_element()),
+        (None, true, _) => return Some(quiet(form, "sending…").into_element()),
+        (None, false, read) => read?,
     };
-    Some(quiet(form, said).into_element())
+    let retry = read.retry.map(|action| {
+        button(
+            app,
+            "Retry",
+            ButtonKind::Quiet,
+            "btn-cards-retry",
+            move || run(app, action.clone()),
+        )
+    });
+    Some(
+        view()
+            .test_id("card-read")
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(if form == Form::Terminal { 16.0 } else { 8.0 }))
+            .child(
+                words(form, read.words, tint(read.hue))
+                    .flex_1()
+                    .min_w(px(0.0)),
+            )
+            .children(retry)
+            .into_element(),
+    )
 }
 
 /// The docked choice (`dock.choice`): the title, the exit's landing policy at its end, the exit's
@@ -545,11 +569,14 @@ fn choice_card(
         None,
     );
     let state = computed(move || {
-        card.with(|c| c.as_ref().map(|c| (c.reading, c.sending, c.inert.clone())))
+        card.with(|c| {
+            c.as_ref()
+                .map(|c| (c.read.clone(), c.sending, c.inert.clone()))
+        })
     });
     let state = dynamic(move || {
-        let (reading, sending, inert) = state.get()?;
-        untracked(|| standing(form, reading, sending, inert.as_deref()))
+        let (read, sending, inert) = state.get()?;
+        untracked(|| standing(app, read, sending, inert.as_deref()))
     });
     let foot = computed(move || {
         card.with(|c| {

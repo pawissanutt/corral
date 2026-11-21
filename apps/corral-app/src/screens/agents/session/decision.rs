@@ -116,11 +116,14 @@ fn decision_card(app: AppState, card: Memo<Option<DecisionCard>>) -> AnyElement 
         })?
     });
     let state = computed(move || {
-        card.with(|c| c.as_ref().map(|c| (c.reading, c.sending, c.inert.clone())))
+        card.with(|c| {
+            c.as_ref()
+                .map(|c| (c.read.clone(), c.sending, c.inert.clone()))
+        })
     });
     let state = dynamic(move || {
-        let (reading, sending, inert) = state.get()?;
-        untracked(|| standing(form, reading, sending, inert.as_deref()))
+        let (read, sending, inert) = state.get()?;
+        untracked(|| standing(app, read, sending, inert.as_deref()))
     });
     let foot = computed(move || {
         card.with(|c| {

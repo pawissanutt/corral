@@ -17,7 +17,7 @@ use crate::model::nav::Form;
 
 use super::actions::{ActionGroup, row};
 use super::choice::{ChoiceOption, options};
-use super::dock::{self, CardDraft, DockAction};
+use super::dock::{self, CardDraft, CardsRead, DockAction};
 use super::keys::{KeyAction, KeyBinding, bind};
 use super::{Action, Cx, State};
 
@@ -47,7 +47,8 @@ pub struct QuestionLine {
     pub action: Option<Action>,
 }
 
-/// An owner question's answer card, in the composer's place.
+/// An owner question's answer card, in the composer's place. Before its body is read it is the
+/// question's title and where the read stands; its questions and Send follow once read.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnswerCard {
     /// `dock-<card>`.
@@ -63,12 +64,15 @@ pub struct AnswerCard {
     /// The question the shown tab asks; none on Review.
     pub question: Option<QuestionView>,
     pub review: Option<Review>,
-    pub send: SendAnswers,
+    /// None until the card's body is read.
+    pub send: Option<SendAnswers>,
     pub close: Action,
     /// This device's answer is on its way: the card takes no other.
     pub sending: bool,
     /// Why the card cannot be answered from here now.
     pub inert: Option<String>,
+    /// The card's body is not here: where its read stands, with Retry after a failure.
+    pub read: Option<CardsRead>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,8 +248,52 @@ fn view(
     })
 }
 
-/// The answer card of `card`.
+/// The answer card of `brief`, from its card when read.
 pub(super) fn answer_card(
+    cx: &Cx<'_>,
+    brief: &CardBrief,
+    card: Option<&SessionCard>,
+    inert: Option<String>,
+) -> AnswerCard {
+    match card {
+        Some(card) => read_card(cx, brief, card, inert),
+        None => waiting_card(
+            cx,
+            brief.id.clone(),
+            brief.title.clone(),
+            dock::card_read(cx),
+            inert,
+        ),
+    }
+}
+
+/// The answer card of a question whose body is not here: its title, and where its read stands.
+pub(super) fn waiting_card(
+    cx: &Cx<'_>,
+    card: String,
+    title: String,
+    read: CardsRead,
+    inert: Option<String>,
+) -> AnswerCard {
+    AnswerCard {
+        id: format!("dock-{card}"),
+        sending: dock::sending(cx.ui, cx.feed, &card),
+        card,
+        title,
+        meta: None,
+        body: None,
+        more: false,
+        tabs: Vec::new(),
+        question: None,
+        review: None,
+        send: None,
+        close: Action::Dock(DockAction::Close(cx.id.clone())),
+        inert,
+        read: Some(read),
+    }
+}
+
+fn read_card(
     cx: &Cx<'_>,
     brief: &CardBrief,
     card: &SessionCard,
@@ -311,7 +359,7 @@ pub(super) fn answer_card(
         tabs,
         question: view(cx, card, current, draft, enabled),
         review,
-        send: SendAnswers {
+        send: Some(SendAnswers {
             id: "btn-send-answers",
             label: if left == 0 {
                 "Send answers".into()
@@ -324,10 +372,11 @@ pub(super) fn answer_card(
                 session: cx.id.clone(),
                 card: card.id.clone(),
             }),
-        },
+        }),
         close: Action::Dock(DockAction::Close(cx.id.clone())),
         sending,
         inert,
+        read: None,
     }
 }
 

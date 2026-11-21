@@ -51,6 +51,11 @@ pub struct State {
 pub enum Press {
     /// Open a live record (a task page, a session, a question, a plan, a review).
     Open(Live),
+    /// Open session `session`'s page with the card `asked` names open: a Pi host's question.
+    Question {
+        session: Id,
+        asked: crate::model::session::Asked,
+    },
     /// Start an engine operation, opening its composer when it asks for input.
     Verb {
         record: Record,
@@ -175,6 +180,7 @@ impl State {
     pub fn press(&mut self, press: Press, feed: &daemon::Feed, _env: Env) -> Vec<Effect> {
         match press {
             Press::Open(live) => vec![Effect::OpenLive(live)],
+            Press::Question { session, asked } => vec![Effect::Answer { session, asked }],
             Press::Verb { record, verb } => self.start_verb(record, verb, feed),
             Press::SubmitVerb(values) => self.submit_verb(values),
             Press::CancelVerb => {

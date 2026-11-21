@@ -616,6 +616,15 @@ impl AppState {
                     focus_to.set(Some(id));
                     after_answer(move || focus_to.set(None));
                 }
+                // The session's page state is this device's, for the sample as for corrald.
+                Effect::Answer { session, asked } => {
+                    let action = crate::model::session::Action::Dock(
+                        crate::model::session::DockAction::Answer { session, asked },
+                    );
+                    self.reduce(self.session, move |state, feed, _, _| {
+                        state.act(action, feed)
+                    });
+                }
                 other => self.run_live(other),
             }
         }

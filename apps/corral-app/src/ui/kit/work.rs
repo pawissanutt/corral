@@ -20,7 +20,11 @@ fn kind(kind: work::ButtonKind) -> ButtonKind {
 
 /// The leading icon the mock gives a control: the speech bubble on session buttons.
 fn glyph(action: Option<&Press>) -> Option<Icon> {
-    matches!(action, Some(Press::Open(Live::Session(_)))).then_some(Icon::Ask)
+    matches!(
+        action,
+        Some(Press::Open(Live::Session(_)) | Press::Question { .. })
+    )
+    .then_some(Icon::Ask)
 }
 
 /// A model button in the kit's look: its label, weight and enabled state, pressing it runs its
@@ -60,6 +64,7 @@ pub fn press_id(press: &Press) -> String {
         Press::Open(Live::Plan(id)) => format!("plan-{id}"),
         Press::Open(Live::Session(_)) => "btn-open-session".into(),
         Press::Open(Live::Review(_)) => "btn-review".into(),
+        Press::Question { .. } => "btn-answer-question".into(),
         Press::Verb { verb, .. } => format!("btn-{}", verb.slug()),
         Press::SubmitVerb(_) => "btn-verb-send".into(),
         Press::CancelVerb => "btn-verb-cancel".into(),

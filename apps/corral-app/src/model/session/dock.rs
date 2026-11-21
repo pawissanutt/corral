@@ -4,11 +4,14 @@
 //! confirm or input card and an opened question card take the composer's place.
 //!
 //! The host's state briefs the waiting cards; their bodies are read from `SessionCards`, and a
-//! brief whose card is not read yet shows its title alone. Every answer goes out as
-//! `session.card.answer` under a key whose reply this page reads; a destructive option is
-//! confirmed once on this device first, and an option that needs the owner's reason puts the
-//! composer in reason mode until the reason is given or the owner leaves it. Which cards show
-//! open is `fold`'s; what is read and what comes back is `reads`'.
+//! card shown open before its body is read says where that read stands, with Retry after a
+//! failure. Every answer goes out as `session.card.answer` under a key whose reply this page
+//! reads; a destructive option is confirmed once on this device first, and an option that
+//! needs the owner's reason puts the composer in reason mode until the reason is given or the
+//! owner leaves it. Which cards show open is `fold`'s; what is read and what comes back is
+//! `reads`'. An Answer pressed outside the page (Home, a session's row) names the card it opens
+//! ([`Asked`]); the page shows that card open, reading until the host's state briefs it, and
+//! never another card in its place.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,10 +19,10 @@ use corral_protocol::detail::{CardKind, DetailBody, DetailRef, SessionCard};
 use corral_protocol::session_host::{CardAnswer, SessionCardAnswer};
 use corral_protocol::session_state::CardBrief;
 
-use crate::model::Id;
 use crate::model::daemon::{Feed, Operation};
 use crate::model::effect::Effect;
 use crate::model::hue::Hue;
+use crate::model::{Id, Live};
 
 use super::choice::{self, ChoiceCard};
 use super::dialog::{self, DecisionCard};
@@ -34,7 +37,7 @@ mod reads;
 
 pub(super) use fold::escape;
 pub use fold::{keys, press};
-pub(super) use reads::{fetch, settle};
+pub(super) use reads::{card_read, fetch, settle};
 
 /// This device's answer to one card while it is being given.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -99,6 +102,15 @@ impl Compose {
     }
 }
 
+/// The card an Answer pressed outside the page opens: the one the session's row names (a chat's
+/// or a build's `question_id`, which is the card's id), or, where the row names none, the
+/// oldest owner question the host's state briefs. Never a card matched by its words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asked {
+    Card(String),
+    Oldest,
+}
+
 /// An option chosen on this device, before it goes out: a destructive one waits here for its
 /// one confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,6 +168,9 @@ pub struct DockUi {
     pub answered: BTreeMap<String, String>,
     /// The briefed card ids when the cards were last asked for.
     pub asked: Option<Vec<String>>,
+    /// An Answer from outside the page whose card the host's state does not brief yet: it
+    /// opens once briefed.
+    pub wanted: Option<Asked>,
 }
 
 impl DockUi {
@@ -170,6 +185,7 @@ impl DockUi {
         pending: BTreeMap::new(),
         answered: BTreeMap::new(),
         asked: None,
+        wanted: None,
     };
 }
 
@@ -179,7 +195,11 @@ pub enum DockAction {
     /// Bring a waiting card forward: open a question's answer card, open a docked choice, or
     /// give a decision card the keys.
     Bring { session: Id, card: String },
-    /// Close the open answer card; its answers so far stay.
+    /// Answer from outside the page: open the session's page with the card `asked` names open,
+    /// or reading until the host's state briefs it.
+    Answer { session: Id, asked: Asked },
+    /// Close the open answer card, or the one an Answer still waits for; its answers so far
+    /// stay.
     Close(Id),
     /// Show a tab of the answer card; the questions' count is Review.
     Show {
@@ -447,9 +467,14 @@ pub(super) fn act(state: &mut State, action: DockAction, feed: &Feed) -> Vec<Eff
             fold::bring(state, &session, card, feed);
             Vec::new()
         }
+        DockAction::Answer { session, asked } => {
+            fold::answer(state, &session, asked, feed);
+            vec![Effect::OpenLive(Live::Session(session))]
+        }
         DockAction::Close(session) => {
             let ui = state.ui_mut(&session);
             ui.dock.open = None;
+            ui.dock.wanted = None;
             ui.focus = Focus::Composer;
             Vec::new()
         }
@@ -545,9 +570,11 @@ fn confirm(cx: &Cx<'_>) -> Option<CardConfirm> {
 /// The dock of the session `cx` reads.
 pub fn dock(cx: &Cx<'_>) -> Dock {
     let queue = queue::queue_dock(cx);
+    let wanted = fold::wanted_card(cx);
     let Some(state) = cx.state else {
         return Dock {
             queue,
+            answer: wanted,
             ..Dock::default()
         };
     };
@@ -567,10 +594,15 @@ pub fn dock(cx: &Cx<'_>) -> Dock {
         .open
         .as_deref()
         .and_then(|open| state.cards.iter().find(|brief| brief.id == open))
-        .and_then(|brief| {
-            let body = card(cx.feed, cx.id.as_str(), &brief.id)?;
-            Some(questions::answer_card(cx, brief, body, inert.clone()))
-        });
+        .map(|brief| {
+            let body = card(cx.feed, cx.id.as_str(), &brief.id);
+            questions::answer_card(cx, brief, body, inert.clone())
+        })
+        .or(wanted);
+    // A card shown open says where the read stands itself; the dock's line would repeat it.
+    let shown_read = choice.as_ref().is_some_and(|c| c.read.is_some())
+        || dialog_card.as_ref().is_some_and(|c| c.read.is_some())
+        || answer.as_ref().is_some_and(|c| c.read.is_some());
     Dock {
         choice,
         questions: questions::dock(cx, &state.cards),
@@ -586,7 +618,7 @@ pub fn dock(cx: &Cx<'_>) -> Dock {
                 card: brief.id.clone(),
             })
         }),
-        read: reads::cards_read(cx, &state.cards),
+        read: reads::cards_read(cx, &state.cards).filter(|_| !shown_read),
         inert,
     }
 }

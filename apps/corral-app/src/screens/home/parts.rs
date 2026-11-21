@@ -1,12 +1,14 @@
 //! What the dashboard's tiles, cards and panels share: the panel frame with its head, a
 //! pressable line that opens the page holding its detail, words at the dashboard's sizes and a
-//! bar drawn as a share of its track; and Ask about the project in scope, in every form's head.
+//! bar drawn as a share of its track; Ask about the project in scope, in every form's head; and
+//! the watcher that keeps a Blocked task's Pi run state coming while its card or row shows.
 
 use nsh_core::prelude::*;
 
+use crate::model::effect::Effect;
 use crate::model::hue::Hue;
 use crate::model::projects::Scope;
-use crate::model::{Form, home};
+use crate::model::{Form, Id, home};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -14,6 +16,26 @@ use crate::ui::kit::hint::hinted;
 use crate::ui::kit::marks::hue_fill;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+
+/// While task `id`'s card or row shows, watches its Blocked Pi run (`home::watched_run`), so
+/// the host's state says whether it asks an owner question Answer can open. Released when the
+/// row goes or the run stops waiting, through the source it was opened on.
+pub(super) fn watch_run(app: AppState, id: Id) {
+    let run = computed(move || app.feed.with(|feed| home::watched_run(feed, &id)));
+    let scoped = app.scope();
+    effect(move || {
+        let Some(session) = run.get() else {
+            return;
+        };
+        untracked(|| {
+            scoped.run(vec![Effect::Watch {
+                session: session.clone(),
+                on: true,
+            }]);
+        });
+        cleanup(move || scoped.run(vec![Effect::Watch { session, on: false }]));
+    });
+}
 
 /// Ask opened with the project in scope as its context (`btn-ask-project`); none with every
 /// project in scope.

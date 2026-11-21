@@ -80,7 +80,11 @@ pub(in crate::model::session) fn settle(ui: &mut Ui, scope: &str, feed: &Feed) {
     ui.dock
         .drafts
         .retain(|card, _| open.contains(card.as_str()));
-    fold::settle(ui, state);
+    let advertised = feed
+        .assistants
+        .get(scope)
+        .and_then(|row| row.question_id.as_deref());
+    fold::settle(ui, state, advertised, feed.now);
     ui.dock
         .answered
         .retain(|card, _| open.contains(card.as_str()));
@@ -190,21 +194,34 @@ pub(in crate::model::session) fn fetch(cx: &Cx<'_>) -> Option<Action> {
 
 /// Where the read of briefed cards whose bodies are not here stands.
 pub(super) fn cards_read(cx: &Cx<'_>, briefs: &[CardBrief]) -> Option<CardsRead> {
-    let missing = briefs
+    briefs
         .iter()
-        .any(|brief| card(cx.feed, cx.id.as_str(), &brief.id).is_none());
-    if !missing {
-        return None;
-    }
+        .any(|brief| card(cx.feed, cx.id.as_str(), &brief.id).is_none())
+        .then(|| card_read(cx))
+}
+
+/// Where the read stands of a briefed card whose body is not here: reading while a read is under
+/// way or about to be asked for, the failure with Retry, and, once a read came back without the
+/// card, that it was not there, with Retry. Nothing is inferred meanwhile.
+pub(in crate::model::session) fn card_read(cx: &Cx<'_>) -> CardsRead {
     let target = target(cx.id.as_str());
     let read = ReadState::of(cx.feed.detail(&target), cx.feed);
-    Some(CardsRead {
-        words: if read.has_rows() {
-            "reading…".into()
-        } else {
-            read.words()
+    let retry = Some(Action::Refresh(target));
+    match read {
+        ReadState::Failed(_) => CardsRead {
+            words: read.words(),
+            hue: read.hue(),
+            retry,
         },
-        hue: read.hue(),
-        retry: matches!(read, ReadState::Failed(_)).then_some(Action::Refresh(target)),
-    })
+        ReadState::Read { .. } | ReadState::Stale { .. } if fetch(cx).is_none() => CardsRead {
+            words: "! not in the last read of the cards · nothing is inferred".into(),
+            hue: Hue::Held,
+            retry,
+        },
+        _ => CardsRead {
+            words: "reading…".into(),
+            hue: Hue::Neutral,
+            retry: None,
+        },
+    }
 }

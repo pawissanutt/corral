@@ -23,7 +23,7 @@ use crate::ui::kit::status::{look_mark, pipeline_marks};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
-use super::parts::{empty, figure, surface, words};
+use super::parts::{empty, figure, surface, watch_run, words};
 
 /// The Needs you panel: one card per thing that waits, the selected one open.
 pub(super) fn needs_you(app: AppState, scope: Memo<Scope>) -> AnyElement {
@@ -106,6 +106,7 @@ const NEEDS_NOTE: &str = "Blocked, or ready to land · j k next · Enter opens t
 fn card(app: AppState, id: Id, open: Memo<Option<Id>>) -> AnyElement {
     let form = app.form;
     let key = id.clone();
+    watch_run(app, id.clone());
     let facts = computed(move || app.feed.with(|feed| home::card(feed, &key)));
     let me = id.clone();
     let is_open = computed(move || open.with(|open| open.as_ref() == Some(&me)));
@@ -415,6 +416,7 @@ fn step_button(app: AppState, step: &work::Button) -> AnyElement {
     let action = step.action.clone();
     let test_id = match &action {
         Some(Press::Next { index, .. }) => format!("btn-next-{index}"),
+        Some(press @ Press::Question { .. }) => crate::ui::kit::work::press_id(press),
         _ => String::new(),
     };
     button_with(

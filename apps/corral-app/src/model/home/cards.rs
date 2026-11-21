@@ -2,18 +2,53 @@
 //! next step; the open one holds the decision. For a task that is its Blocked reason, the log
 //! excerpt the engine served, the reply box when the recommended step is a reply, and one
 //! button per other next step; for a review ready to land, the pipeline's phrase and Approve.
+//! A Blocked task whose Pi run asks an owner question, as the run host's state briefs it,
+//! offers Answer, which opens the run's page with that card open, in place of the reply box;
+//! a run of another harness, or one whose state is not read, keeps the engine's steps.
 //! A session's open card is its own dock and composer (the screen mounts them).
 
-use corral_types::Status;
+use corral_types::{SessionRef, SessionStatus, Status};
 
 use crate::model::act;
-use crate::model::agents::session_line;
-use crate::model::daemon::Feed;
+use crate::model::agents::{briefed_question, session_line};
+use crate::model::daemon::{Feed, Task};
 use crate::model::next::{NextStep, next_step, session_next_step};
 use crate::model::pipeline::phrase;
+use crate::model::session::Asked;
 use crate::model::status::{Look, session_look, status_look, status_word};
 use crate::model::work::{self, Button, ButtonKind, Press, ReplyBox, age};
 use crate::model::{Id, Live};
+
+/// The run session Home watches while it shows task `id`: the task's current run, when the task
+/// is Blocked and a Pi host runs that run and waits, so the host's state says what it asks.
+pub fn watched_run(feed: &Feed, id: &Id) -> Option<Id> {
+    let task = feed
+        .board
+        .task(id)
+        .filter(|task| task.status() == Status::Blocked)?;
+    let session = Id::from(format!("{}_{}", task.id, task.row.run.as_ref()?.id));
+    let row = feed.agents.get(&session)?;
+    (matches!(row.run.session, Some(SessionRef::Pi { .. }))
+        && matches!(row.status, SessionStatus::Blocked { .. }))
+    .then_some(session)
+}
+
+/// Answer on a Blocked task whose Pi run asks an owner question: the run's page with that card
+/// open, the card named by its id as the host's state briefs it, never by the excerpt's words.
+/// None until that state is read and for a run of another harness.
+pub fn question_step(feed: &Feed, task: &Task) -> Option<NextStep> {
+    let session = watched_run(feed, &task.id)?;
+    let card = briefed_question(feed, session.as_str())??.to_owned();
+    Some(NextStep {
+        label: "Answer".into(),
+        press: Press::Question {
+            session,
+            asked: Asked::Card(card),
+        },
+        verb: None,
+        yours: true,
+    })
+}
 
 /// One card's head and its closed form.
 #[derive(Debug, Clone, PartialEq)]
@@ -56,7 +91,7 @@ pub fn card(feed: &Feed, id: &Id) -> Option<Card> {
             age: age(task.since(), feed.now),
             why: phrase(task, feed),
             facts: join([task.project().map(str::to_owned), profile]),
-            next: next_step(task),
+            next: question_step(feed, task).or_else(|| next_step(task)),
             session: false,
         });
     }
@@ -103,37 +138,46 @@ pub struct Decision {
 }
 
 /// The decision of the task `id` when it waits on the owner; none for a session, whose card
-/// is its own dock and composer, and for a task that waits on nobody.
+/// is its own dock and composer, and for a task that waits on nobody. A Pi run's question
+/// replaces the reply box: a reply would not answer its card.
 pub fn decision(feed: &Feed, id: &Id) -> Option<Decision> {
     let task = feed.board.task(id)?;
     match task.status() {
         Status::Blocked => {
             let blocked = task.blocked()?;
             let reply = work::reply_box(task);
+            let question = question_step(feed, task);
+            let engine = blocked
+                .next
+                .iter()
+                .enumerate()
+                .skip(usize::from(reply.is_some()))
+                .map(|(index, next)| {
+                    Button::new(
+                        act::label(&next.op, next.force),
+                        Press::Next {
+                            task: id.clone(),
+                            index,
+                        },
+                        if index == 0 && question.is_none() {
+                            ButtonKind::Primary
+                        } else {
+                            ButtonKind::Ghost
+                        },
+                    )
+                });
             Some(Decision {
                 what: format!("Blocked: {}", blocked.reason),
                 detail: blocked.detail.clone(),
-                steps: blocked
-                    .next
-                    .iter()
-                    .enumerate()
-                    .skip(usize::from(reply.is_some()))
-                    .map(|(index, next)| {
-                        Button::new(
-                            act::label(&next.op, next.force),
-                            Press::Next {
-                                task: id.clone(),
-                                index,
-                            },
-                            if index == 0 {
-                                ButtonKind::Primary
-                            } else {
-                                ButtonKind::Ghost
-                            },
-                        )
+                steps: question
+                    .as_ref()
+                    .map(|step| {
+                        Button::new(step.label.clone(), step.press.clone(), ButtonKind::Primary)
                     })
+                    .into_iter()
+                    .chain(engine)
                     .collect(),
-                reply,
+                reply: reply.filter(|_| question.is_none()),
             })
         }
         Status::Review if task.row.ready => {

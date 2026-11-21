@@ -13,7 +13,7 @@ mod dash;
 mod digest;
 mod lanes;
 
-pub use cards::{Card, Decision, card, decision};
+pub use cards::{Card, Decision, card, decision, watched_run};
 pub use dash::{
     Cost, CostRow, ProjectLine, StatusBar, Tile, by_status, cost, cost_request, project_facts,
     projects, tiles,
@@ -275,6 +275,7 @@ const CHAT_ROLE: &str = "assistant";
 /// visit; none once the daemon lists none of them.
 pub fn row(feed: &Feed, id: &Id) -> Option<HomeRow> {
     if let Some(task) = feed.board.task(id) {
+        let question = cards::question_step(feed, task);
         return Some(HomeRow {
             id: id.clone(),
             live: Live::Task(id.clone()),
@@ -282,8 +283,8 @@ pub fn row(feed: &Feed, id: &Id) -> Option<HomeRow> {
             word: status_word(task.status()),
             title: task.title().to_owned(),
             now: phrase(task, feed),
-            next: next_step(task),
-            in_place: crate::model::work::reply_box(task).is_some(),
+            in_place: question.is_none() && crate::model::work::reply_box(task).is_some(),
+            next: question.or_else(|| next_step(task)),
         });
     }
     let Some(session) = session_line(feed, id) else {
@@ -423,5 +424,102 @@ mod tests {
             order(&feed, &Scope::All, &list),
             [Id::from("T-1"), Id::from("T-4")]
         );
+    }
+
+    /// A Blocked task whose Pi worker asked a structured question showed only the generic
+    /// Reply box on Home, and a reply never answers the question's card. Once the run host's
+    /// state briefs the card, Answer opens it by its id (the oldest owner question, not the
+    /// first card); a run of another harness keeps the engine's Reply.
+    #[test]
+    fn a_pi_runs_question_is_answered_by_its_card_and_another_harness_keeps_reply() {
+        use corral_protocol::detail::CardKind;
+        use corral_protocol::rows::AgentRow;
+        use corral_protocol::session_state::{CardBrief, SessionState as HostState};
+        use corral_types::{Blocked, Next, Op, Role, SessionRef, SessionStatus};
+
+        use crate::model::agents::source_tests::agent;
+        use crate::model::session::Asked;
+        use crate::model::session::transcript::LiveSession;
+        use crate::model::work::Press;
+
+        let blocked = |id: &str| -> (Task, AgentRow) {
+            let mut row = task_row(bare_task(
+                id,
+                id,
+                Status::Blocked,
+                jiff::Timestamp::UNIX_EPOCH,
+            ));
+            row.task.blocked = Some(Blocked {
+                reason: "worker needs a reply".into(),
+                detail: Some("Which clock should the axes use?".into()),
+                next: vec![
+                    Next::run(Op::Reply {
+                        id: id.into(),
+                        text: String::new(),
+                    }),
+                    Next::run(Op::Stop { id: id.into() }),
+                ],
+            });
+            let mut run = agent(id, "R1", Role::Worker);
+            run.status = SessionStatus::Blocked {
+                excerpt: "Which clock should the axes use?".into(),
+            };
+            row.run = Some(run.run.clone());
+            (Task::new(row), run)
+        };
+        let (pi, mut pi_run) = blocked("T-1");
+        pi_run.run.session = Some(SessionRef::Pi {
+            socket: "/run/T-1-R1.sock".into(),
+            inner: Box::new(SessionRef::Herdr {
+                workspace: "w1".into(),
+                pane: "w1:p1".into(),
+            }),
+            dir: "/runs/T-1/R1".into(),
+        });
+        let (other, other_run) = blocked("T-2");
+        let mut feed = Feed::default();
+        feed.board.apply_batch(1, vec![pi, other], &[]);
+        feed.agents.insert(Id::from("T-1_R1"), pi_run);
+        feed.agents.insert(Id::from("T-2_R1"), other_run);
+        let (t1, t2) = (Id::from("T-1"), Id::from("T-2"));
+        assert_eq!(watched_run(&feed, &t1), Some(Id::from("T-1_R1")));
+        // Until the host's state is read nothing says the excerpt is a card: Reply stands.
+        assert!(decision(&feed, &t1).is_some_and(|d| d.reply.is_some()));
+
+        let brief = |id: &str, kind: CardKind| CardBrief {
+            id: id.into(),
+            kind,
+            title: "Which clock should the axes use?".into(),
+            child: None,
+            expires_at: None,
+        };
+        let mut live = LiveSession::default();
+        live.replace_state(Some(Box::new(HostState {
+            cards: vec![
+                brief("edit-1", CardKind::Confirm),
+                brief("q-7", CardKind::Question),
+            ],
+            ..HostState::default()
+        })));
+        feed.live.insert(Id::from("T-1_R1"), live);
+        let answer = Press::Question {
+            session: Id::from("T-1_R1"),
+            asked: Asked::Card("q-7".into()),
+        };
+        let next = card(&feed, &t1).and_then(|card| card.next);
+        assert_eq!(
+            next.map(|step| (step.label, step.press)),
+            Some(("Answer".into(), answer.clone()))
+        );
+        let decided = decision(&feed, &t1).expect("the task is Blocked");
+        assert_eq!(decided.reply, None);
+        assert_eq!(
+            decided.steps.first().and_then(|step| step.action.clone()),
+            Some(answer)
+        );
+        assert!(row(&feed, &t1).is_some_and(|row| !row.in_place));
+
+        assert_eq!(watched_run(&feed, &t2), None);
+        assert!(decision(&feed, &t2).is_some_and(|d| d.reply.is_some()));
     }
 }
