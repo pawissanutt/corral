@@ -367,7 +367,7 @@ fn build_resume_entry(session: &BuildSessionSummary, now: jiff::Timestamp) -> La
         (None, Some(dir)) => dir.to_string_lossy().into_owned(),
         (None, None) => session.repo_root.display().to_string(),
     };
-    let mut detail = format!("{} · {place}", session.name);
+    let mut detail = format!("{} · {place}", session.title);
     if let Ok(updated) = session.updated.parse::<jiff::Timestamp>() {
         let age = corral_core::age_text(now.duration_since(updated).as_secs());
         detail.push_str(&format!(" · {age} ago"));

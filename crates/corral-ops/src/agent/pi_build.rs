@@ -642,6 +642,8 @@ pub fn build(_args: &BuildArgs) -> Result<()> {
 pub struct BuildSessionSummary {
     pub id: String,
     pub name: String,
+    /// Resolved display title; `name` remains the worktree slug.
+    pub title: String,
     pub repo_root: PathBuf,
     pub worktree: PathBuf,
     pub here: bool,
@@ -654,6 +656,8 @@ pub struct BuildSessionSummary {
 
 /// The largest `session.json` [`list_sessions`] reads.
 const SESSION_MAX_BYTES: u64 = 64 * 1024;
+/// A journal may include build evidence as well as its title; keep launcher reads bounded.
+const JOURNAL_MAX_BYTES: u64 = 16 * 1024 * 1024;
 /// The most recently modified session directories [`list_sessions`] reads.
 const SESSION_DIRS: usize = 32;
 
@@ -663,6 +667,7 @@ const SESSION_DIRS: usize = 32;
 struct SessionRecord {
     id: String,
     name: String,
+    title: Option<String>,
     updated: String,
     repo_root: PathBuf,
     worktree: PathBuf,
@@ -672,6 +677,13 @@ struct SessionRecord {
     project: Option<String>,
     session_file: Option<String>,
     exit: Option<SessionExit>,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionJournal {
+    session_title: Option<String>,
+    title: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -720,11 +732,36 @@ fn read_session(dir: &Path) -> Option<(jiff::Timestamp, BuildSessionSummary)> {
         return None;
     }
     let updated = record.updated.parse::<jiff::Timestamp>().ok()?;
+    let journal = std::fs::File::open(dir.join("journal.json"))
+        .ok()
+        .and_then(|file| {
+            let mut bytes = Vec::new();
+            file.take(JOURNAL_MAX_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            if bytes.len() as u64 > JOURNAL_MAX_BYTES {
+                return None;
+            }
+            serde_json::from_slice::<SessionJournal>(&bytes).ok()
+        })
+        .unwrap_or_default();
+    let title = [
+        journal.session_title.as_deref(),
+        record.title.as_deref(),
+        journal.title.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|title| !title.is_empty())
+    .unwrap_or(&record.name)
+    .to_owned();
     Some((
         updated,
         BuildSessionSummary {
             id: record.id,
             name: record.name,
+            title,
             repo_root: record.repo_root,
             worktree: record.worktree,
             here: record.here,

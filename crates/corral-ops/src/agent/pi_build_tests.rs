@@ -578,6 +578,7 @@ fn list_sessions_reads_host_records_newest_first_and_skips_unresumable_ones() {
         BuildSessionSummary {
             id: "B-newer1".into(),
             name: "checkout-copy".into(),
+            title: "checkout-copy".into(),
             repo_root: "/repo".into(),
             worktree: "/repo".into(),
             here: true,
@@ -596,6 +597,40 @@ fn list_sessions_reads_host_records_newest_first_and_skips_unresumable_ones() {
     assert_eq!(sessions[1].exited, None);
     assert!(!sessions[1].bare);
     assert!(sessions[2].bare);
+}
+
+#[test]
+fn list_sessions_resolves_display_titles_without_changing_identity() {
+    let data = tempfile::tempdir().unwrap();
+    let id = "B-titles1";
+    let mut record = session_record(id, "2026-11-03T10:00:00.000Z");
+    let journal = data.path().join("build").join(id).join("journal.json");
+    let read = || list_sessions(data.path()).remove(0);
+    session_file(data.path(), id, &record.to_string());
+    assert_eq!(read().title, "checkout-copy");
+    std::fs::write(&journal, json!({"title": "Fix the parser"}).to_string()).unwrap();
+    assert_eq!(read().title, "Fix the parser");
+    record["title"] = json!("Launch title");
+    session_file(data.path(), id, &record.to_string());
+    assert_eq!(read().title, "Launch title");
+    std::fs::write(
+        &journal,
+        json!({"sessionTitle": " Pi rename ", "title": "Fix the parser"}).to_string(),
+    )
+    .unwrap();
+    let session = read();
+    assert_eq!(session.title, "Pi rename");
+    assert_eq!(session.name, "checkout-copy");
+    assert_eq!(session.id, id);
+    assert_eq!(
+        session.worktree,
+        PathBuf::from("/repo/.worktrees/build-checkout-copy")
+    );
+    std::fs::write(&journal, "{broken").unwrap();
+    assert_eq!(read().title, "Launch title");
+    record["title"] = json!("  ");
+    session_file(data.path(), id, &record.to_string());
+    assert_eq!(read().title, "checkout-copy");
 }
 
 #[test]

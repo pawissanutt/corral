@@ -190,6 +190,7 @@ fn launcher_rows_open_what_their_flags_open() {
     let session = BuildSessionSummary {
         id: "B-abc123".into(),
         name: "checkout-copy".into(),
+        title: "Fix the parser".into(),
         repo_root: "/work/mitiplay".into(),
         worktree: "/work/mitiplay/.worktrees/build-checkout-copy".into(),
         here: false,
@@ -201,7 +202,7 @@ fn launcher_rows_open_what_their_flags_open() {
     let now: jiff::Timestamp = "2026-11-12T10:23:00Z".parse().unwrap();
     let row = build_resume_entry(&session, now);
     assert_eq!(row.name, "build");
-    assert_eq!(row.detail, "checkout-copy · mitiplay · 23m ago · shipped");
+    assert_eq!(row.detail, "Fix the parser · mitiplay · 23m ago · shipped");
     assert_eq!(
         chosen(&row.id, 0).unwrap(),
         (build(false, None, Some("B-abc123")), false)
@@ -225,6 +226,7 @@ fn launcher_offers_bare_and_marks_resumable_bare_sessions() {
     let session = |bare| BuildSessionSummary {
         id: "B-bare01".into(),
         name: "scratch".into(),
+        title: "scratch".into(),
         repo_root: "/work/mitiplay".into(),
         worktree: "/work/mitiplay/.worktrees/build-scratch".into(),
         here: false,
@@ -236,6 +238,7 @@ fn launcher_offers_bare_and_marks_resumable_bare_sessions() {
     let now: jiff::Timestamp = "2026-11-12T10:23:00Z".parse().unwrap();
     let bare = build_resume_entry(&session(true), now);
     assert_eq!(bare.name, "bare");
+    assert!(bare.detail.starts_with("scratch ·"));
     assert!(matches!(bare.section, Section::Resume));
     assert_eq!(
         chosen(&bare.id, 0).unwrap(),
