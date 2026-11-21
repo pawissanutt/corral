@@ -1,23 +1,5 @@
-diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-2b768fdd05a562a5 b/.bun-tag-2b768fdd05a562a5
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-54d2205a3614960d b/.bun-tag-54d2205a3614960d
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-98cc4d713cd0cf4e b/.bun-tag-98cc4d713cd0cf4e
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-a623d2c712400c20 b/.bun-tag-a623d2c712400c20
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-bbe6a83ed201364 b/.bun-tag-bbe6a83ed201364
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@earendil-works/pi-coding-agent/.bun-tag-f675643e48a4a4b8 b/.bun-tag-f675643e48a4a4b8
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/core/agent-session.d.ts b/dist/core/agent-session.d.ts
-index 8b6a58430eea2cbb463e2b51773a8bc6e4914505..9845d698f787386557bfb3527936dfb74fc65ced 100644
+index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d929d279222 100644
 --- a/dist/core/agent-session.d.ts
 +++ b/dist/core/agent-session.d.ts
 @@ -12,7 +12,7 @@
@@ -55,7 +37,7 @@ index 8b6a58430eea2cbb463e2b51773a8bc6e4914505..9845d698f787386557bfb3527936dfb7
      readonly sessionManager: SessionManager;
      readonly settingsManager: SettingsManager;
      private _scopedModels;
-@@ -595,6 +606,7 @@ export declare class AgentSession {
+@@ -598,6 +609,7 @@ export declare class AgentSession {
       */
      steer(text: string, images?: ImageContent[], options?: {
          source?: InputSource;
@@ -63,7 +45,7 @@ index 8b6a58430eea2cbb463e2b51773a8bc6e4914505..9845d698f787386557bfb3527936dfb7
      }): Promise<QueuedInputDisposition>;
      /**
       * Queue a follow-up message to be processed after the agent finishes.
-@@ -606,6 +618,7 @@ export declare class AgentSession {
+@@ -609,6 +621,7 @@ export declare class AgentSession {
       */
      followUp(text: string, images?: ImageContent[], options?: {
          source?: InputSource;
@@ -71,7 +53,7 @@ index 8b6a58430eea2cbb463e2b51773a8bc6e4914505..9845d698f787386557bfb3527936dfb7
      }): Promise<QueuedInputDisposition>;
      /**
       * Internal: Queue a steering message (already expanded, no extension command check).
-@@ -661,7 +674,7 @@ export declare class AgentSession {
+@@ -664,7 +677,7 @@ export declare class AgentSession {
       * Useful for restoring to editor when user aborts.
       * @returns Object with steering and followUp arrays
       */
@@ -81,7 +63,7 @@ index 8b6a58430eea2cbb463e2b51773a8bc6e4914505..9845d698f787386557bfb3527936dfb7
          followUp: string[];
      };
 diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
-index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f169d5f79c5 100644
+index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311230eae8c 100644
 --- a/dist/core/agent-session.js
 +++ b/dist/core/agent-session.js
 @@ -117,6 +117,14 @@ export class AgentSession {
@@ -99,7 +81,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
      _steeringMessages = [];
      /** Tracks pending follow-up messages for UI display. Removed when delivered. */
      _followUpMessages = [];
-@@ -201,6 +209,18 @@ export class AgentSession {
+@@ -205,6 +213,18 @@ export class AgentSession {
      _runSystemPromptOptions;
      constructor(config) {
          this.agent = config.agent;
@@ -118,7 +100,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
          this.sessionManager = config.sessionManager;
          this.settingsManager = config.settingsManager;
          this._scopedModels = config.scopedModels ?? [];
-@@ -785,21 +805,7 @@ export class AgentSession {
+@@ -789,21 +809,7 @@ export class AgentSession {
          // This ensures the UI sees the updated queue state
          if (event.type === "message_start" && event.message.role === "user") {
              this._overflowRecoveryAttempted = false;
@@ -141,7 +123,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
              // Normalize queued images at delivery, before events and persistence see the message,
              // so they get the same resize as idle prompts with the current model's limits (#11738).
              if (this._queuedMessagesWithImages.has(event.message)) {
-@@ -1502,7 +1508,6 @@ export class AgentSession {
+@@ -1511,7 +1517,6 @@ export class AgentSession {
          // have while idle. No run exists yet, so they cannot split a tool call from its result.
          this._flushPendingBashMessages();
          this._flushPendingCustomMessages();
@@ -149,7 +131,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
          // Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
          this._failedResponse = undefined;
          this._recordSelection();
-@@ -1510,6 +1515,7 @@ export class AgentSession {
+@@ -1519,6 +1524,7 @@ export class AgentSession {
          // are dropped, so a tool that never registers does not stay pending.
          this._pendingToolNames.clear();
          try {
@@ -157,7 +139,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
              await this.agent.prompt(messages);
              while (!this._agentRunAbortRequested) {
                  if (await this._handlePostAgentRun()) {
-@@ -1693,8 +1699,28 @@ export class AgentSession {
+@@ -1702,8 +1708,28 @@ export class AgentSession {
       * @throws Error if no model selected or no API key available (when not streaming)
       */
      async prompt(text, options) {
@@ -187,7 +169,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
              return;
          }
          const expandPromptTemplates = options?.expandPromptTemplates ?? true;
-@@ -1751,10 +1777,10 @@ export class AgentSession {
+@@ -1760,10 +1786,10 @@ export class AgentSession {
                  throw new Error("Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.");
              }
              if (options.streamingBehavior === "followUp") {
@@ -200,7 +182,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
              }
              preflightResult?.("queued");
              return undefined;
-@@ -1833,7 +1859,18 @@ export class AgentSession {
+@@ -1842,7 +1868,18 @@ export class AgentSession {
              return text; // Return original on error
          }
      }
@@ -220,7 +202,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
          if (text.startsWith("/")) {
              this._throwIfExtensionCommand(text);
          }
-@@ -1843,10 +1880,10 @@ export class AgentSession {
+@@ -1852,10 +1889,10 @@ export class AgentSession {
          let expandedText = this._expandSkillCommand(processedInput.text);
          expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
          if (behavior === "steer") {
@@ -233,7 +215,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
          }
          return "queued";
      }
-@@ -1860,7 +1897,7 @@ export class AgentSession {
+@@ -1869,7 +1906,7 @@ export class AgentSession {
       * @throws Error if text is an extension command
       */
      async steer(text, images, options) {
@@ -242,7 +224,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
      }
      /**
       * Queue a follow-up message to be processed after the agent finishes.
-@@ -1871,14 +1908,12 @@ export class AgentSession {
+@@ -1880,14 +1917,12 @@ export class AgentSession {
       * @throws Error if text is an extension command
       */
      async followUp(text, images, options) {
@@ -259,7 +241,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
          const content = [{ type: "text", text }];
          if (images) {
              content.push(...images);
-@@ -1886,14 +1921,13 @@ export class AgentSession {
+@@ -1895,14 +1930,13 @@ export class AgentSession {
          const message = { role: "user", content, timestamp: Date.now() };
          if (images?.length)
              this._queuedMessagesWithImages.add(message);
@@ -276,7 +258,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
          const content = [{ type: "text", text }];
          if (images) {
              content.push(...images);
-@@ -1901,6 +1935,7 @@ export class AgentSession {
+@@ -1910,6 +1944,7 @@ export class AgentSession {
          const message = { role: "user", content, timestamp: Date.now() };
          if (images?.length)
              this._queuedMessagesWithImages.add(message);
@@ -284,7 +266,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
          this.agent.followUp(message);
      }
      /** Replace a queued user message's images in place with normalized ones, appending hints to its text. */
-@@ -2043,13 +2078,16 @@ export class AgentSession {
+@@ -2052,13 +2087,16 @@ export class AgentSession {
       * Useful for restoring to editor when user aborts.
       * @returns Object with steering and followUp arrays
       */
@@ -309,7 +291,7 @@ index d67feeb70a00ff60a93583bf4ffb79a3d780fa9b..9550f3fb8400bf7dc1844936d8a29f16
      }
      /** Number of pending messages (includes both steering and follow-up) */
 diff --git a/dist/core/extensions/types.d.ts b/dist/core/extensions/types.d.ts
-index f527dee4c02869611b6fbf1871bc82841b14125b..d836440d5d892206e454403f47f544e032c4b237 100644
+index f784e083e2644e0fb14fe023c94ec7c8605b819a..ff5585007aa04dd8250ff756bb8833b0e43c6526 100644
 --- a/dist/core/extensions/types.d.ts
 +++ b/dist/core/extensions/types.d.ts
 @@ -381,6 +381,8 @@ export interface ToolRenderContext<TState = any, TArgs = any> extends Keybinding
@@ -335,10 +317,10 @@ index c042aaf3f7aff9aa8dca36a83a6d96cdbbfc949e..53cdbd4fbcc1cdeb8337d98b20eda1e7
      appendSessionInfo(name: string): string;
      /** Get the current session name from the latest session_info entry, if any. */
 diff --git a/dist/core/session-manager.js b/dist/core/session-manager.js
-index 7ee05014e13c6434040bfdd7b39b455a6731a7d6..70ec5185af15a96c14395a1623a23573bff47bc3 100644
+index 92cc26e10130f0b1f61344dd95d8ae4841438bcb..da07e8a6c87890077906aa9920462d6abb8f9eca 100644
 --- a/dist/core/session-manager.js
 +++ b/dist/core/session-manager.js
-@@ -792,11 +792,11 @@ export class SessionManager {
+@@ -801,11 +801,11 @@ export class SessionManager {
      _hasConversation() {
          return this.fileEntries.some((e) => e.type === "message" && (e.message.role === "user" || e.message.role === "assistant"));
      }
@@ -352,7 +334,7 @@ index 7ee05014e13c6434040bfdd7b39b455a6731a7d6..70ec5185af15a96c14395a1623a23573
                  return;
              const fd = openSync(this.sessionFile, "wx");
              try {
-@@ -813,13 +813,13 @@ export class SessionManager {
+@@ -822,13 +822,13 @@ export class SessionManager {
              appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
          }
      }
@@ -368,7 +350,7 @@ index 7ee05014e13c6434040bfdd7b39b455a6731a7d6..70ec5185af15a96c14395a1623a23573
          }
          catch (error) {
              // Keep memory in line with the file: an entry that was not written must not become the
-@@ -910,7 +910,7 @@ export class SessionManager {
+@@ -919,7 +919,7 @@ export class SessionManager {
          return entry.id;
      }
      /** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */
@@ -377,7 +359,7 @@ index 7ee05014e13c6434040bfdd7b39b455a6731a7d6..70ec5185af15a96c14395a1623a23573
          const entry = {
              type: "custom",
              customType,
-@@ -919,7 +919,7 @@ export class SessionManager {
+@@ -928,7 +928,7 @@ export class SessionManager {
              parentId: this.leafId,
              timestamp: new Date().toISOString(),
          };
@@ -464,7 +446,7 @@ index afed5bdc99bad115f3e5c14b872aa714ef71d023..e995c18b1fc7c748d7630fccd91f623b
          ]),
      };
 diff --git a/dist/modes/interactive/components/assistant-message.d.ts b/dist/modes/interactive/components/assistant-message.d.ts
-index c58f050624a13c494174ab5f60be20e14a3dbfd5..19cafe1b983453aeeac3bc7cc6a4323dc9279807 100644
+index a5211b8bb590a88e03ece604b072ab0a1e0598ad..fbb982a1844a51074e215344c41d0eb3252cc865 100644
 --- a/dist/modes/interactive/components/assistant-message.d.ts
 +++ b/dist/modes/interactive/components/assistant-message.d.ts
 @@ -1,6 +1,43 @@
@@ -512,10 +494,10 @@ index c58f050624a13c494174ab5f60be20e14a3dbfd5..19cafe1b983453aeeac3bc7cc6a4323d
  /**
   * Component that renders a complete assistant message
   */
-@@ -18,12 +55,22 @@ export declare class AssistantMessageComponent extends Container {
-     private timestamp?;
+@@ -19,12 +56,22 @@ export declare class AssistantMessageComponent extends Container {
      private thinkingVisibilityOverrides;
      private markdownSlots;
+     private zoneLines?;
 -    constructor(message?: AssistantMessage, hideThinkingBlock?: boolean, markdownTheme?: MarkdownTheme, hiddenThinkingLabel?: string, outputPad?: number, markdownTransformers?: readonly MarkdownTransformer[], messageId?: string, timestamp?: string);
 +    private errorPresentation?;
 +    private errorRows?;
@@ -527,7 +509,7 @@ index c58f050624a13c494174ab5f60be20e14a3dbfd5..19cafe1b983453aeeac3bc7cc6a4323d
      setHideThinkingBlock(hide: boolean): void;
      setHiddenThinkingLabel(label: string): void;
      setOutputPad(padding: number): void;
-     render(width: number): string[];
+     render(width: number): readonly string[];
 -    updateContent(message: AssistantMessage, isStreaming?: boolean): void;
 +    /** Ctrl+O reaches the hook's error rows through the message. */
 +    setExpanded(expanded: boolean): void;
@@ -539,7 +521,7 @@ index c58f050624a13c494174ab5f60be20e14a3dbfd5..19cafe1b983453aeeac3bc7cc6a4323d
  //# sourceMappingURL=assistant-message.d.ts.map
 \ No newline at end of file
 diff --git a/dist/modes/interactive/components/assistant-message.js b/dist/modes/interactive/components/assistant-message.js
-index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..51da101919f122a0d9facc49cdd853248190c417 100644
+index 4789d613cd1fe3cd60e21f40b78a88075f673b1b..66175de4d2dc43ff4341516231b5b874f2a83a24 100644
 --- a/dist/modes/interactive/components/assistant-message.js
 +++ b/dist/modes/interactive/components/assistant-message.js
 @@ -1,9 +1,26 @@
@@ -570,10 +552,10 @@ index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..51da101919f122a0d9facc49cdd85324
  /**
   * Component that renders a complete assistant message
   */
-@@ -21,7 +38,14 @@ export class AssistantMessageComponent extends Container {
-     timestamp;
+@@ -22,7 +39,14 @@ export class AssistantMessageComponent extends Container {
      thinkingVisibilityOverrides = new Map();
      markdownSlots = [];
+     zoneLines;
 -    constructor(message, hideThinkingBlock = false, markdownTheme = getMarkdownTheme(), hiddenThinkingLabel = "Thinking...", outputPad = 1, markdownTransformers = [], messageId, timestamp) {
 +    errorPresentation;
 +    /** The hook's rows for this message's error or stop, reused while the input stays the same. */
@@ -586,7 +568,7 @@ index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..51da101919f122a0d9facc49cdd85324
          super();
          this.hideThinkingBlock = hideThinkingBlock;
          this.markdownTheme = markdownTheme;
-@@ -30,6 +54,7 @@ export class AssistantMessageComponent extends Container {
+@@ -31,6 +55,7 @@ export class AssistantMessageComponent extends Container {
          this.markdownTransformers = markdownTransformers;
          this.messageId = messageId;
          this.timestamp = timestamp;
@@ -594,9 +576,9 @@ index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..51da101919f122a0d9facc49cdd85324
          // Container for text/thinking content
          this.contentContainer = new Container();
          this.addChild(this.contentContainer);
-@@ -73,6 +98,19 @@ export class AssistantMessageComponent extends Container {
-         lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
-         return lines;
+@@ -79,6 +104,19 @@ export class AssistantMessageComponent extends Container {
+         }
+         return this.zoneLines.lines;
      }
 +    /** Ctrl+O reaches the hook's error rows through the message. */
 +    setExpanded(expanded) {
@@ -614,7 +596,7 @@ index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..51da101919f122a0d9facc49cdd85324
      updateContent(message, isStreaming = this.isStreaming) {
          this.lastMessage = message;
          this.isStreaming = isStreaming;
-@@ -91,6 +129,7 @@ export class AssistantMessageComponent extends Container {
+@@ -97,6 +135,7 @@ export class AssistantMessageComponent extends Container {
          // line before the first visible block and after each visible thinking run that is followed
          // by more visible content, while hidden thinking runs without a label contribute nothing.
          let needsSpacer = true;
@@ -622,7 +604,7 @@ index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..51da101919f122a0d9facc49cdd85324
          const addVisibleChild = (child) => {
              if (needsSpacer) {
                  this.contentContainer.addChild(new Spacer(1));
-@@ -106,6 +145,7 @@ export class AssistantMessageComponent extends Container {
+@@ -112,6 +151,7 @@ export class AssistantMessageComponent extends Container {
                  // Assistant text messages with no background - trim the text
                  // Set paddingY=0 to avoid extra spacing before tool executions
                  const text = content.text.trim();
@@ -630,7 +612,7 @@ index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..51da101919f122a0d9facc49cdd85324
                  addVisibleChild(markdownBlock("text", text, () => new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
                      transform: createMarkdownTransform("assistant", () => this.isStreaming, this.markdownTransformers, this.messageId, this.timestamp),
                  })));
-@@ -141,6 +181,7 @@ export class AssistantMessageComponent extends Container {
+@@ -147,6 +187,7 @@ export class AssistantMessageComponent extends Container {
                      }, {
                          transform: createMarkdownTransform("assistant-thinking", () => this.isStreaming, this.markdownTransformers, this.messageId, this.timestamp),
                      }));
@@ -638,7 +620,7 @@ index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..51da101919f122a0d9facc49cdd85324
                  addVisibleChild(new MouseRegion(thinkingComponent, (event) => {
                      if (event.type !== "click" || event.button !== "left")
                          return undefined;
-@@ -157,26 +198,58 @@ export class AssistantMessageComponent extends Container {
+@@ -163,26 +204,58 @@ export class AssistantMessageComponent extends Container {
          // Check if incomplete/failed - show after partial content.
          // For aborted/error tool calls, tool execution components show the error.
          // Length stops can happen before a tool call is complete, so surface them here too.
@@ -703,7 +685,7 @@ index 1e16f4cb43136e7c20264f1e3dc8c5c43c0bd8a8..51da101919f122a0d9facc49cdd85324
  //# sourceMappingURL=assistant-message.js.map
 \ No newline at end of file
 diff --git a/dist/modes/interactive/components/bash-execution.d.ts b/dist/modes/interactive/components/bash-execution.d.ts
-index bfcb1776c19950f5da12084cc0aa41ca3cec4475..c2cefa096e03d0f29b1caef0ae9b652cb50c99f8 100644
+index bfcb1776c19950f5da12084cc0aa41ca3cec4475..d0fc3f8f99c4399dfb1246de439c2c93d655a2f6 100644
 --- a/dist/modes/interactive/components/bash-execution.d.ts
 +++ b/dist/modes/interactive/components/bash-execution.d.ts
 @@ -3,6 +3,35 @@
@@ -756,7 +738,7 @@ index bfcb1776c19950f5da12084cc0aa41ca3cec4475..c2cefa096e03d0f29b1caef0ae9b652c
 +    private presentedState?;
 +    /** `startedAt`: epoch ms a command Pi runs live started; omitted for a block Pi did not time (replayed, or an extension's result). */
 +    constructor(command: string, ui: TUI, excludeFromContext?: boolean, outputPad?: number, present?: BashPresentation, startedAt?: number);
-+    render(width: number): string[];
++    render(width: number): readonly string[];
      /**
       * Set whether the output is expanded (shows full output) or collapsed (preview only).
       */
@@ -1510,7 +1492,7 @@ index f7929f1dfb9dcdd1e80e71e1c4e6fc05578d8a49..59b3726f5d43e18b0ce09c24e124dced
          this.addChild(new DynamicBorder());
      }
 diff --git a/dist/modes/interactive/components/settings-submenu.d.ts b/dist/modes/interactive/components/settings-submenu.d.ts
-index 088c785d1a90f6cca55980af48b6edcb40905536..5e579714ae8d4379db8b85e8f3ea43824adb89b4 100644
+index df6d88104ab4c789d6a7c57649f682cc350e4d34..fc02ca24546be514532684a76ec6bcdf1d464b37 100644
 --- a/dist/modes/interactive/components/settings-submenu.d.ts
 +++ b/dist/modes/interactive/components/settings-submenu.d.ts
 @@ -1,4 +1,30 @@
@@ -1589,13 +1571,13 @@ index 088c785d1a90f6cca55980af48b6edcb40905536..5e579714ae8d4379db8b85e8f3ea4382
 +    /** Disposes the current step's component once. */
 +    dispose(): void;
      private buildStep;
-     render(width: number): string[];
+     render(width: number): readonly string[];
      handleInput(data: string): void;
 diff --git a/dist/modes/interactive/components/settings-submenu.js b/dist/modes/interactive/components/settings-submenu.js
-index 391d1f8bda43bb6796cbf04373c7746eb0f662dc..54ba674db7d223bb3bdc7186b4f0ff7e81fc55f7 100644
+index 10551b55f195f8fa747386da52e0f8d74ed37517..253d135ebfb51c08282982935f1c77b649b811b4 100644
 --- a/dist/modes/interactive/components/settings-submenu.js
 +++ b/dist/modes/interactive/components/settings-submenu.js
-@@ -96,6 +96,30 @@ export class SelectSubmenu extends Container {
+@@ -100,6 +100,30 @@ export class SelectSubmenu extends Container {
          }
      }
  }
@@ -1626,7 +1608,7 @@ index 391d1f8bda43bb6796cbf04373c7746eb0f662dc..54ba674db7d223bb3bdc7186b4f0ff7e
  /**
   * Generic N-step submenu built on top of {@link SelectSubmenu}.
   *
-@@ -109,7 +133,18 @@ export class SteppedSubmenu extends Container {
+@@ -113,7 +137,18 @@ export class SteppedSubmenu extends Container {
      onCancel;
      opts;
      activeComponent;
@@ -1645,7 +1627,7 @@ index 391d1f8bda43bb6796cbf04373c7746eb0f662dc..54ba674db7d223bb3bdc7186b4f0ff7e
      constructor(steps, onComplete, onCancel, opts = {}) {
          super();
          this.steps = steps;
-@@ -117,7 +152,23 @@ export class SteppedSubmenu extends Container {
+@@ -121,7 +156,23 @@ export class SteppedSubmenu extends Container {
          this.onCancel = onCancel;
          this.opts = opts;
          this.context = { ...(opts.initialContext ?? {}) };
@@ -1670,7 +1652,7 @@ index 391d1f8bda43bb6796cbf04373c7746eb0f662dc..54ba674db7d223bb3bdc7186b4f0ff7e
      }
      buildStep(stepIndex) {
          const step = this.steps[stepIndex];
-@@ -127,32 +178,34 @@ export class SteppedSubmenu extends Container {
+@@ -131,32 +182,34 @@ export class SteppedSubmenu extends Container {
          const desc = typeof step.description === "function" ? step.description(this.context) : step.description;
          const items = step.options(this.context);
          const preselect = step.preselect?.(this.context) ?? "";
@@ -1723,7 +1705,7 @@ index b4a337007b2258a1652e5a53ad7617da703e96bc..7561219ed0283b10feda15eed992b4bf
   * Component that renders a thinking level selector with borders
   */
 diff --git a/dist/modes/interactive/components/thinking-selector.js b/dist/modes/interactive/components/thinking-selector.js
-index d0b11ac65857fce038d0bdff43dccf623df5897d..7bb71e2bfa51144e0bb51d1e162e2a5a6589c61d 100644
+index b6d2a97c99c087a23fc9ad1a8838f7953f4a33c2..2548555cc11bf221a7eb651514de3b530d2c06a8 100644
 --- a/dist/modes/interactive/components/thinking-selector.js
 +++ b/dist/modes/interactive/components/thinking-selector.js
 @@ -15,6 +15,10 @@ const LEVEL_DESCRIPTIONS = {
@@ -1738,7 +1720,7 @@ index d0b11ac65857fce038d0bdff43dccf623df5897d..7bb71e2bfa51144e0bb51d1e162e2a5a
   * Component that renders a thinking level selector with borders
   */
 diff --git a/dist/modes/interactive/components/tool-execution.d.ts b/dist/modes/interactive/components/tool-execution.d.ts
-index 89cf0519dc56399ebb4017054d9a2ac0f2563347..5831d2aeedccf6e1c8cb1f66a8f2d1d061a6b461 100644
+index 0c69a2e1287a5a795199b66690f412d2082f9ee4..900ee1cabdb1989a7893bcc639e508b1611ef076 100644
 --- a/dist/modes/interactive/components/tool-execution.d.ts
 +++ b/dist/modes/interactive/components/tool-execution.d.ts
 @@ -1,4 +1,4 @@
@@ -1817,7 +1799,7 @@ index 89cf0519dc56399ebb4017054d9a2ac0f2563347..5831d2aeedccf6e1c8cb1f66a8f2d1d0
 + */
 +export declare class TranscriptContainer extends Container {
 +    private groupCache;
-+    render(width: number): string[];
++    render(width: number): readonly string[];
 +    private groupRow;
 +    handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]>;
 +    invalidate(): void;
@@ -1825,7 +1807,7 @@ index 89cf0519dc56399ebb4017054d9a2ac0f2563347..5831d2aeedccf6e1c8cb1f66a8f2d1d0
  //# sourceMappingURL=tool-execution.d.ts.map
 \ No newline at end of file
 diff --git a/dist/modes/interactive/components/tool-execution.js b/dist/modes/interactive/components/tool-execution.js
-index 611416e9d082fe5bbae0019ea4393a76219c381e..0421a14039e87f15541364a141fe523c9775c51f 100644
+index ec6a2f63b7478eb3025314fed81f22d7afee2250..0055d08c86287295fc59c332cfed3448134518e8 100644
 --- a/dist/modes/interactive/components/tool-execution.js
 +++ b/dist/modes/interactive/components/tool-execution.js
 @@ -34,6 +34,12 @@ export class ToolExecutionComponent extends Container {
@@ -1912,10 +1894,10 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..0421a14039e87f15541364a141fe523c
 -                lines.push("");
 +                if (!this.tightTop)
 +                    lines.push("");
-                 lines.push(...contentLines);
-             }
-             for (let i = 0; i < this.imageComponents.length; i++) {
-@@ -199,13 +245,22 @@ export class ToolExecutionComponent extends Container {
+                 // Append in a loop: spreading hundreds of thousands of wrapped lines exceeds V8's argument limit.
+                 for (const line of contentLines)
+                     lines.push(line);
+@@ -201,13 +247,22 @@ export class ToolExecutionComponent extends Container {
      handleMouse(event) {
          if (!this.hasRendererDefinition() || this.getRenderShell() !== "self")
              return super.handleMouse(event);
@@ -1945,7 +1927,7 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..0421a14039e87f15541364a141fe523c
      }
      updateDisplay() {
          this.argsPending = false;
-@@ -333,4 +388,122 @@ export class ToolExecutionComponent extends Container {
+@@ -335,4 +390,132 @@ export class ToolExecutionComponent extends Container {
          return text;
      }
  }
@@ -1964,7 +1946,9 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..0421a14039e87f15541364a141fe523c
 +    groupCache = new Map();
 +    render(width) {
 +        const lines = [];
-+        const mouseChildren = [];
++        /** Pointer targets and their lines, in the shape Container.handleMouse dispatches through. */
++        const targets = [];
++        const parts = [];
 +        const cache = new Map();
 +        let afterSelfRow = false;
 +        /** The rows that may still fold together, with their members. */
@@ -1975,18 +1959,19 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..0421a14039e87f15541364a141fe523c
 +            const first = run[0];
 +            if (run.length >= first.member.min && !run.some((entry) => entry.component.isGroupOpen())) {
 +                const group = this.groupRow(first.component, run, width, cache);
-+                if (!afterSelfRow)
-+                    lines.push("");
-+                for (const line of group.lines)
++                const part = afterSelfRow ? group.lines : ["", ...group.lines];
++                for (const line of part)
 +                    lines.push(line);
-+                mouseChildren.push({ component: group.mouse(afterSelfRow ? 0 : 1), height: group.lines.length + (afterSelfRow ? 0 : 1) });
++                targets.push(group.mouse(afterSelfRow ? 0 : 1));
++                parts.push(part);
 +                afterSelfRow = true;
 +            }
 +            else {
 +                for (const { component } of run) {
 +                    component.setTightTop(afterSelfRow);
 +                    const childLines = component.render(width);
-+                    mouseChildren.push({ component, height: childLines.length });
++                    targets.push(component);
++                    parts.push(childLines);
 +                    for (const line of childLines)
 +                        lines.push(line);
 +                    if (childLines.length > 0)
@@ -2010,11 +1995,13 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..0421a14039e87f15541364a141fe523c
 +            const childLines = child.render(width);
 +            if (childLines.length === 0) {
 +                // Nothing visible: the run goes on across it.
-+                mouseChildren.push({ component: child, height: 0 });
++                targets.push(child);
++                parts.push(childLines);
 +                continue;
 +            }
 +            flush();
-+            mouseChildren.push({ component: child, height: childLines.length });
++            targets.push(child);
++            parts.push(childLines);
 +            for (const line of childLines) {
 +                lines.push(line);
 +            }
@@ -2023,8 +2010,13 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..0421a14039e87f15541364a141fe523c
 +        }
 +        flush();
 +        this.groupCache = cache;
-+        this.mouseLayout = { width, children: mouseChildren };
-+        return lines;
++        // Keep the last frame's array while the transcript draws the same lines, as Container does: ancestors then
++        // skip their copy. Callers must not modify it.
++        const previous = this.childLines;
++        const same = previous?.width === width && previous.lines.length === lines.length &&
++            previous.lines.every((line, index) => line === lines[index]);
++        this.childLines = { width, children: targets, parts, lines: same ? previous.lines : lines };
++        return this.childLines.lines;
 +    }
 +    /** The group row of `run` at `width`: the last frame's lines when the same members fold at the same width. */
 +    groupRow(first, run, width, cache) {
@@ -2058,7 +2050,7 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..0421a14039e87f15541364a141fe523c
 +    }
 +    handleMouse(event) {
 +        // Rows fold per frame: a pointer event at another width lays the frame out first, so rows map to the group rows.
-+        if (this.mouseLayout?.width !== event.width)
++        if (this.childLines?.width !== event.width)
 +            this.render(event.width);
 +        return super.handleMouse(event);
 +    }
@@ -2070,10 +2062,10 @@ index 611416e9d082fe5bbae0019ea4393a76219c381e..0421a14039e87f15541364a141fe523c
  //# sourceMappingURL=tool-execution.js.map
 \ No newline at end of file
 diff --git a/dist/modes/interactive/components/user-message.js b/dist/modes/interactive/components/user-message.js
-index 4f5722425293a837926b8fb42de5ce6d820757dc..12194a23e323b737a74af27b2b6ac3832e33cbdd 100644
+index 0831174766f22410f526bcc0a570829f94752809..0dcf3cc2be3dad25685c144bce28af96480022b3 100644
 --- a/dist/modes/interactive/components/user-message.js
 +++ b/dist/modes/interactive/components/user-message.js
-@@ -32,7 +32,7 @@ export class UserMessageComponent extends Container {
+@@ -33,7 +33,7 @@ export class UserMessageComponent extends Container {
          this.clear();
          // The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
          // line, with identical output.
@@ -2082,18 +2074,26 @@ index 4f5722425293a837926b8fb42de5ce6d820757dc..12194a23e323b737a74af27b2b6ac383
              color: (content) => theme.fg("userMessageText", content),
              bgColor: (content) => theme.bg("userMessageBg", content),
          }, {
-@@ -42,7 +42,8 @@ export class UserMessageComponent extends Container {
+@@ -43,13 +43,14 @@ export class UserMessageComponent extends Container {
          }));
      }
      render(width) {
 -        const lines = super.render(width);
 +        // A bubble one cell in from the transcript's edge, at most 96 cells wide and as tall as its text.
-+        const lines = super.render(Math.max(1, Math.min(width - 1, 96))).map((line) => ` ${line}`);
++        const lines = super.render(Math.max(1, Math.min(width - 1, 96)));
          if (lines.length === 0) {
              return lines;
          }
+-        // Container output is shared across frames; copy it once per change instead of mutating it.
++        // Container output is shared across frames; pad and zone a copy once per change instead of mutating it.
+         if (this.zoneLines?.source !== lines) {
+-            const zoned = [...lines];
++            const zoned = lines.map((line) => ` ${line}`);
+             zoned[0] = OSC133_ZONE_START + zoned[0];
+             zoned[zoned.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + zoned[zoned.length - 1];
+             this.zoneLines = { source: lines, lines: zoned };
 diff --git a/dist/modes/interactive/interactive-mode.d.ts b/dist/modes/interactive/interactive-mode.d.ts
-index 6fc601645f5fe0ad734e64d10026ccddfc80f506..9cbb4feff1f3af3ea0274cc610a951adc7c0ff78 100644
+index a2f792aa7a1b248101805095b3f20c5fed56d7dc..ca223dd62a0ba7bfe6b2d4a00798c1d5fb66cc14 100644
 --- a/dist/modes/interactive/interactive-mode.d.ts
 +++ b/dist/modes/interactive/interactive-mode.d.ts
 @@ -2,16 +2,138 @@
@@ -2277,7 +2277,7 @@ index 6fc601645f5fe0ad734e64d10026ccddfc80f506..9cbb4feff1f3af3ea0274cc610a951ad
  }
  export declare class InteractiveMode {
      private runtimeHost;
-@@ -297,6 +453,8 @@ export declare class InteractiveMode {
+@@ -298,6 +454,8 @@ export declare class InteractiveMode {
       * Show a text input for extensions.
       */
      private showExtensionInput;
@@ -2286,7 +2286,7 @@ index 6fc601645f5fe0ad734e64d10026ccddfc80f506..9cbb4feff1f3af3ea0274cc610a951ad
      /**
       * Show a multi-line editor for extensions (with Ctrl+G support).
       */
-@@ -334,8 +492,12 @@ export declare class InteractiveMode {
+@@ -335,8 +493,12 @@ export declare class InteractiveMode {
       * we update the previous status line instead of appending new ones to avoid log spam.
       */
      private showStatus;
@@ -2311,7 +2311,7 @@ index 6fc601645f5fe0ad734e64d10026ccddfc80f506..9cbb4feff1f3af3ea0274cc610a951ad
      showPackageUpdateNotification(packages: string[]): void;
      /**
 diff --git a/dist/modes/interactive/interactive-mode.js b/dist/modes/interactive/interactive-mode.js
-index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e73020a05b 100644
+index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7faedb10b 100644
 --- a/dist/modes/interactive/interactive-mode.js
 +++ b/dist/modes/interactive/interactive-mode.js
 @@ -16,6 +16,7 @@ import { parseSkillBlock } from "../../core/agent-session.js";
@@ -2331,7 +2331,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
  import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.js";
  import { getSourcePackageKey } from "../../core/source-info.js";
  import { isInstallTelemetryEnabled } from "../../core/telemetry.js";
-@@ -53,10 +54,11 @@ import { checkForNewPiVersion } from "../../utils/version-check.js";
+@@ -54,10 +55,11 @@ import { checkForNewPiVersion } from "../../utils/version-check.js";
  import { reportBug } from "./bug-report.js";
  import { createChatViewport } from "./chat-viewport.js";
  import { ArminComponent } from "./components/armin.js";
@@ -2345,7 +2345,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
  import { CustomEditor } from "./components/custom-editor.js";
  import { CustomEntryComponent } from "./components/custom-entry.js";
  import { CustomMessageComponent } from "./components/custom-message.js";
-@@ -77,12 +79,12 @@ import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.js
+@@ -78,12 +80,12 @@ import { piLogoLines, piWordmark, supportsPiLogo } from "./components/pi-logo.js
  import { createLoginMenuSelector } from "./components/radius-login-selector.js";
  import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.js";
  import { SessionSelectorComponent } from "./components/session-selector.js";
@@ -2361,7 +2361,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
  import { TreeSelectorComponent } from "./components/tree-selector.js";
  import { TrustSelectorComponent } from "./components/trust-selector.js";
  import { UserMessageComponent } from "./components/user-message.js";
-@@ -105,6 +107,18 @@ function isEmbeddedStatus(editor) {
+@@ -106,6 +108,18 @@ function isEmbeddedStatus(editor) {
  function isExpandable(obj) {
      return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
  }
@@ -2380,7 +2380,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
  class ExpandableText extends ThemedText {
      state;
      constructor(getCollapsedText, getExpandedText, expanded = false, paddingX = 0, paddingY = 0) {
-@@ -133,6 +147,65 @@ function isCustomSessionEntry(item) {
+@@ -134,6 +148,65 @@ function isCustomSessionEntry(item) {
  function isCompactionCostNotice(item) {
      return "type" in item && item.type === "compaction_cost";
  }
@@ -2446,7 +2446,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
  function isUsageSessionEntry(item) {
      return "type" in item && item.type === "usage";
  }
-@@ -292,7 +365,8 @@ export class InteractiveMode {
+@@ -328,7 +401,8 @@ export class InteractiveMode {
      managedToolStatusStarted = false;
      // Streaming message tracking
      streamingComponent = undefined;
@@ -2456,7 +2456,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
      streamingMessage = undefined;
      // Tool execution tracking: toolCallId -> component
      pendingTools = new Map();
-@@ -400,7 +474,7 @@ export class InteractiveMode {
+@@ -437,7 +511,7 @@ export class InteractiveMode {
          this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
          this.headerContainer = new Container();
          this.loadedResourcesContainer = new Container();
@@ -2465,7 +2465,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          this.documentContainer = new Container();
          this.documentContainer.addChild(this.headerContainer);
          this.documentContainer.addChild(this.loadedResourcesContainer);
-@@ -466,7 +540,7 @@ export class InteractiveMode {
+@@ -503,7 +577,7 @@ export class InteractiveMode {
          return description ? `[${sourceTag}] ${description}` : `[${sourceTag}]`;
      }
      getBuiltInCommandConflictDiagnostics(extensionRunner) {
@@ -2474,7 +2474,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          return extensionRunner
              .getRegisteredCommands()
              .filter((command) => builtinNames.has(command.name))
-@@ -707,6 +781,15 @@ export class InteractiveMode {
+@@ -745,6 +819,15 @@ export class InteractiveMode {
          this.renderWidgets(); // Initialize with default spacer
          const viewport = createChatViewport({
              document: this.documentContainer,
@@ -2490,7 +2490,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
              pendingMessages: this.pendingMessagesContainer,
              status: this.statusContainer,
              widgetsAbove: this.widgetContainerAbove,
-@@ -774,7 +857,7 @@ export class InteractiveMode {
+@@ -814,7 +897,7 @@ export class InteractiveMode {
                  rawKeyHint("!", "to run bash"),
                  rawKeyHint("!!", "to run bash (no context)"),
                  hint("app.message.followUp", "to queue follow-up"),
@@ -2499,7 +2499,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                  hint("app.clipboard.pasteImage", "to paste files on macOS, images, or text"),
                  rawKeyHint("drop files", "to attach"),
              ].join("\n");
-@@ -2253,22 +2336,54 @@ export class InteractiveMode {
+@@ -2297,22 +2380,54 @@ export class InteractiveMode {
      /**
       * Show a selector for extensions.
       */
@@ -2559,7 +2559,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          });
      }
      /**
-@@ -2278,7 +2393,7 @@ export class InteractiveMode {
+@@ -2322,7 +2437,7 @@ export class InteractiveMode {
          const result = await this.showExtensionSelector(`${title}\n${message}`, ["Yes", "No"], opts, {
              kind: "permission",
              message: title,
@@ -2568,7 +2568,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          return result === "Yes";
      }
      async promptForMissingSessionCwd(error) {
-@@ -2295,18 +2410,69 @@ export class InteractiveMode {
+@@ -2339,18 +2454,69 @@ export class InteractiveMode {
                  resolve(undefined);
                  return;
              }
@@ -2642,7 +2642,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
      /**
       * Show a multi-line editor for extensions (with Ctrl+G support).
       */
-@@ -2402,13 +2568,13 @@ export class InteractiveMode {
+@@ -2446,13 +2612,13 @@ export class InteractiveMode {
       */
      showExtensionNotify(message, type) {
          if (type === "error") {
@@ -2659,7 +2659,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          }
      }
      /** Show a custom component with keyboard focus. Overlay mode renders on top of existing content. */
-@@ -2780,7 +2946,7 @@ export class InteractiveMode {
+@@ -2824,7 +2990,7 @@ export class InteractiveMode {
                  this.editor.setText("");
                  return;
              }
@@ -2668,7 +2668,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                  this.showSessionSelector();
                  this.editor.setText("");
                  return;
-@@ -2881,8 +3047,6 @@ export class InteractiveMode {
+@@ -2925,8 +3091,6 @@ export class InteractiveMode {
                  this.ui.requestRender();
                  break;
              case "entry_appended":
@@ -2677,7 +2677,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                  if (event.entry.type === "custom") {
                      this.addCustomEntryToChat(event.entry);
                      this.ui.requestRender();
-@@ -2896,26 +3060,8 @@ export class InteractiveMode {
+@@ -2940,26 +3104,8 @@ export class InteractiveMode {
                      this.ui.requestRender();
                  }
                  else if (event.entry.type === "compaction") {
@@ -2706,7 +2706,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                      this.footer.invalidate();
                      this.ui.requestRender();
                  }
-@@ -2940,7 +3086,10 @@ export class InteractiveMode {
+@@ -2984,7 +3130,10 @@ export class InteractiveMode {
                      this.ui.requestRender();
                  }
                  else if (event.message.role === "assistant") {
@@ -2718,7 +2718,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                      this.streamingMessage = event.message;
                      this.chatContainer.addChild(this.streamingComponent);
                      this.streamingComponent.updateContent(this.streamingMessage, true);
-@@ -2993,11 +3142,14 @@ export class InteractiveMode {
+@@ -3037,11 +3186,14 @@ export class InteractiveMode {
                          if (!errorMessage) {
                              errorMessage = this.streamingMessage.errorMessage || "Error";
                          }
@@ -2738,7 +2738,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                          }
                          this.pendingTools.clear();
                          this.maybeSuggestBugReport(this.streamingMessage);
-@@ -3103,35 +3255,26 @@ export class InteractiveMode {
+@@ -3147,35 +3299,26 @@ export class InteractiveMode {
                  this.clearStatusIndicator("compaction");
                  if (event.aborted) {
                      if (event.reason === "manual") {
@@ -2783,7 +2783,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                          this.chatContainer.addChild(new Spacer(1));
                          const errorMessage = event.errorMessage;
                          this.chatContainer.addChild(new ThemedText(() => theme.fg("error", errorMessage), 1, 0));
-@@ -3160,7 +3303,24 @@ export class InteractiveMode {
+@@ -3204,7 +3347,24 @@ export class InteractiveMode {
                  this.clearStatusIndicator("retry");
                  // Show error only on final failure (success shows normal response)
                  if (!event.success) {
@@ -2809,7 +2809,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                  }
                  this.ui.requestRender();
                  break;
-@@ -3220,7 +3380,9 @@ export class InteractiveMode {
+@@ -3264,7 +3424,9 @@ export class InteractiveMode {
       * If multiple status messages are emitted back-to-back (without anything else being added to the chat),
       * we update the previous status line instead of appending new ones to avoid log spam.
       */
@@ -2820,7 +2820,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          const children = this.chatContainer.children;
          const last = children.length > 0 ? children[children.length - 1] : undefined;
          const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
-@@ -3239,6 +3401,29 @@ export class InteractiveMode {
+@@ -3283,6 +3445,29 @@ export class InteractiveMode {
          this.lastStatusText = text;
          this.ui.requestRender();
      }
@@ -2850,7 +2850,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
      addCustomEntryToChat(entry) {
          const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
          if (!renderer) {
-@@ -3261,7 +3446,7 @@ export class InteractiveMode {
+@@ -3305,7 +3490,7 @@ export class InteractiveMode {
      addMessageToChat(message, options) {
          switch (message.role) {
              case "bashExecution": {
@@ -2859,7 +2859,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                  if (message.output) {
                      component.appendOutput(message.output);
                  }
-@@ -3280,7 +3465,7 @@ export class InteractiveMode {
+@@ -3324,7 +3509,7 @@ export class InteractiveMode {
              }
              case "compactionSummary": {
                  this.chatContainer.addChild(new Spacer(1));
@@ -2868,7 +2868,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                  component.setExpanded(this.toolOutputExpanded);
                  this.chatContainer.addChild(component);
                  break;
-@@ -3314,6 +3499,15 @@ export class InteractiveMode {
+@@ -3358,6 +3543,15 @@ export class InteractiveMode {
                          }
                      }
                      else {
@@ -2884,7 +2884,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                          const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings(), this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp);
                          this.chatContainer.addChild(userComponent);
                      }
-@@ -3324,7 +3518,8 @@ export class InteractiveMode {
+@@ -3368,7 +3562,8 @@ export class InteractiveMode {
                  break;
              }
              case "assistant": {
@@ -2894,7 +2894,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                  this.chatContainer.addChild(assistantComponent);
                  break;
              }
-@@ -3337,6 +3532,33 @@ export class InteractiveMode {
+@@ -3381,6 +3576,33 @@ export class InteractiveMode {
              }
          }
      }
@@ -2928,7 +2928,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
      renderSessionItems(items, messageMeta, options = {}) {
          this.pendingTools.clear();
          const renderedPendingTools = new Map();
-@@ -3371,6 +3593,7 @@ export class InteractiveMode {
+@@ -3415,6 +3637,7 @@ export class InteractiveMode {
                      timestamp: meta?.timestamp,
                  });
                  // Render tool call components
@@ -2936,7 +2936,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                  for (const content of message.content) {
                      if (content.type === "toolCall") {
                          const component = new ToolExecutionComponent(content.name, content.id, content.arguments, {
-@@ -3381,24 +3604,29 @@ export class InteractiveMode {
+@@ -3425,24 +3648,29 @@ export class InteractiveMode {
                          component.setExpanded(this.toolOutputExpanded);
                          this.chatContainer.addChild(component);
                          if (message.stopReason === "aborted" || message.stopReason === "error") {
@@ -2978,7 +2978,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                  if (message.stopReason !== "aborted" && message.stopReason !== "error") {
                      const miss = cacheMisses.get(message);
                      if (miss)
-@@ -3550,19 +3778,177 @@ export class InteractiveMode {
+@@ -3582,19 +3810,177 @@ export class InteractiveMode {
          this.chatContainer.addChild(new ThemedText(() => theme.fg("warning", `${label}: ${reBilled}`), 1, 0));
      }
      renderInitialMessages() {
@@ -3164,7 +3164,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
      }
      renderProjectTrustWarningIfNeeded() {
          if (this.settingsManager.isProjectTrusted() || !hasTrustRequiringProjectResources(this.sessionManager.getCwd())) {
-@@ -3587,7 +3973,7 @@ export class InteractiveMode {
+@@ -3619,7 +4005,7 @@ export class InteractiveMode {
      }
      rebuildChatFromMessages() {
          this.chatContainer.clear();
@@ -3173,16 +3173,16 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
      }
      // =========================================================================
      // Key handlers
-@@ -3643,7 +4029,7 @@ export class InteractiveMode {
+@@ -3676,7 +4062,7 @@ export class InteractiveMode {
          this.stop();
          await this.runtimeHost.dispose();
          const resumeCommand = formatResumeCommand(this.sessionManager);
 -        if (resumeCommand) {
 +        if (resumeCommand && this.options.resumeHint !== false) {
-             process.stdout.write(`${chalk.dim("To resume this session:")} ${resumeCommand}\n`);
+             // Own line so the command can be selected with a triple-click (#12237).
+             process.stdout.write(`${chalk.dim("To resume this session:")}\n${resumeCommand}\n`);
          }
-         process.exit(0);
-@@ -3814,6 +4200,10 @@ export class InteractiveMode {
+@@ -3849,6 +4235,10 @@ export class InteractiveMode {
          }
      }
      handleDequeue() {
@@ -3193,7 +3193,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          const restored = this.restoreQueuedMessagesToEditor();
          if (restored === 0) {
              this.showStatus("No queued messages to restore");
-@@ -3836,12 +4226,12 @@ export class InteractiveMode {
+@@ -3871,12 +4261,12 @@ export class InteractiveMode {
      cycleThinkingLevel() {
          const newLevel = this.session.cycleThinkingLevel();
          if (newLevel === undefined) {
@@ -3208,7 +3208,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          }
      }
      async cycleModel(direction) {
-@@ -3849,18 +4239,18 @@ export class InteractiveMode {
+@@ -3884,18 +4274,18 @@ export class InteractiveMode {
              const result = await this.session.cycleModel(direction);
              if (result === undefined) {
                  const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
@@ -3230,7 +3230,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          }
      }
      toggleToolOutputExpansion() {
-@@ -3926,12 +4316,16 @@ export class InteractiveMode {
+@@ -3961,12 +4351,16 @@ export class InteractiveMode {
          this.editor.setText("");
          this.ui.requestRender();
      }
@@ -3249,7 +3249,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          this.chatContainer.addChild(new Spacer(1));
          this.chatContainer.addChild(new ThemedText(() => theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
          this.ui.requestRender();
-@@ -3990,7 +4384,7 @@ export class InteractiveMode {
+@@ -4025,7 +4419,7 @@ export class InteractiveMode {
       * Clears both session queue and compaction queue.
       */
      clearAllQueues() {
@@ -3258,7 +3258,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          const compactionSteering = this.compactionQueuedMessages
              .filter((msg) => msg.mode === "steer")
              .map((msg) => msg.text);
-@@ -4010,6 +4404,8 @@ export class InteractiveMode {
+@@ -4045,6 +4439,8 @@ export class InteractiveMode {
              this.pendingMessagesContainer.addChild(component);
          }
          const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
@@ -3267,7 +3267,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          if (steeringMessages.length > 0 || followUpMessages.length > 0) {
              this.pendingMessagesContainer.addChild(new Spacer(1));
              for (const message of steeringMessages) {
-@@ -4026,6 +4422,13 @@ export class InteractiveMode {
+@@ -4061,6 +4457,13 @@ export class InteractiveMode {
          }
      }
      restoreQueuedMessagesToEditor(options) {
@@ -3281,7 +3281,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          const { steering, followUp } = this.clearAllQueues();
          const allQueued = [...steering, ...followUp];
          if (allQueued.length === 0) {
-@@ -4178,10 +4581,11 @@ export class InteractiveMode {
+@@ -4213,10 +4616,11 @@ export class InteractiveMode {
      showSettingsSelector() {
          this.showSelector((done) => {
              let selector;
@@ -3294,7 +3294,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                  autoCompact: this.session.autoCompactionEnabled,
                  defaultModel,
                  currentModel: this.session.model,
-@@ -4224,7 +4628,8 @@ export class InteractiveMode {
+@@ -4259,7 +4663,8 @@ export class InteractiveMode {
                  fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
                  fullscreenWheelScrollLines: this.settingsManager.getFullscreenWheelScrollLines(),
                  warnings: this.settingsManager.getWarnings(),
@@ -3304,7 +3304,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                  onAutoCompactChange: (enabled) => {
                      this.session.setAutoCompactionEnabled(enabled);
                      this.footer.setAutoCompactEnabled(enabled);
-@@ -4378,6 +4783,7 @@ export class InteractiveMode {
+@@ -4413,6 +4818,7 @@ export class InteractiveMode {
                  onTuiModeChange: (mode) => {
                      if (!this.switchTuiMode(mode)) {
                          selector?.getSettingsList().updateValue("tui-mode", this.ui.mode);
@@ -3312,7 +3312,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
                          this.showStatus("Close active overlays before changing TUI mode");
                          return;
                      }
-@@ -4410,7 +4816,20 @@ export class InteractiveMode {
+@@ -4445,7 +4851,20 @@ export class InteractiveMode {
                      done();
                      this.ui.requestRender();
                  },
@@ -3334,7 +3334,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
              return { component: selector, focus: selector.getSettingsList() };
          });
      }
-@@ -4423,7 +4842,7 @@ export class InteractiveMode {
+@@ -4458,7 +4877,7 @@ export class InteractiveMode {
          const normalized = searchTerm.trim().toLowerCase();
          const level = availableLevels.find((candidate) => candidate.toLowerCase() === normalized);
          if (!level) {
@@ -3343,7 +3343,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
              return;
          }
          this.selectThinkingLevel(level, false);
-@@ -4433,10 +4852,10 @@ export class InteractiveMode {
+@@ -4468,10 +4887,10 @@ export class InteractiveMode {
              this.session.setThinkingLevel(level, { persist });
              this.footer.invalidate();
              this.updateEditorBorderColor();
@@ -3356,7 +3356,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          }
      }
      showThinkingSelector() {
-@@ -4445,10 +4864,25 @@ export class InteractiveMode {
+@@ -4480,10 +4899,25 @@ export class InteractiveMode {
                  this.selectThinkingLevel(level, persist);
                  done();
              };
@@ -3384,7 +3384,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
              return { component: selector, focus: selector };
          });
      }
-@@ -4463,11 +4897,11 @@ export class InteractiveMode {
+@@ -4498,11 +4932,11 @@ export class InteractiveMode {
                  await this.session.setModel(model, { persist: false });
                  this.footer.invalidate();
                  this.updateEditorBorderColor();
@@ -3398,7 +3398,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
              }
              return;
          }
-@@ -4480,7 +4914,7 @@ export class InteractiveMode {
+@@ -4515,7 +4949,7 @@ export class InteractiveMode {
          const cachedMatch = findExactModelReferenceMatch(searchTerm, cachedModels);
          if (cachedMatch || this.session.scopedModels.length > 0)
              return cachedMatch;
@@ -3407,7 +3407,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          const controller = new AbortController();
          let timedOut = false;
          const timeout = setTimeout(() => {
-@@ -4490,16 +4924,16 @@ export class InteractiveMode {
+@@ -4525,16 +4959,16 @@ export class InteractiveMode {
          try {
              const result = await refreshModelCatalogs(this.session.modelRuntime, controller.signal);
              if (result.aborted && timedOut) {
@@ -3427,7 +3427,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
          }
          finally {
              clearTimeout(timeout);
-@@ -4595,20 +5029,36 @@ export class InteractiveMode {
+@@ -4630,20 +5064,36 @@ export class InteractiveMode {
                      this.footer.invalidate();
                      this.updateEditorBorderColor();
                      done();
@@ -3470,7 +3470,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
              return { component: selector, focus: selector, dispose: () => selector.dispose() };
          });
      }
-@@ -5919,7 +6369,7 @@ export class InteractiveMode {
+@@ -5954,7 +6404,7 @@ export class InteractiveMode {
  | \`${externalEditor}\` | Edit message in external editor |
  | \`${copyMessage}\` | Copy selection or last assistant message |
  | \`${followUp}\` | Queue follow-up message |
@@ -3479,7 +3479,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
  | \`${pasteImage}\` | Paste files on macOS, images, or text from clipboard |
  | \`/\` | Slash commands |
  | \`!\` | Run bash command |
-@@ -6022,7 +6472,7 @@ export class InteractiveMode {
+@@ -6057,7 +6507,7 @@ export class InteractiveMode {
          if (eventResult?.result) {
              const result = eventResult.result;
              // Create UI component for display
@@ -3488,7 +3488,7 @@ index d4e4b09197dec6ab4e2a3d5dab6f9cb8620e7644..2664b7c8d32bea5a9b5ff05aab87f7e7
              this.bashComponent.setExpanded(this.toolOutputExpanded);
              if (this.session.isStreaming) {
                  this.pendingMessagesContainer.addChild(this.bashComponent);
-@@ -6044,7 +6494,7 @@ export class InteractiveMode {
+@@ -6079,7 +6529,7 @@ export class InteractiveMode {
          }
          // Normal execution path (possibly with custom operations)
          const isDeferred = this.session.isStreaming;

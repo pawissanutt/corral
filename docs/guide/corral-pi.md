@@ -83,6 +83,11 @@ For example, `anthropic/claude-opus-5-5` uses the subscription, while
 `anthropic-api/claude-opus-5-5` spends on the API. Ctrl+P cycles within the current
 billing kind. Resuming a Build or restarting a chat restores its last selection.
 
+On GPT-6.2, repeated top-level `instructions` are not cacheable. Pi 1.6.0's
+`openai-codex` adapter sends the session's instructions as a leading developer
+message, including after compaction. You do not need to switch to API billing
+or remove project guidance to get cache reuse.
+
 To use Pi for tasks, give Corral a profile in `.corral-next/corral.toml`:
 
 ```toml
