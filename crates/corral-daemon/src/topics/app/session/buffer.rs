@@ -72,8 +72,12 @@ impl Buffer {
     }
 
     pub(super) fn unavailable(&mut self) {
-        if !self.ready || self.generation.is_some() || self.gap.is_none() {
-            self.fleet = None;
+        self.publish_offline(None);
+    }
+
+    fn publish_offline(&mut self, fleet: Option<(SessionFleet, usize)>) {
+        if !self.ready || self.generation.is_some() || self.gap.is_none() || self.fleet != fleet {
+            self.fleet = fleet;
             self.state = None;
             self.clear(
                 None,
@@ -88,6 +92,10 @@ impl Buffer {
     }
 
     pub(super) fn publish(&mut self, page: LivePage) {
+        if page.generation.is_none() && page.gap.is_some() {
+            self.publish_offline(page.fleet);
+            return;
+        }
         let changed = !self.ready
             || self.generation != page.generation
             || (page.generation.is_none() && self.gap.is_some());

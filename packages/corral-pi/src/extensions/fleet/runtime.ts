@@ -44,6 +44,7 @@ export interface FleetOptions {
   readonly timeoutSecs?: number;
   readonly research?: { readonly settings: ExploreSettings };
   readonly record?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  readonly retained?: { has(id: string): boolean; child(child: ChildSnapshot): void };
 }
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 interface Entry {
@@ -315,6 +316,7 @@ export class FleetRuntime implements FleetControl {
     for (const spec of specs) {
       if (!/^[a-z][a-z0-9-]{0,31}$/.test(spec.id)) throw new Error(`Invalid child id: ${spec.id}`);
       if (this.entries.has(spec.id) || batch.has(spec.id)) throw new Error(`Duplicate child id: ${spec.id}`);
+      if (this.options.retained?.has(spec.id)) throw new Error(`Child id ${spec.id} belongs to this session's saved history. Choose a new id.`);
       if (typeof spec.brief !== "string" || spec.brief.length < 1 || spec.brief.length > 32768) throw new Error(`Child ${spec.id} brief must contain 1 to 32,768 characters`);
       if (spec.kind !== undefined && !["slice", "explore", "review"].includes(spec.kind)) throw new Error(`Invalid child kind: ${spec.kind}`);
       const allowed = this.options.allowedKinds ?? ["slice", "explore", "review"];
@@ -397,12 +399,17 @@ export class FleetRuntime implements FleetControl {
   private settle(entry: Entry): void {
     if (entry.complete) return;
     entry.complete = true;
+    this.retain(entry);
     clearTimeout(entry.timer);
     entry.settled.resolve();
     for (const wait of [...this.replies]) {
       if (wait.recipients.has(entry.spec.id) || wait.from === entry.spec.id) wait.finish({ unanswered: "recipient_finished", report: entry.value.report });
     }
     this.deliverReport(entry);
+  }
+  private retain(entry: Entry): void {
+    try { this.options.retained?.child(this.copy(entry)); }
+    catch { /* A readback failure cannot change child execution or settlement. */ }
   }
   private async recordFinish(entry: Entry): Promise<void> {
     if (!entry.prepared || !this.options.record) return;
@@ -469,6 +476,7 @@ export class FleetRuntime implements FleetControl {
     this.active++;
     entry.value.state = "running"; entry.value.startedAt = this.now();
     entry.value.sessionFile ??= join(this.options.context.dir, "children", `${entry.spec.id}.jsonl`);
+    this.retain(entry);
     entry.history.phase(entry.spec.id, "running"); this.touch(entry);
     const job = (async () => {
       const common = { kind: "auxiliary", request: entry.request, usage_kind: entry.value.kind };

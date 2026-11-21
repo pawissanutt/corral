@@ -677,7 +677,18 @@ fn a_child_scope_never_reads_outside_its_session_directory() {
         json!({"children": [{"id": "child-1", "sessionFile": external}]}).to_string(),
     )
     .unwrap();
-    symlink(outside, dir.join("children")).unwrap();
+    symlink(&outside, dir.join("children")).unwrap();
+    fs::create_dir(dir.join("child-records")).unwrap();
+    fs::create_dir(dir.join("runtime")).unwrap();
+    symlink(outside, dir.join("runtime/auxiliary")).unwrap();
+    fs::write(
+        dir.join("child-records/child-1.json"),
+        json!({
+            "session_file": "runtime/auxiliary/child-1.jsonl", "detail": null
+        })
+        .to_string(),
+    )
+    .unwrap();
     let socket = fixture.unix_server();
     let mut owner = Client::connect(&socket);
     let id = "B-child/child/child-1";
@@ -745,3 +756,6 @@ fn a_worker_send_records_the_reply_event() {
         && event.actor == Actor::Owner
         && event.detail["text"] == "continue the work"));
 }
+
+#[path = "pi_build/retained_child.rs"]
+mod retained_child;

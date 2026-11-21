@@ -7,7 +7,10 @@ use serde_json::Map;
 
 use super::{details, fingerprint};
 use crate::{
-    sessions::forward::{HostCall, PartTooLarge, host_call},
+    sessions::{
+        self,
+        forward::{HostCall, PartTooLarge, host_call},
+    },
     state::Shared,
 };
 
@@ -91,11 +94,15 @@ pub(super) fn read(
         DetailRef::SessionCards { id } => paged!(id, "cards", args(), DetailBody::SessionCards),
         DetailRef::SessionModels { id } => paged!(id, "models", args(), DetailBody::SessionModels),
         DetailRef::SessionChild { id, child } => {
-            #[derive(Serialize)]
-            struct Child<'a> {
-                child: &'a str,
-            }
-            unpaged!(id, "child", Child { child }, DetailBody::SessionChild)
+            ensure!(
+                after.is_none(),
+                "invalid: this session part does not paginate"
+            );
+            let parent = sessions::resolve(shared, id)?;
+            (
+                DetailBody::SessionChild(sessions::children::detail(&parent, child)?),
+                None,
+            )
         }
         DetailRef::SessionJobs { id } => {
             unpaged!(id, "jobs", Map::new(), DetailBody::SessionJobs)

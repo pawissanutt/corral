@@ -133,20 +133,52 @@ impl LiveReader {
                 state: None,
             });
         }
+        let live = self.read_host(&resolved);
+        match live {
+            Err(_)
+                if !resolved.unreachable
+                    && (resolved.ended
+                        || !matches!(resolved.session, Some(SessionRef::Pi { .. }))
+                        || live.as_ref().is_err_and(crate::builds::disconnected)) =>
+            {
+                let Some(fleet) = crate::sessions::children::fleet(&resolved) else {
+                    return live;
+                };
+                self.replay = true;
+                Ok(LivePage {
+                    generation: None,
+                    events: Vec::new(),
+                    next: 0,
+                    more: false,
+                    gap: Some(SessionLiveGap {
+                        after: self.cursors.live,
+                        resumed: 0,
+                        missing: 0,
+                        reconcile: true,
+                    }),
+                    fleet: Some(bound_fleet(fleet)?),
+                    state: None,
+                })
+            }
+            _ => live,
+        }
+    }
+
+    fn read_host(&mut self, resolved: &crate::sessions::Session) -> Result<LivePage> {
         ensure!(!resolved.ended, "session ended");
-        let Some(SessionRef::Pi { socket, .. }) = resolved.session else {
+        let Some(SessionRef::Pi { socket, .. }) = &resolved.session else {
             anyhow::bail!("session has no Pi socket");
         };
-        let rebound = self.socket.as_ref().is_some_and(|prev| *prev != socket);
+        let rebound = self.socket.as_ref().is_some_and(|prev| prev != socket);
         let requested = if rebound || self.replay {
             Cursors::default()
         } else {
             self.cursors
         };
-        let lifecycle = request(&socket, "events_since", requested.lifecycle)?;
-        let live = request(&socket, "live_since", requested.live)?;
+        let lifecycle = request(socket, "events_since", requested.lifecycle)?;
+        let live = request(socket, "live_since", requested.live)?;
         let page = self.advance(requested, lifecycle, live, rebound)?;
-        self.socket = Some(socket);
+        self.socket = Some(socket.clone());
         Ok(page)
     }
 

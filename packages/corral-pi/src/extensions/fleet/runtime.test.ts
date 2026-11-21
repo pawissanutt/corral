@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -9,6 +9,7 @@ import { AGENT_JOURNAL_MAX, AGENT_MESSAGE_MAX, AGENT_SEND_BUDGET, MAX_CHILDREN_P
 import { FleetRuntime, type FleetOptions } from "./runtime.ts";
 import type { ChildHandle, ChildHooks, ChildRunner } from "./child.ts";
 import { fleetTools, formatChildReport } from "./tools.ts";
+import { RetainedChildren } from "../../host/retained-children.ts";
 interface ChildToolDetails { readonly children: readonly ChildSnapshot[] }
 
 test("build text deltas do not recompute session usage, while turns and tool events do", async () => {
@@ -136,6 +137,34 @@ test("bound children commit lifecycle in order and shutdown finishes the canonic
     expect(records.map(record => record.action)).toEqual(["prepare", "started", "finish"]);
     expect(records.at(-1)!.outcome).toBe("uncertain");
   } finally { await runtime.close(); }
+});
+
+test("bound fleet readback keeps the display id, original transcript and final report after shutdown", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "retained-child-"));
+  const name = "runtime/auxiliary/canonical.jsonl";
+  const file = join(dir, name);
+  const options = { retained: new RetainedChildren(dir), record: async (payload: Record<string, unknown>) => ({
+    session_file: file, session_id: payload.request,
+  }) };
+  const { runtime, runner } = fixture(1, options);
+  const read = (name: string) => JSON.parse(readFileSync(join(dir, "child-records", name), "utf8"));
+  try {
+    await runtime.start("call", [spec("slice")]);
+    await flush();
+    expect(read("slice.json")).toMatchObject({ session_file: name, detail: { state: "running" } });
+    mkdirSync(join(dir, "runtime/auxiliary"), { recursive: true });
+    const raw = '{"type":"toolResult","content":"original output"}\n';
+    writeFileSync(file, raw);
+    runner.finish("slice");
+    await runtime.wait(["slice"]);
+    await runtime.close();
+    expect(readFileSync(file, "utf8")).toBe(raw);
+    expect(read("slice.json")).toMatchObject({ session_file: name, detail: { state: "done", report: "Report from slice" } });
+    expect(read("fleet").children).toMatchObject([{ id: "slice", state: "done" }]);
+    const resumed = fixture(1, { ...options, retained: new RetainedChildren(dir) }).runtime;
+    await expect(resumed.start("second", [spec("slice")])).rejects.toThrow("belongs to this session's saved history");
+    await resumed.close();
+  } finally { await runtime.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a refused child prepare starts nothing and exposes the refusal", async () => {

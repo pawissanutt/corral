@@ -43,6 +43,7 @@ export interface AuxiliaryOptions {
   record(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
   execute(invocation: Invocation, signal: AbortSignal): Promise<AuxiliaryResult>;
   changed?(): void;
+  retain?(helper: HelperInspection, file: string, report?: string): void;
 }
 
 // Abortable FIFO semaphore. Taking a released slot happens before waking a waiter, so a new
@@ -154,6 +155,13 @@ export class AuxiliaryRuntime {
     let started = false;
     let outcome: Outcome = "not_started";
     let result: AuxiliaryResult | undefined;
+    const retain = () => {
+      if (!observation.sessionFile || !options.retain) return;
+      try {
+        const helper = this.history.snapshot().find(entry => entry.request === request);
+        if (helper) options.retain(helper, observation.sessionFile, result?.text);
+      } catch { /* Readback does not change auxiliary execution or accounting. */ }
+    };
     try {
       signal.throwIfAborted();
       const reference = await options.record({ ...common, action: "prepare", model: `${provider}/${model}` });
@@ -170,6 +178,7 @@ export class AuxiliaryRuntime {
       observation.state = "running";
       outcome = "uncertain";
       this.history.phase(request, "running");
+      retain();
       signal.throwIfAborted();
       result = await options.execute({ request, kind, provider, model, prompt,
         sessionFile: reference.session_file, sessionId: request,
@@ -199,7 +208,7 @@ export class AuxiliaryRuntime {
       } finally {
         const settled: Outcome = started ? recorded ? outcome : "uncertain" : "not_started";
         observation.state = settled;
-        try { this.history.finish(request, settled, result?.text); }
+        try { this.history.finish(request, settled, result?.text); retain(); }
         finally { try { release?.(); } finally { this.controllers.delete(controller); } }
       }
     }

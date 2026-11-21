@@ -115,6 +115,7 @@ import { MARK_ENTRY, observeTranscriptEntries, recordTranscriptMark, type MarkSi
   type TurnStopCause, type TurnWait } from "./transcript-marks.ts";
 import { TurnFacts, turnWaits } from "./turn-facts.ts";
 import { RemotePrompts } from "./remote-prompts.ts";
+import { RetainedChildren } from "./retained-children.ts";
 import { createSummaryRequest, summarizeQuick, type SummaryOptions, type SummaryRequest } from "./summary.ts";
 
 export interface HostSessionOptions {
@@ -423,6 +424,8 @@ export class HostSession {
     });
     this.provider = options.provider ?? "openai-codex";
     this.local = new LocalControlPlane(options.build?.dir ?? options.runtimeDir ?? options.agentDir, options.identity);
+    const sessionRoot = options.build?.dir ?? options.sessionDir;
+    const retained = sessionRoot ? new RetainedChildren(sessionRoot) : undefined;
     this.remoteDefaultModel = options.model.startsWith(`${this.provider}/`) ? options.model : `${this.provider}/${options.model}`;
     const { task, run } = options.identity, buildSession = options.build?.session;
     const reviewBases = persistedBases(
@@ -467,7 +470,7 @@ export class HostSession {
         const result = await this.submitAutomated(text);
         if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
       },
-      shellRefusal: options.modules.role.shellRefusal, changed: () => this.fleetChanged(),
+      shellRefusal: options.modules.role.shellRefusal, changed: () => this.fleetChanged(), retained,
     }) : undefined;
     this.remoteBuild = new RemoteBuild(this.buildControls, {
       fleet: () => this.buildControls?.ui.fleet ?? this.fleet,
@@ -608,7 +611,7 @@ export class HostSession {
         get parentLoadout() { return host.loadout; },
         get localTools() { return host.localTools; },
         shellRefusal: options.modules.role.shellRefusal,
-        changed: () => this.fleetChanged(), record,
+        changed: () => this.fleetChanged(), record, retained,
         deliverToParent: async text => {
           const result = await this.submitAutomated(text);
           if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
@@ -626,6 +629,7 @@ export class HostSession {
             ? { provider: model.provider, model: model.id } : undefined;
         },
         record,
+        retain: retained ? (helper, file, result) => retained.helper(helper, file, result) : undefined,
         execute: (invocation, signal) => {
           if (invocation.kind === "web_search") {
             if (!this.searchModels || !options.capabilities?.web) throw new Error("subscription search runtime is not ready");

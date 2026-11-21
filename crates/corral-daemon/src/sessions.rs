@@ -29,6 +29,7 @@ use crate::{
     views::{self, NotFound},
 };
 
+pub(crate) mod children;
 pub(crate) mod forward;
 
 pub(crate) struct Session {
@@ -72,18 +73,19 @@ pub(crate) fn is_build(id: &str) -> bool {
     pi::is_build_id(id)
 }
 
+fn valid_child_id(child: &str) -> bool {
+    (1..=128).contains(&child.len())
+        && !matches!(child, "." | "..")
+        && child
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+}
+
 pub(crate) fn child_scope(id: &str) -> Result<Option<(&str, &str)>> {
     let Some((parent, child)) = id.split_once("/child/") else {
         return Ok(None);
     };
-    ensure!(
-        (1..=128).contains(&child.len())
-            && !matches!(child, "." | "..")
-            && child
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte)),
-        "invalid: expected a child id"
-    );
+    ensure!(valid_child_id(child), "invalid: expected a child id");
     if parent.starts_with("B-") {
         ensure!(is_build(parent), "invalid: expected build id B-<base36>");
     } else if is_chat(parent) {
@@ -188,22 +190,25 @@ fn resolve_child(parent: Session, child: &str) -> Result<Session> {
             && file.is_file())
         .then_some(file)
     };
-    let file = forward::host_call_on::<ChildFile>(
-        &parent,
-        "child_file",
-        json!({"child": child}),
-        forward::HostCall::Read,
-    )
-    .ok()
-    .and_then(|reply| safe(reply.session_file))
-    .or_else(|| {
-        let journal = open_session_file(&dir, &dir.join("journal.json")).ok()?;
-        let journal: Journal = serde_json::from_reader(BufReader::new(journal)).ok()?;
-        let row = journal.children.into_iter().find(|row| row.id == child)?;
-        safe(row.session_file?)
-    })
-    .or_else(|| safe(dir.join("children").join(format!("{child}.jsonl"))))
-    .context(NotFound("child session not found"))?;
+    let file = children::transcript(&dir, child)
+        .or_else(|| {
+            forward::host_call_on::<ChildFile>(
+                &parent,
+                "child_file",
+                json!({"child": child}),
+                forward::HostCall::Read,
+            )
+            .ok()
+            .and_then(|reply| safe(reply.session_file))
+        })
+        .or_else(|| {
+            let journal = open_session_file(&dir, &dir.join("journal.json")).ok()?;
+            let journal: Journal = serde_json::from_reader(BufReader::new(journal)).ok()?;
+            let row = journal.children.into_iter().find(|row| row.id == child)?;
+            safe(row.session_file?)
+        })
+        .or_else(|| safe(dir.join("children").join(format!("{child}.jsonl"))))
+        .context(NotFound("child session not found"))?;
     Ok(Session {
         id: format!("{}/child/{child}", parent.id),
         role: "child",

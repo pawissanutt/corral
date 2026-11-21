@@ -50,14 +50,14 @@ export function childDetail(child: ChildSnapshot, transcript: boolean, choices?:
   };
 }
 
-function helperDetail(helper: HelperInspection, transcript: boolean) {
-  const brief = clipText(helper.prompt, 8 * KiB), report = optionalText(helper.result, 16 * KiB);
+export function helperDetail(helper: HelperInspection, transcript: boolean, result = helper.result) {
+  const brief = clipText(helper.prompt, 8 * KiB), report = optionalText(result, 16 * KiB);
   return { id: helper.request, kind: `helper:${helper.kind}`, title: helper.kind, brief,
     brief_more: brief !== helper.prompt || helper.truncated && helper.prompt.length >= 4096,
     profile: "", model: clipText(helper.model, 512), state: helperState(helper), created_at: helper.createdAt,
     started_at: helper.startedAt, ended_at: helper.endedAt, activity: optionalText(helper.latestActivity, 512),
     usage: { input: 0, output: 0, turns: 0 }, report,
-    report_more: report !== helper.result || helper.truncated && (helper.result?.length ?? 0) >= 4096,
+    report_more: report !== result || result === helper.result && helper.truncated && (result?.length ?? 0) >= 4096,
     error: optionalText(helper.error ?? helper.inspectionError, 512), history: "", dropped: helper.dropped, transcript };
 }
 

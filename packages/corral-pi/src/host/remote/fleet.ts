@@ -30,7 +30,7 @@ export interface SessionFleet {
   max_parallel: number;
 }
 
-function childRow(child: ChildSnapshot): SessionChild {
+export function childRow(child: ChildSnapshot): SessionChild {
   return {
     id: child.id, kind: child.kind, title: utf8Prefix(child.title, 256), state: child.state, model: utf8Prefix(child.model, 512),
     started_at: child.startedAt, ended_at: child.endedAt,
@@ -46,6 +46,12 @@ function childRow(child: ChildSnapshot): SessionChild {
   };
 }
 
+export function helperRow(helper: HelperInspection): SessionChild {
+  return { id: helper.request, kind: `helper:${helper.kind}`, title: helper.kind, state: helperState(helper),
+    model: utf8Prefix(helper.model, 512), started_at: helper.startedAt, ended_at: helper.endedAt, tokens: 0, steerable: false,
+    error: helper.error === undefined ? undefined : utf8Prefix(helper.error, 256) };
+}
+
 export function projectFleet(snapshot: FleetSnapshot | undefined, helpers: readonly HelperInspection[] = []): {
   fleet: SessionFleet; counts: Counts;
 } {
@@ -59,9 +65,7 @@ export function projectFleet(snapshot: FleetSnapshot | undefined, helpers: reado
   for (const helper of helpers) {
     const state = helperState(helper);
     if (state === "queued" || state === "running") live++;
-    children.push({ id: helper.request, kind: `helper:${helper.kind}`, title: helper.kind, state,
-      model: utf8Prefix(helper.model, 512), started_at: helper.startedAt, ended_at: helper.endedAt, tokens: 0, steerable: false,
-      error: helper.error === undefined ? undefined : utf8Prefix(helper.error, 256) });
+    children.push(helperRow(helper));
   }
   if (helpers.length && snapshot?.children.length) {
     const created = new Map(snapshot.children.map(child => [child.id, child.createdAt]));
