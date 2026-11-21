@@ -120,6 +120,7 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
     const stop = AbortSignal.any([signal, controller.signal]);
     let checking = false;
     const timer = setInterval(() => {
+      exit.gateProgress(candidate, { kind: "tick" });
       if (checking || stop.aborted) return;
       checking = true;
       void checkIdentity(candidate).catch(error => controller.abort(error)).finally(() => { checking = false; });
@@ -134,13 +135,20 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
         }
         return result;
       };
-      const gate = await verifyBuild(context, pinnedGit, { ...journal, gate() {} }, stop);
+      const gate = await verifyBuild(context, pinnedGit, { ...journal, gate() {} }, stop, {
+        started: (log, commands) => exit.gateProgress(candidate, { kind: "start", commands, log }),
+        command: index => exit.gateProgress(candidate, { kind: "command", index }),
+      });
       stop.throwIfAborted();
       if (!sameCommands(gate, commands)) throw new Error("The configured gate commands changed. Run build_verify again.");
       await checkIdentity(candidate);
       stop.throwIfAborted();
       journal.gate(gate);
+      exit.gateProgress(candidate, { kind: "end", gate });
       return gate;
+    } catch (error) {
+      exit.gateProgress(candidate, { kind: "stop", detail: message(error) });
+      throw error;
     } finally { clearInterval(timer); }
   }
 

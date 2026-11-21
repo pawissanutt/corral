@@ -57,6 +57,8 @@ export interface RecordReview {
   /** The review child's id. */
   readonly reviewer: string;
   readonly model: string;
+  /** Integration tip used for the reviewed diff. Older reviews did not record it. */
+  readonly base?: string;
   /** The commit reviewed. */
   readonly head: string;
   readonly verdict: "approve" | "changes";

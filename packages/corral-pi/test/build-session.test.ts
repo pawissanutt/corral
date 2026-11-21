@@ -1,13 +1,14 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createBuildControls, type BuildControls } from "../src/build/host-controls.ts";
 import { loadSession, saveSession, sessionDir } from "../src/build/session-store.ts";
-import type { Run } from "../src/build/corral-cli.ts";
+import { gitRun, type Run } from "../src/build/corral-cli.ts";
+import { prepareWorktree } from "../src/build/worktree.ts";
 import type { BuildContext, ChildSpec, ExitRecord } from "../src/build/types.ts";
 import type { ChildHandle, ChildHooks, ChildRunner } from "../src/extensions/fleet/child.ts";
 import { RemoteBuild } from "../src/host/remote/build.ts";
@@ -33,17 +34,17 @@ class FakeRunner implements ChildRunner {
   }
 }
 
-function fixture(root: string, exit?: ExitRecord, workspace = false, bare = false, engine?: Run) {
+function fixture(root: string, exit?: ExitRecord, workspace = false, bare = false, engine?: Run, binding?: { repo: string; checkout: ReturnType<typeof prepareWorktree> }) {
   const now = new Date().toISOString();
   const context: BuildContext = { dir: sessionDir(root, "B-test"), corral: "/unused/corral",
-    settings: { maxParallel: 2, exitPolicy: "none", profiles: [] },
+    settings: { maxParallel: 2, exitPolicy: binding ? "review" : "none", profiles: [] },
     session: { version: 1, id: "B-test", name: "test", created: now, updated: now, repoRoot: root, worktree: root,
       here: true, branch: "build/test", base: workspace ? "base" : null, ...(workspace ? { workspaceRoot: root, project: "app" } : {}),
-      ...(bare ? { bare: true, repository: false } : {}), ...(exit ? { exit } : {}) } };
+      ...(bare ? { bare: true, repository: false } : {}), ...(exit ? { exit } : {}), ...(binding ? { repoRoot: binding.repo, here: false, ...binding.checkout } : {}) } };
   saveSession(root, context.session);
   if (workspace) {
     mkdirSync(join(root, ".corral-next"));
-    writeFileSync(join(root, ".corral-next", "corral.toml"), `[projects.app]\ngate = ["printf 'local check'"]\n`);
+    writeFileSync(join(root, ".corral-next", "corral.toml"), `[projects.app]\nbase = "main"\ngate = ["printf 'local check'"]\n`);
   }
   const runner = new FakeRunner();
   const calls: string[][] = [];
@@ -52,7 +53,7 @@ function fixture(root: string, exit?: ExitRecord, workspace = false, bare = fals
     if (engine) return engine(argv, options);
     throw new Error(`Unexpected engine command: ${argv.join(" ")}`);
   };
-  const git: Run = async argv => ({ code: 0, stdout: argv[0] === "rev-parse" ? argv.includes("--abbrev-ref") ? "build/test\n" : "abc\n" : "", stderr: "" });
+  const git: Run = binding ? gitRun() : async argv => ({ code: 0, stdout: argv[0] === "rev-parse" ? argv.includes("--abbrev-ref") ? "build/test\n" : "abc\n" : "", stderr: "" });
   let changed = 0;
   const controls = createBuildControls({ context, runner, run, git, sdk: {} as typeof Sdk,
     models: () => ({ getModels: () => [] }) as unknown as ModelRuntime, approved: () => ["approved"],
@@ -122,6 +123,69 @@ test("resumed build controls restore saved exits with no persisted children", as
     } finally { await controls.close(); rmSync(root, { recursive: true, force: true }); }
   }
 });
+
+test("Finish prepares against current main, gates and reviews once before offering direct Land", async () => {
+  const root = mkdtempSync(join(tmpdir(), "build-finish-")), repo = join(root, "repo");
+  mkdirSync(repo);
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.org");
+  git("commit", "-qm", "start", "--allow-empty");
+  const checkout = prepareWorktree(repo, "candidate", false);
+  writeFileSync(join(checkout.worktree, "result"), "candidate");
+  git("-C", checkout.worktree, "add", "result"); git("-C", checkout.worktree, "commit", "-qm", "work");
+  git("commit", "-qm", "advanced", "--allow-empty");
+  const target = git("rev-parse", "main");
+  const { controls, runner } = fixture(root, undefined, true, false, undefined, { repo, checkout });
+  try {
+    const finish = controls.tools.find(tool => tool.name === "build_finish")!;
+    const completing = finish.execute("finish", { title: "Build result" }, undefined, undefined, {} as never);
+    const id = await within(runner.started.promise, 5000, "prepared reviewer");
+    const reviewer = runner.children.get(id)!;
+    const candidate = git("-C", checkout.worktree, "rev-parse", "HEAD");
+    expect(git("rev-parse", candidate + "^")).toBe(target);
+    expect(reviewer.spec.brief).toContain(target + ".." + candidate);
+    reviewer.hooks.reviewVerdict({ verdict: "approve", summary: "Ready", findings: [], head: candidate });
+    reviewer.finish();
+    expect((await completing).isError).not.toBe(true);
+    expect(git("rev-parse", "main")).toBe(target);
+    const option = controls.exit.options().find(row => row.choice === "land")!;
+    expect(option.authorization).toBeDefined();
+    expect((await controls.exit.choose("land", { authorization: option.authorization })).phase).toBe("landed");
+    expect(git("rev-parse", "main")).toBe(candidate);
+    expect(controls.ui.record().verification).toHaveLength(1);
+    expect(controls.ui.record().reviews).toHaveLength(1);
+  } finally { await controls.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test.skipIf(process.platform !== "linux")("moving main during preparation stops the gate group and records no receipt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "build-prep-moved-")), repo = join(root, "repo");
+  mkdirSync(repo);
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.org");
+  git("commit", "-qm", "start", "--allow-empty");
+  const checkout = prepareWorktree(repo, "moved", false);
+  git("-C", checkout.worktree, "commit", "-qm", "work", "--allow-empty");
+  const { controls } = fixture(root, undefined, true, false, undefined, { repo, checkout });
+  const pidfile = join(root, "gate.pid");
+  const gate = "sh -c 'trap \"\" TERM; exec sleep 30' & echo $! > " + JSON.stringify(pidfile) + "; wait";
+  writeFileSync(join(root, ".corral-next/corral.toml"), '[projects.app]\nbase="main"\ngate=[' + JSON.stringify(gate) + ']\n');
+  try {
+    const verifying = controls.tools.find(tool => tool.name === "build_verify")!.execute("verify", {}, undefined, undefined, {} as never);
+    const deadline = performance.now() + 3000;
+    while (!existsSync(pidfile) && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    expect(existsSync(pidfile)).toBeTrue();
+    expect(controls.exit.state().phase).toBe("verifying");
+    expect(controls.exit.state().land?.gate?.command).toBe(gate);
+    git("commit", "-qm", "main advanced", "--allow-empty");
+    const result = await within(verifying, 6000, "gate stopped on stale base");
+    expect(result.isError).toBeTrue();
+    expect(controls.ui.record().verification).toHaveLength(0);
+    const pid = Number(readFileSync(pidfile, "utf8"));
+    const gone = performance.now() + 2000;
+    while (existsSync("/proc/" + pid) && performance.now() < gone) await new Promise(resolve => setTimeout(resolve, 10));
+    expect(() => process.kill(pid, 0)).toThrow();
+  } finally { await controls.close(); rmSync(root, { recursive: true, force: true }); }
+}, 12000);
 
 function terminalDecisions(controls: BuildControls) {
   const entries: BuildEntry<unknown>[] = [];

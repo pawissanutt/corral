@@ -4,13 +4,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { engineRun, gitRun, checked, json, type Run } from "../src/build/corral-cli.ts";
-import { createExit, LAND_REPAIR_ROUNDS, type ExitProgressRecord } from "../src/build/exit.ts";
+import { createExit, type ExitProgressRecord } from "../src/build/exit.ts";
 import { createJournal } from "../src/build/record.ts";
 import { summarize } from "../src/build/git.ts";
 import type { BuildGateResult } from "../src/build/record-types.ts";
 import { verifyBuild } from "../src/build/gate.ts";
 import { prepareWorktree } from "../src/build/worktree.ts";
-import { exitBrief } from "../src/host/remote/state.ts";
+import { within } from "./support/wait.ts";
 import type { BuildContext, ChildSnapshot, ExitPolicy, ExitRecord, FleetSnapshot } from "../src/build/types.ts";
 
 const head = "a".repeat(40), base = "b".repeat(40);
@@ -35,53 +35,48 @@ function git(dirty = false, commits = 2, calls: string[][] = [], branch: string 
 function gateResult(): BuildGateResult {
   return { attempt: "G1", head, result: "pass", commands: ["check"], started: "2026-01-01T00:00:00Z", ended: "2026-01-01T00:01:00Z", log: "/logs/G1.log" };
 }
-type Repair = (prompt: string, f: { commit(): void; approve(): void }) => { aborted: boolean } | Promise<{ aborted: boolean }>;
-/** `failGate` fails every gate; `failGates` fails only the first that many; `gate` is the passing gate's shell line. */
-function fixture(settings: { policy?: ExitPolicy; failGate?: boolean; failGates?: number; repair?: Repair; stale?: boolean; conflict?: boolean; patchChanged?: boolean;
-  gate?: string; watchMs?: number; dirtyBase?: boolean } = {}) {
+/** Stateful refs, with a real verification journal and disposable gate directory. */
+function fixture(settings: { policy?: ExitPolicy; conflict?: boolean; dirtyBase?: boolean; onStaleOffer?: () => Promise<void> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "build-exit-"));
   const start = context(settings.policy);
   const ctx = { ...start, dir, session: { ...start.session, workspaceRoot: dir, worktree: dir } };
   mkdirSync(join(dir, ".corral-next"));
-  const setGate = (fail: boolean) => writeFileSync(join(dir, ".corral-next", "corral.toml"),
-    `[projects.app]\nbase = \"main\"\ngate = [${JSON.stringify(fail ? "echo failing-check; exit 1" : settings.gate ?? "true")}]\n`);
-  setGate(settings.failGate === true);
-  const events: string[] = [], records: ExitRecord[] = [], calls: string[][] = [];
-  let gates = 0, rebased = false, current = head;
-  const prompts: string[] = [];
-  const underlying = git(false, 2, calls);
-  const gitRun: Run = async (argv, options) => {
-    if (argv[0] === "rev-parse" && argv[1] === "HEAD") return { code: 0, stdout: current, stderr: "" };
-    if (argv[0] === "rebase") {
-      events.push(argv.includes("--abort") ? "abort" : "rebase"); rebased = true;
-      return { code: settings.conflict && !argv.includes("--abort") ? 1 : 0, stdout: "", stderr: "conflict" };
+  const setGate = (command: string) => writeFileSync(join(dir, ".corral-next", "corral.toml"),
+    '[projects.app]\nbase="main"\ngate=[' + JSON.stringify(command) + ']\n');
+  setGate("true");
+  const repo = { candidate: head, tip: base, dirty: false, ancestor: !settings.conflict };
+  const calls: string[][] = [];
+  const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
+  const underlying = git();
+  const run: Run = async (argv, options) => {
+    calls.push([...argv]);
+    if (argv.includes("--absolute-git-dir")) return ok(dir);
+    if (argv.includes("--git-common-dir")) return ok(dir);
+    if (argv.includes("--show-prefix")) return ok("");
+    if (argv[0] === "rev-parse" && !argv.includes("--abbrev-ref")) return ok(argv.at(-1) === "HEAD" && options.cwd !== "/primary" ? repo.candidate : repo.tip);
+    if (argv[0] === "symbolic-ref") return ok(options.cwd === "/primary" ? "refs/heads/main" : "refs/heads/build/parser");
+    if (argv[0] === "merge-base") return argv.includes("--is-ancestor") ? { code: repo.ancestor ? 0 : 1, stdout: "", stderr: "" } : ok(repo.ancestor ? repo.tip : base);
+    if (argv.includes("rebase") && settings.conflict) {
+      if (argv.includes("--abort")) return ok("");
+      mkdirSync(join(dir, "rebase-merge"));
+      return { code: 1, stdout: "", stderr: "conflict" };
     }
-    if (argv.includes("--diff-filter=U")) return { code: 0, stdout: "src/parser.ts\n", stderr: "" };
-    if (argv.includes("--name-only") && settings.dirtyBase) return { code: 0, stdout: "src/parser.ts\n", stderr: "" };
-    if (argv.includes("--binary") && settings.patchChanged && rebased) return { code: 0, stdout: "changed patch", stderr: "" };
-    if (argv.includes("--verify") && settings.stale && rebased) return { code: 0, stdout: "c".repeat(40), stderr: "" };
-    if (argv[0] === "worktree") return { code: 0, stdout: "worktree /primary\0branch refs/heads/main\0\0", stderr: "" };
-    if (argv[0] === "merge") events.push("land");
+    if (argv.includes("--diff-filter=U")) return ok("src/parser.ts\n");
+    if (argv.includes("--name-only") && settings.dirtyBase) return ok("src/parser.ts\n");
+    if (argv[0] === "worktree") return ok("worktree /primary\0HEAD " + repo.tip + "\0branch refs/heads/main\0\0");
+    if (argv[0] === "status" && options.cwd !== "/primary") return ok(repo.dirty ? " M src/parser.ts\n" : "");
+    if (argv[0] === "merge") repo.tip = repo.candidate;
     return underlying(argv, options);
   };
-  const journal = createJournal({ context: ctx, git: gitRun, fleet: () => fleet });
-  const repair = settings.repair;
-  const control = createExit({ context: ctx, git: gitRun, journal, fleet: () => fleet,
-    save: record => {
-      records.push(record);
-      if ((record as ExitProgressRecord).progress?.phase !== "verifying") return;
-      // The gate reads the project's commands after this save, so each attempt can be made to pass or fail.
-      events.push("gate"); gates++;
-      setGate(settings.failGate === true || gates <= (settings.failGates ?? 0));
-    }, changed() {}, ...(settings.watchMs === undefined ? {} : { watchMs: settings.watchMs }),
-    ...(repair ? { repair: async (prompt: string) => {
-      events.push("repair"); prompts.push(prompt);
-      return repair(prompt, {
-        commit() { current = String(prompts.length).repeat(40); },
-        approve() { journal.review({ ...child(`review-${prompts.length}`, "review"), verdict: { verdict: "approve", summary: "Approved", findings: [], head: current, at: 1000 } }, current); },
-      });
-    } } : {}) });
-  return { ctx, journal, control, gitRun, events, records, calls, prompts, close() { control.close(); rmSync(dir, { recursive: true, force: true }); } };
+  const journal = createJournal({ context: ctx, git: run, fleet: () => fleet });
+  const control = createExit({ context: ctx, git: run, journal, fleet: () => fleet, requestFinish: settings.onStaleOffer, save() {}, changed() {} });
+  const offer = async () => {
+    const candidate = await control.prepare();
+    await verifyBuild(ctx, run, journal);
+    control.open(candidate ?? null);
+    return control.options().find(option => option.choice === "land")?.authorization;
+  };
+  return { ctx, journal, control, run, offer, repo, setGate, calls, close() { control.close(); rmSync(dir, { recursive: true, force: true }); } };
 }
 function child(id = "parser", kind: ChildSnapshot["kind"] = "slice"): ChildSnapshot {
   return { id, kind, call: "call", title: "Parser", brief: "Build parser", owns: ["src/parser.ts"], after: [], profile: "default", model: "provider/model",
@@ -91,7 +86,7 @@ function child(id = "parser", kind: ChildSnapshot["kind"] = "slice"): ChildSnaps
 }
 
 describe("build exits", () => {
-  test("Verify executes the project's shell lines and Land rebases and fast-forwards its base", async () => {
+  test("preparation rebases first; only the owner advances the base to the exact gated commit", async () => {
     const dir = mkdtempSync(join(tmpdir(), "build-local-land-"));
     const repo = join(dir, "repo");
     const run = gitRun();
@@ -115,163 +110,140 @@ describe("build exits", () => {
       const commands = ["test \"$PWD\" = \"$BUILD_WORKTREE\" && printf 'worktree verified\\n'", "grep -x verified code.txt"];
       writeFileSync(join(dir, ".corral-next", "corral.toml"), `[projects.app]\npath = "repo"\nbase = "release"\ngate = ${JSON.stringify(commands)}\nenv = { BUILD_WORKTREE = ${JSON.stringify(checkout.worktree)} }\n`);
       const journal = createJournal({ context: ctx, git: run, fleet: () => fleet });
-      const verified = await verifyBuild(ctx, run, journal);
-      expect(verified).toMatchObject({ result: "pass", attempt: "G1", head: before, commands });
-      expect(readFileSync(verified.log!, "utf8")).toContain("worktree verified\n");
       const records: ExitProgressRecord[] = [];
       const control = createExit({ context: ctx, git: run, journal, fleet: () => fleet,
         save: record => records.push(record), changed() {} });
-      const result = await control.choose("land");
+      const prepared = await control.prepare();
+      expect(prepared?.base).toBe(baseTip);
+      expect(prepared?.head).not.toBe(before);
+      const verified = await verifyBuild(ctx, run, journal);
+      expect(verified).toMatchObject({ result: "pass", attempt: "G1", head: prepared!.head, commands });
+      expect(readFileSync(verified.log!, "utf8")).toContain("worktree verified\n");
+      control.open(prepared!);
+      const option = control.options().find(option => option.choice === "land")!;
+      const result = await control.choose("land", { authorization: option.authorization });
       expect(result.phase).toBe("landed");
       const landed = (await git(repo, "rev-parse", "release")).trim();
       expect(landed).not.toBe(before);
       expect((await git(repo, "rev-parse", "release^")).trim()).toBe(baseTip);
       expect(readFileSync(join(repo, "code.txt"), "utf8")).toBe("verified\n");
-      expect(records.map(record => record.progress?.phase)).toEqual(["rebasing", "verifying", "landing", "landed"]);
-      expect(result.record).toMatchObject({ landed, baseBranch: "release", gateAttempt: "G2" });
-      expect(journal.record().verification).toMatchObject([{ head: before, result: "pass" }, { head: landed, result: "pass" }]);
+      expect(result.record).toMatchObject({ landed, baseBranch: "release", gateAttempt: "G1" });
+      expect(journal.record().verification).toHaveLength(1);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
-  test("a failing full gate leaves the session open and never lands", async () => {
-    const f = fixture({ failGate: true });
+  test("a failed gate cannot authorize or repair a candidate, even with a review override", async () => {
+    const f = fixture({ policy: "review" });
     try {
-      const state = await f.control.choose("land");
-      expect(state.phase).toBe("failed"); expect(state.detail).toContain("failing-check");
-      expect(readFileSync(f.journal.latestGate()!.log!, "utf8")).toContain("failing-check");
-      expect(state.land?.steps.map(step => step.state)).toEqual(["done", "failed", "waiting"]);
-      expect(state.land?.gate).toMatchObject({ attempt: "G1", log: f.journal.latestGate()!.log!, tail: ["$ echo failing-check; exit 1", "failing-check"] });
-      // The app reads the base and the steps of a Land that did not land from the same brief.
-      expect(exitBrief(state)).toMatchObject({ phase: "failed", base_branch: "main", land: { steps: [{ id: "rebase" }, { id: "gate", state: "failed" }, { id: "land" }], gate: { attempt: "G1" } } });
-      expect(f.events).not.toContain("land");
-      expect(f.journal.record().outcome.state).toBe("open");
+      f.setGate("exit 1");
+      const authorization = await f.offer();
+      expect(f.journal.latestGate()?.result).toBe("fail");
+      expect(f.control.options().find(o => o.choice === "land")?.unavailable).toBeDefined();
+      await f.control.choose("land", { authorization, overrideReason: "Accept review risk" });
+      expect(f.calls.some(args => ["merge", "update-ref"].includes(args[0]!))).toBeFalse();
+      expect(f.repo.tip).toBe(base);
       expect((await f.control.choose("iterate")).phase).toBe("none");
     } finally { f.close(); }
   });
-  test("a failing landing gate is handed to the session and Land resumes on its fix without the owner", async () => {
-    const f = fixture({ failGates: 2, repair: (_prompt, session) => { session.commit(); return { aborted: false }; } });
-    try {
-      const state = await f.control.choose("land");
-      expect(state.phase).toBe("landed");
-      expect(f.events).toEqual(["rebase", "gate", "repair", "rebase", "gate", "repair", "rebase", "gate", "land"]);
-      const [first, second] = f.journal.record().verification;
-      expect(f.prompts[0]).toContain(`rebased head ${head}`); expect(f.prompts[0]).toContain("Failed command: echo failing-check; exit 1");
-      expect(f.prompts[0]).toContain(first!.log!); expect(f.prompts[0]).toContain(`repair 1 of ${LAND_REPAIR_ROUNDS}`);
-      expect(f.prompts[0]).not.toContain("build_review");
-      expect(f.prompts[1]).toContain(second!.log!);
-      expect(state.record).toMatchObject({ landed: "2".repeat(40), gateAttempt: "G3" });
-      expect(f.records.map(record => (record as ExitProgressRecord).progress?.phase)).toContain("repairing");
-      expect(f.journal.record().decisions.filter(decision => decision.kind === "exit")).toHaveLength(1);
-    } finally { f.close(); }
-  });
-  test("automatic landing repair is bounded and stops without a new commit or when the turn is stopped", async () => {
-    const endless = fixture({ failGate: true, repair: (_prompt, session) => { session.commit(); return { aborted: false }; } });
-    try {
-      const state = await endless.control.choose("land");
-      const last = endless.journal.latestGate()!;
-      expect(last.attempt).toBe(`G${LAND_REPAIR_ROUNDS + 1}`);
-      expect(state.phase).toBe("failed"); expect(state.detail).toContain(last.log!);
-      expect(endless.events.filter(event => event === "repair")).toHaveLength(LAND_REPAIR_ROUNDS);
-      expect(endless.events).not.toContain("land");
-    } finally { endless.close(); }
-    for (const [repair, why] of [[() => ({ aborted: false }), "made no new commit"], [(_p, s) => { s.commit(); return { aborted: true }; }, "was stopped"],
-      [() => { throw new Error("host_closing"); }, "host_closing"]] as const satisfies readonly (readonly [Repair, string])[]) {
-      const f = fixture({ failGates: 1, repair });
-      try {
-        const state = await f.control.choose("land");
-        expect(state.phase).toBe("failed"); expect(state.detail).toContain(f.journal.latestGate()!.log!); expect(state.detail).toContain(why);
-        expect(f.events).toEqual(["rebase", "gate", "repair"]);
-      } finally { f.close(); }
-    }
-  });
-  test("under review policy a repaired head lands only with a fresh approving review or the owner's override", async () => {
-    for (const [approve, override, landed] of [[false, false, false], [true, false, true], [false, true, true]] as const) {
-      const f = fixture({ policy: "review", failGates: 1, repair: (_prompt, session) => { session.commit(); if (approve) session.approve(); return { aborted: false }; } });
-      try {
-        f.journal.review({ ...child("review-0", "review"), verdict: { verdict: "approve", summary: "Approved", findings: [], head, at: 1000 } }, head);
-        const state = await f.control.choose("land", override ? { overrideReason: "Owner accepts the risk" } : undefined);
-        expect(state.phase).toBe(landed ? "landed" : "failed");
-        expect(f.prompts[0]!.includes("build_review")).toBe(!override);
-        expect(f.journal.record().decisions.some(decision => decision.kind === "override" && decision.text.startsWith("Repair 1 commits"))).toBe(override);
-        if (!landed) { expect(state.detail).toContain("no approving review covers the repaired head"); expect(f.events).not.toContain("land"); }
-      } finally { f.close(); }
-    }
-  });
-  test("a base move during verification leaves landing for the next owner choice", async () => {
-    const f = fixture({ stale: true });
-    try {
-      const result = await f.control.choose("land");
-      expect(result.phase).toBe("failed");
-      expect(result.detail).toContain("base main moved");
-      expect(f.events).toEqual(["rebase", "gate"]);
-    } finally { f.close(); }
-  });
-  test("a base move while the gate runs stops the gate and what it started at once", async () => {
-    const pidFile = join(tmpdir(), `build-exit-gate-${process.pid}-${Date.now()}.pid`);
-    // What the gate started ignores SIGTERM, as a worker that traps it would.
-    const f = fixture({ stale: true, watchMs: 5, gate: `sh -c 'trap "" TERM; sleep 30' & echo $! > ${pidFile}; wait` });
-    try {
-      const started = Date.now();
-      const state = await f.control.choose("land");
-      expect(Date.now() - started < 10_000).toBe(true);
-      expect(state.phase).toBe("failed"); expect(state.detail).toContain("while the gate ran");
-      expect(state.land?.steps.find(step => step.id === "gate")).toMatchObject({ state: "failed", note: "stopped: main moved" });
-      expect(f.events).toEqual(["rebase", "gate"]);
-      // A stopped gate has no result, and the process it left in the background went with it.
-      expect(f.journal.latestGate()).toBeUndefined();
-      const pid = Number(readFileSync(pidFile, "utf8"));
-      expect(Number.isInteger(pid) && pid > 0).toBe(true);
-      for (let waited = 0; waited < 2_000 && existsSync(`/proc/${pid}`); waited += 20) await new Promise(resolve => setTimeout(resolve, 20));
-      expect(() => process.kill(pid, 0)).toThrow();
-    } finally { f.close(); rmSync(pidFile, { force: true }); }
-  });
-  test("Land does not run the gate again on a commit it already passed on", async () => {
+
+  for (const change of ["candidate", "base", "dirty", "commands", "old offer"]) test(`stale ${change} cannot fast-forward or run a new gate`, async () => {
     const f = fixture();
     try {
-      await verifyBuild(f.ctx, f.gitRun, f.journal);
-      const state = await f.control.choose("land");
-      expect(state.phase).toBe("landed");
-      expect(f.events).toEqual(["rebase", "land"]);
-      expect(state.record?.gateAttempt).toBe("G1");
-      expect(f.journal.record().verification).toHaveLength(1);
-      expect(state.land?.steps.find(step => step.id === "gate")).toMatchObject({ state: "done", note: "G1 passed earlier on this commit" });
+      const authorization = await f.offer();
+      expect(authorization).toBeDefined();
+      if (change === "candidate") f.repo.candidate = "d".repeat(40);
+      if (change === "base") f.repo.tip = "c".repeat(40);
+      if (change === "dirty") f.repo.dirty = true;
+      if (change === "commands") f.setGate("false");
+      if (change === "old offer") {
+        await f.control.choose("iterate");
+        await f.offer();
+      }
+      const tip = f.repo.tip, count = f.journal.record().verification.length;
+      const at = f.calls.length;
+      const result = await f.control.choose("land", { authorization });
+      expect(result.phase).not.toBe("landed");
+      expect(f.journal.record().verification).toHaveLength(count);
+      expect(f.calls.slice(at).some(args => ["rebase", "merge", "update-ref"].includes(args[0]!))).toBeFalse();
+      expect(f.repo.tip).toBe(tip);
     } finally { f.close(); }
   });
-  test("uncommitted changes in the base checkout to files the branch changes stop Land before the gate", async () => {
-    const f = fixture({ dirtyBase: true });
+
+  test("a moved base prepares a replacement offer but never carries the old consent", async () => {
+    const again = Promise.withResolvers<void>();
+    let refreshes = 0;
+    const f = fixture({ onStaleOffer: async () => {
+      refreshes++;
+      const candidate = await f.control.prepare();
+      f.control.open(candidate ?? null);
+      again.resolve();
+    } });
     try {
-      const state = await f.control.choose("land");
-      expect(state.phase).toBe("failed"); expect(state.detail).toContain("/primary has uncommitted changes");
-      expect(f.events).toEqual(["rebase"]);
+      const authorization = await f.offer();
+      f.repo.tip = "c".repeat(40);
+      expect((await f.control.choose("land", { authorization })).phase).not.toBe("landed");
+      await within(again.promise, 3000, "replacement offer");
+      const next = f.control.options().find(option => option.choice === "land")?.authorization;
+      expect(next).toBeDefined(); expect(next).not.toBe(authorization);
+      expect((await f.control.choose("land", { authorization })).phase).not.toBe("landed");
+      expect(f.repo.tip).toBe("c".repeat(40));
+      expect(refreshes).toBe(1);
+      expect((await f.control.choose("land", { authorization: next })).phase).toBe("landed");
     } finally { f.close(); }
   });
-  test("review policy requires an approving round or an owner's recorded override", async () => {
+  test("an approval of the same head against a different base is not approval of the offered diff", async () => {
     const f = fixture({ policy: "review" });
     try {
-      await f.control.summary();
-      const option = f.control.options().find(option => option.choice === "land");
-      expect(option?.unavailable).toBeUndefined(); expect(typeof option?.needsReason).toBe("string");
-      expect((await f.control.choose("land")).phase).toBe("failed"); expect(f.events).not.toContain("rebase");
-      expect((await f.control.choose("land", { overrideReason: "Owner accepts the risk" })).phase).toBe("landed");
-      expect(f.journal.record()).toMatchObject({ outcome: { override_reason: "Owner accepts the risk" }, decisions: [
-        { kind: "exit", text: "land" }, { kind: "exit", text: "land" }, { kind: "override", text: "Owner accepts the risk" },
-      ] });
+      const approve = (tip: string) => f.journal.review({ ...child("review-1", "review"), verdict: {
+        verdict: "approve", summary: "Reviewed", findings: [], head, at: 1000,
+      } }, head, tip);
+      approve("c".repeat(40));
+      await f.offer();
+      expect(f.control.options().find(o => o.choice === "land")?.needsReason).toBeDefined();
+      approve(base);
+      expect(f.control.options().find(o => o.choice === "land")?.needsReason).toBeUndefined();
     } finally { f.close(); }
   });
-  test("a rebase conflict aborts and names conflicted paths", async () => {
+  test("review override is explicit and recorded for the offered, gated head", async () => {
+    const f = fixture({ policy: "review" });
+    try {
+      let authorization = await f.offer();
+      expect(f.control.options().find(o => o.choice === "land")?.needsReason).toBeDefined();
+      expect((await f.control.choose("land", { authorization })).phase).not.toBe("landed");
+      authorization = await f.offer();
+      expect((await f.control.choose("land", { authorization, overrideReason: "Owner accepts the risk" })).phase).toBe("landed");
+      expect(f.journal.record().outcome.override_reason).toBe("Owner accepts the risk");
+    } finally { f.close(); }
+  });
+
+  test("preparation aborts a conflicted rebase and leaves a useful path without moving main", async () => {
     const f = fixture({ conflict: true });
     try {
-      const state = await f.control.choose("land");
-      expect(state.phase).toBe("failed"); expect(state.detail).toContain("src/parser.ts");
-      expect(f.events.filter(event => event !== "record")).toEqual(["rebase", "abort"]);
+      f.repo.tip = "c".repeat(40);
+      expect(await f.control.prepare()).toBeUndefined();
+      expect(f.control.preparationDetail()).toContain("src/parser.ts");
+      expect(f.calls.filter(args => args[0] === "rebase" && args[1] === "--abort")).toHaveLength(1);
+      expect(f.repo.tip).toBe("c".repeat(40));
+      expect(f.control.options().find(o => o.choice === "land")?.unavailable).toBeDefined();
     } finally { f.close(); }
   });
-  test("a changed rebased patch needs review again even after an approving round", async () => {
-    const f = fixture({ policy: "review", patchChanged: true });
+  test("overlapping changes in the owner's checkout block preparation without touching that checkout", async () => {
+    const f = fixture({ dirtyBase: true });
     try {
-      f.journal.review({ ...child("review-1", "review"), verdict: { verdict: "approve", summary: "Approved", findings: [], head, at: 1000 } }, head);
-      const state = await f.control.choose("land");
-      expect(state.phase).toBe("failed"); expect(state.detail).toContain("build_review");
-      expect(f.events).not.toContain("gate");
+      expect(await f.control.prepare()).toBeUndefined();
+      expect(f.control.preparationDetail()).toContain("/primary");
+      expect(f.calls.some(args => ["merge", "update-ref", "stash", "reset"].includes(args[0]!))).toBeFalse();
+    } finally { f.close(); }
+  });
+  test("a later failed receipt invalidates a previously offered pass", async () => {
+    const f = fixture();
+    try {
+      const authorization = await f.offer();
+      expect(authorization).toBeDefined();
+      const previous = f.journal.latestGate()!;
+      f.journal.gate({ ...previous, attempt: "G2", result: "fail", failed_command: "true" });
+      expect(f.journal.passedGate(head, ["true"])).toBeUndefined();
+      expect((await f.control.choose("land", { authorization })).phase).not.toBe("landed");
+      expect(f.repo.tip).toBe(base);
     } finally { f.close(); }
   });
   test("Keep retains its outcome in the private session journal", async () => {
@@ -279,7 +251,7 @@ describe("build exits", () => {
     try {
       const state = await f.control.choose("keep");
       expect(state.phase).toBe("kept");
-      expect(f.events).toEqual([]);
+      expect(f.calls.some(args => ["rebase", "merge", "update-ref"].includes(args[0]!))).toBeFalse();
       expect(f.journal.record()).toMatchObject({ outcome: { state: "kept", head }, decisions: [{ kind: "exit", text: "keep" }] });
       expect(statSync(join(f.ctx.dir, "journal.json")).mode & 0o777).toBe(0o600);
     } finally { f.close(); }
@@ -318,7 +290,7 @@ describe("build exits", () => {
   });
 });
 
-test("bare Land only rebases and fast-forwards Git in the clean primary checkout on its starting branch", async () => {
+test("bare preparation respects the primary checkout; Land never rebases or runs a gate", async () => {
   for (const [primaryBranch, tracked, succeeds] of [["main", "", true], ["other", "", false], ["main", " M tracked\n", false]] as const) {
     const dir = mkdtempSync(join(tmpdir(), "bare-exit-"));
     const original = context("review");
@@ -328,10 +300,10 @@ test("bare Land only rebases and fast-forwards Git in the clean primary checkout
     const fallback = git();
     const gitRun: Run = async (argv, options) => {
       if (argv[0] === "worktree") return { code: 0, stdout: "worktree /primary\0HEAD ignored\0branch refs/heads/main\0\0", stderr: "" };
-      if (argv[0] === "symbolic-ref") {
-        expect(options.cwd).toBe("/primary");
-        return { code: 0, stdout: primaryBranch, stderr: "" };
-      }
+      if (argv.includes("--absolute-git-dir") || argv.includes("--git-common-dir")) return { code: 0, stdout: dir, stderr: "" };
+      if (argv.includes("--show-prefix")) return { code: 0, stdout: "", stderr: "" };
+      if (argv[0] === "rev-parse" && argv.at(-1) === "HEAD" && !argv.includes("--abbrev-ref")) return { code: 0, stdout: options.cwd === "/primary" ? base : head, stderr: "" };
+      if (argv[0] === "symbolic-ref") return { code: 0, stdout: "refs/heads/" + (options.cwd === "/primary" ? primaryBranch : "build/parser"), stderr: "" };
       if (argv[0] === "status" && options.cwd === "/primary") return { code: 0, stdout: tracked, stderr: "" };
       if (["rebase", "merge"].includes(argv[0]!)) writes.push({ argv: [...argv], cwd: options.cwd });
       return fallback(argv, options);
@@ -342,19 +314,22 @@ test("bare Land only rebases and fast-forwards Git in the clean primary checkout
     try {
       await exit.summary();
       expect(exit.options().find(option => option.choice === "land")?.needsReason).toBeUndefined();
-      const result = await exit.choose("land");
-      expect(result.phase).toBe(succeeds ? "landed" : "failed");
-      if (succeeds) {
-        expect(writes).toEqual([{ argv: ["rebase", "main"], cwd: ctx.session.worktree },
-          { argv: ["merge", "--ff-only", head], cwd: "/primary" }]);
-        expect(phases).toContain("rebasing"); expect(phases).toContain("landing");
-        expect(phases).not.toContain("verifying");
-        expect(result.record).toMatchObject({ landed: head, baseBranch: "main" });
-        expect(result.record?.gateAttempt).toBeUndefined();
-      } else {
+      if (!succeeds) {
+        expect(await exit.prepare()).toBeUndefined();
+        expect(exit.preparationDetail()).toMatch(primaryBranch === "other" ? /main/ : /changes/);
         expect(writes).toEqual([]);
-        expect(result.detail).toContain(primaryBranch === "other" ? "must be on main" : "tracked changes");
+        continue;
       }
+      const candidate = await exit.prepare();
+      exit.open(candidate!);
+      const authorization = exit.options().find(option => option.choice === "land")?.authorization;
+      const at = writes.length;
+      const result = await exit.choose("land", { authorization });
+      expect(result.phase).toBe("landed");
+      expect(writes.slice(at)).toEqual([{ argv: ["merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", head], cwd: "/primary" }]);
+      expect(phases).not.toContain("verifying");
+      expect(result.record).toMatchObject({ landed: head, baseBranch: "main" });
+      expect(result.record?.gateAttempt).toBeUndefined();
     } finally { exit.close(); rmSync(dir, { recursive: true, force: true }); }
   }
 });

@@ -93,31 +93,26 @@ offer the choices, but you decide:
 
 - **Keep** records the outcome and keeps the worktree and branch.
 - **Iterate** returns to the session to continue working.
-- **Land** rebases onto the base branch, runs the project's gate on the rebased
-  commit, and fast-forwards the base branch locally. A standalone Git build
-  instead lands on its starting branch without a Corral gate.
+- **Land** locally fast-forwards the base branch to the prepared commit. It does not
+  rebase your work, run another gate, or ask the agent to change code after you click.
 
-Land is unavailable without a suitable Git branch and base, commits beyond the
-session base, a clean worktree and no live child agents. It is also unavailable
-when the project or its landing base is missing, or project policy disables it.
-In a workspace with review policy, provide a reason if the current commit lacks
-an approving review with every finding resolved. The primary checkout must be
-ready for the fast-forward. If the rebase conflicts or the base moves, Land fails
-and the session stays open. A failed gate can be handed to the agent for repair,
-with up to three repair rounds.
+Preparation happens **before** the landing choice. For a workspace build, the host
+captures the integration tip, rebases the committed candidate onto it when necessary,
+and checks the prepared head. Review compares that head to the captured base, not to
+where the build originally started. A clean rebase is not a failure: the resulting
+commit can still need a gate or review. If Git finds a conflict, the host attempts to
+abort and reports the conflicted paths; resolve them in the build worktree. A failing
+gate reports its command and log. Repair the candidate before offering it for Land.
 
-Land shows its steps as they run: the rebase, the gate and the fast-forward, each
-with its time. Under the gate step you see the command that runs, the last lines
-of its log and the log's path; a failed gate keeps them. Land does not wait for a
-result it cannot use:
+The final choice covers a specific base and head. A previously passing gate on the
+same head and commands can be reused. Under review policy an owner may supply a reason
+to override missing approval, never to bypass a failed gate. If either branch moves,
+prepare the new candidate rather than reusing an old choice. A stale card cannot land
+a different commit. Keep and Iterate do not require passing evidence.
 
-- The gate is not run again on a commit it already passed on with the same
-  commands. When the rebase changes nothing, Land goes straight to the
-  fast-forward and names the earlier attempt.
-- If the base branch moves while the gate runs, the gate is stopped at once and
-  Land fails. Choose Land again to rebase onto the new tip.
-- If the checkout of the base branch has uncommitted changes to files the build
-  changes, Land fails before the gate, because the fast-forward would refuse.
+Land requires a clean candidate, no live children, a suitable base branch and a base
+checkout that can safely fast-forward. A standalone Git build prepares against its
+starting branch, with no Corral gate; outside Git only Keep and Iterate are available.
 
 ## Stop, resume and remove
 

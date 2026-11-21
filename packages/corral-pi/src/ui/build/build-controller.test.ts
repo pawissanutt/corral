@@ -92,6 +92,7 @@ function harness(options: { readonly remote?: boolean } = {}) {
     checkPrepared: async () => {},
     choiceBusy: () => false,
     choiceRevision: () => 0,
+    gateProgress: () => {},
   };
   const board: BoardControl & { propose(plan: BoardPlan): void; close(): void } = {
     tasks: () => s.tasks,

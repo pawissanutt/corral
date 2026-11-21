@@ -41,7 +41,7 @@ export interface BuildJournal {
   /** The latest gate that passed on exactly `head` with exactly `commands`. */
   passedGate(head: string, commands: readonly string[]): BuildGateResult | undefined;
   latestReview(): RecordReview | undefined;
-  review(child: ChildSnapshot, head: string): RecordReview;
+  review(child: ChildSnapshot, head: string, base?: string): RecordReview;
   resolve(round: number, finding: string, resolution: { state: "fixed" | "declined"; commit?: string; reason?: string }): void;
   decision(kind: RecordDecision["kind"], text: string, answer?: string): void;
   outcome(value: BuildRecord["outcome"]): void;
@@ -251,13 +251,16 @@ export function createJournal(options: {
     },
     gate(result) { data.verification.push(result); data.timeline.push({ at: result.ended, phase: "verify", detail: `${result.attempt}: ${result.result}` }); persist(); },
     latestGate: () => data.verification.at(-1),
-    passedGate: (head, commands) => data.verification.findLast(gate => gate.result === "pass" && gate.head === head
-      && gate.commands?.length === commands.length && gate.commands.every((command, index) => command === commands[index])),
+    passedGate(head, commands) {
+      const latest = data.verification.findLast(gate => gate.head === head && gate.commands?.length === commands.length
+        && gate.commands.every((command, index) => command === commands[index]));
+      return latest?.result === "pass" ? latest : undefined;
+    },
     latestReview: () => data.reviews.at(-1),
-    review(child: ChildSnapshot, head: string): RecordReview {
+    review(child: ChildSnapshot, head: string, base?: string): RecordReview {
       if (!child.verdict) throw new Error(`Reviewer ${child.id} ended without a verdict${child.error ? `: ${child.error}` : "."}`);
       const verdict = child.verdict;
-      const round: RecordReview = { round: data.reviews.length + 1, reviewer: child.id, model: child.model, head: verdict.head ?? head,
+      const round: RecordReview = { round: data.reviews.length + 1, reviewer: child.id, model: child.model, head: verdict.head ?? head, ...(base ? { base } : {}),
         verdict: verdict.verdict, at: iso(verdict.at), summary: verdict.summary,
         findings: verdict.findings.map((finding, index) => ({ ...finding, id: `F${index + 1}` })) };
       data.reviews.push(round); data.timeline.push({ at: round.at, phase: "review", detail: `${child.id}: ${round.verdict}` }); captureFleet(); persist(); return round;

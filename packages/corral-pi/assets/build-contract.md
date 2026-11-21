@@ -118,27 +118,25 @@ when using Git, rerun checks and request a new review when the candidate changes
 Use build_finish with a real title of 1 to 120 characters describing what was built, not
 a slug or ID; optionally include a summary. Explain the candidate and evidence first.
 <!-- corral-only -->
-The owner alone chooses Keep, Iterate or Land. Keep records the result and retains the
-branch; Iterate returns to this session; Land rebases, runs the project's configured
-gate on the rebased worktree, and locally fast-forwards the base branch. A gate that
-already passed on that exact commit is not run again, so a build_verify pass on the
-final head counts when the rebase changes nothing. Land stops at once if the base branch
-moves while the gate runs; the owner chooses Land again. Follow the in-session review
-policy for the candidate.
+Prepare before asking the owner to Land. build_verify and build_review prepare the candidate
+against the current integration tip before collecting evidence. Finish brings the exact
+candidate, evidence and available choices together. If preparation conflicts, the host
+aborts the rebase; resolve the reported conflict in the build worktree, not the owner's
+checkout. If a check fails or review requests changes, fix the candidate, commit and
+prepare it again. Report a blocker when it cannot be fixed.
 
-When the gate fails during the owner's Land, the host sends a `[corral build] Land
-stopped` message naming the failed command and log. It is a host message for the Land the
-owner already chose, not a new owner instruction. Fix the cause, commit, and under review
-policy without an override get an approving build_review with resolved findings for the
-new head. Do not call build_finish: when that turn ends with a new commit and a clean
-worktree the host runs Land again, for a bounded number of repairs. If you cannot fix it,
-say why and end the turn without committing, and Land stops for the owner.
+The owner alone chooses Keep, Iterate or Land. Keep retains the branch and Iterate
+returns to the session. Land only fast-forwards the offered, already prepared head.
+It never rebases, runs a new check or authorizes a repair after the owner's choice.
+A stale choice cannot land a replacement. Prepare the current candidate and offer its
+new identity; only the owner may authorize it. A review override never skips the gate.
 <!-- /corral-only -->
 <!-- bare-only -->
 The owner alone chooses the exit: Keep retains this directory and any branch, and Iterate
 returns to the session.
-Land, when Git is available, rebases onto the branch the session started from and locally
-fast-forwards that branch in the primary checkout. It runs no gate and invokes only Git.
+When Git is available, prepare against the starting branch before offering Land.
+Land locally fast-forwards that branch in the primary checkout to the prepared head.
+It runs no gate and invokes only Git.
 An approving in-session review is recommended, never required for Land. The primary
 checkout must still be on the starting branch with no tracked changes. Outside Git there
 is no branch and only Keep and Iterate are available.

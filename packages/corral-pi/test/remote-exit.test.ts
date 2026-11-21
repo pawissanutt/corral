@@ -28,7 +28,7 @@ async function withBuild(run: (fixture: Fixture) => Promise<void>) {
     const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
     mkdirSync(repo);
     git(repo, "init", "-b", "main");
-    writeFileSync(join(repo, ".gitignore"), "/.worktrees/\n");
+    writeFileSync(join(repo, ".gitignore"), "/.worktrees/\n/gate-ran\n");
     git(repo, "add", ".gitignore");
     git(repo, "commit", "-m", "base");
     mkdirSync(join(root, ".corral-next"));
@@ -51,7 +51,8 @@ async function withBuild(run: (fixture: Fixture) => Promise<void>) {
 }
 
 async function exitCard(fixture: Fixture, landAvailable = false): Promise<SessionCard> {
-  expect((await fixture.request("exit_open")).result).toEqual({ phase: "pending" });
+  // Opening Finish acknowledges promptly; preparation may still be checking evidence.
+  expect((await fixture.request("exit_open")).ok).toBeTrue();
   const deadline = performance.now() + 3000;
   while (performance.now() < deadline) {
     const reply = await fixture.request("cards");
@@ -64,7 +65,7 @@ async function exitCard(fixture: Fixture, landAvailable = false): Promise<Sessio
   throw new Error("build exit did not become available");
 }
 
-test("Land without the required reason is refused before anything runs", async () => {
+test("a prepared exit cannot advance main without the required review override", async () => {
   await withBuild(async fixture => {
     const { record, git, repo, root } = fixture;
     const base = git(repo, "rev-parse", "main");
@@ -75,7 +76,7 @@ test("Land without the required reason is refused before anything runs", async (
     expect(answer.error?.code).toBe("exit_reason_required");
     expect(git(repo, "rev-parse", "main")).toBe(base);
     expect(loadSession(join(root, "data"), ID).exit).toBeUndefined();
-    expect(existsSync(join(record.worktree, "gate-ran"))).toBeFalse();
+    expect(existsSync(join(record.worktree, "gate-ran"))).toBeTrue();
     const shown = (await fixture.request("cards")).result?.cards as SessionCard[];
     expect(shown.map(card => card.id)).toContain(card.id);
   });

@@ -355,8 +355,6 @@ export class HostSession {
   private readonly code: CodeRuntime | undefined;
   private turn = 0;
   private open = false;
-  /** Each is settled once, by the first turn numbered `from` or later that ends. */
-  private turnWaiters: { readonly from: number; settle(aborted: boolean): void }[] = [];
   private cancelRequested: number | undefined;
   private stopCause: TurnStopCause | undefined;
   private turnError: string | null = null;
@@ -468,13 +466,6 @@ export class HostSession {
       deliverToParent: async text => {
         const result = await this.submitAutomated(text);
         if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
-      },
-      repairLand: async text => {
-        const result = await this.submitLocal({ text, busyPolicy: "steer", origin: "auto" });
-        // A started prompt owns its turn; a steer queued into the open turn is answered there.
-        const from = result.disposition === "started" ? result.turn : result.disposition === "queued" && this.open ? this.turn : undefined;
-        if (from === undefined) throw new Error(`Land repair reached no turn: ${result.reason ?? result.disposition}`);
-        return new Promise(resolve => { this.turnWaiters.push({ from, settle: aborted => resolve({ aborted }) }); });
       },
       shellRefusal: options.modules.role.shellRefusal, changed: () => this.fleetChanged(),
     }) : undefined;
@@ -1164,7 +1155,7 @@ export class HostSession {
     });
     if (this.buildControls) {
       const { exit, board } = this.buildControls;
-      pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { if (!this.panels?.finish()) exit.open(); } });
+      pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { if (!this.panels?.finish()) await exit.requestFinish(); } });
       if (board) pi.registerCommand("board", { description: "Refresh this build session's board tasks", handler: async () => { await board.refresh(); this.panels?.showBoard(); } });
     }
     if (this.exportable()) {
@@ -1402,9 +1393,6 @@ export class HostSession {
     this.options.herdr?.turnEnded();
     this.commands?.flush();
     this.turnFacts.finish(this.turn);
-    const due = this.turnWaiters.filter(waiter => waiter.from <= this.turn);
-    this.turnWaiters = this.turnWaiters.filter(waiter => waiter.from > this.turn);
-    for (const waiter of due) waiter.settle(aborted);
   }
 
   private checkpoint(phase: "start" | "end"): void {
