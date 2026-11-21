@@ -110,14 +110,20 @@ export class ToolApprovals {
     const prior = this.requests.get(key);
     if (prior) {
       const answer = this.questions.get(prior.id);
-      if (answer?.status === "pending" && !grant) return waiting(prior.id);
+      if (answer?.status === "pending") return waiting(prior.id);
       this.requests.delete(key);
-      if (answer?.status === "pending") this.questions.cancel(prior.id);
-      if (this.questions.allowed(prior.id) || (grant && answer?.answers?.[0]?.option !== CHOICE.deny)) return undefined;
+      if (this.questions.allowed(prior.id) || grant) return undefined;
       const choice = answer?.answers?.[0]?.option;
       if (choice !== CHOICE.timed && choice !== CHOICE.session) return `No current owner approval for this tool call; ${effect}.`;
     }
     if (grant) return undefined;
+    if (this.reusable && destination !== undefined) {
+      // One live decision per file prevents two cards from conflicting over a reusable scope.
+      const pending = [...this.requests.values()].find(request => request.scope === scope &&
+        this.questions.get(request.id)?.status === "pending");
+      if (pending) return `A different change to this file is waiting for owner approval ${pending.id}; ${effect}. `
+        + "Allow once applies only to the original change.";
+    }
     if (!fitsPrompt(question)) return `The full command or destination does not fit in the owner prompt; ${effect}.`;
     const options = this.reusable ? [CHOICE.deny, CHOICE.once, CHOICE.timed, CHOICE.session] : [CHOICE.deny, CHOICE.legacyOnce];
     const record = this.questions.ask(randomUUID(), [{ question, options, freeText: false }], kind);

@@ -63,6 +63,7 @@ test("a timed grant covers only the exact shell invocation and expires from the 
   const input = { command: "touch marker", wait_ms: 0 };
   expect(approvals.shell("bash", input)).toContain("Waiting");
   const [card] = questionEntries(questions);
+  advance(5 * 60 * 1000);
   await card!.answer([{ options: [CHOICE.timed] }], false, async () => {});
   advance(APPROVAL_TTL - 1);
   expect(approvals.shell("bash", input)).toBeUndefined();
@@ -71,6 +72,19 @@ test("a timed grant covers only the exact shell invocation and expires from the 
   expect(approvals.shell("bash", { ...input, wait_ms: 100 })).toContain("Waiting");
   advance(1);
   expect(approvals.shell("bash", input)).toContain("Waiting");
+});
+
+test("one file cannot have conflicting pending choices, and denied writes stay blocked on retry", async () => {
+  const { questions, approvals } = fixture(true);
+  const request = (content: string) => approvals.write("write", { path: "link", content }, outside);
+  expect(request("first")).toContain("Waiting");
+  const [card] = questions.pending();
+  expect(request("second")).toContain(card!.id);
+  expect(questions.pending()).toHaveLength(1);
+  await questions.answer(card!.id, [{ option: CHOICE.deny }]);
+  expect(request("first")).toContain("No current owner approval");
+  expect(request("first")).toContain("Waiting");
+  expect(questions.pending()[0]!.id).not.toBe(card!.id);
 });
 
 test("a session file grant is limited to the canonical destination and never restored", async () => {
