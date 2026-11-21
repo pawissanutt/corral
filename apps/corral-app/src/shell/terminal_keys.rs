@@ -1,17 +1,20 @@
 //! The terminal's key line on the last row: a legend of the keys in focus (the page's, the
 //! composer's while Ask's field has them, or the keys of the surface standing over the page), the
-//! destinations, then Ask and Go to, and the sidebar's toggle while there is room. Every entry is
-//! a whole pair, its key and what it does: a key without its word says nothing, so when the grid
-//! is short of room whole entries give way, never a word. The keys in focus come first, in their
-//! order, as many as fit; then Ask, the destinations (all or none) and the sidebar's toggle as
-//! room is left. Go to (`^K`) always ends the line, as `^K more` when keys in focus were left
-//! out: the palette lists every action of what is in view.
+//! destinations, then Ask, Agents and Go to, and the sidebar's toggle while there is room. Every
+//! entry is a whole pair, its key and what it does: a key without its word says nothing, so when
+//! the grid is short of room whole entries give way, never a word. The keys in focus come first,
+//! in their order, as many as fit; then Ask, Agents, the destinations (all or none) and the
+//! sidebar's toggle as room is left. Go to (`^K`) always ends the line, as `^K more` when keys
+//! in focus were left out: the palette lists every action of what is in view. A session page on
+//! top takes the row for its conversation: its keys are in its ⋯ menu, and the line comes back
+//! only while a surface stands over the page.
 
 use nsh_core::prelude::*;
 
 use crate::{
     model::{
         Area, DataState, Destination, Live, Overlay, WorkspaceMode,
+        agents::switcher::{AGENTS_CHORD, AGENTS_LABEL},
         assistant::COMPOSER_KEYS,
         commands::{Surface, area_key, key_legend_live},
         nav::{ASK_KEY, ASK_LABEL, PALETTE_LABEL, SIDEBAR_LABEL},
@@ -50,18 +53,21 @@ impl Entry {
 const MORE_LABEL: &str = "more";
 
 /// The key line's groups in order, a line between each two: the keys in focus, the
-/// destinations, then Ask and Go to, with the sidebar's toggle after them while there is room.
+/// destinations, then Ask, Agents and Go to, with the sidebar's toggle after them while there is
+/// room.
 struct Line {
     own: Vec<Entry>,
     destinations: Vec<Entry>,
     /// Ask, while the page's keys are the line's.
     ask: Option<Entry>,
+    /// The Agents switcher, while the page's keys are the line's.
+    agents: Option<Entry>,
     /// Go to (`^K`), which ends the line wherever the palette reaches.
     go_to: Option<Entry>,
     sidebar: Option<Entry>,
 }
 
-/// The group Ask, Go to and the sidebar's toggle share.
+/// The group Ask, Agents, Go to and the sidebar's toggle share.
 const ACTIONS_GROUP: usize = 2;
 
 /// What a layout of the line shows: how many keys in focus, and which of the rest.
@@ -69,6 +75,7 @@ const ACTIONS_GROUP: usize = 2;
 struct Fit {
     own: usize,
     ask: bool,
+    agents: bool,
     destinations: bool,
     sidebar: bool,
 }
@@ -77,36 +84,27 @@ struct Fit {
 /// the line gives the composer's own keys and Go to, the one chord that still reaches past it.
 /// While a surface stands over the page (`surface`) the page's keys do nothing: the line gives
 /// the surface's own. Otherwise the keys of the page in view (when the model gives it any and
-/// the destination is served), the `shown` places and Settings, then Ask and Go to. A place
-/// whose key the page takes for itself is left out rather than listed twice with two meanings.
-/// `session`: the legend of the session page on top for its focused surface (its composer's
-/// keys while it has them), which replaces the page's and the composer's.
+/// the destination is served), the `shown` places and Settings, then Ask, Agents and Go to. A
+/// place whose key the page takes for itself is left out rather than listed twice with two
+/// meanings.
 fn line(
     destination: Destination,
     live: Option<Live>,
     served: bool,
     typing: bool,
     surface: Option<Surface>,
-
     shown: &[Area],
-    session: Option<Vec<(&'static str, &'static str)>>,
 ) -> Line {
     let go_to = Entry::new(PALETTE_CHORD, PALETTE_LABEL);
     if typing {
-        let own = match &session {
-            Some(legend) => legend
-                .iter()
-                .map(|&(keys, name)| Entry::new(chord(keys), name))
-                .collect(),
-            None => COMPOSER_KEYS
+        return Line {
+            own: COMPOSER_KEYS
                 .iter()
                 .map(|hint| Entry::new(hint.keys, hint.action))
                 .collect(),
-        };
-        return Line {
-            own,
             destinations: Vec::new(),
             ask: None,
+            agents: None,
             go_to: Some(go_to),
             sidebar: None,
         };
@@ -120,14 +118,15 @@ fn line(
                 .collect(),
             destinations: Vec::new(),
             ask: None,
+            agents: None,
             go_to: surface.reaches_past().then_some(go_to),
             sidebar: None,
         };
     }
-    let legend = match session {
-        Some(legend) => legend,
-        None if served => key_legend_live(destination, live.as_ref()),
-        None => Vec::new(),
+    let legend = if served {
+        key_legend_live(destination, live.as_ref())
+    } else {
+        Vec::new()
     };
     let taken = |key: char| {
         legend
@@ -148,6 +147,7 @@ fn line(
             .collect(),
         destinations,
         ask: Some(Entry::new(ASK_KEY, ASK_LABEL)),
+        agents: Some(Entry::new(AGENTS_CHORD, AGENTS_LABEL)),
         go_to: Some(go_to),
         sidebar: Some(Entry::new(SIDEBAR_CHORD, SIDEBAR_LABEL)),
     }
@@ -171,6 +171,13 @@ impl Line {
         }
         if fit.ask {
             shown.extend(self.ask.iter().map(|entry| (ACTIONS_GROUP, entry.clone())));
+        }
+        if fit.agents {
+            shown.extend(
+                self.agents
+                    .iter()
+                    .map(|entry| (ACTIONS_GROUP, entry.clone())),
+            );
         }
         if let Some(go_to) = &self.go_to {
             let mut go_to = go_to.clone();
@@ -207,8 +214,8 @@ impl Line {
     }
 
     /// What fits in `room`, whole pairs only: the keys in focus in their order while they fit
-    /// (Go to kept at the end), then, once all of them show, Ask, the destinations and the
-    /// sidebar's toggle, each while it fits.
+    /// (Go to kept at the end), then, once all of them show, Ask, Agents, the destinations and
+    /// the sidebar's toggle, each while it fits.
     fn layout(&self, room: usize) -> Fit {
         let fits = |fit: Fit| self.cells(fit) <= room;
         let mut fit = Fit::default();
@@ -221,8 +228,9 @@ impl Line {
             fit.own += 1;
         }
         if fit.own == self.own.len() {
-            let grows: [fn(&mut Fit); 3] = [
+            let grows: [fn(&mut Fit); 4] = [
                 |fit| fit.ask = true,
+                |fit| fit.agents = true,
                 |fit| fit.destinations = true,
                 |fit| fit.sidebar = true,
             ];
@@ -239,9 +247,9 @@ impl Line {
 }
 
 /// Tracked: the surface standing over the page and taking its keys, the newest first: the
-/// palette, the confirmation, the refusal sheet, the Remove sheet, the rewind sheet, an
-/// operation's form, the keyboard's menu or one a press opened; on Artifacts the full-size view,
-/// or the filter while it has the keys.
+/// palette, the confirmation, the refusal sheet, the Remove sheet, the rewind sheet, the Agents
+/// switcher, an operation's form, the keyboard's menu or one a press opened; on Artifacts the
+/// full-size view, or the filter while it has the keys.
 fn open_surface(app: AppState) -> Option<Surface> {
     if app.is_open(Overlay::Palette) {
         Some(Surface::Palette)
@@ -250,7 +258,7 @@ fn open_surface(app: AppState) -> Option<Surface> {
     } else if app.refusal.with(Option::is_some) || app.agents.with(|state| state.removing.is_some())
     {
         Some(Surface::Sheet)
-    } else if app.agents.with(|state| state.rewind.is_some()) {
+    } else if app.agents.with(|state| state.rewind.is_some()) || app.switcher.get() {
         Some(Surface::Menu)
     } else if app.work.with(|state| state.composer.is_some()) {
         Some(Surface::Form)
@@ -269,17 +277,10 @@ fn open_surface(app: AppState) -> Option<Surface> {
     }
 }
 
-/// A session legend without its Ctrl+K: the line ends with its own Go to (`^K`).
-fn without_go_to(legend: Vec<(&'static str, &'static str)>) -> Vec<(&'static str, &'static str)> {
-    legend
-        .into_iter()
-        .filter(|&(keys, _)| chord(keys) != PALETTE_CHORD)
-        .collect()
-}
-
 /// The last row, a legend: each key as a cap and the name it goes to, the keys in focus first.
 /// When the grid is short of room the names give way one by one, then whole groups, as
-/// [`fits`] orders them; a key's cap is never cut.
+/// [`Line::layout`] orders them; a key's cap is never cut. Nothing, not even the row, while a
+/// session page is on top with nothing over it and Ask closed.
 pub(super) fn key_line(app: AppState, typing: Memo<bool>, shown: Memo<Vec<Area>>) -> AnyElement {
     let route = computed(move || {
         let destination = app.destination();
@@ -289,36 +290,14 @@ pub(super) fn key_line(app: AppState, typing: Memo<bool>, shown: Memo<Vec<Area>>
         (destination, app.live_page(), app.data.get(), landing)
     });
     let surface = computed(move || open_surface(app));
-    // The session page on top gives the legend of what has its keys (a picker, the `/` menu, the
-    // transcript, a view, a card, the composer), unless Ask's field stands over it. Its Ctrl+K
-    // is the line's own Go to, so it is not listed twice.
     let session = computed(move || {
-        let Some(Live::Session(id)) = app.live_page() else {
-            return None;
-        };
-        if app.is_open(Overlay::Ask) {
-            return None;
-        }
-        let env = app.env();
-        let legend = app.feed.with(|feed| {
-            app.session.with(|state| {
-                use crate::model::session::{self, Cx, Facts, Tab};
-                let facts = Facts::of(feed, &id);
-                let ui = state.ui(id.as_str());
-                let cx = Cx::new(feed, ui, &id, env, &facts);
-                let tab = if session::shown_tabs(&cx).contains(&ui.tab) {
-                    ui.tab
-                } else {
-                    Tab::Chat
-                };
-                let slash = ui.draft.starts_with('/')
-                    && session::slash(&cx, &session::actions(&cx)).is_some();
-                session::legend_of(&cx, tab, slash)
-            })
-        });
-        Some(without_go_to(legend))
+        matches!(app.live_page(), Some(Live::Session(_))) && !app.is_open(Overlay::Ask)
     });
     dynamic(move || {
+        let surface = surface.get();
+        if session.get() && surface.is_none() {
+            return view().into_element();
+        }
         let room = term::columns();
         let (destination, live, data, landing) = route.get();
         let shown = shown.get();
@@ -326,15 +305,7 @@ pub(super) fn key_line(app: AppState, typing: Memo<bool>, shown: Memo<Vec<Area>>
         let served = data != DataState::Disconnected
             && !landing
             && app.available(destination) == crate::model::Availability::Ready;
-        let line = line(
-            destination,
-            live,
-            served,
-            typing.get(),
-            surface.get(),
-            &shown,
-            session.get(),
-        );
+        let line = line(destination, live, served, typing.get(), surface, &shown);
         let fit = line.layout(room);
         let mut row = view()
             .h(term::rows(1.0))
@@ -372,19 +343,6 @@ pub(super) fn key_line(app: AppState, typing: Memo<bool>, shown: Memo<Vec<Area>>
 mod tests {
     use super::*;
 
-    /// The line of `legend` in focus on a session page.
-    fn session_line(typing: bool, legend: Vec<(&'static str, &'static str)>) -> Line {
-        line(
-            Destination::Sessions,
-            Some(Live::Session(crate::model::Id::new("B-k3x9"))),
-            true,
-            typing,
-            None,
-            &Area::PLACES,
-            Some(legend),
-        )
-    }
-
     #[test]
     fn key_line_never_cuts_a_key_or_shows_a_destination_key_unnamed() {
         let views = [
@@ -396,27 +354,10 @@ mod tests {
                 Destination::Tasks,
                 Some(Live::Task(crate::model::Id::new("T-14"))),
             ),
-            (
-                Destination::Sessions,
-                Some(Live::Session(crate::model::Id::new("T-14_R1"))),
-            ),
         ];
         for (destination, live) in views {
             for typing in [false, true] {
-                let line = line(
-                    destination,
-                    live.clone(),
-                    true,
-                    typing,
-                    None,
-                    &Area::PLACES,
-                    live.as_ref()
-                        .filter(|live| matches!(live, Live::Session(_)))
-                        .map(|_| {
-                            use crate::model::session::{Focus, Tab, legend};
-                            without_go_to(legend(Focus::Composer, Tab::Chat, true))
-                        }),
-                );
+                let line = line(destination, live.clone(), true, typing, None, &Area::PLACES);
                 for room in 20..=240 {
                     let fit = line.layout(room);
                     assert!(
@@ -443,13 +384,14 @@ mod tests {
         }
     }
 
-    /// On a session view with many keys (the Board's) the line dropped every word, the app's
-    /// own `/ Ask` and `^K Go to` too, and showed bare caps (`p   n   q  │  /   ^K`). A crowded
-    /// line keeps whole pairs: the keys in focus first and in order, as many as fit, then
-    /// `^K more` saying the palette has the rest.
+    /// On a view with many keys the line dropped every word, the app's own `/ Ask` and `^K Go
+    /// to` too, and showed bare caps (`p   n   q  │  /   ^K`). A crowded line keeps whole pairs:
+    /// the keys in focus first and in order, as many as fit, then `^K more` saying the palette
+    /// has the rest.
     #[test]
     fn a_crowded_key_line_keeps_whole_pairs_and_never_a_bare_key() {
-        let board = vec![
+        let mut line = line(Destination::Tasks, None, true, false, None, &Area::PLACES);
+        line.own = [
             ("esc", "chat"),
             ("j", "next task"),
             ("k", "previous task"),
@@ -462,41 +404,40 @@ mod tests {
             ("Ctrl+O", "expand"),
             ("Alt+P", "next model"),
             ("Alt+E", "effort"),
-        ];
-        for typing in [false, true] {
-            let line = session_line(typing, board.clone());
-            for room in 20..=240 {
-                let fit = line.layout(room);
-                let shown = line.entries(fit);
-                assert!(line.cells(fit) <= room, "at {room}: {fit:?} overflows");
-                assert!(
-                    shown.iter().all(|(_, entry)| !entry.name.is_empty()),
-                    "at {room}: a key shows without its word"
+        ]
+        .into_iter()
+        .map(|(keys, name)| Entry::new(chord(keys), name))
+        .collect();
+        for room in 20..=240 {
+            let fit = line.layout(room);
+            let shown = line.entries(fit);
+            assert!(line.cells(fit) <= room, "at {room}: {fit:?} overflows");
+            assert!(
+                shown.iter().all(|(_, entry)| !entry.name.is_empty()),
+                "at {room}: a key shows without its word"
+            );
+            let own: Vec<&str> = shown
+                .iter()
+                .filter(|(group, _)| *group == 0)
+                .map(|(_, entry)| entry.keys.as_str())
+                .collect();
+            let first: Vec<&str> = line.own[..own.len()]
+                .iter()
+                .map(|entry| entry.keys.as_str())
+                .collect();
+            assert_eq!(own, first, "at {room}: the keys in focus lost their order");
+            let last = shown
+                .last()
+                .map(|(_, entry)| (entry.keys.as_str(), entry.name));
+            if own.len() < line.own.len() {
+                assert_eq!(
+                    last,
+                    Some((PALETTE_CHORD, MORE_LABEL)),
+                    "at {room}: keys were left out without `^K more`"
                 );
-                let own: Vec<&str> = shown
-                    .iter()
-                    .filter(|(group, _)| *group == 0)
-                    .map(|(_, entry)| entry.keys.as_str())
-                    .collect();
-                let first: Vec<&str> = line.own[..own.len()]
-                    .iter()
-                    .map(|entry| entry.keys.as_str())
-                    .collect();
-                assert_eq!(own, first, "at {room}: the keys in focus lost their order");
-                let last = shown
-                    .last()
-                    .map(|(_, entry)| (entry.keys.as_str(), entry.name));
-                if own.len() < line.own.len() {
-                    assert_eq!(
-                        last,
-                        Some((PALETTE_CHORD, MORE_LABEL)),
-                        "at {room}: keys were left out without `^K more`"
-                    );
-                }
             }
-            let at_140 = line.layout(140);
-            assert!(at_140.own >= 6, "140 Cells show the Board's first keys");
         }
+        assert!(line.layout(140).own >= 6, "140 Cells show the first keys");
     }
 
     /// With a menu, a sheet or a form open the key line listed the page's keys, which do
@@ -510,7 +451,6 @@ mod tests {
             false,
             Some(Surface::Menu),
             &Area::PLACES,
-            None,
         );
         let keys: Vec<&str> = line.own.iter().map(|entry| entry.keys.as_str()).collect();
         let menu: Vec<&str> = Surface::Menu.keys().iter().map(|(keys, _)| *keys).collect();

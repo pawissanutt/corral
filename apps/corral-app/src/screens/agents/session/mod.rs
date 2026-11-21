@@ -1,14 +1,17 @@
-//! The one session page every session opens in, of every role: the header with the way back,
-//! the state word, Details, More and the ⋯ host actions, the main view (the transcript, or a
-//! Details section opened in its place: Usage, Agents, Changes, Board, Task or Proof, or the
-//! read-only log of a session without a Pi host) with the Details panel beside it when the page
-//! is wide, the dock, the composer (or what takes its place: a decision card, the one
+//! The one session page every session opens in, of every role: the one-row header with the way
+//! back, the state word, the Agents switcher, Files and Changes while the page is wide, Details,
+//! More and the ⋯ host actions (with the page's keys), the main view (the transcript, or a
+//! Details section opened in its place: Usage, Agents, Changes, Files, Board, Task or Proof, or
+//! the read-only log of a session without a Pi host) with the Details panel beside it when the
+//! page is wide, the dock, the composer (or what takes its place: a decision card, the one
 //! confirmation of a destructive option, an answer card, or the bar standing in for it while the
-//! session takes no message) with the `/` command menu over it, and the status line. Every fact
-//! is the model's (`model::session::page`); every press runs the session reducer. Desktop and
-//! terminal stack the parts top to bottom across the page; the phone pushes the page with the
-//! transcript scrolling and the dock, the composer and the status fixed at the bottom. While
-//! the page is on top the window's title says who the session is and whether it needs you.
+//! session takes no message) with the `/` command menu over it, and the host's alerts only while
+//! it has any. No status or key line stays under the page: the cost, context and model are
+//! Details' and the composer's, the keys the ⋯ menu's. Every fact is the model's
+//! (`model::session::page`); every press runs the session reducer. Desktop and terminal stack
+//! the parts top to bottom across the page; the phone pushes the page with the transcript
+//! scrolling and the dock and the composer fixed at the bottom. While the page is on top the
+//! window's title says who the session is and whether it needs you.
 
 mod agents_tab;
 mod board;
@@ -20,6 +23,7 @@ mod decision;
 mod dock;
 mod events;
 mod exit;
+mod files;
 mod header;
 mod pager;
 mod plan;
@@ -78,8 +82,7 @@ enum Panel {
 }
 
 /// The page of session `id` on desktop and in a terminal: the head, then the conversation (or a
-/// part's full view) over the dock, the composer and the status line, with Details beside it on
-/// a wide page.
+/// part's full view) over the dock and the composer, with Details beside it on a wide page.
 pub fn page(app: AppState, id: Id) -> AnyElement {
     let page = view_of(app, id.clone());
     follow(app, id.clone(), page);
@@ -127,7 +130,7 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
             command_menu::menu(app, page, commands),
         ))
         .child(bottom(app, page, id.clone(), commands, false, true, true))
-        .child(status::bar(app, page, true))
+        .child(alerts(app, page))
         .style_when(move || panel.get() == Panel::Instead, |s| s.hidden());
     view()
         .size_full()
@@ -144,7 +147,7 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
                 room.set(width);
             }
         })
-        .child(header::head(app, page))
+        .child(header::head(app, page, wide))
         .child(banner(app, page))
         .child(
             view()
@@ -488,6 +491,41 @@ fn banner(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             })
         })
     })
+}
+
+/// The host's standing alerts and last error under the composer, each in its tone and never
+/// dropped, while there are any; nothing otherwise.
+fn alerts(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+    let shown = computed(move || {
+        page.with(|p| {
+            p.status
+                .alerts
+                .iter()
+                .map(|alert| (alert.hue, alert.text.clone()))
+                .collect::<Vec<_>>()
+        })
+    });
+    dynamic(move || {
+        let alerts = shown.get();
+        (!alerts.is_empty()).then(|| {
+            untracked(|| {
+                let lines = view()
+                    .test_id("session-alerts")
+                    .flex_none()
+                    .gap(px(if app.form == Form::Terminal { 0.0 } else { 4.0 }))
+                    .children(
+                        alerts
+                            .into_iter()
+                            .map(|(hue, words)| notice(app, hue, &vec![span(words)], None)),
+                    );
+                match app.form {
+                    Form::Terminal => lines.into_element(),
+                    _ => conversation(app, true, lines.px(px(18.0)).pb(px(6.0)).into_element()),
+                }
+            })
+        })
+    })
+    .into_element()
 }
 
 /// What the composer's place shows: the one confirmation a destructive option asks for, a

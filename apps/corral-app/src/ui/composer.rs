@@ -1,10 +1,11 @@
 //! The session composer (`session`), the one composer of every session page and of Ask; the
-//! staged attachments with the Screenshot, Link and File controls, the images pasted into its
-//! field and the line saying why Send waits on them, which Ask offers always and a session page
-//! while its host takes attachments; and what Ask adds: the removable context and project chips
-//! and the surface Ask opens in. Ask's draft is its session's own (`draft` keeps it on this
-//! device), so the session page shows the same words. A message goes out as `session.send`, Ask's
-//! chips' ids as its first line and the session's staged attachments as its refs.
+//! staged attachments with the File control, the images and files pasted into its field and the
+//! line saying why Send waits on them, which Ask offers always and a session page while its host
+//! takes attachments; and what Ask adds: the removable context and project chips and the surface
+//! Ask opens in. Pasted text goes into the field as it was copied. Ask's draft is its session's
+//! own (`draft` keeps it on this device), so the session page shows the same words. A message
+//! goes out as `session.send`, Ask's chips' ids as its first line and the session's staged
+//! attachments as its refs.
 
 use corral_protocol::assistant::SendAttachment;
 use corral_protocol::session_state::SendPolicy;
@@ -18,7 +19,7 @@ use crate::model::session::{Action as SessionAction, SessionComposer};
 use crate::model::text::Rich;
 use crate::model::{Form, Id, Overlay};
 use crate::state::AppState;
-use crate::ui::ask::{act, chip_row, drawer, field_row, foot_controls, plus, tray};
+use crate::ui::ask::{act, attach_controls, chip_row, drawer, field_row, plus, tray};
 use crate::ui::kit::chip::chip;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::text::rich_small;
@@ -106,11 +107,28 @@ impl Attach {
     }
 }
 
-/// Stages the images (and files) pasted into session `id`'s composer; the pasted text is the
-/// field's own. Refused visibly where the session takes no attachments now.
-fn paste(app: AppState, id: &Id, attach: Attach, paste: &PasteEvent) {
-    // A copied file's path pasted where no attachments are offered is only text.
-    if paste.files.is_empty() && (paste.uris.is_empty() || !attach.offered.get_untracked()) {
+/// Whether a paste is attachments rather than text: images or files without text beside them
+/// (an office app puts a picture of copied text beside the text, which pastes as text), or
+/// files copied in a file manager, which this device reads by path (a browser reads none; its
+/// copied files arrive with their bytes).
+fn attaches(paste: &PasteEvent) -> bool {
+    let paths = !cfg!(target_arch = "wasm32") && !paste.uris.is_empty();
+    paths || (!paste.files.is_empty() && paste.text.trim().is_empty())
+}
+
+/// A paste into session `id`'s composer, whose field inserts nothing itself (`entry`): text goes
+/// in exactly as it was copied; images and files are staged for the message, refused visibly
+/// where the session takes no attachments now, where a copied file's text (its path) goes in
+/// instead. A terminal's paste is text alone, which its field inserts itself.
+fn paste(app: AppState, id: &Id, attach: Attach, entry: ElementRef, paste: &PasteEvent) {
+    if app.form == Form::Terminal {
+        return;
+    }
+    let text = (!paste.text.is_empty()).then(|| paste.text.clone());
+    if !attaches(paste) || (!attach.offered.get_untracked() && text.is_some()) {
+        if let Some(text) = text {
+            entry.insert_text(text);
+        }
         return;
     }
     match attach.refusal.get_untracked() {
@@ -202,15 +220,14 @@ fn above(app: AppState, id: &Id, ask: Option<Ask>, attach: Attach) -> AnyElement
     when(move || shown.get(), move || untracked(&draw)).into_element()
 }
 
-/// Under the composer on desktop and in a terminal while it offers attachments: Screenshot,
-/// Link and File, or the open link or path field in their place.
+/// In the composer's bar on desktop and in a terminal while it offers attachments: File.
 fn attachments(app: AppState, id: &Id, attach: Attach) -> AnyElement {
     let session = id.clone();
     dynamic(move || {
         attach
             .offered
             .get()
-            .then(|| untracked(|| foot_controls(app, session.clone(), attach.built)))
+            .then(|| untracked(|| attach_controls(app, session.clone(), attach.built)))
     })
     .into_element()
 }
@@ -227,8 +244,9 @@ fn phone_plus(app: AppState, id: &Id, attach: Attach) -> AnyElement {
     .into_element()
 }
 
-/// The phone's open link or path field for session `id`.
-fn phone_field(app: AppState, id: &Id) -> AnyElement {
+/// The open path field (a terminal's File) under the composer's bar for session `id`; nothing
+/// while closed.
+fn attach_field(app: AppState, id: &Id) -> AnyElement {
     field_row(app, id.clone())
 }
 

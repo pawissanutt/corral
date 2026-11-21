@@ -15,13 +15,13 @@ use crate::ui::tokens::{FONT_TEXT, MEASURE_CONVERSATION, MEASURE_RECORD, Token, 
 
 use super::super::run;
 use super::super::transcript;
-use super::{agents_tab, board, changes, pager, proof, task, usage};
+use super::{agents_tab, board, changes, files, pager, proof, task, usage};
 
 /// The rows a terminal's conversation or view keeps however much waits in the dock.
 const MAIN_ROWS: f32 = 6.0;
 
 /// `content` kept to the transcript's measure where `measured` (the page on desktop), so the
-/// dock, the composer and the status line stay under the conversation on a wide window; Ask and
+/// dock, the composer and the alerts stay under the conversation on a wide window; Ask and
 /// the cards fill their own narrower places as they are. The measured part keeps its height, as
 /// the parts of the page's foot do.
 pub(super) fn conversation(app: AppState, measured: bool, content: AnyElement) -> AnyElement {
@@ -35,9 +35,9 @@ pub(super) fn conversation(app: AppState, measured: bool, content: AnyElement) -
     }
 }
 
-/// Over a part's full view (Changes, Agents, the board, Usage): what it is, and the way back to
-/// the conversation, which Escape also takes. A terminal's key line says `esc chat` and its
-/// rows are few, so it has none. On desktop its words line up with the view under it.
+/// Over a part's full view (Changes, Files, Agents, the board, Usage): what it is, and the way
+/// back to the conversation, which Escape also takes. A terminal's rows are few, so it has none;
+/// the ⋯ menu's keys say Escape goes back. On desktop its words line up with the view under it.
 pub(super) fn view_bar(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     let form = app.form;
     if form == Form::Terminal {
@@ -116,6 +116,7 @@ enum Shown {
     Usage,
     Agents,
     Changes,
+    Files,
     Board,
     Task,
     Proof,
@@ -131,6 +132,7 @@ pub(super) fn main(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             Body::Usage(_) => Shown::Usage,
             Body::Agents(_) => Shown::Agents,
             Body::Changes(_) => Shown::Changes,
+            Body::Files(_) => Shown::Files,
             Body::Board(_) => Shown::Board,
             Body::Task(_) => Shown::Task,
             Body::Proof(_) => Shown::Proof,
@@ -156,6 +158,7 @@ pub(super) fn main(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                     Shown::Usage => usage::tab(app, page),
                     Shown::Agents => agents_tab::tab(app, page),
                     Shown::Changes => changes::tab(app, page),
+                    Shown::Files => files::tab(app, page),
                     Shown::Board => board::tab(app, page),
                     Shown::Task => task::tab(app, page),
                     Shown::Proof => proof::tab(app, page),

@@ -1,26 +1,29 @@
-//! The session page's head (`session::Header`): back to Sessions, the session's id, name and
-//! role word, the needs-you and decisions chips, the state word with its mark (a current notice
-//! in its place, with × to dismiss it), Details, More (the session's controls, as on its row)
-//! and the ⋯ menu of everything its host offers; under it the meta line (project, branch, task,
-//! model and effort, what it does). Pressing the needs-you chip docks the oldest waiting card; a
-//! build's `choose exit` presses to Finish…, which docks the exit choice. Desktop: one 46 pt row
-//! and the line under it; terminal: the same as two rows of Cells; phone: the shell's head names
-//! the session and holds ⋯, the page leads with one state line with Details. The facts redraw on
-//! their own, so the open menu and its trigger stay mounted while the state word ticks. test ids
-//! `btn-needs-you`, `btn-choose-exit`, `btn-dismiss-notice`, `btn-details`, `more-<session>`,
-//! `session-meta`, `meta-task`.
+//! The session page's head (`session::Header`), one row: back to Sessions, the session's id,
+//! name and role word, the needs-you and decisions chips, the state word with its mark (a
+//! current notice in its place, with × to dismiss it), the Agents switcher, Files and Changes
+//! while the page is wide enough (the ⋯ menu's Views reach them at every width), Details, More
+//! (the session's controls, as on its row) and the ⋯ menu of everything its host offers, its
+//! keys included. Where the session works, on what and with which model is Details' and the
+//! composer's to say. Pressing the needs-you chip docks the oldest waiting card; a build's
+//! `choose exit` presses to Finish…, which docks the exit choice. Desktop: one 46 pt row;
+//! terminal: one row of Cells; phone: the shell's head names the session and holds ⋯, the page
+//! leads with one state line with Details. The facts redraw on their own, so the open menu and
+//! its trigger stay mounted while the state word ticks. test ids `btn-needs-you`,
+//! `btn-choose-exit`, `btn-dismiss-notice`, `agents-open-head`, `btn-view-<files|changes>`,
+//! `btn-details`, `more-<session>`.
 
 use corral_protocol::session_state::ExitPhase;
 use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
-use crate::model::session::{Action, CommandAction, DockAction, Header, Meta, SessionPage};
+use crate::model::session::{Action, CommandAction, DockAction, Header, SessionPage, Tab};
 use crate::model::work::Record;
 use crate::model::{Form, Hue, Id};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::chip::chip;
+use crate::ui::kit::hint::hinted;
 use crate::ui::kit::next::more_button;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
@@ -55,11 +58,8 @@ fn details_button(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                     } else {
                         ButtonKind::Quiet
                     },
-                    ButtonOptions {
-                        // A terminal's key line names Alt+B; its head keeps the room.
-                        key_hint: (app.form == Form::Desktop).then_some("Alt+B"),
-                        ..ButtonOptions::default()
-                    },
+                    // Its key (Alt+B) is listed in the ⋯ menu; the one row keeps the room.
+                    ButtonOptions::default(),
                     "btn-details",
                     move || run(app, action.clone()),
                 )
@@ -74,83 +74,90 @@ fn more(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     more_button(app, Record::Session(id), app.form == Form::Phone)
 }
 
-/// The meta line under the head: project, branch, task (opening its page), model and effort,
-/// what the session does.
-fn meta(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+/// One view the head opens.
+#[derive(Clone, PartialEq)]
+struct ViewTrigger {
+    slug: &'static str,
+    label: &'static str,
+    /// Shown: pressing it goes back to the conversation.
+    selected: bool,
+    /// Why the host cannot serve it now: dimmed, with this as its hint.
+    unavailable: Option<String>,
+    action: Action,
+}
+
+/// Files and Changes, each while the session has it and `wide` leaves the head room for it;
+/// narrower, the ⋯ menu's Views open them. Each opens its view in the conversation's place, and
+/// pressed while it shows goes back to the conversation.
+fn views(app: AppState, page: Memo<SessionPage>, wide: Memo<bool>) -> AnyElement {
     let form = app.form;
-    let facts = computed(move || page.with(|p| p.header.meta.clone()));
+    let triggers = computed(move || {
+        if !wide.get() {
+            return Vec::new();
+        }
+        page.with(|p| {
+            p.tabs
+                .iter()
+                .filter(|item| matches!(item.tab.slug(), "files" | "changes"))
+                .map(|item| ViewTrigger {
+                    slug: item.tab.slug(),
+                    label: item.tab.label(),
+                    selected: item.selected,
+                    unavailable: item.unavailable.clone(),
+                    action: if item.selected {
+                        Action::Tab {
+                            session: p.id.clone(),
+                            tab: Tab::Chat,
+                        }
+                    } else {
+                        item.action.clone()
+                    },
+                })
+                .collect::<Vec<_>>()
+        })
+    });
     dynamic(move || {
-        let facts = facts.get();
-        (!facts.is_empty()).then(|| {
+        let triggers = triggers.get();
+        (!triggers.is_empty()).then(|| {
             untracked(|| {
-                let parts: Vec<AnyElement> =
-                    facts.into_iter().map(|fact| meta_fact(app, fact)).collect();
-                let line = view()
-                    .test_id("session-meta")
+                view()
                     .flex_row()
+                    .flex_shrink_0()
                     .items_center()
-                    .overflow_hidden()
-                    .gap(px(if form == Form::Terminal { 16.0 } else { 14.0 }))
-                    .children(parts);
-                match form {
-                    Form::Terminal => line.px(term::cells(1.0)).into_element(),
-                    _ => line.px(px(18.0)).pb(px(8.0)).into_element(),
-                }
+                    .gap(px(if form == Form::Terminal { 8.0 } else { 6.0 }))
+                    .children(triggers.into_iter().map(|trigger| {
+                        let action = trigger.action;
+                        let face = button_with(
+                            app,
+                            trigger.label,
+                            // Outlined while it shows, as a pressed toggle reads.
+                            if trigger.selected {
+                                ButtonKind::Ghost
+                            } else {
+                                ButtonKind::Quiet
+                            },
+                            ButtonOptions {
+                                disabled: trigger.unavailable.is_some(),
+                                ..ButtonOptions::default()
+                            },
+                            format!("btn-view-{}", trigger.slug),
+                            move || run(app, action.clone()),
+                        );
+                        match trigger.unavailable {
+                            Some(why) => hinted(app, face, why),
+                            None => face,
+                        }
+                    }))
+                    .into_element()
             })
         })
     })
 }
 
-fn meta_fact(app: AppState, fact: Meta) -> AnyElement {
-    let form = app.form;
-    let sized = |words: Text, mono: bool| match form {
-        Form::Terminal => words,
-        _ => words
-            .font_family(if mono { FONT_MONO } else { FONT_TEXT })
-            .text_size(px(12.0)),
-    };
-    let value = sized(
-        text(fact.value.clone())
-            .number_of_lines(1u32)
-            .truncate()
-            .min_w(px(0.0))
-            .text_color(color(if fact.label.is_some() {
-                Token::Ink2
-            } else {
-                Token::Ink3
-            })),
-        fact.mono,
-    );
-    let face = view()
-        .flex_row()
-        .items_center()
-        .min_w(px(0.0))
-        .flex_shrink(if fact.label.is_some() { 0.0 } else { 1.0 })
-        .gap(px(if form == Form::Terminal { 8.0 } else { 4.0 }))
-        .children(fact.label.map(|label| {
-            sized(
-                text(label)
-                    .number_of_lines(1u32)
-                    .text_color(color(Token::Ink3)),
-                false,
-            )
-        }))
-        .child(value);
-    match fact.action {
-        Some(action) => face
-            .test_id(&format!("meta-{}", fact.label.unwrap_or("link")))
-            .role(AccessibilityRole::Link)
-            .label(format!("{} {}", fact.label.unwrap_or_default(), fact.value))
-            .cursor_pointer()
-            .on_press(move || run(app, action.clone()))
-            .into_element(),
-        None => face.into_element(),
-    }
-}
-
-/// The page head on desktop and in a terminal: back to Sessions, the session's id, name and
-/// role, its state, Details, More and the session's actions; the meta line under it.
-pub(super) fn head(app: AppState, page: Memo<SessionPage>) -> AnyElement {
+/// The page head on desktop and in a terminal, one row: back to Sessions, the session's id, name
+/// and role, its state, the Agents switcher, Files and Changes while `wide`, Details, More and
+/// the session's actions.
+pub(super) fn head(app: AppState, page: Memo<SessionPage>, wide: Memo<bool>) -> AnyElement {
     let form = app.form;
     let header = computed(move || page.with(|p| p.header.clone()));
     let back = untracked(|| header.with(|h| h.back.clone()));
@@ -205,16 +212,17 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             .child(view().flex_1().min_w(px(0.0)))
             .child(facts(app, page, header))
             .child(term::space(1.0))
+            .child(crate::shell::agents_trigger(app, "agents-open-head"))
+            .child(views(app, page, wide))
             .child(details_button(app, page))
             .child(more(app, page))
             .child(actions(app, page));
-        return view()
-            .flex_none()
-            .child(first)
-            .child(meta(app, page))
-            .into_element();
+        return first.flex_none().into_element();
     }
-    let first = view()
+    view()
+        .flex_none()
+        .border_b(px(1.0))
+        .border_color(color(Token::Rule))
         .flex_row()
         .items_center()
         .gap(px(12.0))
@@ -264,15 +272,11 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>) -> AnyElement {
         )
         .child(view().flex_1().min_w(px(0.0)))
         .child(facts(app, page, header))
+        .child(crate::shell::agents_trigger(app, "agents-open-head"))
+        .child(views(app, page, wide))
         .child(details_button(app, page))
         .child(more(app, page))
-        .child(actions(app, page));
-    view()
-        .flex_none()
-        .border_b(px(1.0))
-        .border_color(color(Token::Rule))
-        .child(first)
-        .child(meta(app, page))
+        .child(actions(app, page))
         .into_element()
 }
 

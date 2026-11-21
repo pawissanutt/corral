@@ -22,9 +22,9 @@ use crate::model::text::{Rich, span};
 /// What the owner chose to attach from this device: a saved image or a text file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PickKind {
-    /// A saved screenshot or other image (Screenshot).
+    /// An image: pasted, or a path File names by its extension.
     Image,
-    /// A UTF-8 text file (File).
+    /// A UTF-8 text file, or an image File picked (File).
     File,
 }
 
@@ -112,7 +112,7 @@ pub struct StagedChip {
 /// The composer's attachment parts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tray {
-    /// Screenshot, Link and File, each enabled or not.
+    /// File, enabled or not.
     pub buttons: Vec<Button>,
     /// What is staged.
     pub chips: Vec<StagedChip>,
@@ -230,19 +230,15 @@ fn staged_chip(item: &Staged, feed: &Feed) -> StagedChip {
     }
 }
 
-/// The tray, the three buttons with why any is dimmed, and what holds Send. Screenshot and File
-/// upload, so they need corrald now; a link is inline, so it attaches offline too.
+/// The tray, its one File button (an image or a text file) with why it is dimmed, and what
+/// holds Send. A file uploads, so it needs corrald now; images and files pasted into the field
+/// stage through the same upload.
 pub fn tray(feed: &Feed, staged: &[Staged], text_blank: bool) -> Tray {
     let capable = feed.capable(ASSISTANT_ATTACH_V1);
     let full = staged.len() >= ATTACHMENTS_PER_MESSAGE;
     let up = feed.link == Link::Up;
-    let open = capable && !full;
-    let mut screenshot = button("Screenshot", Action::Attach(PickKind::Image));
-    let mut link = button("Link", Action::AttachLink);
     let mut file = button("File", Action::Attach(PickKind::File));
-    screenshot.enabled = open && up;
-    link.enabled = open;
-    file.enabled = open && up;
+    file.enabled = capable && !full && up;
     let note = if !capable {
         Some(if feed.capabilities.is_empty() {
             "attachments wait for a connection to corrald".to_owned()
@@ -252,7 +248,7 @@ pub fn tray(feed: &Feed, staged: &[Staged], text_blank: bool) -> Tray {
     } else if full {
         Some(format!("{ATTACHMENTS_PER_MESSAGE} attachments per message"))
     } else if !up {
-        Some("screenshots and files upload while corrald is reachable; links attach now".into())
+        Some("files upload while corrald is reachable".into())
     } else {
         None
     };
@@ -290,7 +286,7 @@ pub fn tray(feed: &Feed, staged: &[Staged], text_blank: bool) -> Tray {
         None
     };
     Tray {
-        buttons: vec![screenshot, link, file],
+        buttons: vec![file],
         chips: staged.iter().map(|item| staged_chip(item, feed)).collect(),
         note,
         status,

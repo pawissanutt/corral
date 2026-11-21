@@ -1,6 +1,7 @@
 //! The ⋯ menu of the session's actions, under the catalog's group headings; a row the host
 //! cannot run now stays listed, muted with its reason, and does not run. Its rows are read when
-//! it opens.
+//! it opens. At its foot on desktop and in a terminal, Keys: the keys of what has the page's
+//! keyboard and the composer's, read only, which no line under the page repeats.
 //!
 //! The app draws it on every form rather than through NSH's `Menu`, which presents itself by the
 //! platform's idiom, not the app's form: in a browser whose idiom is not the desktop's while the
@@ -19,8 +20,8 @@ use std::rc::Rc;
 
 use nsh_core::prelude::*;
 
-use crate::model::Form;
-use crate::model::session::{ActionGroup, ActionRow, SessionPage};
+use crate::model::session::{self, ActionGroup, ActionRow, Cx, Facts, SessionPage, Tab};
+use crate::model::{Form, Id};
 use crate::state::AppState;
 use crate::ui::kit::walk::walk;
 use crate::ui::term;
@@ -167,6 +168,18 @@ fn panel(
             handles.push(handle);
             children.push(entry(app, found, open, anchor, handle));
         }
+    }
+    let keys = if form == Form::Phone {
+        Vec::new()
+    } else {
+        legend(app, page)
+    };
+    if !keys.is_empty() {
+        children.push(heading(form, "Keys", children.is_empty()));
+        children.extend(
+            keys.into_iter()
+                .map(|(keys, name)| key_row(form, keys, name)),
+        );
     }
     if let Some(first) = first.or_else(|| handles.first().copied()) {
         after_answer(move || first.focus());
@@ -363,6 +376,69 @@ fn content(form: Form, row: &ActionRow) -> (View, String) {
             .children(why),
     };
     (view, spoken)
+}
+
+/// The keys the page takes now, as its key line gave them (for what has its keyboard, in the
+/// view it shows), then the composer's not already listed.
+fn legend(app: AppState, page: Memo<SessionPage>) -> Vec<(&'static str, &'static str)> {
+    let (id, composer): (Id, Vec<(&'static str, &'static str)>) = page.with_untracked(|p| {
+        let composer = p.composer.as_ref().map(|c| c.keys.clone());
+        (p.id.clone(), composer.unwrap_or_default())
+    });
+    let env = untracked(|| app.env());
+    let mut keys = app.feed.with_untracked(|feed| {
+        app.session.with_untracked(|state| {
+            let facts = Facts::of(feed, &id);
+            let ui = state.ui(id.as_str());
+            let cx = Cx::new(feed, ui, &id, env, &facts);
+            let tab = if session::shown_tabs(&cx).contains(&ui.tab) {
+                ui.tab
+            } else {
+                Tab::Chat
+            };
+            session::legend_of(&cx, tab, false)
+        })
+    });
+    for key in composer {
+        if !keys.iter().any(|(listed, _)| *listed == key.0) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// A key and what it does, the name where a row's label is and the key where its cap is: read,
+/// never pressed or walked to.
+fn key_row(form: Form, keys: &'static str, name: &'static str) -> AnyElement {
+    let words = text(name)
+        .number_of_lines(1u32)
+        .truncate()
+        .flex_1()
+        .min_w(px(0.0))
+        .text_color(color(Token::Ink2));
+    let cap = text(keys)
+        .number_of_lines(1u32)
+        .text_color(color(Token::Ink3));
+    let line = view()
+        .flex_row()
+        .items_center()
+        .accessible(true)
+        .label(format!("{keys}: {name}"))
+        .gap(px(if form == Form::Terminal { 16.0 } else { 12.0 }));
+    match form {
+        Form::Terminal => line
+            .px(term::cells(1.0))
+            .h(term::rows(1.0))
+            .child(words)
+            .child(cap)
+            .into_element(),
+        Form::Desktop | Form::Phone => line
+            .px(px(12.0))
+            .py(px(3.0))
+            .child(words.font_family(FONT_TEXT).text_size(px(12.5)))
+            .child(cap.font_family(FONT_MONO).text_size(px(11.0)))
+            .into_element(),
+    }
 }
 
 /// One row of the anchored menu: pressing one that can run closes the menu and runs it.

@@ -1,12 +1,12 @@
-//! The chips above the draft and the attachment controls under it: the removable context chip,
+//! The chips above the draft and the attachment control in its bar: the removable context chip,
 //! the staged tray in the same anatomy (upload progress, ready, failed with the reason,
-//! remove), the Screenshot, Link and File controls with why any is dimmed, and the inline link
-//! or path field that takes their place while it is open.
+//! remove), File with why it is dimmed, and the inline path field a terminal opens under the
+//! bar while it is open.
 
 use nsh_core::element::{color as for_appearance, input};
 use nsh_core::prelude::*;
 
-use crate::model::assistant::{AttachField, Composer, ContextChip, StagedChip};
+use crate::model::assistant::{self, AttachField, Composer, ContextChip, PickKind, StagedChip};
 use crate::model::hue::Hue;
 use crate::model::{Form, Id};
 use crate::state::AppState;
@@ -15,16 +15,19 @@ use crate::ui::atoms::control_height;
 use crate::ui::composer::state_mark;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
+use crate::ui::kit::hint::hinted;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
-/// Screenshot, Link, File in the model's order: the mockup's icon and what a screen reader says.
-const CONTROLS: [(Icon, &str); 3] = [
-    (Icon::Review, "Attach a saved screenshot or image"),
-    (Icon::Chevron, "Attach a link"),
-    (Icon::Plans, "Attach a file"),
-];
+/// An attachment control's icon and what a screen reader says for it.
+fn face_of(action: &assistant::Action) -> (Icon, &'static str) {
+    match action {
+        assistant::Action::Attach(PickKind::Image) => (Icon::Review, "Attach an image"),
+        assistant::Action::AttachLink => (Icon::Chevron, "Attach a link"),
+        _ => (Icon::Plans, "Attach an image or a text file"),
+    }
+}
 
 /// The chips over the draft (`.achip`), each with its note beside it: the default project the
 /// message files under (`btn-unchip-project`), then the record whose brief the assistant gets
@@ -307,171 +310,85 @@ fn staged_chip(app: AppState, session: &Id, chip: &StagedChip) -> AnyElement {
         .into_element()
 }
 
-/// Screenshot, Link and File with why any is dimmed; the open link or path field takes their
-/// place. Desktop and terminal; a phone keeps them behind its "+" ([`plus`]).
-pub(crate) fn foot_controls(app: AppState, session: Id, built: Memo<Composer>) -> AnyElement {
-    let open = field_open(app, session.clone());
-    let field = session.clone();
-    when(
-        move || open.get(),
-        move || untracked(|| field_row(app, field.clone())),
-    )
-    .otherwise(move || untracked(|| controls(app, session.clone(), built)))
-    .into_element()
-}
-
-/// Whether the inline field is open in `session`'s composer.
-fn field_open(app: AppState, session: Id) -> Memo<bool> {
-    computed(move || {
-        app.ask_field
-            .with(|open| open.as_ref().is_some_and(|(owner, _)| *owner == session))
-    })
-}
-
-/// The controls in a row, then why any is dimmed on its own line under them, wrapping inside
-/// the room left beside Send so it never runs under it.
-fn controls(app: AppState, session: Id, built: Memo<Composer>) -> AnyElement {
+/// The attachment controls in the composer's bar (File), each dimmed with why as its hint.
+/// Desktop and terminal; a phone keeps File as its "+" ([`plus`]).
+pub(crate) fn controls(app: AppState, session: Id, built: Memo<Composer>) -> AnyElement {
     let form = app.form;
     let count = built.with_untracked(|c| c.attachments.len());
-    let note = computed(move || built.with(|c| c.attach_note.clone()));
-    view()
-        .min_w(px(0.0))
-        .gap(px(if form == Form::Terminal { 0.0 } else { 2.0 }))
-        .child(
-            view()
-                .flex_row()
-                .flex_wrap()
-                .items_center()
-                .gap(px(if form == Form::Terminal { 16.0 } else { 4.0 }))
-                .children((0..count).map(|index| control(app, &session, built, index, None))),
-        )
-        .child(dynamic(move || {
-            note.get().map(|note| {
-                let words = note_text(form, note)
-                    .min_w(px(0.0))
-                    .text_color(color(Token::Ink3));
-                if form == Form::Terminal {
-                    words.truncate().into_element()
-                } else {
-                    words.number_of_lines(2u32).into_element()
-                }
-            })
-        }))
-        .into_element()
-}
-
-/// What the phone's "+" is called to a screen reader.
-const PLUS_LABEL: &str = "Attach";
-/// The phone's attachments menu's width.
-const MENU_WIDTH: f32 = 248.0;
-
-/// The phone's "+" at the start of the composer's row: a full touch target that opens
-/// Screenshot, Link and File as a menu above it, each a full-height row, and why any is dimmed
-/// under them. Pressing one closes the menu before it attaches; pressing outside closes it.
-/// Nothing when the composer offers no attachments.
-pub(crate) fn plus(app: AppState, session: Id, built: Memo<Composer>) -> AnyElement {
-    let count = built.with_untracked(|c| c.attachments.len());
-    if count == 0 {
-        return view().into_element();
-    }
-    let open = signal(false);
-    let anchor = element_ref();
-    let note = computed(move || built.with(|c| c.attach_note.clone()));
-    let face = view()
-        .test_id("btn-attach")
-        .element_ref(&anchor)
-        .role(AccessibilityRole::Button)
-        .label(PLUS_LABEL)
-        .accessibility_state(move || AccessibilityState {
-            expanded: Some(open.get()),
-            has_popup: true,
-            ..AccessibilityState::default()
-        })
-        .on_press(move || open.update(|open| *open = !*open))
-        .size(px(TARGET))
-        .flex_shrink_0()
-        .items_center()
-        .justify_center()
-        .rounded(px(10.0))
-        .border_1()
-        .border_color(color(Token::Rule2))
-        .bg(move || {
-            if open.get() {
-                color(Token::Surface2)
-            } else {
-                color(Token::Surface)
-            }
-        })
-        .cursor_pointer()
-        .active(|s| s.bg(color(Token::Sel)))
-        .focus_visible(|s| {
-            s.outline(px(2.0))
-                .outline_color(color(Token::Focus))
-                .outline_offset(px(2.0))
-        })
-        .child(icon(Icon::Plus, 20.0, color(Token::Ink2)));
-    let menu = when(
-        move || open.get(),
-        move || {
-            overlay()
-                .anchor(&anchor)
-                .placement(Placement::Top)
-                .align(Align::Start)
-                .offset(px(6.0))
-                .margin(px(8.0))
-                .on_press_outside(move |_: &Point<Points>| open.set(false))
-                .child(
-                    view()
-                        .role(AccessibilityRole::Menu)
-                        .label(PLUS_LABEL)
-                        .w(px(MENU_WIDTH))
-                        .p(px(4.0))
-                        .gap(px(1.0))
-                        .rounded(px(12.0))
-                        .bg(color(Token::Surface))
-                        .border_1()
-                        .border_color(color(Token::Rule2))
-                        .shadow_xl()
-                        .shadow_color(color(Token::Shell))
-                        .children(
-                            (0..count)
-                                .map(|index| control(app, &session, built, index, Some(open))),
-                        )
-                        .child(dynamic(move || {
-                            note.get().map(|note| {
-                                note_text(Form::Phone, note)
-                                    .number_of_lines(3u32)
-                                    .px(px(10.0))
-                                    .pt(px(6.0))
-                                    .pb(px(6.0))
-                                    .text_color(color(Token::Ink3))
-                                    .into_element()
-                            })
-                        })),
-                )
-        },
-    );
     view()
         .flex_row()
         .flex_shrink_0()
-        .child(face)
-        .child(menu)
+        .items_center()
+        .gap(px(if form == Form::Terminal { 16.0 } else { 4.0 }))
+        .children((0..count).map(|index| control(app, &session, built, index)))
         .into_element()
+}
+
+/// The phone's "+" at the start of the composer's row: a full touch target that runs File (the
+/// system picker). Dimmed while it cannot, it says why to screen readers and, as the phone has
+/// no hover, in a toast when pressed. Nothing when the composer offers no attachments.
+pub(crate) fn plus(app: AppState, session: Id, built: Memo<Composer>) -> AnyElement {
+    let state = computed(move || {
+        built.with(|c| {
+            c.attachments
+                .first()
+                .map(|b| (b.action.clone(), b.enabled, c.attach_note.clone()))
+        })
+    });
+    dynamic(move || {
+        state.get().map(|(action, enabled, note)| {
+            let session = session.clone();
+            untracked(|| {
+                let (_, spoken) = face_of(&action);
+                let why = format!(
+                    "Not attached: {}.",
+                    note.as_deref().unwrap_or("unavailable")
+                );
+                let spoken = match (enabled, note) {
+                    (true, _) => spoken.to_owned(),
+                    (false, Some(note)) => format!("{spoken}, unavailable: {note}"),
+                    (false, None) => format!("{spoken}, unavailable"),
+                };
+                view()
+                    .test_id("btn-attach")
+                    .role(AccessibilityRole::Button)
+                    .label(spoken)
+                    .size(px(TARGET))
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(10.0))
+                    .border_1()
+                    .border_color(color(Token::Rule2))
+                    .bg(color(Token::Surface))
+                    .focus_visible(|s| {
+                        s.outline(px(2.0))
+                            .outline_color(color(Token::Focus))
+                            .outline_offset(px(2.0))
+                    })
+                    .active(|s| s.bg(color(Token::Sel)))
+                    .on_press(move || {
+                        if enabled {
+                            act_on(app, &session, action.clone());
+                        } else {
+                            app.toast(why.clone());
+                        }
+                    })
+                    .when(!enabled, |v| v.opacity(0.45))
+                    .child(icon(Icon::Plus, 20.0, color(Token::Ink2)))
+                    .into_element()
+            })
+        })
+    })
+    .into_element()
 }
 
 /// The phone's touch target.
 const TARGET: f32 = 44.0;
 
-/// One control, redrawn when it is enabled or dimmed. A dimmed one takes no press and says why.
-/// In the phone's "+" menu (`menu` is its open state) it is a full-height row that closes the
-/// menu as it is pressed.
-fn control(
-    app: AppState,
-    session: &Id,
-    built: Memo<Composer>,
-    index: usize,
-    menu: Option<Signal<bool>>,
-) -> AnyElement {
+/// One control, redrawn when it is enabled or dimmed. A dimmed one takes no press and says why,
+/// as its hint and to screen readers.
+fn control(app: AppState, session: &Id, built: Memo<Composer>, index: usize) -> AnyElement {
     let state = computed(move || {
         built.with(|c| {
             c.attachments
@@ -485,78 +402,55 @@ fn control(
             let session = session.clone();
             untracked(|| {
                 let form = app.form;
-                let (glyph, spoken) = CONTROLS.get(index).copied().unwrap_or((Icon::Plans, label));
+                let (glyph, spoken) = face_of(&action);
                 let spoken = if enabled {
                     spoken.to_owned()
                 } else {
-                    match note {
+                    match &note {
                         Some(note) => format!("{spoken}, unavailable: {note}"),
                         None => format!("{spoken}, unavailable"),
                     }
                 };
                 let face = view()
                     .test_id(&format!("btn-attach-{index}"))
-                    .role(if menu.is_some() {
-                        AccessibilityRole::Menuitem
-                    } else {
-                        AccessibilityRole::Button
-                    })
+                    .role(AccessibilityRole::Button)
                     .label(spoken)
                     .flex_row()
                     .items_center()
                     .when(enabled, |v| {
-                        v.on_press(move || {
-                            if let Some(open) = menu {
-                                open.set(false);
-                            }
-                            act_on(app, &session, action.clone());
-                        })
-                        .cursor_pointer()
+                        v.on_press(move || act_on(app, &session, action.clone()))
+                            .cursor_pointer()
                     })
                     .when(!enabled, |v| v.opacity(0.45));
-                if form == Form::Terminal {
+                let face = if form == Form::Terminal {
                     let ink = if enabled { Token::Ink } else { Token::Ink3 };
-                    return face
-                        .child(text(label).text_color(color(ink)))
-                        .into_element();
-                }
-                let face = face
-                    .when(enabled, |v| v.hover(|s| s.bg(color(Token::Hover))))
-                    .focus_visible(|s| {
-                        s.outline(px(2.0))
-                            .outline_color(color(Token::Focus))
-                            .outline_offset(px(1.0))
-                    });
-                if menu.is_some() {
-                    return face
-                        .gap(px(12.0))
-                        .min_h(px(TARGET))
-                        .px(px(10.0))
-                        .rounded(px(8.0))
-                        .active(|s| s.bg(color(Token::Sel)))
-                        .child(icon(glyph, 18.0, color(Token::Ink2)))
+                    face.child(text(label).text_color(color(ink)))
+                        .into_element()
+                } else {
+                    face.when(enabled, |v| v.hover(|s| s.bg(color(Token::Hover))))
+                        .focus_visible(|s| {
+                            s.outline(px(2.0))
+                                .outline_color(color(Token::Focus))
+                                .outline_offset(px(1.0))
+                        })
+                        .gap(px(5.0))
+                        .h(px(control_height(26.0)))
+                        .px(px(8.0))
+                        .rounded(px(6.0))
+                        .child(icon(glyph, 13.0, color(Token::Ink3)))
                         .child(
                             text(label)
                                 .number_of_lines(1u32)
                                 .font_family(FONT_TEXT)
-                                .text_size(px(15.0))
-                                .text_color(color(Token::Ink)),
+                                .text_size(px(12.0))
+                                .text_color(color(Token::Ink3)),
                         )
-                        .into_element();
+                        .into_element()
+                };
+                match note.filter(|_| !enabled) {
+                    Some(note) => hinted(app, face, note),
+                    None => face,
                 }
-                face.gap(px(5.0))
-                    .h(px(control_height(26.0)))
-                    .px(px(8.0))
-                    .rounded(px(6.0))
-                    .child(icon(glyph, 13.0, color(Token::Ink3)))
-                    .child(
-                        text(label)
-                            .number_of_lines(1u32)
-                            .font_family(FONT_TEXT)
-                            .text_size(px(12.0))
-                            .text_color(color(Token::Ink3)),
-                    )
-                    .into_element()
             })
         })
     })

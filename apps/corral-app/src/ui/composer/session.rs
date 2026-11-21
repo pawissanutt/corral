@@ -1,18 +1,20 @@
-//! The session page's composer (`model::session::SessionComposer`): who receives the message
-//! (`Message → parent · last input queued`), the working indicator with Stop while the agent
-//! works, the draft, the model and effort the host reports, the receiver for a build with
-//! children that take a message, and the send controls. Enter sends; while the agent works Enter
-//! steers the running turn and Queue (Alt+Enter) keeps the text for after it. While the dock asks
-//! for the owner's reason (`→ land on main · your reason`, Held) or answer (`→ a2 · answer`), Enter
-//! gives the text instead, and an empty one is the model's to refuse with what is missing. An
-//! image pasted into the field is staged for the message while the session takes attachments. While
-//! the draft is a `/` command the page's command menu matches, Enter runs that command instead.
-//! A control the host cannot run now is dimmed with its reason under the field. The draft lives
-//! in the session's UI state, so it survives tab switches and leaving the page; the field takes
-//! the keys back whenever the page gives them to the composer. Desktop: a rounded box over the
-//! page's foot with the keys under it; terminal: the same rows between rules; phone: Steer now |
-//! After this turn over one row of field and button, the button stopping the turn while the
-//! agent works and the draft is empty.
+//! The session page's composer (`model::session::SessionComposer`): the draft, whose placeholder
+//! says who receives it (`Message → parent`), over one bar: the model and effort the host
+//! reports, File, the receiver for a build with children that take a message, the receiver's
+//! words while Enter gives a reason or an answer and the last send's standing, then the working
+//! indicator with Stop while the agent works and the send controls. Enter sends; while the agent
+//! works Enter steers the running turn and Queue (Alt+Enter) keeps the text for after it. While
+//! the dock asks for the owner's reason (`→ land on main · your reason`, Held) or answer
+//! (`→ a2 · answer`), Enter gives the text instead, and an empty one is the model's to refuse
+//! with what is missing. Text pasted into the field goes in as it was copied; images and files
+//! are staged for the message while the session takes attachments. While the draft is a `/`
+//! command the page's command menu matches, Enter runs that command instead. A control the host
+//! cannot run now is dimmed with its reason under the bar. The keys are listed in the page's ⋯
+//! menu, not under the composer. The draft lives in the session's UI state, so it survives tab
+//! switches and leaving the page; the field takes the keys back whenever the page gives them to
+//! the composer. Desktop: a rounded box over the page's foot; terminal: the same rows under a
+//! rule; phone: Steer now | After this turn over one row of field and button, the button
+//! stopping the turn while the agent works and the draft is empty.
 
 use nsh_base::{menu, menu_item};
 use nsh_core::element::{color as for_appearance, input};
@@ -27,7 +29,6 @@ use crate::model::session::{
 };
 use crate::model::{Form, Id};
 use crate::state::AppState;
-use crate::ui::atoms::key_hint;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::{hue_ink, mark};
 use crate::ui::kit::overlay::counted;
@@ -206,8 +207,9 @@ fn build(
 }
 
 /// The draft field: multiline, Enter sends with the send button's policy (or runs the matched
-/// `/` command), Shift+Enter breaks the line; a pasted image is staged for the message. Docked
-/// on Home, Escape leaves the field, so Home's keys walk its cards again rather than typing.
+/// `/` command), Shift+Enter breaks the line; a paste is the composer's to place (`super::paste`)
+/// except in a terminal, whose host takes no text the app inserts. Docked on Home, Escape leaves
+/// the field, so Home's keys walk its cards again rather than typing.
 #[allow(clippy::too_many_arguments)]
 fn field(
     app: AppState,
@@ -255,7 +257,12 @@ fn field(
                 send(app, &id, composer, policy, ask, attach);
             }
         })
-        .on_paste(move |pasted_now: &PasteEvent| super::paste(app, &pasted, attach, pasted_now))
+        .when(form != Form::Terminal, |field| {
+            field.paste_behavior(PasteBehavior::Report)
+        })
+        .on_paste(move |pasted_now: &PasteEvent| {
+            super::paste(app, &pasted, attach, entry, pasted_now)
+        })
         .placeholder(placeholder)
         .value(draft)
         .on_change(move |text: &str| {
@@ -326,29 +333,57 @@ fn small(form: Form, words: impl Into<String>, ink: AdaptiveColor) -> Text {
     }
 }
 
-/// The title line: `Message → parent`, the last send's standing, then the working indicator and
-/// Stop at its trailing edge.
-fn title(app: AppState, composer: Memo<Option<SessionComposer>>) -> AnyElement {
+/// What the field's placeholder does not say: the receiver while Enter gives a reason or an
+/// answer, in its tone, and the newest send's standing while it is current (`last input
+/// queued`). Nothing otherwise.
+fn standing(app: AppState, composer: Memo<Option<SessionComposer>>) -> AnyElement {
     let form = app.form;
     let shown = computed(move || {
         composer.with(|c| {
-            c.as_ref()
-                .map(|c| (c.title.clone(), c.activity.clone(), c.stop.clone()))
+            let title = &c.as_ref()?.title;
+            let to = (title.hue != Hue::Neutral).then(|| (title.to.clone(), title.hue));
+            (to.is_some() || title.last.is_some()).then(|| (to, title.last.clone()))
         })
     });
     dynamic(move || {
-        shown.with(|shown| {
-            let (title, activity, stop) = shown.as_ref()?.clone();
-            Some(untracked(|| {
-                let lead = small(form, title.lead, color(Token::Ink3));
-                let to =
-                    small(form, title.to, tint_or_ink(title.hue)).font_weight(FontWeight::SEMIBOLD);
-                let last = title.last.map(|(hue, words)| {
-                    small(form, format!("· {words}"), tint(hue))
-                        .truncate()
-                        .flex_shrink(1.0)
-                        .min_w(px(0.0))
-                });
+        shown.get().map(|(to, last)| {
+            untracked(|| {
+                view()
+                    .flex_row()
+                    .items_center()
+                    .flex_shrink(1.0)
+                    .min_w(px(0.0))
+                    .gap(px(6.0))
+                    .children(to.map(|(to, hue)| {
+                        small(form, to, tint_or_ink(hue))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .flex_shrink_0()
+                    }))
+                    .children(last.map(|(hue, words)| {
+                        small(form, words, tint(hue))
+                            .truncate()
+                            .flex_shrink(1.0)
+                            .min_w(px(0.0))
+                    }))
+                    .into_element()
+            })
+        })
+    })
+    .into_element()
+}
+
+/// While the agent works: the working indicator (`● working · 12s`) and Stop. Nothing otherwise.
+fn working(app: AppState, composer: Memo<Option<SessionComposer>>) -> AnyElement {
+    let form = app.form;
+    let shown = computed(move || {
+        composer.with(|c| {
+            let c = c.as_ref()?;
+            (c.activity.is_some() || c.stop.is_some()).then(|| (c.activity.clone(), c.stop.clone()))
+        })
+    });
+    dynamic(move || {
+        shown.get().map(|(activity, stop)| {
+            untracked(|| {
                 let activity = activity.map(|line| {
                     let words = match &line.elapsed {
                         Some(time) => format!("{} · {time}", line.phase),
@@ -371,15 +406,12 @@ fn title(app: AppState, composer: Memo<Option<SessionComposer>>) -> AnyElement {
                 view()
                     .flex_row()
                     .items_center()
-                    .gap(px(6.0))
-                    .child(lead)
-                    .child(to)
-                    .children(last)
-                    .child(view().flex_1().min_w(px(0.0)))
+                    .flex_shrink_0()
+                    .gap(px(8.0))
                     .children(activity)
                     .children(stop.map(|stop| stop_button(app, stop)))
                     .into_element()
-            }))
+            })
         })
     })
     .into_element()
@@ -410,7 +442,6 @@ fn stop_button(app: AppState, stop: StopButton) -> AnyElement {
         ButtonKind::Ghost,
         ButtonOptions {
             danger: true,
-            key_hint: Some("Esc"),
             ..ButtonOptions::default()
         },
         "btn-stop",
@@ -418,10 +449,11 @@ fn stop_button(app: AppState, stop: StopButton) -> AnyElement {
     )
 }
 
-/// The bar under the field: the model and effort as the picker's pill, the receiver, then
-/// (except on the phone, whose one button sits beside the field) Queue and Send or Steer. On a
-/// phone the model, the effort and the receiver are compact chips on one row, which scrolls
-/// sideways rather than wrapping when it does not fit.
+/// The one bar under the field: the model and effort as the picker's pill, File, the receiver,
+/// what the placeholder does not say, then (except on the phone, whose one button sits beside
+/// the field) the working indicator, Stop, Queue and Send or Steer. It wraps only where the page
+/// is too narrow for one row. On a phone the model, the effort and the receiver are compact
+/// chips on one row, which scrolls sideways rather than wrapping when it does not fit.
 fn bar(
     app: AppState,
     id: Id,
@@ -449,6 +481,9 @@ fn bar(
                 untracked(|| crate::ui::ask::models::session_pill(app, id, composer))
             })
         }))
+        .when(form != Form::Phone, |chips| {
+            chips.child(super::attachments(app, &id, attach))
+        })
         .child(dynamic(move || {
             receiver.get().map(|pill| {
                 untracked(|| receiver_menu(app, pill.label, pill.choices, pill.unavailable))
@@ -463,7 +498,9 @@ fn bar(
     }
     chips
         .flex_wrap()
+        .child(standing(app, composer))
         .child(view().flex_1().min_w(px(0.0)))
+        .child(working(app, composer))
         .child(dynamic(move || {
             buttons
                 .get()
@@ -518,7 +555,6 @@ fn send_button(
         kind,
         ButtonOptions {
             disabled: button.unavailable.is_some(),
-            key_hint: (policy == SendPolicy::FollowUp).then_some("Alt+⏎"),
             ..ButtonOptions::default()
         },
         button.id,
@@ -655,39 +691,9 @@ fn reasons(app: AppState, composer: Memo<Option<SessionComposer>>) -> AnyElement
     .into_element()
 }
 
-/// The keys under the desktop composer: `⏎ steer  esc stop  Alt+⏎ queue …`.
-fn keys(composer: Memo<Option<SessionComposer>>) -> AnyElement {
-    let shown = computed(move || composer.with(|c| c.as_ref().map(|c| c.keys.clone())));
-    dynamic(move || {
-        shown.get().map(|keys| {
-            view()
-                .flex_row()
-                .flex_wrap()
-                .justify_end()
-                .gap(px(10.0))
-                .children(keys.into_iter().map(|(keys, name)| {
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(4.0))
-                        .child(key_hint(keys))
-                        .child(
-                            text(name)
-                                .font_family(FONT_TEXT)
-                                .text_size(px(11.0))
-                                .text_color(color(Token::Ink3)),
-                        )
-                        .into_element()
-                }))
-                .into_element()
-        })
-    })
-    .into_element()
-}
-
-/// Desktop and terminal: the box (rules in a terminal) with the title, the field and the bar;
-/// Ask's chips and the staged attachments over the field and the attachment controls under the
-/// bar.
+/// Desktop and terminal: the box (a rule over it in a terminal) with the field over the one
+/// bar; Ask's chips and the staged attachments over the box, and only while open, the path
+/// field under the bar; why Send is dimmed under the box only while it is.
 fn frame(
     app: AppState,
     id: Id,
@@ -705,10 +711,9 @@ fn frame(
                 view()
                     .px(term::cells(1.0))
                     .child(super::above(app, &id, ask, attach))
-                    .child(title(app, composer))
                     .child(field)
                     .child(bar(app, id.clone(), composer, ask, attach))
-                    .child(super::attachments(app, &id, attach))
+                    .child(super::attach_field(app, &id))
                     .child(reasons(app, composer)),
             )
             .into_element();
@@ -727,20 +732,49 @@ fn frame(
                 .border_1()
                 .border_color(color(Token::Rule2))
                 .bg(color(Token::Surface))
-                .child(view().px(px(12.0)).pt(px(8.0)).child(title(app, composer)))
-                .child(field)
+                .child(view().pt(px(4.0)).child(field))
                 .child(
                     view()
                         .px(px(12.0))
                         .pb(px(8.0))
                         .gap(px(6.0))
                         .child(bar(app, id.clone(), composer, ask, attach))
-                        .child(super::attachments(app, &id, attach)),
+                        .child(super::attach_field(app, &id)),
                 ),
         )
         .child(reasons(app, composer))
-        .child(keys(composer))
         .into_element()
+}
+
+/// The phone's line over the field, only while it has something to say: what the placeholder
+/// does not, then the working indicator and Stop.
+fn phone_line(app: AppState, composer: Memo<Option<SessionComposer>>) -> AnyElement {
+    let noted = computed(move || {
+        composer.with(|c| {
+            c.as_ref().is_some_and(|c| {
+                c.title.hue != Hue::Neutral
+                    || c.title.last.is_some()
+                    || c.activity.is_some()
+                    || c.stop.is_some()
+            })
+        })
+    });
+    when(
+        move || noted.get(),
+        move || {
+            untracked(|| {
+                view()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(standing(app, composer))
+                    .child(view().flex_1().min_w(px(0.0)))
+                    .child(working(app, composer))
+                    .into_element()
+            })
+        },
+    )
+    .into_element()
 }
 
 /// The phone: while the agent works, Steer now | After this turn decides what the button does;
@@ -830,7 +864,7 @@ fn phone(
         .pt(px(6.0))
         .gap(px(6.0))
         .child(super::above(app, &id, ask, attach))
-        .child(title(app, composer))
+        .child(phone_line(app, composer))
         .child(choice)
         .child(
             view()
@@ -841,7 +875,6 @@ fn phone(
                 .child(field)
                 .child(button),
         )
-        .child(super::phone_field(app, &id))
         .child(bar(app, id, composer, ask, attach))
         .child(reasons(app, composer))
         .into_element()

@@ -1,9 +1,10 @@
 //! Attaching to a session's next message from the app root. Desktop and web open the system
 //! picker in the press (a browser opens its file input only then) and await it under the root
-//! owner; a terminal has no picker, so Screenshot and File open a field for a path on this device,
-//! which the client reads off the UI thread. Links are typed, checked and sent inline, never
-//! fetched. An image pasted into a session's composer is checked and uploaded as a picked one is.
-//! Only bytes, a base name and a sniffed type reach the client; a typed path never leaves it.
+//! owner; a terminal has no picker, so File opens a field for a path on this device, which the
+//! client reads off the UI thread. Links are typed, checked and sent inline, never fetched. An
+//! image or file pasted into a session's composer is checked and uploaded as a picked one is;
+//! a file copied in a desktop file manager arrives as its path and is read as a typed one.
+//! Only bytes, a base name and a sniffed type reach the client; a path never leaves it.
 //! Each session keeps its own staged items, so what is staged on one session page never goes
 //! with another session's message.
 
@@ -28,6 +29,9 @@ const TEXT_EXTENSIONS: [&str; 20] = [
     "txt", "md", "log", "json", "jsonl", "csv", "tsv", "yaml", "yml", "toml", "xml", "html", "css",
     "rs", "ts", "js", "py", "go", "sh", "diff",
 ];
+
+/// The images File also offers, and by which a path is read as an image.
+const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 
 const NOT_RUNNING: &str =
     "Not attached: the app's connection to corrald is not running. Nothing was sent.";
@@ -56,8 +60,9 @@ impl AppState {
             .update(|staged| staged.entry(session.clone()).or_default().push(item));
     }
 
-    /// Screenshot or File for `session`: the system picker in this press on desktop and web,
-    /// the path field in a terminal. Refused visibly when corrald cannot take an upload now.
+    /// File (an image or a text file) for `session`: the system picker in this press on desktop
+    /// and web, the path field in a terminal. Refused visibly when corrald cannot take an upload
+    /// now.
     pub fn attach(&self, session: &Id, pick: PickKind) {
         if let Some(refusal) = self.upload_refusal(session) {
             self.toast(refusal);
@@ -77,8 +82,12 @@ impl AppState {
                 pick_images(request)
             }
             PickKind::File => pick_files(
-                FilePickRequest::new(room > 1, u32::try_from(room).unwrap_or(1))
-                    .filter(FileFilter::new("Text files", TEXT_EXTENSIONS)),
+                FilePickRequest::new(room > 1, u32::try_from(room).unwrap_or(1)).filter(
+                    FileFilter::new(
+                        "Images and text files",
+                        IMAGE_EXTENSIONS.into_iter().chain(TEXT_EXTENSIONS),
+                    ),
+                ),
             ),
         };
         let app = *self;
@@ -101,21 +110,12 @@ impl AppState {
         });
     }
 
-    /// What the owner pasted into `session`'s composer: each image (a screenshot, an image
-    /// copied from a page or an app) is checked and uploaded as a picked one is, any other
-    /// pasted file as a text file. The pasted text stays the field's; a paste without files
-    /// stages nothing. Refused visibly when corrald cannot take an upload now, and for files
-    /// copied in a file manager, which arrive as paths alone.
+    /// What the owner pasted into `session`'s composer as attachments: each image (a
+    /// screenshot, an image copied from a page or an app) is checked and uploaded as a picked one
+    /// is, any other pasted file as a text file, and each file copied in a file manager is read
+    /// from its path on this device as a typed one is. Refused visibly when corrald cannot take an
+    /// upload now.
     pub fn paste(&self, session: &Id, paste: &PasteEvent) {
-        if paste.files.is_empty() {
-            if !paste.uris.is_empty() {
-                self.toast(
-                    "Not attached: a copied file arrives as its path alone; attach it with \
-                     Screenshot or File, or paste the image itself.",
-                );
-            }
-            return;
-        }
         if let Some(refusal) = self.upload_refusal(session) {
             self.toast(refusal);
             return;
@@ -134,9 +134,25 @@ impl AppState {
                 mime.trim().starts_with("image/") || assistant::sniff_image(data.bytes()).is_some()
             });
         let mut refusals = self.stage_files(session, PickKind::Image, images);
-        for why in self.stage_files(session, PickKind::File, others) {
+        let mut refuse = |why: String| {
             if !refusals.contains(&why) {
                 refusals.push(why);
+            }
+        };
+        for why in self.stage_files(session, PickKind::File, others) {
+            refuse(why);
+        }
+        for uri in &paste.uris {
+            let outcome = match local_path(uri) {
+                Some(path) => self.attach_path(session, PickKind::File, &path),
+                None => Err("only a file on this device attaches".into()),
+            };
+            if let Err(why) = outcome {
+                let name = uri.rsplit('/').next().unwrap_or(uri);
+                refuse(format!(
+                    "{} not attached: {why}",
+                    assistant::bounded_name(name)
+                ));
             }
         }
         self.toast_refusals(refusals);
@@ -226,8 +242,7 @@ impl AppState {
                 )
             } else if feed.link != Link::Up || feed.session.is_none() {
                 Some(
-                    "Not attached: screenshots and files upload only while corrald is reachable."
-                        .into(),
+                    "Not attached: images and files upload only while corrald is reachable.".into(),
                 )
             } else if self.staged_count(session) >= ATTACHMENTS_PER_MESSAGE {
                 Some(format!(
@@ -333,6 +348,12 @@ impl AppState {
         if let Some(refusal) = self.upload_refusal(session) {
             return Err(refusal);
         }
+        // The client checks a path against its kind's bound before it reads it, so File names
+        // an image by its extension.
+        let image = base
+            .rsplit_once('.')
+            .is_some_and(|(_, ext)| IMAGE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()));
+        let pick = if image { PickKind::Image } else { pick };
         let upload = requests::new_id();
         let handed = requests::attach_path(requests::AttachPath {
             upload: upload.clone(),
@@ -354,9 +375,64 @@ impl AppState {
         Ok(())
     }
 
-    /// A browser reads no paths; its File and Screenshot use the system picker instead.
+    /// A browser reads no paths; its File uses the system picker instead.
     #[cfg(target_arch = "wasm32")]
     fn attach_path(&self, _session: &Id, _pick: PickKind, _text: &str) -> Result<(), String> {
-        Err("a browser reads no paths; use Screenshot or File to pick one".into())
+        Err("a browser reads no paths; use File to pick one".into())
+    }
+}
+
+/// The path a `file:` URL of a file on this device names, its escapes decoded; none for another
+/// scheme, another host or escapes that are not UTF-8.
+fn local_path(uri: &str) -> Option<String> {
+    let scheme = uri.get(..7)?;
+    if !scheme.eq_ignore_ascii_case("file://") {
+        return None;
+    }
+    let rest = &uri[7..];
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !rest.starts_with('/') {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(rest.len());
+    let mut raw = rest.bytes();
+    while let Some(byte) = raw.next() {
+        if byte == b'%' {
+            let hex = [raw.next()?, raw.next()?];
+            bytes.push(u8::from_str_radix(std::str::from_utf8(&hex).ok()?, 16).ok()?);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    let path = String::from_utf8(bytes).ok()?;
+    // Windows writes a drive after the root: `file:///C:/notes.txt`.
+    let drive = path.as_bytes().get(1).is_some_and(u8::is_ascii_alphabetic)
+        && path.as_bytes().get(2) == Some(&b':');
+    Some(if cfg!(windows) && drive {
+        path[1..].to_owned()
+    } else {
+        path
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_path;
+
+    /// A file copied in a file manager arrives as an escaped `file:` URL; read as written, a
+    /// name with a space named no file.
+    #[test]
+    fn a_copied_file_s_url_names_its_path_on_this_device() {
+        assert_eq!(
+            local_path("file:///home/me/My%20shot.png").as_deref(),
+            Some("/home/me/My shot.png")
+        );
+        assert_eq!(
+            local_path("FILE://localhost/tmp/a.txt").as_deref(),
+            Some("/tmp/a.txt")
+        );
+        assert_eq!(local_path("file://server/share/a.txt"), None);
+        assert_eq!(local_path("https://example.com/a.png"), None);
+        assert_eq!(local_path("file:///bad%zz"), None);
     }
 }
