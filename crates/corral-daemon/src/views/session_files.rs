@@ -183,7 +183,11 @@ mod linux {
             !build.here
                 && !build.bare
                 && build.id == id
-                && build.workspace_root == shared.root()
+                && build.workspace_root.is_absolute()
+                && build
+                    .workspace_root
+                    .canonicalize()
+                    .is_ok_and(|root| root == shared.root())
                 && (1..=40).contains(&build.name.len())
                 && build
                     .name

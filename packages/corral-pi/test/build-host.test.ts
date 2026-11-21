@@ -33,6 +33,17 @@ test("build flags retain paths, AWS settings and launch data", () => {
   expect(buildHostConfig(launch, createSession(launch, { worktree: dir, branch: null, base: null }), dir, local).aws).toEqual(launch.aws);
 });
 
+test("build infers the configured project through workspace and project aliases", () => {
+  const dir = directory(), ws = join(dir, "space"), repo = join(ws, "source"), alias = join(dir, "alias");
+  mkdirSync(join(ws, ".corral-next"), { recursive: true });
+  mkdirSync(repo);
+  execFileSync("git", ["init", "--quiet", repo]);
+  symlinkSync(ws, alias, "dir");
+  symlinkSync(repo, join(ws, "project-link"), "dir");
+  writeFileSync(join(ws, ".corral-next", "corral.toml"), '[projects.demo]\npath = "project-link"\n');
+  expect(parseBuildFlags([], "/assets", { CORRAL_NEXT_ROOT: alias }, repo).launch.project).toBe("demo");
+});
+
 test("a build under a legacy installation leaves its saved logins reachable", () => {
   const data = directory(), dir = directory();
   const env = { XDG_DATA_HOME: data };

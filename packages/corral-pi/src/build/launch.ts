@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
@@ -35,6 +36,10 @@ export function parsePruneFlags(argv: readonly string[], env = process.env, cwd 
     ...(values.session ? { session: values.session } : {}), ...(values.json ? { json: true as const } : {}) };
 }
 
+function resolvedRepo(path: string): string | undefined {
+  try { return realpathSync(path); } catch { return undefined; }
+}
+
 export function parseBuildFlags(argv: readonly string[], assets: string, env = process.env,
   cwd = process.cwd()): { launch: BuildLaunch; local: LocalBuildOptions } {
   rejectRemovedModelOptions(argv);
@@ -54,7 +59,7 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
   const repoRoot = git.status === 0 ? git.stdout.trim() : cwd;
   const projects = workspaceRoot && readWorkspaceToml(workspaceRoot, "corral.toml").projects as Record<string, { path?: string }> | undefined;
   const project = values.project ?? (workspaceRoot && projects ? Object.entries(projects).find(([, entry]) =>
-    typeof entry.path === "string" && resolve(workspaceRoot, entry.path) === repoRoot)?.[0] : undefined);
+    typeof entry.path === "string" && resolvedRepo(resolve(workspaceRoot, entry.path)) === repoRoot)?.[0] : undefined);
   const corral = values.corral ? resolve(cwd, values.corral) : workspaceRoot ? "corral-next" : undefined;
   const dataRoot = buildDataRoot(values["data-dir"], env, cwd);
   const profileArgs = values.profile ? buildProfileArgs(workspaceRoot ?? cwd, values.profile) : [];

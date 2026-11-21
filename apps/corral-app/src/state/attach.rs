@@ -194,7 +194,7 @@ impl AppState {
         let text = self.ask_field_text.get_untracked();
         let outcome = match field {
             AttachField::Link => self.stage_link(&session, &text),
-            AttachField::Path(pick) => self.attach_path(&session, pick, &text),
+            AttachField::Path(pick) => self.attach_path(&session, pick, text.trim()),
         };
         match outcome {
             Ok(()) => self.close_attach_field(),
@@ -336,8 +336,7 @@ impl AppState {
     /// checks the open handle (a regular file within the kind's bound) and uploads only its
     /// bytes, base name and sniffed type. The chip names the base name alone.
     #[cfg(not(target_arch = "wasm32"))]
-    fn attach_path(&self, session: &Id, pick: PickKind, text: &str) -> Result<(), String> {
-        let path = text.trim();
+    fn attach_path(&self, session: &Id, pick: PickKind, path: &str) -> Result<(), String> {
         if path.is_empty() {
             return Err("type the path of a file on this device".into());
         }

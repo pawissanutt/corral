@@ -92,6 +92,19 @@ impl AppState {
     /// `/` goes on with it; a build only opens.
     pub fn switch_agent(&self, id: Id) {
         self.close_agents();
+        // An explicit choice counts even when a retained route already has this id.
+        let preview = self.data.get_untracked() == DataState::Fixture;
+        if let Some(key) = self.feed.with_untracked(|feed| {
+            feed.assistants.get(id.as_str())?;
+            pin_key(feed, preview)
+        }) {
+            let pins = if preview {
+                self.preview_pins
+            } else {
+                self.pins
+            };
+            pins.update(|pins| _ = pins.used(&key, id.as_str()));
+        }
         let keys_ask = self.feed.with_untracked(|feed| {
             feed.assistants
                 .get(id.as_str())
