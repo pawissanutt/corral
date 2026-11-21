@@ -19,7 +19,8 @@ export function createSession(launch: BuildLaunch, worktree: Pick<BuildSessionRe
   id ??= `B-${now.getTime().toString(36)}${randomInt(36 * 36).toString(36).padStart(2, "0")}`;
   validateBuildId(id);
   const name = launch.name?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || id.slice(2);
-  return { version: 1, id, name, created: now.toISOString(), updated: now.toISOString(),
+  const title = launch.name?.trim();
+  return { version: 1, id, name, ...(title ? { title } : {}), created: now.toISOString(), updated: now.toISOString(),
     repoRoot: launch.repoRoot, ...worktree, here: launch.here, ...(launch.bare ? { bare: true } : {}),
     route: { provider: launch.provider, model: launch.model, effort: launch.effort, aws: launch.aws, fallback: launch.fallback },
     ...(launch.project ? { project: launch.project } : {}), ...(launch.workspaceRoot ? { workspaceRoot: launch.workspaceRoot } : {}) };
@@ -39,7 +40,8 @@ export function loadSession(dataRoot: string, id: string): BuildSessionRecord {
     || (record.pid !== undefined && (!Number.isSafeInteger(record.pid) || record.pid <= 0))
     || (record.cleaned !== undefined && record.cleaned !== true)
     || (record.bare === true && (record.workspaceRoot !== undefined || record.project !== undefined))
-    || (record.project !== undefined && typeof record.project !== "string")) throw new Error(`Invalid build session record: ${id}`);
+    || (record.project !== undefined && typeof record.project !== "string")
+    || (record.title !== undefined && typeof record.title !== "string")) throw new Error(`Invalid build session record: ${id}`);
   if (record.route) {
     if (!isProviderId(record.route.provider) || typeof record.route.model !== "string" ||
         (record.route.fallback !== undefined && (!Array.isArray(record.route.fallback) ||

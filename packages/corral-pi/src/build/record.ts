@@ -45,6 +45,15 @@ export interface BuildJournal {
   timeline(phase: BuildRecord["timeline"][number]["phase"], detail: string): void;
 }
 const iso = (at: number) => new Date(at).toISOString();
+/** Keep the first nonempty request line readable in session lists. */
+function requestTitle(text: string): string | undefined {
+  const line = text.split(/\r?\n/).map(value => value.trim()).find(Boolean)?.replace(/\s+/g, " ");
+  if (!line) return undefined;
+  if (line.length <= 120) return line;
+  const prefix = line.slice(0, 119);
+  const boundary = prefix.lastIndexOf(" ");
+  return `${boundary >= 60 ? prefix.slice(0, boundary) : prefix}…`;
+}
 function sum(values: readonly RecordUsage[]): RecordUsage {
   return { input: values.reduce((n, v) => n + v.input, 0), output: values.reduce((n, v) => n + v.output, 0),
     ...(values.every(v => v.cost !== undefined) ? { cost: values.reduce((n, v) => n + v.cost!, 0) } : {}) };
@@ -129,7 +138,7 @@ export function createJournal(options: {
     const children = sum(data.children.filter(child => child.kind !== "review").map(child => child.usage));
     const reviewers = sum(data.children.filter(child => child.kind === "review").map(child => child.usage));
     return { version: 1, id: current.id, kind: "build", project: current.project,
-      title: (data.title ?? data.intent[0]?.text.split(/\r?\n/)[0] ?? "Build session").slice(0, 120),
+      title: (current.title?.trim() || data.title?.trim() || data.intent.map(entry => requestTitle(entry.text)).find(Boolean) || "Build session").slice(0, 120),
       intent: data.intent.slice(0, 32).map(prompt => ({ ...prompt, text: prompt.text.slice(0, 4096) })),
       created: current.created, updated: data.updated, repo_root: current.repoRoot, worktree: current.worktree,
       branch: data.branch === undefined ? current.branch : data.branch, base: current.base, outcome: data.outcome, diff: data.diff,
@@ -192,7 +201,11 @@ export function createJournal(options: {
   return {
     record, liveRecord, refresh,
     capture() { captureFleet(); persist(); },
-    noteOwnerInput(text: string) { data.intent.push({ at: iso(now()), text }); persist(); },
+    noteOwnerInput(text: string) {
+      data.intent.push({ at: iso(now()), text });
+      if (!data.title?.trim() && !session().title?.trim()) data.title = requestTitle(text);
+      persist();
+    },
     prompts: () => data.intent.map(prompt => ({ ...prompt })),
     finish(title: string, summary?: string) {
       if (!title.trim() || title.length > 120) throw new Error("A real build title of 1 to 120 characters is required.");

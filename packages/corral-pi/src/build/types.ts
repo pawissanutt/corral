@@ -68,6 +68,8 @@ export interface BuildSessionRecord {
   /** `B-` plus lowercase base36. */
   readonly id: string;
   readonly name: string;
+  /** Explicit display title supplied at creation, independent of the worktree slug. */
+  readonly title?: string;
   readonly created: string;
   readonly updated: string;
   readonly repoRoot: string;

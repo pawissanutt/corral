@@ -420,6 +420,28 @@ test("build records retain intent, evidence, resolutions, slice attribution, mes
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("request titles persist, fall back for empty input, and preserve an explicit title", () => {
+  const dir = mkdtempSync(join(tmpdir(), "build-title-"));
+  const initial = context();
+  const ctx = { ...initial, dir };
+  try {
+    const journal = createJournal({ context: ctx, git: git(), fleet: () => fleet });
+    expect(journal.record().title).toBe("Build session");
+    journal.noteOwnerInput("  \n  ");
+    expect(journal.record().title).toBe("Build session");
+    journal.noteOwnerInput("\n  Fix   the parser\nMore detail");
+    expect(JSON.parse(readFileSync(join(dir, "journal.json"), "utf8")).title).toBe("Fix the parser");
+    journal.noteOwnerInput("Another request");
+    expect(createJournal({ context: ctx, git: git(), fleet: () => fleet }).record().title).toBe("Fix the parser");
+
+    const named = { ...ctx, dir: join(dir, "named"), session: { ...ctx.session, title: "My chosen title" } };
+    const namedJournal = createJournal({ context: named, git: git(), fleet: () => fleet });
+    namedJournal.noteOwnerInput("A different request");
+    namedJournal.finish("Generated finish title");
+    expect(createJournal({ context: named, git: git(), fleet: () => fleet }).record().title).toBe("My chosen title");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("record caps bound wire content and missing prices never produce partial total cost", async () => {
   const dir = mkdtempSync(join(tmpdir(), "build-record-caps-"));
   const ctx = { ...context(), dir };

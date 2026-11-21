@@ -50,6 +50,7 @@ test("build session records round trip privately and list newest first, skipping
   const first = createSession(launch, { worktree: dir, branch: "build/a", base: "abc" });
   expect(first.id).toMatch(/^B-[a-z0-9]+$/);
   expect(first.name).toBe("a-build");
+  expect(first.title).toBe("A Build");
   const old = { ...first, updated: "2026-01-01T00:00:00.000Z" };
   const fresh = { ...createSession({ ...launch, name: undefined }, { worktree: dir, branch: null, base: null }), id: `${first.id}a`, updated: "2026-02-01T00:00:00.000Z" };
   saveSession(dir, old);

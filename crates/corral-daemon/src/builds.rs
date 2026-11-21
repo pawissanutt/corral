@@ -39,6 +39,7 @@ const MAX_ROWS: usize = 200;
 struct Record {
     id: String,
     name: String,
+    title: Option<String>,
     workspace_root: Option<PathBuf>,
     repo_root: String,
     worktree: String,
@@ -77,6 +78,13 @@ struct Journal {
     diff: Option<BuildDiff>,
     #[serde(default)]
     children: Vec<JournalChild>,
+}
+
+fn build_title<'a>(explicit: Option<&'a str>, journal: Option<&'a str>, name: &'a str) -> &'a str {
+    explicit
+        .filter(|title| !title.trim().is_empty())
+        .or_else(|| journal.filter(|title| !title.trim().is_empty()))
+        .unwrap_or(name)
 }
 
 #[derive(Deserialize)]
@@ -318,7 +326,14 @@ impl Build {
         AssistantRow {
             id: record.id,
             kind: AssistantKind::Build,
-            title: bounded(journal.title.as_deref().unwrap_or(&record.name), 160),
+            title: bounded(
+                build_title(
+                    record.title.as_deref(),
+                    journal.title.as_deref(),
+                    &record.name,
+                ),
+                160,
+            ),
             state,
             live_in,
             profile: None,
@@ -777,5 +792,39 @@ fn discard_reservation(dir: &Path) -> Result<()> {
         Err(err) => {
             Err(err).with_context(|| format!("remove unused reservation {}", dir.display()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persisted_build_title_priority_and_empty_values() {
+        let record: Record = serde_json::from_value(json!({
+            "id": "build-1", "name": "fallback", "title": "explicit",
+            "repoRoot": "/repo", "worktree": "/worktree", "here": false,
+            "created": "now", "updated": "now"
+        }))
+        .unwrap();
+        let journal: Journal = serde_json::from_value(json!({"title": "first prompt"})).unwrap();
+        assert_eq!(
+            build_title(
+                record.title.as_deref(),
+                journal.title.as_deref(),
+                &record.name
+            ),
+            "explicit"
+        );
+        assert_eq!(
+            build_title(None, journal.title.as_deref(), &record.name),
+            "first prompt"
+        );
+        assert_eq!(
+            build_title(Some("  "), journal.title.as_deref(), &record.name),
+            "first prompt"
+        );
+        assert_eq!(build_title(Some(""), Some(" \n"), &record.name), "fallback");
+        assert_eq!(build_title(None, None, &record.name), "fallback");
     }
 }
