@@ -1256,9 +1256,19 @@ export class HostSession {
     });
   }
 
+  private syncBuildTitle(session: AgentSession): void {
+    if (!this.buildControls) return;
+    try { this.buildControls.setSessionTitle(session.sessionManager.getSessionName()); }
+    catch (error) {
+      this.options.events.emit("build_title_save_failed", { reason: utf8Prefix(String(error), 512) });
+    }
+  }
+
   private watch(session: AgentSession): void {
     this.unsubscribe?.();
     this.unobserveTranscript?.();
+    // Reconcile names written before Corral mirrored Pi's session_info into the Build journal.
+    this.syncBuildTitle(session);
     this.unobserveTranscript = observeTranscriptEntries(session.sessionManager,
       () => this.liveEvents.entry(), () => this.liveEvents.stateChanged());
     this.startedInputFacts = undefined;
@@ -1339,6 +1349,9 @@ export class HostSession {
       } else if (event.type === "agent_settled") {
         this.turnEnded(event.aborted);
         this.remoteBuild.refreshExit();
+      } else if (event.type === "session_info_changed") {
+        // InteractiveMode /name emits this after appending session_info. It is not a prompt.
+        this.syncBuildTitle(session);
       } else if (event.type === "queue_update") {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {

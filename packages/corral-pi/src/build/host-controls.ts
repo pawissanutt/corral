@@ -35,6 +35,7 @@ export interface BuildControls {
   readonly ui: BuildUi;
   liveRecord(): Promise<BuildRecord>;
   panelState(): BuildPanelState;
+  setSessionTitle(name: string | undefined): void;
   noteOwnerInput(text: string): void;
   close(): Promise<void>;
 }
@@ -124,6 +125,7 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
   return {
     fleet, exit, board, tools, ui,
     liveRecord: buildJournal.liveRecord,
+    setSessionTitle: buildJournal.setSessionTitle,
     panelState: () => ({ session, settings: context.settings, fleet: fleet.snapshot(), target, exit: exit.state(), record: buildJournal.record(), board: board?.tasks() ?? [] }),
     noteOwnerInput(text) {
       try { buildJournal.noteOwnerInput(text); }

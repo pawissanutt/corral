@@ -73,18 +73,26 @@ struct SavedExit {
 }
 
 #[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Journal {
+    session_title: Option<String>,
     title: Option<String>,
     diff: Option<BuildDiff>,
     #[serde(default)]
     children: Vec<JournalChild>,
 }
 
-fn build_title<'a>(explicit: Option<&'a str>, journal: Option<&'a str>, name: &'a str) -> &'a str {
-    explicit
-        .filter(|title| !title.trim().is_empty())
-        .or_else(|| journal.filter(|title| !title.trim().is_empty()))
-        .unwrap_or(name)
+fn build_title<'a>(record: &'a Record, journal: &'a Journal) -> &'a str {
+    [
+        journal.session_title.as_deref(),
+        record.title.as_deref(),
+        journal.title.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(str::trim)
+    .find(|title| !title.is_empty())
+    .unwrap_or(&record.name)
 }
 
 #[derive(Deserialize)]
@@ -281,6 +289,7 @@ impl Build {
             }
         }
         let record = self.record;
+        let title = bounded(build_title(&record, &journal), 160);
         let mut route = record.route;
         let saved_model = || {
             let route = route.as_ref()?;
@@ -326,14 +335,7 @@ impl Build {
         AssistantRow {
             id: record.id,
             kind: AssistantKind::Build,
-            title: bounded(
-                build_title(
-                    record.title.as_deref(),
-                    journal.title.as_deref(),
-                    &record.name,
-                ),
-                160,
-            ),
+            title,
             state,
             live_in,
             profile: None,
@@ -801,30 +803,55 @@ mod tests {
 
     #[test]
     fn persisted_build_title_priority_and_empty_values() {
-        let record: Record = serde_json::from_value(json!({
-            "id": "build-1", "name": "fallback", "title": "explicit",
+        let mut record: Record = serde_json::from_value(json!({
+            "id": "B-build1", "name": "fallback", "title": "launch title",
             "repoRoot": "/repo", "worktree": "/worktree", "here": false,
             "created": "now", "updated": "now"
         }))
         .unwrap();
-        let journal: Journal = serde_json::from_value(json!({"title": "first prompt"})).unwrap();
-        assert_eq!(
-            build_title(
-                record.title.as_deref(),
-                journal.title.as_deref(),
-                &record.name
-            ),
-            "explicit"
-        );
-        assert_eq!(
-            build_title(None, journal.title.as_deref(), &record.name),
-            "first prompt"
-        );
-        assert_eq!(
-            build_title(Some("  "), journal.title.as_deref(), &record.name),
-            "first prompt"
-        );
-        assert_eq!(build_title(Some(""), Some(" \n"), &record.name), "fallback");
-        assert_eq!(build_title(None, None, &record.name), "fallback");
+        let mut journal: Journal = serde_json::from_value(json!({
+            "sessionTitle": " renamed in Pi ", "title": "first prompt"
+        }))
+        .unwrap();
+        assert_eq!(build_title(&record, &journal), "renamed in Pi");
+        journal.session_title = Some("  ".into());
+        assert_eq!(build_title(&record, &journal), "launch title");
+        record.title = None;
+        assert_eq!(build_title(&record, &journal), "first prompt");
+        journal.title = Some(" \n".into());
+        assert_eq!(build_title(&record, &journal), "fallback");
+        assert_eq!(build_title(&record, &Journal::default()), "fallback");
+    }
+
+    #[test]
+    fn cold_build_row_reads_the_saved_pi_title_at_a_utf8_boundary() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let shared = Shared::new(root.clone(), None).unwrap();
+        let id = "B-rename";
+        let dir = root.join(id);
+        fs::create_dir(&dir).unwrap();
+        fs::write(
+            dir.join("session.json"),
+            json!({
+                "id": id, "name": "fallback", "title": "launch title",
+                "workspaceRoot": root, "repoRoot": root, "worktree": root,
+                "here": true, "created": "now", "updated": "now"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let prefix = "界".repeat(53);
+        fs::write(
+            dir.join("journal.json"),
+            json!({"sessionTitle": format!("{prefix}😀"), "title": "first prompt"}).to_string(),
+        )
+        .unwrap();
+        let row = Build::read(&root, &root, id)
+            .unwrap()
+            .unwrap()
+            .row(&shared, None);
+        assert_eq!(row.state, AssistantState::Cold);
+        assert_eq!(row.title, prefix);
     }
 }

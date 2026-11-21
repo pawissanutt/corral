@@ -9,6 +9,8 @@ import type { BuildGateResult, BuildRecord, RecordDecision, RecordReview, Record
 interface JournalData {
   version: 1;
   title?: string;
+  /** Owner's Pi session_info name, distinct from inferred and finish titles. */
+  sessionTitle?: string;
   summary?: string;
   intent: { at: string; text: string }[];
   ownerSteers: Record<string, number>;
@@ -30,6 +32,7 @@ export interface BuildJournal {
   liveRecord(): Promise<BuildRecord>;
   refresh(): Promise<void>;
   capture(): void;
+  setSessionTitle(name: string | undefined): void;
   noteOwnerInput(text: string): void;
   prompts(): { at: string; text: string }[];
   finish(title: string, summary?: string): void;
@@ -45,13 +48,28 @@ export interface BuildJournal {
   timeline(phase: BuildRecord["timeline"][number]["phase"], detail: string): void;
 }
 const iso = (at: number) => new Date(at).toISOString();
+const TITLE_MAX = 120;
+
+/** Single-line display text, bounded by Unicode code points without copying a long name. */
+function displayTitle(value: string | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  let title = "", length = 0;
+  for (const character of value) {
+    const safe = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(character) ? " " : character;
+    if (!length && !safe.trim()) continue;
+    title += safe;
+    if (++length === TITLE_MAX) break;
+  }
+  return title.trimEnd().toWellFormed() || undefined;
+}
+
 /** Keep the first nonempty request line readable in session lists. */
 function requestTitle(text: string): string | undefined {
   const line = text.split(/\r?\n/).map(value => value.trim()).find(Boolean)?.replace(/\s+/g, " ");
   if (!line) return undefined;
   const characters = Array.from(line);
-  if (characters.length <= 120) return line;
-  const prefix = characters.slice(0, 119).join("");
+  if (characters.length <= TITLE_MAX) return line;
+  const prefix = characters.slice(0, TITLE_MAX - 1).join("");
   const boundary = prefix.lastIndexOf(" ");
   return `${boundary >= 60 ? prefix.slice(0, boundary) : prefix}…`;
 }
@@ -139,7 +157,8 @@ export function createJournal(options: {
     const children = sum(data.children.filter(child => child.kind !== "review").map(child => child.usage));
     const reviewers = sum(data.children.filter(child => child.kind === "review").map(child => child.usage));
     return { version: 1, id: current.id, kind: "build", project: current.project,
-      title: Array.from(current.title?.trim() || data.title?.trim() || data.intent.map(entry => requestTitle(entry.text)).find(Boolean) || "Build session").slice(0, 120).join(""),
+      title: displayTitle(data.sessionTitle) ?? displayTitle(current.title) ?? displayTitle(data.title)
+        ?? displayTitle(data.intent.map(entry => requestTitle(entry.text)).find(Boolean)) ?? "Build session",
       intent: data.intent.slice(0, 32).map(prompt => ({ ...prompt, text: prompt.text.slice(0, 4096) })),
       created: current.created, updated: data.updated, repo_root: current.repoRoot, worktree: current.worktree,
       branch: data.branch === undefined ? current.branch : data.branch, base: current.base, outcome: data.outcome, diff: data.diff,
@@ -202,6 +221,12 @@ export function createJournal(options: {
   return {
     record, liveRecord, refresh,
     capture() { captureFleet(); persist(); },
+    setSessionTitle(name) {
+      const title = displayTitle(name);
+      if (title === data.sessionTitle) return;
+      data.sessionTitle = title;
+      persist();
+    },
     noteOwnerInput(text: string) {
       data.intent.push({ at: iso(now()), text });
       if (!data.title?.trim() && !session().title?.trim()) data.title = data.intent.map(entry => requestTitle(entry.text)).find(Boolean);

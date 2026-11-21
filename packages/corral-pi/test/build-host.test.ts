@@ -146,11 +146,13 @@ test("a headless build takes --id and records its socket", async () => {
         const record = loadSession(data, id);
         expect(record).toMatchObject({ id, socket, sessionFile: hello.session_file, pid: child.child.pid, workspaceRoot: dir });
         if (transcript === undefined) {
-          expect((await call("submit_input", { text: "Begin", origin: "owner", input_id: "build-first" })).disposition).toBe("started");
+          expect((await call("submit_input", { text: "Fix the parser\nHandle empty input", origin: "owner", input_id: "build-first" })).disposition).toBe("started");
           await child.output(/turn 1 ended/);
+          expect(JSON.parse(readFileSync(join(sessionDir(data, id), "journal.json"), "utf8")).title).toBe("Fix the parser");
         } else {
           expect(record.sessionFile).toBe(transcript);
           expect((await call("get_state")).turn).toMatchObject({ current: 1, open: false });
+          expect(JSON.parse(readFileSync(join(sessionDir(data, id), "journal.json"), "utf8")).title).toBe("Fix the parser");
         }
         expect(await call("shutdown")).toEqual({ shutting_down: true });
         expect(await within(child.exit, 10_000, "build shutdown")).toBe(0);
