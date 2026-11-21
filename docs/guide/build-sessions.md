@@ -105,7 +105,8 @@ abort and reports the conflicted paths; resolve them in the build worktree. A fa
 gate reports its command and log. Repair the candidate before offering it for Land.
 
 The final choice covers a specific base and head. A previously passing gate on the
-same head and commands can be reused. Under review policy an owner may supply a reason
+same head with the same commands and configured gate environment can be reused. A
+receipt from before the host recorded those inputs does not count. Under review policy an owner may supply a reason
 to override missing approval, never to bypass a failed gate. If either branch moves,
 prepare the new candidate rather than reusing an old choice. A stale card cannot land
 a different commit. Keep and Iterate do not require passing evidence.
