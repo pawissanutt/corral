@@ -198,7 +198,7 @@ fn sidebar(
 
 /// Folds or unfolds the sidebar, drawn as a window with its sidebar (a back chevron would read
 /// as leaving the page); it says whether the labels are shown. test_id "sidebar-toggle".
-fn sidebar_toggle(app: AppState, collapsed: Memo<bool>) -> AnyElement {
+pub(crate) fn sidebar_toggle(app: AppState, collapsed: Memo<bool>) -> AnyElement {
     let ink = color(Token::ShellInk);
     view()
         .size(px(control_height(28.0)))

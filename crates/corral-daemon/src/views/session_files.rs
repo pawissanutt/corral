@@ -202,7 +202,7 @@ mod linux {
         } else {
             shared.root().to_owned()
         };
-        let repo = std::path::absolute(repo).map_err(|_| missing)?;
+        let repo = repo.canonicalize().map_err(|_| missing)?;
         let expected = repo
             .join(".worktrees")
             .join(format!("build-{}", build.name));

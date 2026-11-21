@@ -76,18 +76,29 @@ pub(super) fn open_file(raw: &super::tool::Raw<'_>, cx: super::replay::Cx<'_>) -
     }
     let args: Value = serde_json::from_str(raw.arguments).ok()?;
     let raw_path = str_of(&args, "path").or_else(|| str_of(&args, "file_path"))?;
-    let path = std::path::Path::new(raw_path);
-    let path = if path.is_absolute() {
-        path.strip_prefix(cx.journal.cwd.as_deref()?).ok()?
+    let path = raw_path.strip_prefix('@').unwrap_or(raw_path);
+    // The Files daemon is Linux even when the reading app runs on Windows. Do not
+    // guess the host's home, URL decoding or fallback spellings from client paths.
+    if path == "~"
+        || path.starts_with("~/")
+        || path.starts_with("file://")
+        || path.contains('\\')
+        || path.chars().any(|c| c.is_whitespace() && c != ' ')
+    {
+        return None;
+    }
+    let relative = if path.starts_with('/') {
+        path.strip_prefix(cx.journal.cwd.as_deref()?.trim_end_matches('/'))?
+            .strip_prefix('/')?
     } else {
         path
     };
     let mut parts = Vec::new();
-    for part in path.components() {
+    for part in relative.split('/') {
         match part {
-            std::path::Component::CurDir => {}
-            std::path::Component::Normal(name) => parts.push(name.to_str()?),
-            _ => return None,
+            "" | "." => (),
+            ".." => return None,
+            name => parts.push(name),
         }
     }
     (!parts.is_empty()).then(|| ToolView {

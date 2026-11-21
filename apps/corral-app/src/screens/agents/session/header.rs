@@ -236,6 +236,18 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>, wide: Memo<bool>) -> 
         .gap(px(12.0))
         .h(px(46.0))
         .px(px(18.0))
+        .child(when(
+            move || {
+                app.feed
+                    .with(|feed| feed.link != crate::model::daemon::Link::Down)
+            },
+            move || {
+                crate::shell::desktop::sidebar_toggle(
+                    app,
+                    computed(move || crate::shell::sidebar_collapsed(app)),
+                )
+            },
+        ))
         .child(button_with(
             app,
             back.0,
