@@ -3,7 +3,7 @@ use crate::{
     tests::{run, task, tempdir},
 };
 
-use super::{UsageBy, UsageSummary, UsageTotal, UsageWindow};
+use super::{UsageBy, UsageSummary, UsageTotal, UsageWindow, empty_total};
 
 fn request(at: &str) -> Usage {
     Usage {
@@ -27,7 +27,13 @@ fn request(at: &str) -> Usage {
 fn usage_add_attributes_the_run_without_creating_an_event() {
     let root = tempdir();
     let engine = Engine::init(root.path(), None).unwrap();
-    assert_eq!(engine.usage_summary(None).unwrap(), UsageSummary::default());
+    assert_eq!(
+        engine.usage_summary(None).unwrap(),
+        UsageSummary {
+            total: empty_total(),
+            ..UsageSummary::default()
+        }
+    );
     let associated = Usage {
         task: Some("T-001".into()),
         run: Some("R1".into()),
@@ -137,6 +143,10 @@ fn usage_rollups_keep_unassociated_requests_but_count_only_exact_run_matches() {
                 output: 10,
                 cache_read: 15,
                 cache_write: 20,
+                input_requests: Some(5),
+                output_requests: Some(5),
+                cache_read_requests: Some(5),
+                cache_write_requests: Some(5),
                 priced_requests: 3,
                 usd: Some(0.375),
                 ..UsageTotal::default()
@@ -200,6 +210,10 @@ fn usage_rollups_keep_unassociated_requests_but_count_only_exact_run_matches() {
             output: 4,
             cache_read: 6,
             cache_write: 8,
+            input_requests: Some(2),
+            output_requests: Some(2),
+            cache_read_requests: Some(2),
+            cache_write_requests: Some(2),
             priced_requests: 0,
             usd: None,
             ..UsageTotal::default()
@@ -441,7 +455,14 @@ fn usage_series_buckets_by_local_midnight_and_covers_only_same_day_cohorts() {
     );
     assert_eq!(counts(2), (0, 0, 1));
     assert_eq!(groups(2), [(Some("model-a"), 0, Some(0), Some(1))]);
-    assert_eq!(series[3].summary, UsageSummary::default());
+    assert_eq!(series[2].summary.groups[0].total, empty_total());
+    assert_eq!(
+        series[3].summary,
+        UsageSummary {
+            total: empty_total(),
+            ..UsageSummary::default()
+        }
+    );
 
     let by_day = engine.usage_series(window(), Some(UsageBy::Day)).unwrap();
     for day in &by_day[..3] {
@@ -451,6 +472,87 @@ fn usage_series_buckets_by_local_midnight_and_covers_only_same_day_cohorts() {
             Some(day.summary.covered_runs)
         );
     }
+}
+
+#[test]
+fn usage_totals_count_omitted_explicit_zero_and_partial_tokens_separately() {
+    let root = tempdir();
+    let engine = Engine::init(root.path(), None).unwrap();
+    let omitted: Usage = serde_json::from_value(serde_json::json!({
+        "at": "2026-11-17T12:00:00Z",
+        "model": "omitted",
+    }))
+    .unwrap();
+    let zero = Usage {
+        model: "zero".into(),
+        explicit_zero_tokens: [
+            UsageToken::Input,
+            UsageToken::Output,
+            UsageToken::CacheRead,
+            UsageToken::CacheWrite,
+        ]
+        .into(),
+        ..omitted.clone()
+    };
+    let partial = Usage {
+        model: "partial".into(),
+        input: 10,
+        cache_read: 3,
+        ..omitted.clone()
+    };
+    for row in [omitted, zero, partial] {
+        engine.record_usage(&row).unwrap();
+    }
+
+    let tokens = |total: &UsageTotal| {
+        (
+            [
+                total.input,
+                total.output,
+                total.cache_read,
+                total.cache_write,
+            ],
+            [
+                total.input_requests,
+                total.output_requests,
+                total.cache_read_requests,
+                total.cache_write_requests,
+            ],
+        )
+    };
+    let summary = engine.usage_summary(Some(UsageBy::Model)).unwrap();
+    assert_eq!(summary.total, engine.usage_summary(None).unwrap().total);
+    assert_eq!(summary.total.requests, 3);
+    assert_eq!(
+        tokens(&summary.total),
+        ([10, 0, 3, 0], [Some(2), Some(1), Some(2), Some(1)])
+    );
+    let groups: Vec<_> = summary
+        .groups
+        .iter()
+        .map(|group| (group.key.as_deref().unwrap(), tokens(&group.total)))
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            ("omitted", ([0; 4], [Some(0); 4])),
+            (
+                "partial",
+                ([10, 0, 3, 0], [Some(1), Some(0), Some(1), Some(0)])
+            ),
+            ("zero", ([0; 4], [Some(1); 4])),
+        ]
+    );
+    let series = engine
+        .usage_series(
+            UsageWindow::parse("2026-11-17", "2026-11-18", 0, None).unwrap(),
+            Some(UsageBy::Model),
+        )
+        .unwrap();
+    assert_eq!(series[0].summary, summary);
+    let by_day = engine.usage_summary(Some(UsageBy::Day)).unwrap();
+    assert_eq!(by_day.groups.len(), 1);
+    assert_eq!(by_day.groups[0].total, summary.total);
 }
 
 #[test]

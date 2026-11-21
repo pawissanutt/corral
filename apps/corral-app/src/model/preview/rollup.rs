@@ -434,6 +434,22 @@ fn add(total: &mut UsageTotal, row: &corral_types::Usage) {
     total.output += row.output;
     total.cache_read += row.cache_read;
     total.cache_write += row.cache_write;
+    for (token, count) in [
+        (corral_types::UsageToken::Input, &mut total.input_requests),
+        (corral_types::UsageToken::Output, &mut total.output_requests),
+        (
+            corral_types::UsageToken::CacheRead,
+            &mut total.cache_read_requests,
+        ),
+        (
+            corral_types::UsageToken::CacheWrite,
+            &mut total.cache_write_requests,
+        ),
+    ] {
+        if row.token_count(token).is_some() {
+            *count.get_or_insert(0) += 1;
+        }
+    }
     if let Some(usd) = row.usd {
         total.priced_requests += 1;
         total.usd = Some(total.usd.unwrap_or(0.0) + usd);

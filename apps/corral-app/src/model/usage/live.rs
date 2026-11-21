@@ -77,10 +77,111 @@ fn unrated(total: &UsageTotal) -> u64 {
         .saturating_sub(missing_tokens(total))
 }
 
+/// How much of a total's requests carried evidence for one token count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Evidence {
+    /// No request did; a zero sum is then not a recorded zero.
+    Missing,
+    /// Some did, or how many did is unknown (a daemon older than the evidence counts): the sum
+    /// is a lower bound.
+    Partial(Option<u64>),
+    /// Every request did, so an explicit zero is a zero.
+    All,
+}
+
+fn evidence(requests: u64, reported: Option<u64>, sum: u64) -> Evidence {
+    match reported {
+        _ if requests == 0 => Evidence::Missing,
+        Some(0) => Evidence::Missing,
+        Some(n) if n >= requests => Evidence::All,
+        Some(n) => Evidence::Partial(Some(n)),
+        // A legacy positive sum is some evidence but not full coverage; a legacy zero is unknown.
+        None if sum > 0 => Evidence::Partial(None),
+        None => Evidence::Missing,
+    }
+}
+
+fn input_evidence(total: &UsageTotal) -> Evidence {
+    evidence(total.requests, total.input_requests, total.input)
+}
+
+fn output_evidence(total: &UsageTotal) -> Evidence {
+    evidence(total.requests, total.output_requests, total.output)
+}
+
+/// A token count as its evidence allows: [`UNKNOWN`] with none, `≥` before a lower bound.
+fn figure_of(evidence: Evidence, sum: u64) -> String {
+    match evidence {
+        Evidence::Missing => UNKNOWN.to_owned(),
+        Evidence::Partial(_) => format!("≥{}", tokens(sum)),
+        Evidence::All => tokens(sum),
+    }
+}
+
+/// Input and output together, for the day strip: complete only when both are.
+fn used_words(total: &UsageTotal) -> String {
+    let sum = total.input + total.output;
+    match (input_evidence(total), output_evidence(total)) {
+        (Evidence::Missing, Evidence::Missing) => UNKNOWN.to_owned(),
+        (Evidence::All, Evidence::All) => tokens(sum),
+        _ => format!("≥{}", tokens(sum)),
+    }
+}
+
+/// Why a total's input and output tokens are unknown or partial; empty when both are complete.
+fn token_reasons(total: &UsageTotal) -> Vec<String> {
+    let requests = total.requests;
+    let (input, output) = (input_evidence(total), output_evidence(total));
+    if requests == 0 || (input == Evidence::All && output == Evidence::All) {
+        return Vec::new();
+    }
+    if input == Evidence::Missing && output == Evidence::Missing {
+        return vec!["no request reported input or output tokens".to_owned()];
+    }
+    [("input", input), ("output", output)]
+        .into_iter()
+        .filter_map(|(name, evidence)| match evidence {
+            Evidence::All => None,
+            Evidence::Missing => Some(format!("no request reported {name} tokens")),
+            Evidence::Partial(Some(n)) => Some(format!(
+                "{name} tokens reported on {n} of {} requests",
+                count(requests)
+            )),
+            Evidence::Partial(None) => Some(format!(
+                "{name} tokens: how many requests reported them is unknown"
+            )),
+        })
+        .collect()
+}
+
+/// A part's reported-request count for one token count where it is known. A legacy part
+/// (no count) with requests is unknown even at a zero sum, as it may have reported zeros; a
+/// part without requests reported none.
+fn known(reported: Option<u64>, requests: u64) -> Option<u64> {
+    match reported {
+        Some(n) => Some(n),
+        None if requests == 0 => Some(0),
+        None => None,
+    }
+}
+
+/// Two parts' counts, each with its requests, added; unknown if either is. The token sums
+/// keep their lower bound.
+fn joined(a: (Option<u64>, u64), b: (Option<u64>, u64)) -> Option<u64> {
+    Some(known(a.0, a.1)? + known(b.0, b.1)?)
+}
+
 /// Explain missing prices and the start-day limitation of run coverage.
 fn coverage(summary: &UsageSummary) -> Option<Coverage> {
     let total = &summary.total;
     let mut reasons = Vec::new();
+    let partial = token_reasons(total);
+    if !partial.is_empty() {
+        reasons.push(format!(
+            "Input and output tokens are incomplete: {}.",
+            partial.join("; ")
+        ));
+    }
     let missing = unpriced(total);
     if missing > 0 {
         reasons.push(format!(
@@ -142,11 +243,21 @@ const ESTIMATE_NOTE: &str = "Reported is the price agent hosts recorded. API est
 const QUOTA: &str = "Quota is unknown: no harness reports quota or remaining allowance.";
 
 fn add(sum: &mut UsageTotal, total: &UsageTotal) {
+    // The evidence counts are joined before the request counts they qualify change.
+    let join = |a: Option<u64>, b: Option<u64>| joined((a, sum.requests), (b, total.requests));
+    let input_requests = join(sum.input_requests, total.input_requests);
+    let output_requests = join(sum.output_requests, total.output_requests);
+    let cache_read_requests = join(sum.cache_read_requests, total.cache_read_requests);
+    let cache_write_requests = join(sum.cache_write_requests, total.cache_write_requests);
     sum.requests += total.requests;
     sum.input += total.input;
     sum.output += total.output;
     sum.cache_read += total.cache_read;
     sum.cache_write += total.cache_write;
+    sum.input_requests = input_requests;
+    sum.output_requests = output_requests;
+    sum.cache_read_requests = cache_read_requests;
+    sum.cache_write_requests = cache_write_requests;
     sum.priced_requests += total.priced_requests;
     sum.estimated_requests += total.estimated_requests;
     sum.estimate_missing_token_requests += total.estimate_missing_token_requests;
@@ -249,6 +360,7 @@ fn group_coverage(group: &UsageGroup) -> (String, bool, Option<String>) {
         }
         _ => UNKNOWN.to_owned(),
     };
+    reasons.extend(token_reasons(&group.total));
     let unpriced = unpriced(&group.total);
     if unpriced > 0 {
         reasons.push(format!(
@@ -332,8 +444,8 @@ fn group_row(
         runs_missing,
         reasons,
         requests: figure(|t| count(t.requests)),
-        input: figure(|t| tokens(t.input)),
-        output: figure(|t| tokens(t.output)),
+        input: figure(|t| figure_of(input_evidence(t), t.input)),
+        output: figure(|t| figure_of(output_evidence(t), t.output)),
         cost: figure(cost),
         estimate: figure(estimate),
     }
@@ -382,7 +494,7 @@ fn day_strip(days: Days, series: &UsageSeries) -> DayStrip {
             let mut hint = format!(
                 "{}: {} tokens · {}",
                 short_day(*day),
-                tokens(used(summary)),
+                used_words(total),
                 plural(total.requests, "request", "requests")
             );
             if total.usd.is_some() {
@@ -638,7 +750,13 @@ mod tests {
         let page = page(&state, &feed);
         assert!(page.head.contains("1 of 3 runs"), "{}", page.head);
         assert!(page.head.contains("reported usage on their start day"));
-        assert!(page.coverage.unwrap().reasons[0].contains("no cost"));
+        assert!(
+            page.coverage
+                .unwrap()
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("no cost"))
+        );
         let total = page.total.as_ref().unwrap();
         assert_eq!(total.covered, "1 of 3");
         let claude = page.rows.iter().find(|row| row.key == "claude").unwrap();
@@ -829,6 +947,111 @@ mod tests {
         assert!(
             reasons.contains("later requests are still included"),
             "{reasons}"
+        );
+    }
+
+    /// Input and output are only a number where requests carried evidence for them: absent
+    /// evidence is a dash (not 0), incomplete evidence is a lower bound with its reason, an
+    /// explicit zero is 0, and a daemon that predates the evidence counts is never shown as
+    /// complete. The day and group sums keep this.
+    #[test]
+    fn token_totals_follow_their_evidence_not_their_sum() {
+        let group =
+            |key: &str, requests, input, output, seen: (Option<u64>, Option<u64>)| UsageGroup {
+                key: Some(key.into()),
+                total: UsageTotal {
+                    requests,
+                    input,
+                    output,
+                    input_requests: seen.0,
+                    output_requests: seen.1,
+                    ..UsageTotal::default()
+                },
+                covered_runs: Some(1),
+                total_runs: Some(1),
+            };
+        let day = |day: &str, groups: Vec<UsageGroup>| UsageDay {
+            day: day.into(),
+            summary: UsageSummary {
+                total: groups.iter().fold(UsageTotal::default(), |mut sum, group| {
+                    add(&mut sum, &group.total);
+                    sum
+                }),
+                covered_runs: groups.len() as u64,
+                total_runs: groups.len() as u64,
+                groups,
+            },
+        };
+        let both = |n| (Some(n), Some(n));
+        let series = UsageSeries {
+            days: vec![
+                day(
+                    "2025-11-14",
+                    vec![
+                        group("zero", 2, 0, 0, both(2)),
+                        group("silent", 1, 0, 0, both(0)),
+                        group("mixed", 3, 300, 10, (Some(1), Some(3))),
+                        group("legacy", 2, 500, 0, (None, None)),
+                        group("legacy-zero", 1, 0, 0, (None, None)),
+                        group("split", 2, 100, 0, both(2)),
+                    ],
+                ),
+                day("2025-11-15", vec![group("split", 1, 0, 0, both(0))]),
+            ],
+        };
+        let summary = merged(&series);
+        let rows = rows(UsageBy::Profile, &summary, &Feed::default());
+        let row = |key: &str| rows.iter().find(|row| row.key == key).unwrap();
+        let figures = |key: &str| (row(key).input.clone(), row(key).output.clone());
+        let pair = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+        assert_eq!(figures("zero"), pair("0", "0"));
+        assert_eq!(figures("silent"), pair(UNKNOWN, UNKNOWN));
+        assert_eq!(figures("mixed"), pair("≥300", "10"));
+        assert_eq!(figures("legacy"), pair("≥500", UNKNOWN));
+        assert_eq!(figures("legacy-zero"), pair(UNKNOWN, UNKNOWN));
+        // Two of three requests across the days reported: the sum is a lower bound.
+        assert_eq!(figures("split"), pair("≥100", "≥0"));
+        let reasons = |key: &str| row(key).reasons.clone().unwrap_or_default();
+        assert!(!reasons("zero").contains("tokens"), "{}", reasons("zero"));
+        assert!(
+            reasons("silent").contains("no request reported input or output tokens"),
+            "{}",
+            reasons("silent")
+        );
+        assert!(
+            reasons("mixed").contains("input tokens reported on 1 of 3 requests"),
+            "{}",
+            reasons("mixed")
+        );
+        assert!(
+            reasons("legacy").contains("input tokens: how many requests reported them is unknown"),
+            "{}",
+            reasons("legacy")
+        );
+        assert!(
+            reasons("split").contains("input tokens reported on 2 of 3 requests"),
+            "{}",
+            reasons("split")
+        );
+        // A legacy part makes the period's total a lower bound, said once in the page's notes.
+        let total = total_row(&summary);
+        assert_eq!(total.input, "≥900");
+        assert_eq!(total.output, "≥10");
+        let notes = coverage(&summary).unwrap().reasons.join(" ");
+        assert!(
+            notes.contains("Input and output tokens are incomplete"),
+            "{notes}"
+        );
+        // The day strip says the same.
+        assert_eq!(used_words(&group("zero", 2, 0, 0, both(2)).total), "0");
+        assert_eq!(
+            used_words(&group("silent", 1, 0, 0, both(0)).total),
+            UNKNOWN
+        );
+        assert_eq!(used_words(&UsageTotal::default()), UNKNOWN);
+        assert_eq!(
+            used_words(&group("mixed", 3, 300, 10, (Some(1), Some(3))).total),
+            "≥310"
         );
     }
 }

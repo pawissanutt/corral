@@ -125,7 +125,18 @@ fn parse_date(value: &str) -> Result<Date> {
     Ok(value.parse()?)
 }
 
-#[derive(Default)]
+fn empty_total() -> UsageTotal {
+    // Locally calculated rollups always have a known coverage count, even for
+    // an empty day or a group containing only runs with no usage reports.
+    UsageTotal {
+        input_requests: Some(0),
+        output_requests: Some(0),
+        cache_read_requests: Some(0),
+        cache_write_requests: Some(0),
+        ..UsageTotal::default()
+    }
+}
+
 struct Bucket {
     total: UsageTotal,
     groups: BTreeMap<Option<GroupKey>, GroupTally>,
@@ -134,11 +145,31 @@ struct Bucket {
     covered: HashMap<i64, bool>,
 }
 
-#[derive(Default)]
+impl Default for Bucket {
+    fn default() -> Self {
+        Self {
+            total: empty_total(),
+            groups: BTreeMap::new(),
+            total_runs: 0,
+            covered: HashMap::new(),
+        }
+    }
+}
+
 struct GroupTally {
     total: UsageTotal,
     covered_runs: u64,
     total_runs: u64,
+}
+
+impl Default for GroupTally {
+    fn default() -> Self {
+        Self {
+            total: empty_total(),
+            covered_runs: 0,
+            total_runs: 0,
+        }
+    }
 }
 
 impl Bucket {
@@ -170,22 +201,39 @@ enum Estimate {
 
 fn add(total: &mut UsageTotal, usage: &Usage, estimate: Estimate) -> Result<()> {
     total.requests += 1;
-    total.input = total
-        .input
-        .checked_add(usage.input)
-        .context("usage input total overflow")?;
-    total.output = total
-        .output
-        .checked_add(usage.output)
-        .context("usage output total overflow")?;
-    total.cache_read = total
-        .cache_read
-        .checked_add(usage.cache_read)
-        .context("usage cache-read total overflow")?;
-    total.cache_write = total
-        .cache_write
-        .checked_add(usage.cache_write)
-        .context("usage cache-write total overflow")?;
+    for (token, category, sum, requests) in [
+        (
+            UsageToken::Input,
+            "input",
+            &mut total.input,
+            &mut total.input_requests,
+        ),
+        (
+            UsageToken::Output,
+            "output",
+            &mut total.output,
+            &mut total.output_requests,
+        ),
+        (
+            UsageToken::CacheRead,
+            "cache-read",
+            &mut total.cache_read,
+            &mut total.cache_read_requests,
+        ),
+        (
+            UsageToken::CacheWrite,
+            "cache-write",
+            &mut total.cache_write,
+            &mut total.cache_write_requests,
+        ),
+    ] {
+        if let Some(count) = usage.token_count(token) {
+            *sum = sum
+                .checked_add(count)
+                .with_context(|| format!("usage {category} total overflow"))?;
+            *requests.get_or_insert(0) += 1;
+        }
+    }
     if let Some(price) = usage.usd {
         let usd = total.usd.unwrap_or_default() + price;
         ensure!(usd.is_finite(), "usage USD total overflow");
@@ -348,7 +396,7 @@ impl Engine {
     pub fn usage_summary(&self, by: Option<UsageBy>) -> Result<UsageSummary> {
         self.usage_snapshot(|| {
             if by.is_none() {
-                let mut total = UsageTotal::default();
+                let mut total = empty_total();
                 self.store.read_usage(
                     "SELECT document FROM usage ORDER BY seq",
                     None,

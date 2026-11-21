@@ -496,10 +496,27 @@ pub enum UsageBy {
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageTotal {
     pub requests: u64,
+    /// Sum of known input counts; interpret alongside `input_requests`.
     pub input: u64,
+    /// Sum of known output counts; interpret alongside `output_requests`.
     pub output: u64,
+    /// Sum of known cache-read counts; interpret alongside `cache_read_requests`.
     pub cache_read: u64,
+    /// Sum of known cache-write counts; interpret alongside `cache_write_requests`.
     pub cache_write: u64,
+    /// Requests with an evidenced input count, including explicit zero.
+    /// `None` means coverage is unavailable (e.g. on older wire responses).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_requests: Option<u64>,
+    /// Requests with an evidenced output count, using the same coverage convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_requests: Option<u64>,
+    /// Requests with an evidenced cache-read count, using the same coverage convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_requests: Option<u64>,
+    /// Requests with an evidenced cache-write count, using the same coverage convention.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_requests: Option<u64>,
     pub priced_requests: u64,
     /// Sum of reported prices; `None` if no requests reported a price.
     pub usd: Option<f64>,
@@ -550,4 +567,48 @@ pub struct UsageDay {
     /// Local calendar date in `YYYY-MM-DD` format.
     pub day: String,
     pub summary: UsageSummary,
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::UsageTotal;
+    use serde_json::{json, to_value};
+
+    #[test]
+    fn usage_total_distinguishes_legacy_coverage_from_zero_coverage() {
+        let legacy = json!({
+            "requests": 2,
+            "input": 10,
+            "output": 0,
+            "cache_read": 0,
+            "cache_write": 0,
+            "priced_requests": 0,
+            "usd": null,
+        });
+        let old: UsageTotal = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(
+            [
+                old.input_requests,
+                old.output_requests,
+                old.cache_read_requests,
+                old.cache_write_requests,
+            ],
+            [None; 4]
+        );
+        assert_eq!(to_value(&old).unwrap(), legacy);
+
+        let current = UsageTotal {
+            input_requests: Some(2),
+            output_requests: Some(0),
+            cache_read_requests: Some(1),
+            cache_write_requests: Some(0),
+            ..old
+        };
+        let wire = to_value(&current).unwrap();
+        assert_eq!(wire["input_requests"], json!(2));
+        assert_eq!(wire["output_requests"], json!(0));
+        assert_eq!(wire["cache_read_requests"], json!(1));
+        assert_eq!(wire["cache_write_requests"], json!(0));
+        assert_eq!(serde_json::from_value::<UsageTotal>(wire).unwrap(), current);
+    }
 }

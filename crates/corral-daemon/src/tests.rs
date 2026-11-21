@@ -269,7 +269,7 @@ fn socket_review_before_done_is_not_found() {
 
 #[test]
 fn socket_usage_add_preserves_harness_and_token_evidence() {
-    use corral_types::UsageToken;
+    use corral_types::{UsageBy, UsageToken};
     use wire::detail::{DetailBody, DetailGet, DetailRef, DetailReply};
 
     let fixture = Fixture::new();
@@ -317,7 +317,7 @@ fn socket_usage_add_preserves_harness_and_token_evidence() {
             target: DetailRef::UsageSeries {
                 from: "2026-02-03".into(),
                 to: "2026-02-04".into(),
-                by: None,
+                by: Some(UsageBy::Model),
                 utc_offset_minutes: 0,
                 time_zone: None,
             },
@@ -328,10 +328,34 @@ fn socket_usage_add_preserves_harness_and_token_evidence() {
     let Some(DetailBody::UsageSeries(series)) = reply.body else {
         panic!("expected usage series");
     };
-    let total = &series.days[0].summary.total;
+    let summary = &series.days[0].summary;
+    let total = &summary.total;
     assert_eq!(
         (total.requests, total.estimate_missing_token_requests),
         (4, 3)
+    );
+    assert_eq!((total.input, total.input_requests), (2, Some(3)));
+    assert_eq!((total.output, total.output_requests), (0, Some(2)));
+    assert_eq!((total.cache_read, total.cache_read_requests), (0, Some(2)));
+    assert_eq!(
+        (total.cache_write, total.cache_write_requests),
+        (0, Some(1))
+    );
+    let [omitted, mixed] = summary.groups.as_slice() else {
+        panic!("expected two models");
+    };
+    assert_eq!(
+        omitted.key.as_deref(),
+        Some("anthropic-api/claude-sonnet-4-6")
+    );
+    assert_eq!(
+        (omitted.total.output, omitted.total.output_requests),
+        (0, Some(0))
+    );
+    assert_eq!(mixed.key.as_deref(), Some("openai-codex/gpt-6.2-sol"));
+    assert_eq!(
+        (mixed.total.output, mixed.total.output_requests),
+        (0, Some(2))
     );
     assert_eq!(
         (total.estimate_usd, total.estimated_requests),

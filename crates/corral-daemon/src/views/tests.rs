@@ -657,7 +657,19 @@ fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
     };
     assert_eq!(last.days.len(), 1);
     assert_eq!(last.days[0].day, "2026-05-12");
-    assert_eq!(last.days[0].summary, corral_types::UsageSummary::default());
+    assert_eq!(
+        last.days[0].summary,
+        corral_types::UsageSummary {
+            total: corral_types::UsageTotal {
+                input_requests: Some(0),
+                output_requests: Some(0),
+                cache_read_requests: Some(0),
+                cache_write_requests: Some(0),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    );
     assert!(detail(&fixture.shared, get("2026-01-01", "2027-01-03")).is_err());
 }
 

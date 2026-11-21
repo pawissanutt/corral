@@ -213,6 +213,7 @@ fn usage_delta_observes_usage_without_a_new_event() {
         panic!("expected usage");
     };
     assert_eq!(delta.rows[0].total.requests, 0);
+    assert_eq!(delta.rows[0].total.input_requests, Some(0));
     let mut cursor = delta.cursor;
     for (model, billing, usd, requests) in [
         ("anthropic-api/claude-sonnet-4-6", "api", Some(0.02), 1),
@@ -237,7 +238,19 @@ fn usage_delta_observes_usage_without_a_new_event() {
             panic!("expected usage delta");
         };
         let total = &delta.rows[0].total;
-        assert_eq!(total.input, 100 * requests);
+        assert_eq!(
+            (total.input, total.input_requests),
+            (100 * requests, Some(requests))
+        );
+        assert_eq!(
+            (total.output, total.output_requests),
+            (20 * requests, Some(requests))
+        );
+        assert_eq!((total.cache_read, total.cache_read_requests), (0, Some(0)));
+        assert_eq!(
+            (total.cache_write, total.cache_write_requests),
+            (0, Some(0))
+        );
         assert_eq!(total.requests, requests);
         assert_eq!(total.estimate_missing_token_requests, requests);
         assert_eq!(total.estimated_requests, 0);
