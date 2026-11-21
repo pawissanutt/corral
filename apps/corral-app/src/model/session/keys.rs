@@ -197,6 +197,7 @@ pub fn keys() -> Vec<KeyBinding> {
         bind("f9", "F9", "Chat", KeyAction::Tab(Tab::Chat)),
         bind("f8", "F8", "Agents", KeyAction::Tab(Tab::Agents)),
         bind("f7", "F7", "Changes", KeyAction::Tab(Tab::Changes)),
+        bind("alt+f", "Alt+F", "Files", KeyAction::Tab(Tab::Files)),
         bind("f10", "F10", "Board or Proof", KeyAction::Tab(Tab::Board)),
         bind("alt+1", "Alt+1", "first tab", KeyAction::TabAt(0)),
         bind("alt+2", "Alt+2", "second tab", KeyAction::TabAt(1)),

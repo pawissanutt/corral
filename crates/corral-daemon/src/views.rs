@@ -3,6 +3,7 @@ mod chat;
 mod details;
 mod review;
 pub(crate) mod rows;
+mod session_files;
 mod session_parts;
 mod terminal_screen;
 mod transcript;
@@ -43,6 +44,9 @@ impl std::error::Error for NotFound {}
 
 pub(crate) fn detail(shared: &Shared, query: DetailGet) -> Result<DetailReply> {
     let engine = shared.engine()?;
+    if let Some(reply) = session_files::read(shared, &engine, &query)? {
+        return Ok(reply);
+    }
     if let Some(reply) = session_parts::read(shared, &engine, &query)? {
         return Ok(reply);
     }

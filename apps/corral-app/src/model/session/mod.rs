@@ -36,6 +36,7 @@ mod dock;
 mod echo;
 mod events;
 mod exit;
+mod files;
 mod fleet;
 mod header;
 mod keys;
@@ -111,6 +112,7 @@ pub use dock::{
 pub use echo::{Echo, EchoState, Sent};
 pub use events::{EventsAction, EventsUi, HostEvents, host_events};
 pub use exit::{ExitOutcome, ExitProgress, ExitStep, ExitSummary, StepState, progress};
+pub use files::{FilesAction, FilesContent, FilesView};
 pub use fleet::{
     AgentDetail, AgentRowView, AgentsTab, Asking, Clipped, ConfirmView, Conversation, EditLine,
     EditList, EndLine, FleetAction, FleetButton, FleetRequest, FleetUi, JobDetail, JobList,
@@ -205,6 +207,7 @@ pub enum Tab {
     Chat,
     Agents,
     Changes,
+    Files,
     Board,
     Proof,
 }
@@ -216,6 +219,7 @@ impl Tab {
             Self::Chat => "chat",
             Self::Agents => "agents",
             Self::Changes => "changes",
+            Self::Files => "files",
             Self::Board => "board",
             Self::Proof => "proof",
         }
@@ -227,6 +231,7 @@ impl Tab {
             Self::Chat => "Chat",
             Self::Agents => "Agents",
             Self::Changes => "Changes",
+            Self::Files => "Files",
             Self::Board => "Board",
             Self::Proof => "Proof",
         }
@@ -239,6 +244,7 @@ impl Tab {
             Self::Chat => "F9",
             Self::Agents => "F8",
             Self::Changes => "F7",
+            Self::Files => "Alt+F",
             Self::Board | Self::Proof => "F10",
         }
     }
@@ -293,6 +299,7 @@ pub struct Ui {
     pub dock: DockUi,
     pub sidebar: SidebarUi,
     pub changes: ChangesUi,
+    pub files: files::FilesUi,
     pub board: BoardUi,
     pub usage: UsageUi,
     pub task: TaskUi,
@@ -325,6 +332,7 @@ impl Ui {
         dock: DockUi::EMPTY,
         sidebar: SidebarUi::EMPTY,
         changes: ChangesUi::EMPTY,
+        files: files::FilesUi::EMPTY,
         board: BoardUi::EMPTY,
         usage: UsageUi::EMPTY,
         task: TaskUi::EMPTY,
@@ -648,9 +656,6 @@ impl<'a> Cx<'a> {
 
 /// The tabs the page of `cx` shows, in order.
 pub fn shown_tabs(cx: &Cx<'_>) -> Vec<Tab> {
-    if cx.log_only() {
-        return Vec::new();
-    }
     tabs::items(cx).into_iter().map(|item| item.tab).collect()
 }
 
@@ -662,6 +667,7 @@ pub enum Body {
     Usage(UsageView),
     Agents(AgentsTab),
     Changes(ChangesTab),
+    Files(FilesView),
     Board(BoardTab),
     Task(TaskTab),
     Proof(ProofTab),
@@ -778,11 +784,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
     let ui = state.ui(id);
     let facts = Facts::of(feed, id);
     let cx = Cx::new(feed, ui, id, env, &facts);
-    let tabs = if cx.log_only() {
-        Vec::new()
-    } else {
-        tabs::items(&cx)
-    };
+    let tabs = tabs::items(&cx);
     let tab = if tabs.iter().any(|item| item.tab == ui.tab) {
         ui.tab
     } else {
@@ -790,6 +792,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
     };
     let sub = ui.sub.clone().filter(|_| tab == ui.tab);
     let body = match (cx.log_only().then(|| log(id, feed)).flatten(), tab) {
+        (_, Tab::Files) => Body::Files(files::view(&cx)),
         (Some(log), _) => Body::Log(log),
         (None, Tab::Chat) if sub == Some(SubView::Usage) => Body::Usage(usage_view(&cx)),
         (None, Tab::Agents) => Body::Agents(agents_tab(&cx, state)),
@@ -813,6 +816,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
     fetches.extend(match &body {
         Body::Usage(_) => usage::fetches(&cx),
         Body::Changes(_) => changes::fetches(&cx),
+        Body::Files(_) => files::fetches(&cx),
         Body::Board(_) => board::fetches(&cx),
         Body::Task(_) => task::fetches(&cx),
         Body::Proof(_) => proof::fetches(&cx),

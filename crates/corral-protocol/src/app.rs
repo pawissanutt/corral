@@ -17,6 +17,8 @@ pub const SESSION_V1: &str = "session.v1";
 pub const SESSION_FLEET_V1: &str = "session.fleet.v1";
 /// Grants live state and its events, session parts, and session host operations whenever requested.
 pub const SESSION_STATE_V1: &str = "session.state.v1";
+/// Bounded read-only listing and file previews inside a session's dedicated checkout.
+pub const SESSION_FILES_V1: &str = "session.files.v1";
 pub const REVIEW_V1: &str = "review.v1";
 pub const TIMELINE_V1: &str = "timeline.v1";
 pub const USAGE_V1: &str = "usage.v1";

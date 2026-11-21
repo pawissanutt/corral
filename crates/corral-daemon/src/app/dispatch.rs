@@ -65,11 +65,12 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::CLOSED_V1
                         | device::DEVICE_V1
                         | device::PUSH_V1
-                ) || chat
-                    && matches!(
-                        cap.as_str(),
-                        wire::ASSISTANT_V1 | attachment::ASSISTANT_ATTACH_V1
-                    )
+                ) || cfg!(target_os = "linux") && cap == app::SESSION_FILES_V1
+                    || chat
+                        && matches!(
+                            cap.as_str(),
+                            wire::ASSISTANT_V1 | attachment::ASSISTANT_ATTACH_V1
+                        )
             })
             .collect(),
         daemon: wire::DaemonInfo {
@@ -216,7 +217,18 @@ pub(crate) fn serve(
             pane_keys::send(&health::herdr(&engine.config.runner), pane, &request)?;
             Ok(())
         }),
-        app::DETAIL_GET => answer!(Ok(views::detail(shared, decode(params)?)?)),
+        app::DETAIL_GET => answer!({
+            use wire::detail::{DetailGet, DetailRef};
+            let query: DetailGet = decode(params)?;
+            if matches!(
+                query.target,
+                DetailRef::SessionFiles { .. } | DetailRef::SessionFile { .. }
+            ) && matches!(peer, Peer::Tcp(_))
+            {
+                device_id()?;
+            }
+            Ok(views::detail(shared, query)?)
+        }),
         app::CHANGES_PAGE => answer!({
             let seen = match session {
                 Some(session) => devices.seen(&session.device)?,

@@ -105,6 +105,7 @@ pub enum Action {
     Dock(DockAction),
     Sidebar(SidebarAction),
     Changes(ChangesAction),
+    Files(super::FilesAction),
     Board(BoardAction),
     Usage(UsageAction),
     Task(TaskAction),
@@ -181,6 +182,7 @@ impl State {
                 self.panel.give_way(tab != Tab::Chat);
                 let rows = tabs::rows(feed, session.as_str());
                 let ui = self.ui_mut(&session);
+                let refresh_files = tab == Tab::Files && ui.tab != tab;
                 if tab == Tab::Chat {
                     dock::leave(ui, feed.now);
                 }
@@ -194,7 +196,11 @@ impl State {
                 } else {
                     Focus::Main
                 };
-                Vec::new()
+                if refresh_files {
+                    vec![reread(feed, ui.files.target(&session))]
+                } else {
+                    Vec::new()
+                }
             }
             Action::Sub { session, sub } => {
                 self.panel.give_way(sub.is_some());
@@ -322,6 +328,41 @@ impl State {
             Action::Dock(action) => dock::act(self, action, feed),
             Action::Sidebar(action) => sidebar::act(self, action, feed),
             Action::Changes(action) => changes::act(self, action, feed),
+            Action::Files(super::FilesAction::Open {
+                session,
+                path,
+                directory,
+            }) => {
+                let ui = self.ui_mut(&session);
+                ui.files = super::files::FilesUi {
+                    path,
+                    directory,
+                    filter: String::new(),
+                };
+                if ui.tab == Tab::Files {
+                    vec![reread(feed, ui.files.target(&session))]
+                } else {
+                    self.act(
+                        Action::Tab {
+                            session,
+                            tab: Tab::Files,
+                        },
+                        feed,
+                    )
+                }
+            }
+            Action::Files(super::FilesAction::Filter { session, text }) => {
+                let ui = self.ui_mut(&session);
+                if !ui.files.directory {
+                    return Vec::new();
+                }
+                let text = text.trim();
+                ui.files.filter = text[..text.floor_char_boundary(text.len().min(128))]
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .collect();
+                vec![reread(feed, ui.files.target(&session))]
+            }
             Action::Board(action) => board::act(self, action, feed),
             Action::Usage(action) => usage::act(self, action, feed),
             Action::Task(action) => task::act(self, action, feed),

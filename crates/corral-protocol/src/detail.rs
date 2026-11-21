@@ -8,6 +8,7 @@ pub mod plan;
 pub mod question;
 pub mod review;
 pub mod session;
+pub mod session_files;
 pub mod session_parts;
 pub mod task;
 pub mod timeline;
@@ -18,6 +19,7 @@ pub use plan::*;
 pub use question::*;
 pub use review::*;
 pub use session::*;
+pub use session_files::*;
 pub use session_parts::*;
 pub use task::*;
 pub use timeline::*;
@@ -74,6 +76,19 @@ pub enum DetailRef {
         comparison: ChangesComparison,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope: Option<String>,
+        path: String,
+    },
+    /// A directory within a session's dedicated worktree. The empty path names its root.
+    SessionFiles {
+        id: String,
+        path: String,
+        /// Optional case-insensitive filename substring, within this directory only.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter: Option<String>,
+    },
+    /// The current regular file at a worktree-relative path, not a diff or committed blob.
+    SessionFile {
+        id: String,
         path: String,
     },
     SessionUsage {
@@ -184,6 +199,8 @@ pub enum DetailBody {
     SessionJobOutput(JobOutputPage),
     SessionChanges(SessionChanges),
     SessionChangeFile(PatchPage),
+    SessionFiles(SessionFiles),
+    SessionFile(SessionFile),
     SessionUsage(SessionUsage),
     SessionContext(SessionContext),
     SessionPlan(SessionPlan),

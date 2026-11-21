@@ -124,7 +124,7 @@ fn capability(tab: Tab) -> Option<&'static str> {
         Tab::Agents => Some("children"),
         Tab::Changes => Some("changes"),
         Tab::Board => Some("board"),
-        Tab::Chat | Tab::Task | Tab::Proof => None,
+        Tab::Chat | Tab::Files | Tab::Task | Tab::Proof => None,
     }
 }
 
@@ -167,7 +167,18 @@ fn label(tab: Tab, sub: Option<&SubView>) -> String {
 /// (when it reported what it serves).
 pub fn items(cx: &Cx<'_>) -> Vec<TabItem> {
     let bare = !matches!(cx.can("board"), Can::Yes | Can::Unavailable(_));
-    let tabs = tabs_for(cx.role, cx.role.task_bound() && cx.task.is_some(), bare);
+    let mut tabs = if cx.log_only() {
+        Vec::new()
+    } else {
+        tabs_for(cx.role, cx.role.task_bound() && cx.task.is_some(), bare)
+    };
+    if super::files::applies(cx) {
+        let at = tabs
+            .iter()
+            .position(|tab| *tab == Tab::Changes)
+            .map_or(tabs.len(), |at| at + 1);
+        tabs.insert(at, Tab::Files);
+    }
     tabs.into_iter()
         .filter_map(|tab| {
             let unavailable = match capability(tab).map(|id| cx.can(id)) {

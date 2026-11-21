@@ -37,6 +37,9 @@ toml_edit = { version = "0.25", default-features = false, features = ["parse", "
 nsh-engine = "0.6.1"
 nsh-testing = "0.6.1"
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tempfile = "3"
+
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["event", "fs", "net", "process", "system"] }
 
@@ -46,7 +49,7 @@ snow = { version = "=0.10.0", default-features = false, features = ["default-res
 wasm-bindgen = "=0.2.130"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "CloseEvent", "BinaryType", "Window", "Crypto", "Performance", "Location", "History"] }
+web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "CloseEvent", "BinaryType", "Window", "Crypto", "Performance", "Location", "History", "Blob", "BlobPropertyBag", "Url"] }
 futures-channel = "0.3"
 futures-core = "0.3"
 

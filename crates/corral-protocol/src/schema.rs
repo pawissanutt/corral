@@ -250,6 +250,7 @@ fn document() -> Value {
             false,
             &[
                 InvalidParams,
+                rpc::ErrorCode::Unauthenticated,
                 NotFound,
                 Conflict,
                 Refused,

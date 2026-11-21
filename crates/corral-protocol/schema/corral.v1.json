@@ -2249,6 +2249,38 @@
           {
             "properties": {
               "body": {
+                "$ref": "#/components/schemas/SessionFiles"
+              },
+              "kind": {
+                "const": "session_files",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SessionFile"
+              },
+              "kind": {
+                "const": "session_file",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
                 "$ref": "#/components/schemas/SessionUsage"
               },
               "kind": {
@@ -2746,6 +2778,55 @@
               "kind",
               "id",
               "comparison",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A directory within a session's dedicated worktree. The empty path names its root.",
+            "properties": {
+              "filter": {
+                "description": "Optional case-insensitive filename substring, within this directory only.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_files",
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "path"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The current regular file at a worktree-relative path, not a diff or committed blob.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_file",
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id",
               "path"
             ],
             "type": "object"
@@ -6440,6 +6521,76 @@
         },
         "required": [
           "last"
+        ],
+        "type": "object"
+      },
+      "SessionFile": {
+        "properties": {
+          "bytes": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "data": {
+            "description": "Base64 of the complete contents (at most 32 KiB before encoding); empty for unsupported files.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SessionFileKind"
+          }
+        },
+        "required": [
+          "kind",
+          "data",
+          "bytes"
+        ],
+        "type": "object"
+      },
+      "SessionFileEntry": {
+        "properties": {
+          "directory": {
+            "type": "boolean"
+          },
+          "name": {
+            "description": "One UTF-8 path component, not a path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "directory"
+        ],
+        "type": "object"
+      },
+      "SessionFileKind": {
+        "enum": [
+          "text",
+          "markdown",
+          "html",
+          "png",
+          "jpeg",
+          "binary",
+          "too_large",
+          "other"
+        ],
+        "type": "string"
+      },
+      "SessionFiles": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/SessionFileEntry"
+            },
+            "type": "array"
+          },
+          "truncated": {
+            "description": "The scan or response bound was reached, so entries may be missing.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entries",
+          "truncated"
         ],
         "type": "object"
       },
@@ -11089,7 +11240,7 @@
             ]
           },
           "x-required-in": [
-            22
+            24
           ]
         },
         {
@@ -11120,17 +11271,28 @@
             "type": "string"
           },
           "x-required-in": [
-            27
+            29
           ]
         },
         {
           "name": "filter",
           "required": false,
           "schema": {
-            "description": "Whitespace-separated words, all of which must match.",
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "description": "Optional case-insensitive filename substring, within this directory only.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
+                "description": "Whitespace-separated words, all of which must match.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
             ]
           }
         },
@@ -11149,8 +11311,8 @@
             ]
           },
           "x-required-in": [
-            22,
-            24
+            24,
+            26
           ]
         },
         {
@@ -11180,7 +11342,9 @@
             19,
             20,
             21,
-            27
+            22,
+            23,
+            29
           ]
         },
         {
@@ -11200,7 +11364,7 @@
             "type": "string"
           },
           "x-required-in": [
-            19
+            21
           ]
         },
         {
@@ -11258,6 +11422,14 @@
               },
               {
                 "const": "session_change_file",
+                "type": "string"
+              },
+              {
+                "const": "session_files",
+                "type": "string"
+              },
+              {
+                "const": "session_file",
                 "type": "string"
               },
               {
@@ -11353,7 +11525,9 @@
           },
           "x-required-in": [
             3,
-            12
+            12,
+            13,
+            14
           ]
         },
         {
@@ -11363,7 +11537,7 @@
             "type": "string"
           },
           "x-required-in": [
-            25
+            27
           ]
         },
         {
@@ -11383,7 +11557,7 @@
             ]
           },
           "x-required-in": [
-            23
+            25
           ]
         },
         {
@@ -11423,8 +11597,8 @@
             ]
           },
           "x-required-in": [
-            22,
-            24
+            24,
+            26
           ]
         },
         {
@@ -11448,7 +11622,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            24
+            26
           ]
         }
       ],
@@ -11466,6 +11640,10 @@
         {
           "code": "invalid_params",
           "message": "invalid_params"
+        },
+        {
+          "code": "unauthenticated",
+          "message": "unauthenticated"
         },
         {
           "code": "not_found",
