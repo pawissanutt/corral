@@ -91,26 +91,43 @@ pub fn commits_between(repo: &Path, older: &str, newer: &str) -> Result<Vec<Comm
 /// # Errors
 /// Returns an error for invalid full commit SHAs, Git failures, or non-UTF-8 paths.
 pub fn changed_paths_between(repo: &Path, older: &str, newer: &str) -> Result<Vec<String>> {
+    changed_path_bytes_between(repo, older, newer)?
+        .into_iter()
+        .map(|path| String::from_utf8(path).context("non-UTF-8 path in git diff output"))
+        .collect()
+}
+
+/// Sorted changed paths between committed trees, without assuming UTF-8 filenames.
+/// Renames are treated as delete/add. Invalid commits and Git failures are errors.
+pub fn changed_path_bytes_between(repo: &Path, older: &str, newer: &str) -> Result<Vec<Vec<u8>>> {
     validate_commit(repo, older)?;
     validate_commit(repo, newer)?;
-    let output = git_utf8(
-        repo,
-        &[
-            "diff",
-            "--name-only",
-            "--no-renames",
-            "-z",
-            older,
-            newer,
-            "--",
-        ],
-    )?;
-    let mut paths: Vec<_> = nul_records(&output)?
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
-    if paths.iter().any(String::is_empty) {
-        bail!("empty path in git diff output");
+    let args = [
+        "diff",
+        "--name-only",
+        "--no-renames",
+        "-z",
+        older,
+        newer,
+        "--",
+    ];
+    let out = git_raw(repo, &args)?;
+    if !out.status.success() {
+        return Err(fail(repo, &args, &out));
+    }
+    if out.stdout.is_empty() {
+        return Ok(Vec::new());
+    }
+    let records = out
+        .stdout
+        .strip_suffix(b"\0")
+        .context("unterminated git NUL output")?;
+    let mut paths = Vec::new();
+    for path in records.split(|&byte| byte == 0) {
+        if path.is_empty() {
+            bail!("empty path in git diff output");
+        }
+        paths.push(path.to_vec());
     }
     paths.sort();
     paths.dedup();

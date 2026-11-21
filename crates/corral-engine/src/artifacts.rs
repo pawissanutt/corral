@@ -369,8 +369,26 @@ impl Engine {
         File::open(self.blob_path(&artifact.sha256)).context("open artifact blob")
     }
 
-    pub fn scan_artifacts(&self, worktree: &Path) -> Result<Vec<PathBuf>> {
-        scan_globs(worktree, &self.config.artifacts.globs)
+    /// Select artifact candidates from the submitted change and ignored evidence scratch.
+    pub(crate) fn scan_artifacts(
+        &self,
+        worktree: &Path,
+        base: &str,
+        head: &str,
+    ) -> Result<Vec<PathBuf>> {
+        let globs = &self.config.artifacts.globs;
+        if globs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let changed = corral_git::changed_path_bytes_between(worktree, base, head)
+            .context("list submitted paths for artifact collection")?;
+        let scratch = corral_git::ignored_artifact_scratch(worktree)
+            .context("list ignored evidence for artifact collection")?;
+        // Text globs cannot match non-UTF-8 names; those paths must not block submission.
+        let changed = changed
+            .into_iter()
+            .filter_map(|path| String::from_utf8(path).ok());
+        scan_globs(worktree, globs, changed.chain(scratch))
     }
 
     fn blob_path(&self, hash: &str) -> PathBuf {
@@ -381,20 +399,23 @@ impl Engine {
     }
 }
 
-/// Return sorted, deduplicated absolute file paths matching owner-configured globs.
-/// Absolute patterns and parent traversal are rejected: scans stay in the worktree.
-pub fn scan_globs(worktree: &Path, globs: &[String]) -> Result<Vec<PathBuf>> {
-    let root = worktree
-        .canonicalize()
-        .context("resolve artifact scan worktree")?;
-    let prefix = glob::Pattern::escape(root.to_str().context("artifact scan path is not UTF-8")?);
-    let mut found = BTreeSet::new();
+/// Filter repository-relative Git paths by the configured globs without walking the worktree.
+fn scan_globs(
+    worktree: &Path,
+    globs: &[String],
+    candidates: impl IntoIterator<Item = String>,
+) -> Result<Vec<PathBuf>> {
+    use std::path::Component;
+
+    let mut patterns = Vec::new();
     for pattern in globs {
-        if Path::new(pattern).is_absolute()
-            || Path::new(pattern)
-                .components()
-                .any(|part| part == std::path::Component::ParentDir)
-        {
+        let path = Path::new(pattern);
+        if path.components().any(|part| {
+            matches!(
+                part,
+                Component::RootDir | Component::Prefix(_) | Component::ParentDir
+            )
+        }) {
             return Err(refuse(
                 format!(
                     "artifact glob must stay inside the worktree: {pattern}; correct .corral-next/corral.toml"
@@ -402,16 +423,39 @@ pub fn scan_globs(worktree: &Path, globs: &[String]) -> Result<Vec<PathBuf>> {
                 vec![],
             ));
         }
-        for entry in glob::glob(&format!("{prefix}/{pattern}")).context("parse artifact glob")? {
-            let path = entry.context("scan artifact glob")?;
-            if path.is_file() {
-                let target = path
-                    .canonicalize()
-                    .context("resolve matched artifact path")?;
-                if target.starts_with(&root) {
-                    found.insert(path);
-                }
-            }
+        // A trailing separator requires a directory, which cannot be an artifact.
+        if !pattern.ends_with(std::path::is_separator) {
+            let normalized = path
+                .components()
+                .filter_map(|part| match part {
+                    Component::Normal(value) => value.to_str(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            patterns.push(glob::Pattern::new(&normalized).context("parse artifact glob")?);
+        }
+    }
+    let options = glob::MatchOptions {
+        require_literal_separator: true,
+        ..glob::MatchOptions::new()
+    };
+    let root = worktree
+        .canonicalize()
+        .context("resolve artifact scan worktree")?;
+    let mut found = BTreeSet::new();
+    for candidate in candidates {
+        if !patterns.iter().any(|p| p.matches_with(&candidate, options)) {
+            continue;
+        }
+        let path = root.join(candidate);
+        if path.is_file()
+            && path
+                .canonicalize()
+                .context("resolve matched artifact path")?
+                .starts_with(&root)
+        {
+            found.insert(path);
         }
     }
     Ok(found.into_iter().collect())

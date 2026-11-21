@@ -67,7 +67,7 @@ impl Engine {
                     Some("summary"),
                     "summary.md",
                 )?;
-                for path in self.scan_artifacts(&run.worktree)? {
+                for path in self.scan_artifacts(&run.worktree, &run.base_sha, &head)? {
                     let result = self.add_artifact_file_in(
                         store,
                         target(),
