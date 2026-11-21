@@ -49,7 +49,7 @@ pub struct AppState {
     /// The transport writes here even while the explicitly selected synthetic feed is shown.
     daemon_feed: Signal<daemon::Feed>,
     /// Invalidates a system picker opened before a data-source change.
-    source_revision: Signal<u64>,
+    pub(crate) source_revision: Signal<u64>,
     /// The Agents switcher is open (Mod+G or its trigger).
     pub switcher: Signal<bool>,
     /// This device's pins and last opened conversation per daemon store, saved as
