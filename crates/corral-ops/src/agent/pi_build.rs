@@ -656,6 +656,9 @@ pub struct BuildSessionSummary {
 
 /// The largest `session.json` [`list_sessions`] reads.
 const SESSION_MAX_BYTES: u64 = 64 * 1024;
+/// Optional title metadata is deliberately bounded independently of legacy journals.
+const TITLE_MAX_BYTES: u64 = 2 * 1024;
+const JOURNAL_MAX_BYTES: u64 = 64 * 1024;
 /// The most recently modified session directories [`list_sessions`] reads.
 const SESSION_DIRS: usize = 32;
 
@@ -731,7 +734,10 @@ fn read_session(dir: &Path, include_title: bool) -> Option<(jiff::Timestamp, Bui
     }
     let updated = record.updated.parse::<jiff::Timestamp>().ok()?;
     let journal = include_title
-        .then(|| read_journal(&dir.join("journal.json")))
+        .then(|| {
+            read_title_metadata(&dir.join("title.json"), TITLE_MAX_BYTES)
+                .or_else(|| read_title_metadata(&dir.join("journal.json"), JOURNAL_MAX_BYTES))
+        })
         .flatten()
         .unwrap_or_default();
     let title = [
@@ -762,7 +768,9 @@ fn read_session(dir: &Path, include_title: bool) -> Option<(jiff::Timestamp, Bui
     ))
 }
 
-fn read_journal(path: &Path) -> Option<SessionJournal> {
+fn read_title_metadata(path: &Path, max_bytes: u64) -> Option<SessionJournal> {
+    use std::io::Read;
+
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -774,7 +782,12 @@ fn read_journal(path: &Path) -> Option<SessionJournal> {
     if !file.metadata().ok()?.is_file() {
         return None;
     }
-    serde_json::from_reader(std::io::BufReader::new(file)).ok()
+    let mut bytes = Vec::new();
+    file.take(max_bytes + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > max_bytes {
+        return None;
+    }
+    serde_json::from_slice(&bytes).ok()
 }
 
 #[cfg(all(test, target_os = "linux"))]

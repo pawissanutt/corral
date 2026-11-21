@@ -28,6 +28,7 @@ test("Pi /name overrides a Build's request title and reprojects session_info on 
     mkdirSync(agentDir);
     const sdk = await import("@earendil-works/pi-coding-agent");
     const id = "B-rename", dir = sessionDir(cwd, id), journal = join(dir, "journal.json");
+    const savedTitles = () => JSON.parse(readFileSync(join(dir, "title.json"), "utf8"));
     const at = new Date().toISOString();
     saveSession(cwd, { version: 1, id, name: "rename", created: at, updated: at, worktree: cwd,
       repoRoot: cwd, branch: null, base: null, here: true, bare: true, repository: false });
@@ -79,6 +80,7 @@ test("Pi /name overrides a Build's request title and reprojects session_info on 
     await turnEnded;
     const saved = JSON.parse(readFileSync(journal, "utf8"));
     expect(saved).toMatchObject({ title: "Fix the parser", sessionTitle: "Owner's chosen title", intent: [{ text: "Fix the parser" }] });
+    expect(savedTitles()).toEqual({ title: "Fix the parser", sessionTitle: "Owner's chosen title" });
     expect(readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line)).findLast(entry => entry.type === "session_info"))
       .toMatchObject({ name: "Owner's chosen title" });
     expect(await record()).toMatchObject({ title: "Owner's chosen title" });
@@ -99,6 +101,7 @@ test("Pi /name overrides a Build's request title and reprojects session_info on 
     host.session.setSessionName("");
     expect(await record()).toMatchObject({ title: "Launch title" });
     expect(JSON.parse(readFileSync(journal, "utf8")).sessionTitle).toBeUndefined();
+    expect(savedTitles()).toEqual({ title: "Fix the parser" });
   } finally {
     mode?.stop();
     await host?.close();

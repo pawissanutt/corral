@@ -632,17 +632,64 @@ fn list_sessions_resolves_display_titles_without_changing_identity() {
     session_file(data.path(), id, &record.to_string());
     assert_eq!(read().title, "checkout-copy");
 
-    // A journal can exceed the old 16 MiB cap with valid retained evidence.
-    use std::io::Write;
-    let mut file = std::fs::File::create(&journal).unwrap();
-    file.write_all(b"{\"padding\":\"").unwrap();
-    for _ in 0..257 {
-        file.write_all(&[b'x'; 65536]).unwrap();
-    }
-    file.write_all(b"\",\"sessionTitle\":\"Large journal title\"}")
-        .unwrap();
-    drop(file);
-    assert_eq!(read().title, "Large journal title");
+    let sidecar = journal.with_file_name("title.json");
+    std::fs::write(&journal, r#"{"sessionTitle":"Legacy title"}"#).unwrap();
+    std::fs::write(&sidecar, r#"{"sessionTitle":"Sidecar title"}"#).unwrap();
+    assert_eq!(read().title, "Sidecar title");
+    record["title"] = json!("Launch title");
+    session_file(data.path(), id, &record.to_string());
+    std::fs::write(&sidecar, r#"{"title":"Sidecar fallback"}"#).unwrap();
+    assert_eq!(read().title, "Launch title");
+    std::fs::write(
+        &sidecar,
+        r#"{"sessionTitle":"Sidecar rename","title":"Sidecar fallback"}"#,
+    )
+    .unwrap();
+    assert_eq!(read().title, "Sidecar rename");
+    record["title"] = json!("  ");
+    session_file(data.path(), id, &record.to_string());
+    // A valid empty sidecar is authoritative, not a request to consult the journal.
+    std::fs::write(&sidecar, "{}").unwrap();
+    assert_eq!(read().title, "checkout-copy");
+    std::fs::write(&sidecar, "{broken").unwrap();
+    assert_eq!(read().title, "Legacy title");
+    std::fs::remove_file(&sidecar).unwrap();
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        &sidecar,
+        rustix::fs::Mode::from_bits_truncate(0o600),
+    )
+    .unwrap();
+    assert_eq!(read().title, "Legacy title");
+    std::fs::remove_file(&sidecar).unwrap();
+
+    // Each cap applies to the whole file, even when its title is near the front.
+    let padded = |size: usize| {
+        let mut json = String::from(r#"{"sessionTitle":"Bounded title","padding":""#);
+        json.push_str(&"x".repeat(size - json.len() - 2));
+        json.push_str("\"}");
+        json
+    };
+    std::fs::write(&sidecar, padded(TITLE_MAX_BYTES as usize)).unwrap();
+    assert_eq!(read().title, "Bounded title");
+    std::fs::write(&sidecar, padded(TITLE_MAX_BYTES as usize + 1)).unwrap();
+    assert_eq!(read().title, "Legacy title");
+    std::fs::remove_file(&sidecar).unwrap();
+    std::fs::write(&journal, padded(JOURNAL_MAX_BYTES as usize)).unwrap();
+    assert_eq!(read().title, "Bounded title");
+    std::fs::write(&journal, padded(JOURNAL_MAX_BYTES as usize + 1)).unwrap();
+    assert_eq!(read().title, "checkout-copy");
+    std::fs::write(&sidecar, r#"{"sessionTitle":"Sidecar title"}"#).unwrap();
+    assert_eq!(read().title, "Sidecar title");
+    // Direct resume does not consult optional title metadata.
+    assert_eq!(
+        read_session(journal.parent().unwrap(), false)
+            .unwrap()
+            .1
+            .title,
+        "checkout-copy"
+    );
+    std::fs::remove_file(&sidecar).unwrap();
 
     // A non-regular optional journal must not block a Resume listing.
     std::fs::remove_file(&journal).unwrap();

@@ -95,15 +95,25 @@ export function createJournal(options: {
     data = { version: 1, intent: [], ownerSteers: {}, verification: [], reviews: [], decisions: [],
       timeline: [{ at: context.session.created, phase: "started" }], outcome: { state: "open" }, children: [], mail: [], commits: [], updated: context.session.updated };
   }
+  function writePrivateJson(target: string, value: string) {
+    const temporary = `${target}-${randomBytes(12).toString("hex")}.tmp`;
+    try {
+      writeFileSync(temporary, `${value}\n`, { flag: "wx", mode: 0o600 });
+      renameSync(temporary, target);
+      chmodSync(target, 0o600);
+    } finally { rmSync(temporary, { force: true }); }
+  }
+  let savedTitles: string | undefined;
   function persist() {
     data.updated = iso(now());
     mkdirSync(context.dir, { recursive: true, mode: 0o700 });
-    const temporary = join(context.dir, `.journal-${randomBytes(12).toString("hex")}.tmp`);
-    try {
-      writeFileSync(temporary, `${JSON.stringify(data)}\n`, { flag: "wx", mode: 0o600 });
-      renameSync(temporary, path);
-      chmodSync(path, 0o600);
-    } finally { rmSync(temporary, { force: true }); }
+    writePrivateJson(path, JSON.stringify(data));
+    // Resume only needs these bounded fields, not the evidence retained in the journal.
+    const titles = JSON.stringify({ sessionTitle: displayTitle(data.sessionTitle), title: displayTitle(data.title) });
+    if (titles !== savedTitles) {
+      writePrivateJson(join(context.dir, "title.json"), titles);
+      savedTitles = titles;
+    }
     try { options.changed?.(); } catch { /* Observers do not own journal persistence. */ }
   }
   let cachedParent: { key: string; usage: RecordUsage } | undefined;
