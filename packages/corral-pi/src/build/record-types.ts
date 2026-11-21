@@ -4,6 +4,8 @@ export interface BuildGateResult {
   readonly attempt: string;
   /** The commit the gate ran on. */
   readonly head: string;
+  /** Digest of ordered commands and configured project env. Legacy receipts lack this and cannot be reused. */
+  readonly input_fingerprint?: string;
   /** `skipped` when the project configures no gate commands. */
   readonly result: "pass" | "fail" | "skipped";
   readonly failed_command?: string;

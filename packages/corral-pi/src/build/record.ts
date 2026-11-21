@@ -38,8 +38,8 @@ export interface BuildJournal {
   finish(title: string, summary?: string): void;
   gate(result: BuildGateResult): void;
   latestGate(): BuildGateResult | undefined;
-  /** The latest gate that passed on exactly `head` with exactly `commands`. */
-  passedGate(head: string, commands: readonly string[]): BuildGateResult | undefined;
+  /** The latest matching receipt, if it passed on exactly this head and input fingerprint. */
+  passedGate(head: string, inputFingerprint: string): BuildGateResult | undefined;
   latestReview(): RecordReview | undefined;
   review(child: ChildSnapshot, head: string, base?: string): RecordReview;
   resolve(round: number, finding: string, resolution: { state: "fixed" | "declined"; commit?: string; reason?: string }): void;
@@ -180,8 +180,8 @@ export function createJournal(options: {
         ended: child.endedAt === undefined ? undefined : iso(child.endedAt), usage: { input: child.usage.input, output: child.usage.output, turns: child.usage.turns,
           ...(child.usage.cost === undefined ? {} : { cost: child.usage.cost }) },
         outside: [...new Set(child.edits.filter(edit => edit.outside).map(edit => edit.path))], report: child.report?.slice(0, 8192) })),
-      verification: data.verification.map(({ attempt, head, result, failed_command, started, ended, log }) =>
-        ({ attempt, head, result, failed_command, started, ended, log })),
+      verification: data.verification.map(({ attempt, head, result, input_fingerprint, failed_command, started, ended, log }) =>
+        ({ attempt, head, result, ...(input_fingerprint ? { input_fingerprint } : {}), failed_command, started, ended, log })),
       reviews: data.reviews, messages: data.mail.slice(-500).map(message => ({ at: iso(message.at), from: message.from, to: message.to,
         text: message.text.slice(0, 2048), delivery: message.delivery })), decisions: data.decisions,
       usage: { parent, children, reviewers, total: sum([parent, children, reviewers]) }, timeline: data.timeline,
@@ -251,9 +251,9 @@ export function createJournal(options: {
     },
     gate(result) { data.verification.push(result); data.timeline.push({ at: result.ended, phase: "verify", detail: `${result.attempt}: ${result.result}` }); persist(); },
     latestGate: () => data.verification.at(-1),
-    passedGate(head, commands) {
-      const latest = data.verification.findLast(gate => gate.head === head && gate.commands?.length === commands.length
-        && gate.commands.every((command, index) => command === commands[index]));
+    passedGate(head, inputFingerprint) {
+      const latest = data.verification.findLast(gate => gate.head === head && gate.input_fingerprint !== undefined
+        && gate.input_fingerprint === inputFingerprint);
       return latest?.result === "pass" ? latest : undefined;
     },
     latestReview: () => data.reviews.at(-1),

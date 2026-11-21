@@ -7,7 +7,7 @@ import { checked, type Run } from "./corral-cli.ts";
 import type { BuildExitControl } from "./exit.ts";
 import type { BuildJournal } from "./record.ts";
 import type { BuildGateResult, RecordReview } from "./record-types.ts";
-import { buildProject, verifyBuild } from "./gate.ts";
+import { buildProject, checkGateSource, gateInputFingerprint, verifyBuild } from "./gate.ts";
 import type { FleetRuntime } from "../extensions/fleet/runtime.ts";
 import type { BoardPlan, BuildContext, PreparedLanding as Candidate } from "./types.ts";
 type FinishReadiness = { candidate?: Candidate | null; nextAction?: string };
@@ -52,9 +52,6 @@ interface EvidenceRound {
   review?: Promise<RecordReview>;
 }
 
-const GATE_WATCH_MS = 500;
-const sameCommands = (gate: BuildGateResult, commands: readonly string[]) => gate.commands?.length === commands.length
-  && gate.commands.every((command, i) => command === commands[i]);
 const gateText = (gate: BuildGateResult) => `${gate.attempt}: ${gate.result}${gate.failed_command ? `\nFailed command: ${gate.failed_command}` : ""}${gate.log ? `\nLog: ${gate.log}` : ""}`;
 const reviewText = (review: RecordReview) => `${review.verdict}: ${review.summary ?? ""}\n${review.findings.map(finding =>
   `${finding.id} [${finding.severity}] ${finding.path ?? ""}${finding.line ? `:${finding.line}` : ""} ${finding.text}`).join("\n")}`;
@@ -62,7 +59,8 @@ const openFindings = (review: RecordReview) => review.findings.filter(finding =>
 const reviewsCandidate = (review: RecordReview, candidate: Candidate) => review.head === candidate.head && review.base === candidate.base;
 
 /** One round pins the worktree until its gate, reviewer, and any concurrent finish call settle. */
-export function createBuildEvidence(options: { context: BuildContext; git: Run; fleet: FleetRuntime; journal: BuildJournal; exit: BuildExitControl; changed: () => void }) {
+export function createBuildEvidence(options: { context: BuildContext; git: Run; fleet: Pick<FleetRuntime, "snapshot" | "profiles" | "start" | "wait" | "cancel">;
+  journal: BuildJournal; exit: BuildExitControl; changed: () => void }) {
   const { context, git, fleet, journal, exit } = options;
   const { session } = context;
   const landingProject = !session.bare && !!session.workspaceRoot && !!session.project && context.settings.exitPolicy !== "none";
@@ -110,46 +108,29 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
 
   async function verify(candidate: Candidate | undefined, signal: AbortSignal): Promise<BuildGateResult> {
     if (!candidate) return verifyBuild(context, git, journal, signal);
-    await checkIdentity(candidate);
-    const commands = buildProject(session).gate ?? [];
-    const previous = journal.passedGate(candidate.head, commands);
-    if (previous) return previous;
-    const skipped = journal.latestGate();
-    if (skipped?.head === candidate.head && skipped.result === "skipped" && sameCommands(skipped, commands)) return skipped;
-    const controller = new AbortController();
-    const stop = AbortSignal.any([signal, controller.signal]);
-    let checking = false;
-    const timer = setInterval(() => {
-      exit.gateProgress(candidate, { kind: "tick" });
-      if (checking || stop.aborted) return;
-      checking = true;
-      void checkIdentity(candidate).catch(error => controller.abort(error)).finally(() => { checking = false; });
-    }, GATE_WATCH_MS);
+    const inputFingerprint = gateInputFingerprint(buildProject(session));
+    const latest = journal.latestGate();
+    const cached = journal.passedGate(candidate.head, inputFingerprint)
+      ?? (latest?.result === "skipped" && latest.head === candidate.head && latest.input_fingerprint === inputFingerprint ? latest : undefined);
+    if (cached) {
+      await checkIdentity(candidate);
+      await checkGateSource(git, session.worktree, candidate.head);
+      if (gateInputFingerprint(buildProject(session)) !== inputFingerprint) throw new Error("The configured gate inputs changed. Run build_verify again.");
+      signal.throwIfAborted();
+      return cached;
+    }
     try {
-      stop.throwIfAborted();
-      // Hold the receipt until we know the gate did not run across a candidate change.
-      const pinnedGit: Run = async (args, options) => {
-        const result = await git(args, options);
-        if (args[0] === "rev-parse" && args[1] === "HEAD" && result.code === 0 && result.stdout.trim() !== candidate.head) {
-          throw new Error("Build HEAD changed before the gate started. Run build_verify on the current candidate.");
-        }
-        return result;
-      };
-      const gate = await verifyBuild(context, pinnedGit, { ...journal, gate() {} }, stop, {
+      const gate = await verifyBuild(context, git, journal, signal, {
         started: (log, commands) => exit.gateProgress(candidate, { kind: "start", commands, log }),
         command: index => exit.gateProgress(candidate, { kind: "command", index }),
-      });
-      stop.throwIfAborted();
-      if (!sameCommands(gate, commands)) throw new Error("The configured gate commands changed. Run build_verify again.");
-      await checkIdentity(candidate);
-      stop.throwIfAborted();
-      journal.gate(gate);
+        tick: () => exit.gateProgress(candidate, { kind: "tick" }),
+      }, { head: candidate.head, inputFingerprint, check: () => checkIdentity(candidate) });
       exit.gateProgress(candidate, { kind: "end", gate });
       return gate;
     } catch (error) {
       exit.gateProgress(candidate, { kind: "stop", detail: message(error) });
       throw error;
-    } finally { clearInterval(timer); }
+    }
   }
 
   async function review(call: string, focus: string | undefined, candidate: Candidate | undefined, signal: AbortSignal): Promise<RecordReview> {
@@ -215,10 +196,11 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
       let nextAction: string | undefined;
       try {
         await checkIdentity(candidate);
-        const commands = bareGit ? [] : buildProject(session).gate ?? [];
-        if (commands.length && !journal.passedGate(candidate.head, commands)) {
+        const project = bareGit ? {} : buildProject(session);
+        const inputFingerprint = gateInputFingerprint(project);
+        if (project.gate?.length && !journal.passedGate(candidate.head, inputFingerprint)) {
           const latest = journal.latestGate();
-          const previousFailure = latest?.result === "fail" && latest.head === candidate.head && sameCommands(latest, commands);
+          const previousFailure = latest?.result === "fail" && latest.head === candidate.head && latest.input_fingerprint === inputFingerprint;
           const gate = active.gate || !previousFailure ? await (active.gate ??= verify(candidate, stop)) : latest;
           if (gate.result !== "pass") nextAction = `Land requires a passing gate on the prepared head. ${gateText(gate)}\nInvestigate and fix the gate failure, commit any changes, and rerun build_verify if needed; then run build_finish.`;
         }
