@@ -404,7 +404,10 @@ fn hunk(app: AppState, opened: Memo<Option<FileDiff>>, n: usize, shape: &Shape) 
     let block = if form == Form::Terminal {
         view()
             .child(bar)
-            .child(view().selectable(true).children(rows))
+            .child(
+                crate::ui::composer::terminal_selectable(app, view().selectable(true))
+                    .children(rows),
+            )
             .into_element()
     } else {
         view()

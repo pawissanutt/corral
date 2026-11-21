@@ -249,9 +249,8 @@ fn source(app: AppState, value: &str) -> AnyElement {
         .font_family(FONT_MONO)
         .text_color(color(Token::Ink));
     if app.form == Form::Terminal {
-        return view()
+        return crate::ui::composer::terminal_selectable(app, view().selectable(true))
             .test_id("session-file-source")
-            .selectable(true)
             .child(words)
             .into_element();
     }

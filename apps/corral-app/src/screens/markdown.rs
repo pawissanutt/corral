@@ -264,11 +264,18 @@ fn laid_out(app: AppState, markdown: &str, streaming: bool, images: bool) -> Any
     if narrow(app) {
         document.blocks = records(std::mem::take(&mut document.blocks));
     }
-    text_view()
+    let rendered = text_view()
         .document(document)
         .selectable(app.form == Form::Terminal)
         .render_code_block(move |code: &CodeBlock| code_block(app, code))
-        .into_element()
+        .into_element();
+    if app.form == Form::Terminal {
+        crate::ui::composer::terminal_selectable(app, view().selectable(true))
+            .child(rendered)
+            .into_element()
+    } else {
+        rendered
+    }
 }
 
 #[cfg(test)]

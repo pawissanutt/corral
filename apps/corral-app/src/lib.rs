@@ -43,6 +43,7 @@ pub fn App() -> impl IntoElement {
         _ => Form::Phone,
     };
     let app = AppState::install(form);
+    crate::ui::composer::install_terminal_copy(app);
     #[cfg(all(
         not(target_arch = "wasm32"),
         any(target_os = "linux", target_os = "macos", target_os = "windows")

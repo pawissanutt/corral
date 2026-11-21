@@ -120,7 +120,8 @@ fn output(app: AppState, part: &CellOutput) -> AnyElement {
         .child(
             view()
                 .when(app.form == Form::Terminal, |block| {
-                    block.selectable(true).pl(term::cells(2.0))
+                    crate::ui::composer::terminal_selectable(app, block.selectable(true))
+                        .pl(term::cells(2.0))
                 })
                 .child(mono(app, part.text.clone(), ink).select_text()),
         )

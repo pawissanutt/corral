@@ -248,9 +248,8 @@ fn section(app: AppState, part: &Section) -> AnyElement {
 /// so columns stay aligned; on the phone it wraps; a terminal indents it two Cells.
 pub(super) fn well(app: AppState, body: &str) -> AnyElement {
     match app.form {
-        Form::Terminal => view()
+        Form::Terminal => crate::ui::composer::terminal_selectable(app, view().selectable(true))
             .pl(term::cells(2.0))
-            .selectable(true)
             .child(
                 text(body.to_owned())
                     .select_text()

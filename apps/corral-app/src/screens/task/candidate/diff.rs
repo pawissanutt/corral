@@ -145,8 +145,7 @@ fn hunk(cx: &Ctx, part: &HunkView) -> AnyElement {
         DiffContent::Split(rows) => split_rows(app, rows),
     };
     if app.form == Form::Terminal {
-        return view()
-            .selectable(true)
+        return crate::ui::composer::terminal_selectable(app, view().selectable(true))
             .child(clip(term::quiet(part.header.clone())))
             .children(rows)
             .into_element();
