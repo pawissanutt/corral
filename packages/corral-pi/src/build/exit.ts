@@ -1,348 +1,491 @@
+import { randomUUID } from "node:crypto";
 import { checked, type Run } from "./corral-cli.ts";
-import { buildProject, verifyBuild } from "./gate.ts";
 import { LandTracker, TAIL_FAILED } from "./land-progress.ts";
-import { landingBaseFromRef, landingBaseLookups, landingBaseName, patchDigest, summarize } from "./git.ts";
+import { summarize } from "./git.ts";
+import { ancestor, baseMoved, CandidateMoved, checkDestination, checkSource, checkTargetConfig, commit, landingDisabled, landingTarget, message, PreparationError,
+  PREPARATION_NEEDED, rebaseCandidate, sameCommands, short, sourceBranch, type LandingTarget } from "./prepare.ts";
 import type { BuildJournal } from "./record.ts";
 import type { BuildGateResult } from "./record-types.ts";
-import { LIVE_CHILD_STATES, type BuildContext, type BuildSummary, type ExitChoice, type ExitControl, type ExitOption, type ExitRecord, type ExitState, type FleetSnapshot } from "./types.ts";
+import { LIVE_CHILD_STATES, type BuildContext, type BuildSummary, type ExitChoice, type ExitControl, type ExitOption, type ExitRecord,
+  type ExitState, type FleetSnapshot, type LandCandidate, type PreparedLanding } from "./types.ts";
 
 /** Recovery metadata stays local to session.json, not the tracked build record. */
 export interface ExitProgressRecord extends ExitRecord {
   readonly progress?: { readonly phase: ExitState["phase"]; readonly detail?: string };
 }
 
-/** Host-only admission and state around the same single-flight operation the TUI chooses. */
+export type GateProgressEvent = { readonly kind: "start"; readonly commands: readonly string[]; readonly log: string }
+  | { readonly kind: "command"; readonly index: number }
+  | { readonly kind: "tick" }
+  | { readonly kind: "end"; readonly gate: BuildGateResult }
+  | { readonly kind: "stop"; readonly detail: string };
+
 export interface BuildExitControl extends ExitControl {
-  open(): void;
+  requestFinish(): Promise<void>;
+  /** Explicitly prepare for evidence or finish. The returned base is the immutable integration tip SHA. */
+  prepare(): Promise<PreparedLanding | undefined>;
+  preparationDetail(): string | undefined;
+  /** Validate the pin without mutating Git. Evidence polling can omit cleanliness and child checks. */
+  checkPrepared(candidate: PreparedLanding, options?: { readonly identityOnly?: boolean }): Promise<void>;
+  gateProgress(candidate: PreparedLanding, event: GateProgressEvent): void;
+  /** Display a choice without preparing. With null, offer no candidate even if an old pin exists. */
+  open(candidate?: PreparedLanding | null, detail?: string): void;
   close(): void;
   busy(): boolean;
+  choiceBusy(): boolean;
+  /** A finish coordinator cannot open over a choice accepted while its evidence was pending. */
+  choiceRevision(): number;
   summarySnapshot(): BuildSummary | undefined;
 }
 
-/** How many times one Land choice hands a failing gate back to the session before it stops. */
-export const LAND_REPAIR_ROUNDS = 3;
-
-/** How often the running gate's log tail is read again; the base branch is checked every other time. */
-const GATE_WATCH_MS = 1_000;
-
-class GateFailed extends Error {
-  constructor(readonly gate: BuildGateResult) {
-    super(`Gate ${gate.attempt} failed${gate.failed_command ? `: ${gate.failed_command}` : ""}${gate.log ? `; log: ${gate.log}` : ""}`);
-  }
+interface Pin {
+  readonly candidate: PreparedLanding;
+  readonly target: LandingTarget;
+  readonly branch: string;
+  readonly source: string;
 }
-/** The base branch moved under a running Land: its rebase and gate no longer describe what would land. */
-class BaseMoved extends Error {}
-
-const short = (sha: string) => sha.slice(0, 7);
-
-function repairPrompt(gate: BuildGateResult, round: number, review: boolean): string {
-  return [
-    `[corral build] Land stopped: the project's gate failed on the rebased head ${gate.head}.`,
-    ...(gate.failed_command ? [`Failed command: ${gate.failed_command}`] : []),
-    ...(gate.log ? [`Log: ${gate.log}`] : []),
-    `This is automatic repair ${round} of ${LAND_REPAIR_ROUNDS} for the owner's Land choice. It comes from the host, not the owner.`,
-    "Read the log, fix the cause in this worktree and commit the fix. The branch is already rebased onto the base branch.",
-    ...(review ? ["Then run build_review on the new head and resolve every finding: Land resumes only when an approving review covers it."] : []),
-    "Do not call build_finish. When this turn ends with a new commit and a clean worktree, the host rebases, runs the gate again and lands.",
-    "If you cannot fix it, explain why and end the turn without committing; Land then stops for the owner.",
-  ].join("\n");
-}
+interface Offer { readonly pin: Pin; readonly authorization: string; shown: boolean }
 
 export function createExit(options: {
   context: BuildContext; git: Run; fleet: () => FleetSnapshot; journal: BuildJournal;
   save: (record: ExitRecord) => void; changed: () => void; now?: () => number;
-  /** Gives the parent a failed landing gate to fix; settles when the turn it starts ends. Absent: a failed gate ends Land. */
-  repair?: (prompt: string) => Promise<{ readonly aborted: boolean }>;
-  /** Overrides `GATE_WATCH_MS`. */
-  watchMs?: number;
+  evidenceBusy?: () => boolean;
+  requestFinish?: () => Promise<void>;
 }): BuildExitControl {
   const { context, git, journal } = options;
-  const session = context.session;
+  const { session } = context;
+  const cwd = session.worktree;
   const now = options.now ?? Date.now;
   const listeners = new Set<() => void>();
   const saved = session.exit as ExitProgressRecord | undefined;
   let state: ExitState = saved ? { record: saved, phase: saved.progress?.phase ?? (saved.landed ? "landed" : saved.choice === "keep" ? "kept" : "none"), detail: saved.progress?.detail } : { phase: "none" };
-  if (["rebasing", "verifying", "repairing", "landing"].includes(state.phase)) state = { ...state, phase: "failed", detail: `The previous exit stopped during ${state.phase}. Inspect the worktree and choose Land again when ready.` };
+  if (["rebasing", "verifying", "repairing", "landing"].includes(state.phase)) {
+    state = { ...state, phase: "failed", detail: `The previous exit stopped during ${state.phase}. Inspect the worktree. ${PREPARATION_NEEDED}` };
+  }
   let summary: BuildSummary | undefined;
-  let integration: string | undefined;
-  let integrationError: string | undefined;
-  let inFlight: Promise<ExitState> | undefined;
-  let closed = false;
-  /** The steps of the Land the owner last chose, and what stops its running gate. */
+  let summaryEpoch = 0;
+  let summaryRead = 0;
+  let prepared: Pin | undefined;
+  let preparationDetail: string | undefined;
+  let candidateStatus: LandCandidate | undefined;
+  let offered: Offer | undefined;
+  let offerDetail: string | undefined;
+  let preparing: Promise<PreparedLanding | undefined> | undefined;
+  let choiceRevision = 0;
+  let inFlight: { readonly choice: ExitChoice; readonly authorization?: string; readonly result: Promise<ExitState> } | undefined;
   let steps: LandTracker | undefined;
-  let gateStop: AbortController | undefined;
+  let trackedPin: Pin | undefined;
+  let gateFlight: { readonly pin: Pin; readonly phase: ExitState["phase"]; readonly commands: readonly string[]; readonly tracker: LandTracker } | undefined;
+  let closed = false;
+
   function changed() {
-    for (const listener of [options.changed, ...listeners]) { try { listener(); } catch { /* Observers do not own exit execution. */ } }
+    if (closed) return;
+    try { options.changed(); } catch { /* Observers do not own exit execution. */ }
+    for (const listener of [...listeners]) { try { listener(); } catch { /* Observers do not own exit execution. */ } }
   }
-  function update(phase: ExitState["phase"], detail: string, record = state.record, repair?: ExitState["repair"]) {
-    state = { phase, detail, ...(record ? { record } : {}), ...(repair ? { repair } : {}), ...(steps ? { land: steps.view() } : {}) };
-    if (record) options.save({ ...record, progress: { phase, detail } } as ExitProgressRecord);
+  function update(phase: ExitState["phase"], detail: string, record = state.record, save = false) {
+    state = { phase, detail, ...(record ? { record } : {}) };
+    if (save && record) options.save({ ...record, progress: { phase, detail } } as ExitProgressRecord);
     changed();
   }
-  /** A step or its log moved within the phase: shown, not saved. */
-  function stepped() {
-    if (!steps) return;
-    state = { ...state, land: steps.view() };
-    changed();
+  async function readSummary(base = session.base): Promise<BuildSummary> {
+    return session.bare && session.repository === false
+      ? { branch: null, base: null, head: null, commits: 0, files: 0, added: 0, removed: 0, dirty: false, slices: [], outside: [] }
+      : summarize(git, { ...session, base }, options.fleet());
   }
   async function getSummary() {
-    summary = session.bare && session.repository === false
-      ? { branch: null, base: null, head: null, commits: 0, files: 0, added: 0, removed: 0, dirty: false, slices: [], outside: [] }
-      : await summarize(git, session, options.fleet());
-    integrationError = undefined;
-    if (session.bare) {
-      integration = landingBaseName(session);
-      if (session.repository !== false && !integration) integrationError = "The session started without a base branch.";
-    } else if (session.workspaceRoot && session.project) {
-      try {
-        integration = landingBaseName(session);
-        for (const lookup of landingBaseLookups) {
-          if (integration) break;
-          const result = await git(lookup, { cwd: session.repoRoot });
-          if (result.code === 0) integration = landingBaseFromRef(result.stdout, lookup);
-        }
-        if (!integration) integrationError = "The project's base branch is not configured.";
-      } catch (error) { integrationError = `Cannot read the project's base branch: ${error instanceof Error ? error.message : String(error)}`; }
+    const epoch = summaryEpoch, read = ++summaryRead;
+    const result = await readSummary(offered?.pin.candidate.base);
+    // A passive read started before preparation must not overwrite its final snapshot.
+    if (epoch === summaryEpoch && read === summaryRead && !preparing && !inFlight) { summary = result; changed(); }
+    return result;
+  }
+  const hasLiveChildren = () => options.fleet().children.some(child => LIVE_CHILD_STATES.includes(child.state));
+  function checkAvailable() {
+    if (closed) throw new Error("The session closed.");
+    const disabled = landingDisabled(context);
+    if (disabled) throw new Error(disabled);
+    if (hasLiveChildren()) throw new Error("Wait for all live children before preparing to land.");
+  }
+  function pinStatus(pin: Pin): LandCandidate {
+    return { state: "ready", base: pin.target.name, baseTip: pin.candidate.base, head: pin.candidate.head, source: pin.source };
+  }
+  function reviewReason(pin: Pin): string | undefined {
+    if (session.bare || context.settings.exitPolicy !== "review") return;
+    const review = journal.latestReview();
+    if (!review || review.verdict !== "approve" || review.head !== pin.candidate.head || review.base !== pin.candidate.base
+        || review.findings.some(finding => !finding.resolution || finding.resolution.state === "open")) {
+      return "No approving review covers the prepared head with every finding resolved. Give a reason to land anyway.";
     }
-    changed(); return summary;
+  }
+  function gateReceipt(pin: Pin) {
+    return session.bare ? undefined : journal.passedGate(pin.candidate.head, pin.target.commands);
+  }
+  function evidenceStatus(pin: Pin): LandCandidate {
+    const status = pinStatus(pin);
+    const passed = gateReceipt(pin);
+    if (pin.target.commands.length && !passed) {
+      const latest = journal.latestGate();
+      const action = `build_verify on the prepared head ${short(pin.candidate.head)} before landing.`;
+      return latest?.result === "fail" && latest.head === pin.candidate.head && sameCommands(latest.commands, pin.target.commands)
+        ? { ...status, state: "gate_failed", gateAttempt: latest.attempt,
+          detail: `Gate ${latest.attempt} failed${latest.failed_command ? `: ${latest.failed_command}` : ""}. Fix the failure, then run ${action}` }
+        : { ...status, state: "needs_gate", detail: `Run ${action}` };
+    }
+    const needsReason = reviewReason(pin);
+    return { ...status, ...(needsReason ? { state: "needs_review" as const, detail: needsReason } : {}),
+      ...(passed ? { gateAttempt: passed.attempt } : {}) };
+  }
+  function visibleCandidate(): LandCandidate | undefined {
+    if (!preparing && prepared && candidateStatus?.state === "ready" && (!offered || offered.pin === prepared)) {
+      if (!inFlight && (gateFlight || options.evidenceBusy?.())) return { ...pinStatus(prepared), state: "preparing", detail: "Collecting verification and review on the prepared candidate." };
+      if (["none", "pending"].includes(state.phase)) return { ...candidateStatus, ...evidenceStatus(prepared) };
+    }
+    return candidateStatus;
+  }
+  function view(): ExitState {
+    const candidate = visibleCandidate();
+    return { ...state, ...(steps ? { land: steps.view() } : {}), ...(candidate ? { candidate } : {}) };
   }
   function choices(): readonly ExitOption[] {
-    let unavailable: string | undefined;
-    if (!session.bare && !session.workspaceRoot) unavailable = "This session is outside a corral workspace.";
-    else if (!session.bare && !session.project) unavailable = "This session has no configured corral project.";
-    else if (!session.bare && context.settings.exitPolicy === "none") unavailable = "Project policy disables landing.";
-    else if (session.bare && session.repository === false) unavailable = "This session is not in a Git repository.";
-    else if (!summary) unavailable = "The branch summary is still being read.";
-    else if (integrationError) unavailable = integrationError;
-    else if (!summary.branch) unavailable = "A detached session has no branch to land.";
-    else if (session.here && summary.branch === integration) unavailable = session.bare ? "The session is on its starting branch; use a separate branch." : "The session is on the project's base branch; use a separate branch.";
-    else if (!summary.base || summary.commits === 0) unavailable = "There are no commits beyond the session base.";
-    else if (summary.dirty) unavailable = "Commit uncommitted changes before landing.";
-    else if (options.fleet().children.some(child => LIVE_CHILD_STATES.includes(child.state))) unavailable = "Wait for all live children before landing.";
-    const review = journal.latestReview();
-    const needsReason = !session.bare && context.settings.exitPolicy === "review" && (!review || review.verdict !== "approve" || review.head !== summary?.head
-      || review.findings.some(finding => !finding.resolution || finding.resolution.state === "open"))
-      ? "No approving review covers the current head with every finding resolved. Give a reason to land anyway." : undefined;
+    const offer = offered;
+    const busy = preparing ? "Landing preparation is in progress." : gateFlight || options.evidenceBusy?.() ? "Wait for the current build evidence to finish." : undefined;
+    const blocked = landingDisabled(context)
+      ?? busy
+      ?? (hasLiveChildren() ? "Wait for all live children before landing." : undefined)
+      ?? (summary?.dirty ? "Commit or stash uncommitted build changes before landing." : undefined)
+      ?? (!offer ? offerDetail ?? preparationDetail ?? PREPARATION_NEEDED : undefined)
+      ?? (offer && offer.pin !== prepared ? PREPARATION_NEEDED : undefined);
+    const status = offer && !blocked ? evidenceStatus(offer.pin) : undefined;
+    const unavailable = blocked ?? (status?.state === "needs_gate" || status?.state === "gate_failed" ? status.detail : undefined);
+    // Seeing a disabled option (e.g. a missing receipt) never publishes its authorization.
+    if (offer && !unavailable) offer.shown = true;
     return [
-      { choice: "keep", label: "Keep", detail: "Keep this worktree and branch and record the result." },
-      ...(session.bare && session.repository === false ? [] : [
-        { choice: "land" as const, label: "Land", detail: session.bare ? "Rebase and locally fast-forward the starting branch (no gate)." : "Rebase, verify the project's gate and locally fast-forward its base branch.", unavailable, ...(needsReason ? { needsReason } : {}) },
-      ]),
-      { choice: "iterate", label: "Iterate", detail: "Return to the session and continue working." },
+      { choice: "keep", label: "Keep", detail: "Keep this worktree and branch and record the result.", unavailable: busy },
+      ...(session.bare && session.repository === false ? [] : [{ choice: "land" as const, label: "Land",
+        detail: offer ? `Fast-forward ${offer.pin.target.name} to the prepared candidate.` : "Fast-forward the base branch to a prepared candidate.",
+        unavailable, ...(offer && !unavailable ? { authorization: offer.authorization, needsReason: reviewReason(offer.pin) } : {}) }]),
+      { choice: "iterate", label: "Iterate", detail: "Return to the session and continue working.", unavailable: busy },
     ];
   }
-  async function primaryCheckout(): Promise<string> {
-    const entries = await checked(git, ["worktree", "list", "--porcelain", "-z"], session.worktree);
-    const first = entries.split("\0")[0];
-    if (!first?.startsWith("worktree ")) throw new Error("Cannot locate the repository's primary checkout.");
-    return first.slice("worktree ".length);
+
+  async function checkIdentity(pin: Pin): Promise<void> {
+    if (closed) throw new Error("The session closed.");
+    if (pin !== prepared) throw new PreparationError(`The prepared landing candidate is no longer current. ${PREPARATION_NEEDED}`);
+    const { candidate, target } = pin;
+    const current = await landingTarget(git, context);
+    if (target.ref !== current.ref) throw new PreparationError(`The configured base branch changed from ${target.name} to ${current.name}. ${PREPARATION_NEEDED}`);
+    if (!sameCommands(target.commands, current.commands)) throw new PreparationError(`The configured gate commands changed. ${PREPARATION_NEEDED} Run build_verify for the new commands.`);
+    const tip = await commit(git, target.ref, cwd);
+    if (tip !== candidate.base) throw baseMoved(target, candidate.base, tip);
+    if (await sourceBranch(git, cwd) !== pin.branch) throw new PreparationError(`The build branch changed since preparation. ${PREPARATION_NEEDED}`);
+    if (await commit(git, "HEAD", cwd) !== candidate.head) throw new CandidateMoved(`Build HEAD changed since preparation. ${PREPARATION_NEEDED}`);
+    if (pin !== prepared) throw new PreparationError(`The prepared landing candidate is no longer current. ${PREPARATION_NEEDED}`);
   }
-  async function checkPrimary(primary: string): Promise<void> {
-    const branch = await git(["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd: primary });
-    if (branch.code !== 0 || branch.stdout.trim() !== integration) {
-      throw new Error(`The repository's primary checkout must be on ${integration}; found ${branch.stdout.trim() || "a detached HEAD"}.`);
-    }
-    if ((await checked(git, ["status", "--porcelain", "--untracked-files=no"], primary)).trim()) {
-      throw new Error("The repository's primary checkout has tracked changes; commit or stash them before landing.");
-    }
+  async function checkPin(pin: Pin): Promise<string | undefined> {
+    checkAvailable();
+    await checkSource(git, context);
+    const { candidate, target } = pin;
+    checkTargetConfig(context, target);
+    const checkout = await checkDestination(git, context, target, candidate.base, candidate.head);
+    await checkIdentity(pin);
+    checkAvailable();
+    return checkout;
   }
-  async function rebase(): Promise<void> {
-    const result = await git(["rebase", integration!], { cwd: session.worktree });
-    if (result.code === 0) return;
-    const conflicts = await git(["diff", "--name-only", "--diff-filter=U"], { cwd: session.worktree });
-    const abort = await git(["rebase", "--abort"], { cwd: session.worktree });
-    throw new Error(`Rebase failed${conflicts.stdout.trim() ? `; conflicted paths: ${conflicts.stdout.trim().split("\n").join(", ")}` : `: ${result.stderr.trim() || result.stdout.trim()}`}.${abort.code ? ` Rebase abort failed: ${abort.stderr.trim()}` : " The rebase was aborted; the branch is unchanged."}`);
-  }
-  /** A fast-forward refuses to overwrite uncommitted changes; found here, that costs no gate run. */
-  async function checkBaseCheckout(progress: LandTracker, checkout: string, tip: string, head: string): Promise<void> {
-    let overlap: string[];
+
+  async function prepare(): Promise<PreparedLanding | undefined> {
+    const previousPhase = state.phase;
+    const previousRecord = state.record;
+    let status: LandCandidate = { state: "preparing" };
+    let rebasing = false;
+    let tracker: LandTracker | undefined;
+    const publish = () => { candidateStatus = status; changed(); };
+    preparationDetail = undefined;
     try {
-      const dirty = (await checked(git, ["diff", "--name-only", "HEAD", "--"], checkout)).split("\n").filter(Boolean);
-      if (!dirty.length) return;
-      const incoming = new Set((await checked(git, ["diff", "--name-only", `${tip}..${head}`, "--"], session.worktree)).split("\n").filter(Boolean));
-      overlap = dirty.filter(path => incoming.has(path));
-    } catch { return; /* The fast-forward reports what this could not read. */ }
-    if (!overlap.length) return;
-    progress.fail("its checkout has uncommitted changes", "land");
-    throw new Error(`The checkout of ${integration} at ${checkout} has uncommitted changes to ${overlap.length === 1 ? "a file" : "files"} this branch changes: `
-      + `${overlap.slice(0, 5).join(", ")}${overlap.length > 5 ? ` and ${overlap.length - 5} more` : ""}. Commit or stash them, then choose Land again.`);
-  }
-  /**
-   * The project's gate on `head`. While it runs its log tail is read again and the base branch is watched: a gate
-   * whose base moved cannot land, so it is stopped at once. Throws `GateFailed` when the gate fails.
-   */
-  async function runGate(progress: LandTracker, head: string, ref: string, tip: string): Promise<BuildGateResult> {
-    const stop = gateStop = new AbortController();
-    let commands: readonly string[] = [], checking = false, ticks = 0;
-    const timer = setInterval(() => {
-      if (progress.refreshTail()) stepped();
-      if (checking || ++ticks % 2) return;
-      checking = true;
-      void git(["rev-parse", "--verify", ref], { cwd: session.worktree }).then(result => {
-        const now = result.stdout.trim();
-        if (result.code === 0 && now && now !== tip) {
-          stop.abort(new BaseMoved(`The base ${integration} moved to ${short(now)} while the gate ran, so the gate was stopped. Choose Land again to rebase onto the new tip.`));
+      checkAvailable();
+      if (options.evidenceBusy?.()) throw new Error("Wait for the current build evidence to finish before preparing.");
+      publish();
+      await checkSource(git, context);
+      summary = await readSummary();
+      const target = await landingTarget(git, context);
+      const branch = await sourceBranch(git, cwd);
+      if (branch === target.ref) throw new Error(session.bare ? "The session is on its starting branch; use a separate branch." : "The session is on the project's base branch; use a separate branch.");
+      if (!session.here && session.branch && branch !== `refs/heads/${session.branch}`) throw new Error(`Switch the build worktree back to ${session.branch} before preparing.`);
+      if (!summary.base || !summary.commits) throw new Error("There are no commits beyond the session base.");
+      const source = await commit(git, "HEAD", cwd);
+      if (summary.head !== source) throw new Error("Build HEAD changed while reading the branch summary. Try preparing again.");
+      const base = await commit(git, target.ref, cwd);
+      status = { ...status, base: target.name, baseTip: base, source };
+      const alreadyBased = await ancestor(git, base, source, cwd);
+      if (source === base || !alreadyBased && await ancestor(git, source, base, cwd)) {
+        throw new Error("There are no candidate commits beyond the integration tip.");
+      }
+      await checkDestination(git, context, target, base, alreadyBased ? source : undefined);
+      let head = source;
+      if (!alreadyBased) {
+        const fork = await git(["merge-base", base, source], { cwd });
+        if (fork.code !== 0 || !fork.stdout.trim()) {
+          throw new Error("Cannot find a common ancestor of the integration tip and build head. Inspect the branches before preparing.");
         }
-      }, () => { /* The check after the gate still decides. */ }).finally(() => { checking = false; });
-    }, options.watchMs ?? GATE_WATCH_MS);
-    let gate: BuildGateResult;
-    try {
-      gate = await verifyBuild(context, git, journal, stop.signal, {
-        started(log, lines) { commands = lines; progress.setGate({ log, of: lines.length }); stepped(); },
-        command(index) { progress.setGate({ command: commands[index], index: index + 1 }); stepped(); },
-      });
-    } catch (error) { throw stop.signal.aborted ? stop.signal.reason : error; }
-    finally { clearInterval(timer); gateStop = undefined; }
-    progress.setGate({ attempt: gate.attempt });
+        rebasing = true;
+        // A pending offer must never be rebound to the result of this rebase.
+        prepared = undefined;
+        offered = undefined;
+        trackedPin = undefined;
+        tracker = steps = new LandTracker(target.name, !session.bare, now);
+        tracker.begin("rebase");
+        candidateStatus = status;
+        update("rebasing", `Preparing the candidate on ${target.name} (${short(base)}).`);
+        journal.timeline("land", `Preparing onto ${target.name} at ${base}.`);
+        await checkSource(git, context);
+        if (await sourceBranch(git, cwd) !== branch || await commit(git, "HEAD", cwd) !== source) throw new Error("The build branch changed during preparation. Try again.");
+        checkAvailable();
+        await rebaseCandidate(git, cwd, base, source);
+        head = await commit(git, "HEAD", cwd);
+        tracker.done("rebase", short(head));
+      }
+      status = { ...status, head };
+      if (head === base) throw new Error("There are no candidate commits beyond the integration tip.");
+      if (!await ancestor(git, base, head, cwd)) throw new Error("The prepared candidate is not a fast-forward of the captured base.");
+      summary = await readSummary(base);
+      if (summary.head !== head) throw new Error("Build HEAD changed while reading the prepared candidate. Try preparing again.");
+      const current = prepared;
+      const pin: Pin = current?.candidate.head === head && current.candidate.base === base && current.branch === branch
+        && current.target.ref === target.ref && current.target.configuredName === target.configuredName && sameCommands(current.target.commands, target.commands)
+        ? current : { candidate: Object.freeze({ head, base }), target, branch, source };
+      if (offered?.pin !== pin) offered = undefined;
+      if (tracker) trackedPin = pin;
+      else if (trackedPin !== pin) { steps = undefined; trackedPin = undefined; }
+      prepared = pin;
+      await checkPin(pin);
+      const detail = head === source
+        ? `Prepared ${short(head)} on ${target.name} (${short(base)}).`
+        : `Rebased ${short(source)} to ${short(head)} on ${target.name} (${short(base)}). Evidence for the old head does not cover the new head.`;
+      candidateStatus = { ...pinStatus(pin), detail };
+      if (head !== source) journal.timeline("land", detail);
+      if (rebasing) update(previousPhase, detail, previousRecord);
+      return pin.candidate;
+    } catch (error) {
+      prepared = undefined;
+      offered = undefined;
+      preparationDetail = message(error);
+      candidateStatus = { ...status, state: "failed", ...(error instanceof PreparationError ? error.status : {}), detail: preparationDetail };
+      tracker?.fail(preparationDetail);
+      if (rebasing) {
+        journal.timeline("land", `Preparation stopped: ${preparationDetail}`);
+        update(previousPhase === "pending" ? "pending" : "failed", preparationDetail, previousRecord);
+      }
+      return undefined;
+    }
+  }
+
+  function gateProgress(candidate: PreparedLanding, event: GateProgressEvent): void {
+    if (closed) return;
+    if (event.kind === "start") {
+      const pin = prepared;
+      if (!pin || pin.candidate !== candidate || inFlight || preparing || gateFlight) return;
+      trackedPin = pin;
+      const tracker = steps = new LandTracker(pin.target.name, true, now);
+      tracker.done("rebase", `prepared ${short(candidate.head)}`);
+      tracker.begin("gate");
+      tracker.setGate({ log: event.log, of: event.commands.length });
+      gateFlight = { pin, phase: state.phase, commands: event.commands, tracker };
+      update("verifying", `Running the project's gate on prepared head ${short(candidate.head)}.`);
+      return;
+    }
+    const flight = gateFlight;
+    if (!flight || flight.pin.candidate !== candidate) return;
+    const { tracker } = flight;
+    if (event.kind === "tick") { if (tracker.refreshTail()) changed(); return; }
+    if (event.kind === "command") {
+      tracker.setGate({ command: flight.commands[event.index], index: event.index + 1 });
+      changed();
+      return;
+    }
+    gateFlight = undefined;
+    if (event.kind === "stop") {
+      tracker.clearTail();
+      tracker.fail("stopped", "gate");
+      update(flight.phase, event.detail);
+      return;
+    }
+    const { gate } = event;
+    tracker.setGate({ attempt: gate.attempt });
     if (gate.result === "fail") {
-      if (gate.failed_command) progress.setGate({ command: gate.failed_command });
-      progress.refreshTail(TAIL_FAILED);
-      progress.fail(`${gate.attempt} failed`);
-      throw new GateFailed(gate);
+      if (gate.failed_command) tracker.setGate({ command: gate.failed_command });
+      tracker.refreshTail(TAIL_FAILED);
+      tracker.fail(`${gate.attempt} failed`, "gate");
+    } else {
+      tracker.clearTail();
+      tracker.done("gate", gate.result === "skipped" ? "no gate commands" : `${gate.attempt} passed`);
     }
-    if (gate.head !== head || (await checked(git, ["rev-parse", "HEAD"], session.worktree)).trim() !== head) {
-      throw new Error("Build HEAD changed during verification. Choose Land again to verify the new head.");
-    }
-    progress.clearTail();
-    progress.done("gate", gate.result === "skipped" ? "no gate commands" : `${gate.attempt} passed`);
-    return gate;
+    update(flight.phase, `Gate ${gate.attempt}: ${gate.result}.`);
   }
-  /** One Land attempt: rebase, the project's gate, local fast-forward. Throws `GateFailed` when the gate fails. */
-  async function land(record: ExitRecord, progress: LandTracker): Promise<void> {
-    const primary = session.bare ? await primaryCheckout() : undefined;
-    if (primary) await checkPrimary(primary);
-    progress.round();
-    progress.begin("rebase");
-    update("rebasing", `Rebasing onto ${integration}.`);
-    journal.timeline("land", `Rebasing onto ${integration}.`);
-    const ref = `refs/heads/${integration}`;
-    const tip = (await checked(git, ["rev-parse", "--verify", ref], session.worktree)).trim();
-    const checkPatch = !session.bare && context.settings.exitPolicy === "review" && !record.overrideReason;
-    const before = checkPatch ? await patchDigest(git, (await checked(git, ["merge-base", tip, "HEAD"], session.worktree)).trim(), session.worktree) : undefined;
-    await rebase();
-    if (before !== undefined && before !== await patchDigest(git, tip, session.worktree)) {
-      throw new Error("The rebase changed the patch. Review the rebased head again with build_review, then choose Land.");
-    }
-    const head = (await checked(git, ["rev-parse", "HEAD"], session.worktree)).trim();
-    progress.done("rebase", short(head));
-    const baseCheckout = primary ?? (await checked(git, ["worktree", "list", "--porcelain", "-z"], session.worktree))
-      .split("\0\0").map(entry => entry.split("\0")).find(entry => entry.includes(`branch ${ref}`))?.[0]?.slice("worktree ".length);
-    if (baseCheckout && !primary) await checkBaseCheckout(progress, baseCheckout, tip, head);
-    let gateAttempt: string | undefined;
-    if (!session.bare) {
-      progress.begin("gate");
-      // The same commit under the same commands gives the same gate: a pass already recorded for it is not run again.
-      const passed = journal.passedGate(head, buildProject(session).gate ?? []);
-      if (passed) {
-        progress.done("gate", `${passed.attempt} passed earlier on this commit`);
-        journal.timeline("land", `Gate ${passed.attempt} already passed on ${head}; it was not run again.`);
-        stepped();
-      } else update("verifying", `Running the project's gate on ${short(head)}.`);
-      gateAttempt = (passed ?? await runGate(progress, head, ref, tip)).attempt;
-    }
-    if ((await checked(git, ["rev-parse", "--verify", ref], session.worktree)).trim() !== tip) {
-      progress.fail(`${integration} moved`, "land");
-      throw new BaseMoved(`The base ${integration} moved. Choose Land again to rebase onto its new tip.`);
-    }
-    if (primary) await checkPrimary(primary);
-    progress.begin("land");
-    update("landing", `Fast-forwarding ${integration} to ${short(head)}.`);
-    if (baseCheckout) await checked(git, ["merge", "--ff-only", head], baseCheckout);
-    else await checked(git, ["fetch", ".", `${head}:${ref}`], session.worktree);
-    progress.done("land");
-    journal.outcome({ state: "landed", at: new Date(now()).toISOString(), head, landed: head, base_branch: integration, override_reason: record.overrideReason });
-    journal.timeline("land", `${integration}: ${head}`);
-    update("landed", "Landed.", { ...record, landed: head, baseBranch: integration, gateAttempt });
-  }
-  /** Hands a failed landing gate to the session; returns once Land may run again and throws when it may not. */
-  async function repaired(failure: GateFailed, round: number, record: ExitRecord): Promise<void> {
-    const stopped = (why: string) => new Error(`${failure.message}. Land did not resume after repair ${round}: ${why}`);
-    // The round is `repair`'s to say; the detail is the failure alone.
-    update("repairing", `${failure.message}.`, record, { round, of: LAND_REPAIR_ROUNDS });
-    journal.timeline("land", `Repair ${round} of ${LAND_REPAIR_ROUNDS}: ${failure.message}`);
-    let turn: { readonly aborted: boolean };
-    try { turn = await options.repair!(repairPrompt(failure.gate, round, context.settings.exitPolicy === "review" && !record.overrideReason)); }
-    catch (error) { throw stopped(`the session could not be reached (${error instanceof Error ? error.message : String(error)}).`); }
-    if (closed) throw stopped("the session closed.");
-    if (turn.aborted) throw stopped("the repair turn was stopped.");
-    await getSummary();
-    const option = choices().find(option => option.choice === "land");
-    if (option?.unavailable) throw stopped(option.unavailable);
-    if (summary?.head === failure.gate.head) throw stopped("the session made no new commit.");
-    if (option?.needsReason && !record.overrideReason) throw stopped("no approving review covers the repaired head with every finding resolved.");
-    if (option?.needsReason) journal.decision("override", `Repair ${round} commits (${summary?.head}) land without review under the owner's reason: ${record.overrideReason}`);
-  }
-  async function execute(choice: ExitChoice, overrideReason?: string): Promise<void> {
-    journal.decision("exit", choice);
-    journal.timeline("exit", choice);
+
+  function refuse(detail: string): ExitState { return { ...view(), phase: "failed", detail }; }
+  async function execute(choice: ExitChoice, offer: Offer | undefined, overrideReason: string | undefined, moved: () => void): Promise<ExitState> {
+    const record: ExitRecord = { choice, at: new Date(now()).toISOString(), ...(overrideReason ? { overrideReason } : {}) };
     try {
-      // The steps shown belong to the Land that ran; any new choice starts without them.
       steps = undefined;
-      if (choice === "iterate") { update("none", "The build session remains open for iteration."); return; }
-      if (choice === "keep") {
-        try { summary = session.bare && session.repository === false ? await getSummary() : await summarize(git, session, options.fleet()); } catch { /* Keeping an unborn or unavailable worktree does not require a Git head. */ }
-      } else await getSummary();
-      const option = choices().find(option => option.choice === choice);
-      if (!option) throw new Error("Land is unavailable outside a Git repository.");
-      if (option.unavailable) throw new Error(option.unavailable);
-      if (choice === "land" && option.needsReason && !overrideReason?.trim()) throw new Error(option.needsReason);
-      const record: ExitRecord = { choice, at: new Date(now()).toISOString(), ...(overrideReason?.trim() ? { overrideReason: overrideReason.trim() } : {}) };
-      state = { ...state, record };
-      if (choice === "keep") {
+      trackedPin = undefined;
+      offered = undefined;
+      journal.decision("exit", choice);
+      journal.timeline("exit", choice);
+      if (choice === "iterate") { update("none", "The build session remains open for iteration.", state.record, true); }
+      else if (choice === "keep") {
+        try { summary = await readSummary(); } catch { /* Keeping does not require a Git head. */ }
         journal.outcome({ state: "kept", at: record.at, head: summary?.head ?? undefined });
         journal.timeline("exit", "kept");
-        update("kept", "The worktree and branch are kept.", record);
-        return;
-      }
-      if (record.overrideReason) journal.decision("override", record.overrideReason);
-      const progress = steps = new LandTracker(integration!, !session.bare, now);
-      for (let round = 1; ; round++) {
-        try { await land(record, progress); return; }
-        catch (error) {
-          if (!(error instanceof GateFailed) || !options.repair) throw error;
-          if (round > LAND_REPAIR_ROUNDS) throw new Error(`${error.message}. All ${LAND_REPAIR_ROUNDS} automatic repairs are used.`);
-          await repaired(error, round, record);
+        update("kept", "The worktree and branch are kept.", record, true);
+      } else if (offer) {
+        const pin = offer.pin;
+        const { candidate, target } = pin;
+        const progress = steps = new LandTracker(target.name, !session.bare, now);
+        progress.done("rebase", `prepared ${short(candidate.head)}`);
+        progress.begin("land");
+        candidateStatus = evidenceStatus(pin);
+        await checkPin(pin);
+        const authorize = () => {
+          if (options.evidenceBusy?.()) throw new Error("Wait for the current build evidence to finish.");
+          const needsReason = reviewReason(pin);
+          if (needsReason && !overrideReason) throw new Error(needsReason);
+          const passed = gateReceipt(pin);
+          if (target.commands.length && !passed) throw new Error(evidenceStatus(pin).detail);
+          return passed;
+        };
+        const passed = authorize();
+        if (!session.bare) progress.done("gate", passed ? `${passed.attempt} passed earlier on this commit` : "no gate commands");
+        if (passed) progress.setGate({ attempt: passed.attempt, log: passed.log });
+        if (overrideReason) journal.decision("override", overrideReason);
+        candidateStatus = { ...pinStatus(pin), ...(passed ? { gateAttempt: passed.attempt } : {}) };
+        update("landing", `Fast-forwarding ${target.name} to ${short(candidate.head)}.`, record, true);
+        // After publishing progress, validate again, then perform only the fast-forward to the offered SHA.
+        const checkout = await checkPin(pin);
+        if (checkout) {
+          if (await sourceBranch(git, checkout) !== target.ref) throw new Error(`The checkout of ${target.name} switched branches. ${PREPARATION_NEEDED}`);
+          const actual = await commit(git, "HEAD", checkout);
+          if (actual !== candidate.base) throw baseMoved(target, candidate.base, actual);
+        } else if (await checkDestination(git, context, target, candidate.base, candidate.head)) {
+          throw new Error(`The base ${target.name} is now checked out. ${PREPARATION_NEEDED}`);
         }
+        checkAvailable();
+        checkTargetConfig(context, target);
+        const receipt = authorize();
+        try {
+          if (checkout) await checked(git, ["merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", candidate.head], checkout);
+          else await checked(git, ["update-ref", target.ref, candidate.head, candidate.base], cwd);
+        } catch (error) {
+          // In particular, distinguish a CAS refusal caused by a new tip from a Git write error.
+          const actual = await commit(git, target.ref, cwd).catch(() => undefined);
+          if (actual && actual !== candidate.base && actual !== candidate.head) throw baseMoved(target, candidate.base, actual);
+          throw error;
+        }
+        progress.done("land");
+        prepared = undefined;
+        journal.outcome({ state: "landed", at: new Date(now()).toISOString(), head: candidate.head, landed: candidate.head,
+          base_branch: target.name, override_reason: overrideReason });
+        journal.timeline("land", `${target.name}: ${candidate.head}`);
+        update("landed", "Landed.", { ...record, landed: candidate.head, baseBranch: target.name, gateAttempt: receipt?.attempt }, true);
       }
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      // A gate stopped for a moved base did not fail: its last lines explain nothing.
-      if (error instanceof BaseMoved) steps?.clearTail();
-      steps?.fail(error instanceof BaseMoved ? `stopped: ${integration} moved` : undefined);
+      const retry = choice === "land" && error instanceof CandidateMoved && options.requestFinish;
+      const detail = retry ? `${message(error).replace(` ${PREPARATION_NEEDED}`, "")} Checking for a fresh landing candidate; a new choice will be required.` : message(error);
+      if (retry) moved();
+      if (choice === "land") {
+        candidateStatus = { ...candidateStatus, state: "failed", ...(error instanceof PreparationError ? error.status : {}), detail };
+        preparationDetail = detail;
+        prepared = undefined;
+        steps?.fail(candidateStatus.state === "base_moved" ? "base moved" : undefined, "land");
+      }
       journal.timeline("exit", `failed: ${detail}`);
-      update("failed", detail);
+      update("failed", detail, record, true);
     } finally {
       try { await journal.refresh(); }
-      catch (error) {
-        update(state.phase, `${state.detail ?? ""}\nBuild record Git snapshot failed: ${String(error)}`);
-      }
+      catch (error) { update(state.phase, `${state.detail ?? ""}\nBuild record Git snapshot failed: ${message(error)}`); }
     }
+    return view();
   }
-  return {
-    options: choices, summary: getSummary, state: () => state,
-    busy: () => inFlight !== undefined, summarySnapshot: () => summary,
-    choose(choice, options) {
-      if (closed) return Promise.resolve(state);
-      if (state.phase === "landed" && choice !== "iterate") return Promise.resolve(state);
-      if (inFlight) return inFlight;
-      inFlight = execute(choice, options?.overrideReason).then(() => state).finally(() => { inFlight = undefined; });
-      return inFlight;
+
+  const control: BuildExitControl = {
+    options: choices, summary: getSummary, state: view,
+    requestFinish: options.requestFinish ?? (async () => { control.open(); }),
+    busy: () => !!(preparing || inFlight || gateFlight), choiceBusy: () => !!inFlight, choiceRevision: () => choiceRevision, summarySnapshot: () => summary, gateProgress,
+    prepare() {
+      if (preparing) return preparing;
+      if (closed || inFlight || gateFlight || options.evidenceBusy?.()) {
+        preparationDetail = closed ? "The session closed." : inFlight ? "An exit choice is already in progress." : "Wait for the current build evidence to finish before preparing.";
+        return Promise.resolve(undefined);
+      }
+      ++summaryEpoch;
+      preparing = Promise.resolve().then(prepare).finally(() => { preparing = undefined; changed(); });
+      return preparing;
+    },
+    preparationDetail: () => preparationDetail,
+    async checkPrepared(candidate, opts) {
+      const pin = prepared;
+      if (!pin || pin.candidate !== candidate) throw new PreparationError(`The prepared landing candidate is no longer current. ${PREPARATION_NEEDED}`);
+      try {
+        if (opts?.identityOnly) await checkIdentity(pin);
+        else await checkPin(pin);
+      } catch (error) {
+        // Evidence can invalidate the in-memory pin, but never repairs it or mutates Git.
+        if (prepared === pin && !preparing && !inFlight && !closed) {
+          prepared = undefined;
+          offered = undefined;
+          preparationDetail = message(error);
+          candidateStatus = { ...pinStatus(pin), state: "failed", ...(error instanceof PreparationError ? error.status : {}), detail: preparationDetail };
+          changed();
+        }
+        throw error;
+      }
+    },
+    choose(choice, opts) {
+      if (closed || state.phase === "landed" && choice !== "iterate") return Promise.resolve(view());
+      if (inFlight) return inFlight.choice === choice && inFlight.authorization === opts?.authorization
+        ? inFlight.result : Promise.resolve(refuse("An exit choice is already in progress."));
+      if (preparing) return Promise.resolve(refuse("Landing preparation is in progress. Wait for it to finish."));
+      if (gateFlight || options.evidenceBusy?.()) return Promise.resolve(refuse("Wait for the current build evidence to finish."));
+      const offer = offered;
+      if (choice === "land") {
+        if (state.phase !== "pending" || !offer?.shown || opts?.authorization !== offer.authorization || offer.pin !== prepared) {
+          return Promise.resolve(refuse(offerDetail ?? preparationDetail ?? `That Land choice is no longer offered. ${PREPARATION_NEEDED}`));
+        }
+        const reason = reviewReason(offer.pin);
+        if (reason && !opts.overrideReason?.trim()) return Promise.resolve(refuse(reason));
+      }
+      let retry = false;
+      ++choiceRevision;
+      ++summaryEpoch;
+      const result = Promise.resolve().then(() => execute(choice, offer, opts?.overrideReason?.trim(), () => { retry = true; })).finally(() => {
+        inFlight = undefined;
+        changed();
+        const failed = state;
+        if (retry) setTimeout(() => {
+          if (!closed && state === failed && failed.phase === "failed" && !inFlight && !preparing && !hasLiveChildren() && !options.evidenceBusy?.()) {
+            void Promise.resolve().then(() => options.requestFinish?.()).catch(error => {
+              if (state === failed && !closed) update("failed", `${failed.detail}\nCould not prepare a fresh candidate: ${message(error)}`);
+            });
+          }
+        }, 0);
+      });
+      inFlight = { choice, authorization: opts?.authorization, result };
+      return result;
     },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    open() {
-      if (closed || inFlight) return;
-      summary = undefined;
-      steps = undefined;
-      update("pending", "Choose Keep, Land or Iterate.");
-      const opened = state;
-      void getSummary().catch(error => {
-        if (!closed && state === opened && !inFlight) update("failed", String(error));
-      });
+    open(candidate, detail) {
+      if (closed || preparing || inFlight || gateFlight) return;
+      if (state.phase === "pending" && candidate === undefined) return;
+      const pin = candidate === null || candidate !== undefined && candidate !== prepared?.candidate ? undefined : prepared;
+      offerDetail = pin ? undefined : detail;
+      if (!pin) offered = undefined;
+      else if (pin !== offered?.pin) offered = { pin, authorization: randomUUID(), shown: false };
+      if (!prepared && candidateStatus?.state === "ready") candidateStatus = undefined;
+      const previouslyTracked = !pin && trackedPin && candidateStatus?.head === trackedPin.candidate.head && candidateStatus.baseTip === trackedPin.candidate.base;
+      if (!(pin && trackedPin === pin) && !previouslyTracked && !(candidateStatus?.state === "conflicts")) { steps = undefined; trackedPin = undefined; }
+      update("pending", detail ?? "Choose Keep, Land or Iterate.");
+      void getSummary().catch(() => { /* A summary failure cannot prevent Keep or Iterate. */ });
     },
-    close() {
-      closed = true;
-      listeners.clear();
-      gateStop?.abort(new Error("The session closed while the gate ran; the gate was stopped."));
-    },
+    close() { closed = true; listeners.clear(); },
   };
+  return control;
 }

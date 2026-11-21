@@ -306,7 +306,7 @@ export interface FleetControl {
 
 // ---------- exit ----------
 
-/** `land` gates, lands and records in this session; nothing is handed to the task board. */
+/** `land` fast-forwards an explicitly offered, already prepared candidate. */
 export type ExitChoice = "keep" | "land" | "iterate";
 
 export interface ExitOption {
@@ -317,6 +317,8 @@ export interface ExitOption {
   readonly unavailable?: string;
   /** Set on `land` when review findings are open or no approval covers the head: the owner must give a reason to land anyway. */
   readonly needsReason?: string;
+  /** Opaque ticket for this exact offered candidate; must be echoed when choosing Land. */
+  readonly authorization?: string;
 }
 
 export interface BuildSummary {
@@ -346,11 +348,7 @@ export interface ExitRecord {
   readonly overrideReason?: string;
 }
 
-/**
- * `pending`: the owner is choosing. `rebasing`, `verifying` and `landing` are the steps of `land`:
- * rebase onto the base branch, the full gate on that head, then the fast-forward. `repairing`: that
- * gate failed and the session is fixing it; `land` runs again when its turn ends.
- */
+/** `rebasing` is explicit preparation, before `pending` offers the owner's choice. `verifying` and `repairing` are retained for compatibility. */
 export type ExitPhase = "none" | "pending" | "rebasing" | "verifying" | "repairing" | "landing" | "kept" | "landed" | "failed";
 
 /** One step of `land` as the owner follows it. Times are milliseconds since the epoch. */
@@ -377,11 +375,30 @@ export interface LandGate {
   readonly tail: readonly string[];
 }
 
-/** The current round of `land`: its steps in order and the gate's log. A repair starts a new round. */
+/** Preparation, existing gate evidence, and fast-forward progress. */
 export interface LandProgress {
   readonly base: string;
   readonly steps: readonly LandStep[];
   readonly gate?: LandGate;
+}
+
+/** Immutable Git identity of a prepared landing candidate. `base` is the tip SHA, never a ref name. */
+export interface PreparedLanding {
+  readonly head: string;
+  readonly base: string;
+}
+
+export type LandCandidateState = "preparing" | "ready" | "conflicts" | "needs_review" | "needs_gate" | "gate_failed" | "base_moved" | "failed";
+export interface LandCandidate {
+  readonly state: LandCandidateState;
+  readonly base?: string;
+  readonly baseTip?: string;
+  readonly head?: string;
+  readonly source?: string;
+  readonly conflicts?: readonly string[];
+  readonly gateAttempt?: string;
+  readonly movedTo?: string;
+  readonly detail?: string;
 }
 
 export interface ExitState {
@@ -392,14 +409,17 @@ export interface ExitState {
   readonly repair?: { readonly round: number; readonly of: number };
   /** Present from the first step of `land` until the next exit choice opens. */
   readonly land?: LandProgress;
+  readonly candidate?: LandCandidate;
 }
 
 export interface ExitControl {
+  /** Explicit owner Finish, sharing preparation and evidence with build_finish. */
+  requestFinish?(): Promise<void>;
   options(): readonly ExitOption[];
   summary(): Promise<BuildSummary>;
   state(): ExitState;
-  /** Runs the chosen exit. Only the owner's dialog calls this; no model-callable tool does. `overrideReason` is required when the `land` option carries `needsReason`. */
-  choose(choice: ExitChoice, options?: { readonly overrideReason?: string }): Promise<ExitState>;
+  /** Runs the owner's choice. Land needs the ticket from its displayed option and, when indicated, an override reason. */
+  choose(choice: ExitChoice, options?: { readonly authorization?: string; readonly overrideReason?: string }): Promise<ExitState>;
   subscribe(listener: () => void): () => void;
 }
 

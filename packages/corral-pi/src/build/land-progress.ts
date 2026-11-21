@@ -1,5 +1,5 @@
-// What the owner follows while Land runs: its steps in order and the gate's log. The exit control drives one
-// tracker per Land choice; each attempt (the first, then one per repair) starts a new round.
+// Preparation and the owner's eventual fast-forward report the same ordered steps. Land itself
+// only completes the fast-forward; earlier steps identify the preparation and evidence it reused.
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import type { LandGate, LandProgress, LandStep } from "./types.ts";
 
@@ -28,27 +28,21 @@ export function logTail(path: string, lines: number): string[] {
 }
 
 export class LandTracker {
-  private steps: LandStep[] = [];
+  private steps: LandStep[];
   private gate: LandGate | undefined;
 
-  constructor(private readonly base: string, private readonly gated: boolean, private readonly now: () => number) { this.round(); }
-
-  /** A new attempt: every step waits again and the previous gate's log is put away. */
-  round(): void {
-    this.steps = (this.gated ? ["rebase", "gate", "land"] as const : ["rebase", "land"] as const).map(id => ({ id, state: "waiting" }));
-    this.gate = undefined;
+  constructor(private readonly base: string, gated: boolean, private readonly now: () => number) {
+    this.steps = (gated ? ["rebase", "gate", "land"] as const : ["rebase", "land"] as const).map(id => ({ id, state: "waiting" }));
   }
   begin(id: LandStep["id"]): void { this.set(id, { state: "running", startedAt: this.now() }); }
   done(id: LandStep["id"], note?: string): void { this.set(id, { state: "done", endedAt: this.now(), ...(note ? { note } : {}) }); }
-  /** Step `id`, else the running step, failed; `note` says why in a few words. A step that already failed keeps its note. */
+  /** Step `id`, else the running step, failed. A step that already failed keeps its note. */
   fail(note?: string, id?: LandStep["id"]): void {
     const step = this.steps.find(step => id ? step.id === id : step.state === "running");
     if (step && step.state !== "failed") this.set(step.id, { state: "failed", endedAt: this.now(), ...(note ? { note } : {}) });
   }
   setGate(gate: Partial<LandGate>): void { this.gate = { tail: [], ...this.gate, ...gate }; }
-  /** The gate's last lines explain nothing any more: it passed, or it was stopped. */
   clearTail(): void { if (this.gate) this.gate = { ...this.gate, tail: [] }; }
-  /** Reads the log's tail again; true when it changed. */
   refreshTail(lines = TAIL_RUNNING): boolean {
     if (!this.gate?.log) return false;
     const tail = logTail(this.gate.log, lines);

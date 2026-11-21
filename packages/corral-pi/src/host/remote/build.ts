@@ -8,11 +8,12 @@ import { cardOptions, cardQuestion, invalidAnswer, optionId, singleAnswer, type 
 import type { RemoteRegistry } from "./registry.ts";
 
 interface Episode { id: string; opened_at: string }
+interface ExitEpisode extends Episode { readonly authorization?: string }
 function episode(kind: string, at = Date.now()): Episode {
   return { id: `${kind}-${crypto.randomUUID()}`, opened_at: new Date(at).toISOString() };
 }
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
-const closedPhases: readonly ExitState["phase"][] = ["kept", "landed", "rebasing", "verifying", "repairing", "landing"];
+const closedPhases: readonly ExitState["phase"][] = ["rebasing", "verifying", "repairing", "landing"];
 const BOARD_OPTIONS: CardOption[] = [
   { id: "file_start", label: "File and start", detail: "File the plan and queue its tasks.", destructive: false },
   { id: "file", label: "File only", detail: "File the plan without starting tasks.", destructive: false },
@@ -21,7 +22,8 @@ const BOARD_OPTIONS: CardOption[] = [
 
 export class RemoteBuild {
   private readonly children = new Map<string, Episode & { askedAt: number }>();
-  private exitEpisode: Episode | undefined;
+  private exitEpisode: ExitEpisode | undefined;
+  private exitOpening = false;
   private exitReading = false;
   private exitChoosing = false;
   private exitOutcome: ((state: ExitState) => void) | undefined;
@@ -87,23 +89,26 @@ export class RemoteBuild {
     const exit = this.build?.exit;
     if (!exit || !this.host.ready()) throw new BridgeRefusal("host_not_ready", "session cannot open an exit");
     const phase = exit.state().phase;
-    if (this.exitChoosing || exit.busy() || closedPhases.includes(phase)) return phase;
-    if (phase === "pending" && this.exitFailure === undefined) {
-      if (!this.host.working()) this.refreshExit();
-      return phase;
-    }
+    if (this.exitOpening || this.exitChoosing || exit.busy() || closedPhases.includes(phase)) return phase;
     if (this.host.working() || this.host.children().some(child => LIVE_CHILD_STATES.includes(child.state))) {
+      if (phase === "pending") return phase;
       throw new BridgeRefusal("exit_unavailable", "wait for the parent and its agents to finish");
     }
-    this.exitEpisode = undefined;
+    const previous = this.exitEpisode;
     this.exitFailure = undefined;
-    exit.open();
-    const opened = this.exitCard()?.card;
-    if (opened && this.host.headless()) void this.host.post(finishEntry(opened.id)).catch(error => this.host.error(errorMessage(error)));
-    return exit.state().phase;
+    this.exitOpening = true;
+    // Preparing and collecting evidence can outlive a socket request; publish the card when it settles.
+    void Promise.resolve().then(() => exit.requestFinish()).then(() => {
+      const opened = this.exitCard()?.card;
+      if (opened && opened.id !== previous?.id && this.host.headless()) return this.host.post(finishEntry(opened.id));
+    }).catch(error => {
+      this.exitFailure = errorMessage(error);
+      this.host.error(this.exitFailure);
+    }).finally(() => { this.exitOpening = false; this.host.changed(); });
+    return phase;
   }
 
-  private async chooseExit(card: Episode, choice: string, reason: string | undefined): Promise<"started" | "missing"> {
+  private chooseExit(card: ExitEpisode, choice: string, reason: string | undefined): "started" | "missing" {
     const exit = this.build?.exit;
     if (!exit || card !== this.exitEpisode || this.exitChoosing || exit.busy() || this.exitFailure !== undefined) return "missing";
     const check = (option: ExitOption | undefined): ExitOption => {
@@ -112,7 +117,8 @@ export class RemoteBuild {
       if (option.unavailable) throw new BridgeRefusal("exit_unavailable", option.unavailable);
       return option;
     };
-    let option = check(exit.options().find(option => option.choice === choice));
+    const option = check(exit.options().find(option => option.choice === choice));
+    if (option.choice === "land" && (!card.authorization || option.authorization !== card.authorization)) return "missing";
     if (option.choice === "land" && (this.exitReading || this.host.working())) {
       throw new BridgeRefusal("exit_unavailable", "wait for the branch summary and parent turn to finish");
     }
@@ -120,13 +126,6 @@ export class RemoteBuild {
     this.host.changed();
     const release = () => { this.exitOutcome = undefined; this.exitChoosing = false; this.host.changed(); };
     try {
-      if (option.choice === "land") {
-        // An external edit or a just-finished turn can make the displayed availability stale.
-        await exit.summary();
-        if (!this.host.ready() || card !== this.exitEpisode || exit.busy()) { release(); return "missing"; }
-        if (this.host.working()) throw new BridgeRefusal("exit_unavailable", "wait for the parent turn to finish");
-        option = check(exit.options().find(candidate => candidate.choice === choice));
-      }
       let posted = false;
       const post = (state: ExitState) => {
         if (posted) return;
@@ -134,7 +133,7 @@ export class RemoteBuild {
         void this.host.post(exitEntry(option, state)).catch(error => this.host.error(errorMessage(error)));
       };
       this.exitOutcome = post;
-      void exit.choose(option.choice, option.choice === "land" && reason?.trim() ? { overrideReason: reason } : undefined).then(post, error => {
+      void exit.choose(option.choice, option.choice === "land" ? { authorization: card.authorization, overrideReason: reason } : undefined).then(post, error => {
         this.exitFailure = errorMessage(error);
         this.host.changed();
         post({ phase: "failed", detail: this.exitFailure });
@@ -144,8 +143,13 @@ export class RemoteBuild {
   }
 
   private exitCard(): CardEntry | undefined {
-    const pending = this.exitEpisode, exit = this.build?.exit;
+    let pending = this.exitEpisode;
+    const exit = this.build?.exit;
     if (!pending || !exit || this.exitChoosing || exit.busy() || this.exitFailure !== undefined) return;
+    const choices = exit.options();
+    const authorization = choices.find(option => option.choice === "land")?.authorization;
+    // A remote answer names its card, not a SHA. A new offer therefore MUST have a new card ID.
+    if (pending.authorization !== authorization) pending = this.exitEpisode = { ...episode("exit"), authorization };
     const title = "How should this leave the build session?";
     const summary = exit.summarySnapshot();
     const body = summary ? [
@@ -153,7 +157,7 @@ export class RemoteBuild {
       ...(summary.dirty ? ["! Uncommitted changes"] : []),
       ...(summary.outside.length ? [`! ${summary.outside.length} files changed outside child ownership`] : []),
     ].join("\n") : undefined;
-    const options = exit.options().map(option => ({
+    const options = choices.map(option => ({
       id: option.choice, label: option.label, detail: option.detail, needs_text: option.needsReason,
       unavailable: option.unavailable ?? (option.choice === "land" && this.exitReading ? "The branch summary is still being read."
         : option.choice === "land" && this.host.working() ? "Wait for the parent turn to finish." : undefined),
