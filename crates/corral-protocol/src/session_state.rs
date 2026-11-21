@@ -143,6 +143,62 @@ pub struct ExitBrief {
     /// Absent from a host that does not report it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub land: Option<LandBrief>,
+    /// The candidate the host prepared for Land: the session's commits rebased onto the base tip
+    /// and checked there. Land only fast-forwards the base from `base_tip` to `head`. Absent from
+    /// a host that does not prepare one, or before it began to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate: Option<LandCandidate>,
+}
+
+/// A prepared Land candidate and what holds it back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LandCandidate {
+    pub state: LandCandidateState,
+    /// The base branch's name. At most 256 bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// The base commit the candidate sits on: where the fast-forward starts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_tip: Option<String>,
+    /// The candidate's commit: where the fast-forward ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+    /// The session's head the candidate was prepared from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Paths that conflicted while rebasing: at most 20 of at most 240 bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<String>,
+    /// The gate attempt that passed or failed on `head`: `G4`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_attempt: Option<String>,
+    /// The base's new tip, once it moved past `base_tip`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moved_to: Option<String>,
+    /// The host's one-line reason. At most 512 bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LandCandidateState {
+    /// Being rebased and checked.
+    Preparing,
+    /// Land may fast-forward the base to it.
+    Ready,
+    /// Rebasing onto the base conflicted; the branch is unchanged.
+    Conflicts,
+    /// No approving review covers it.
+    NeedsReview,
+    /// No passing gate covers it.
+    NeedsGate,
+    GateFailed,
+    /// The base moved past the tip it was prepared on.
+    BaseMoved,
+    Failed,
+    #[serde(other)]
+    Other,
 }
 
 /// One round of Land as its host runs it. A repair starts a new round.

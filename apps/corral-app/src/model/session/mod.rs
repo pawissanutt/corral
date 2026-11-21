@@ -123,7 +123,7 @@ pub use header::{
     DecisionsChip, ExitStatus, Header, Meta, NeedsChip, StateWord, exit_status, header, role_word,
 };
 pub use keys::{KeyAction, KeyBinding, WEB_RESERVED, bound, keys, legend, legend_of, press};
-pub use land::GateLog;
+pub use land::{CandidateView, GateLog};
 pub use log::{SessionLog, ended_run, log};
 pub use notices::{Notice, RecentNotices, Ring, recent};
 pub use plan::{

@@ -494,7 +494,8 @@ fn exit_line(exit: &ExitBrief, worktree: Option<&str>, branch: Option<&str>) -> 
 fn steps(exit: &ExitBrief, now: u64) -> Vec<ExitStep> {
     let base = exit.base_branch.as_deref().unwrap_or("the base branch");
     if let Some(land) = &exit.land {
-        return land::rows(land, base, now)
+        // A host that prepared the candidate names the commits the fast-forward moves between.
+        return land::rows_with(land, base, now, exit.candidate.as_ref())
             .into_iter()
             .map(|row| ExitStep {
                 state: match row.state {

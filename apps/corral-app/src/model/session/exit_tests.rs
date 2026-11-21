@@ -1,7 +1,7 @@
 use corral_protocol::detail::{CardKind, CardOption};
 use corral_protocol::session_state::{
-    ExitBrief, ExitChoice, ExitPhase, LandBrief, LandGate, LandStep, LandStepId, LandStepState,
-    SendPolicy, SessionState,
+    ExitBrief, ExitChoice, ExitPhase, LandBrief, LandCandidate, LandCandidateState, LandGate,
+    LandStep, LandStepId, LandStepState, SendPolicy, SessionState,
 };
 
 use super::questions_tests::{SESSION, answers, card, feed_with, option, question};
@@ -49,7 +49,163 @@ fn exit(phase: ExitPhase, land: Option<LandBrief>) -> ExitBrief {
         base_branch: Some("main".into()),
         repair: None,
         land,
+        candidate: None,
     }
+}
+
+const TIP: &str = "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const HEAD: &str = "2222222bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+fn candidate(state: LandCandidateState) -> LandCandidate {
+    LandCandidate {
+        state,
+        base: Some("main".into()),
+        base_tip: Some(TIP.into()),
+        head: Some(HEAD.into()),
+        source: None,
+        conflicts: Vec::new(),
+        gate_attempt: Some("G4".into()),
+        moved_to: None,
+        detail: None,
+    }
+}
+
+/// A prepared candidate names the exact fast-forward Land authorizes; each blocker reads as
+/// itself, so conflicts are never a failed rebase, and a moved base names where it went.
+#[test]
+fn a_candidate_names_its_fast_forward_and_what_holds_it_back() {
+    let ready = super::land::candidate(&candidate(LandCandidateState::Ready));
+    assert_eq!(
+        ready.text,
+        "Ready: Land fast-forwards main 1111111 → 2222222"
+    );
+    assert_eq!(ready.facts.as_deref(), Some("gate G4 passed"));
+    assert_eq!(ready.detail, None);
+
+    let conflicts = super::land::candidate(&LandCandidate {
+        conflicts: (0..7).map(|n| format!("src/{n}.rs")).collect(),
+        detail: Some("Resolve them on the branch.".into()),
+        ..candidate(LandCandidateState::Conflicts)
+    });
+    assert!(
+        conflicts
+            .text
+            .contains("conflicts; the branch is unchanged")
+    );
+    assert_eq!(conflicts.facts.as_deref(), Some("7 paths"));
+    assert_eq!(conflicts.paths.len(), 6);
+    assert_eq!(conflicts.paths[5], "and 2 more");
+    assert_eq!(
+        conflicts.detail.as_deref(),
+        Some("Resolve them on the branch.")
+    );
+
+    let failed = super::land::candidate(&candidate(LandCandidateState::Failed));
+    assert!(failed.text.contains("failed") && !failed.text.contains("conflict"));
+
+    let moved = super::land::candidate(&LandCandidate {
+        moved_to: Some("3333333cccc".into()),
+        ..candidate(LandCandidateState::BaseMoved)
+    });
+    assert_eq!(
+        moved.text,
+        "main moved to 3333333 since the candidate was prepared on 1111111"
+    );
+    for (state, words) in [
+        (LandCandidateState::NeedsReview, "needs an approving review"),
+        (LandCandidateState::NeedsGate, "has no passing gate"),
+        (LandCandidateState::GateFailed, "Gate G4 failed"),
+    ] {
+        assert!(
+            super::land::candidate(&candidate(state))
+                .text
+                .contains(words)
+        );
+    }
+}
+
+/// While the candidate is prepared nothing is landing: no Land rail, no outcome. Land on it
+/// then names the commits its fast-forward moves between, and the landed outcome too.
+#[test]
+fn preparing_is_not_landing_and_land_names_its_commits() {
+    let preparing = progress_of(ExitBrief {
+        choice: None,
+        candidate: Some(candidate(LandCandidateState::Preparing)),
+        ..exit(
+            ExitPhase::Rebasing,
+            Some(LandBrief {
+                steps: vec![land_step(LandStepId::Rebase, LandStepState::Running, None)],
+                gate: None,
+            }),
+        )
+    })
+    .expect("preparation shows");
+    assert_eq!(
+        preparing.candidate.map(|shown| shown.text),
+        Some("Preparing the Land candidate on main".to_owned())
+    );
+    assert_eq!(preparing.steps.len(), 1);
+    assert!(preparing.outcome.is_none());
+
+    let landing = progress_of(ExitBrief {
+        candidate: Some(candidate(LandCandidateState::Ready)),
+        ..exit(
+            ExitPhase::Landing,
+            Some(LandBrief {
+                steps: vec![
+                    land_step(
+                        LandStepId::Rebase,
+                        LandStepState::Done,
+                        Some("prepared 2222222"),
+                    ),
+                    land_step(LandStepId::Gate, LandStepState::Done, Some("G4 passed")),
+                    land_step(LandStepId::Land, LandStepState::Running, None),
+                ],
+                gate: None,
+            }),
+        )
+    })
+    .expect("Land shows");
+    assert_eq!(
+        landing.steps[2].label,
+        "Land (fast-forward main 1111111 → 2222222)"
+    );
+    assert!(landing.candidate.is_none());
+
+    let landed = progress_of(ExitBrief {
+        landed: Some(HEAD.into()),
+        candidate: Some(candidate(LandCandidateState::Ready)),
+        ..exit(ExitPhase::Landed, None)
+    })
+    .expect("an outcome");
+    assert_eq!(
+        landed.outcome.map(|outcome| outcome.text),
+        Some("✓ Landed 2222222 on main, fast-forwarded from 1111111".to_owned())
+    );
+
+    let moved = progress_of(ExitBrief {
+        candidate: Some(LandCandidate {
+            moved_to: Some("3333333cccc".into()),
+            ..candidate(LandCandidateState::BaseMoved)
+        }),
+        ..exit(ExitPhase::Failed, None)
+    })
+    .expect("a failure");
+    assert!(
+        moved
+            .candidate
+            .is_some_and(|shown| shown.text.contains("moved to 3333333"))
+    );
+}
+
+/// A host that prepares no candidate keeps the rail derived from its phase, and nothing claims
+/// a candidate it never reported.
+#[test]
+fn a_host_without_a_candidate_is_never_shown_as_prepared() {
+    let shown = progress_of(exit(ExitPhase::Rebasing, None)).expect("Land shows");
+    assert!(shown.candidate.is_none());
+    assert_eq!(shown.steps.len(), 3);
+    assert_eq!(shown.steps[2].label, "Land (fast-forward main)");
 }
 
 /// A host that reused an earlier passing gate goes from rebasing to landing; deriving the rail

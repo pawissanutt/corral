@@ -21,12 +21,18 @@ interface LandBrief {
   steps: { id: string; state: string; note?: string; started_at?: string; ended_at?: string }[];
   gate?: { attempt?: string; log?: string; command?: string; index?: number; of?: number; tail: string[] };
 }
+interface CandidateBrief {
+  state: NonNullable<ExitState["candidate"]>["state"]; base?: string; base_tip?: string; head?: string; source?: string;
+  conflicts?: string[]; gate_attempt?: string; moved_to?: string; detail?: string;
+}
 interface ExitBrief {
   phase: ExitState["phase"]; detail?: string; choice?: "keep" | "land" | "iterate"; landed?: string; base_branch?: string;
-  repair?: { round: number; of: number }; land?: LandBrief;
+  repair?: { round: number; of: number }; land?: LandBrief; candidate?: CandidateBrief;
 }
 /** The wire's bounds on a gate log tail: its last lines, each clipped. */
 const LAND_TAIL_LINES = 8, LAND_TAIL_BYTES = 200;
+/** The wire's bounds on a candidate's conflicted paths: the first ones, each clipped. */
+const CONFLICT_PATHS = 20, CONFLICT_BYTES = 240;
 interface BoardBrief { open: number; blocked: number; failed: number; proposed: boolean }
 interface PlanBrief { done: number; total: number; current?: string; stale: boolean }
 interface Capability { id: string; unavailable?: string }
@@ -127,6 +133,12 @@ export function boundState(state: SessionState): BoundedSessionState {
     bytes -= jsonBytes(clipped.exit.land.gate) - jsonBytes(gate);
     clipped.exit = { ...clipped.exit, land: { ...clipped.exit.land, gate } };
   }
+  // So are a candidate's conflicted paths: its state and detail still say it conflicted.
+  if (bytes > LIVE_STATE_BYTES && clipped.exit?.candidate?.conflicts) {
+    const { conflicts: _, ...candidate } = clipped.exit.candidate;
+    bytes -= jsonBytes(clipped.exit.candidate) - jsonBytes(candidate);
+    clipped.exit = { ...clipped.exit, candidate };
+  }
   for (const field of ["last_error", "pending_model", "activity", "plan", "exit"] as const) {
     if (bytes <= LIVE_STATE_BYTES) break;
     if (clipped[field] !== undefined) bytes -= Buffer.byteLength(JSON.stringify({ [field]: clipped[field] })) - 1;
@@ -173,12 +185,22 @@ function landBrief(land: NonNullable<ExitState["land"]>): LandBrief {
   };
 }
 
+function candidateBrief(candidate: NonNullable<ExitState["candidate"]>): CandidateBrief {
+  const sha = (text: string | undefined) => optionalText(text, 64);
+  return { state: candidate.state, base: optionalText(candidate.base, 256), base_tip: sha(candidate.baseTip), head: sha(candidate.head),
+    source: sha(candidate.source), gate_attempt: optionalText(candidate.gateAttempt, 64), moved_to: sha(candidate.movedTo),
+    ...(candidate.conflicts?.length ? { conflicts: candidate.conflicts.slice(0, CONFLICT_PATHS).map(path => clipText(path, CONFLICT_BYTES)) } : {}),
+    detail: optionalText(candidate.detail, 512) };
+}
+
 export function exitBrief(exit: ExitState): ExitBrief {
   return { phase: exit.phase, detail: exit.detail === undefined ? undefined : utf8Prefix(exit.detail, 512),
     choice: exit.record?.choice, landed: exit.record?.landed,
-    // The record names the base once Land succeeded; a running or failed Land already knows it.
-    base_branch: optionalText(exit.record?.baseBranch ?? exit.land?.base, 256), repair: exit.repair,
-    land: exit.land && landBrief(exit.land) };
+    // The record names the base once Land succeeded; a running or failed Land already knows it, a prepared candidate too.
+    base_branch: optionalText(exit.record?.baseBranch ?? exit.land?.base ?? exit.candidate?.base, 256), repair: exit.repair,
+    land: exit.land && landBrief(exit.land),
+    // A host that prepared nothing says nothing: the app never shows a candidate it did not serve.
+    ...(exit.candidate ? { candidate: candidateBrief(exit.candidate) } : {}) };
 }
 
 export function boardBrief(board: BoardControl): BoardBrief {

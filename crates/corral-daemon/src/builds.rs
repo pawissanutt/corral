@@ -329,6 +329,8 @@ impl Build {
                     base_branch: exit.base_branch,
                     repair: None,
                     land: None,
+                    // The saved record names what landed, not a prepared candidate.
+                    candidate: None,
                 }
             })
         });

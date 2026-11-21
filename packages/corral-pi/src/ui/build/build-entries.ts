@@ -5,11 +5,11 @@
 import type { MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import type { BoardTaskStatus, ExitChoice, ExitOption, ExitPhase, ExitRecord, ExitState, LandProgress } from "../../build/types.ts";
+import type { BoardTaskStatus, ExitChoice, ExitOption, ExitPhase, ExitRecord, ExitState, LandCandidate, LandProgress } from "../../build/types.ts";
 import { onSurface } from "../frame.ts";
 import { plainLabel, PANEL_BG, PANEL_BUBBLE, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT } from "../panels-view.ts";
 import type { BuildCardSource } from "./contract.ts";
-import { landLines } from "./land-steps.ts";
+import { candidateLines, landLines } from "./land-steps.ts";
 import { EXIT_LABELS, exitLines, exitProgress, resultCardLines, shortSha } from "./result-card.ts";
 import type { ResultHit } from "./result-card.ts";
 import { cardCell, cardLine, cardWrap } from "./task-card.ts";
@@ -24,7 +24,9 @@ export const BUILD_FINISH_ENTRY = "corral_build_finish";
 export interface BuildEntry<T> { readonly customType: string; readonly content: string; readonly display: true; readonly details: T }
 export type ExitEntryDetails = { readonly choice: ExitChoice; readonly label: string; readonly phase: ExitPhase; readonly detail?: string;
   /** Land's steps as they ended, with a failed gate's last log lines. */
-  readonly land?: LandProgress }
+  readonly land?: LandProgress;
+  /** The candidate the host prepared for this Land, as it stood when Land ended. */
+  readonly candidate?: LandCandidate }
   & Pick<ExitRecord, "landed" | "baseBranch" | "gateAttempt" | "overrideReason">;
 export interface BoardEntryDetails { readonly filed: readonly { readonly id: string; readonly title: string; readonly depends: readonly string[] }[]; readonly started: boolean }
 export interface FinishEntryDetails { readonly id: string }
@@ -105,10 +107,13 @@ export function exitEntry(option: ExitOption, state: ExitState): BuildEntry<Exit
     ...(record?.gateAttempt ? { gateAttempt: plainLabel(record.gateAttempt) } : {}),
     ...(record?.overrideReason ? { overrideReason: plainLabel(record.overrideReason) } : {}),
     ...(option.choice === "land" && state.land ? { land: state.land } : {}),
+    ...(option.choice === "land" && state.candidate ? { candidate: state.candidate } : {}),
   };
+  // The base fast-forwarded from the tip the candidate was prepared on, when the host says so.
+  const from = details.landed && details.candidate?.baseTip && details.candidate.head === details.landed ? ` (fast-forwarded from ${shortSha(details.candidate.baseTip)})` : "";
   const sentences = [
     `The owner chose "${label}" for this build branch.`, outcome(details),
-    ...(details.landed ? [`${details.baseBranch ?? "The base branch"} now points at ${shortSha(details.landed)}${details.gateAttempt ? ` (gate ${details.gateAttempt})` : ""}.`] : []),
+    ...(details.landed ? [`${details.baseBranch ?? "The base branch"} now points at ${shortSha(details.landed)}${from}${details.gateAttempt ? ` (gate ${details.gateAttempt})` : ""}.`] : []),
     ...(details.overrideReason ? [`The owner landed over open review findings: "${details.overrideReason}".`] : []),
   ];
   return { customType: BUILD_EXIT_ENTRY, display: true, details, content: sentences.join(" ") };
@@ -148,9 +153,12 @@ function exitEntryLines(details: ExitEntryDetails, width: number): string[] {
   const log = typeof land?.gate?.log === "string" ? `; log: ${plainLabel(land.gate.log)}` : undefined;
   const detail = log ? details.detail?.replace(log, "") : details.detail;
   const shown = exitProgress({ phase: details.phase, ...(detail ? { detail } : {}), record: details });
+  const candidate = details.candidate && typeof details.candidate.state === "string" ? details.candidate : undefined;
   return [
     ...bubble("you chose", plainLabel(label), width),
-    ...(land ? landLines(land, width) : []),
+    ...(land ? landLines(land, width, undefined, undefined, candidate) : []),
+    // A Land that ended with its candidate held back (the base moved, say) shows why, apart from a failed step.
+    ...(candidate && candidate.state !== "ready" && details.phase !== "landed" ? candidateLines(candidate, width) : []),
     ...(shown ? exitLines(shown, width) : cardWrap(PANEL_MUTED + "· " + outcome(details), "", width)),
     ...(details.choice === "land" && details.phase === "failed" ? cardWrap("/finish to choose an exit again", PANEL_MUTED, width, 2) : []),
     ...(details.overrideReason ? cardWrap(PANEL_MUTED + "landed over open findings: " + PANEL_TEXT + details.overrideReason, "", width, 2) : []),

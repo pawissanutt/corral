@@ -145,6 +145,32 @@ test("Land draws its steps in order with the gate's log under the gate step, liv
   expect(drawn.some(line => line.includes("/finish"))).toBeTrue();
 });
 
+test("preparing a candidate is not landing; Land then only fast-forwards between the exact commits, and a moved base says so", () => {
+  const candidate = { base: "main", baseTip: "1111111aaaa", head: "2222222bbbb", gateAttempt: "G4" };
+  const preparing = card({ summary: summary(), exit: { phase: "rebasing", candidate: { ...candidate, state: "preparing" },
+    land: { base: "main", steps: [{ id: "rebase", state: "running" }, { id: "gate", state: "waiting" }, { id: "land", state: "waiting" }] } } }).text.join("\n");
+  expect(preparing).toContain("Preparing the Land candidate on main");
+  expect(preparing).not.toContain("you chose");
+
+  const record = { choice: "land" as const, at: "t" };
+  const landing = card({ summary: summary(), exit: { phase: "landing", record, candidate: { ...candidate, state: "ready" },
+    land: { base: "main", steps: [{ id: "rebase", state: "done", note: "prepared 2222222" }, { id: "gate", state: "done", note: "G4 passed" },
+      { id: "land", state: "running" }] } } }).text.join("\n");
+  expect(landing).toContain("Fast-forward main 1111111 → 2222222");
+
+  const moved: ExitState = { phase: "failed", record, detail: "The base main moved.", candidate: { ...candidate, state: "base_moved", movedTo: "3333333cccc" },
+    land: { base: "main", steps: [{ id: "rebase", state: "done" }, { id: "gate", state: "done" }, { id: "land", state: "failed", note: "main moved" }] } };
+  const entry = exitEntry({ choice: "land", label: "Land on main", detail: "d" }, moved);
+  const drawn = (buildEntryRenderer(() => undefined)({ role: "custom", ...entry, timestamp: NOW }, { expanded: false, outputPad: 1 } as never, undefined as never)
+    ?.render(100) ?? []).map(line => stripTerminalSequences(line)).join("\n");
+  expect(drawn).toContain("main moved to 3333333 since the candidate was prepared on 1111111");
+  expect(drawn).not.toContain("conflicts");
+
+  const landed = exitEntry({ choice: "land", label: "Land on main", detail: "d" },
+    { phase: "landed", record: { ...record, landed: "2222222bbbb", baseBranch: "main" }, candidate: { ...candidate, state: "ready" } });
+  expect(landed.content).toContain("main now points at 2222222 (fast-forwarded from 1111111)");
+});
+
 test("slice rows and, while the exit is pending, the header are clickable, and every line fits", () => {
   for (const width of [30, 46, 52, 61, 80, 92, 140, 185]) {
     const { lines, hits, text } = card({

@@ -72,8 +72,9 @@ function harness(options: { readonly remote?: boolean } = {}) {
     options: () => s.options,
     summary: async () => s.summary,
     state: () => s.exit,
-    choose: async (choice: ExitChoice, options?: { readonly overrideReason?: string }) => {
-      s.calls.push(`choose ${choice}` + (options?.overrideReason === undefined ? "" : ` ${options.overrideReason}`));
+    choose: async (choice: ExitChoice, options?: { readonly overrideReason?: string; readonly authorization?: string }) => {
+      s.calls.push(`choose ${choice}` + (options?.overrideReason === undefined ? "" : ` ${options.overrideReason}`)
+        + (options?.authorization === undefined ? "" : ` @${options.authorization}`));
       s.exit = choice === "iterate" ? { phase: "none" } : choice === "land" ? { phase: "landed", record: { choice, at: "now", landed: "abc1234" } }
         : { phase: "kept", record: { choice, at: "now" }, detail: "kept" };
       emit();
@@ -84,6 +85,13 @@ function harness(options: { readonly remote?: boolean } = {}) {
     close: () => {},
     busy: () => false,
     summarySnapshot: () => s.summary,
+    // An explicit Finish opens the choice before its first await, as the host's does when nothing needs preparing.
+    requestFinish: async () => { s.exit = { phase: "pending" }; emit(); },
+    prepare: async () => undefined,
+    preparationDetail: () => undefined,
+    checkPrepared: async () => {},
+    choiceBusy: () => false,
+    choiceRevision: () => 0,
   };
   const board: BoardControl & { propose(plan: BoardPlan): void; close(): void } = {
     tasks: () => s.tasks,
@@ -147,7 +155,7 @@ function harness(options: { readonly remote?: boolean } = {}) {
     openChild: id => { s.calls.push(`open ${id}`); },
     color: () => "", now: () => 1000, changed: () => {}, ...(dialogs ? { dialogs } : {}),
   });
-  return { s, controller, dialogs, emit, key: (data: string) => controller.dock.handleKey(data) };
+  return { s, controller, dialogs, emit, exit, key: (data: string) => controller.dock.handleKey(data) };
 }
 
 test("a question that arrives while the composer holds a draft does not take focus", () => {
@@ -232,6 +240,113 @@ test("a Land that needs a reason shows it, takes the reason in the composer and 
   expect(s.calls).toEqual(["choose land Checked the finding by hand"]);
   expect(s.draft).toBe("");
   expect(controller.target()).toBeUndefined();
+});
+
+const plain = (lines: readonly string[]) => lines.map(line => line.replace(/\x1b\[[0-9;]*m/g, "")).join("\n");
+const TIP = "1111111aaaaaaa", HEAD = "2222222bbbbbbb";
+const ready = (ticket: string, head = HEAD): { options: readonly ExitOption[]; exit: ExitState } => ({
+  options: [OPTIONS[0]!, { choice: "land", label: "Land on main", detail: "Fast-forward main to the prepared candidate.", authorization: ticket,
+    needsReason: "REVIEW_FINDINGS_OPEN" }, OPTIONS[2]!],
+  exit: { phase: "pending", candidate: { state: "ready", base: "main", baseTip: TIP, head, gateAttempt: "G4" } },
+});
+
+test("a ready candidate names the exact fast-forward, and the reason lands the ticket the owner picked", async () => {
+  const { s, controller, key } = harness();
+  ({ options: s.options, exit: s.exit } = ready("T1"));
+  controller.sync();
+  const dialog = controller.dialog()!;
+  expect(plain(dialog.body!(100, 4))).toContain("Land fast-forwards main 1111111 → 2222222 · gate G4 passed");
+  expect(dialog.options[1]?.detail).toContain("fast-forward main 1111111 → 2222222");
+  controller.dock.guard(0);
+  key("2");
+  expect(s.notices.at(-1)?.text).toContain("Enter lands (fast-forward main 1111111 → 2222222)");
+  s.draft = "Checked by hand";
+  expect(await controller.submit("Checked by hand")).toBeTrue();
+  await settle();
+  expect(s.calls).toEqual(["choose land Checked by hand @T1"]);
+});
+
+test("a candidate prepared again while the reason is typed is not landed by it", async () => {
+  const { s, controller, key } = harness();
+  ({ options: s.options, exit: s.exit } = ready("T1"));
+  controller.sync();
+  controller.dock.guard(0);
+  key("2");
+  ({ options: s.options, exit: s.exit } = ready("T2", "3333333ccccccc"));
+  s.draft = "Checked by hand";
+  expect(await controller.submit("Checked by hand")).toBeTrue();
+  await settle();
+  expect(s.calls).toEqual([]);
+  expect(s.draft).toBe("Checked by hand");
+  expect(s.notices.at(-1)?.text).toContain("The Land candidate changed");
+  // The new candidate is shown before anything can land it.
+  expect(plain(controller.dialog()!.body!(100, 4))).toContain("1111111 → 3333333");
+});
+
+test("a pick on a dialog shown with an older candidate shows the new one instead of landing", async () => {
+  const { s, controller, key } = harness();
+  ({ options: s.options, exit: s.exit } = ready("T1"));
+  s.options = s.options.map(option => option.choice === "land" ? { ...option, needsReason: undefined } : option);
+  controller.sync();
+  controller.dock.guard(0);
+  s.options = s.options.map(option => option.choice === "land" ? { ...option, authorization: "T2" } : option);
+  key("2");
+  await settle();
+  expect(s.calls).toEqual([]);
+  expect(s.notices.at(-1)?.text).toContain("The Land candidate changed");
+  controller.dock.guard(0);
+  key("2");
+  await settle();
+  expect(s.calls).toEqual(["choose land @T2"]);
+});
+
+test("an explicit Finish waits for the host to prepare, refuses a second Finish meanwhile, then docks the prepared choice once", async () => {
+  const { s, controller, emit, exit } = harness();
+  const ready = Promise.withResolvers<void>();
+  let requests = 0;
+  exit.requestFinish = async () => {
+    requests++;
+    s.exit = { phase: "rebasing", candidate: { state: "preparing", base: "main" } };
+    emit();
+    await ready.promise;
+    s.exit = { phase: "pending", candidate: { state: "ready", base: "main", baseTip: TIP, head: HEAD } };
+    emit();
+  };
+  expect(controller.openFinish()).toBeTrue();
+  controller.sync();
+  expect(controller.dialog()).toBeUndefined();
+  // Preparing is not landing, and Finish waits for it.
+  expect(controller.finishUnavailable()).toBe("the Land candidate is still being prepared");
+  expect(controller.openFinish()).toBeFalse();
+  ready.resolve();
+  await settle();
+  controller.sync();
+  expect(requests).toBe(1);
+  expect(plain(controller.dialog()!.body!(100, 4))).toContain("main 1111111 → 2222222");
+  expect(s.posts.filter(entry => entry.customType === BUILD_FINISH_ENTRY)).toHaveLength(1);
+});
+
+test("conflicts read as conflicts, apart from a failed preparation; a host without a candidate claims none", () => {
+  const { s, controller } = harness();
+  s.options = [OPTIONS[0]!, { choice: "land", label: "Land on main", detail: "land it", unavailable: "Rebasing onto main conflicts." }, OPTIONS[2]!];
+  s.exit = { phase: "pending", candidate: { state: "conflicts", base: "main", conflicts: ["src/a.ts", "src/b.ts"], detail: "Resolve them on the branch." } };
+  controller.sync();
+  const conflicts = plain(controller.dialog()!.body!(100, 6));
+  expect(conflicts).toContain("Rebasing onto main conflicts; the branch is unchanged · 2 paths");
+  expect(conflicts).toContain("│ src/a.ts");
+  expect(conflicts).toContain("Resolve them on the branch.");
+  expect(conflicts).not.toContain("failed");
+
+  s.exit = { phase: "pending", candidate: { state: "failed", base: "main", detail: "git rebase exited 128" } };
+  const failed = plain(controller.dialog()!.body!(100, 6));
+  expect(failed).toContain("Preparing the Land candidate failed");
+  expect(failed).not.toContain("conflicts");
+
+  s.exit = { phase: "pending" };
+  s.options = OPTIONS;
+  const old = controller.dialog()!;
+  expect(old.body).toBeUndefined();
+  expect(old.options[1]?.detail).toBe("land it");
 });
 
 test("filing waits for the preview and runs once even on a double pick; the host posts the filed tasks", async () => {

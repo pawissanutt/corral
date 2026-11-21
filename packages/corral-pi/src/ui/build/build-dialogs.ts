@@ -1,9 +1,10 @@
 // The three docked dialogs of a build session: the exit choice, a child's question and the board plan.
 import { basename } from "node:path";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import type { BoardPlan, BoardPreview, BuildPanelState, ChildSnapshot, ExitOption } from "../../build/types.ts";
+import type { BoardPlan, BoardPreview, BuildPanelState, ChildSnapshot, ExitOption, LandCandidate } from "../../build/types.ts";
 import { plainLabel, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT } from "../panels-view.ts";
 import type { ChoiceDialog } from "./choice-dock.ts";
+import { candidateLines, fastForward } from "./land-steps.ts";
 
 export type PreviewState = { readonly state: "loading" } | { readonly state: "ready"; readonly value: BoardPreview }
   | { readonly state: "failed"; readonly error: string };
@@ -43,19 +44,29 @@ function wrapped(text: string, color: string, width: number, rows: number): stri
   return [...kept, PANEL_MUTED + `… ${lines.length - kept.length} more lines`];
 }
 
-/** Keep, Land and Iterate as the host offers them; a Land that needs the owner's reason says why, ahead of its detail. */
-export function exitDialog(state: BuildPanelState, options: readonly ExitOption[], episode: number, live: number): ChoiceDialog {
-  const policy = policyLabel(state);
+/**
+ * Keep, Land and Iterate as the host offers them; a Land that needs the owner's reason says why, ahead of its detail.
+ * With a candidate the host prepared, the body says where it stands, and a Land that can run names the exact
+ * fast-forward it authorizes first; without one (a host that prepares none) Land reads as the host words it.
+ */
+export function exitDialog(state: BuildPanelState, options: readonly ExitOption[], episode: number, live: number, candidate?: LandCandidate): ChoiceDialog {
+  const policy = policyLabel(state), move = candidate?.state === "ready" ? fastForward(candidate) : undefined;
   return {
-    key: `exit:${episode}`,
+    // A new candidate is a new decision: the selection starts over.
+    key: `exit:${episode}` + (candidate ? `:${candidate.state}:${candidate.baseTip ?? ""}:${candidate.head ?? ""}` : ""),
     title: "How should this leave the build session?",
     short: "How should this leave?",
     meta: live ? `${policy} · ${live} ${live === 1 ? "agent" : "agents"} still running` : policy,
-    options: options.map(option => ({
-      label: option.label,
-      detail: option.needsReason !== undefined && option.unavailable === undefined ? `needs your reason: ${option.needsReason} · ${option.detail}` : option.detail,
-      ...(option.unavailable !== undefined ? { unavailable: option.unavailable } : {}),
-    })),
+    ...(candidate ? { body: (width: number, rows: number) => candidateLines(candidate, width).slice(0, Math.max(0, rows)) } : {}),
+    options: options.map(option => {
+      const open = option.unavailable === undefined;
+      const detail = option.choice === "land" && open && move ? `fast-forward ${move} · ${option.detail}` : option.detail;
+      return {
+        label: option.label,
+        detail: option.needsReason !== undefined && open ? `needs your reason: ${option.needsReason} · ${detail}` : detail,
+        ...(open ? {} : { unavailable: option.unavailable }),
+      };
+    }),
   };
 }
 

@@ -20,6 +20,7 @@ import type { ChoiceDialog, ChoiceOption } from "./choice-dock.ts";
 import { childHue } from "./contract.ts";
 import type { BuildCardSource, ComposerTarget } from "./contract.ts";
 import { steerable } from "./fleet-rows.ts";
+import { fastForward } from "./land-steps.ts";
 
 export interface BuildControllerHost {
   readonly ui: BuildUi;
@@ -56,10 +57,13 @@ export interface BuildControllerHost {
 type Shown = { readonly kind: "exit" } | { readonly kind: "question"; readonly id: string; readonly askedAt: number } | { readonly kind: "plan" };
 
 const PLAN_DRAFT = "Split the remaining work into board tasks and propose them with board_plan.";
+/**
+ * Why Finish waits while an exit runs. Kept and landed are outcomes, not the end of the session: Finish opens the
+ * choice again, and the host offers Land only for commits it has not landed.
+ */
 const DONE_REASON: Partial<Record<ExitPhase, string>> = {
-  kept: "this session already kept the branch", rebasing: "this session is already landing", verifying: "this session is already landing",
-  repairing: "this session is already landing",
-  landing: "this session is already landing", landed: "this session already landed",
+  rebasing: "this session is already landing", verifying: "this session is already landing",
+  repairing: "this session is already landing", landing: "this session is already landing",
 };
 /** The composer target while Enter gives the owner's reason to land. */
 const REASON_TARGET: ComposerTarget = { id: "exit", answer: true };
@@ -74,9 +78,13 @@ export function childQuestionCard(child: string, askedAt: number): (card: Readon
   return card => card.kind === "child_question" && card.child === child && card.opened_at === opened;
 }
 
-/** Which registry card is `shown`'s decision: the exit, the board plan, or this child's question at its `askedAt`. */
-function cardOf(shown: Shown): (card: Readonly<CardEntry["card"]>) => boolean {
-  if (shown.kind === "exit") return card => card.kind === "exit";
+/**
+ * Which registry card is `shown`'s decision: the exit (the one card `pinned`, once the dock saw it), the board plan,
+ * or this child's question at its `askedAt`. The host gives a new candidate a new exit card, so a pinned one never
+ * answers for a candidate the owner was not shown.
+ */
+function cardOf(shown: Shown, pinned?: string): (card: Readonly<CardEntry["card"]>) => boolean {
+  if (shown.kind === "exit") return pinned === undefined ? card => card.kind === "exit" : card => card.kind === "exit" && card.id === pinned;
   if (shown.kind === "plan") return card => card.kind === "board_plan";
   return childQuestionCard(shown.id, shown.askedAt);
 }
@@ -89,6 +97,8 @@ export class BuildController implements BuildCardSource {
   /** Exit episodes: one per entry into `pending`. */
   private episode = 0;
   private choosing = false;
+  /** An explicit Finish waits for the host to prepare its candidate. */
+  private finishing = false;
   private summaryValue: BuildSummary | undefined;
   private latest: string | undefined;
   private finishes = 0;
@@ -104,8 +114,14 @@ export class BuildController implements BuildCardSource {
   private fileError: string | undefined;
   private answerFor: string | undefined;
   private steering = false;
-  /** The exit episode whose Land waits for the owner's reason in the composer. */
-  private reasonFor: number | undefined;
+  /**
+   * The exit episode whose Land waits for the owner's reason in the composer, with the Land option and exit card
+   * the owner picked: the reason lands that candidate or nothing.
+   */
+  private reasonFor: { readonly episode: number; readonly option: ExitOption; readonly card: string | undefined } | undefined;
+  /** The exit card and Land ticket the docked exit choice was shown with. */
+  private exitCard: string | undefined;
+  private exitTicket: string | undefined;
   /** When the exit's current phase began, as `sync` saw it change. */
   private phaseAt: number | undefined;
   private readonly watchers = new Set<{ readonly invalidate: () => void }>();
@@ -197,10 +213,10 @@ export class BuildController implements BuildCardSource {
     const shown = this.shown, ui = this.host.ui;
     if (!shown) return undefined;
     if (shown.kind === "exit") {
-      const state = this.host.state();
-      if (!state || ui.exit.state().phase !== "pending") return undefined;
+      const state = this.host.state(), exit = ui.exit.state();
+      if (!state || exit.phase !== "pending") return undefined;
       const live = ui.fleet.snapshot().children.filter(child => LIVE_CHILD_STATES.includes(child.state)).length;
-      return exitDialog(state, ui.exit.options(), this.episode, live);
+      return exitDialog(state, ui.exit.options(), this.episode, live, exit.candidate);
     }
     if (shown.kind === "question") {
       const fleet = ui.fleet.snapshot(), child = fleet.children.find(entry => entry.id === shown.id);
@@ -294,17 +310,24 @@ export class BuildController implements BuildCardSource {
   async submit(text: string): Promise<boolean> {
     if (text.trimStart().startsWith("/")) return false;
     if (this.reasonFor !== undefined) {
-      const reason = text.trim(), option = this.host.ui.exit.options().find(entry => entry.choice === "land");
+      const reason = text.trim(), waiting = this.reasonFor, option = this.host.ui.exit.options().find(entry => entry.choice === "land");
       if (!reason) { this.host.notice("Landing needs your reason first", "warning"); return true; }
-      if (this.reasonFor !== this.episode || this.host.ui.exit.state().phase !== "pending" || !option || option.unavailable !== undefined) {
+      if (waiting.episode !== this.episode || this.host.ui.exit.state().phase !== "pending" || !option || option.unavailable !== undefined) {
         this.reasonFor = undefined;
         this.host.notice("The exit choice is no longer waiting · your reason is still in the composer", "warning");
         this.host.changed();
         return true;
       }
+      // The reason is for the candidate the owner picked: one prepared since then is theirs to look at first.
+      if (option.authorization !== waiting.option.authorization) {
+        this.reasonFor = undefined;
+        this.host.notice("The Land candidate changed while you typed · your reason is still in the composer; choose Land again", "warning");
+        this.show({ kind: "exit" }, false);
+        return true;
+      }
       this.reasonFor = undefined;
       this.clearDraft(text);
-      this.choose(option, reason);
+      this.choose(waiting.option, reason, waiting.card);
       return true;
     }
     const target = this.target();
@@ -342,8 +365,10 @@ export class BuildController implements BuildCardSource {
    * episode's, so refusing on it would let the first Finish open and every Finish after an Iterate fail.
    */
   finishUnavailable(): string | undefined {
-    const ui = this.host.ui, phase = ui.exit.state().phase;
+    const ui = this.host.ui, exit = ui.exit.state(), phase = exit.phase;
     if (phase === "pending") return undefined;
+    // A rebase or gate while the candidate is prepared lands nothing: Land only fast-forwards a ready candidate.
+    if (exit.candidate?.state === "preparing") return "the Land candidate is still being prepared";
     const done = DONE_REASON[phase];
     if (done) return done;
     if (ui.fleet.snapshot().children.some(child => LIVE_CHILD_STATES.includes(child.state))) return "agents are still running";
@@ -357,6 +382,33 @@ export class BuildController implements BuildCardSource {
     if (reason) { this.host.notice(`Finish is unavailable: ${reason}`, "warning"); return false; }
     // The host's exit control opens episodes; `BuildUi` types it as the plain `ExitControl`.
     const exit = this.host.ui.exit as ExitControl & { open?: () => void };
+    // A host that prepares candidates prepares (or reuses) one for an explicit Finish, then opens the choice.
+    if (exit.requestFinish) {
+      if (this.finishing) return true;
+      const waiting = exit.state().phase === "pending";
+      // Docks once, as soon as the choice is pending: at once when the host opens it before its first await.
+      let docked = false;
+      const dock = (): boolean => {
+        if (docked || this.disposed || exit.state().phase !== "pending") return docked;
+        docked = true;
+        if (!waiting) {
+          const entry = finishEntry(`finish-${this.host.now()}-${++this.finishes}`);
+          this.latest = entry.details.id;
+          this.host.post(entry);
+          this.sync();
+        }
+        this.show({ kind: "exit" }, false);
+        return true;
+      };
+      this.finishing = true;
+      const requested = exit.requestFinish();
+      dock();
+      requested.then(() => { if (!this.disposed && !dock()) this.host.notice("The exit choice could not open", "warning"); },
+        error => { if (!this.disposed) this.host.notice(message(error), "error"); })
+        .finally(() => { this.finishing = false; if (!this.disposed) this.host.changed(); });
+      this.host.changed();
+      return true;
+    }
     if (exit.state().phase !== "pending") {
       exit.open?.();
       if (exit.state().phase !== "pending") { this.host.notice("The exit choice could not open", "warning"); return false; }
@@ -420,15 +472,23 @@ export class BuildController implements BuildCardSource {
     if (option.unavailable !== undefined) { this.refuse(option); return; }
     const ui = this.host.ui;
     if (shown.kind === "exit") {
-      const choice = ui.exit.options()[index];
+      const options = ui.exit.options(), choice = options[index];
       if (this.choosing || !choice || choice.unavailable !== undefined) return;
+      // The host prepared another candidate since this dialog docked: its card is a new one, and it is the owner's to see first.
+      if (options.find(option => option.choice === "land")?.authorization !== this.exitTicket) {
+        this.show({ kind: "exit" }, false);
+        this.host.notice("The Land candidate changed · check it and choose again", "warning");
+        return;
+      }
+      const card = this.exitCard;
       this.close();
-      if (choice.needsReason === undefined) { this.choose(choice); return; }
+      if (choice.needsReason === undefined) { this.choose(choice, undefined, card); return; }
       // Landing over open findings or without an approval takes the owner's reason, typed in the composer.
-      this.reasonFor = this.episode;
+      this.reasonFor = { episode: this.episode, option: choice, card };
       this.dock.focused = false;
       this.host.focusComposer();
-      this.host.notice(`${choice.needsReason} · type your reason to land anyway; Enter lands`, "warning");
+      const exit = ui.exit.state().candidate, move = exit?.state === "ready" ? fastForward(exit) : undefined;
+      this.host.notice(`${choice.needsReason} · type your reason to land anyway; Enter lands${move ? ` (fast-forward ${move})` : ""}`, "warning");
       this.host.changed();
       return;
     }
@@ -508,7 +568,12 @@ export class BuildController implements BuildCardSource {
     this.shown = shown;
     this.watching?.dispose();
     this.watching = this.host.dialogs?.watch(cardOf(shown), result => this.resolved(shown, result));
-    if (shown.kind === "exit") this.reasonFor = undefined;
+    if (shown.kind === "exit") {
+      this.reasonFor = undefined;
+      // What the owner is shown is what a pick answers: this card and this Land ticket.
+      this.exitCard = this.watching?.id;
+      this.exitTicket = this.host.ui.exit.options().find(option => option.choice === "land")?.authorization;
+    }
     if (shown.kind === "question") this.dismissed.delete(questionKey(shown.id, shown.askedAt));
     this.dock.guard(auto ? Date.now() + CHOICE_GUARD_MS : 0);
     this.dock.focused = true;
@@ -516,14 +581,21 @@ export class BuildController implements BuildCardSource {
     this.host.changed();
   }
 
-  /** Runs exit `option`; `overrideReason` is the owner's reason to land over open findings. */
-  private choose(option: ExitOption, overrideReason?: string): void {
+  /**
+   * Runs exit `option` as the owner picked it: through exit card `card` when the registry serves it, else with the
+   * option's own Land ticket. `overrideReason` is the owner's reason to land over open findings.
+   */
+  private choose(option: ExitOption, overrideReason?: string, card?: string): void {
     if (this.choosing) return;
     this.choosing = true;
+    const given = {
+      ...(overrideReason === undefined ? {} : { overrideReason }),
+      ...(option.authorization === undefined ? {} : { authorization: option.authorization }),
+    };
     const chosen: Promise<unknown> = this.host.dialogs
-      ? this.decide({ kind: "exit" }, [{ options: [option.choice], ...(overrideReason === undefined ? {} : { text: overrideReason }) }])
+      ? this.decide({ kind: "exit" }, [{ options: [option.choice], ...(overrideReason === undefined ? {} : { text: overrideReason }) }], card)
         .then(status => { if (status !== "started" && !this.disposed) this.host.notice("The exit choice is no longer waiting", "warning"); })
-      : this.host.ui.exit.choose(option.choice, overrideReason === undefined ? undefined : { overrideReason });
+      : this.host.ui.exit.choose(option.choice, Object.keys(given).length ? given : undefined);
     chosen.catch(error => { if (!this.disposed) this.host.notice(message(error), "error"); })
       .finally(() => { this.choosing = false; if (!this.disposed) this.host.changed(); });
   }
@@ -531,9 +603,10 @@ export class BuildController implements BuildCardSource {
   /**
    * Answers the registry's card for `shown` from these keys, as the app would; "missing" when no such card waits.
    * The card delivers the decision and the host records its outcome, so nothing here applies or posts it again.
+   * `pinned` names the exit card the owner was shown: another exit card is not answered in its place.
    */
-  private async decide(shown: Shown, answers: readonly CardAnswer[]): Promise<AnswerStatus> {
-    const card = this.host.dialogs?.watch(cardOf(shown), () => {});
+  private async decide(shown: Shown, answers: readonly CardAnswer[], pinned?: string): Promise<AnswerStatus> {
+    const card = this.host.dialogs?.watch(cardOf(shown, pinned), () => {});
     if (!card) return "missing";
     try { return await card.answer(answers); } finally { card.dispose(); }
   }

@@ -1,10 +1,11 @@
 //! The cards a sample pi host waits on, its queue, its session actions, and a build's exit and
 //! removal, answered as corral-pi and corrald answer them: a question card takes one answer per
 //! question and delivers them as the next turn's input; a child's question and a proposed board
-//! plan are answered on the build's parts (`parts_ops.rs`); the exit choice (Finish) checks the
-//! option's availability and Land's reason, then walks rebase, gate and land one phase every
-//! other clock tick, reporting its steps and the gate's log tail as the host does and the build
-//! record following it; Compact and the board's refresh run, Export
+//! plan are answered on the build's parts (`parts_ops.rs`); Finish prepares a Land candidate
+//! (rebased and gated) and docks the exit choice; the choice checks the option's availability
+//! and Land's reason, then Land only fast-forwards the base to exactly that candidate on the
+//! next other clock tick, reporting its steps as the host does and the build record following
+//! it; Compact and the board's refresh run, Export
 //! is refused with the host's reason; the queue withdraws an owner's item with its whole text and
 //! moves it among the owner's items; and a stopped build's removal reports what prune removes,
 //! refusing while its host runs.
@@ -17,7 +18,8 @@ use corral_protocol::session_host::{
     SessionCardAnswer, SessionCardAnswered, SessionQueueKey, SessionQueueMove, WithdrawOutcome,
 };
 use corral_protocol::session_state::{
-    ExitBrief, ExitChoice, ExitPhase, LandBrief, LandGate, LandStep, LandStepId, LandStepState,
+    ExitBrief, ExitChoice, ExitPhase, LandBrief, LandCandidate, LandCandidateState, LandGate,
+    LandStep, LandStepId, LandStepState,
 };
 use corral_types::Origin;
 use serde::Serialize;
@@ -221,6 +223,7 @@ fn brief(phase: ExitPhase, choice: Option<ExitChoice>, base: Option<String>) -> 
         base_branch: base,
         repair: None,
         land: None,
+        candidate: None,
     }
 }
 
@@ -234,13 +237,46 @@ fn land_step(id: LandStepId, state: LandStepState, at: Option<&str>) -> LandStep
     }
 }
 
-/// Land's round as the sample host reports it once Land starts: the rebase running.
-fn land_round(at: &str) -> LandBrief {
+/// The candidate the sample host prepares when Finish opens the choice: the session's commits
+/// rebased onto the base tip, with its gate passed there.
+fn prepared(session: &str, base: Option<String>, attempt: &str) -> LandCandidate {
+    LandCandidate {
+        state: LandCandidateState::Ready,
+        base,
+        base_tip: Some(sha(&format!("{session}/base"), 40)),
+        head: Some(sha(&format!("{session}/candidate"), 40)),
+        source: Some(sha(&format!("{session}/source"), 40)),
+        conflicts: Vec::new(),
+        gate_attempt: Some(attempt.into()),
+        moved_to: None,
+        detail: None,
+    }
+}
+
+/// Land's round as the sample host reports it once Land starts on its prepared `candidate`:
+/// the rebase and gate are done, so only the fast-forward runs.
+fn land_round(at: &str, candidate: &LandCandidate) -> LandBrief {
+    let done = |id, note: Option<String>| LandStep {
+        note,
+        ..land_step(id, LandStepState::Done, None)
+    };
     LandBrief {
         steps: vec![
-            land_step(LandStepId::Rebase, LandStepState::Running, Some(at)),
-            land_step(LandStepId::Gate, LandStepState::Waiting, None),
-            land_step(LandStepId::Land, LandStepState::Waiting, None),
+            done(
+                LandStepId::Rebase,
+                candidate
+                    .head
+                    .as_deref()
+                    .map(|head| format!("prepared {}", &head[..7.min(head.len())])),
+            ),
+            done(
+                LandStepId::Gate,
+                candidate
+                    .gate_attempt
+                    .as_deref()
+                    .map(|attempt| format!("{attempt} passed")),
+            ),
+            land_step(LandStepId::Land, LandStepState::Running, Some(at)),
         ],
         gate: None,
     }
@@ -355,13 +391,17 @@ fn exit(
     if let (Some(why), None) = (&option.needs_text, reason) {
         return Err(format!("{} needs your reason: {why}", option.label));
     }
+    let candidate = host.exit.as_ref().and_then(|exit| exit.candidate.clone());
     host.pending.remove(index);
-    host.exit = match chosen {
-        "land" => Some(ExitBrief {
-            land: Some(land_round(&at)),
-            ..brief(ExitPhase::Rebasing, Some(ExitChoice::Land), base)
+    host.exit = match (chosen, candidate) {
+        // Land fast-forwards the candidate prepared when the choice opened, and nothing else.
+        ("land", Some(candidate)) => Some(ExitBrief {
+            land: Some(land_round(&at, &candidate)),
+            candidate: Some(candidate),
+            ..brief(ExitPhase::Landing, Some(ExitChoice::Land), base)
         }),
-        "keep" => Some(brief(ExitPhase::Kept, Some(ExitChoice::Keep), base)),
+        ("land", None) => return Err("no prepared candidate to land; choose Finish again".into()),
+        ("keep", _) => Some(brief(ExitPhase::Kept, Some(ExitChoice::Keep), base)),
         _ => None,
     };
     if let Some(phase) = host.exit.as_ref().map(|exit| exit.phase) {
@@ -393,7 +433,7 @@ fn exit_card(feed: &Feed, id: &str, at: &str) -> Result<SessionCard, String> {
     let mut land = option(
         "land",
         &format!("Land on {base}"),
-        &format!("rebase, full gate, fast-forward {base}"),
+        &format!("Fast-forward {base} to the prepared candidate."),
     );
     land.needs_text = needs;
     land.destructive = true;
@@ -470,7 +510,16 @@ pub(super) fn action(feed: &mut Feed, request: &SessionActionRequest) -> Result<
     {
         host.pending.push(card);
     }
-    host.exit = Some(brief(ExitPhase::Pending, None, base));
+    // Finish prepares the candidate Land would fast-forward to, gated on the latest attempt.
+    let attempt = host
+        .parts
+        .as_deref()
+        .map_or(0, |parts| parts.record.verification.len())
+        .max(1);
+    host.exit = Some(ExitBrief {
+        candidate: Some(prepared(id.as_str(), base.clone(), &format!("G{attempt}"))),
+        ..brief(ExitPhase::Pending, None, base)
+    });
     settle(feed, id.as_str());
     reply(SessionActionDone { text: None })
 }
@@ -502,7 +551,12 @@ pub(super) fn tick(feed: &mut Feed) {
                 ExitPhase::Rebasing => ExitPhase::Verifying,
                 ExitPhase::Verifying => ExitPhase::Landing,
                 _ => {
-                    exit.landed = Some(sha(&format!("{id}/landed"), 40));
+                    // Land lands exactly the candidate it was chosen on.
+                    exit.landed = exit
+                        .candidate
+                        .as_ref()
+                        .and_then(|candidate| candidate.head.clone())
+                        .or_else(|| Some(sha(&format!("{id}/landed"), 40)));
                     ExitPhase::Landed
                 }
             };

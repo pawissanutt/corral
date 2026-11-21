@@ -4,13 +4,16 @@
 //! running step, each step's note and time muted after it and the gate's log under the gate
 //! step, a failed gate's repair round in Held, and the outcome: what was landed or kept, or what
 //! failed, what to do next and Finish… to choose again. Every word is the host's, as the model
-//! reads it. test ids `session-exit`, `exit-step-<n>`, `gate-log`, `exit-outcome`, `btn-finish`.
+//! reads it. The Land candidate the host prepared shows under the summary (the exact
+//! fast-forward Land authorizes, or what holds it back, with conflicted paths) and in the
+//! progress while it is prepared or once it held a Land back. test ids `session-exit`,
+//! `exit-step-<n>`, `gate-log`, `exit-outcome`, `exit-candidate`, `btn-finish`.
 
 use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::hue::Hue;
-use crate::model::session::{ExitProgress, ExitSummary, SessionPage, StepState};
+use crate::model::session::{CandidateView, ExitProgress, ExitSummary, SessionPage, StepState};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions};
 use crate::ui::kit::marks::hue_ink;
@@ -20,7 +23,8 @@ use super::super::transcript::gate_log;
 use super::cards::{press, quiet, tint, words};
 use super::state_mark;
 
-/// The exit choice's summary lines: the branch's line, then each warning in Held.
+/// The exit choice's summary lines: the branch's line, then each warning in Held, then the
+/// Land candidate the host prepared.
 pub(super) fn summary(app: AppState, summary: &ExitSummary) -> Vec<AnyElement> {
     let form = app.form;
     summary
@@ -33,7 +37,66 @@ pub(super) fn summary(app: AppState, summary: &ExitSummary) -> Vec<AnyElement> {
                 .iter()
                 .map(|warning| words(form, warning.clone(), hue_ink(Hue::Held)).into_element()),
         )
+        .chain(
+            summary
+                .candidate
+                .as_ref()
+                .map(|shown| candidate(app, shown)),
+        )
         .collect()
+}
+
+/// The candidate: its mark (a spinner while it is prepared) and words, its facts muted, then
+/// the conflicted paths and the host's reason.
+fn candidate(app: AppState, shown: &CandidateView) -> AnyElement {
+    let form = app.form;
+    let row = view()
+        .flex_row()
+        .items_center()
+        .gap(px(if form == Form::Terminal { 8.0 } else { 6.0 }))
+        .min_w(px(0.0))
+        .children(state_mark(
+            app,
+            shown.glyph.is_none(),
+            shown.glyph,
+            shown.hue,
+        ))
+        .child(
+            words(form, shown.text.clone(), hue_ink(shown.hue))
+                .flex_shrink(1.0)
+                .min_w(px(0.0)),
+        )
+        .children(shown.facts.clone().map(|facts| {
+            quiet(form, facts)
+                .flex_shrink(1.0)
+                .min_w(px(0.0))
+                .truncate()
+        }));
+    // Paths and the reason sit under the words, past the mark.
+    let under = |said: Text| {
+        view()
+            .min_w(px(0.0))
+            .pl(px(if form == Form::Terminal { 2.0 } else { 18.0 }))
+            .child(said)
+            .into_element()
+    };
+    view()
+        .test_id("exit-candidate")
+        .min_w(px(0.0))
+        .child(row)
+        .children(
+            shown
+                .paths
+                .iter()
+                .map(|path| under(quiet(form, path.clone()).truncate())),
+        )
+        .children(
+            shown
+                .detail
+                .clone()
+                .map(|detail| under(quiet(form, detail))),
+        )
+        .into_element()
 }
 
 /// Where the build's exit stands, in the dock while it runs or has an outcome.
@@ -90,6 +153,7 @@ fn face(app: AppState, exit: ExitProgress) -> AnyElement {
             .children(steps)
             .into_element()
     });
+    let prepared = exit.candidate.as_ref().map(|shown| candidate(app, shown));
     let detail = exit
         .detail
         .map(|(hue, said)| words(form, said, tint(hue)).into_element());
@@ -120,6 +184,7 @@ fn face(app: AppState, exit: ExitProgress) -> AnyElement {
         .test_id("session-exit")
         .role(AccessibilityRole::Summary)
         .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
+        .children(prepared)
         .children(rail)
         .children(detail)
         .children(outcome)

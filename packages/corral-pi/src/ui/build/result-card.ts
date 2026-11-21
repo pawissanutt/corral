@@ -10,7 +10,7 @@ import type { Tone } from "../agents-model.ts";
 import { spinner } from "../frame.ts";
 import { plainLabel, PANEL_ERROR, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING } from "../panels-view.ts";
 import { childHue } from "./contract.ts";
-import { landLines } from "./land-steps.ts";
+import { candidateLines, landLines } from "./land-steps.ts";
 import { BOLD, CARD_BODY, cardCell, cardInner, cardLine, cardWrap, conversationCard, UNBOLD } from "./task-card.ts";
 
 /** The mock's `.sres` columns: name (11), state and time (9), cost, two cells apart. */
@@ -193,6 +193,11 @@ export function resultCardLines(input: {
   // card leaves both to it. The steps of `land`, and a failure without a record, stay on the card.
   const settled = choice !== undefined && (exit.phase === "kept" || exit.phase === "landed" || exit.phase === "failed"
     || (exit.phase === "none" && choice === "iterate"));
+  // A candidate being prepared is no Land: it shows where preparation stands, its rebase and gate under it.
+  if (exit.candidate?.state === "preparing" && exit.phase !== "pending") {
+    body.push(...candidateLines(exit.candidate, inner, now), ...(exit.land ? landLines(exit.land, inner, now) : []));
+    return { lines: conversationCard(header, body, width), hits };
+  }
   if (!settled && exit.phase !== "pending") {
     if (choice) {
       const label = input.options.find(option => option.choice === choice)?.label ?? EXIT_LABELS[choice];
@@ -200,7 +205,7 @@ export function resultCardLines(input: {
     }
     // Land reports its steps; the single progress line is for a host state without them.
     if (exit.land && choice === "land") {
-      body.push(...landLines(exit.land, inner, now, exit.phase === "repairing" ? exit.repair : undefined));
+      body.push(...landLines(exit.land, inner, now, exit.phase === "repairing" ? exit.repair : undefined, exit.candidate));
       return { lines: conversationCard(header, body, width), hits };
     }
     const progress = choice || exit.phase !== "none" ? exitProgress(exit) : undefined;

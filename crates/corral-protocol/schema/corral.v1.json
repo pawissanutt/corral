@@ -3490,6 +3490,17 @@
               "null"
             ]
           },
+          "candidate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LandCandidate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The candidate the host prepared for Land: the session's commits rebased onto the base tip\nand checked there. Land only fast-forwards the base from `base_tip` to `head`. Absent from\na host that does not prepare one, or before it began to."
+          },
           "choice": {
             "anyOf": [
               {
@@ -3900,6 +3911,116 @@
           }
         },
         "type": "object"
+      },
+      "LandCandidate": {
+        "description": "A prepared Land candidate and what holds it back.",
+        "properties": {
+          "base": {
+            "description": "The base branch's name. At most 256 bytes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "base_tip": {
+            "description": "The base commit the candidate sits on: where the fast-forward starts.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conflicts": {
+            "description": "Paths that conflicted while rebasing: at most 20 of at most 240 bytes.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "detail": {
+            "description": "The host's one-line reason. At most 512 bytes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "gate_attempt": {
+            "description": "The gate attempt that passed or failed on `head`: `G4`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head": {
+            "description": "The candidate's commit: where the fast-forward ends.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "moved_to": {
+            "description": "The base's new tip, once it moved past `base_tip`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "description": "The session's head the candidate was prepared from.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/LandCandidateState"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "LandCandidateState": {
+        "oneOf": [
+          {
+            "enum": [
+              "gate_failed",
+              "failed",
+              "other"
+            ],
+            "type": "string"
+          },
+          {
+            "const": "preparing",
+            "description": "Being rebased and checked.",
+            "type": "string"
+          },
+          {
+            "const": "ready",
+            "description": "Land may fast-forward the base to it.",
+            "type": "string"
+          },
+          {
+            "const": "conflicts",
+            "description": "Rebasing onto the base conflicted; the branch is unchanged.",
+            "type": "string"
+          },
+          {
+            "const": "needs_review",
+            "description": "No approving review covers it.",
+            "type": "string"
+          },
+          {
+            "const": "needs_gate",
+            "description": "No passing gate covers it.",
+            "type": "string"
+          },
+          {
+            "const": "base_moved",
+            "description": "The base moved past the tip it was prepared on.",
+            "type": "string"
+          }
+        ]
       },
       "LandGate": {
         "properties": {

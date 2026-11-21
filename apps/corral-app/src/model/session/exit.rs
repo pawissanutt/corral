@@ -4,10 +4,15 @@
 //! reports them (`land.rs`), else the host's exit phase walks it; a failed gate shows its repair
 //! round, and the outcome says what was landed or kept, or what failed and what to do next, under
 //! the rail that shows which step failed. Nothing here predicts a phase or a step.
+//!
+//! A host that prepares a Land candidate reports it: the choice's summary names the exact
+//! fast-forward Land authorizes (base commit → candidate head) or what holds it back, and a
+//! rebase or gate run while it is prepared reads as preparation, not as Land. A host that
+//! reports no candidate keeps the rail above and is never shown as having prepared one.
 
 use corral_protocol::detail::{CardKind, SessionCard};
 use corral_protocol::session_host::{SessionAction, SessionActionRequest};
-use corral_protocol::session_state::ExitPhase;
+use corral_protocol::session_state::{ExitPhase, LandCandidateState};
 
 use crate::model::Id;
 use crate::model::daemon::Feed;
@@ -16,7 +21,7 @@ use crate::model::hue::Hue;
 
 use super::actions::{ActionGroup, row};
 use super::dock::{self, DockAction, Pending};
-use super::land::{self, GateLog};
+use super::land::{self, CandidateView, GateLog};
 use super::{Action, Can, Cx, Focus, Host, SessionRole, State};
 
 /// The exit choice's summary: the host's lines, else the build's recorded diff.
@@ -26,6 +31,8 @@ pub struct ExitSummary {
     pub line: Option<String>,
     /// `! Uncommitted changes in the worktree`, Held.
     pub warnings: Vec<String>,
+    /// The Land candidate the host prepared: what Land would fast-forward, or what holds it back.
+    pub candidate: Option<CandidateView>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,11 +80,18 @@ pub struct ExitProgress {
     pub outcome: Option<ExitOutcome>,
     /// `Finish…` to choose again after a failure.
     pub finish: Option<Action>,
+    /// The candidate while it is prepared, or once it held a Land back (the base moved).
+    pub candidate: Option<CandidateView>,
 }
 
 /// The summary of the exit `card`: its body's lines (a line opening with `!` is a warning),
-/// else the build's recorded diff. None when neither says anything.
+/// else the build's recorded diff, and the candidate the host prepared. None when none of them
+/// says anything.
 pub(super) fn summary(cx: &Cx<'_>, card: Option<&SessionCard>) -> Option<ExitSummary> {
+    let candidate = cx
+        .exit()
+        .and_then(|exit| exit.candidate.as_ref())
+        .map(land::candidate);
     let mut line = None;
     let mut warnings = Vec::new();
     for text in card
@@ -105,7 +119,11 @@ pub(super) fn summary(cx: &Cx<'_>, card: Option<&SessionCard>) -> Option<ExitSum
             diff.files, diff.added, diff.removed, diff.commits
         ))
     });
-    (line.is_some() || !warnings.is_empty()).then_some(ExitSummary { line, warnings })
+    (line.is_some() || !warnings.is_empty() || candidate.is_some()).then_some(ExitSummary {
+        line,
+        warnings,
+        candidate,
+    })
 }
 
 fn step(label: String, state: StepState) -> ExitStep {
@@ -151,7 +169,23 @@ pub fn progress(cx: &Cx<'_>) -> Option<ExitProgress> {
         detail: exit.detail.clone().map(|detail| (Hue::Held, detail)),
         outcome: None,
         finish: None,
+        candidate: None,
     };
+    let candidate = exit.candidate.as_ref();
+    // A rebase or gate while the candidate is prepared lands nothing: it shows as preparation,
+    // its own steps under it, and no Land rail.
+    if let Some(prepared) = candidate.filter(|c| c.state == LandCandidateState::Preparing)
+        && !matches!(
+            exit.phase,
+            ExitPhase::None | ExitPhase::Pending | ExitPhase::Other
+        )
+    {
+        progress.candidate = Some(land::candidate(prepared));
+        progress.steps = exit.land.as_ref().map_or_else(Vec::new, |land| {
+            land_steps(land::rows(land, &base, cx.feed.now))
+        });
+        return Some(progress);
+    }
     match exit.phase {
         ExitPhase::None | ExitPhase::Pending | ExitPhase::Other => return None,
         ExitPhase::Rebasing => progress.steps = rail([Running, Waiting, Waiting]),
@@ -184,10 +218,21 @@ pub fn progress(cx: &Cx<'_>) -> Option<ExitProgress> {
                 .landed
                 .as_deref()
                 .map(|sha| sha.chars().take(7).collect::<String>());
+            // The base fast-forwarded from the tip the candidate was prepared on, when the
+            // host says it landed that candidate.
+            let from = candidate
+                .filter(|c| c.head.is_some() && c.head == exit.landed)
+                .and_then(|c| c.base_tip.as_deref())
+                .map_or_else(String::new, |tip| {
+                    format!(
+                        ", fast-forwarded from {}",
+                        tip.chars().take(7).collect::<String>()
+                    )
+                });
             progress.outcome = Some(ExitOutcome {
                 hue: Hue::Ok,
                 text: match sha {
-                    Some(sha) => format!("✓ Landed {sha} on {base}"),
+                    Some(sha) => format!("✓ Landed {sha} on {base}{from}"),
                     None => format!("✓ Landed on {base}"),
                 },
                 next: None,
@@ -216,20 +261,28 @@ pub fn progress(cx: &Cx<'_>) -> Option<ExitProgress> {
                 next: Some("Inspect the worktree and choose Finish again.".into()),
             });
             progress.finish = Some(finish);
+            // A Land its candidate held back (the base moved, say) shows why, apart from the
+            // step that failed.
+            progress.candidate = candidate
+                .filter(|c| c.state != LandCandidateState::Ready)
+                .map(land::candidate);
         }
     }
     if let Some(land) = &exit.land {
-        progress.steps = land::rows(land, &base, cx.feed.now)
-            .into_iter()
-            .map(|row| ExitStep {
-                note: row.note,
-                time: row.time,
-                log: row.log,
-                ..step(row.label, row.state)
-            })
-            .collect();
+        progress.steps = land_steps(land::rows_with(land, &base, cx.feed.now, candidate));
     }
     Some(progress)
+}
+
+fn land_steps(rows: Vec<land::LandRow>) -> Vec<ExitStep> {
+    rows.into_iter()
+        .map(|row| ExitStep {
+            note: row.note,
+            time: row.time,
+            log: row.log,
+            ..step(row.label, row.state)
+        })
+        .collect()
 }
 
 /// Finish…: docks the exit choice the host already holds pending, else asks the host to open
