@@ -34,12 +34,9 @@ use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::term;
 use crate::ui::tokens::{MEASURE_FORM, Token, color};
 
-/// The Sessions place on every form. With the daemon, the page settles new chats, which open
-/// their page, for as long as it stays open.
+/// The Sessions place on every form. A new chat opens its page from wherever it was started
+/// (`AppState::follow_agents` settles the chat operations for the app's life).
 pub fn screen(app: AppState) -> AnyElement {
-    if untracked(|| app.daemon()) {
-        crate::screens::assistant::watch_ops(app);
-    }
     let form = app.form;
     let sections = computed(move || {
         let scope = app.project_scope();

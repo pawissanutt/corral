@@ -19,6 +19,9 @@ use crate::model::{
     DataState, Destination, Effect, Live, Overlay, commands, home, nav, sessions, tasks, work,
 };
 
+/// The Agents switcher's chord on every form (Ctrl+G, ⌘G on a Mac).
+const AGENTS_CHORD: &str = "mod+g";
+
 /// Where the keyboard focus is, as far as key routing needs it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct KeyFocus {
@@ -129,6 +132,8 @@ impl AppState {
             }
         });
         on_key_with("mod+k", anywhere, move |_| self.toggle_palette());
+        // From a field too: the chord never types into it, and closes the switcher it opened.
+        on_key_with(AGENTS_CHORD, anywhere, move |_| self.toggle_agents());
         // Over a profile shown alone, Escape returns to the profile list rather than leaving
         // Configuration; whatever stands over the page closes first.
         on_key_with("escape", anywhere, move |_| {
@@ -220,13 +225,14 @@ impl AppState {
     }
 
     /// The phone form with a hardware keyboard: Ctrl+K (⌘K) opens and closes the palette, as the
-    /// magnifier does. Its letter and list keys stay unbound; a phone has no key line naming them.
+    /// magnifier does, and Ctrl+G (⌘G) the Agents switcher, as its trigger does. Its letter and list keys stay unbound; a phone has no key line naming them.
     pub(super) fn bind_phone_keys(self) {
         let anywhere = KeyOptions {
             when: When::Always,
             ..KeyOptions::default()
         };
         on_key_with("mod+k", anywhere, move |_| self.toggle_palette());
+        on_key_with(AGENTS_CHORD, anywhere, move |_| self.toggle_agents());
     }
 
     fn toggle_palette(self) {
@@ -450,10 +456,11 @@ impl AppState {
             && untracked(|| self.workspace_mode()) != WorkspaceMode::AssistantOnly
     }
 
-    /// Tracked: the confirm sheet, the refusal sheet, the rewind sheet, the New build sheet, the
-    /// Remove sheet or the action composer is up.
+    /// Tracked: the confirm sheet, the refusal sheet, the Agents switcher, the rewind sheet, the
+    /// New build sheet, the Remove sheet or the action composer is up.
     pub(super) fn sheet_open(&self) -> bool {
         self.confirm.with(Option::is_some)
+            || self.switcher.get()
             || self.refusal.with(Option::is_some)
             || self.agents.with(|state| {
                 state.rewind.is_some() || state.start.open || state.removing.is_some()

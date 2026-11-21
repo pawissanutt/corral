@@ -111,8 +111,10 @@ pub enum Action {
     Ask(Option<String>),
     /// Open the New build sheet over Sessions.
     NewBuild,
-    /// Start a new assistant session and open its page.
+    /// Start a new assistant session apart from Ask's, key Ask to it and open its page.
     NewAssistant,
+    /// Open the Agents switcher.
+    Agents,
     /// Change the persisted appearance.
     Theme(ThemeChoice),
     /// Select live transport, explicit preview, or disconnected data.
@@ -250,6 +252,15 @@ pub fn commands(
             "New build session…",
             Some("N"),
             Action::NewBuild,
+        ));
+    }
+    if live {
+        rows.push(row(
+            "switch-agent",
+            "Sessions",
+            "Switch agent…",
+            Some(crate::model::agents::AGENTS_KEY),
+            Action::Agents,
         ));
     }
     if ask {

@@ -1,5 +1,5 @@
 //! The desktop and web shell: a top bar across the window, the sidebar (the scope switcher,
-//! the four places with Activity's pages under it while one shows, then Go to and
+//! the four places with Activity's pages under it while one shows, then Agents, Go to and
 //! Settings at its foot; folding to a rail of icons by choice or on a narrow window), and the
 //! content container that holds the connection banner and the current page, with the Ask
 //! drawer, the palette, the confirmation and the toast over it. On a touch tablet every shell
@@ -9,6 +9,7 @@ use nsh_core::AccessibilityCurrent;
 use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
+use crate::model::agents::switcher::{AGENTS_KEY, AGENTS_LABEL};
 use crate::model::commands::area_key;
 use crate::model::nav::{PALETTE_HINT, PALETTE_KEY, SIGNS_AS, THIS_DEVICE};
 use crate::model::{Area, Destination, SettingsSection, Workspace};
@@ -174,6 +175,7 @@ fn sidebar(
         .bg(color(Token::Shell))
         .child(scope_switcher(app, ScopeFace::Sidebar))
         .child(scroll().flex_1().min_h(px(0.0)).child(rows))
+        .child(agents_opener(app))
         .child(palette_opener(app))
         .child(place_row(app, current, Area::Settings))
         .child(when(
@@ -282,6 +284,20 @@ fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElemen
         .bg(color(Token::Shell))
         .child(scope_switcher(app, ScopeFace::Rail))
         .child(scroll().flex_1().min_h(px(0.0)).child(rows))
+        .child(
+            rail_button(
+                app,
+                Hint {
+                    name: AGENTS_LABEL,
+                    key: Some(AGENTS_KEY.to_owned()),
+                },
+                move || SharedString::from(AGENTS_LABEL),
+                "agents-open".into(),
+                move || app.switcher.get(),
+                move || app.open_agents(),
+            )
+            .child(icon(Icon::Agents, 18.0, color(Token::ShellInk2))),
+        )
         .child(
             rail_button(
                 app,
@@ -509,6 +525,41 @@ fn rail_hint(hint: Hint) -> AnyElement {
         .into_element()
 }
 
+/// The Agents switcher's row above Go to, with its chord.
+fn agents_opener(app: AppState) -> AnyElement {
+    let ink = color(Token::ShellInk);
+    let quiet = color(Token::ShellInk2);
+    view()
+        .h(px(control_height(row_height(app.form))))
+        .flex_shrink_0()
+        .flex_row()
+        .items_center()
+        .gap(px(10.0))
+        .px(px(8.0))
+        .rounded(px(RADIUS_CONTROL))
+        .cursor_pointer()
+        .transition_colors()
+        .duration(120.0_f32)
+        .hover(move |s| s.bg(ink.opacity(0.1)))
+        .active(move |s| s.bg(ink.opacity(0.16)))
+        .focus_visible(focus_ring)
+        .role(AccessibilityRole::Button)
+        .label(AGENTS_LABEL)
+        .test_id("agents-open")
+        .on_press(move || app.open_agents())
+        .child(icon(Icon::Agents, 16.0, quiet))
+        .child(
+            text(AGENTS_LABEL)
+                .flex_1()
+                .min_w(px(0.0))
+                .truncate()
+                .text_size(px(text_size(app.form)))
+                .text_color(quiet),
+        )
+        .child(key_hint(AGENTS_KEY))
+        .into_element()
+}
+
 fn palette_opener(app: AppState) -> AnyElement {
     let ink = color(Token::ShellInk);
     let quiet = color(Token::ShellInk2);
@@ -688,6 +739,7 @@ fn content(app: AppState) -> AnyElement {
         .child(crate::screens::agents::start_sheet(app))
         .child(confirmation(app))
         .child(crate::shell::refusal(app))
+        .child(crate::shell::switcher(app))
         .child(crate::ui::kit::more::overlays(app))
         .child(toast(app))
         .into_element()

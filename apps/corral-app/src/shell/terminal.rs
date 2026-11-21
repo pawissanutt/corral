@@ -10,6 +10,7 @@ use nsh_core::prelude::*;
 use crate::{
     model::{
         Area, Overlay, SettingsSection, Workspace,
+        agents::switcher::{AGENTS_CHORD, AGENTS_LABEL},
         commands::area_key,
         nav::{PALETTE_LABEL, THIS_DEVICE},
     },
@@ -154,6 +155,7 @@ fn content(app: AppState, focus: Focus) -> AnyElement {
             .child(screens::agents::start_sheet(app))
             .child(confirmation(app))
             .child(refusal(app))
+            .child(crate::shell::switcher(app))
             .child(crate::ui::kit::more::overlays(app)),
     )
     .flex_1()
@@ -199,6 +201,14 @@ fn sidebar(
                 view()
                     .child(rows)
                     .child(term::hrule())
+                    .child(atoms::nav_row(
+                        app,
+                        AGENTS_LABEL,
+                        String::from("agents-open"),
+                        move || app.switcher.get(),
+                        Some(trailing(None, String::from(AGENTS_CHORD))),
+                        move || app.open_agents(),
+                    ))
                     .child(atoms::nav_row(
                         app,
                         PALETTE_LABEL,
@@ -275,6 +285,14 @@ fn rail(app: AppState, current: Memo<Area>, shown: Memo<Vec<Area>>) -> AnyElemen
         view()
             .child(rows)
             .child(term::hrule())
+            .child(atoms::nav_row(
+                app,
+                AGENTS_CHORD,
+                String::from("agents-open"),
+                move || app.switcher.get(),
+                None,
+                move || app.open_agents(),
+            ))
             .child(atoms::nav_row(
                 app,
                 PALETTE_CHORD,

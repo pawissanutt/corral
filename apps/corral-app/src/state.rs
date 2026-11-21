@@ -16,6 +16,7 @@ mod projects;
 mod selection;
 mod sidebar;
 mod source;
+mod switcher;
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -49,6 +50,14 @@ pub struct AppState {
     daemon_feed: Signal<daemon::Feed>,
     /// Invalidates a system picker opened before a data-source change.
     source_revision: Signal<u64>,
+    /// The Agents switcher is open (Mod+G or its trigger).
+    pub switcher: Signal<bool>,
+    /// This device's pins and last opened conversation per daemon store, saved as
+    /// `corral.agents`; the explicit preview keeps its own in memory.
+    pins: Signal<agents::Pins>,
+    preview_pins: Signal<agents::Pins>,
+    /// The New assistant operation whose chat Ask is keyed to once corrald answers with it.
+    switch_new: Signal<Option<Id>>,
     /// Grows by one each time Ask opens, so the composer focuses its field.
     pub ask_focus: Signal<u32>,
     /// The test id of a control a direct key asked to take the keyboard focus (`Effect::Focus`),
@@ -180,6 +189,10 @@ impl AppState {
                 preference(THEME_KEY, ThemeChoice::from_slug).unwrap_or(ThemeChoice::System),
             ),
             sidebar: signal(preference(SIDEBAR_KEY, SidebarPref::from_slug).unwrap_or_default()),
+            switcher: signal(false),
+            pins: signal(switcher::load_pins()),
+            preview_pins: signal(agents::Pins::default()),
+            switch_new: signal(None),
             ask_focus: signal(0),
             focus_to: signal(None),
             docked_field: signal(None),
@@ -297,6 +310,7 @@ impl AppState {
         app.follow_sidebar();
         app.follow_projects();
         app.follow_sessions();
+        app.follow_agents();
         app.settle_config();
         app.follow_cached_feed();
         app.watch_device_receipts();
@@ -442,7 +456,7 @@ impl AppState {
         }
     }
 
-    /// Escape priority: confirm sheet, refusal sheet, model list, the operation composer, newest
+    /// Escape priority: confirm sheet, refusal sheet, the Agents switcher, model list, the operation composer, newest
     /// overlay, the selection on the Sessions page in view, the narrow sidebar's labels,
     /// then top page.
     pub fn close_newest(&self) {
@@ -452,6 +466,10 @@ impl AppState {
         }
         if self.refusal.get_untracked().is_some() {
             self.close_refusal();
+            return;
+        }
+        if self.switcher.get_untracked() {
+            self.close_agents();
             return;
         }
         if self.work.with_untracked(|state| state.menu.is_some()) {
@@ -514,6 +532,7 @@ impl AppState {
             self.source_revision
                 .update(|revision| *revision = revision.wrapping_add(1));
             self.close(Overlay::Ask);
+            self.switcher.set(false);
             self.hotkey.set(false);
             self.share.set(false);
             self.lock.set(false);
@@ -667,9 +686,8 @@ impl AppState {
                     )
                 });
             }
-            Action::NewAssistant => self.reduce(self.assistant, |state, feed, _, _| {
-                state.act_live(assistant::Action::NewSession, feed)
-            }),
+            Action::NewAssistant => self.new_assistant(),
+            Action::Agents => self.open_agents(),
             Action::Theme(theme) => self.set_theme(theme),
             Action::Data(data) => self.set_data(data),
             Action::Hotkey => self.hotkey.set(true),

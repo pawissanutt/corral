@@ -24,6 +24,7 @@ use crate::{
     model::{
         Area, Availability, DataState, Destination, Live, Overlay, PhoneTab, Route,
         SettingsSection,
+        agents::switcher::AGENTS_LABEL,
         nav::{ASK_BUTTON, ASK_BUTTON_LABEL, phone_tabs},
     },
     screens::{self, PhoneBar, PhonePage, settings},
@@ -104,6 +105,7 @@ pub fn shell(app: AppState) -> AnyElement {
         .child(crate::screens::agents::start_sheet(app))
         .child(confirmation(app))
         .child(refusal(app))
+        .child(super::switcher(app))
         .child(crate::ui::kit::more::overlays(app))
         .child(when(
             move || app.lock.get(),
@@ -118,8 +120,8 @@ pub fn shell(app: AppState) -> AnyElement {
 }
 
 /// The head under the status bar: the health line (the two-row strip, or the one-row line
-/// while the window is short, which keeps the reach path in it), then the scope switcher and
-/// the gear that opens Settings.
+/// while the window is short, which keeps the reach path in it), then the scope switcher, the
+/// Agents switcher's button and the gear that opens Settings.
 fn health_strip(app: AppState) -> AnyElement {
     let short = computed(short_window);
     let health = dynamic(move || {
@@ -148,6 +150,20 @@ fn health_strip(app: AppState) -> AnyElement {
         .focus_visible(ring)
         .on_press(move || app.go(Destination::Settings))
         .child(icon(Icon::Settings, 20.0, color(Token::ShellInk)));
+    let agents = view()
+        .test_id("agents-open")
+        .size(px(atoms::TOUCH_TARGET))
+        .flex_shrink_0()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .cursor_pointer()
+        .role(AccessibilityRole::Button)
+        .label(AGENTS_LABEL)
+        .active(|s| s.opacity(0.7))
+        .focus_visible(ring)
+        .on_press(move || app.open_agents())
+        .child(icon(Icon::Agents, 20.0, color(Token::ShellInk)));
     view()
         .bg(color(Token::Shell))
         .pt_safe_area_plus(px(2.0))
@@ -160,6 +176,7 @@ fn health_strip(app: AppState) -> AnyElement {
         .gap(px(6.0))
         .child(view().flex_1().min_w(px(0.0)).child(health))
         .child(scope_switcher(app, ScopeFace::Bar))
+        .child(agents)
         .child(gear)
         .into_element()
 }

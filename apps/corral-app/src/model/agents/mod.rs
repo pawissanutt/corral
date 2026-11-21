@@ -1,7 +1,8 @@
 //! Every session the daemon addresses (runs of every role, the assistant's chats, build
 //! sessions) as Sessions and Home list them (`lines`), where sessions start (the New menu and
-//! the New build sheet), each session's run controls and Session menu, and the Remove sheet of
-//! a stopped build: what removing it would delete, as prune's dry run says, before it is
+//! the New build sheet), the Agents switcher over the assistant's conversations with this
+//! device's pins (`switcher`), each session's run controls and Session menu, and the Remove
+//! sheet of a stopped build: what removing it would delete, as prune's dry run says, before it is
 //! removed. A line opens the session page (`model::session`), which every role shares.
 
 use std::collections::BTreeMap;
@@ -21,6 +22,7 @@ mod source;
 #[cfg(test)]
 pub(crate) mod source_tests;
 mod start;
+pub mod switcher;
 
 pub use control::{
     Control, ControlAsk, Kind, RewindPoint, RewindSheet, ask, control_label, control_verbs,
@@ -33,6 +35,7 @@ pub use start::{
     Choice, EffortField, ModelField, ModelPick, NameField, NewBuildForm, NewItem, NewMenu,
     NewPress, Place, PlaceField, ProjectField, Start, StartAction, StartButton, form, new_menu,
 };
+pub use switcher::{AGENTS_KEY, Pins, Switcher, exact, switcher};
 
 /// Sessions' interaction state: the list's folds, the latest control per session, the rewind
 /// sheet, the New build sheet and the Remove sheet.
