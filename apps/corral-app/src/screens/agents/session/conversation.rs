@@ -16,6 +16,7 @@
 //! and the transcript is drawn again only when the transcript changes. test ids
 //! `session-conversation`, `btn-agents-back`, `btn-child-more`, `btn-child-end`.
 
+use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
@@ -74,6 +75,33 @@ impl Head {
 pub(super) fn page(app: AppState, tab: Tab) -> AnyElement {
     let form = app.form;
     let phone = form == Form::Phone;
+    // A parent subscription does not pin a child's transcript pages or item assemblies.
+    let child = tab.part(|t| {
+        of(t).map(|c| DetailRef::Session {
+            id: c.scope.to_string(),
+        })
+    });
+    let source = untracked(|| app.scope());
+    let pinned = stored(None::<DetailRef>);
+    effect(move || {
+        let wanted = child.get().flatten();
+        let previous = pinned.replace(wanted.clone());
+        if previous != wanted {
+            untracked(|| {
+                if let Some(old) = previous {
+                    source.watch_detail(old, false);
+                }
+                if let Some(new) = wanted {
+                    source.watch_detail(new, true);
+                }
+            });
+        }
+    });
+    cleanup(move || {
+        if let Some(old) = pinned.try_with(Option::take).flatten() {
+            source.watch_detail(old, false);
+        }
+    });
     let more = signal(false);
     let shape = tab.part(|t| of(t).map(Head::of));
     let facts = tab.part(|t| of(t).map(|c| c.facts.clone()));

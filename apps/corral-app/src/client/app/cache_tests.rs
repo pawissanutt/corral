@@ -156,6 +156,23 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
             <= MAX_BYTES
     );
     assert!(feed.with_untracked(|feed| !feed.live.contains_key(last_scope.as_str())));
+    // An expanded child item can exceed the entire inactive cache budget. The parent
+    // watch alone is insufficient; keep the assembly only while the child view is mounted.
+    let child = DetailRef::Session {
+        id: "session/child/reader".into(),
+    };
+    let token = "large-child-item";
+    app.watch_detail(feed, child.clone(), true);
+    feed.update(|feed| {
+        feed.items.insert(token.into(), ItemFetch::Loading);
+    });
+    app.touch_item(feed, "session/child/reader", token);
+    app.retained.touch(Key::Item(token.into()), MAX_BYTES + 1);
+    app.trim_retained(feed);
+    assert!(feed.with_untracked(|feed| feed.items.contains_key(token)));
+    app.watch_detail(feed, child, false);
+    app.trim_retained(feed);
+    assert!(feed.with_untracked(|feed| !feed.items.contains_key(token)));
     let older = app.detail_request(
         feed,
         "older-read".into(),
