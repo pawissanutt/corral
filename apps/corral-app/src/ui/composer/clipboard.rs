@@ -18,7 +18,7 @@ use rustix::io::Errno;
 const DEADLINE: Duration = Duration::from_millis(500);
 const MIME_LIMIT: usize = 16 * 1024;
 const URI_LIMIT: usize = 16 * 1024;
-const TEXT_LIMIT: usize = ATTACHMENT_TEXT_MAX as usize;
+pub(super) const TEXT_LIMIT: usize = ATTACHMENT_TEXT_MAX as usize;
 const IMAGE_LIMIT: usize = ATTACHMENT_IMAGE_MAX as usize;
 const URI_LIST: &str = "text/uri-list";
 const GNOME_FILES: &str = "x-special/gnome-copied-files";
@@ -38,7 +38,7 @@ pub(super) enum Helper {
     Xsel(PathBuf),
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ReadError {
     Timeout,
     TooLarge,

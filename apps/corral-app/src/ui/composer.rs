@@ -34,6 +34,18 @@ mod terminal_paste;
 
 pub(crate) use session::{ask_composer, docked_composer, session_composer};
 
+pub(crate) fn install_terminal_copy(_app: AppState) {
+    #[cfg(target_os = "linux")]
+    terminal_paste::install(_app);
+}
+
+/// Observe native copies of text NSH has already selected in this terminal view.
+pub(crate) fn terminal_selectable(_app: AppState, view: View) -> View {
+    #[cfg(target_os = "linux")]
+    let view = terminal_paste::observe_selection(_app, view);
+    view
+}
+
 /// What Ask adds to its session's composer, read through one memo so typing redraws only what
 /// the draft changes.
 #[derive(Clone, Copy)]
