@@ -1,305 +1,70 @@
-# corral (classic)
+# Corral
 
-This README describes the classic `corral` CLI and board, including features developed
-after the published v0.2.0 release. The published classic binaries are v0.2.0;
-the v0.4.0 Pi release notes describe source work, not published classic assets.
-For the current app and engine, see the [app README](apps/corral-app/README.md).
+**Stop babysitting agent chats.** Corral gives your coding agents one place to work and you one
+place to see it: what is running, what is blocked, and what is ready to land. Give agents
+separate worktrees, review their changes with evidence, and decide what lands.
 
-**Tell the PM what you want built.** corral is project management for coding agents, powered by the
-[herdr](https://herdr.dev/) terminal engine. Talk to a PM in plain language; coding agents work in
-separate git worktrees, and a board tracks the work through checks, review and local landing.
-You supply intent and decisions. The PM handles task filing, model selection and coordination.
+**[Try Corral](#try-corral)** · [Latest release](https://github.com/pawissanutt/corral/releases/latest) ·
+[App guide](apps/corral-app/README.md)
 
-## In 30 seconds
+![Corral Home on the desktop: Needs you cards for a blocked task and two reviews, working sessions, tasks by status, projects, cost and the Ask composer](docs/img/corral-app-home.webp)
 
-An example conversation, after setting up checks and a reviewer:
+*Corral Home in the built-in sample preview. Every task, session and cost shown is sample data.*
 
-> **You:** Add a dry-run option to app. Show me the task before dispatching.
->
-> **PM:** Prepares a bounded task and asks permission to start a coding agent.
->
-> **You:** Dispatch it. Keep final acceptance with me.
->
-> **The board:** Running → Review → Done, after the configured checks, a separate review,
-> and your approval. Questions or failed checks come back with a reason and evidence.
+## Why switch
 
-![The corral board, with tasks in Backlog, Ready, Running, Blocked and Review](docs/img/board.svg)
+- **One screen instead of a dozen chat tabs.** Home puts what needs you first, each with its one
+  next step: reply to a blocked task, request changes, or approve and land. Below that is
+  everything still working.
+- **Parallel agents that never share a checkout.** Each task gets its own branch and worktree,
+  so tasks don't step on each other's changes or on your checkout. Open any session to pick
+  up the conversation where it left off.
+- **Review the change, not the chat.** See the diff, test results, and independent review
+  together when you've configured checks and a reviewer.
+- **You stay the owner.** Landing waits for your approval and only fast-forwards your local
+  branch; Corral never pushes. Automatic start and landing stay off until you turn them on.
 
-*Real board capture in an isolated demo workspace, not corral's own task history.*
+## How a change moves
 
-## Install
+```mermaid
+flowchart TD
+    accTitle: How a change moves through Corral
+    accDescr: You ask Corral, capture an idea and turn it into a task, then start it. A coding agent builds it on its own branch in its own git worktree. Your checks run; a failure sends the work back to the agent. A separate reviewer reads the change; requested changes send it back too. A passing change waits in Needs you. You can request changes, which sends it back to the agent, or approve it, which fast-forwards your local branch without pushing.
 
-You need **git** and an installed, authenticated coding-agent CLI: OmO (`omo`), `omp`,
-or Claude Code (`claude`). No Rust toolchain is required.
+    ask(["Ask Corral, capture an idea,<br/>turn it into a task"]) --> start["You start it"]
+    start --> agent["Agent builds it in<br/>its own worktree"]
+    agent --> checks{"Your checks"}
+    checks -- "red" --> agent
+    checks -- "green" --> review{"Reviewer"}
+    review -- "changes" --> agent
+    review -- "approved" --> decide{"Needs you"}
+    decide -- "request changes" --> agent
+    decide -- "Approve and land" --> land(["Lands on your local branch<br/>Nothing is pushed"])
 
-Linux and macOS (includes consent to install or upgrade herdr):
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/pawissanutt/corral/main/install.sh | CORRAL_VERSION=v0.2.0 sh -s -- --legacy --yes
-export PATH="$HOME/.local/bin:$PATH"
-corral --version
+    classDef owner stroke:#2f9e5f,stroke-width:3px
+    class start,decide owner
 ```
 
-Native Windows (x86_64; see the [v0.2.0 release notes](docs/releases/v0.2.0.md)):
+Outlined steps are yours by default. The diagram shows a project with checks and a reviewer configured.
 
-```powershell
-Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/pawissanutt/corral/main/install.ps1 -OutFile install.ps1
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Legacy -Version v0.2.0
-$env:PATH = "$env:LOCALAPPDATA\Programs\corral\bin;$env:PATH"
-corral --version
-```
+## Try Corral
 
-On Windows, complete [herdr and Git Bash setup](docs/guide/install.md#native-windows) before
-opening the board. The [installation guide](docs/guide/install.md) covers updates and version pins.
+**Linux or macOS:** Corral runs as a daemon next to your repositories, and you use it in a
+browser. [Install it](apps/corral-app/README.md#install-and-upgrade) with one script, then
+[start the daemon and pair your browser](apps/corral-app/README.md#serve-the-web-app). You need
+Git and an authenticated agent provider; the installer can offer to install herdr, the terminal
+engine Corral uses.
 
-## Quick start
+**Windows:** run the Linux build in Ubuntu 24.04 on WSL 2 and open Corral in your Windows
+browser. There is no Windows desktop installer in the current release.
 
-The following workflow describes later classic source features; commands and behavior may differ
-in the published v0.2.0 binaries.
+**Use sample data:** once the app is open locally and before you pair, it offers **Preview with
+sample data**: the real screens on sample tasks, never your workspace. It is an option inside
+your local install, not a hosted demo.
+[More on the sample preview](apps/corral-app/README.md#sample-preview).
 
-```bash
-cd ~/code                 # a git repository, or a directory containing repositories
-corral up                 # accept initialization; the board opens
-```
-
-1. **Open the PM:** press `P`. The default is OmO. Using Claude Code or `omp` instead?
-   From another terminal in the workspace, preview `corral setup bootstrap --harness claude`
-   (or `--harness omp`), then repeat with `--confirm` to open that setup PM.
-2. **Set up your first run:** tell the PM:
-
-   > Use my installed agent. Set up this project's test gate and a separate reviewer;
-   > keep final acceptance with me. Show me the settings before applying them.
-   > Then file a small dry-run option task and ask me before dispatching.
-
-3. **Start the task:** inspect the proposed scope and checks, approve the settings, then tell the PM
-   to dispatch it. The card moves to **Running** in its own worktree.
-
-Fresh workspaces start in **Assist**, with no gate or reviewer and owner acceptance. A gate is your
-project's test/check command; a reviewer is a separate agent session judging the result.
-The PM can configure both without you editing TOML. Configuring them does not grant automatic execution.
-For the first run, explicitly ask the PM to run the gate and review when the worker finishes;
-you approve the local landing. Nothing is pushed.
-
-Follow [your first reviewed task](docs/guide/getting-started.md) for the full path, including review
-controls. Press `?` for board help. Close with `q`; `corral up` brings you back without stopping agents.
-
-## Built with corral
-
-corral manages its own development, including the README and release work:
-
-- The [first prototype commit](https://github.com/pawissanutt/corral/commit/75c8cfa) was on
-  **October 14, 2026**; [v0.3.0](https://github.com/pawissanutt/corral/releases/tag/v0.3.0)
-  was tagged on **October 19, 2026**.
-- At main commit `630811e`, **343 of 369 commits** had `(T-` task references in their subjects.
-- On October 19, the development workspace held **149 Done corral tasks**. The earlier PM-first
-  README (T-101) and native release packaging (T-108) have recorded passing gates, independent
-  approvals and local landings.
-
-These are dated development records, not a measure of agent quality or a promise that every task
-followed the same policy. [Sources, commands and the task-store snapshot](docs/records/built-with-corral-2026-10-19.md)
-make the counts and examples inspectable. For example, from a full clone:
-
-```sh
-git rev-list --count 630811e                      # 369
-git log 630811e --format=%s | grep -c '(T-'        # 343
-```
-
-## What you'll be asked
-
-Keep intent, scope and authority with you; let the PM handle the mechanics:
-
-- **Which ideas to promote.** Capturing an idea does not authorize implementation. The PM asks which
-  idea, if any, should become work; spare agent capacity is not permission to promote it.
-- **Whether to approve a plan.** Planning is optional. Where required, plans get a separate review;
-  unresolved owner decisions come back to you. Plan approval does not dispatch or accept code.
-- **Authorization to run and land work.** The workspace starts in **Assist**: every start and
-  acceptance is your explicit action. To delegate, you confirm a scoped **Autopilot** grant that names
-  exact tasks (or projects) and what may run automatically (start and review, land, accept plans);
-  within it the PM does not ask again for routine steps. An explicitly configured `accept = "owner"`
-  or `plan_accept = "owner"` stays yours even under a grant; the built-in default does not. See
-  [operating modes](docs/guide/automation.md#operating-modes-and-owner-confirmation).
-- **Escalations.** Exhausting `max_rounds`, protected paths, failed or missing review
-  evidence, and unresolved requirements can require your decision.
-- **Destructive actions.** Give explicit authorization for destructive recovery or cleanup rather
-  than treating a suggestion or board notification as consent.
-
-The PM asks questions in its pane. Stopped workers, missing reviewers, unresolved waits and owner
-decisions appear in **Needs me**, with a reason, unblocker and age. Select a card to inspect it;
-`r` replies when the agent is waiting for input. Idea promotion is owner-controlled today; Ready-task admission can be configured, but
-does not promote ideas. See [PM policy boundaries](docs/guide/pm.md#policy-boundaries).
-
-## Safety model
-
-- **Separate worktrees.** Each coding run gets its own checkout and branch, so parallel tasks do not
-  edit your working tree. The PM coordinates; coding agents implement and independent reviewers judge.
-- **Local landing.** corral lands into the project's local base branch and does not push to remotes.
-- **Checks bind to the candidate.** Configured gates and reviews must match the code being accepted;
-  a changed candidate cannot silently reuse stale evidence.
-- **Automation needs your grant.** The default mode is Assist, with no gate, no reviewer and owner
-  acceptance. Automatic work needs a confirmed, finite Autopilot grant; legacy settings such as
-  `[review] autopilot` or `accept = "auto"` never grant it. Configured checks, independent review,
-  protected paths and review-round guards still apply and can send work to Needs me.
-  `corral mode pause` (alias `corral autopilot off`) stops every new automatic action across the
-  workspace without killing running agents.
-- **Bounded scratch and retained evidence.** Finished clean worktrees can be reclaimed with their
-  branches kept; dirty, deliberately kept or still-used scratch is left alone. Evidence lives in
-  content-addressed compressed blobs. See [cleanup](docs/guide/cleanup.md).
-
-## Status and limitations
-
-corral is a **prototype**. Interfaces and file formats may still change. Harness integrations invoke
-the installed agent CLIs, so behavior depends on their versions and access to models.
-
-The PM-first experience still has setup gaps:
-
-- **Startup opens the board, not the PM.** Press `P` or run `corral pm` to open it. `corral up` offers
-  workspace initialization and applies safe setup fixes, including agent-skill installation; you do
-  not need to study the skill. Agent installation and authentication remain prerequisites.
-- **The PM defaults to OmO.** Startup accepts other installed harnesses, but does not automatically
-  choose one for the PM or default coding profile. Use the bootstrap command in Quick start to open
-  a setup PM with your existing harness, then have it configure the worker and reviewer profiles.
-- **A new project needs real checks.** Initialization does not configure a gate or independent reviewer.
-  Doctor and Settings suggest gate commands, but do not silently install or run them. Ask the PM to
-  configure appropriate checks; an empty gate is not a passing gate.
-- **Delegation is not the default policy.** The PM still asks before dispatching; plan requirements,
-  Ready admission and automatic landing need explicit choices. Ideas remain owner-promoted.
-- **PM event push is off by default.** The PM can subscribe to board events; push notifications require
-  opt-in and an already-open PM. Keep the board open for automatic advancement.
-
-Proposed follow-ups: a first-run PM launch and installed-harness choice, guided project gate/reviewer
-setup, and a single explicit delegation setup covering dispatch, review and PM event awareness.
-These are gaps to close, not features to assume already exist.
-
-## Under the hood / For power users
-
-The PM uses the same board, configuration and CLI available to you. Use these when you want direct
-control; they are not a vocabulary you need before talking to the PM.
-
-### Installation and setup controls
-
-Set `CORRAL_INSTALL_DIR` to change the install location. Classic installs require `--legacy`
-and a published legacy tag such as `CORRAL_VERSION=v0.2.0`. To answer the engine consent
-prompt yourself, download `install.sh` and run `CORRAL_VERSION=v0.2.0 sh install.sh --legacy`
-from a terminal. With closed or piped stdin and no `--yes`, the installer prints the official
-engine install command and continues without installing herdr.
-`CORRAL_VERSION=v0.2.0 sh install.sh --legacy --dry-run` previews without changes.
-See the [engine installation guide](https://herdr.dev/docs/install/).
-For a source build of the classic CLI, use a compatible classic checkout:
-`cargo install --path crates/corral --locked`.
-
-`corral up --yes` accepts unattended initialization. Bare `corral` also runs `up`.
-The default herdr session is `corral`; `corral up --session <name>` overrides it.
-`corral doctor` diagnoses setup; `corral doctor --fix` applies safe fixes without touching running
-agents or panes. `corral plugin install` writes plugin configuration with backups and a diff.
-
-### Configuration, profiles and model routing
-
-Settings (`corral settings`, or `,` on the board) and `.corral/corral.toml` control the same policy.
-`corral config get`, `corral config set` and `corral config validate` inspect, change and check it.
-Recorded changes are visible through `corral config diff` and `corral config history`.
-
-Profiles name a harness, model and effort. Routing selects one from task kind, size, project and text;
-`corral route T-001` or `corral dispatch T-001 --explain` explains the choice without starting work.
-Explicit dispatch overrides win, then task profile, routing rules, project default, workspace default
-and finally `omo`. Model selectors must match discovered IDs; failed discovery warns rather than
-pretending availability was checked. `corral harness list --refresh` refreshes discovery.
-
-The [configuration guide](docs/guide/configuration.md) covers settings, starter profiles and ordered
-routing rules; the [automation guide](docs/guide/automation.md) covers cross-vendor review.
-
-### Review policy and plans
-
-Configure a project's gate and independent reviewer, then choose owner acceptance or automatic landing.
-Failed gates and change verdicts loop back to the worker up to `max_rounds`; owner-path and diff-size
-guards still apply. `corral autopilot status` explains the current state.
-The [automation guide](docs/guide/automation.md) covers policy layers, capacity, Ready admission,
-integration checks, the kill switch and recovery.
-
-Approved plans are optional and off by default. Requiring one blocks dispatch until the exact plan
-and task revision are approved; it never authorizes implementation or accepts the resulting code.
-See [approved plans](docs/guide/plans.md) and [acceptance evidence](docs/guide/acceptance.md).
-
-### CLI, events and evidence
-
-| To | Command |
-|---|---|
-| Open the PM | `corral pm` |
-| Capture an idea | `corral new "..." --idea` |
-| File ready work | `corral new "..." -p app --ready --kind backend --size s` |
-| Inspect the board state | `corral list --json` |
-| Answer a blocked worker | `corral reply T-001 "..."` |
-| Inspect finished work | `corral review T-001 --diff` |
-| Find reports and evidence | `corral artifact list --task T-001` |
-| Inspect model/run results | `corral stats` |
-
-Agents finish through `corral done`; reports, plans, screenshots and diffs can outlive their worktrees.
-Pin artifacts you revisit. [Artifact storage](docs/guide/storage.md) covers retention and viewers;
-[project lessons](docs/guide/lessons.md) explains evidence-backed rules distilled from task history.
-
-`corral review-sprint` pins a seven-section report of recent work. Owner ideas cannot be dropped or
-narrowed without explicit consent; see [sprint reviews](docs/guide/sprint-review.md).
-
-The database under `.corral/db/` is authoritative for tasks, events and records; there is no
-Markdown or JSONL mirror. `corral list --json` returns summaries with `current_run`, without
-paths or history. Use `corral show T-001 --json` for a full task, `corral export tasks DIR`
-for Markdown snapshots, and `corral export events --json` for stored Event JSONL.
-`corral log T-001 --all --json` returns TimelineEntry JSONL instead, wrapping each event.
-Existing file stores require an owner-run migration on an empty board with the old binary
-kept for rollback; see [storage and migration](docs/guide/storage.md).
-
-PMs can subscribe with `corral wait --json --print-cursor` and re-arm with `--after` using `cursor.seq`.
-Opt-in `[pm] push_events` sends selected events only to a live PM pane. Notifications are awareness,
-not authorization. See [board events](docs/guide/events.md) for filters, cursors and harness-specific
-subscriptions, and the [CLI reference](docs/guide/cli.md) for the full command surface.
-
-## Documentation
-
-- [Getting started](docs/guide/getting-started.md)
-- [Install and update](docs/guide/install.md)
-- [Release runbook](docs/releases/README.md)
-- [Configuration](docs/guide/configuration.md)
-- [Automation: gate, reviewers, autopilot](docs/guide/automation.md)
-- [PM coordination and replay benchmarks](docs/guide/pm.md)
-- [Agent skills](docs/guide/skills.md)
-- [Approved plans](docs/guide/plans.md)
-- [Import a plan](docs/guide/import.md)
-- [Candidate-bound acceptance and criterion evidence](docs/guide/acceptance.md)
-- [The terminal UI](docs/guide/tui.md)
-- [CLI reference](docs/guide/cli.md)
-- [Run statistics](docs/stats.md)
-- [Design](docs/DESIGN.md)
-- [herdr CLI reference](docs/herdr-cli.md) (contributor reference)
-
-## Screenshots
-
-The images in `docs/img/` are captured from a live board in an isolated herdr session with a seeded demo
-workspace. Regenerate them with `scripts/screenshots.sh` (needs `herdr`, `git`, `jq` and `python3`, and a built
-`corral`).
-
-## Development
-
-See [AGENTS.md](AGENTS.md). Dispatched runs follow their authoritative gate contract:
-commit, rebase onto the named target, then run `corral gate T-001 --wait` once for that
-round. Corral selects the tier and records the receipt; a reduced-tier member does not
-start the full gate. The full repository gate for release/aggregate verification uses
-the isolated, plugin-free test server described there:
-
-```bash
-(
-  source scripts/test-herdr.sh
-  corral_test_herdr_start || exit 1
-  scripts/gate.sh
-)
-```
-
-The script checks formatting, the exact 800-SLOC Rust ceiling, Clippy, workspace tests in
-`corral-test`, and the docs against a freshly built binary. It stops at the first failing
-step and preserves the review runner's gate identity exports. Its isolated regression
-checks use temporary fixtures: `python3 scripts/test_gate.py`.
-
-End-to-end against an isolated herdr server: `scripts/e2e.sh` (flow) and `scripts/tui-drive.sh` (board screens).
-Docs checks: `scripts/check-docs.sh` verifies commands, flags and TOML examples in the README and
-guides against the binary; `scripts/gen-cli-docs.sh` regenerates the CLI reference.
+Corral is a prototype: interfaces and configuration may still change, so back up your
+workspace before upgrading.
 
 ## License
 
