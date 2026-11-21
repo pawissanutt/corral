@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { FleetRuntime, type FleetOptions } from "../extensions/fleet/runtime.ts";
@@ -8,7 +9,7 @@ import { createBoard } from "./board.ts";
 import { engineRun, gitRun, type Run } from "./corral-cli.ts";
 import { createExit, type BuildExitControl } from "./exit.ts";
 import { loadSession, saveSession } from "./session-store.ts";
-import { boardPlanTool, buildEvidenceTools, buildFinishTool } from "./tools.ts";
+import { boardPlanTool, createBuildEvidence, buildFinishTool } from "./tools.ts";
 import { createJournal, type BuildJournal } from "./record.ts";
 import type { BuildRecord } from "./record-types.ts";
 import { LIVE_CHILD_STATES, type BoardControl, type BoardPlan, type BuildContext, type BuildPanelState, type BuildUi, type FleetControl } from "./types.ts";
@@ -21,8 +22,6 @@ export interface BuildControlsOptions extends Omit<FleetOptions, "models" | "app
   readonly localTools: () => readonly ToolDefinition[];
   readonly run?: Run;
   readonly git?: Run;
-  /** Gives the parent a failed landing gate to fix and settles when the turn that answers it ends. */
-  readonly repairLand?: (prompt: string) => Promise<{ readonly aborted: boolean }>;
   /** Ends the parent's agent_wait when input is queued for its next turn boundary. */
   readonly wake?: InputWake;
 }
@@ -73,8 +72,10 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     try { void Promise.resolve(options.deliverToParent(`Build record Git snapshot failed: ${error instanceof Error ? error.message : String(error)}`)).catch(() => {}); }
     catch { /* A reporting failure does not block the interactive session. */ }
   });
+  const evidenceBusy = (): boolean => evidence.busy();
+  const requestFinish = async (): Promise<void> => { await evidence.finish(`owner-finish-${randomUUID()}`); };
   const exit = createExit({ context, git, fleet: () => fleet.snapshot(), journal: buildJournal,
-    changed: options.changed, now: options.now, ...(options.repairLand ? { repair: options.repairLand } : {}),
+    changed: options.changed, now: options.now, evidenceBusy, requestFinish,
     save(record) {
       // The entry records the transcript after binding, later than this composition is created.
       const saved = loadSession(dataRoot, session.id);
@@ -94,8 +95,8 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     if (reused) return { content: [{ type: "text", text: `Child id ${reused.id} belongs to this session's saved history. Choose a new id.` }], details: {}, isError: true };
     return start(...args);
   };
-  const tools = [...fleetDefinitions, ...buildEvidenceTools({ context, git, fleet, journal: buildJournal }), buildFinishTool(() => exit.open(), buildJournal,
-    () => ["rebasing", "verifying", "repairing", "landing"].includes(exit.state().phase)),
+  const evidence = createBuildEvidence({ context, git, fleet, journal: buildJournal, exit, changed: options.changed });
+  const tools = [...fleetDefinitions, ...evidence.tools, buildFinishTool(exit, buildJournal, evidence.finish),
     ...(board ? [boardPlanTool(plan => board.propose(plan), () => {
       if (!session.workspaceRoot) return "This session is outside a corral workspace.";
       if (!session.project) return "This session has no configured corral project.";
@@ -137,7 +138,7 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     async close() {
       exit.close();
       board?.close();
-      await fleet.close();
+      await Promise.all([evidence.close(), fleet.close()]);
       await initialized;
       await buildJournal.refresh().catch(error => {
         return Promise.resolve(options.deliverToParent(`Build record Git snapshot failed: ${String(error)}`)).catch(() => {});
