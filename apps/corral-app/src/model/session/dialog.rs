@@ -16,7 +16,7 @@ use crate::model::hue::Hue;
 use crate::model::nav::Form;
 
 use super::choice::{ChoiceOption, options};
-use super::dock::{self, DockAction};
+use super::dock::{self, CardsRead, DockAction};
 use super::questions::TextRow;
 use super::{Action, Cx, State};
 
@@ -63,8 +63,8 @@ pub struct DecisionCard {
     pub dismiss: Action,
     pub sending: bool,
     pub inert: Option<String>,
-    /// The card's body is not read yet: only its title shows.
-    pub reading: bool,
+    /// The card's body is not read yet: only its title shows, with where the read stands.
+    pub read: Option<CardsRead>,
 }
 
 const fn kind(kind: CardKind) -> DecisionKind {
@@ -180,7 +180,7 @@ pub(super) fn card(
         }),
         sending,
         inert,
-        reading: card.is_none(),
+        read: card.is_none().then(|| dock::card_read(cx)),
     }
 }
 

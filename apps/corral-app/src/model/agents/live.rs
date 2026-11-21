@@ -15,6 +15,23 @@ pub(super) fn excerpt(row: &AgentRow) -> Option<&str> {
     }
 }
 
+/// The oldest owner question the host's state briefs for session `session` (the card's id):
+/// `None` while no state is here (the session is not watched, or its state has not come),
+/// `Some(None)` when the state briefs none.
+pub(crate) fn briefed_question<'f>(
+    feed: &'f daemon::Feed,
+    session: &str,
+) -> Option<Option<&'f str>> {
+    let state = feed.live.get(session)?.state.as_ref()?;
+    Some(
+        state
+            .cards
+            .iter()
+            .find(|brief| brief.kind == corral_protocol::detail::CardKind::Question)
+            .map(|brief| brief.id.as_str()),
+    )
+}
+
 /// Where a session runs: a pi session's placement is the pane or process its host runs in.
 pub(crate) fn placement(session: &SessionRef) -> &SessionRef {
     match session {

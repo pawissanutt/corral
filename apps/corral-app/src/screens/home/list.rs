@@ -17,7 +17,7 @@ use crate::ui::kit::page::head;
 use crate::ui::kit::status::look_word;
 
 use super::dash::composer;
-use super::parts::ask_project;
+use super::parts::{ask_project, watch_run};
 
 /// The list's columns: the status word, the id, the title, what is happening, the next step.
 fn columns() -> Vec<Column> {
@@ -101,6 +101,7 @@ pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
 /// One row: a task or a session in the same anatomy. Its words follow the feed.
 fn row(app: AppState, id: &Id) -> Row {
     let key = id.clone();
+    watch_run(app, id.clone());
     let line = computed(move || app.feed.with(|feed| home::row(feed, &key)));
     let (test_id, spoken, record) = app.feed.with_untracked(|feed| {
         (

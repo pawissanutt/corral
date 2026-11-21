@@ -27,7 +27,7 @@ pub use control::{
     controls, kind, rewind_sheet, status as control_status,
 };
 pub use lines::{SessionLine, removable, session_line, session_lines};
-pub(crate) use live::{clock, placement, unix};
+pub(crate) use live::{briefed_question, clock, placement, unix};
 pub use menu::{SESSION_MENU_LABEL, session_verbs};
 pub use start::{
     Choice, EffortField, ModelField, ModelPick, NameField, NewBuildForm, NewItem, NewMenu,

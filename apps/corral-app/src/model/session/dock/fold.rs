@@ -1,9 +1,11 @@
 //! Which waiting cards the dock shows open. A docked choice (an exit choice, a child's question,
 //! a proposed board plan) is one line until the owner opens it: by pressing its line, Alt+A,
-//! Alt+↓, the needs-you chip, or from elsewhere (Bring); Not now and Esc fold it back. The exit
-//! choice Finish… asked for opens by itself once the host docks it. Alt+↓ also unfolds the queue
-//! when it gives it the keys.
+//! Alt+↓, the needs-you chip, or from elsewhere (Bring, or Answer from outside the page); Not now
+//! and Esc fold it back. The exit choice Finish… asked for opens by itself once the host docks
+//! it, and so does the card an Answer from outside the page named, once briefed. Alt+↓ also
+//! unfolds the queue when it gives it the keys.
 
+use corral_protocol::app::SESSION_STATE_V1;
 use corral_protocol::detail::CardKind;
 use corral_protocol::session_state::{CardBrief, SessionState};
 
@@ -14,30 +16,97 @@ use crate::model::hue::Hue;
 use crate::model::nav::Form;
 use crate::model::session::choice::{self, ChoiceCard};
 use crate::model::session::keys::{KeyAction, KeyBinding, bind};
+use crate::model::session::questions::{self, AnswerCard};
 use crate::model::session::{Action, Cx, Focus, State, Ui};
 
-use super::{AsideLine, DockAction, briefs, card, decision, docked, kind, leave, send, sending};
+use super::{
+    AsideLine, Asked, CardsRead, DockAction, briefs, card, decision, docked, kind, leave, send,
+    sending,
+};
 
 /// At most this many folded lines show; the rest are counted.
 const LINES: usize = 3;
 
 /// Brings a waiting card forward: a question's answer card opens, a docked choice opens, a
-/// decision card takes the keys.
+/// decision card takes the keys. The owner's own choice replaces an Answer still waiting.
 pub(super) fn bring(state: &mut State, session: &Id, card: String, feed: &Feed) {
     let kind = kind(feed, session.as_str(), &card);
     let ui = state.ui_mut(session);
+    ui.dock.wanted = None;
+    if let Some(kind) = kind {
+        open(ui, card, kind);
+    }
+}
+
+fn open(ui: &mut Ui, card: String, kind: CardKind) {
     match kind {
-        Some(CardKind::Question) => {
+        CardKind::Question => {
             ui.dock.open = Some(card);
             ui.focus = Focus::Questions;
         }
-        Some(kind) if docked(kind) => {
+        kind if docked(kind) => {
             ui.dock.opened.insert(card);
             ui.focus = Focus::Dock;
         }
-        Some(kind) if decision(kind) => ui.focus = Focus::Dock,
+        kind if decision(kind) => ui.focus = Focus::Dock,
         _ => {}
     }
+}
+
+/// The card `asked` names among the host's briefs: that card by its id, or the oldest owner
+/// question.
+fn named<'c>(cards: &'c [CardBrief], asked: &Asked) -> Option<&'c CardBrief> {
+    match asked {
+        Asked::Card(id) => cards.iter().find(|brief| brief.id == *id),
+        Asked::Oldest => cards.iter().find(|brief| brief.kind == CardKind::Question),
+    }
+}
+
+/// Answer from outside the page: opens the card `asked` names when the host's state briefs it,
+/// else waits for a state that does. A connection that never carries the host's state has
+/// nothing to wait for: the page opens as it is.
+pub(super) fn answer(state: &mut State, session: &Id, asked: Asked, feed: &Feed) {
+    let briefed = feed
+        .live
+        .get(session.as_str())
+        .and_then(|live| live.state.as_ref())
+        .map(|host| named(&host.cards, &asked).map(|brief| (brief.id.clone(), brief.kind)));
+    let ui = state.ui_mut(session);
+    ui.dock.wanted = None;
+    match briefed {
+        Some(Some((card, kind))) => open(ui, card, kind),
+        // A state that briefs no owner question has none to open. A card the row names may be
+        // newer than the state held here, so that one is waited for.
+        Some(None) if asked == Asked::Oldest => {}
+        _ if feed.capable(SESSION_STATE_V1) => ui.dock.wanted = Some(asked),
+        _ => {}
+    }
+}
+
+/// The card an Answer waits for, open in the composer's place until the host's state briefs
+/// it: the question as the session's row says it, and why it is not here yet.
+pub(super) fn wanted_card(cx: &Cx<'_>) -> Option<AnswerCard> {
+    let asked = cx.ui.dock.wanted.as_ref()?;
+    let said = crate::model::agents::session_line(cx.feed, cx.id.as_str())
+        .and_then(|line| line.doing)
+        .unwrap_or_else(|| "Owner question".to_owned());
+    let card = match asked {
+        Asked::Card(id) => id.clone(),
+        Asked::Oldest => String::new(),
+    };
+    let read = match super::reads::inert(cx) {
+        Some(why) => CardsRead {
+            words: why,
+            hue: Hue::Held,
+            retry: None,
+        },
+        None => CardsRead {
+            words: "reading the question…".into(),
+            hue: Hue::Neutral,
+            retry: None,
+        },
+    };
+    Some(questions::waiting_card(cx, card, said, read, None))
 }
 
 /// Answers nothing: a decision card resolves as no; a docked choice folds back to its line and
@@ -124,8 +193,11 @@ pub(super) fn next(state: &mut State, session: &Id, feed: &Feed) {
 }
 
 /// Follows the host's cards: forgets opened cards that no longer wait, opens the exit choice
-/// Finish… asked for once it docks, and lets an emptied queue fold by the rule again.
-pub(super) fn settle(ui: &mut Ui, state: &SessionState) {
+/// Finish… asked for once it docks and the card an Answer waits for once briefed, and lets an
+/// emptied queue fold by the rule again. A named card the state does not brief is waited for
+/// while the session's row still names it (`advertised`); once it does not, the Answer ends
+/// without opening another card.
+pub(super) fn settle(ui: &mut Ui, state: &SessionState, advertised: Option<&str>, now: u64) {
     ui.dock
         .opened
         .retain(|card| state.cards.iter().any(|brief| brief.id == *card));
@@ -138,6 +210,19 @@ pub(super) fn settle(ui: &mut Ui, state: &SessionState) {
         ui.dock.opened.insert(exit.id.clone());
         ui.dock.exit_wanted = false;
         ui.focus = Focus::Dock;
+    }
+    if let Some(asked) = ui.dock.wanted.take() {
+        if let Some(brief) = named(&state.cards, &asked) {
+            open(ui, brief.id.clone(), brief.kind);
+        } else if matches!(&asked, Asked::Card(id) if advertised == Some(id.as_str())) {
+            ui.dock.wanted = Some(asked);
+        } else {
+            ui.notices.push(
+                Hue::Neutral,
+                "That question no longer waits; nothing else was opened",
+                now,
+            );
+        }
     }
     if state.queue_total == 0 {
         ui.dock.queue_open = None;
@@ -181,7 +266,7 @@ pub(in crate::model::session) fn escape(cx: &Cx<'_>) -> Option<Action> {
     if cx.ui.dock.compose.is_some() {
         return Some(Action::Dock(DockAction::Leave(session)));
     }
-    if cx.ui.dock.open.is_some() {
+    if cx.ui.dock.open.is_some() || cx.ui.dock.wanted.is_some() {
         return Some(Action::Dock(DockAction::Close(session)));
     }
     let briefs = cx

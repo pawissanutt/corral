@@ -54,6 +54,11 @@ pub enum Effect {
     Focus(&'static str),
     /// Select a live record and push its page where the form stacks it.
     OpenLive(Live),
+    /// Open a session's page with the card `asked` names open (`session::DockAction::Answer`).
+    Answer {
+        session: Id,
+        asked: crate::model::session::Asked,
+    },
     /// Select a live record in place without navigating.
     Select(Live),
     /// Open the one Ask composer with a real bounded context and an optional draft.

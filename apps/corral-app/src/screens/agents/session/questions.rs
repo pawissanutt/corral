@@ -3,9 +3,10 @@
 //! question bold with `· choose any` for a multi-choice one, its numbered options with `●`/`○`,
 //! the owner's own words where it takes them, and Send answers, which goes to the first
 //! unanswered question until every one has an answer. Review lists each answer or `○
-//! unanswered`. The keys: 1–9 choose, the arrows walk the options, ← → the tabs.
+//! unanswered`. Until the card's body is read it is the title and where the read stands, with
+//! Retry after a failure. The keys: 1–9 choose, the arrows walk the options, ← → the tabs.
 //! test ids `seg-answer-<n>`, `seg-answer-review`, `opt-<card>-<n>`, `field-answer-<card>-<n>`,
-//! `review-<n>`, `btn-send-answers`, `btn-answer-close`.
+//! `review-<n>`, `btn-send-answers`, `btn-answer-close`, `card-read`, `btn-cards-retry`.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -127,15 +128,20 @@ fn answer_card(app: AppState, card: Memo<Option<AnswerCard>>) -> AnyElement {
             })
         })
     });
-    let state = computed(move || card.with(|c| c.as_ref().map(|c| (c.sending, c.inert.clone()))));
+    let state = computed(move || {
+        card.with(|c| {
+            c.as_ref()
+                .map(|c| (c.read.clone(), c.sending, c.inert.clone()))
+        })
+    });
     let state = dynamic(move || {
-        let (sending, inert) = state.get()?;
-        untracked(|| standing(form, false, sending, inert.as_deref()))
+        let (read, sending, inert) = state.get()?;
+        untracked(|| standing(app, read, sending, inert.as_deref()))
     });
     let foot = computed(move || {
         card.with(|c| {
             c.as_ref()
-                .map(|c| (c.send.clone(), c.sending || c.inert.is_some()))
+                .and_then(|c| Some((c.send.clone()?, c.sending || c.inert.is_some())))
         })
     });
     let foot = dynamic(move || {
@@ -297,7 +303,12 @@ fn question(app: AppState, card: Memo<Option<AnswerCard>>, index: usize) -> AnyE
     let options = computed(move || view_of().map(|q| q.options).unwrap_or_default());
     let rows = options_list(app, options, Rc::new(Cell::new(true)), None, true, Some(0));
     let row = computed(move || view_of().and_then(|q| q.words));
-    let submit = computed(move || card.with(|c| c.as_ref().map(|c| c.send.action.clone())));
+    let submit = computed(move || {
+        card.with(|c| {
+            c.as_ref()
+                .and_then(|c| c.send.as_ref().map(|send| send.action.clone()))
+        })
+    });
     // A question that takes only words gives its field the keys.
     let words_only = asked.as_ref().is_some_and(|q| q.options.is_empty());
     let field = asked.and_then(|q| q.words).map(|first| {

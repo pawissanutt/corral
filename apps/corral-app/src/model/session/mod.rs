@@ -105,8 +105,8 @@ pub use composer::{
 };
 pub use dialog::{DecisionCard, DecisionKind, OPEN_GUARD_MS};
 pub use dock::{
-    AsideLine, CardConfirm, CardDraft, CardsRead, Compose, Confirming, Dock, DockAction, DockUi,
-    Pending, dock,
+    AsideLine, Asked, CardConfirm, CardDraft, CardsRead, Compose, Confirming, Dock, DockAction,
+    DockUi, Pending, dock,
 };
 pub use echo::{Echo, EchoState, Sent};
 pub use events::{EventsAction, EventsUi, HostEvents, host_events};

@@ -3,6 +3,7 @@
 //! with tasks; Sessions groups them by state.
 
 use super::source::{Source, scoped};
+use crate::model::session::Asked;
 use crate::model::status::SessionState;
 use crate::model::{Id, ProjectFilter, daemon};
 
@@ -22,18 +23,26 @@ pub struct SessionLine {
     pub agent: Option<String>,
     /// The run's task; none for a chat or a build.
     pub task: Option<Id>,
+    /// What Answer opens while the session is Blocked on its Pi host's card; none for a
+    /// session of another harness, whose question is its terminal's, and for a host whose state
+    /// briefs no owner question.
+    pub asked: Option<Asked>,
 }
 
 fn line(source: Source<'_>, feed: &daemon::Feed) -> SessionLine {
+    let state = source.state();
     SessionLine {
         id: Id::new(source.id),
-        state: source.state(),
+        state,
         role: source.role().to_owned(),
         name: source.name(feed).unwrap_or_default(),
         doing: source.doing(feed),
         project: source.project(feed).map(str::to_owned),
         agent: source.agent(),
         task: source.run.map(|row| Id::new(&row.run.task)),
+        asked: (state == SessionState::Blocked)
+            .then(|| source.asked(feed))
+            .flatten(),
     }
 }
 

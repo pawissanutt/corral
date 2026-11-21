@@ -98,17 +98,29 @@ pub fn next_step(task: &Task) -> Option<NextStep> {
     }
 }
 
-/// A session's one next step: Blocked, answer it on its page; Working or Idle, open it; a
-/// Gone one has none (Relaunch is under More).
+/// A session's one next step: Blocked on its Pi host's card, Answer opens its page with that
+/// card open; Blocked otherwise (another harness's prompt, a host error), Working or Idle, open
+/// it; a Gone one has none (Relaunch is under More).
 pub fn session_next_step(session: &SessionLine) -> Option<NextStep> {
-    let (label, yours) = match session.state {
-        SessionState::Blocked => ("Answer", true),
-        SessionState::Working | SessionState::Idle | SessionState::Unavailable => ("Open", false),
-        SessionState::Gone => return None,
+    let open = Press::Open(Live::Session(session.id.clone()));
+    let (label, yours, press) = match (session.state, &session.asked) {
+        (SessionState::Blocked, Some(asked)) => (
+            "Answer",
+            true,
+            Press::Question {
+                session: session.id.clone(),
+                asked: asked.clone(),
+            },
+        ),
+        (SessionState::Blocked, None) => ("Open", true, open),
+        (SessionState::Working | SessionState::Idle | SessionState::Unavailable, _) => {
+            ("Open", false, open)
+        }
+        (SessionState::Gone, _) => return None,
     };
     Some(NextStep {
         label: label.into(),
-        press: Press::Open(Live::Session(session.id.clone())),
+        press,
         verb: None,
         yours,
     })

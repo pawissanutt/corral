@@ -6,12 +6,12 @@
 use corral_protocol::rows::{
     AgentRow, AssistantKind, AssistantLocation, AssistantRow, AssistantState,
 };
-use corral_types::SessionStatus;
+use corral_types::{SessionRef, SessionStatus};
 
 use crate::model::daemon;
 use crate::model::hue::Hue;
 use crate::model::projects::ProjectFilter;
-use crate::model::session::exit_status;
+use crate::model::session::{Asked, exit_status};
 use crate::model::status::status_unavailable;
 use crate::model::{assistant, status::SessionState};
 
@@ -160,6 +160,26 @@ impl<'a> Source<'a> {
                 if live == 1 { "agent" } else { "agents" }
             )
         })
+    }
+    /// What Answer opens on this session: the card its row names (a chat's or a build's
+    /// `question_id`), else the oldest owner question its host's state briefs, or that oldest
+    /// question once the state comes. None for a run of another harness, whose prompt is its
+    /// terminal's, and for a host whose state briefs no owner question.
+    pub fn asked(self, feed: &daemon::Feed) -> Option<Asked> {
+        let pi = match (self.run, self.chat) {
+            (Some(row), _) => matches!(row.run.session, Some(SessionRef::Pi { .. })),
+            (None, chat) => chat.is_some(),
+        };
+        if !pi {
+            return None;
+        }
+        if let Some(card) = self.chat.and_then(|chat| chat.question_id.clone()) {
+            return Some(Asked::Card(card));
+        }
+        match live::briefed_question(feed, self.id) {
+            None => Some(Asked::Oldest),
+            Some(card) => card.map(|card| Asked::Card(card.to_owned())),
+        }
     }
     /// The model and effort: the row's model; a chat without one names its profile.
     pub fn agent(self) -> Option<String> {

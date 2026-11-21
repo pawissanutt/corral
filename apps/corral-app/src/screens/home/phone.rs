@@ -20,7 +20,7 @@ use crate::ui::kit::status::look_mark;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
 
 use super::cards::reply_box;
-use super::parts::ask_project;
+use super::parts::{ask_project, watch_run};
 
 pub(super) fn screen(app: AppState, scope: Memo<Scope>) -> AnyElement {
     let said = computed(move || {
@@ -158,6 +158,7 @@ fn section_head(section: &Section) -> AnyElement {
 /// to its page); under it, for a small thing, the answer in place.
 fn row(app: AppState, id: Id) -> AnyElement {
     let key = id.clone();
+    watch_run(app, id.clone());
     let line = computed(move || app.feed.with(|feed| home::row(feed, &key)));
     let test_id = app
         .feed

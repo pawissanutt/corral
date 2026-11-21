@@ -16,7 +16,7 @@ use crate::model::effect::Effect;
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
 
-use super::dock::{self, AsideLine, Compose, Confirming, DockAction};
+use super::dock::{self, AsideLine, CardsRead, Compose, Confirming, DockAction};
 use super::exit::{self, ExitSummary};
 use super::{Action, Cx, Focus, State};
 
@@ -100,8 +100,8 @@ pub struct ChoiceCard {
     pub hint: Vec<(&'static str, &'static str)>,
     pub sending: bool,
     pub inert: Option<String>,
-    /// The card's body is not read yet: only its title shows.
-    pub reading: bool,
+    /// The card's body is not read yet: only its title shows, with where the read stands.
+    pub read: Option<CardsRead>,
 }
 
 /// The docked choice of `brief`, from its card when read.
@@ -171,7 +171,7 @@ pub(super) fn card(
         hint,
         sending,
         inert,
-        reading: card.is_none(),
+        read: card.is_none().then(|| dock::card_read(cx)),
     }
 }
 
