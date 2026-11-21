@@ -1,15 +1,17 @@
 import { expect, test } from "bun:test";
 import { cardDetail, questionEntries } from "./remote/cards.ts";
-import { PendingQuestions, QUESTION_ENTRY, QUESTION_TTL, type QuestionEntry } from "./pending-questions.ts";
-import { ToolApprovals } from "./tool-approvals.ts";
+import { APPROVAL_CHOICES as CHOICE, PendingQuestions, QUESTION_ENTRY, QUESTION_TTL, type QuestionEntry } from "./pending-questions.ts";
+import { APPROVAL_TTL, ToolApprovals } from "./tool-approvals.ts";
 
-function fixture() {
+function fixture(reusable = false) {
   const entries: QuestionEntry[] = [];
   let now = 42;
   const questions = new PendingQuestions({ session: () => "session", entries: () => entries,
     append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); },
-    changed() {}, deliver: async () => false, now: () => now });
-  return { questions, approvals: new ToolApprovals(questions, "/session"), expire: () => { now += QUESTION_TTL; } };
+    changed: question => { if (question) approvals.observeAnswer(question); },
+    deliver: async () => false, now: () => now });
+  const approvals = new ToolApprovals(questions, "/session", reusable, () => now);
+  return { questions, approvals, advance: (ms: number) => { now += ms; }, expire: () => { now += QUESTION_TTL; } };
 }
 
 const outside = { action: "ask", path: "/session/link", canonical: "/outside/saved.txt" } as const;
@@ -54,6 +56,37 @@ test("a command approval cannot switch tools, survive restore, or be used after 
   questions.restore();
   expect(questions.status(beforeRestore)).toBe("cancelled");
   expect(approvals.shell("bash", input)).not.toContain(beforeRestore);
+});
+
+test("a timed grant covers only the exact shell invocation and expires from the time of the answer", async () => {
+  const { questions, approvals, advance } = fixture(true);
+  const input = { command: "touch marker", wait_ms: 0 };
+  expect(approvals.shell("bash", input)).toContain("Waiting");
+  const [card] = questionEntries(questions);
+  await card!.answer([{ options: [CHOICE.timed] }], false, async () => {});
+  advance(APPROVAL_TTL - 1);
+  expect(approvals.shell("bash", input)).toBeUndefined();
+  expect(approvals.shell("bash", input)).toBeUndefined();
+  expect(approvals.shell("job_start", input)).toContain("Waiting");
+  expect(approvals.shell("bash", { ...input, wait_ms: 100 })).toContain("Waiting");
+  advance(1);
+  expect(approvals.shell("bash", input)).toContain("Waiting");
+});
+
+test("a session file grant is limited to the canonical destination and never restored", async () => {
+  const { questions, approvals, advance } = fixture(true);
+  expect(approvals.write("write", { path: "link", content: "first" }, outside)).toContain("Waiting");
+  const [request] = questions.pending();
+  await questions.answer(request!.id, [{ option: CHOICE.session }]);
+  advance(QUESTION_TTL);
+  const edit = { path: "link", edits: [{ oldText: "first", newText: "next" }] };
+  expect(approvals.write("edit", edit, outside)).toBeUndefined();
+  expect(approvals.write("write", { path: "link", content: "first" },
+    { ...outside, canonical: "/outside/sibling.txt" })).toContain("destination changed");
+  expect(approvals.write("edit", edit, { action: "deny", reason: "protected" })).toBe("protected");
+  approvals.clear();
+  questions.restore();
+  expect(approvals.write("edit", edit, outside)).toContain("Waiting");
 });
 
 test("a command with a supplementary format character is shown losslessly", () => {

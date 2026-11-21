@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { WriteScopeDecision } from "../roles/assistant/write-scope.ts";
 import { sha256Hex } from "../tools/corral.ts";
-import type { PendingQuestions } from "./pending-questions.ts";
+import { APPROVAL_CHOICES as CHOICE, isToolApproval, type PendingQuestion, type PendingQuestions } from "./pending-questions.ts";
+
+export const APPROVAL_TTL = 30 * 60 * 1000;
 
 export type WriteTool = "edit" | "write";
 export type ShellTool = "bash" | "job_start";
@@ -32,13 +34,35 @@ function writeSummary(tool: WriteTool, input: Input): string {
   return "";
 }
 
-/** Live, one-shot bindings to the owner's structured question answers. No binding is restored. */
+/** Live bindings to structured owner answers. Neither pending requests nor grants are restored. */
 export class ToolApprovals {
-  private readonly requests = new Map<string, { id: string; destination?: string }>();
+  private readonly requests = new Map<string, { id: string; scope: string; destination?: string }>();
+  private readonly grants = new Map<string, number>();
 
-  constructor(private readonly questions: PendingQuestions, private readonly cwd: string) {}
+  constructor(private readonly questions: PendingQuestions, private readonly cwd: string,
+    private readonly reusable = false, private readonly now = () => performance.now()) {}
 
-  clear(): void { this.requests.clear(); }
+  clear(): void {
+    this.requests.clear();
+    this.grants.clear();
+  }
+
+  /** The question store calls this in the live process after committing the owner's answer. */
+  observeAnswer(question: PendingQuestion): void {
+    if (!this.reusable || !isToolApproval(question) || question.status !== "answered") return;
+    const choice = question.answers?.[0]?.option;
+    if (choice !== CHOICE.timed && choice !== CHOICE.session) return;
+    const request = [...this.requests.values()].find(request => request.id === question.id);
+    if (request) this.grants.set(request.scope, choice === CHOICE.timed ? this.now() + APPROVAL_TTL : Infinity);
+  }
+
+  private hasGrant(scope: string): boolean {
+    const until = this.grants.get(scope);
+    if (until === undefined) return false;
+    if (until > this.now()) return true;
+    this.grants.delete(scope);
+    return false;
+  }
 
   private key(tool: string, input: Input): string {
     // Ignore property order, but not whitespace, array order, or any argument's value.
@@ -51,7 +75,9 @@ export class ToolApprovals {
     const runtime = typeof input.timeout === "number" ? `\nRequested timeout: ${input.timeout} s` : "";
     const wait = tool === "job_start" || input.wait_ms === 0 ? "\nStart in background without waiting."
       : typeof input.wait_ms === "number" ? `\nWait up to ${input.wait_ms} ms for output.` : "";
-    return this.confirm(this.key(tool, input), "bash", `Allow this ${tool} command once?\n`
+    const key = this.key(tool, input);
+    const title = this.reusable ? `Allow this exact ${tool} invocation?` : `Allow this ${tool} command once?`;
+    return this.confirm(key, key, "bash", `${title}\n`
       + `Working directory: ${quoted(this.cwd)}${runtime}${wait}\n${quoted(String(input.command))}`);
   }
 
@@ -68,29 +94,34 @@ export class ToolApprovals {
     if (decision.action === "allow") return undefined;
     const target = quoted(decision.canonical);
     const via = decision.path === decision.canonical ? "" : `\nRequested as: ${quoted(decision.path)}`;
-    const title = `Allow ${tool} outside the session directory once?\nDestination: ${target}${via}`;
+    const title = `Allow ${tool} outside the session directory?\nDestination: ${target}${via}`
+      + (this.reusable ? "\nA longer grant allows future edits and writes to this file only." : "");
     const summary = writeSummary(tool, input);
     const preview = `${title}\n${summary}`;
-    return this.confirm(key, "file_write", summary && fitsPrompt(preview) ? preview : title, decision.canonical);
+    return this.confirm(key, `file:${decision.canonical}`, "file_write",
+      summary && fitsPrompt(preview) ? preview : title, decision.canonical);
   }
 
-  private confirm(key: string, kind: "bash" | "file_write", question: string, destination?: string): string | undefined {
+  private confirm(key: string, scope: string, kind: "bash" | "file_write", question: string, destination?: string): string | undefined {
     const effect = kind === "bash" ? "nothing ran" : "nothing was written";
     const waiting = (id: string) => `Waiting for owner approval ${id} (/questions or the app); ${effect}. `
-      + "Retry the exact tool call only after the owner selects allow.";
+      + "Retry the exact tool call only after an affirmative owner choice.";
+    const grant = this.hasGrant(scope);
     const prior = this.requests.get(key);
     if (prior) {
       const answer = this.questions.get(prior.id);
-      if (answer?.status === "pending") return waiting(prior.id);
+      if (answer?.status === "pending" && !grant) return waiting(prior.id);
       this.requests.delete(key);
-      if (this.questions.allowed(prior.id)) {
-        return undefined;
-      }
-      return `No current owner approval for this tool call; ${effect}.`;
+      if (answer?.status === "pending") this.questions.cancel(prior.id);
+      if (this.questions.allowed(prior.id) || (grant && answer?.answers?.[0]?.option !== CHOICE.deny)) return undefined;
+      const choice = answer?.answers?.[0]?.option;
+      if (choice !== CHOICE.timed && choice !== CHOICE.session) return `No current owner approval for this tool call; ${effect}.`;
     }
+    if (grant) return undefined;
     if (!fitsPrompt(question)) return `The full command or destination does not fit in the owner prompt; ${effect}.`;
-    const record = this.questions.ask(randomUUID(), [{ question, options: ["deny", "allow"], freeText: false }], kind);
-    this.requests.set(key, { id: record.id, ...(destination === undefined ? {} : { destination }) });
+    const options = this.reusable ? [CHOICE.deny, CHOICE.once, CHOICE.timed, CHOICE.session] : [CHOICE.deny, CHOICE.legacyOnce];
+    const record = this.questions.ask(randomUUID(), [{ question, options, freeText: false }], kind);
+    this.requests.set(key, { id: record.id, scope, ...(destination === undefined ? {} : { destination }) });
     return waiting(record.id);
   }
 }

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventLog } from "../src/bridge/events.ts";
 import { loadModules } from "../src/host/modules.ts";
+import { APPROVAL_CHOICES as CHOICE } from "../src/host/pending-questions.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { HostSession } from "../src/host/session.ts";
 import { assistantRole } from "../src/roles/assistant/index.ts";
@@ -11,8 +12,8 @@ import { CorralClient } from "../src/tools/corral.ts";
 import { fakeCodexTransport } from "./fixtures/auth/fake-transport.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
 
-// Prove the approval is enforced by the real Pi host even with ask_user off.
-test("assistant writes outside its directory only on an exact owner-approved retry", async () => {
+// Prove approvals are enforced by the real Pi host even with ask_user off.
+test("assistant writes outside its directory only with an explicit owner approval", async () => {
   const assets = buildFixtureInstall();
   const work = mkdtempSync(join(tmpdir(), "corral-write-approval-"));
   const originalFetch = globalThis.fetch, originalEnv = { ...process.env };
@@ -49,10 +50,10 @@ test("assistant writes outside its directory only on an exact owner-approved ret
     const [question] = host.pendingOwnerQuestions();
     expect(host.pendingOwnerQuestions()).toHaveLength(1);
     expect(question?.question).toContain(external);
-    expect(await host.replyToQuestion("allow")).toBeFalse();
+    expect(await host.replyToQuestion(CHOICE.session)).toBeFalse();
     expect(host.pendingOwnerQuestions()[0]?.id).toBe(question?.id);
     transport.script([write("approved", external, "original"), write("repeat", external, "original"), { text: "Done." }]);
-    await host.answerQuestion({ question: question!.id, option: "allow" }, async () => {});
+    await host.answerQuestion({ question: question!.id, option: CHOICE.once }, async () => {});
     await host.session.waitForIdle();
     await host.drained();
     expect(readFileSync(external, "utf8")).toBe("original");
@@ -62,6 +63,12 @@ test("assistant writes outside its directory only on an exact owner-approved ret
     const again = host.pendingOwnerQuestions();
     expect(again).toHaveLength(1);
     expect(again[0]?.id).not.toBe(question?.id);
+    transport.script([write("session-first", external, "new contents"), write("session-second", external, "final contents"), { text: "Done." }]);
+    await host.answerQuestion({ question: again[0]!.id, option: CHOICE.session }, async () => {});
+    await host.session.waitForIdle();
+    await host.drained();
+    expect(readFileSync(external, "utf8")).toBe("final contents");
+    expect(host.pendingOwnerQuestions()).toHaveLength(0);
   } finally {
     await host?.close(); globalThis.fetch = originalFetch;
     for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];

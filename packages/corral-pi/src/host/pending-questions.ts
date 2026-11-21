@@ -26,6 +26,9 @@ const Record = z.object({ version: z.literal(1), id: z.string(), session: z.stri
   answers: z.array(Answer).optional(), message: z.string().optional(),
 });
 export type PendingQuestion = z.infer<typeof Record>;
+export const APPROVAL_CHOICES = {
+  deny: "deny", once: "allow once", legacyOnce: "allow", timed: "allow for 30 minutes", session: "allow for this session",
+} as const;
 export const isToolApproval = (q: PendingQuestion): boolean => q.tool === "bash" || q.tool === "file_write";
 export type QuestionEntry = { type: string; customType?: string; data?: unknown; message?: unknown };
 export interface QuestionHost {
@@ -117,7 +120,9 @@ export class PendingQuestions {
   get(id: string): PendingQuestion | undefined { this.expire(); return this.questions.get(id); }
   allowed(id: string): boolean {
     const q = this.get(id);
-    return q?.status === "answered" && q.expires > this.now() && q.answers?.[0]?.option === "allow";
+    const choice = q?.answers?.[0]?.option;
+    return q?.status === "answered" && q.expires > this.now() &&
+      (choice === APPROVAL_CHOICES.once || choice === APPROVAL_CHOICES.legacyOnce);
   }
   status(id: string): string { return this.consumed.has(id) ? "delivered" : this.questions.get(id)?.status ?? "missing"; }
 
@@ -161,8 +166,9 @@ export class PendingQuestions {
     if (answers.length !== q.questions.length || answers.some((a, i) => !validAnswer(q.questions[i]!, a))) {
       throw new Error("invalid_question_answer");
     }
+    const choice = answers[0]?.option;
     const text = isToolApproval(q)
-      ? `Corral tool approval ${id}: owner selected ${answers[0]?.option === "allow" ? "allow once" : "deny"}.`
+      ? `Corral tool approval ${id}: owner selected ${choice === APPROVAL_CHOICES.legacyOnce ? APPROVAL_CHOICES.once : choice}.`
       : answerText(q.questions, answers);
     if (Buffer.byteLength(text) > ANSWER_MAX_BYTES) throw new Error("question_answer_too_large");
     if (before) {
