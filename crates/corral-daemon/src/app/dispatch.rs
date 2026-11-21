@@ -61,6 +61,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::TIMELINE_V1
                         | wire::USAGE_V1
                         | wire::SETTINGS_V1
+                        | settings::PI_STARTUP_V1
                         | wire::CLOSED_V1
                         | device::DEVICE_V1
                         | device::PUSH_V1
@@ -193,6 +194,9 @@ pub(crate) fn serve(
             Ok(config::get(shared)?)
         }),
         settings::CONFIG_PUT => answer!(Ok(config::put(shared, decode(params)?)?)),
+        settings::PI_STARTUP => {
+            answer!(config::pi_startup::handle(shared.root(), decode(params)?).map_err(invalid))
+        }
         pane::PANE_FOCUS => answer!({
             let engine = shared.engine()?;
             let session = pane_session(&engine, &decode(params)?)?;

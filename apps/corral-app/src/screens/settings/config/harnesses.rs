@@ -19,6 +19,8 @@ use crate::ui::kit::text::h3_flush;
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
+mod pi_startup;
+
 pub(super) fn catalog(app: AppState, configured: &[String], live: Memo<Live>) -> AnyElement {
     let entries = harnesses::entries(configured);
     let chosen = computed({
@@ -270,6 +272,8 @@ fn selected(app: AppState, item: Entry, facts: Memo<Details>, live: Memo<Live>) 
                 code(app, harnesses::LOGIN_COMMAND),
             ],
         ));
+        parts.push(space(app, 10.0));
+        parts.push(pi_startup::panel(app));
         parts.push(space(app, 10.0));
     } else {
         parts.push(command(app, &item, live));

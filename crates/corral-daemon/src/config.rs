@@ -12,6 +12,8 @@ use sha2::{Digest, Sha256};
 
 use crate::state::Shared;
 
+pub(crate) mod pi_startup;
+
 fn path(root: &Path) -> PathBuf {
     root.join(crate::STATE_DIR).join("corral.toml")
 }

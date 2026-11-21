@@ -48,6 +48,10 @@ model; use `corral-pi chat --new` to start fresh. This setting does not change
 models for daemon-managed chat, task runs, or Build children. If unset, the
 built-in default remains `openai-codex/gpt-6.1-sol`.
 
+In the Corral app, open **Settings → Configuration → Harnesses → Pi** to edit
+this same setting on the connected workspace. Use **Save startup model** to
+save it separately from `corral.toml` changes. Clear the field and save to reset.
+
 ## From the app
 
 Open a Pi session in Agents to follow its transcript, send or steer messages,
