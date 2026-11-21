@@ -31,7 +31,7 @@ pub(crate) use transcript::StaleTranscriptCursor;
 // The transport reserves room for the response envelope and bounded request id.
 const REPLY_MAX: usize = APP_CONTROL_MAX - 2048;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct NotFound(pub(crate) &'static str);
 
 impl std::fmt::Display for NotFound {

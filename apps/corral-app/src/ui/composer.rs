@@ -112,7 +112,11 @@ impl Attach {
 /// files copied in a file manager, which this device reads by path (a browser reads none; its
 /// copied files arrive with their bytes).
 fn attaches(paste: &PasteEvent) -> bool {
-    let paths = !cfg!(target_arch = "wasm32") && !paste.uris.is_empty();
+    let paths = !cfg!(target_arch = "wasm32")
+        && paste.uris.iter().any(|uri| {
+            uri.get(..7)
+                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file://"))
+        });
     paths || (!paste.files.is_empty() && paste.text.trim().is_empty())
 }
 
@@ -124,7 +128,13 @@ fn paste(app: AppState, id: &Id, attach: Attach, entry: ElementRef, paste: &Past
     if app.form == Form::Terminal {
         return;
     }
-    let text = (!paste.text.is_empty()).then(|| paste.text.clone());
+    let text = if !paste.text.is_empty() {
+        Some(paste.text.clone())
+    } else if !paste.uris.is_empty() && paste.files.is_empty() {
+        Some(paste.uris.join("\n"))
+    } else {
+        None
+    };
     if !attaches(paste) || (!attach.offered.get_untracked() && text.is_some()) {
         if let Some(text) = text {
             entry.insert_text(text);
