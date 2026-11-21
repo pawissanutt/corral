@@ -3,7 +3,7 @@
 //! remove), File with why it is dimmed, and the inline path field a terminal opens under the
 //! bar while it is open.
 
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::assistant::{self, AttachField, Composer, ContextChip, PickKind, StagedChip};
@@ -12,6 +12,7 @@ use crate::model::{Form, Id};
 use crate::state::AppState;
 use crate::ui::ask::{act, act_on};
 use crate::ui::atoms::control_height;
+use crate::ui::composer::copyable_input;
 use crate::ui::composer::state_mark;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
@@ -487,14 +488,13 @@ fn field_view(app: AppState, field: AttachField) -> AnyElement {
     let form = app.form;
     let phone = form == Form::Phone;
     let terminal = form == Form::Terminal;
-    let entry = input()
+    let entry = copyable_input(app, None, move || app.ask_field_text.get())
         .test_id(match field {
             AttachField::Link => "attach-link-input",
             AttachField::Path(_) => "attach-path-input",
         })
         .label(field.placeholder())
         .placeholder(field.placeholder().to_owned())
-        .value(move || app.ask_field_text.get())
         .on_change(move |text: &str| {
             app.ask_field_text.set(text.to_owned());
             app.ask_field_error.set(None);

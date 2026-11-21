@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use corral_protocol::app::CLOSED_V1;
 use corral_protocol::detail::DetailRef;
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::list::{self, ListKey};
@@ -22,6 +22,7 @@ use crate::model::work::{Press, Record, Verb};
 use crate::model::{Form, Hue, Id, Live};
 use crate::screens::task::keep::keep_details;
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::board_status::{board_status, dim_stale};
 use crate::ui::kit::button::{ButtonKind, button};
@@ -175,11 +176,11 @@ fn page_head(app: AppState) -> AnyElement {
 /// The filter field (`field-tasks`): every word must be in a task's id, title or project.
 fn filter(app: AppState) -> AnyElement {
     let form = app.form;
-    let entry = input()
+    let displayed = move || app.tasks.with(|state| state.filter.clone());
+    let entry = copyable_input(app, None, displayed)
         .test_id("field-tasks")
         .label(tasks::FILTER_LABEL)
         .placeholder(tasks::FILTER)
-        .value(move || app.tasks.with(|state| state.filter.clone()))
         .on_change(move |typed: &str| {
             let typed = typed.to_owned();
             app.tasks.update(|state| state.filter = typed);

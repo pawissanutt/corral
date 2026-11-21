@@ -9,11 +9,12 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use nsh_base::{ContextMenuEvents, MenuEvent, SheetEvent, dialog, sheet};
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::state::AppState;
+use crate::ui::composer::copyable_confirmation_input;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
@@ -580,8 +581,7 @@ fn terminal_dialog(app: AppState, modal: Modal, on_close: Rc<dyn Fn()>) -> AnyEl
                 .child(term::quiet(" to confirm"))
                 .child(term::space(2.0))
                 .child(
-                    input()
-                        .element_ref(&field)
+                    copyable_confirmation_input(app, field)
                         .test_id(&format!("{test_id}-word"))
                         .label(format!("Type {word} to confirm"))
                         .placeholder(word)

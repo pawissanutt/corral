@@ -9,13 +9,14 @@
 //! ticking, a run starting): it is drawn again only when its step changes, keeping the words
 //! being typed and the focus.
 
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::tasks::band::{Band, Hold, band};
 use crate::model::work::{self, ReplyBox};
 use crate::model::{Form, Id};
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::more::press;
@@ -182,12 +183,10 @@ fn reply_box(app: AppState, reply: ReplyBox) -> AnyElement {
     let on_enter = reply.clone();
     let handle = element_ref();
     app.focus_when_asked(work::REPLY_FIELD, handle);
-    let entry = input()
+    let entry = copyable_input(app, Some(handle), move || draft.get())
         .test_id(work::REPLY_FIELD)
-        .element_ref(&handle)
         .label(reply.label.clone())
         .placeholder(reply.placeholder)
-        .value(move || draft.get())
         .on_change(move |typed: &str| draft.set(typed.to_owned()))
         .on_submit(move |_: &str| send_reply(app, draft, &on_enter))
         .flex_1()

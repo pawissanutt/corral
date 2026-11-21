@@ -22,6 +22,7 @@ use crate::model::settings::form::{self, Entries, Group, Live, Shape};
 use crate::model::text::span;
 use crate::screens::{PhoneBar, PhonePage};
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with, tab_strip};
 use crate::ui::kit::notice::error;
 use crate::ui::kit::page::{body, measured_bar};
@@ -450,12 +451,12 @@ fn group(app: AppState, group: Group, live: Memo<Live>) -> AnyElement {
 /// The whole file as text.
 fn file(app: AppState) -> AnyElement {
     let form = app.form;
-    let field = nsh_core::element::input()
+    let displayed = move || app.settings.with(|state| state.config.draft.clone());
+    let field = copyable_input(app, None, displayed)
         .test_id("field-config-file")
         .label("corral.toml")
         .multiline(true)
         .submit_behavior(SubmitBehavior::Newline)
-        .value(move || app.settings.with(|state| state.config.draft.clone()))
         .on_change(move |text: &str| edit(app, Edit::File(text.to_owned())))
         .auto_correct(false)
         .auto_capitalize(AutoCapitalize::None)

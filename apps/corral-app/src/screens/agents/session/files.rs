@@ -1,5 +1,5 @@
 //! Worktree files replace the main view; the session chrome carries the return to conversation.
-use nsh_core::{element::input, prelude::*};
+use nsh_core::prelude::*;
 
 use crate::model::{
     Form, Id,
@@ -7,6 +7,7 @@ use crate::model::{
 };
 use crate::screens::markdown::{markdown_without_images, provide_styles};
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, Token, color};
@@ -61,11 +62,10 @@ fn filter_bar(app: AppState, session: Id, current: String) -> AnyElement {
         Form::Desktop => px(30.0),
         Form::Phone => px(44.0),
     };
-    let search = input()
+    let search = copyable_input(app, None, move || draft.get())
         .test_id("field-session-files")
         .label("Filter filenames in this folder")
         .placeholder("Filter filenames")
-        .value(move || draft.get())
         .on_change(move |typed: &str| draft.set(typed.to_owned()))
         .on_submit(move |typed: &str| {
             run(

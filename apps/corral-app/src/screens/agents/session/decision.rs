@@ -14,7 +14,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
@@ -22,6 +22,7 @@ use crate::model::session::{
     Action, DecisionCard, DecisionKind, OPEN_GUARD_MS, SessionPage, TextRow,
 };
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
@@ -203,12 +204,11 @@ pub(super) fn text_row(
     if focus {
         after_answer(move || entry.focus());
     }
-    let field = input()
-        .element_ref(&entry)
+    let displayed = move || row.with(|r| r.as_ref().map(|r| r.text.clone()).unwrap_or_default());
+    let field = copyable_input(app, Some(entry), displayed)
         .test_id(&first.id)
         .label(first.label)
         .placeholder(first.placeholder)
-        .value(move || row.with(|r| r.as_ref().map(|r| r.text.clone()).unwrap_or_default()))
         .on_change(move |typed: &str| {
             let action = row.with_untracked(|r| r.as_ref().map(|r| r.with(typed.to_owned())));
             if let Some(action) = action {

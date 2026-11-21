@@ -5,13 +5,14 @@
 //! approves. The words live in the model (`Action::Onto`), and the field is built once per
 //! shown candidate, so typing re-reads the model without rebuilding the field.
 
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::projects::BRANCHES_CAPTION;
 use crate::model::review::{Action, Target};
 use crate::model::text::{Rich, flat};
+use crate::ui::composer::copyable_input;
 use crate::ui::kit::hint::hinted;
 use crate::ui::kit::suggest::suggestions;
 use crate::ui::term;
@@ -62,11 +63,10 @@ fn line(cx: &Ctx, target: &Target) -> AnyElement {
         move |words: &str| act(&cx, Action::Onto(words.to_owned()))()
     };
     let approve = act(cx, Action::Approve);
-    let field = input()
+    let field = copyable_input(app, None, move || value.get())
         .test_id("field-onto")
         .label(target.label)
         .placeholder(target.placeholder)
-        .value(move || value.get())
         .on_change(typed)
         .on_submit(move |_: &str| approve())
         .min_w(px(0.0))

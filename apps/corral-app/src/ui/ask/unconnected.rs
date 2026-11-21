@@ -4,12 +4,12 @@
 //! A device with an enrolled identity is never here while offline: it boots against its cached
 //! store, where the live composer queues what it sends.
 
-use nsh_core::element::input;
 use nsh_core::prelude::*;
 
 use crate::model::assistant::UNCONNECTED;
 use crate::model::{DataState, Form, Overlay, SettingsSection};
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::composer::{field_look, focus_on_open};
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
@@ -75,13 +75,11 @@ fn field(app: AppState) -> AnyElement {
     focus_on_open(app, entry);
     field_look(
         app.form,
-        input()
-            .element_ref(&entry)
+        copyable_input(app, Some(entry), move || app.ask_draft())
             .test_id("ask-input")
             .label(UNCONNECTED.placeholder)
             .placeholder(UNCONNECTED.placeholder.to_owned())
             .multiline(true)
-            .value(move || app.ask_draft())
             .on_change(move |text: &str| app.set_ask_draft(text.to_owned())),
     )
 }

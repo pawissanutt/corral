@@ -15,6 +15,7 @@ use crate::model::settings::editor::{Edit, Typed};
 use crate::model::settings::form::{self, Field, Kind, Live};
 use crate::model::settings::inherit;
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with};
 use crate::ui::kit::suggest::suggestions;
 use crate::ui::term;
@@ -63,10 +64,17 @@ pub fn entry(
     value: impl Fn() -> String + 'static,
     on_change: impl Fn(String) + 'static,
 ) -> AnyElement {
-    entry_with(app, id, label, value, on_change, None)
+    entry_with(app, id, label, value, on_change, None, CopyMode::Ordinary)
 }
 
-/// [`entry`] with a handle the caller focuses it by.
+#[derive(Clone, Copy)]
+enum CopyMode {
+    Ordinary,
+    /// Environment values can hold credentials; leave copying entirely to the platform.
+    NativeOnly,
+}
+
+/// [`entry`] with an optional focus handle and copy policy.
 fn entry_with(
     app: AppState,
     id: String,
@@ -74,6 +82,7 @@ fn entry_with(
     value: impl Fn() -> String + 'static,
     on_change: impl Fn(String) + 'static,
     handle: Option<ElementRef>,
+    copy: CopyMode,
 ) -> AnyElement {
     let form = app.form;
     let label: SharedString = label.into();
@@ -87,13 +96,15 @@ fn entry_with(
     let handle = handle.unwrap_or_else(element_ref);
     let jump_id = id.clone();
     on_jump(app, move |path| self::id(path) == jump_id, || {}, handle);
-    let field = input()
-        .element_ref(&handle)
+    let field = match copy {
+        CopyMode::Ordinary => copyable_input(app, Some(handle), value),
+        CopyMode::NativeOnly => input().element_ref(&handle).value(value),
+    };
+    let field = field
         .test_id(&id)
         .label(label.clone())
         .placeholder(label.to_string())
         .auto_focus(added)
-        .value(value)
         .on_change(move |text: &str| on_change(text.to_owned()))
         .auto_correct(false)
         .auto_capitalize(AutoCapitalize::None)
@@ -256,6 +267,7 @@ fn text_field(app: AppState, field: &Field, live: Memo<Live>) -> AnyElement {
         move || live.with(|live| live.draft.text(&read)),
         move |text| edit(app, Edit::Text(path.clone(), text)),
         Some(handle),
+        CopyMode::Ordinary,
     );
     if field.offers.is_empty() {
         return entry;
@@ -429,12 +441,14 @@ fn pairs(app: AppState, path: &Path, names: &[String], live: Memo<Live>) -> AnyE
         .map(|name| {
             let (read, write, gone) = (path.clone(), path.clone(), path.clone());
             let (shown, typed, removed) = (name.clone(), name.clone(), name.clone());
-            let value = entry(
+            let value = entry_with(
                 app,
                 format!("{}.{name}", id(path)),
                 name.clone(),
                 move || live.with(|live| live.draft.pair(&read, &shown)),
                 move |text| edit(app, Edit::Pair(write.clone(), typed.clone(), Some(text))),
+                None,
+                CopyMode::NativeOnly,
             );
             view()
                 .flex_row()
@@ -525,13 +539,16 @@ fn new_pair(app: AppState, path: &Path) -> AnyElement {
             move || name.get(),
             move |text| name.set(text),
             Some(handle),
+            CopyMode::Ordinary,
         ))
-        .child(entry(
+        .child(entry_with(
             app,
             format!("{}-new-value", id(path)),
             "Value",
             move || value.get(),
             move |text| value.set(text),
+            None,
+            CopyMode::NativeOnly,
         ))
         .child(add)
         .into_element()

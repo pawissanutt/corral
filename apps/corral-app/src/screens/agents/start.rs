@@ -9,7 +9,7 @@
 //! `seg-build-<field>-<value>`, `field-build-name`, `field-build-model`, `btn-start-build`.
 
 use nsh_base::{menu, menu_item};
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
@@ -18,6 +18,7 @@ use crate::model::agents::{
 };
 use crate::model::hue::Hue;
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with, menu_trigger};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::overlay::{Modal, counted, modal};
@@ -321,12 +322,12 @@ fn text_field(
     change: fn(String) -> StartAction,
 ) -> AnyElement {
     let form = app.form;
-    let entry = input()
+    let displayed = move || sheet.with(|s| s.as_ref().map(value).unwrap_or_default());
+    let entry = copyable_input(app, None, displayed)
         .test_id(test_id)
         .label(test_id)
         .multiline(false)
         .submit_behavior(SubmitBehavior::BlurAndSubmit)
-        .value(move || sheet.with(|s| s.as_ref().map(value).unwrap_or_default()))
         .on_change(move |typed: &str| start(app, change(typed.to_owned())))
         .min_w(px(0.0))
         .text_color(color(Token::Ink))

@@ -1,13 +1,14 @@
 //! The task page's History tab: the task's events newest first, as its detail serves them, and
 //! a Comment box that sends the `comment` operation (`field-comment`, `btn-comment-send`).
 
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::tasks::page;
 use crate::model::work;
 use crate::model::{Form, Id};
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
@@ -69,11 +70,10 @@ fn comment_box(app: AppState, id: Id) -> AnyElement {
     let draft = signal(String::new());
     let empty = computed(move || draft.with(|words| words.trim().is_empty()));
     let on_enter = id.clone();
-    let entry = input()
+    let entry = copyable_input(app, None, move || draft.get())
         .test_id("field-comment")
         .label(format!("Comment on {id}"))
         .placeholder(page::COMMENT)
-        .value(move || draft.get())
         .on_change(move |typed: &str| draft.set(typed.to_owned()))
         .on_submit(move |_: &str| send(app, draft, &on_enter))
         .flex_1()

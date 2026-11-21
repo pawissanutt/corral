@@ -3,7 +3,7 @@
 //! or `j` `k` opens a card, Enter opens its page. A card tells the app while it holds the
 //! keyboard focus (`AppState::focused_row`), so Enter opens the card that has it.
 
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::home::{self, Card, Decision};
@@ -14,6 +14,7 @@ use crate::model::work::{self, Press, ReplyBox};
 use crate::model::{Form, Id};
 use crate::screens::agents::{Compact, ask_session, ask_view};
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::hue_ink;
@@ -459,12 +460,10 @@ pub(super) fn reply_box(app: AppState, reply: ReplyBox) -> AnyElement {
     let on_enter = reply.clone();
     let handle = element_ref();
     app.focus_when_asked(work::REPLY_FIELD, handle);
-    let entry = input()
+    let entry = copyable_input(app, Some(handle), move || draft.get())
         .test_id(work::REPLY_FIELD)
-        .element_ref(&handle)
         .label(reply.label.clone())
         .placeholder(reply.placeholder)
-        .value(move || draft.get())
         .on_change(move |typed: &str| draft.set(typed.to_owned()))
         .on_submit(move |_: &str| send_reply(app, draft, &on_enter))
         .flex_1()

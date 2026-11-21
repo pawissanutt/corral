@@ -4,6 +4,7 @@
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use nsh_core::element::{Input, input};
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 use nsh_core::text_edit::{pasted, utf16_to_byte};
@@ -46,10 +47,14 @@ impl CopyCache {
         }));
     }
 
+    fn clear(self) {
+        self.0.set(None);
+    }
+
     fn take(self, source: u64) -> Option<CopiedText> {
         let mut copy = self.0.get_untracked();
         if copy.is_some() {
-            self.0.set(None);
+            self.clear();
         }
         take_copy(&mut copy, source, Instant::now())
     }
@@ -86,8 +91,88 @@ pub(super) fn install(app: AppState) {
     provide_context(cache);
     // An unobserved copy in another native input must not leave the earlier mirrored copy
     // preferred. A selection-specific observer mounted later takes precedence over this one.
-    copy_keys(COPY, When::Always, move || cache.0.set(None));
-    copy_keys(CUT, When::Always, move || cache.0.set(None));
+    copy_keys(COPY, When::Always, move || cache.clear());
+    copy_keys(CUT, When::Always, move || cache.clear());
+}
+
+/// A native, non-secret input that contributes to the same bounded copy cache as the composer.
+pub(super) struct InputCopy {
+    app: AppState,
+    cache: CopyCache,
+    entry: ElementRef,
+}
+
+impl InputCopy {
+    pub(super) fn new(app: AppState, entry: Option<ElementRef>) -> Option<Self> {
+        if app.form != Form::Terminal {
+            return None;
+        }
+        Some(Self {
+            app,
+            cache: use_context::<CopyCache>()?,
+            entry: entry.unwrap_or_else(element_ref),
+        })
+    }
+
+    pub(super) fn controlled(self, value: impl Fn() -> String + 'static) -> Input {
+        let value = Rc::new(value);
+        let current = value.clone();
+        self.observe(move |range| selected_text(&current(), range))
+            .value(move || value())
+    }
+
+    pub(super) fn uncontrolled(self) -> Input {
+        // NSH reports only the range at selection time. Keep a bounded snapshot for the
+        // confirmation word, without turning it into a controlled field or capping its edits.
+        let draft = signal(None::<CopiedText>);
+        self.observe(move |range| {
+            draft.with_untracked(|draft| match draft.as_ref()? {
+                Ok(text) => selected_text(text, range),
+                Err(error) => Some(Err(*error)),
+            })
+        })
+        .on_change(move |text: &str| draft.set(bounded_text(text)))
+    }
+
+    fn observe(self, selected: impl Fn(Selection) -> Option<CopiedText> + 'static) -> Input {
+        let Self { app, cache, entry } = self;
+        let focused = signal(false);
+        let range = signal(None::<(Selection, u64)>);
+        entry.on_focus_in(move || focused.set(true));
+        entry.on_focus_out(move || focused.set(false));
+        let selected = Rc::new(selected);
+        effect(move || {
+            if !focused.get() {
+                return;
+            }
+            let selected = selected.clone();
+            let remember = move || {
+                if !focused.get_untracked() {
+                    return;
+                }
+                let source = app.source_revision.get_untracked();
+                match range.get_untracked() {
+                    Some((range, revision)) if source == revision && range.start != range.end => {
+                        // The host reports post-cut edits after this key, so the selected span
+                        // still refers to the text before native editing.
+                        if let Some(text) = selected(range) {
+                            cache.remember(text, source);
+                        } else {
+                            cache.clear();
+                        }
+                    }
+                    _ => cache.clear(),
+                }
+            };
+            copy_keys(COPY, When::Always, remember.clone());
+            copy_keys(CUT, When::Always, remember);
+        });
+        input()
+            .element_ref(&entry)
+            .on_selection_change(move |selection: &Selection| {
+                range.set(Some((*selection, app.source_revision.get_untracked())));
+            })
+    }
 }
 
 pub(super) fn observe_selection(app: AppState, view: View) -> View {
@@ -159,7 +244,7 @@ pub(super) fn bind(
             if focused.get_untracked()
                 && let Some(text) = composer.with_untracked(|c| {
                     let draft = &c.as_ref()?.draft;
-                    bounded_text(&draft[selection_bytes(draft, selection.get_untracked())])
+                    selected_text(draft, selection.get_untracked())
                 })
             {
                 cache.remember(text, app.source_revision.get_untracked());
@@ -248,6 +333,10 @@ fn insert(
         end: caret,
     });
     entry.set_selection(caret, caret);
+}
+
+fn selected_text(draft: &str, range: Selection) -> Option<CopiedText> {
+    bounded_text(&draft[selection_bytes(draft, range)])
 }
 
 fn selection_bytes(draft: &str, range: Selection) -> std::ops::Range<usize> {

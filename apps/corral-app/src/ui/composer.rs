@@ -10,7 +10,7 @@
 use corral_protocol::assistant::SendAttachment;
 use corral_protocol::session_state::SendPolicy;
 use nsh_base::{SheetEvent, sheet};
-use nsh_core::element::{Input, color as for_appearance};
+use nsh_core::element::{Input, color as for_appearance, input};
 use nsh_core::prelude::*;
 
 use crate::model::assistant::{self, Composer};
@@ -44,6 +44,34 @@ pub(crate) fn terminal_selectable(_app: AppState, view: View) -> View {
     #[cfg(target_os = "linux")]
     let view = terminal_paste::observe_selection(_app, view);
     view
+}
+
+/// An ordinary, controlled input. Observe native terminal copy/cut so a subsequent paste in
+/// the composer can recover the selected text even if the desktop clipboard did not update.
+/// Do not use for credentials or other secret inputs.
+pub(crate) fn copyable_input(
+    _app: AppState,
+    entry: Option<ElementRef>,
+    value: impl Fn() -> String + 'static,
+) -> Input {
+    #[cfg(target_os = "linux")]
+    if let Some(field) = terminal_paste::InputCopy::new(_app, entry) {
+        return field.controlled(value);
+    }
+    let field = input().value(value);
+    match entry {
+        Some(entry) => field.element_ref(&entry),
+        None => field,
+    }
+}
+
+/// As for [`copyable_input`], but leave the confirmation field's value owned by the platform.
+pub(crate) fn copyable_confirmation_input(_app: AppState, entry: ElementRef) -> Input {
+    #[cfg(target_os = "linux")]
+    if let Some(field) = terminal_paste::InputCopy::new(_app, Some(entry)) {
+        return field.uncontrolled();
+    }
+    input().element_ref(&entry)
 }
 
 /// What Ask adds to its session's composer, read through one memo so typing redraws only what

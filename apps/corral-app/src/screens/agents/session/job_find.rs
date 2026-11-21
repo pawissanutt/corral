@@ -4,13 +4,13 @@
 //! `field-job-search`, `btn-search-next`, `btn-search-previous`, `btn-search-close`,
 //! `btn-search-earlier`.
 
-use nsh_core::element::input;
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::session::JobOutputView;
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
@@ -210,12 +210,10 @@ pub(super) fn hunt(app: AppState, reading: Reading) {
 pub(super) fn find_bar(app: AppState, reading: Reading) -> AnyElement {
     let form = app.form;
     after_answer(move || reading.field.focus());
-    let field = input()
-        .element_ref(&reading.field)
+    let field = copyable_input(app, Some(reading.field), move || reading.query.get())
         .test_id("field-job-search")
         .label("Find in the output")
         .placeholder("Find in the output")
-        .value(move || reading.query.get())
         .on_change(move |typed: &str| {
             reading.query.set(typed.to_owned());
             reading.at.set(NEWEST);

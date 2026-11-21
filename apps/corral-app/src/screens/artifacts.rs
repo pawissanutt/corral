@@ -11,7 +11,7 @@
 
 mod shown;
 
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
@@ -22,6 +22,7 @@ use crate::model::artifacts::{
 use crate::model::{Effect, Form, Hue};
 use crate::screens::activity::subnav;
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::notice::notice;
@@ -245,12 +246,11 @@ fn field(app: AppState) -> AnyElement {
             after_answer(move || handle.focus());
         });
     }
-    let entry = input()
-        .element_ref(&handle)
+    let displayed = move || app.artifacts.with(|state| state.query.clone());
+    let entry = copyable_input(app, Some(handle), displayed)
         .test_id("field-artifacts")
         .label(FIELD_LABEL)
         .placeholder(PLACEHOLDER)
-        .value(move || app.artifacts.with(|state| state.query.clone()))
         .on_change(move |typed: &str| app.artifacts_act(Action::Query(typed.to_owned())))
         .on_focus(move || {
             focused.set(true);

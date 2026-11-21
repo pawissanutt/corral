@@ -11,7 +11,7 @@
 //! touch targets); terminal: the same rows between rules. Test ids `session-picker`,
 //! `field-picker`, `pick-<n>`, `pick-<n>-favorite`, `btn-model`, `btn-effort`.
 
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::keymap::When;
 use nsh_core::prelude::*;
 
@@ -23,6 +23,7 @@ use crate::model::session::{
 use crate::model::{Form, Id};
 use crate::state::AppState;
 use crate::ui::atoms::control_height;
+use crate::ui::composer::copyable_input;
 use crate::ui::composer::{PHONE_CHIP, chip_slop};
 use crate::ui::kit::button::seg;
 use crate::ui::kit::marks::{hue_ink, mark};
@@ -344,8 +345,9 @@ fn panel(app: AppState, picker: Memo<Option<Picker>>, kind: PickerKind, session:
     let filter = {
         let session = session.clone();
         let chosen = session.clone();
-        input()
-            .element_ref(&field)
+        let displayed =
+            move || picker.with(|p| p.as_ref().map(|p| p.filter.clone()).unwrap_or_default());
+        copyable_input(app, Some(field), displayed)
             .test_id("field-picker")
             .label(match kind {
                 PickerKind::Model => "Filter models",
@@ -354,9 +356,6 @@ fn panel(app: AppState, picker: Memo<Option<Picker>>, kind: PickerKind, session:
             .placeholder(match kind {
                 PickerKind::Model => "Type to filter models…",
                 PickerKind::Effort => "Type to filter levels…",
-            })
-            .value(move || {
-                picker.with(|p| p.as_ref().map(|p| p.filter.clone()).unwrap_or_default())
             })
             .on_change(move |text: &str| {
                 act(

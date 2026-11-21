@@ -17,7 +17,7 @@
 //! model's or effort's offers.
 
 use nsh_base::{menu, menu_item};
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use super::config_fields::{edit, entry, field, on_jump, row};
@@ -28,6 +28,7 @@ use crate::model::settings::editor::{Edit, Part};
 use crate::model::settings::form::{Entries, Field, Group, Live};
 use crate::model::settings::profiles::{self, Check, Naming, Taken, key_of};
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::icons::Icon;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with, menu_trigger};
 use crate::ui::kit::overlay::counted;
@@ -414,12 +415,10 @@ fn name_field(app: AppState, typed: Signal<String>, submit: impl Fn() + 'static)
     let form = app.form;
     let handle = element_ref();
     after_answer(move || handle.focus());
-    let field = input()
-        .element_ref(&handle)
+    let field = copyable_input(app, Some(handle), move || typed.get())
         .test_id("field-config-new-profiles")
         .label(profiles::NAME_LABEL)
         .placeholder(profiles::NAME_LABEL)
-        .value(move || typed.get())
         .on_change(move |text: &str| typed.set(text.to_owned()))
         .on_submit(move |_: &str| submit())
         .auto_correct(false)

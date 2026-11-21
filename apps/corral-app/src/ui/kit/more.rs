@@ -9,7 +9,7 @@
 //! the keyboard's menu and the composer an operation that asks for input opens.
 
 use nsh_base::{button as press_target, context_menu, menu, menu_item, submenu};
-use nsh_core::element::{StyleRefinement, color as for_appearance, input};
+use nsh_core::element::{StyleRefinement, color as for_appearance};
 use nsh_core::prelude::*;
 
 use crate::model::commands::CONFIRM_CANCEL;
@@ -17,6 +17,7 @@ use crate::model::projects;
 use crate::model::work::{self, Press, Record, VerbAction};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::kit::marks::hue_ink;
@@ -546,7 +547,9 @@ fn composer(app: AppState) -> Modal {
             // A prose field keeps its line breaks: Return breaks the line there, and Tab reaches
             // Send; a one-line field sends on Return.
             let multiline = field.multiline;
-            let entry = input()
+            let displayed =
+                move || values.with(|values| values.get(index).cloned().unwrap_or_default());
+            let entry = copyable_input(app, None, displayed)
                 .test_id(&format!("field-verb-{index}"))
                 .label(field.label)
                 .placeholder(field.placeholder)
@@ -557,7 +560,6 @@ fn composer(app: AppState) -> Modal {
                 } else {
                     SubmitBehavior::BlurAndSubmit
                 })
-                .value(move || values.with(|values| values.get(index).cloned().unwrap_or_default()))
                 .on_change(move |typed: &str| {
                     values.update(|values| {
                         if let Some(value) = values.get_mut(index) {

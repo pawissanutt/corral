@@ -1,7 +1,7 @@
 //! A one-row Changes toolbar, with detailed comparison and filter controls under More.
 
 use nsh_core::EllipsizeMode;
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
@@ -12,6 +12,7 @@ use crate::model::session::{
 };
 use crate::model::text::span;
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::hint::hint_on;
@@ -462,18 +463,17 @@ fn filter(app: AppState, shown: Memo<Option<ChangesTab>>) -> AnyElement {
     let form = app.form;
     let handle = element_ref();
     app.focus_when_asked(FILTER_FIELD, handle);
-    let entry = input()
-        .element_ref(&handle)
+    let displayed = move || {
+        shown.with(|tab| {
+            tab.as_ref()
+                .map(|tab| tab.filter.clone())
+                .unwrap_or_default()
+        })
+    };
+    let entry = copyable_input(app, Some(handle), displayed)
         .test_id(FILTER_FIELD)
         .label("Filter changed paths")
         .placeholder("Filter paths")
-        .value(move || {
-            shown.with(|tab| {
-                tab.as_ref()
-                    .map(|tab| tab.filter.clone())
-                    .unwrap_or_default()
-            })
-        })
         .on_change(move |typed: &str| {
             let session = shown.with_untracked(|tab| tab.as_ref().map(|tab| tab.session.clone()));
             if let Some(session) = session {

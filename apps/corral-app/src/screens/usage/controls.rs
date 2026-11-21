@@ -3,12 +3,13 @@
 //! either field applies too) and why a typed range was not applied. The fields are built once
 //! while Custom stays chosen, so typing re-reads the model without rebuilding them.
 
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::usage::{self, GROUPINGS, PERIODS, Page, State};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::kit::button::{ButtonKind, button, seg};
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::term;
@@ -86,12 +87,10 @@ fn field(
 ) -> AnyElement {
     let form = app.form;
     let handle = element_ref();
-    let entry = input()
-        .element_ref(&handle)
+    let entry = copyable_input(app, Some(handle), move || app.usage.with(value))
         .test_id(test_id)
         .label(label)
         .placeholder(placeholder)
-        .value(move || app.usage.with(value))
         .on_change(move |words: &str| {
             let words = words.to_owned();
             change(app, move |state| typed(state, &words));

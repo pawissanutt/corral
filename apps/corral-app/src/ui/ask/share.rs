@@ -4,10 +4,11 @@
 //! extension API. Sending hands the drawn link and the caption to Ask as its draft, so nothing
 //! leaves the device until the owner sends it there, through Ask's own path.
 
-use nsh_core::element::{color as for_appearance, input};
+use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::icons::{Icon, icon};
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::chip::illus;
@@ -371,7 +372,7 @@ fn compose(app: AppState, step: Signal<Step>, caption: Signal<String>) -> AnyEle
                 .px(px(16.0))
                 .pb(px(10.0))
                 .child(attachment())
-                .child(caption_field(caption))
+                .child(caption_field(app, caption))
                 .child(dim(app, COMPOSE_NOTE)),
         )
         .into_element()
@@ -414,16 +415,14 @@ fn attachment() -> AnyElement {
 }
 
 /// The optional caption, focused as the step opens so the keyboard comes up with it.
-fn caption_field(caption: Signal<String>) -> AnyElement {
+fn caption_field(app: AppState, caption: Signal<String>) -> AnyElement {
     let entry = element_ref();
     after_answer(move || entry.focus());
-    input()
-        .element_ref(&entry)
+    copyable_input(app, Some(entry), move || caption.get())
         .test_id("share-caption")
         .label(PLACEHOLDER)
         .multiline(true)
         .placeholder(PLACEHOLDER)
-        .value(move || caption.get())
         .on_change(move |text: &str| caption.set(text.to_owned()))
         .h(px(88.0))
         .px(px(12.0))

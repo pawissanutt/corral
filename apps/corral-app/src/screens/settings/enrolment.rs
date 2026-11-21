@@ -11,6 +11,7 @@ use crate::model::Form;
 use crate::model::devices::{self, DeviceOp, PairBrowser, PairClient, ThisDevice};
 use crate::model::settings::Pending;
 use crate::state::AppState;
+use crate::ui::composer::copyable_input;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color, text_size};
@@ -296,11 +297,15 @@ fn labelled_field(
     } else {
         text_size(form)
     };
-    let entry_field = input()
+    let entry_field = match entry {
+        Entry::Text => copyable_input(app, None, value),
+        // Pairing codes and links never enter Corral's clipboard fallback.
+        Entry::Code => input().value(value),
+    };
+    let entry_field = entry_field
         .test_id(&id)
         .label(label)
         .placeholder(label)
-        .value(value)
         .on_change(move |text: &str| on_change(text.to_owned()))
         .auto_correct(false)
         .auto_capitalize(AutoCapitalize::None)
