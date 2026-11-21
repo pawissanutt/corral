@@ -606,10 +606,11 @@ export class HostSession {
         },
         get approved() { return host.buildProviders; },
         parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
-        context: { session: { worktree: options.cwd, name: `${options.identity.role} session`,
-          ...(options.identity.role === "worker" && options.identity.task ? { task: options.identity.task } : {}) },
+        context: { session: { worktree: options.cwd, name: `${options.identity.role} session` },
           dir: options.runtimeDir ?? join(options.agentDir, "runtime"),
           settings: { maxParallel: settings.maxParallel, profiles: options.childProfiles ?? [] } },
+        // A bound worker's launch cwd is authoritative, including reruns and adopted checkouts.
+        buildWorktree: options.identity.role === "worker" && !!options.identity.task,
         agentDir: options.agentDir, bound: true, allowedKinds: settings.allowedKinds,
         maxTurns: settings.maxTurns, timeoutSecs: settings.timeoutSecs,
         ...(auxiliary.explore ? { research: { settings: auxiliary.explore } } : {}),

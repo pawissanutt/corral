@@ -129,23 +129,28 @@ test("quick research reserves its fourth turn, uses canonical transcript identit
   } finally { proceed.resolve(); await handle.done; f.cleanup(); }
 });
 
-test("a bound worker slice may write in its task checkout but not a sibling checkout", async () => {
-  const f = fixture();
-  const worktree = join(f.dir, ".worktrees", "T-17");
-  mkdirSync(worktree, { recursive: true });
-  f.body(async () => {
-    expect(await f.emit("tool_call", { toolName: "edit", input: { path: "src/file.ts" } })).toBeUndefined();
-    expect(await f.emit("tool_call", { toolName: "write", input: { path: "../T-18/src/file.ts" } })).toMatchObject({ block: true });
-    f.messages.push(answer("Finished"));
+for (const checkout of ["T-17-r2", "T-17-handoff-01234567-r2"]) {
+  test(`a bound worker slice may write inside ${checkout} but not beyond its checkout`, async () => {
+    const f = fixture();
+    try {
+      const worktree = join(f.dir, ".worktrees", checkout);
+      mkdirSync(worktree, { recursive: true });
+      f.body(async () => {
+        expect(await f.emit("tool_call", { toolName: "edit", input: { path: "src/file.ts" } })).toBeUndefined();
+        expect(await f.emit("tool_call", { toolName: "write", input: { path: "src/new.ts" } })).toBeUndefined();
+        for (const path of ["../T-18/src/file.ts", "../marker", "../../outside.ts", ".worktrees/nested/file.ts", ".git/config"]) {
+          expect(await f.emit("tool_call", { toolName: "write", input: { path } })).toMatchObject({ block: true });
+        }
+        f.messages.push(answer("Finished"));
+      });
+      const handle = createSdkRunner({ ...f.options, bound: true, buildWorktree: true, parentLoadout: ["edit", "write"],
+        context: { ...f.options.context, session: { worktree, name: "parent worker" } } })
+        .run({ id: "slice", title: "Write", brief: "Edit src/file.ts", owns: ["src/file.ts"], kind: "slice" },
+          { profile: "fixture", provider: "openai-codex", model: "fixture" }, f.hooks, new AbortController().signal);
+      expect(await handle.done).toMatchObject({ report: "Finished" });
+    } finally { f.cleanup(); }
   });
-  try {
-    const handle = createSdkRunner({ ...f.options, bound: true, parentLoadout: ["edit", "write"],
-      context: { ...f.options.context, session: { worktree, name: "parent worker", task: "T-17" } } })
-      .run({ id: "slice", title: "Write", brief: "Edit src/file.ts", owns: ["src/file.ts"], kind: "slice" },
-        { profile: "fixture", provider: "openai-codex", model: "fixture" }, f.hooks, new AbortController().signal);
-    expect(await handle.done).toMatchObject({ report: "Finished" });
-  } finally { f.cleanup(); }
-});
+}
 
 test("bound slices intersect SDK base tools and honor the supplied write refusal without loading local overrides", async () => {
   const f = fixture();
