@@ -286,6 +286,62 @@ fn dispatch_done_green_gate_approve_cleans_up_without_requiring_clean_base() {
 }
 
 #[test]
+fn done_skips_inherited_artifacts_and_unrelated_ignored_outputs() {
+    let mut cx = Fixture::new(&[]);
+    cx.engine
+        .config
+        .artifacts
+        .globs
+        .push("**/*report*.md".into());
+    fs::write(cx.repo.join("old-report.md"), "from base\n").unwrap();
+    fs::write(cx.repo.join("updated-report.md"), "before\n").unwrap();
+    fs::write(cx.repo.join("deleted-report.md"), "remove me\n").unwrap();
+    fs::write(
+        cx.repo.join(".gitignore"),
+        "/.worktrees/\n/.evidence/\n/target/\n",
+    )
+    .unwrap();
+    git(&cx.repo, &["add", "."]);
+    git(&cx.repo, &["commit", "-m", "base reports"]);
+
+    let id = cx.backlog("publish new evidence");
+    let run = cx.dispatch(&id);
+    fs::write(run.worktree.join("updated-report.md"), "after\n").unwrap();
+    fs::remove_file(run.worktree.join("deleted-report.md")).unwrap();
+    for dir in ["docs/records", ".evidence", "target"] {
+        fs::create_dir_all(run.worktree.join(dir)).unwrap();
+    }
+    fs::write(run.worktree.join("docs/records/new-report.md"), "new\n").unwrap();
+    fs::write(
+        run.worktree.join(".evidence/scratch-report.md"),
+        "evidence\n",
+    )
+    .unwrap();
+    fs::write(run.worktree.join("target/build-report.md"), "generated\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let name = std::ffi::OsStr::from_bytes(b"non-utf8-\xff.txt");
+        fs::write(run.worktree.join(name), "not evidence\n").unwrap();
+    }
+    cx.done(&id);
+
+    let mut titles: Vec<_> = cx
+        .engine
+        .list_artifacts(Some(&id))
+        .unwrap()
+        .into_iter()
+        .filter(|artifact| artifact.kind.is_none())
+        .map(|artifact| artifact.title)
+        .collect();
+    titles.sort();
+    assert_eq!(
+        titles,
+        ["new-report.md", "scratch-report.md", "updated-report.md"]
+    );
+}
+
+#[test]
 fn red_gate_sends_back_then_blocks_with_typed_owner_actions() {
     let mut cx = Fixture::new(&["test -f green", "printf 'unexpected second line' "]);
     cx.project().max_rounds = Some(1);

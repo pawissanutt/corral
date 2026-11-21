@@ -31,6 +31,8 @@
 # See docs/guide/daemon.md for serving, remote TLS and pairing.
 
 # [artifacts]
+# On `done`, globs match files changed from the submission base and ignored evidence
+# under .evidence/, .omo/evidence/, or .omo/plans/. Use `artifact add` for other files.
 # globs = ["docs/**/records/*", "**/*report*.html"]
 # max_bytes = 20000000
 

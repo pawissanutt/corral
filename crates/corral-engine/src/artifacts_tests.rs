@@ -76,11 +76,15 @@ fn artifact_add_list_show_size_and_glob_scan() {
         &[
             "**/*report*.html".to_owned(),
             "docs/**/records/*".to_owned(),
+            "./report.html".to_owned(),
+        ],
+        [
             "report.html".to_owned(),
+            "docs/a/records/note.txt".to_owned(),
         ],
     )
     .unwrap();
     assert_eq!(scan, vec![record, file]);
-    assert!(scan_globs(root.path(), &["../*".to_owned()]).is_err());
+    assert!(scan_globs(root.path(), &["../*".to_owned()], []).is_err());
     assert!(engine.show_artifact("T-001:999").is_err());
 }

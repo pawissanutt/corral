@@ -28,7 +28,10 @@ mod target_tests;
 mod tests;
 pub mod work;
 
-pub use history::{Commit, changed_paths_between, commits_between, merge_base, read_blob};
+pub use history::{
+    Commit, changed_path_bytes_between, changed_paths_between, commits_between, merge_base,
+    read_blob,
+};
 pub use memo::Memo;
 pub use patch::review_patch;
 pub use paths::{changed_paths_with_renames, observed_paths};
