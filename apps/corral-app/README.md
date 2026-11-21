@@ -362,7 +362,9 @@ it, for every role: words as rendered Markdown, thinking (folding to one row), t
 open into their arguments, output, diff or written content and recorded call and result, the
 owner's `!` commands, images, compaction and branch dividers, model, effort, bookmark, stop
 and error rows, run marks, host notices, presenter cards and each assistant turn's model,
-stop and usage. A recorded item larger than its preview shows the preview until its
+stop and usage. Parent and child conversations open at the newest page. Scroll up near the
+start of the visible history to read an older page; **Show earlier messages** also works if
+the page is too short to scroll. A recorded item larger than its preview shows the preview until its
 complete content arrives: words are fetched as soon as they are shown, everything else when
 its row is opened. While the page is open it watches the session's live turn, drawing the
 streamed words and running tools after the recorded messages until the transcript holds them,
