@@ -32,6 +32,22 @@ Sessions also accept `--project <name>` and `--headless`; non-interactive
 launches are headless by default. For build defaults and cleanup, see
 [Build sessions](build-sessions.md).
 
+### Default model for terminal launches
+
+Set the default for `corral-pi chat` and new `corral-pi build` sessions in the
+workspace's `.corral-next/pi.toml`:
+
+```toml
+[startup]
+model = "openai-codex/gpt-6.2-sol"
+```
+
+An explicit model or provider (including one from a Build `--profile`) takes
+precedence over this setting. Existing conversations can restore their saved
+model; use `corral-pi chat --new` to start fresh. This setting does not change
+models for daemon-managed chat, task runs, or Build children. If unset, the
+built-in default remains `openai-codex/gpt-6.1-sol`.
+
 ## From the app
 
 Open a Pi session in Agents to follow its transcript, send or steer messages,

@@ -60,9 +60,10 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
   const profileArgs = values.profile ? buildProfileArgs(workspaceRoot ?? cwd, values.profile) : [];
   rejectRemovedModelOptions(profileArgs);
   const profile = parseArgs({ args: profileArgs, options: modelFlags }).values;
+  const settings = workspaceRoot && !values.resume ? readWorkspaceToml(workspaceRoot, "pi.toml") : undefined;
   return {
     launch: { version: 1, assets, dataRoot, repoRoot, here: values.here === true,
-      ...modelSettings({ ...profile, ...values }), ...(corral ? { corral } : { bare: true }),
+      ...modelSettings({ ...profile, ...values }, settings), ...(corral ? { corral } : { bare: true }),
       ...(workspaceRoot ? { workspaceRoot } : {}), ...(corral && project ? { project } : {}),
       ...(values.name ? { name: values.name } : {}), ...(values.resume ? { resume: values.resume } : {}),
       settings: { exitPolicy: workspaceRoot ? "review" : "none", maxParallel: DEFAULT_MAX_PARALLEL,

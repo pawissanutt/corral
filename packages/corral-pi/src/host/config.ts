@@ -78,7 +78,16 @@ export function rejectRemovedModelOptions(argv: readonly string[]): void {
 }
 
 export function modelSettings(values: { model?: string; provider?: string; effort?: string; fallback?: readonly string[];
-  "aws-profile"?: string; "aws-region"?: string }) {
+  "aws-profile"?: string; "aws-region"?: string }, settings?: Json) {
+  if (values.model === undefined && values.provider === undefined) {
+    const model = (settings?.startup as { model?: unknown } | undefined)?.model;
+    if (model !== undefined) {
+      if (typeof model !== "string" || !/^[^/]+\/[^\s\0]+$/.test(model) || !isProviderId(model.split("/", 1)[0])) {
+        throw new Error(".corral-next/pi.toml: startup.model must be a known <provider>/<model>");
+      }
+      values = { ...values, model };
+    }
+  }
   const prefix = values.model?.split("/", 1)[0];
   const qualified = values.model?.includes("/") && isProviderId(prefix) ? prefix : undefined;
   const provider = values.provider ?? qualified ?? "openai-codex";
@@ -115,12 +124,14 @@ const ABILITIES: Readonly<Record<"worker" | "reviewer" | "assistant" | "build", 
   build: [...COMMON_ABILITIES, ...WORK_ABILITIES, "lsp"],
 };
 
-export function workspaceSettings(root: string, role: keyof typeof ABILITIES, run?: string) {
+function readPiSettings(root: string): Json {
   const settingsPath = join(root, ".corral-next", "pi.toml");
-  let source: string | undefined;
-  try { source = readFileSync(settingsPath, "utf8"); }
+  try { return TOML.parse(readFileSync(settingsPath, "utf8")) as Json; }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  const raw = source === undefined ? {} : TOML.parse(source) as Json;
+  return {};
+}
+
+export function workspaceSettings(root: string, role: keyof typeof ABILITIES, run?: string, raw = readPiSettings(root)) {
   const enabled = [...ABILITIES[role]];
   if (role === "worker" && run) enabled.push("checkpoints");
   if (raw.bash_rules !== undefined) enabled.push("bash_rules");
@@ -189,6 +200,7 @@ export function parseRunFlags(command: "run" | "chat", argv: readonly string[], 
   const task = env.CORRAL_TASK || undefined;
   const run = env.CORRAL_RUN || undefined;
   const id = role === "assistant" ? basename(dir) : task ? `${task}/${role === "reviewer" ? "reviewer" : run ?? basename(dir)}` : basename(dir);
+  const settings = readPiSettings(root);
   return {
     identity: { store: "local", project: values.project ?? "", role, task, run,
       ...(role === "assistant" ? { assistant: id } : {}) },
@@ -199,6 +211,6 @@ export function parseRunFlags(command: "run" | "chat", argv: readonly string[], 
     ...(!values.dir ? { terminalChat: true } as const : {}),
     freshSession: values.new === true || env.CORRAL_FRESH === "1",
     ...(values["prompt-file"] ? { promptFile: resolve(cwd, values["prompt-file"]) } : {}),
-    ...workspaceSettings(root, role, run), ...modelSettings(values),
+    ...workspaceSettings(root, role, run, settings), ...modelSettings(values, !values.dir ? settings : undefined),
   };
 }

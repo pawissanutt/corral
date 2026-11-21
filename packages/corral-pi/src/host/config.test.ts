@@ -65,6 +65,32 @@ test("fallback uses explicit ordered provider models and cannot point at the lau
   expect(() => parse(["--max-usd", "3"])).toThrow();
 });
 
+test("workspace startup model applies to direct Chat and Build without overriding explicit choices", () => {
+  const root = mkdtempSync(join(tmpdir(), "corral-startup-model-"));
+  try {
+    const settings = join(root, ".corral-next");
+    mkdirSync(settings);
+    writeFileSync(join(settings, "corral.toml"), '[profiles.demo]\nharness = "pi"\nmodel = "anthropic/claude-opus-4-8"\n');
+    const piToml = join(settings, "pi.toml");
+    const chat = (...flags: string[]) => parseRunFlags("chat", flags, "/assets", {}, root);
+    const build = (...flags: string[]) => parseBuildFlags(flags, "/assets", {}, root).launch;
+    expect(chat().model).toBe("gpt-6.1-sol");
+    expect(build().model).toBe("gpt-6.1-sol");
+    writeFileSync(piToml, '[startup]\nmodel = "openai-codex/gpt-6.2-sol"\n');
+    for (const launch of [chat, build]) {
+      expect(launch()).toMatchObject({ provider: "openai-codex", model: "openai-codex/gpt-6.2-sol" });
+      expect(launch("--model", "anthropic/claude-opus-4-8").provider).toBe("anthropic");
+      expect(launch("--provider", "anthropic").model).toBe("claude-opus-4-8");
+    }
+    expect(build("--profile", "demo").model).toBe("anthropic/claude-opus-4-8");
+    expect(build("--resume", "existing").model).toBe("gpt-6.1-sol");
+    expect(parseRunFlags("chat", ["--dir", "managed"], "/assets", {}, root).model).toBe("gpt-6.1-sol");
+    expect(parseRunFlags("run", ["--dir", "managed"], "/assets", {}, root).model).toBe("gpt-6.1-sol");
+    writeFileSync(piToml, '[startup]\nmodel = "not-qualified"\n');
+    expect(() => chat()).toThrow("startup.model");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("Build launch and child profiles use provider-qualified models and preserve fallback order", () => {
   const dir = mkdtempSync(join(tmpdir(), "corral-profile-fallback-"));
   try {
