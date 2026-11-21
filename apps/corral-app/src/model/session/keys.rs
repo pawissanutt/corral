@@ -325,7 +325,10 @@ pub fn press(key: &str, cx: &Cx<'_>, web: bool) -> Option<Action> {
         }),
         KeyAction::Jump => {
             let draft_empty = cx.ui.draft.trim().is_empty();
-            (cx.ui.tab == Tab::Chat && !cx.log_only() && (key != "end" || draft_empty))
+            let conversation = cx.ui.tab == Tab::Chat
+                || (cx.ui.tab == Tab::Agents
+                    && matches!(cx.ui.sub, Some(super::SubView::Agent(_))));
+            (conversation && !cx.log_only() && (key != "end" || draft_empty))
                 .then_some(Action::JumpEnd(session))
         }
         // While an agent's conversation is open the model keys are that agent's: the model key

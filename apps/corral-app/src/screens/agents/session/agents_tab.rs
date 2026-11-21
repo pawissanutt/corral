@@ -109,7 +109,9 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
         untracked(|| match shown {
             Shown::None => None,
             Shown::List => Some(list(app, tab)),
-            Shown::Conversation(_) => Some(conversation::page(app, tab)),
+            Shown::Conversation(_) => {
+                Some(conversation::page(app, tab, move || page.with(|p| p.jump)))
+            }
             Shown::Job(_) => Some(job::output(app, tab)),
         })
     })

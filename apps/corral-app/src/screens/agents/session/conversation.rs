@@ -72,7 +72,7 @@ impl Head {
 }
 
 /// The conversation's head, what it asks, and its following transcript.
-pub(super) fn page(app: AppState, tab: Tab) -> AnyElement {
+pub(super) fn page(app: AppState, tab: Tab, jump: impl Fn() -> u32 + 'static) -> AnyElement {
     let form = app.form;
     let phone = form == Form::Phone;
     // A parent subscription does not pin a child's transcript pages or item assemblies.
@@ -158,7 +158,7 @@ pub(super) fn page(app: AppState, tab: Tab) -> AnyElement {
                     .map(|(t, _)| transcript::Earlier::of(t))
             })
         },
-        || 0,
+        jump,
     );
     view()
         .flex_1()
