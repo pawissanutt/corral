@@ -76,7 +76,15 @@ pub fn shell(app: AppState) -> AnyElement {
                 .child(toast(app))
                 .child(key_line(app, typing, shown)),
         )
-        .child(terminal_bar::top_bar(app))
+        .child(when(
+            move || {
+                !matches!(app.live_page(), Some(crate::model::Live::Session(_)))
+                    || app
+                        .feed
+                        .with(|feed| feed.link == crate::model::daemon::Link::Down)
+            },
+            move || terminal_bar::top_bar(app),
+        ))
         .child(ask::hotkey(app))
         .into_element()
 }

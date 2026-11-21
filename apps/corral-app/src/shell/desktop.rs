@@ -59,7 +59,15 @@ pub fn shell(app: AppState) -> AnyElement {
         .flex_1()
         .min_h(px(0.0))
         .bg(color(Token::Shell))
-        .child(top_bar(app, workspace, collapsed))
+        .child(when(
+            move || {
+                !matches!(app.live_page(), Some(crate::model::Live::Session(_)))
+                    || app
+                        .feed
+                        .with(|feed| feed.link == crate::model::daemon::Link::Down)
+            },
+            move || top_bar(app, workspace, collapsed),
+        ))
         .child(
             view()
                 .flex_1()

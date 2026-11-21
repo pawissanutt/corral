@@ -163,7 +163,15 @@ pub(super) fn head(app: AppState, page: Memo<SessionPage>, wide: Memo<bool>) -> 
     let back = untracked(|| header.with(|h| h.back.clone()));
     let name = move || header.with(|h| h.name.clone());
     let role = move || header.with(|h| h.role.clone());
-    let shown_id = move || header.with(|h| h.shown_id.clone());
+    let shown_id = move || {
+        let id = header.with(|h| h.shown_id.clone());
+        if !wide.get() {
+            return id;
+        }
+        app.snapshot()
+            .workspace
+            .map_or_else(|| id.clone(), |ws| format!("{} / {id}", ws.name))
+    };
     let back_action = back.1.clone();
     if form == Form::Terminal {
         let first = view()
