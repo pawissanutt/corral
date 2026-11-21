@@ -757,51 +757,219 @@ diff --git a/dist/index.js b/dist/index.js
 +export { getOsc8LinkAtColumn, replaceControlCharacters, selectionPieces, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, } from "./utils.js";
  //# sourceMappingURL=index.js.map
 \ No newline at end of file
+diff --git a/dist/tui-alt-screen.d.ts b/dist/tui-alt-screen.d.ts
+--- a/dist/tui-alt-screen.d.ts
++++ b/dist/tui-alt-screen.d.ts
+@@ -50,6 +50,7 @@
+     private imageProtocol;
+     private savedCapabilities?;
+     private readonly uploadedKittyImages;
++    private selectionField?;
+     private selectionAnchor?;
+     private selectionFocus?;
+     private selectionGranularity;
+@@ -153,6 +154,10 @@
+     private updateSelectionAutoScroll;
+     private autoScrollSelection;
+     private stopSelectionAutoScroll;
++    private selectionOverlayBox;
++    private selectionRowsInBox;
++    private captureSelectionField;
++    private getSelectionFieldClip;
+     private handleSelectionMouseEvent;
+     private getSelectionBounds;
+     private getSelectionColumns;
 diff --git a/dist/tui-alt-screen.js b/dist/tui-alt-screen.js
 --- a/dist/tui-alt-screen.js
 +++ b/dist/tui-alt-screen.js
-@@ -1106,6 +1106,17 @@
+@@ -51,6 +51,7 @@
+     imageProtocol = null;
+     savedCapabilities;
+     uploadedKittyImages = new Map();
++    selectionField;
+     selectionAnchor;
+     selectionFocus;
+     selectionGranularity = "character";
+@@ -86,6 +87,7 @@
+         this.implicitDocument = {
+             render: (width) => super.render(width),
+             handleMouse: (event) => super.handleMouse(event),
++            selectionRows: (width, y) => super.selectionRows(width, y),
+             invalidate: () => {
+                 for (const child of this.children)
+                     child.invalidate();
+@@ -143,6 +145,8 @@
+     setLayoutRoot(component) {
+         if (this.layoutRoot === component)
+             return;
++        if (this.selectionField)
++            this.resetTextSelection();
+         this.layoutRoot = component;
+         this.currentLayout = undefined;
+         this.requestRender();
+@@ -172,6 +176,7 @@
+             this.invalidate();
+         }
+         this.lastDocument = [];
++        this.selectionField = undefined;
+         this.selectionAnchor = undefined;
+         this.selectionFocus = undefined;
+         this.selectionGranularity = "character";
+@@ -501,6 +506,7 @@
+             this.clearComponentMouseGesture();
+             this.lastComponentClick = undefined;
+             if (hadActiveSelection) {
++                this.selectionField = undefined;
+                 this.selectionAnchor = undefined;
+                 this.selectionFocus = undefined;
+                 this.selectionGranularity = "character";
+@@ -699,6 +705,7 @@
+         return count;
+     }
+     clearTextSelection() {
++        this.selectionField = undefined;
+         this.stopSelectionAutoScroll();
+         this.selectionPressActive = false;
+         this.selectionAnchor = undefined;
+@@ -914,15 +921,7 @@
+         const target = this.getScrollbarTargetAt(event.x, event.y);
+         if (!target)
+             return false;
+-        this.stopSelectionAutoScroll();
+-        this.selectionPressActive = false;
+-        this.selectionAnchor = undefined;
+-        this.selectionFocus = undefined;
+-        this.selectionGranularity = "character";
+-        this.selectionInitialRange = undefined;
+-        this.lastClick = undefined;
+-        this.pressedUrl = undefined;
+-        this.selectionDragged = false;
++        this.resetTextSelection();
+         this.setScrollbarHover(target.scrollView);
+         const onThumb = event.y >= target.geometry.thumbTop && event.y < target.geometry.thumbTop + target.geometry.thumbHeight;
+         const grabOffset = onThumb ? event.y - target.geometry.thumbTop : Math.floor(target.geometry.thumbHeight / 2);
+@@ -1102,6 +1101,74 @@
+         this.selectionAutoScrollDirection = 0;
+         this.selectionDragPointer = undefined;
+     }
++    selectionOverlayBox({ entry, col, row, width, height }) {
++        const rect = { x: col, y: row, width, height };
++        return { component: entry.component, rect, clip: rect, children: [] };
++    }
++    selectionRowsInBox(box, localRow) {
++        const firstRow = box.lineOffset ?? 0;
++        // Respect the leaf's allocation, not its viewport clip: scrolling can reveal the rest.
++        return box.component.selectionRows?.(box.rect.width, localRow)
++            ?.filter(row => row.y >= firstRow && row.y < firstRow + box.rect.height);
++    }
++    captureSelectionField(x, y) {
++        if (this.previousScreenWidth !== this.terminal.columns || this.previousScreenHeight !== this.terminal.rows)
++            return undefined;
++        const overlay = this.renderedOverlayLayouts.findLast(l => x >= l.col && x < l.col + l.width && y >= l.row && y < l.row + l.height);
++        const boxes = overlay ? [this.selectionOverlayBox(overlay)] : this.currentLayout ? getLayoutBoxesAt(this.currentLayout, x, y) : [];
++        for (const box of boxes) {
++            const lineOffset = box.lineOffset ?? 0;
++            const localRow = y - box.rect.y + lineOffset;
++            const rows = this.selectionRowsInBox(box, localRow);
++            if (!rows?.some(row => row.y === localRow))
++                continue;
++            let scrollBox = box.parent;
++            while (scrollBox && !scrollBox.scrollView)
++                scrollBox = scrollBox.parent;
++            const scrollView = scrollBox?.scrollView;
++            // Like the drag endpoints, store scrollable selections in unscrolled content cells.
++            const left = box.rect.x - (scrollBox?.rect.x ?? 0);
++            const top = box.rect.y - (scrollBox ? scrollBox.rect.y - scrollView.scrollTop : 0);
++            return {
++                component: box.component, overlay: overlay?.entry, scrollView, left, top, lineOffset, localRow,
++                width: box.rect.width, screenWidth: this.terminal.columns, screenHeight: this.terminal.rows,
++                rows: new Map(rows.map(row => [top + row.y - lineOffset, { ...row, left: left + row.left }])),
++            };
++        }
++    }
++    getSelectionFieldClip(layout) {
++        const field = this.selectionField;
++        if (!field)
++            return undefined;
++        if (layout?.width === field.screenWidth && layout.height === field.screenHeight) {
++            const scrollBox = field.scrollView ? getScrollViewBox(layout, field.scrollView) : undefined;
++            const overlay = field.overlay ? this.renderedOverlayLayouts.find(l => l.entry === field.overlay) : undefined;
++            const root = field.overlay ? overlay && this.selectionOverlayBox(overlay)
++                : field.scrollView ? scrollBox?.children[0] : layout.root;
++            const x = field.left + (scrollBox?.rect.x ?? 0);
++            const y = field.top + (scrollBox ? scrollBox.rect.y - field.scrollView.scrollTop : 0);
++            const find = box => {
++                if (box.component === field.component && box.rect.x === x && box.rect.y === y &&
++                    box.rect.width === field.width && (box.lineOffset ?? 0) === field.lineOffset)
++                    return box;
++                for (const child of box.children) {
++                    const match = find(child);
++                    if (match)
++                        return match;
++                }
++            };
++            const box = root && find(root);
++            const rows = box && this.selectionRowsInBox(box, field.localRow);
++            if (rows?.length === field.rows.size && rows.every(row => {
++                const previous = field.rows.get(field.top + row.y - field.lineOffset);
++                return previous?.left === field.left + row.left && previous.logicalLine === row.logicalLine && previous.text === row.text;
++            }))
++                return box.clip;
++        }
++        // A moved/reflowed/removed block no longer shares the endpoints' geometry.
++        this.resetTextSelection();
++        return undefined;
++    }
+     handleSelectionMouseEvent(event) {
          const button = event.button & 3;
          if (button !== 0 && !(event.release && button === 3))
-             return;
-+        if (!event.release && !(event.button & 32)) {
-+            this.fieldRows = undefined;
-+            const overlay = this.renderedOverlayLayouts.findLast(l => event.x >= l.col && event.x < l.col + l.width && event.y >= l.row && event.y < l.row + l.height);
-+            const boxes = overlay ? [{ component: overlay.entry.component, rect: { x: overlay.col, y: overlay.row, width: overlay.width }, clip: { y: overlay.row, height: overlay.height } }] : this.currentLayout ? getLayoutBoxesAt(this.currentLayout, event.x, event.y) : [];
-+            for (const box of boxes) {
-+                const top = box.rect.y - (box.lineOffset ?? 0);
-+                const rows = box.component.selectionRows?.(box.rect.width, event.y - top)?.map(row => ({ ...row, y: top + row.y, left: box.rect.x + row.left }))
-+                    .filter(row => row.y >= box.clip.y && row.y < box.clip.y + box.clip.height);
-+                if (rows?.some(row => row.y === event.y)) { this.fieldRows = rows; break; }
-+            }
-+        }
-         const anchorScrollView = this.selectionAnchor?.scrollView;
-         const point = this.getSelectionPoint(event, anchorScrollView);
-         if (event.release) {
-@@ -1166,7 +1177,7 @@
+@@ -1123,8 +1190,7 @@
+             const clickedUrl = isClick ? this.pressedUrl : undefined;
+             this.pressedUrl = undefined;
+             if (clickedUrl && this.openUrl) {
+-                this.selectionAnchor = undefined;
+-                this.selectionFocus = undefined;
++                this.clearTextSelection();
+                 try {
+                     this.openUrl(clickedUrl);
+                 }
+@@ -1166,7 +1232,9 @@
          }
          this.stopSelectionAutoScroll();
          this.selectionPressActive = true;
 -        const scrollView = !this.hasOverlay() && this.currentLayout
-+        const scrollView = !this.fieldRows && !this.hasOverlay() && this.currentLayout
++        this.selectionField = this.captureSelectionField(event.x, event.y);
++        const scrollView = this.selectionField ? this.selectionField.scrollView
++            : !this.hasOverlay() && this.currentLayout
              ? getScrollViewsAt(this.currentLayout, event.x, event.y)[0]
              : undefined;
          const anchor = this.getSelectionPoint(event, scrollView);
-@@ -1216,6 +1227,26 @@
+@@ -1184,6 +1252,9 @@
+         this.requestRender();
+     }
+     getSelectionBounds() {
++        if (this.selectionField && (this.selectionField.screenWidth !== this.terminal.columns ||
++            this.selectionField.screenHeight !== this.terminal.rows))
++            return undefined;
+         if (!this.selectionAnchor || !this.selectionFocus)
+             return undefined;
+         if (this.selectionAnchor.scrollView !== this.selectionFocus.scrollView)
+@@ -1216,6 +1287,27 @@
          const selection = this.getSelectionBounds();
          if (!selection)
              return undefined;
-+        if (this.fieldRows) {
++        if (this.selectionField) {
 +            let out = "", last;
-+            for (const row of this.fieldRows) {
-+                if (row.y < selection.start.row || row.y > selection.end.row) continue;
++            for (const [y, row] of this.selectionField.rows) {
++                if (y < selection.start.row || y > selection.end.row)
++                    continue;
 +                const width = visibleWidth(row.text);
 +                let from = 0, to = width;
-+                if (row.y === selection.start.row) {
++                if (y === selection.start.row) {
 +                    const col = Math.max(0, selection.start.col - row.left);
 +                    from = getGraphemeCellRange(row.text, col)?.start ?? Math.min(width, col);
 +                }
-+                if (row.y === selection.end.row) {
++                if (y === selection.end.row) {
 +                    const col = selection.end.col - row.left;
 +                    to = selection.end.boundary || col < 0 ? Math.max(0, col) : (getGraphemeCellRange(row.text, col)?.end ?? width);
 +                }
@@ -814,19 +982,69 @@ diff --git a/dist/tui-alt-screen.js b/dist/tui-alt-screen.js
          let sourceLines = this.previousScreen;
          if (selection.start.scrollView) {
              if (!this.currentLayout)
-@@ -1398,6 +1429,12 @@
+@@ -1358,10 +1450,13 @@
+         return `${result}\x1b[27m`;
+     }
+     applySelection(screen, layout = this.currentLayout) {
++        const fieldClip = this.getSelectionFieldClip(layout);
+         const selection = this.getSelectionBounds();
+         if (!selection)
+             return screen;
+         let screenSelection = selection;
++        let rowOffset = 0;
++        let columnOffset = 0;
+         let minRow = 0;
+         let maxRow = screen.length - 1;
+         let minColumn = 0;
+@@ -1376,19 +1471,27 @@
+             maxRow = Math.min(screen.length - 1, box.rect.y + box.rect.height - 1, box.clip.y + box.clip.height - 1);
+             minColumn = Math.max(0, box.rect.x, box.clip.x);
+             maxColumn = Math.min(this.terminal.columns, box.rect.x + box.rect.width, box.clip.x + box.clip.width);
++            rowOffset = box.rect.y - selection.start.scrollView.scrollTop;
++            columnOffset = box.rect.x;
+             screenSelection = {
+                 start: {
+                     ...selection.start,
+-                    row: box.rect.y + selection.start.row - selection.start.scrollView.scrollTop,
+-                    col: box.rect.x + selection.start.col,
++                    row: rowOffset + selection.start.row,
++                    col: columnOffset + selection.start.col,
+                 },
+                 end: {
+                     ...selection.end,
+-                    row: box.rect.y + selection.end.row - selection.start.scrollView.scrollTop,
+-                    col: box.rect.x + selection.end.col,
++                    row: rowOffset + selection.end.row,
++                    col: columnOffset + selection.end.col,
+                 },
+             };
+         }
++        if (fieldClip) {
++            minRow = Math.max(minRow, fieldClip.y);
++            maxRow = Math.min(maxRow, fieldClip.y + fieldClip.height - 1);
++            minColumn = Math.max(minColumn, fieldClip.x);
++            maxColumn = Math.min(maxColumn, fieldClip.x + fieldClip.width);
++        }
+         return screen.map((line, row) => {
+             if (row < minRow ||
+                 row > maxRow ||
+@@ -1398,7 +1501,15 @@
                  return line;
              }
              const lineWidth = visibleWidth(line);
-+            if (this.fieldRows) {
-+                const field = this.fieldRows.find(field => field.y === row);
-+                if (!field) return line;
-+                minColumn = field.left;
-+                maxColumn = field.left + visibleWidth(field.text);
+-            const columns = this.getSelectionColumns(line, row, screenSelection, minColumn, maxColumn);
++            let left = minColumn, right = maxColumn;
++            if (this.selectionField) {
++                const field = this.selectionField.rows.get(row - rowOffset);
++                if (!field)
++                    return line;
++                left = Math.max(left, columnOffset + field.left);
++                right = Math.min(right, columnOffset + field.left + visibleWidth(field.text));
 +            }
-             const columns = this.getSelectionColumns(line, row, screenSelection, minColumn, maxColumn);
++            const columns = this.getSelectionColumns(line, row, screenSelection, left, right);
              if (columns.end <= columns.start)
                  return line;
+             const before = sliceByColumn(line, 0, columns.start, true);
 diff --git a/dist/tui.d.ts b/dist/tui.d.ts
 --- a/dist/tui.d.ts
 +++ b/dist/tui.d.ts
@@ -849,7 +1067,7 @@ diff --git a/dist/tui.d.ts b/dist/tui.d.ts
      handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined;
      /**
 +     * Optional semantic selection: the rows of the one content block at local row `y` when drawn `width` cells wide,
-+     * in local coordinates. A press there selects and copies only those rows' text.
++     * in local coordinates, including rows scrolled out of view. A press there selects only that block's text.
 +     */
 +    selectionRows?(width: number, y: number): readonly SelectionRow[] | undefined;
 +    /**
