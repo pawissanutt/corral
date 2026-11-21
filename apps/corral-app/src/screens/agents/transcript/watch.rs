@@ -1,7 +1,7 @@
 //! What a view of a session's live stream keeps going while it is mounted: one watcher of the
 //! session's live topic (released when the view closes or shows another session, through the
 //! source it was opened on), and a re-read of the recorded transcript each time the host says it
-//! fell behind (not while the owner reads an earlier page).
+//! fell behind.
 
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
@@ -44,13 +44,10 @@ pub fn watch(app: AppState, id: Id) {
             return;
         }
         untracked(|| {
-            let earlier = app.session.with(|state| state.ui(id.as_str()).earlier);
-            if !earlier {
-                run(
-                    app,
-                    Action::Refresh(DetailRef::Session { id: id.to_string() }),
-                );
-            }
+            run(
+                app,
+                Action::Refresh(DetailRef::Session { id: id.to_string() }),
+            );
         });
     });
 }

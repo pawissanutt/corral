@@ -84,6 +84,17 @@ pub(super) fn restore(scope: &str, anchor: String, offset: f32, scroller: Elemen
     }
 }
 
+/// Scrolls `scroller` to `offset` into row `anchor` of `scope` once the row is placed again:
+/// rows were added above it, so where it was last placed no longer holds.
+pub(super) fn hold(scope: &str, anchor: String, offset: f32, scroller: ElementRef) {
+    SCOPES.with(|scopes| {
+        let mut scopes = scopes.borrow_mut();
+        let rows = scopes.entry(scope.to_owned()).or_default();
+        rows.tops.remove(&anchor);
+        rows.pending = Some((anchor, offset, scroller));
+    });
+}
+
 /// No reading position waits to be restored in `scope`.
 pub(super) fn cancel(scope: &str) {
     SCOPES.with(|scopes| {
@@ -94,16 +105,21 @@ pub(super) fn cancel(scope: &str) {
 }
 
 /// The row of `scope` the reader is at with the view scrolled to `offset`: the last row that
-/// starts at or above it, and how far into that row the view starts.
+/// starts at or above it, and how far into that row the view starts. Above the first row (the
+/// control for earlier messages) it is the first row, the view starting before it, so rows
+/// that arrive above keep it in place too.
 pub(super) fn at(scope: &str, offset: f32) -> Option<(String, f32)> {
     SCOPES.with(|scopes| {
         let scopes = scopes.borrow();
-        scopes
+        let tops = scopes
             .get(scope)?
             .tops
             .iter()
-            .filter(|(_, (_, top))| *top <= offset + 1.0)
-            .max_by(|(_, (_, a)), (_, (_, b))| a.total_cmp(b))
-            .map(|(anchor, (_, top))| (anchor.clone(), offset - top))
+            .map(|(anchor, (_, top))| (anchor, *top));
+        tops.clone()
+            .filter(|(_, top)| *top <= offset + 1.0)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .or_else(|| tops.min_by(|a, b| a.1.total_cmp(&b.1)))
+            .map(|(anchor, top)| (anchor.clone(), offset - top))
     })
 }

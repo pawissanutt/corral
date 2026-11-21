@@ -123,6 +123,13 @@ pub(super) fn page(app: AppState, tab: Tab) -> AnyElement {
             .min_h(px(0.0))
             .child(body),
         move || said.with(|said| said.as_ref()?.as_ref().map(|(t, _)| t.following())),
+        move || {
+            said.with(|said| {
+                said.as_ref()?
+                    .as_ref()
+                    .map(|(t, _)| transcript::Earlier::of(t))
+            })
+        },
         || 0,
     );
     view()

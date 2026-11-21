@@ -4,7 +4,9 @@
 //! counts what arrived: `↓ 37 new rows · End` (`↓ Jump to latest` when nothing arrived; the
 //! phone's `↓ 37 new · Latest`). Pressing it returns to the end and following resumes. Where
 //! the reader is (the end, or a row and how far into it) is kept per session scope when the
-//! view closes, and every view of that scope opens there again.
+//! view closes, and every view of that scope opens there again. Scrolling up near the first
+//! row asks for the page before it (`older`); rows that arrive above the reader keep the row
+//! they read where it was and are not counted as new.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,7 +19,9 @@ use crate::state::AppState;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
+use super::super::run;
 use super::anchors;
+use super::older::{Earlier, Reach};
 
 /// How close to the end still counts as at the end.
 const END_SLACK: f32 = 24.0;
@@ -58,6 +62,9 @@ pub(super) struct Place {
     pub top: Option<(String, f32)>,
     /// The transcript's row count as last seen.
     pub rows: usize,
+    /// The first message shown as last seen, with its scope: when it changes in the same
+    /// scope, rows arrived above the reader.
+    pub first: Option<(Id, String)>,
 }
 
 impl Place {
@@ -93,28 +100,37 @@ pub(super) fn kept(place: Rc<RefCell<Place>>, save: impl Fn(Id, Reading) + 'stat
 /// with the jump control over it while they are not. `following` is what the shown transcript
 /// says (`Transcript::following`: its scope, its row count, where its reader left it), tracked:
 /// a new scope opens where its reader left it, each new row scrolls to the end while
-/// following. `jump` is the page's jump request (End, Ctrl+End, the catalog's Jump to latest),
-/// tracked: each change does what pressing the control does. Where the reader is, is saved when
-/// the view shows another scope and when it goes.
+/// following. `earlier` is what the transcript offers before its first row
+/// (`Earlier::of`), tracked: scrolling up near the top asks for that page once. `jump` is the
+/// page's jump request (End, Ctrl+End, the catalog's Jump to latest), tracked: each change does
+/// what pressing the control does. Where the reader is, is saved when the view shows another
+/// scope and when it goes.
 pub fn follow(
     app: AppState,
     surface: Scroll,
     following: impl Fn() -> Option<Following> + 'static,
+    earlier: impl Fn() -> Option<Earlier> + 'static,
     jump: impl Fn() -> u32 + 'static,
 ) -> AnyElement {
     let form = app.form;
     let scroller = element_ref();
     // Draws the jump control; `Place::at_end` says the same for the cleanup.
     let at_end = signal(true);
+    // What the control counts: rows that arrived below since the reader left the end.
+    let arrived = signal(0usize);
     let place = Rc::new(RefCell::new(Place {
         at_end: true,
         ..Place::default()
     }));
+    let reach = Rc::new(RefCell::new(Reach::default()));
     let shown = computed(following);
+    let earlier = computed(earlier);
     let count = computed(move || shown.with(|now| now.as_ref().map_or(0, |now| now.rows)));
     let scope_of = computed(move || shown.with(|now| now.as_ref().map(|now| now.scope.clone())));
+    let first = computed(move || earlier.with(|now| now.as_ref()?.first.clone()));
     {
         let place = place.clone();
+        let reach = reach.clone();
         effect(move || {
             let Some(id) = scope_of.get() else {
                 return;
@@ -127,6 +143,8 @@ pub fn follow(
                 untracked(|| save(app, old, reading));
             }
             let resume = shown.with_untracked(|now| now.as_ref().map(|now| now.resume.clone()));
+            reach.borrow_mut().reset();
+            arrived.set(0);
             let mut known = place.borrow_mut();
             known.scope = Some(id.clone());
             known.top = None;
@@ -136,6 +154,7 @@ pub fn follow(
                     known.left_at = Some(rows);
                     known.top = Some((key.clone(), offset as f32));
                     drop(known);
+                    arrived.set(count.get_untracked().saturating_sub(rows));
                     at_end.set(false);
                     anchors::restore(id.as_str(), key, offset as f32, scroller);
                 }
@@ -157,14 +176,47 @@ pub fn follow(
         let place = place.clone();
         effect(move || {
             let now = count.get();
+            let scope = scope_of.get();
+            let top = first.get();
             let mut known = place.borrow_mut();
-            known.rows = now;
+            let before = std::mem::replace(&mut known.rows, now);
+            let shown = scope.zip(top);
+            // The same scope's first message changed: a page arrived above the shown rows.
+            let above = matches!(
+                (&known.first, &shown),
+                (Some((was, old)), Some((scope, new))) if was == scope && old != new
+            );
+            known.first = shown;
             if known.at_end {
                 known.left_at = None;
                 drop(known);
                 after_answer(move || scroller.scroll_to_end(false));
-            } else if known.left_at.is_none() {
-                known.left_at = Some(now);
+                return;
+            }
+            let mut left = *known.left_at.get_or_insert(now);
+            // What arrived above is not new, and the reader's row stays where it is on screen.
+            let held = above.then(|| known.scope.clone().zip(known.top.clone()));
+            if above {
+                left += now.saturating_sub(before);
+                known.left_at = Some(left);
+            }
+            drop(known);
+            if let Some((scope, (key, offset))) = held.flatten() {
+                anchors::hold(scope.as_str(), key, offset, scroller);
+            }
+            arrived.set(now.saturating_sub(left));
+        });
+    }
+    {
+        let place = place.clone();
+        let reach = reach.clone();
+        effect(move || {
+            let asked = earlier.with(|now| {
+                let end = place.borrow().at_end;
+                reach.borrow_mut().changed(now.as_ref(), end)
+            });
+            if let Some(older) = asked {
+                untracked(|| run(app, older));
             }
         });
     }
@@ -192,7 +244,7 @@ pub fn follow(
             let offset = event.offset.y.0;
             let below = event.content_size.height.0 - offset - event.size.height.0;
             let end = below <= END_SLACK;
-            let flipped = {
+            let (flipped, scope) = {
                 let mut known = scrolled.borrow_mut();
                 if let Some(at) = known
                     .scope
@@ -208,21 +260,29 @@ pub fn follow(
                     }
                     known.at_end = end;
                 }
-                flipped
+                (flipped, known.scope.clone())
             };
             if flipped {
+                if end && let Some(scope) = scope {
+                    anchors::cancel(scope.as_str());
+                }
+                arrived.set(0);
                 at_end.set(end);
+            }
+            let older = earlier.with_untracked(|now| {
+                reach
+                    .borrow_mut()
+                    .scrolled(now.as_ref(), offset, event.size.height.0, end)
+            });
+            if let Some(older) = older {
+                run(app, older);
             }
         });
     let control = dynamic(move || {
         if at_end.get() {
             return None;
         }
-        let left_at = place.borrow().left_at;
-        let arrived = count
-            .get()
-            .saturating_sub(left_at.unwrap_or_else(|| count.get_untracked()));
-        let label = words(form, arrived);
+        let label = words(form, arrived.get());
         let words = text(label.clone()).text_color(color(Token::Ink));
         let words = if form == Form::Terminal {
             words.font_weight(FontWeight::BOLD)

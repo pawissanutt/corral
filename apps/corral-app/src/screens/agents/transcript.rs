@@ -4,9 +4,10 @@
 //! and the other bubbles on the raised block; what the host made as quiet rows with no avatar;
 //! this device's own sends the transcript does not hold yet (echoes, each with where it
 //! stands); then the live turn while one runs. Desktop and phone share the layout at their
-//! sizes; a terminal shows each message as a block of rows. A daemon transcript is one bounded
-//! page, with the controls to page through it and the state of its source. `jump::follow`
-//! keeps the transcript's scroll at its newest rows and offers the way back to them.
+//! sizes; a terminal shows each message as a block of rows. A daemon transcript holds its
+//! newest page and the earlier pages read since, with the control for the page before them and
+//! the state of its source. `jump::follow` keeps the transcript's scroll at its newest rows,
+//! offers the way back to them and reads the page before as the reader scrolls up to it.
 //!
 //! Every item carries the test id `item-<n>`, numbered across the page (a folded run's or a
 //! cell's rows `item-<n>-<k>`), and a row that opens carries `btn-expand-<n>`; an echo carries
@@ -22,6 +23,9 @@ mod image;
 mod jump;
 #[cfg(test)]
 mod jump_tests;
+mod older;
+#[cfg(test)]
+mod older_tests;
 mod parts;
 mod prose;
 mod rows;
@@ -32,6 +36,7 @@ use nsh_core::prelude::*;
 
 pub(super) use build_cards::gate_log;
 pub use jump::follow;
+pub use older::Earlier;
 pub use watch::watch;
 
 use crate::model::Form;
@@ -95,7 +100,9 @@ pub fn line(app: AppState, rich: &Rich, size: f32, base: Token) -> AnyElement {
     .into_element()
 }
 
-/// A paging control above or below the messages: a quiet button, dimmed while a page loads.
+/// The control for earlier messages above them: a quiet button, dimmed while a page loads. It
+/// is read on its own as the reader scrolls up; the button stays for a transcript too short to
+/// scroll and to try a failed page again.
 fn pager(
     app: AppState,
     action: &Option<Action>,
@@ -181,8 +188,7 @@ fn anchored(transcript: &Transcript, anchor: &str, block: AnyElement) -> AnyElem
 
 /// The transcript: a stale notice when its source is unreachable, the control for earlier
 /// messages, every message of the page in order (or why there are none), this device's sends
-/// the page does not hold yet, the live turn and the quiet rows after it, the way back to the
-/// latest messages, then the note. Desktop centres it at the mockup's measure; the phone uses
+/// the page does not hold yet, the live turn and the quiet rows after it, then the note. Desktop centres it at the mockup's measure; the phone uses
 /// the full width with 16 pt sides.
 pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
     let form = app.form;
@@ -226,13 +232,6 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
         "btn-older",
         transcript.paging,
     );
-    let newer = pager(
-        app,
-        &transcript.newer,
-        "Back to the latest messages",
-        "btn-newer",
-        transcript.paging,
-    );
     let fill = self::fill(app, &transcript.fill);
     let note = disclaimer(app, &transcript.disclaimer);
     match form {
@@ -251,7 +250,6 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
                 .children(fill)
                 .children(parts)
                 .children(after.map(|rows| view().child(term::blank()).child(rows)))
-                .children(newer.map(|button| view().flex_row().child(button)))
                 .when_some(note, |list, note| list.child(term::blank()).child(note))
                 .into_element()
         }
@@ -275,7 +273,6 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
                         .children(fill)
                         .children(messages)
                         .children(after)
-                        .children(newer.map(edge))
                         .children(
                             note.map(|note| {
                                 view().px(px(sides)).pt(px(4.0)).pb(px(16.0)).child(note)
