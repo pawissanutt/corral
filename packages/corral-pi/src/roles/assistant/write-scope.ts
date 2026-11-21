@@ -25,8 +25,16 @@ function isMarkdownMemory(path: string, workspace: string): boolean {
     && !hasProtectedComponent(relative(memory, path));
 }
 
+function canonicalPath(path: string): string {
+  const bytes = realpathSync.native(path, { encoding: "buffer" });
+  const text = bytes.toString("utf8");
+  // Two distinct filesystem names must never collapse into the same approval key.
+  if (!bytes.equals(Buffer.from(text, "utf8"))) throw new Error(UNSAFE);
+  return text;
+}
+
 function canonicalDirectory(path: string): string {
-  const canonical = realpathSync.native(path);
+  const canonical = canonicalPath(path);
   if (!statSync(canonical).isDirectory()) throw new Error(UNSAFE);
   return canonical;
 }
@@ -44,7 +52,7 @@ function canonicalDestination(path: string): string {
     ancestor = parent;
   }
   if (missing.length) return join(canonicalDirectory(ancestor), ...missing.reverse());
-  const canonical = realpathSync.native(ancestor);
+  const canonical = canonicalPath(ancestor);
   if (!statSync(canonical).isFile()) throw new Error(UNSAFE);
   return canonical;
 }

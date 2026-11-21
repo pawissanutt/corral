@@ -5,13 +5,14 @@ import { APPROVAL_TTL, ToolApprovals } from "./tool-approvals.ts";
 
 function fixture(reusable = false) {
   const entries: QuestionEntry[] = [];
-  let now = 42;
+  let now = 42, wall = 12_000;
   const questions = new PendingQuestions({ session: () => "session", entries: () => entries,
     append: data => { entries.push({ type: "custom", customType: QUESTION_ENTRY, data }); },
     changed: question => { if (question) approvals.observeAnswer(question); },
     deliver: async () => false, now: () => now });
-  const approvals = new ToolApprovals(questions, "/session", reusable, () => now);
-  return { questions, approvals, advance: (ms: number) => { now += ms; }, expire: () => { now += QUESTION_TTL; } };
+  const approvals = new ToolApprovals(questions, "/session", reusable, () => now, () => wall);
+  return { questions, approvals, advance: (ms: number, wallMs = ms) => { now += ms; wall += wallMs; },
+    expire: () => { now += QUESTION_TTL; } };
 }
 
 const outside = { action: "ask", path: "/session/link", canonical: "/outside/saved.txt" } as const;
@@ -72,6 +73,19 @@ test("a timed grant covers only the exact shell invocation and expires from the 
   expect(approvals.shell("bash", { ...input, wait_ms: 100 })).toContain("Waiting");
   advance(1);
   expect(approvals.shell("bash", input)).toContain("Waiting");
+});
+
+test("timed grants expire across suspend and cannot be extended by rolling back the wall clock", async () => {
+  for (const [elapsed, wallDelta] of [[0, APPROVAL_TTL], [APPROVAL_TTL, -APPROVAL_TTL]] as const) {
+    const { questions, approvals, advance } = fixture(true);
+    const input = { command: "touch marker" };
+    const waiting = approvals.shell("bash", input);
+    await questions.answer(questions.pending()[0]!.id, [{ option: CHOICE.timed }]);
+    advance(elapsed, wallDelta);
+    const retry = approvals.shell("bash", input);
+    expect(retry).toContain(questions.pending()[0]!.id);
+    expect(retry).not.toBe(waiting);
+  }
 });
 
 test("one file cannot have conflicting pending choices, and denied writes stay blocked on retry", async () => {

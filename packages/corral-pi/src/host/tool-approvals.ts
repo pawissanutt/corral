@@ -37,11 +37,11 @@ function writeSummary(tool: WriteTool, input: Input): string {
 /** Live bindings to structured owner answers. Neither pending requests nor grants are restored. */
 export class ToolApprovals {
   private readonly requests = new Map<string, { id: string; scope: string; destination?: string }>();
-  private readonly grants = new Map<string, number>();
+  private readonly grants = new Map<string, { monotonic: number; wall: number }>();
   private readonly denials = new Set<string>();
 
   constructor(private readonly questions: PendingQuestions, private readonly cwd: string,
-    private readonly reusable = false, private readonly now = () => performance.now()) {}
+    private readonly reusable = false, private readonly now = () => performance.now(), private readonly wallNow = Date.now) {}
 
   clear(): void {
     this.requests.clear();
@@ -60,14 +60,16 @@ export class ToolApprovals {
     if (choice === CHOICE.deny) {
       this.denials.add(`${key}\0${request.scope}`);
     } else {
-      this.grants.set(request.scope, choice === CHOICE.timed ? this.now() + APPROVAL_TTL : Infinity);
+      const duration = choice === CHOICE.timed ? APPROVAL_TTL : Infinity;
+      this.grants.set(request.scope, { monotonic: this.now() + duration, wall: this.wallNow() + duration });
     }
   }
 
   private hasGrant(scope: string): boolean {
     const until = this.grants.get(scope);
     if (until === undefined) return false;
-    if (until > this.now()) return true;
+    // Wall time includes suspend; monotonic time prevents a wall-clock rollback extending a grant.
+    if (until.monotonic > this.now() && until.wall > this.wallNow()) return true;
     this.grants.delete(scope);
     return false;
   }
