@@ -652,7 +652,7 @@ pub fn agents_tab(cx: &Cx<'_>, state: &State) -> AgentsTab {
 /// What the tab reads while it shows: the jobs; the selected, opened or re-modelled agent's
 /// detail; an opened agent's transcript and the complete words behind its previews; an opened
 /// job's output.
-pub fn fetches(cx: &Cx<'_>) -> Vec<Action> {
+pub fn fetches(cx: &Cx<'_>, state: &State) -> Vec<Action> {
     let mut wanted: Vec<Action> = jobs::fetches(cx);
     let opened = match &cx.ui.sub {
         Some(SubView::Agent(child)) => Some(child.as_str()),
@@ -681,7 +681,7 @@ pub fn fetches(cx: &Cx<'_>) -> Vec<Action> {
             None,
         ));
         wanted.extend(
-            super::transcript::fetches(cx.feed, &scope)
+            super::transcript::fetches(cx.feed, &scope, state.ui(&scope))
                 .into_iter()
                 .map(|token| Action::Fetch {
                     session: scope.clone(),

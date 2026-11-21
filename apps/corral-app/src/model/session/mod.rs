@@ -803,7 +803,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         (None, Tab::Chat) => Body::Chat(chat(&cx)),
     };
     let details = details(&cx, &state.panel);
-    let mut fetches: Vec<Action> = transcript::fetches(feed, id)
+    let mut fetches: Vec<Action> = transcript::fetches(feed, id, ui)
         .into_iter()
         .map(|token| Action::Fetch {
             session: id.clone(),
@@ -820,7 +820,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         Body::Board(_) => board::fetches(&cx),
         Body::Task(_) => task::fetches(&cx),
         Body::Proof(_) => proof::fetches(&cx),
-        Body::Agents(_) => fleet::fetches(&cx),
+        Body::Agents(_) => fleet::fetches(&cx, state),
         Body::Chat(_) | Body::Log(_) => Vec::new(),
     });
     if details.is_some() {
