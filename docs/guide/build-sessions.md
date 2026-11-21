@@ -77,8 +77,9 @@ can choose **Allow once** for one exact retry, **Allow for 30 minutes** starting
 **Allow for this session** for the live host only, or **Deny**. Longer grants cover only one
 canonical file destination for edit/write, never a directory or sibling, or the exact shell
 command, tool and arguments from the ask, within the same host. Grants clear on host
-restart/reload or rewind; none is permanent. Approval does not execute the tool automatically:
-retry the call. Only the host prompt authorizes; ordinary chat and `ask_user` do not.
+restart/reload or rewind; none is permanent. Denying an exact call blocks it for the live
+session, even if a different change to the same file gets a grant. Approval does not execute
+the tool automatically. Only the host prompt authorizes; ordinary chat and `ask_user` do not.
 
 Never use shell, another tool or `ask_user` to bypass a refusal or approval. Rules do not
 inspect command intent or side effects, grant OS elevation or provide a sandbox. Shell and

@@ -38,6 +38,7 @@ function writeSummary(tool: WriteTool, input: Input): string {
 export class ToolApprovals {
   private readonly requests = new Map<string, { id: string; scope: string; destination?: string }>();
   private readonly grants = new Map<string, number>();
+  private readonly denials = new Set<string>();
 
   constructor(private readonly questions: PendingQuestions, private readonly cwd: string,
     private readonly reusable = false, private readonly now = () => performance.now()) {}
@@ -45,15 +46,22 @@ export class ToolApprovals {
   clear(): void {
     this.requests.clear();
     this.grants.clear();
+    this.denials.clear();
   }
 
   /** The question store calls this in the live process after committing the owner's answer. */
   observeAnswer(question: PendingQuestion): void {
     if (!this.reusable || !isToolApproval(question) || question.status !== "answered") return;
     const choice = question.answers?.[0]?.option;
-    if (choice !== CHOICE.timed && choice !== CHOICE.session) return;
-    const request = [...this.requests.values()].find(request => request.id === question.id);
-    if (request) this.grants.set(request.scope, choice === CHOICE.timed ? this.now() + APPROVAL_TTL : Infinity);
+    if (choice !== CHOICE.deny && choice !== CHOICE.timed && choice !== CHOICE.session) return;
+    const binding = [...this.requests].find(([, request]) => request.id === question.id);
+    if (!binding) return;
+    const [key, request] = binding;
+    if (choice === CHOICE.deny) {
+      this.denials.add(`${key}\0${request.scope}`);
+    } else {
+      this.grants.set(request.scope, choice === CHOICE.timed ? this.now() + APPROVAL_TTL : Infinity);
+    }
   }
 
   private hasGrant(scope: string): boolean {
@@ -106,6 +114,10 @@ export class ToolApprovals {
     const effect = kind === "bash" ? "nothing ran" : "nothing was written";
     const waiting = (id: string) => `Waiting for owner approval ${id} (/questions or the app); ${effect}. `
       + "Retry the exact tool call only after an affirmative owner choice.";
+    if (this.denials.has(`${key}\0${scope}`)) {
+      this.requests.delete(key);
+      return `The owner denied this exact tool call for the live session; ${effect}.`;
+    }
     const grant = this.hasGrant(scope);
     const prior = this.requests.get(key);
     if (prior) {

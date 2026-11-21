@@ -82,9 +82,14 @@ test("one file cannot have conflicting pending choices, and denied writes stay b
   expect(request("second")).toContain(card!.id);
   expect(questions.pending()).toHaveLength(1);
   await questions.answer(card!.id, [{ option: CHOICE.deny }]);
-  expect(request("first")).toContain("No current owner approval");
-  expect(request("first")).toContain("Waiting");
-  expect(questions.pending()[0]!.id).not.toBe(card!.id);
+  expect(request("first")).toContain("denied");
+  expect(request("second")).toContain("Waiting");
+  const [later] = questions.pending();
+  await questions.answer(later!.id, [{ option: CHOICE.session }]);
+  expect(request("second")).toBeUndefined();
+  expect(request("first")).toContain("denied");
+  expect(request("first")).toContain("denied");
+  expect(questions.pending()).toHaveLength(0);
 });
 
 test("a session file grant is limited to the canonical destination and never restored", async () => {
