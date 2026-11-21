@@ -290,9 +290,9 @@ of the assistant design, they are not a security boundary. A refusal is logged a
 
 For a parent assistant, edit and write inside its starting cwd work normally, as does bound
 workspace Markdown memory under `.corral-next/memory/`. An edit or write outside the starting
-cwd, including an ordinary canonical symlink escape, requires a host-issued once-only owner
-allow. Protected `.git`, `.corral`, `.corral-next` and `.worktrees` paths are hard blocks,
-except for the scoped worktree and workspace memory exceptions.
+cwd, including a symlink that resolves outside it, requires host-issued owner approval.
+Protected `.git`, `.corral`, `.corral-next` and `.worktrees` paths are hard blocks, except
+for the scoped worktree and workspace memory exceptions.
 
 For `corral-pi chat`, enable rules for both `bash` and `job_start` by adding a top-level
 `[bash_rules]` table to the workspace's `.corral-next/pi.toml`. For example:
@@ -307,11 +307,13 @@ default = "ask"
 
 This asks for unmatched commands; matching `ask` rules also ask. Deny takes precedence over
 ask, which takes precedence over allow. Configured deny and fixed rules cannot be overridden.
-For an approval, the host issues a question through the existing owner prompt, `/questions`
-or a connected app. An affirmative answer authorizes the exact request once; it does not
-execute the call automatically. Retry the same exact call once after the answer. There are no
-permanent grants, and approvals do not carry over after host restart or rewind. Only the
-host-generated question authorizes; ordinary chat and `ask_user` do not.
+The host-generated approval question appears in `/questions` or a connected app. The owner
+can choose **Allow once** for one exact retry, **Allow for 30 minutes** starting from the owner choice,
+**Allow for this session** for the live host only, or **Deny**. Longer grants cover only one
+canonical file destination for edit/write, never a directory or sibling, or the exact shell
+command, tool and arguments from the ask, within the same host. Grants clear on host
+restart/reload or rewind; none is permanent. Approval does not execute the tool automatically:
+retry the call. Only the host prompt authorizes; ordinary chat and `ask_user` do not.
 
 Never use shell, another tool or `ask_user` to bypass a refusal or approval. These checks do
 not detect command intent or side effects, provide OS elevation or sandbox shell or other
