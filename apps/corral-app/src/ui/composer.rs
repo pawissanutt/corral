@@ -25,8 +25,12 @@ use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::text::rich_small;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
+#[cfg(target_os = "linux")]
+mod clipboard;
 mod draft;
 mod session;
+#[cfg(target_os = "linux")]
+mod terminal_paste;
 
 pub(crate) use session::{ask_composer, docked_composer, session_composer};
 
@@ -107,6 +111,28 @@ impl Attach {
     }
 }
 
+fn configure_paste(
+    app: AppState,
+    session: &Id,
+    attach: Attach,
+    entry: ElementRef,
+    _composer: Memo<Option<SessionComposer>>,
+    field: Input,
+) -> Input {
+    if app.form == Form::Terminal {
+        // Preserve the terminal editor's handling of bracketed paste.
+        #[cfg(target_os = "linux")]
+        if let Some(selection) = terminal_paste::bind(app, session, attach, entry, _composer) {
+            return field.on_selection_change(move |range: &Selection| selection.set(*range));
+        }
+        return field;
+    }
+    let session = session.clone();
+    field
+        .paste_behavior(PasteBehavior::Report)
+        .on_paste(move |event: &PasteEvent| paste(app, &session, attach, entry, event))
+}
+
 /// Whether a paste is attachments rather than text: images or files without text beside them
 /// (an office app puts a picture of copied text beside the text, which pastes as text), or
 /// files copied in a file manager, which this device reads by path (a browser reads none; its
@@ -123,11 +149,8 @@ fn attaches(paste: &PasteEvent) -> bool {
 /// A paste into session `id`'s composer, whose field inserts nothing itself (`entry`): text goes
 /// in exactly as it was copied; images and files are staged for the message, refused visibly
 /// where the session takes no attachments now, where a copied file's text (its path) goes in
-/// instead. A terminal's paste is text alone, which its field inserts itself.
+/// instead. The terminal leaves bracketed text paste to the field.
 fn paste(app: AppState, id: &Id, attach: Attach, entry: ElementRef, paste: &PasteEvent) {
-    if app.form == Form::Terminal {
-        return;
-    }
     let text = if !paste.text.is_empty() {
         Some(paste.text.clone())
     } else if !paste.uris.is_empty() && paste.files.is_empty() {
@@ -141,6 +164,10 @@ fn paste(app: AppState, id: &Id, attach: Attach, entry: ElementRef, paste: &Past
         }
         return;
     }
+    stage_paste(app, id, attach, paste);
+}
+
+fn stage_paste(app: AppState, id: &Id, attach: Attach, paste: &PasteEvent) {
     match attach.refusal.get_untracked() {
         Some(why) => app.toast(format!("Not attached: {why}.")),
         None => app.paste(id, paste),

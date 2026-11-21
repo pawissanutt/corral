@@ -43,7 +43,7 @@ const SESSION_FIELD: &str = "field-message";
 /// The phone's least touch target.
 const TARGET: f32 = 44.0;
 
-fn act(app: AppState, action: Action) {
+pub(super) fn act(app: AppState, action: Action) {
     app.reduce(app.session, move |state, feed, _, _| {
         state.act(action, feed)
     });
@@ -207,9 +207,9 @@ fn build(
 }
 
 /// The draft field: multiline, Enter sends with the send button's policy (or runs the matched
-/// `/` command), Shift+Enter breaks the line; a paste is the composer's to place (`super::paste`)
-/// except in a terminal, whose host takes no text the app inserts. Docked on Home, Escape leaves
-/// the field, so Home's keys walk its cards again rather than typing.
+/// `/` command), Shift+Enter breaks the line. A paste is the composer's to place (`super::paste`)
+/// except in a terminal, where the field owns bracketed paste and a local clipboard shortcut
+/// can stage attachments. Docked on Home, Escape leaves the field.
 #[allow(clippy::too_many_arguments)]
 fn field(
     app: AppState,
@@ -236,9 +236,9 @@ fn field(
         SESSION_FIELD
     };
     app.focus_when_asked(test_id, entry);
+    let field = super::configure_paste(app, &id, attach, entry, composer, input());
     let typed = id.clone();
-    let pasted = id.clone();
-    let field = input()
+    let field = field
         .element_ref(&entry)
         .test_id(test_id)
         .label(move || SharedString::from(placeholder()))
@@ -256,12 +256,6 @@ fn field(
             if let Some(policy) = policy {
                 send(app, &id, composer, policy, ask, attach);
             }
-        })
-        .when(form != Form::Terminal, |field| {
-            field.paste_behavior(PasteBehavior::Report)
-        })
-        .on_paste(move |pasted_now: &PasteEvent| {
-            super::paste(app, &pasted, attach, entry, pasted_now)
         })
         .placeholder(placeholder)
         .value(draft)
