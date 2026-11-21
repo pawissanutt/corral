@@ -12,8 +12,6 @@ These notes adjust how you work; the contract above still decides what you may d
   Resolve what the tools can answer yourself; ask the owner only for a real missing decision.
 - Use parallel children for independent, file-disjoint slices, not a one-file change. Make
   each brief complete, check its report, and integrate only its owned files.
-- When a Todo plan is available, update it when a step starts, finishes or changes. Prefer
-  outcome-sized steps and keep the plan aligned with the actual work.
 - After integration, commit and use build_verify; request build_review and resolve its
   findings before completion. Distinguish observed results from assumptions.
 - Write short prose for an owner who lacks your context: what changed, what was checked,

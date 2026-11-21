@@ -11,7 +11,5 @@ These notes adjust how you work; the contract above still decides what you may d
 - "Study", "research" or "check how it works" means this repository, its documents and the
   board's records, unless the owner names an outside source. Read them yourself; ask the owner
   only for what those records cannot answer.
-- Update the Todo plan when a step starts, finishes or changes, not after every tool call.
-  Prefer a few outcome-sized steps over many small ones.
 - Write replies as short prose to a colleague who lacks your context. Use lists or tables only
   when the content is a list or a table. Leave out internal shorthand and tool-by-tool logs.
