@@ -136,6 +136,14 @@ fn clip(text: &str) -> (String, bool) {
     (format!("{}…", text[..end].trim_end()), true)
 }
 
+fn preview_note(transcript: bool) -> &'static str {
+    if transcript {
+        "Preview only. Open conversation to read the recorded transcript."
+    } else {
+        "Preview only. No recorded conversation is available."
+    }
+}
+
 fn clipped(
     cx: &Cx<'_>,
     key: String,
@@ -318,7 +326,7 @@ pub(super) fn buttons(cx: &Cx<'_>, child: &SessionChild, opened: bool) -> Vec<Fl
             .unless(
                 served
                     .filter(|detail| !detail.transcript)
-                    .map(|_| "it has recorded no conversation yet".to_owned()),
+                    .map(|_| "no recorded conversation is available".to_owned()),
             ),
         );
     }
@@ -446,9 +454,7 @@ pub(super) fn detail(cx: &Cx<'_>, child: &SessionChild) -> AgentDetail {
                     format!("brief:{}", child.id),
                     "btn-more-brief",
                     &detail.brief,
-                    detail.brief_more.then_some(
-                        "The host sent the brief's first 8 KiB; its conversation holds all of it.",
-                    ),
+                    detail.brief_more.then_some(preview_note(detail.transcript)),
                 )
             }),
         owns: owns(child, served),
@@ -494,9 +500,7 @@ pub(super) fn detail(cx: &Cx<'_>, child: &SessionChild) -> AgentDetail {
                     format!("report:{}", child.id),
                     "btn-more-report",
                     report,
-                    detail
-                        .report_more
-                        .then_some("The host sent the report's first 16 KiB."),
+                    detail.report_more.then_some(preview_note(detail.transcript)),
                 )
             }),
         verdict,
