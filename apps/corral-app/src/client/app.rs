@@ -21,7 +21,7 @@ use corral_protocol::build::{BUILD_REMOVE, BUILD_START};
 use corral_protocol::config::{CONFIG_GET, CONFIG_PUT};
 use corral_protocol::device::{
     DEVICE_PAGE, DEVICE_PAGE_LIMIT_MAX, DEVICE_REVOKE, DeviceInfo, DevicePage, DevicePageQuery,
-    PUSH_STATUS, PUSH_SUBSCRIBE, PUSH_UNSUBSCRIBE, PUSH_V1,
+    PUSH_STATUS, PUSH_SUBSCRIBE, PUSH_UNSUBSCRIBE,
 };
 use corral_protocol::op::OP_SUBMIT;
 use corral_protocol::session as control;
@@ -54,7 +54,8 @@ pub(super) const CAPS: &[&str] = &[
     SESSION_V1,
     SESSION_FLEET_V1,
     STREAM_TERMINAL_V1,
-    PUSH_V1,
+    #[cfg(not(windows))]
+    corral_protocol::device::PUSH_V1,
     SESSION_STATE_V1,
     BUILD_V1,
 ];

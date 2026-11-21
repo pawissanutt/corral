@@ -37,7 +37,7 @@ toml_edit = { version = "0.25", default-features = false, features = ["parse", "
 nsh-engine = "0.6.1"
 nsh-testing = "0.6.1"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1", features = ["event", "fs", "net", "process", "system"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -57,4 +57,17 @@ nsh-platform-linux = { version = "0.6.1", optional = true, default-features = fa
 nsh-platform-macos = { version = "0.6.1", optional = true, default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+futures-channel = "0.3"
+futures-core = "0.3"
+futures-util = { version = "0.3", features = ["sink"] }
+getrandom = "0.3"
+# Build an explicit ring-backed connector with Windows certificate verification.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7"
+snow = { version = "=0.10.0", default-features = false, features = ["use-getrandom", "use-curve25519", "use-chacha20poly1305", "use-blake2"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["rustls-tls-webpki-roots"] }
+url = "2.5"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem"] }
+zeroize = "1"
 nsh-platform-windows = { version = "0.6.1", optional = true, default-features = false, features = ["shader", "editor", "emoji-picker", "highlight", "math", "plot", "rich-editor", "term"] }

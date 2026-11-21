@@ -2,6 +2,83 @@
 use super::*;
 
 impl Driver {
+    pub(super) fn begin_pair(&mut self, code: &str, name: String, endpoint: Option<&str>) {
+        if self
+            .feed
+            .with_untracked(|feed| matches!(feed.browser_pairing, BrowserPairing::Blocked(_)))
+        {
+            return;
+        }
+        if self.forgetting.pending() {
+            #[cfg(target_arch = "wasm32")]
+            let problem = "Forgetting this browser is incomplete; retry Forget before pairing.";
+            #[cfg(windows)]
+            let problem = "Forgetting this device is incomplete; retry Forget before pairing.";
+            self.forget_failed(problem.into());
+            return;
+        }
+        self.close_connection();
+        self.app.disconnected(self.feed);
+        self.feed
+            .update(|feed| feed.browser_pairing = BrowserPairing::Connecting);
+        let result = (|| {
+            #[cfg(target_arch = "wasm32")]
+            let mut code = PairCode::decode(code)?;
+            #[cfg(windows)]
+            let mut code = super::super::pairing_link::from_input(code)?;
+            #[cfg(target_arch = "wasm32")]
+            let _ = endpoint;
+            #[cfg(windows)]
+            {
+                let supplied = socket::normalize_endpoint(
+                    endpoint
+                        .ok_or("Enter the daemon address shown with the pairing code.")?
+                        .trim(),
+                )?;
+                let expected = code
+                    .endpoint
+                    .take()
+                    .unwrap_or_else(|| format!("ws://127.0.0.1:{}", code.port));
+                if supplied != socket::normalize_endpoint(&expected)? {
+                    return Err("The daemon address does not match the pairing code.".into());
+                }
+                code.endpoint = Some(supplied);
+            }
+            let keys = noise::generate_keypair()?;
+            let private = keys
+                .private
+                .as_slice()
+                .try_into()
+                .map_err(|_| "invalid pairing private key")?;
+            let handshake = noise::initiator_pair(private, &code.daemon_public, &code.token)?;
+            let endpoint = code
+                .endpoint
+                .clone()
+                .unwrap_or_else(|| format!("ws://127.0.0.1:{}", code.port));
+            let credential = WebCredential {
+                v: 1,
+                device: String::new(),
+                name,
+                private: hex(private),
+                daemon: hex(&code.daemon_public),
+                port: code.port,
+                endpoint: code.endpoint.take(),
+            };
+            self.open(
+                &endpoint,
+                &format!("{PAIR_PATH_PREFIX}{}", code.pair_id_hex()),
+                Role::Pair {
+                    credential,
+                    sas: None,
+                },
+                handshake,
+            )
+        })();
+        if let Err(problem) = result {
+            self.failed(true, Failure::Fatal(problem));
+        }
+    }
+
     pub(super) async fn restore(&mut self) {
         // NSH's paired marker is not authoritative and may disappear independently.
         let explicit_pairing = self.feed.with_untracked(Feed::browser_pairing_pending);
@@ -18,7 +95,7 @@ impl Driver {
                 }
             }
             Ok(keystore::Stored::Credential(credential)) => {
-                // A credential without its marker (cleared site storage) opened on the pairing
+                // A credential without its marker opened on the pairing
                 // form; the next launch resumes at once.
                 let _ = Storage::set_item(PAIRED_KEY, "1");
                 let device = credential.device.clone();
@@ -47,14 +124,12 @@ impl Driver {
     }
 
     pub(super) async fn forget(&mut self) {
-        self.connection = None;
-        self.retry_at = None;
-        self.push_intent = None;
+        self.close_connection();
         self.forgetting.begin();
         self.app.disconnected(self.feed);
         let result = async {
             // Commit the intent before removing either namespace. Every later failure
-            // leaves this marker in place, including a browser crash between steps.
+            // leaves this marker in place, including a crash between steps.
             keystore::begin_forget().await?;
             self.app.forget_local(self.feed).await?;
             keystore::clear().await?;
@@ -93,7 +168,11 @@ impl Driver {
             if let Some(device) = device {
                 self.feed.update(|feed| {
                     feed.revoked(device);
-                    feed.link_lost("This browser was revoked.".into());
+                    #[cfg(target_arch = "wasm32")]
+                    let problem = "This browser was revoked.";
+                    #[cfg(windows)]
+                    let problem = "This device was revoked.";
+                    feed.link_lost(problem.into());
                 });
             }
         }

@@ -4,8 +4,8 @@
 //! `durable.json` is revision zero with no records. `compare_exchange(expected, patch)`
 //! locks, checks the revision, and applies only the named records (`None` deletes).
 //! `Ok(false)` means a revision conflict with no changes. `Ok(true)` means the next
-//! revision and its entire patched aggregate were file-synced, atomically renamed,
-//! and directory-synced. Even an empty patch increments the revision.
+//! revision and its entire patched aggregate were file-synced and atomically replaced,
+//! with a directory sync on Unix or a write-through move on Windows.
 //!
 //! Errors are never acknowledgements. In particular, a directory-sync error after
 //! rename can leave the new revision visible: callers must reread/reconcile rather
@@ -13,9 +13,9 @@
 //! replace it with a stale whole-outbox value. Poll `read()`'s committed revision to
 //! observe other instances; no separate, potentially inconsistent revision file exists.
 //!
-//! Files live at `$XDG_STATE_HOME/corral-app` (fallback `$HOME/.local/state`). The
-//! directory is private 0700; `durable.json` and the persistent `durable.lock` are
-//! private 0600 files. Never unlink the lock: all contenders must lock the same inode.
+//! Files live under `corral-app` in the OS user's state directory (`$XDG_STATE_HOME`
+//! or `$HOME/.local/state` on Unix; `%LOCALAPPDATA%` on Windows). Never unlink the
+//! persistent `durable.lock`: all contenders must lock the same file.
 //! The encoded aggregate, including revision and envelope, is limited to 8 MiB.
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -23,13 +23,13 @@ use std::collections::BTreeMap;
 /// Read one transactionally consistent snapshot, or an attributed storage failure.
 #[cfg(not(test))]
 pub(super) async fn read() -> Result<(u64, BTreeMap<String, Value>), String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         nsh_core::prelude::blocking(|| read_in(&state_root()?))
             .await
             .map_err(|error| format!("native durable store worker closed: {error}"))?
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         Err(
             "native durable store: private transactional storage is unavailable on this platform"
@@ -44,13 +44,13 @@ pub(super) async fn compare_exchange(
     expected: u64,
     changes: BTreeMap<String, Option<Value>>,
 ) -> Result<bool, String> {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         nsh_core::prelude::blocking(move || compare_exchange_in(&state_root()?, expected, changes))
             .await
             .map_err(|error| format!("native durable commit worker closed: {error}"))?
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (expected, changes);
         Err(
@@ -60,27 +60,42 @@ pub(super) async fn compare_exchange(
     }
 }
 
+#[cfg(windows)]
+#[path = "durable_native_windows.rs"]
+pub(super) mod windows;
+#[cfg(all(windows, not(test)))]
+use windows::state_root;
+
 #[cfg(unix)]
 use {
     rustix::fs::{AtFlags, Mode, OFlags},
-    serde::{Deserialize, Serialize},
     std::{
         fs,
-        io::{self, Read, Write},
+        io::Read,
         os::unix::fs::MetadataExt,
-        path::{Path, PathBuf},
+        path::PathBuf,
         sync::atomic::{AtomicU64, Ordering},
     },
 };
+#[cfg(any(unix, windows))]
+use {
+    serde::{Deserialize, Serialize},
+    std::{
+        io::{self, Write},
+        path::Path,
+    },
+};
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 const MAX_BYTES: usize = 8 * 1024 * 1024;
+#[cfg(any(unix, windows))]
+const ENCODED_LIMIT: &str = "encoded aggregate exceeds 8 MiB (8388608 bytes)";
 #[cfg(unix)]
 const PRIVATE_FILE: Mode = Mode::RUSR.union(Mode::WUSR);
 #[cfg(unix)]
 static NEXT_STAGE: AtomicU64 = AtomicU64::new(0);
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[derive(Serialize, Deserialize)]
 struct Snapshot {
     version: u32,
@@ -88,7 +103,7 @@ struct Snapshot {
     records: BTreeMap<String, Value>,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Default for Snapshot {
     fn default() -> Self {
         Self {
@@ -99,7 +114,7 @@ impl Default for Snapshot {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn failure(operation: &str, error: impl std::fmt::Display) -> String {
     format!("native durable store: {operation}: {error}")
 }
@@ -238,22 +253,41 @@ fn read_locked(locked: &Locked) -> Result<Snapshot, String> {
         .map_err(|error| failure("cannot inspect durable.json", error))?;
     check_private(&metadata, "durable.json", false)?;
     if metadata.len() > MAX_BYTES as u64 {
-        return Err(failure(
-            "cannot read durable.json",
-            "encoded aggregate exceeds 8 MiB (8388608 bytes)",
-        ));
+        return Err(failure("cannot read durable.json", ENCODED_LIMIT));
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(MAX_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| failure("cannot read durable.json", error))?;
     if bytes.len() > MAX_BYTES {
-        return Err(failure(
-            "cannot read durable.json",
-            "encoded aggregate exceeds 8 MiB (8388608 bytes)",
-        ));
+        return Err(failure("cannot read durable.json", ENCODED_LIMIT));
     }
-    let saved: Snapshot = serde_json::from_slice(&bytes)
+    decode(&bytes)
+}
+
+#[cfg(windows)]
+type Locked = windows::LockedFile;
+
+#[cfg(windows)]
+fn lock(root: &Path) -> Result<Locked, String> {
+    Locked::lock(root, "durable.json", "durable.lock")
+        .map_err(|error| failure("cannot lock durable.json", error))
+}
+
+#[cfg(windows)]
+fn read_locked(locked: &Locked) -> Result<Snapshot, String> {
+    match locked
+        .read(MAX_BYTES, ENCODED_LIMIT)
+        .map_err(|error| failure("cannot read durable.json", error))?
+    {
+        Some(bytes) => decode(&bytes),
+        None => Ok(Snapshot::default()),
+    }
+}
+
+#[cfg(any(unix, windows))]
+fn decode(bytes: &[u8]) -> Result<Snapshot, String> {
+    let saved: Snapshot = serde_json::from_slice(bytes)
         .map_err(|error| failure("cannot decode durable.json", error))?;
     if saved.version != 1 {
         return Err(failure("cannot decode durable.json", "unsupported version"));
@@ -261,23 +295,21 @@ fn read_locked(locked: &Locked) -> Result<Snapshot, String> {
     Ok(saved)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn read_in(root: &Path) -> Result<(u64, BTreeMap<String, Value>), String> {
     let locked = lock(root)?;
     let saved = read_locked(&locked)?;
     Ok((saved.revision, saved.records))
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 struct BoundedEncoding(Vec<u8>);
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl Write for BoundedEncoding {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if bytes.len() > MAX_BYTES - self.0.len() {
-            return Err(io::Error::other(
-                "encoded aggregate exceeds 8 MiB (8388608 bytes)",
-            ));
+            return Err(io::Error::other(ENCODED_LIMIT));
         }
         self.0.extend_from_slice(bytes);
         Ok(bytes.len())
@@ -288,11 +320,23 @@ impl Write for BoundedEncoding {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn persist(locked: &Locked, saved: &Snapshot) -> Result<(), String> {
     let mut encoded = BoundedEncoding(Vec::new());
     serde_json::to_writer(&mut encoded, saved)
         .map_err(|error| failure("cannot encode durable.json", error))?;
+    write_locked(locked, &encoded.0)
+}
+
+#[cfg(windows)]
+fn write_locked(locked: &Locked, bytes: &[u8]) -> Result<(), String> {
+    locked
+        .replace(bytes)
+        .map_err(|error| failure("cannot commit durable.json", error))
+}
+
+#[cfg(unix)]
+fn write_locked(locked: &Locked, bytes: &[u8]) -> Result<(), String> {
     let stage = format!(
         "durable.json.{}.{}.tmp",
         std::process::id(),
@@ -316,7 +360,7 @@ fn persist(locked: &Locked, saved: &Snapshot) -> Result<(), String> {
         )?;
         #[cfg(test)]
         inject_failure(Fault::Write)?;
-        file.write_all(&encoded.0)
+        file.write_all(bytes)
             .map_err(|error| failure("cannot write durable.json", error))?;
         #[cfg(test)]
         inject_failure(Fault::FileSync)?;
@@ -350,7 +394,7 @@ fn persist(locked: &Locked, saved: &Snapshot) -> Result<(), String> {
     result
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn compare_exchange_in(
     root: &Path,
     expected: u64,
@@ -407,4 +451,8 @@ fn inject_failure(point: Fault) -> Result<(), String> {
 
 #[cfg(all(test, unix))]
 #[path = "durable_native_tests.rs"]
+mod tests;
+
+#[cfg(all(test, windows))]
+#[path = "durable_native_windows_tests.rs"]
 mod tests;

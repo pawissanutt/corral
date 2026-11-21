@@ -733,7 +733,7 @@ fn cached_namespace(feed: &daemon::Feed) -> bool {
 
 fn startup(
     nav: &mut NavState,
-    browser: bool,
+    pairs: bool,
     configured: bool,
     pairing_link: Result<Option<String>, &'static str>,
 ) -> (DataState, daemon::Feed) {
@@ -746,7 +746,7 @@ fn startup(
     }
     // The fixture preview is never a fallback and never outlives the launch it was chosen in:
     // a restart is live or disconnected, so its healthy-looking facts cannot pass for live.
-    let data = if feed.browser_pairing_pending() || (browser && !configured) {
+    let data = if feed.browser_pairing_pending() || (pairs && !configured) {
         nav.go_settings(SettingsSection::Connection);
         DataState::Disconnected
     } else if configured {
@@ -815,10 +815,15 @@ mod tests {
                 crate::model::devices::pair_browser(&feed),
                 PairBrowser::Form { prefilled: false }
             ));
-            let guide = crate::model::settings::connect::web_guide(&feed, None);
-            let empty = crate::model::settings::connect::unavailable(&feed, true);
-            for line in [guide.status, empty.reason] {
-                assert!(!line.contains("reachable"), "{line}");
+            for client in [
+                crate::model::devices::PairClient::Browser,
+                crate::model::devices::PairClient::Native,
+            ] {
+                let guide = crate::model::settings::connect::pair_guide(&feed, client, None);
+                let empty = crate::model::settings::connect::unavailable(&feed, Some(client));
+                for line in [guide.status, empty.reason] {
+                    assert!(!line.contains("reachable"), "{line}");
+                }
             }
             let mut nav = NavState::new(form);
             let (data, _) = startup(

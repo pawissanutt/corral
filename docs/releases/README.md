@@ -1,24 +1,25 @@
 # Release runbook
 
 The current release pipeline is `.github/workflows/release.yml`. The classic `v0.4.0`
-tag is historical and has no published release assets; do not move or reuse it. The current workspace
-version is `0.4.1`, a new candidate tag, not a claim that it has been published.
-Tagging and publishing are external writes and require separate owner authorization.
+tag is historical and has no published release assets; do not move or reuse it. The
+published `v0.4.1` release does not contain the Windows desktop installer. Tagging and
+publishing a new release require owner authorization.
 
 ## Candidate and evidence
 
 The pipeline builds `corral-next`, `corrald-next` and the compiled `corral-pi` host
 on native Linux x86_64 and ARM64 (GNU) and macOS Intel and ARM64 runners. It also
-builds one portable web app archive, and tests its installer on Windows. Native
-Windows daemon and native app release packages are not provided. The detailed support
-matrix, prerequisites and installation paths are in the [app README](../../apps/corral-app/README.md).
+builds a portable web app archive and a per-user Windows x86_64 desktop installer.
+The Windows installer does not provide a native daemon. The detailed support matrix,
+prerequisites and installation paths are in the [app README](../../apps/corral-app/README.md).
 Classic release installation remains in the [classic guide](../guide/install.md).
 
-Each archive has a SHA-256 sidecar. Native CI exercises the actual candidate archives
-through the installers, including fresh install, simulated upgrade, checksum refusal,
-and runtime probes; Windows exercises the web installer. Publication depends on the
-build and smoke jobs, and verifies the expected archive checksums. A simulated previous
-installation is not evidence of an upgrade from a separately published current release.
+Each archive and installer has a SHA-256 sidecar. Native CI exercises the candidate
+archives through the installers, including fresh install, simulated upgrade, checksum
+refusal, and runtime probes. Windows checks the web installer and installs, opens,
+upgrades, and uninstalls the desktop app. Publication depends on these checks and verifies
+the complete asset set and checksums.
+A simulated upgrade is not evidence of an upgrade from a separately published release.
 Capture the candidate SHA, workflow URL, native job logs and artifact checksums; hosted
 platform success cannot be inferred from a local Linux run.
 

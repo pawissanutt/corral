@@ -1,11 +1,21 @@
-//! Browser-owned Noise sessions and shared app data; only the paired marker uses NSH Storage.
+//! Paired Noise sessions over browser or native WebSockets.
 mod identity;
+#[cfg(target_arch = "wasm32")]
+mod keystore;
+#[cfg(windows)]
+#[path = "keystore_windows.rs"]
 mod keystore;
 mod lifecycle;
 mod noise;
+#[cfg(target_arch = "wasm32")]
 pub(crate) mod push;
+#[cfg(target_arch = "wasm32")]
 mod push_runtime;
+#[cfg_attr(windows, path = "socket_windows.rs")]
 mod socket;
+#[cfg(all(test, windows))]
+#[path = "windows_tests.rs"]
+mod windows_tests;
 
 use super::{
     PAIRED_KEY,
@@ -32,13 +42,32 @@ use snow::{HandshakeState, TransportState};
 use socket::Socket;
 use std::{cell::RefCell, pin::Pin, time::Duration};
 
+const MAX_QUEUED_MESSAGES: usize = 256;
+const MAX_MESSAGE_BYTES: usize = MESSAGE_MAX + NOISE_TAG;
+const HANDSHAKE_DEADLINE_MS: u64 = 5_000;
+
+#[cfg(target_arch = "wasm32")]
+type Clock = web_sys::Performance;
+#[cfg(windows)]
+type Clock = std::time::Instant;
+
+#[cfg(target_arch = "wasm32")]
+const PAIRING_REQUIRED: &str = "This browser is not paired";
+#[cfg(windows)]
+const PAIRING_REQUIRED: &str = "This device is not paired";
+
+#[cfg(target_arch = "wasm32")]
+const DAMAGED_KEY: &str = "The stored browser pairing has a damaged key; forget it and pair again.";
+#[cfg(windows)]
+const DAMAGED_KEY: &str = "The stored pairing has a damaged key; forget it and pair again.";
+
 pub(super) enum Input {
     Opened {
         generation: u64,
     },
     Message {
         generation: u64,
-        bytes: Vec<u8>,
+        bytes: socket::MessageBytes,
     },
     Closed {
         generation: u64,
@@ -53,6 +82,7 @@ thread_local! { static SENDER: RefCell<Option<UnboundedSender<Input>>> = const {
 pub(super) fn send(request: ClientRequest) -> bool {
     SENDER.with(|sender| {
         sender.borrow().as_ref().is_some_and(|sender| {
+            #[cfg(target_arch = "wasm32")]
             if matches!(&request, ClientRequest::BrowserPush { enabled: true, .. }) {
                 push::begin_permission();
             }
@@ -74,6 +104,7 @@ pub(super) fn start(feed: Signal<Feed>) {
         }
     });
     spawn(async move {
+        #[cfg(target_arch = "wasm32")]
         let Some(clock) = web_sys::window().and_then(|window| window.performance()) else {
             feed.update(|feed| {
                 feed.device = DeviceLink::Failed(
@@ -82,19 +113,9 @@ pub(super) fn start(feed: Signal<Feed>) {
             });
             return;
         };
-        let mut driver = Driver {
-            feed,
-            sender,
-            clock,
-            app: AppState::new(),
-            credential: None,
-            connection: None,
-            generation: 0,
-            failures: 0,
-            retry_at: None,
-            forgetting: identity::ForgetState::default(),
-            push_intent: None,
-        };
+        #[cfg(windows)]
+        let clock = Clock::now();
+        let mut driver = Driver::new(feed, sender, clock);
         driver.tick_clock();
         driver.restore().await;
         while let Some(input) =
@@ -149,7 +170,7 @@ impl Connection {
     }
 
     // Each app transition registers and flushes synchronously, before the next input/event.
-    // Unlike native batching, no later cancel/discard can invalidate an unregistered tuple.
+    // Unlike Unix batching, no later cancel/discard can invalidate an unregistered tuple.
     fn flush_app(&mut self, outgoing: Vec<app::Outgoing>, now: u64) -> Result<(), String> {
         for (method, params, tag) in outgoing {
             self.core.request_tagged(method, params, tag, now)?;
@@ -161,7 +182,7 @@ impl Connection {
 struct Driver {
     feed: Signal<Feed>,
     sender: UnboundedSender<Input>,
-    clock: web_sys::Performance,
+    clock: Clock,
     app: AppState,
     credential: Option<WebCredential>,
     connection: Option<Connection>,
@@ -169,6 +190,7 @@ struct Driver {
     failures: usize,
     retry_at: Option<u64>,
     forgetting: identity::ForgetState,
+    #[cfg(target_arch = "wasm32")]
     push_intent: Option<push_runtime::Intent>,
 }
 enum Action {
@@ -187,8 +209,32 @@ impl From<String> for Failure {
 }
 
 impl Driver {
+    fn new(feed: Signal<Feed>, sender: UnboundedSender<Input>, clock: Clock) -> Self {
+        Self {
+            feed,
+            sender,
+            clock,
+            app: AppState::new(),
+            credential: None,
+            connection: None,
+            generation: 0,
+            failures: 0,
+            retry_at: None,
+            forgetting: identity::ForgetState::default(),
+            #[cfg(target_arch = "wasm32")]
+            push_intent: None,
+        }
+    }
+
     fn now(&self) -> u64 {
-        self.clock.now() as u64
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.clock.now() as u64
+        }
+        #[cfg(windows)]
+        {
+            self.clock.elapsed().as_millis() as u64
+        }
     }
 
     fn tick_clock(&self) {
@@ -213,9 +259,7 @@ impl Driver {
         role: Role,
         handshake: HandshakeState,
     ) -> Result<(), String> {
-        self.connection = None;
-        self.push_intent = None;
-        self.retry_at = None;
+        self.close_connection();
         self.generation = self.generation.wrapping_add(1);
         let generation = self.generation;
         let socket = Socket::open(endpoint, path, generation, self.sender.clone())?;
@@ -242,10 +286,7 @@ impl Driver {
             return;
         }
         let result = (|| {
-            let credential = self
-                .credential
-                .as_ref()
-                .ok_or("This browser is not paired")?;
+            let credential = self.credential.as_ref().ok_or(PAIRING_REQUIRED)?;
             let endpoint = credential
                 .endpoint
                 .clone()
@@ -261,13 +302,21 @@ impl Driver {
         }
     }
 
-    fn lost(&mut self, problem: String) {
+    fn close_connection(&mut self) {
         self.connection = None;
+        self.retry_at = None;
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.push_intent = None;
+        }
+    }
+
+    fn lost(&mut self, problem: String) {
+        self.close_connection();
         self.app.disconnected(self.feed);
         self.feed.update(|feed| feed.link_lost(problem));
         let delay = super::requests::reconnect_delay_ms(self.failures);
         self.failures = self.failures.saturating_add(1);
-        self.push_intent = None;
         self.retry_at = self
             .credential
             .as_ref()
@@ -276,9 +325,7 @@ impl Driver {
     }
 
     fn failed(&mut self, pair: bool, failure: Failure) {
-        self.connection = None;
-        self.push_intent = None;
-        self.retry_at = None;
+        self.close_connection();
         match failure {
             Failure::Retry(problem) if !pair => self.lost(problem),
             Failure::Retry(problem) | Failure::Fatal(problem) => {
@@ -298,61 +345,12 @@ impl Driver {
     async fn handle(&mut self, input: Input) {
         match input {
             Input::Request(ClientRequest::Forget) => self.forget().await,
-            Input::Request(ClientRequest::Pair { code, name }) => {
-                if self.feed.with_untracked(|feed| {
-                    matches!(feed.browser_pairing, BrowserPairing::Blocked(_))
-                }) {
-                    return;
-                }
-                if self.forgetting.pending() {
-                    self.forget_failed(
-                        "Forgetting this browser is incomplete; retry Forget before pairing."
-                            .into(),
-                    );
-                    return;
-                }
-                self.connection = None;
-                self.push_intent = None;
-                self.retry_at = None;
-                self.app.disconnected(self.feed);
-                self.feed
-                    .update(|feed| feed.browser_pairing = BrowserPairing::Connecting);
-                let result = (|| {
-                    let code = PairCode::decode(&code)?;
-                    let keys = noise::generate_keypair()?;
-                    let private: [u8; 32] = keys
-                        .private
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| "invalid browser private key")?;
-                    let handshake =
-                        noise::initiator_pair(&private, &code.daemon_public, &code.token)?;
-                    let credential = WebCredential {
-                        v: 1,
-                        device: String::new(),
-                        name,
-                        private: hex(&private),
-                        daemon: hex(&code.daemon_public),
-                        port: code.port,
-                        endpoint: code.endpoint.clone(),
-                    };
-                    self.open(
-                        &code
-                            .endpoint
-                            .clone()
-                            .unwrap_or_else(|| format!("ws://127.0.0.1:{}", code.port)),
-                        &format!("{PAIR_PATH_PREFIX}{}", code.pair_id_hex()),
-                        Role::Pair {
-                            credential,
-                            sas: None,
-                        },
-                        handshake,
-                    )
-                })();
-                if let Err(problem) = result {
-                    self.failed(true, Failure::Fatal(problem));
-                }
-            }
+            Input::Request(ClientRequest::Pair {
+                code,
+                name,
+                endpoint,
+            }) => self.begin_pair(&code, name, endpoint.as_deref()),
+            #[cfg(target_arch = "wasm32")]
             Input::Request(ClientRequest::BrowserPush {
                 request_id,
                 enabled,
@@ -360,6 +358,7 @@ impl Driver {
             }) => {
                 self.change_push(request_id, enabled, kinds).await;
             }
+            #[cfg(target_arch = "wasm32")]
             Input::Request(ClientRequest::PushStatus { request_id }) => {
                 self.push_status(request_id);
             }
@@ -400,7 +399,7 @@ impl Driver {
                 let pair = matches!(conn.role, Role::Pair { .. });
                 let result = match conn.stage {
                     Stage::Opening | Stage::Handshake
-                        if now.saturating_sub(conn.started) >= 5_000 =>
+                        if now.saturating_sub(conn.started) >= HANDSHAKE_DEADLINE_MS =>
                     {
                         Err("corrald connection handshake timed out".into())
                     }
@@ -521,7 +520,7 @@ impl Driver {
                 }
                 conn.socket.received();
                 let pair = matches!(conn.role, Role::Pair { .. });
-                match self.message(&mut conn, bytes).await {
+                match self.message(&mut conn, &bytes).await {
                     Ok(Action::Keep) => self.connection = Some(conn),
                     Ok(Action::Stop) => {}
                     Ok(Action::Paired(credential)) => {
@@ -556,7 +555,7 @@ impl Driver {
         }
     }
 
-    async fn message(&mut self, conn: &mut Connection, bytes: Vec<u8>) -> Result<Action, Failure> {
+    async fn message(&mut self, conn: &mut Connection, bytes: &[u8]) -> Result<Action, Failure> {
         let now = self.now();
         conn.received = now;
         if matches!(conn.stage, Stage::Handshake) {
@@ -571,7 +570,7 @@ impl Driver {
                 .ok_or_else(|| "missing Noise handshake".to_owned())?;
             let mut payload = [0; 128];
             let size = handshake
-                .read_message(&bytes, &mut payload)
+                .read_message(bytes, &mut payload)
                 .map_err(|_| Failure::Fatal(DAEMON_IDENTITY_FAILED.into()))?;
             if size != 0 {
                 return Err(Failure::Fatal(
@@ -616,7 +615,7 @@ impl Driver {
             .as_mut()
             .ok_or_else(|| "missing Noise transport".to_owned())?;
         let len = noise
-            .read_message(&bytes, &mut conn.plain)
+            .read_message(bytes, &mut conn.plain)
             .map_err(|error| {
                 Failure::Fatal(format!("corrald sent an unauthenticated frame: {error}"))
             })?;
@@ -629,7 +628,7 @@ impl Driver {
                     let credential = self
                         .credential
                         .as_ref()
-                        .ok_or_else(|| "missing browser pairing".to_owned())?;
+                        .ok_or_else(|| PAIRING_REQUIRED.to_owned())?;
                     self.app.welcomed(self.feed, &welcome);
                     self.feed.update(|feed| {
                         feed.welcome_received(welcome.daemon.store, welcome.health);
@@ -655,6 +654,7 @@ impl Driver {
 
     async fn process_events(&mut self, conn: &mut Connection, now: u64) -> Result<Action, Failure> {
         while let Some(event) = conn.core.next_event() {
+            #[cfg(target_arch = "wasm32")]
             if self.push_event(conn, &event, now).await? {
                 continue;
             }
@@ -726,16 +726,13 @@ impl Driver {
 }
 
 fn key(text: &str) -> Result<[u8; 32], String> {
-    if text.len() != 64 {
-        return Err(
-            "The stored browser pairing has a damaged key; forget it and pair again.".into(),
-        );
+    if text.len() != 64 || !text.is_ascii() {
+        return Err(DAMAGED_KEY.into());
     }
     let mut key = [0; 32];
     for (at, byte) in key.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&text[at * 2..at * 2 + 2], 16).map_err(|_| {
-            "The stored browser pairing has a damaged key; forget it and pair again.".to_owned()
-        })?;
+        *byte = u8::from_str_radix(&text[at * 2..at * 2 + 2], 16)
+            .map_err(|_| DAMAGED_KEY.to_owned())?;
     }
     Ok(key)
 }

@@ -1,11 +1,12 @@
 //! Settings › Connection. Without a connection: why, the guide to connecting this form (a native
-//! app's socket and enrolment, a browser's pairing) and the way to the preview. With a served
+//! app's socket and enrolment, a browser's or the Windows app's pairing) and the way to the preview. With a served
 //! feed (corrald's, or the synthetic preview's): this device's enrolment and the connection
 //! facts that feed reports.
 
 use nsh_core::prelude::*;
 
 use super::parts::{button_row, cell, frame, mono_cell, space};
+use crate::model::devices::PairClient;
 use crate::model::settings;
 use crate::model::settings::connect::{self, Guide};
 use crate::model::{DataState, Form};
@@ -51,20 +52,18 @@ pub fn page(app: AppState) -> AnyElement {
 fn guide(app: AppState) -> Memo<Guide> {
     let terminal = app.form == Form::Terminal;
     let origin = crate::client::page_origin();
+    let client = PairClient::here();
     computed(move || {
-        app.feed.with(|feed| {
-            if crate::client::pairing_supported() {
-                connect::web_guide(feed, origin.as_deref())
-            } else {
-                connect::native_guide(feed, terminal)
-            }
+        app.feed.with(|feed| match client {
+            Some(client) => connect::pair_guide(feed, client, origin.as_deref()),
+            None => connect::native_guide(feed, terminal),
         })
     })
 }
 
-/// A browser's pairing: where it stands (and the code to compare), then the form while a
-/// code may be entered.
-fn pairing(app: AppState) -> Vec<AnyElement> {
+/// A pairing client's pairing: where it stands (and the code to compare), then the form while
+/// a code may be entered.
+fn pairing(app: AppState, client: PairClient) -> Vec<AnyElement> {
     let shown = guide(app);
     vec![
         dynamic(move || {
@@ -72,24 +71,25 @@ fn pairing(app: AppState) -> Vec<AnyElement> {
             untracked(move || super::guide::status(app, &guide))
         }),
         space(app, 12.0),
-        super::enrolment::pair_form(app),
+        super::enrolment::pair_form(app, client),
     ]
 }
 
-/// Connection without a connection: a browser's pairing, or a native app's start; the steps,
-/// commands and diagnostics; forgetting a stored pairing that no longer works; the preview.
+/// Connection without a connection: a browser's or the Windows app's pairing, or a socket
+/// app's start; the steps, commands and diagnostics; forgetting a stored pairing that no
+/// longer works; the preview.
 fn disconnected(app: AppState) -> AnyElement {
-    let web = crate::client::pairing_supported();
+    let client = PairClient::here();
     let shown = guide(app);
-    let mut parts = if web {
-        pairing(app)
+    let mut parts = if let Some(client) = client {
+        pairing(app, client)
     } else {
         vec![dynamic(move || {
             let guide = shown.get();
             untracked(move || super::guide::status(app, &guide))
         })]
     };
-    if web && crate::client::configured() {
+    if client.is_some() && crate::client::configured() {
         parts.push(super::enrolment::forget(app));
     }
     parts.push(dynamic(move || {
