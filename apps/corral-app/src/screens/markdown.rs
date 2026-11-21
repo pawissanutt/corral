@@ -199,9 +199,11 @@ fn code_block(app: AppState, code: &CodeBlock) -> AnyElement {
         return view()
             .children(language.map(term::quiet))
             .child(
-                view()
-                    .pl(term::cells(2.0))
-                    .child(text(code.code.clone()).text_color(color(Token::Ink))),
+                view().pl(term::cells(2.0)).child(
+                    text(code.code.clone())
+                        .select_text()
+                        .text_color(color(Token::Ink)),
+                ),
             )
             .into_element();
     }
@@ -264,6 +266,7 @@ fn laid_out(app: AppState, markdown: &str, streaming: bool, images: bool) -> Any
     }
     text_view()
         .document(document)
+        .selectable(app.form == Form::Terminal)
         .render_code_block(move |code: &CodeBlock| code_block(app, code))
         .into_element()
 }

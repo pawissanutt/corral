@@ -75,6 +75,7 @@ pub struct FileDiff {
     pub capture_file: Action,
     /// Back to the file list (the phone shows one at a time).
     pub close: Action,
+    pub open_worktree_file: Option<Action>,
 }
 
 /// The file the diff opens and its neighbours in the shown list.
@@ -356,6 +357,18 @@ pub(super) fn file_diff(cx: &Cx<'_>, opened: &Opened<'_>) -> FileDiff {
         capture_file: Action::Changes(ChangesAction::Capture {
             session: session.clone(),
             text: file_capture(path, &counts, &reference),
+        }),
+        open_worktree_file: (super::files::applies(cx)
+            && cx.ui.changes.scope.is_none()
+            && opened
+                .file
+                .is_some_and(|file| !file.outside && !file.status.contains('D')))
+        .then(|| {
+            Action::Files(super::FilesAction::Open {
+                session: session.clone(),
+                path: path.to_owned(),
+                directory: false,
+            })
         }),
         close: Action::Changes(ChangesAction::Close {
             session: session.clone(),

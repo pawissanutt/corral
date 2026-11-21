@@ -1,11 +1,6 @@
 //! The Changes tab (`session::ChangesTab`): what the session changed, as its host serves it.
-//! On desktop, over the content, fixed: the summary and where the read stands, the comparison
-//! switch (one the host cannot serve muted, its reason said under the switch), the compared
-//! commits, the repository and the totals, the repositories to read, then the path filter and
-//! the author chips. A terminal and a phone fold that head to one line (the summary, the
-//! comparison, what narrows the list, when it was read) with `⋯ More`, which unfolds the rest
-//! as the list's first rows, so the files keep their rows on an 80 × 24 terminal; what keeps the
-//! list from showing (unavailable, a failed read, the host's error) stays under the line. Under
+//! One compact summary on every form, with the comparison controls and read metadata
+//! under More. Failed reads remain visible without opening the controls. Under
 //! the head the file list and the opened file's diff (`changes_diff.rs`): beside each other
 //! from 900 pt of tab width on desktop (the list 320 pt) and 100 Cells in a terminal (36
 //! Cells); narrower, the list above the diff, cut to five rows while a file is open (a
@@ -33,7 +28,7 @@ use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
 use super::super::run;
-use head::{extras, folded, head};
+use head::{extras, folded};
 
 /// Tab widths from which the list stands beside the diff: points, and Cells in a terminal.
 const BESIDE: f32 = 900.0;
@@ -115,7 +110,7 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                     .px(px(18.0))
                     .pt(px(12.0))
                     .pb(px(10.0))
-                    .child(head(app, shown)),
+                    .child(folded(app, shown)),
             )
             .child(content)
             .into_element(),
@@ -224,11 +219,8 @@ fn body(
 }
 
 /// What the list's scroll holds: where the head folds, the unfolded head as its first rows,
-/// then the files, then the bound's notice; on desktop the files alone.
+/// then the files, then the bound's notice.
 fn list_content(app: AppState, shown: Memo<Option<ChangesTab>>) -> AnyElement {
-    if app.form == Form::Desktop {
-        return files(app, shown);
-    }
     let bound = computed(move || shown.with(|tab| tab.as_ref().and_then(|tab| tab.bound.clone())));
     let bound = dynamic(move || {
         bound
@@ -256,7 +248,7 @@ fn unfolded(app: AppState, shown: Memo<Option<ChangesTab>>) -> AnyElement {
                     } else {
                         px(10.0)
                     })
-                    .child(extras(app, shown, false))
+                    .child(extras(app, shown))
                     .into_element()
             })
         })

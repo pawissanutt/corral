@@ -26,8 +26,6 @@ pub const SWITCHER_SUB: &str = "Pinned on this device, then recent. Enter opens;
 pub const SWITCHER_EMPTY: &str = "No assistant conversations yet.";
 pub const PINNED: &str = "Pinned";
 pub const RECENT_HEADING: &str = "Recent";
-/// Conversations listed past the pinned ones; older ones stay on Sessions.
-pub const RECENT: usize = 12;
 /// Pins kept per store, so the saved preference stays small.
 const MOST_PINS: usize = 24;
 
@@ -181,8 +179,7 @@ fn number(id: &str) -> u64 {
 }
 
 /// The switcher for the store's saved pins: the pinned conversations the daemon lists, in pin
-/// order (a pin it does not list now is kept, not shown), then the newest others up to
-/// [`RECENT`]. `ask` is the session Ask is keyed to (`quick` or a chat).
+/// order (a pin it does not list now is kept, not shown), then all others newest first. `ask` is the session Ask is keyed to (`quick` or a chat).
 pub fn switcher(feed: &Feed, saved: Option<&StoreAgents>, ask: &str) -> Switcher {
     let ask = exact(feed, ask);
     let pins: &[String] = saved.map_or(&[], |saved| &saved.pinned);
@@ -204,7 +201,6 @@ pub fn switcher(feed: &Feed, saved: Option<&StoreAgents>, ask: &str) -> Switcher
     });
     let recent: Vec<Entry> = others
         .into_iter()
-        .take(RECENT)
         .map(|row| entry(feed, row, false, ask.as_deref()))
         .collect();
     let mut shown = Switcher {

@@ -235,7 +235,13 @@ pub(super) fn echo(app: AppState, sent: &Echo) -> AnyElement {
         return view()
             .test_id(&sent.id)
             .child(text(lead).flex_shrink_0().text_color(color(Token::Ink3)))
-            .child(view().pl(term::cells(2.0)).child(words).children(state))
+            .child(
+                view()
+                    .selectable(true)
+                    .pl(term::cells(2.0))
+                    .child(words.select_text())
+                    .children(state),
+            )
             .into_element();
     }
     let head = text(lead)

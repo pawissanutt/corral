@@ -16,7 +16,6 @@ use crate::model::Form;
 use crate::model::agents::{
     self, Action, Choice, ModelPick, NewBuildForm, NewItem, NewPress, StartAction,
 };
-use crate::model::assistant;
 use crate::model::hue::Hue;
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button_with, menu_trigger};
@@ -82,7 +81,7 @@ fn new_item(app: AppState, item: NewItem) -> AnyElement {
     menu_item()
         .accessibility_label(item.label)
         .on_select(move || match press {
-            NewPress::Assistant => crate::ui::ask::act(app, assistant::Action::NewSession),
+            NewPress::Assistant => app.new_assistant(),
             NewPress::Build => run_agents(app, Action::Start(StartAction::Open)),
         })
         .cursor_pointer()

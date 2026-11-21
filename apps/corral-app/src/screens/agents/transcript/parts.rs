@@ -250,7 +250,12 @@ pub(super) fn well(app: AppState, body: &str) -> AnyElement {
     match app.form {
         Form::Terminal => view()
             .pl(term::cells(2.0))
-            .child(text(body.to_owned()).text_color(color(Token::Ink)))
+            .selectable(true)
+            .child(
+                text(body.to_owned())
+                    .select_text()
+                    .text_color(color(Token::Ink)),
+            )
             .into_element(),
         Form::Phone => view()
             .rounded(px(4.0))

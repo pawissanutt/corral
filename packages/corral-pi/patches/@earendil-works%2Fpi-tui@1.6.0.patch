@@ -1,3 +1,86 @@
+diff --git a/dist/components/editor.js b/dist/components/editor.js
+--- a/dist/components/editor.js
++++ b/dist/components/editor.js
+@@ -491,1 +491,7 @@
++    selectionRows(width) {
++        const left = Math.min(this.paddingX, Math.max(0, Math.floor((width - 1) / 2)));
++        return this.buildVisualLineMap(this.lastWidth).slice(this.scrollOffset, this.scrollOffset + this.renderedVisibleLineCount)
++            .map(({ logicalLine, startCol, length }, i) => ({ y: i + 1, left, logicalLine,
++                text: this.state.lines[logicalLine].slice(startCol, startCol + length) }));
++    }
+     handleMouse(event) {
+diff --git a/dist/components/input.js b/dist/components/input.js
+--- a/dist/components/input.js
++++ b/dist/components/input.js
+@@ -36,1 +36,5 @@
++    selectionRows(width) {
++        const left = visibleWidth(this.prompt);
++        return [{ y: 0, left, logicalLine: 0, text: sliceByColumn(this.value, this.renderedStartColumn, Math.max(0, width - left), true) }];
++    }
+     getValue() {
+diff --git a/dist/tui.js b/dist/tui.js
+--- a/dist/tui.js
++++ b/dist/tui.js
+@@ -116,1 +116,10 @@
++    selectionRows(width, y) {
++        if (this.mouseLayout?.width !== width) return undefined;
++        let top = 0;
++        for (const { component, height } of this.mouseLayout.children) {
++            if (y >= top && y < top + height)
++                return component.selectionRows?.(width, y - top)?.map(row => ({ ...row, y: top + row.y }));
++            top += height;
++        }
++    }
+     handleMouse(event) {
+diff --git a/dist/tui-alt-screen.js b/dist/tui-alt-screen.js
+--- a/dist/tui-alt-screen.js
++++ b/dist/tui-alt-screen.js
+@@ -1106,1 +1106,12 @@
++        if (!event.release && !(event.button & 32)) {
++            this.fieldRows = undefined;
++            const overlay = this.renderedOverlayLayouts.findLast(l => event.x >= l.col && event.x < l.col + l.width && event.y >= l.row && event.y < l.row + l.height);
++            const boxes = overlay ? [{ component: overlay.entry.component, rect: { x: overlay.col, y: overlay.row, width: overlay.width }, clip: { y: overlay.row, height: overlay.height } }] : this.currentLayout ? getLayoutBoxesAt(this.currentLayout, event.x, event.y) : [];
++            for (const box of boxes) {
++                const top = box.rect.y - (box.lineOffset ?? 0);
++                const rows = box.component.selectionRows?.(box.rect.width, event.y - top)?.map(row => ({ ...row, y: top + row.y, left: box.rect.x + row.left }))
++                    .filter(row => row.y >= box.clip.y && row.y < box.clip.y + box.clip.height);
++                if (rows?.some(row => row.y === event.y)) { this.fieldRows = rows; break; }
++            }
++        }
+         const anchorScrollView = this.selectionAnchor?.scrollView;
+@@ -1166,1 +1177,1 @@
+-        const scrollView = !this.hasOverlay() && this.currentLayout
++        const scrollView = !this.fieldRows && !this.hasOverlay() && this.currentLayout
+@@ -1216,1 +1227,21 @@
++        if (this.fieldRows) {
++            let out = "", last;
++            for (const row of this.fieldRows) {
++                if (row.y < selection.start.row || row.y > selection.end.row) continue;
++                const width = visibleWidth(row.text);
++                let from = 0, to = width;
++                if (row.y === selection.start.row) {
++                    const col = Math.max(0, selection.start.col - row.left);
++                    from = getGraphemeCellRange(row.text, col)?.start ?? Math.min(width, col);
++                }
++                if (row.y === selection.end.row) {
++                    const col = selection.end.col - row.left;
++                    to = selection.end.boundary || col < 0 ? Math.max(0, col) : (getGraphemeCellRange(row.text, col)?.end ?? width);
++                }
++                if (last !== undefined && last !== row.logicalLine) out += "\n";
++                last = row.logicalLine;
++                out += sliceByColumn(row.text, from, Math.max(0, to - from), true);
++            }
++            return out || undefined;
++        }
+         let sourceLines = this.previousScreen;
+@@ -1398,1 +1429,7 @@
++            if (this.fieldRows) {
++                const field = this.fieldRows.find(field => field.y === row);
++                if (!field) return line;
++                minColumn = field.left;
++                maxColumn = field.left + visibleWidth(field.text);
++            }
+             const columns = this.getSelectionColumns(line, row, screenSelection, minColumn, maxColumn);
 diff --git a/dist/components/image.d.ts b/dist/components/image.d.ts
 index 0a1a84a9e425ef0e6d7df672535fe96a1adefb83..8ae85f57decd974101285962e099e3c2cddec635 100644
 --- a/dist/components/image.d.ts

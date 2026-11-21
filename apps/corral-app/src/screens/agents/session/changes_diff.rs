@@ -140,11 +140,25 @@ fn file(app: AppState, opened: Memo<Option<FileDiff>>) -> AnyElement {
         "btn-changes-files",
         press(app, opened, |diff| Some(diff.close.clone())),
     );
+    let preview = dynamic(move || {
+        opened
+            .with(|diff| diff.as_ref()?.open_worktree_file.clone())
+            .map(|action| {
+                button(
+                    app,
+                    "View file",
+                    ButtonKind::Quiet,
+                    "btn-open-worktree-file",
+                    move || run(app, action.clone()),
+                )
+            })
+    });
     let walks = view()
         .flex_row()
         .flex_wrap()
         .items_center()
         .gap(px(if terminal { 8.0 } else { 4.0 }))
+        .child(preview)
         .child(walk(app, opened, "‹ Hunk", "p", "prev-hunk", |diff| {
             diff.prev_hunk.clone()
         }))

@@ -1,7 +1,4 @@
-//! The Changes tab's head: the desktop's whole head, the folded line a terminal and a phone
-//! show instead, and what `⋯ More` unfolds (the comparison switch with the reasons the host
-//! gives for those it cannot serve, the compared commits, the repositories, the path filter and
-//! the author chips).
+//! A one-row Changes toolbar, with detailed comparison and filter controls under More.
 
 use nsh_core::EllipsizeMode;
 use nsh_core::element::{color as for_appearance, input};
@@ -25,27 +22,9 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
 use super::super::super::run;
 use super::super::hue_words;
-use super::super::tabs::part;
 
 const TARGET: f32 = 44.0;
 const RING: f32 = 2.0;
-
-/// The desktop's head: the summary and where the read stands, then everything else.
-pub(super) fn head(app: AppState, shown: Memo<Option<ChangesTab>>) -> AnyElement {
-    let form = app.form;
-    let summary = computed(move || shown.with(|tab| tab.as_ref().map(|tab| tab.part.clone())));
-    let summary = dynamic(move || {
-        summary.with(|body| {
-            body.as_ref()
-                .map(|body| untracked(|| part(app, body, "changes")))
-        })
-    });
-    view()
-        .gap(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
-        .child(summary)
-        .child(extras(app, shown, true))
-        .into_element()
-}
 
 /// The head where it folds (a terminal, a phone), so the file list keeps its rows on a small
 /// screen: one line with the summary, the comparison, what narrows the list and when it was
@@ -57,7 +36,13 @@ pub(super) fn folded(app: AppState, shown: Memo<Option<ChangesTab>>) -> AnyEleme
     let line = computed(move || {
         shown.with(|tab| {
             tab.as_ref().map(|tab| {
-                let mut words = vec![tab.part.summary.clone()];
+                let mut words: Vec<_> = tab
+                    .scopes
+                    .iter()
+                    .filter(|chip| chip.selected)
+                    .map(|chip| chip.label.clone())
+                    .collect();
+                words.push(tab.part.summary.clone());
                 words.extend(
                     tab.comparisons
                         .iter()
@@ -65,7 +50,7 @@ pub(super) fn folded(app: AppState, shown: Memo<Option<ChangesTab>>) -> AnyEleme
                         .map(|chip| chip.label.clone()),
                 );
                 words.extend(tab.narrowed.clone());
-                if tab.part.read.has_rows() {
+                if !matches!(tab.part.read, ReadState::Read { .. }) && tab.part.read.has_rows() {
                     words.push(tab.part.read.words());
                 }
                 (words.join(" · "), tab.part.hue)
@@ -179,11 +164,8 @@ pub(super) fn folded(app: AppState, shown: Memo<Option<ChangesTab>>) -> AnyEleme
         .into_element()
 }
 
-/// Everything over the list after the summary: the switch, the comparison's identity, the
-/// repositories, then the filter and the authors; with `said`, the host's error and the
-/// bound (a folded head says those itself, the bound under the list). Where the head folds,
-/// Reread leads it.
-pub(super) fn extras(app: AppState, shown: Memo<Option<ChangesTab>>, said: bool) -> AnyElement {
+/// Comparison, repository, read and filter controls shown on demand.
+pub(super) fn extras(app: AppState, shown: Memo<Option<ChangesTab>>) -> AnyElement {
     let form = app.form;
     let switch = computed(move || {
         shown.with(|tab| {
@@ -210,28 +192,10 @@ pub(super) fn extras(app: AppState, shown: Memo<Option<ChangesTab>>, said: bool)
         let chips = scopes.get();
         (!chips.is_empty()).then(|| untracked(|| repositories(app, &chips)))
     });
-    let notes = computed(move || {
-        shown.with(|tab| {
-            tab.as_ref()
-                .filter(|_| said)
-                .map(|tab| (tab.error.clone(), tab.bound.clone()))
-                .unwrap_or_default()
-        })
-    });
-    let notes = dynamic(move || {
-        let (error, bound) = notes.get();
-        untracked(|| {
-            view()
-                .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
-                .children(error.map(|error| notice(app, Hue::Held, &vec![span(error)], None)))
-                .children(bound.map(|bound| notice(app, Hue::Neutral, &vec![span(bound)], None)))
-                .into_element()
-        })
-    });
     let reread = computed(move || {
         shown.with(|tab| {
             tab.as_ref()
-                .filter(|tab| !said && tab.part.read.has_rows())
+                .filter(|tab| tab.part.read.has_rows())
                 .and_then(|tab| tab.part.reread.clone())
         })
     });
@@ -272,7 +236,6 @@ pub(super) fn extras(app: AppState, shown: Memo<Option<ChangesTab>>, said: bool)
         .child(switch)
         .child(line)
         .child(scopes)
-        .child(notes)
         .child(tools)
         .into_element()
 }
