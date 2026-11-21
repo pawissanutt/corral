@@ -1807,10 +1807,10 @@ index 0c69a2e1287a5a795199b66690f412d2082f9ee4..900ee1cabdb1989a7893bcc639e508b1
  //# sourceMappingURL=tool-execution.d.ts.map
 \ No newline at end of file
 diff --git a/dist/modes/interactive/components/tool-execution.js b/dist/modes/interactive/components/tool-execution.js
-index ec6a2f63b7478eb3025314fed81f22d7afee2250..0055d08c86287295fc59c332cfed3448134518e8 100644
+index ec6a2f63b7478eb3025314fed81f22d7afee2250..c467569909481a3a6bc9c6c09cef57ced00575fe 100644
 --- a/dist/modes/interactive/components/tool-execution.js
 +++ b/dist/modes/interactive/components/tool-execution.js
-@@ -34,6 +34,12 @@ export class ToolExecutionComponent extends Container {
+@@ -34,6 +34,12 @@
      argsPending = false;
      result;
      hideComponent = false;
@@ -1823,7 +1823,7 @@ index ec6a2f63b7478eb3025314fed81f22d7afee2250..0055d08c86287295fc59c332cfed3448
      constructor(toolName, toolCallId, args, options = {}, toolDefinition, ui, cwd) {
          super();
          this.toolName = toolName;
-@@ -73,6 +79,14 @@ export class ToolExecutionComponent extends Container {
+@@ -73,6 +79,14 @@
      getRenderShell() {
          return this.toolDefinition?.renderShell ?? "default";
      }
@@ -1838,7 +1838,7 @@ index ec6a2f63b7478eb3025314fed81f22d7afee2250..0055d08c86287295fc59c332cfed3448
      getRenderContext(lastComponent) {
          return {
              args: this.args,
-@@ -92,6 +106,7 @@ export class ToolExecutionComponent extends Container {
+@@ -92,6 +106,7 @@
              isError: this.result?.isError ?? false,
              durationMs: this.isPartial ? undefined : this.result?.durationMs,
              outputPad: this.outputPad,
@@ -1846,7 +1846,7 @@ index ec6a2f63b7478eb3025314fed81f22d7afee2250..0055d08c86287295fc59c332cfed3448
              keyText,
              keyHint,
          };
-@@ -145,10 +160,40 @@ export class ToolExecutionComponent extends Container {
+@@ -145,10 +160,40 @@
          this.isPartial = isPartial;
          this.updateDisplay();
      }
@@ -1887,7 +1887,7 @@ index ec6a2f63b7478eb3025314fed81f22d7afee2250..0055d08c86287295fc59c332cfed3448
      setOutputPad(outputPad) {
          this.outputPad = outputPad;
          this.updateDisplay();
-@@ -179,7 +224,8 @@ export class ToolExecutionComponent extends Container {
+@@ -179,7 +224,8 @@
              }
              const lines = [];
              if (contentLines.length > 0) {
@@ -1897,7 +1897,21 @@ index ec6a2f63b7478eb3025314fed81f22d7afee2250..0055d08c86287295fc59c332cfed3448
                  // Append in a loop: spreading hundreds of thousands of wrapped lines exceeds V8's argument limit.
                  for (const line of contentLines)
                      lines.push(line);
-@@ -201,13 +247,22 @@ export class ToolExecutionComponent extends Container {
+@@ -198,16 +244,36 @@
+         }
+         return super.render(width);
+     }
++    /** Semantic selection: a self-framed row's own rows, below its blank top row; images offer none. */
++    selectionRows(width, y) {
++        if (this.hideComponent)
++            return undefined;
++        if (!this.hasRendererDefinition() || this.getRenderShell() !== "self")
++            return super.selectionRows(width, y);
++        const top = this.selfRenderHeight > 0 && !this.tightTop ? 1 : 0;
++        if (y < top || y >= top + this.selfRenderHeight)
++            return undefined;
++        return this.selfRenderContainer.selectionRows(width, y - top)?.map((row) => ({ ...row, y: top + row.y }));
++    }
      handleMouse(event) {
          if (!this.hasRendererDefinition() || this.getRenderShell() !== "self")
              return super.handleMouse(event);
@@ -1927,7 +1941,7 @@ index ec6a2f63b7478eb3025314fed81f22d7afee2250..0055d08c86287295fc59c332cfed3448
      }
      updateDisplay() {
          this.argsPending = false;
-@@ -335,4 +390,132 @@ export class ToolExecutionComponent extends Container {
+@@ -335,4 +401,132 @@
          return text;
      }
  }
@@ -2062,10 +2076,10 @@ index ec6a2f63b7478eb3025314fed81f22d7afee2250..0055d08c86287295fc59c332cfed3448
  //# sourceMappingURL=tool-execution.js.map
 \ No newline at end of file
 diff --git a/dist/modes/interactive/components/user-message.js b/dist/modes/interactive/components/user-message.js
-index 0831174766f22410f526bcc0a570829f94752809..0dcf3cc2be3dad25685c144bce28af96480022b3 100644
+index 0831174766f22410f526bcc0a570829f94752809..b06c5885abbd02b4614e7c992215dcd70c6c097a 100644
 --- a/dist/modes/interactive/components/user-message.js
 +++ b/dist/modes/interactive/components/user-message.js
-@@ -33,7 +33,7 @@ export class UserMessageComponent extends Container {
+@@ -33,7 +33,7 @@
          this.clear();
          // The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
          // line, with identical output.
@@ -2074,7 +2088,7 @@ index 0831174766f22410f526bcc0a570829f94752809..0dcf3cc2be3dad25685c144bce28af96
              color: (content) => theme.fg("userMessageText", content),
              bgColor: (content) => theme.bg("userMessageBg", content),
          }, {
-@@ -43,13 +43,14 @@ export class UserMessageComponent extends Container {
+@@ -43,18 +43,23 @@
          }));
      }
      render(width) {
@@ -2092,6 +2106,16 @@ index 0831174766f22410f526bcc0a570829f94752809..0dcf3cc2be3dad25685c144bce28af96
              zoned[0] = OSC133_ZONE_START + zoned[0];
              zoned[zoned.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + zoned[zoned.length - 1];
              this.zoneLines = { source: lines, lines: zoned };
+         }
+         return this.zoneLines.lines;
+     }
++    /** Semantic selection inside the bubble, which render() draws one cell in. */
++    selectionRows(width, y) {
++        return super.selectionRows(Math.max(1, Math.min(width - 1, 96)), y)?.map((row) => ({ ...row, left: row.left + 1 }));
++    }
+ }
+ //# sourceMappingURL=user-message.js.map
+\ No newline at end of file
 diff --git a/dist/modes/interactive/interactive-mode.d.ts b/dist/modes/interactive/interactive-mode.d.ts
 index a2f792aa7a1b248101805095b3f20c5fed56d7dc..ca223dd62a0ba7bfe6b2d4a00798c1d5fb66cc14 100644
 --- a/dist/modes/interactive/interactive-mode.d.ts

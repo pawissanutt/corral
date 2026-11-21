@@ -8,13 +8,14 @@ import {
   AssistantMessageComponent, ToolExecutionComponent, UserMessageComponent, getMarkdownTheme, type MarkdownTransformer, type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
 import {
-  stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type MarkdownTheme, type TUI, type TuiMouseEvent,
-  type TuiMouseEventResult,
+  stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type MarkdownTheme, type SelectionRow, type TUI,
+  type TuiMouseEvent, type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import type { HelperMessage } from "../extensions/subagent/inspection.ts";
 import type { AgentMail, ConversationSource } from "./agents-model.ts";
 import { userLabel } from "./panels-theme.ts";
 import { plainLabel, PANEL_BUBBLE, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING } from "./panels-view.ts";
+import { selectionIn } from "./selection.ts";
 import { presenterFor, type ToolRenderDeps } from "./tool-rendering.ts";
 import { baseState, firstLine, presentCall, resultText, rowLine, type CallInput, type Presenter, type RowModel } from "./tool-row.ts";
 
@@ -197,6 +198,7 @@ export class HelperChat {
   /** Tool calls opened into their native card by pointer while tools are collapsed. */
   private readonly opened = new Set<string>();
   private hits: Hit[] = [];
+  private hitsWidth = 0;
   private styleKey = "";
   private prompt: UserMessageComponent | undefined;
   private expanded = false;
@@ -221,7 +223,7 @@ export class HelperChat {
     // The prompt's label takes the place of the owner's `you` at the end of the same transformer chain.
     this.prompt ??= new UserMessageComponent(helperText(helper.prompt), style.markdownTheme, style.outputPad, [...transformers, promptLabel(label)]);
     const rows: string[] = [];
-    this.hits = [];
+    this.hits = []; this.hitsWidth = width;
     const append = (component: Component, tool?: string) => {
       const lines = component.render(width);
       this.hits.push({ start: rows.length, end: rows.length + lines.length, component, ...(tool === undefined ? {} : { tool }) }); rows.push(...lines);
@@ -304,6 +306,12 @@ export class HelperChat {
     const result = hit.component.handleMouse?.({ ...event, y: event.y - hit.start, height: hit.end - hit.start });
     if (result?.handled && hit.tool !== undefined && !this.expanded) this.opened.delete(hit.tool);
     return result;
+  }
+  /** Semantic selection inside the prompt, reply or tool card drawn at `y` by the last `renderHelper`. */
+  selectionRows(width: number, y: number): readonly SelectionRow[] | undefined {
+    if (width !== this.hitsWidth) return undefined;
+    const hit = this.hits.find(item => y >= item.start && y < item.end);
+    return hit?.component ? selectionIn(hit.component, width, y, hit.start, 0) : undefined;
   }
   /** Every tool as its expanded native card, or every tool back on one line. */
   expandTools(expanded: boolean): void {

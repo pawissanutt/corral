@@ -5,13 +5,14 @@
 // the foreground, `CodeRuntime.snapshot` and `watch` once it detached), never from parsing the script. While the
 // script streams in, the row shows its newest lines. The model-facing report text is not drawn.
 import type { AgentToolResult, ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type SelectionRow } from "@earendil-works/pi-tui";
 import type { CellReport, ChildOutcome } from "../extensions/codemode/report.ts";
 import type { Ticker } from "./activity.ts";
 import { spinner } from "./frame.ts";
 import { PANEL_ERROR, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
 import { type ToolRenderDeps, presenterFor } from "./tool-rendering.ts";
-import { type CallInput, type Presenter, type RowModel, rowLine } from "./tool-row.ts";
+import { blockRows, wrappedRows, type DrawnRow } from "./selection.ts";
+import { type CallInput, type Presenter, type RowModel, clipPlain, rowLine } from "./tool-row.ts";
 
 type RenderContext = Parameters<NonNullable<ToolRenderers["renderCall"]>>[2];
 
@@ -297,15 +298,20 @@ export function foldChildren(children: readonly ChildOutcome[]): readonly FoldEn
  * `label  text` for each part, at most `rows` rows, and how many rows were cut. Collapsed, a JSON part is one row
  * clipped to the width and plain text wraps (continuation rows under the text); expanded, every part wraps in full.
  */
-function labelled(label: string, parts: readonly OutputPart[], width: number, rows: number, tone: Tone, expanded: boolean): { readonly lines: string[]; readonly hidden: number } {
+function labelled(label: string, parts: readonly OutputPart[], width: number, rows: number, tone: Tone, expanded: boolean): { readonly lines: string[]; readonly hidden: number; readonly drawn: readonly DrawnRow[] } {
   const room = Math.max(1, width - LABEL_WIDTH);
-  const wrap = (text: string) => text.split("\n").flatMap(line => line.length === 0 ? [""] : wrapTextWithAnsi(line, room));
-  const wrapped = parts.flatMap(part => !expanded && part.json ? [part.text] : wrap(expanded ? part.full : part.text));
-  while (wrapped.length > 0 && wrapped[wrapped.length - 1] === "") wrapped.pop();
+  let next = 0;
+  const wrap = (text: string) => text.split("\n").flatMap(line => line.length === 0 ? [{ text: "", copy: "", line: next++ }] : wrappedRows(line, room, next++));
+  const wrapped = parts.flatMap(part => !expanded && part.json ? [{ text: part.text, copy: part.text, line: next++ }] : wrap(expanded ? part.full : part.text));
+  while (wrapped.length > 0 && wrapped[wrapped.length - 1]!.text === "") wrapped.pop();
   const kept = wrapped.slice(0, Math.max(0, rows));
-  const lines = kept.map((line, index) => (index === 0 ? PANEL_MUTED + label.padEnd(LABEL_WIDTH) : " ".repeat(LABEL_WIDTH))
-    + color(tone) + truncateToWidth(line, room, "…") + RESET);
-  return { lines, hidden: wrapped.length - kept.length };
+  const lines = kept.map((row, index) => (index === 0 ? PANEL_MUTED + label.padEnd(LABEL_WIDTH) : " ".repeat(LABEL_WIDTH))
+    + color(tone) + truncateToWidth(row.text, room, "…") + RESET);
+  return { lines, hidden: wrapped.length - kept.length, drawn: kept.map(row => clipped(row, room)) };
+}
+/** `row` as drawn clipped to `room`: a cut row copies what shows, without its `…`. */
+function clipped(row: DrawnRow, room: number): DrawnRow {
+  return visibleWidth(row.text) <= room ? row : { ...row, copy: clipPlain(row.text, room - 1, "") };
 }
 function muted(text: string, width: number, indent = INDENT): string {
   return indent + PANEL_MUTED + truncateToWidth(text, Math.max(1, width - indent.length), "…") + RESET;
@@ -451,8 +457,10 @@ function controlModel(view: View): RowModel {
 /**
  * Rows under the header: the calls, the error, printed output and return value, then `… n more rows` when output was
  * cut; expanded adds every call, all output and the source. Rows name no keys: the footer carries `Ctrl+O expand`.
+ * Each of the error, printed output, return value and source goes to `blocks` for semantic selection, without its
+ * label, in the rows' coordinates.
  */
-function bodyLines(view: View, deps: CodeCellDeps, width: number): string[] {
+function bodyLines(view: View, deps: CodeCellDeps, width: number, blocks: SelectionRow[][] = []): string[] {
   const { cell, context, args, now } = view;
   const expanded = context.expanded, inner = Math.max(1, width - INDENT.length);
   const lines: string[] = [];
@@ -483,26 +491,33 @@ function bodyLines(view: View, deps: CodeCellDeps, width: number): string[] {
     const omitted = omittedTotal(cell);
     if (omitted > 0) lines.push(muted(`… ${counted(omitted, "more call", "more calls")} after the first ${cell.children.length}`, width));
   }
+  const output = (block: ReturnType<typeof labelled>) => {
+    blocks.push(blockRows(block.drawn, lines.length, INDENT.length + LABEL_WIDTH));
+    lines.push(...block.lines.map(line => INDENT + line));
+  };
   if (cell.error) {
     const error = [{ text: clean(cell.error), full: clean(cell.error), json: false }];
-    lines.push(...labelled("error", error, inner, expanded ? 12 : 2, "error", expanded).lines.map(line => INDENT + line));
+    output(labelled("error", error, inner, expanded ? 12 : 2, "error", expanded));
   }
   let rows = expanded ? EXPANDED_OUTPUT_ROWS : OUTPUT_ROWS, cut = 0;
   if (cell.printed.length > 0) {
     const block = labelled("printed", cell.printed, inner, rows, "text", expanded);
-    lines.push(...block.lines.map(line => INDENT + line));
+    output(block);
     rows -= block.lines.length; cut += block.hidden;
   }
   if (cell.images > 0) lines.push(muted(`${"printed".padEnd(LABEL_WIDTH)}${counted(cell.images, "image", "images")}, shown below`, width));
   if (cell.value !== undefined) {
     const block = labelled("returned", [cell.value], inner, Math.max(1, rows), "text", expanded);
-    lines.push(...block.lines.map(line => INDENT + line));
+    output(block);
     cut += block.hidden;
   }
   if (view.background && running) lines.push(muted("the agent continues; this row updates when the cell settles", width));
   if (code && expanded) {
     lines.push(muted("source", width));
-    lines.push(...sourceLines(view.state, code).map(line => INDENT + INDENT + PANEL_TEXT + truncateToWidth(line, Math.max(1, inner - INDENT.length), "…") + RESET));
+    const room = Math.max(1, inner - INDENT.length);
+    const source = sourceLines(view.state, code).map((line, index) => clipped({ text: line, copy: line, line: index }, room));
+    blocks.push(blockRows(source, lines.length, INDENT.length * 2));
+    lines.push(...source.map(row => INDENT + INDENT + PANEL_TEXT + truncateToWidth(row.text, room, "…") + RESET));
   }
   if (cut > 0) lines.push(muted(`… ${counted(cut, "more row", "more rows")}`, width));
   return lines;
@@ -532,13 +547,18 @@ function track(view: View, deps: CodeCellDeps): void {
   }
 }
 
-/** The whole row for `width`: the header and the rows under it. */
-export function cellLines(deps: CodeCellDeps, context: RenderContext, width: number, now: number): string[] {
+/**
+ * The whole row for `width`: the header and the rows under it. `blocks` receives the output blocks (error, printed,
+ * returned, source) for semantic selection, in the row's coordinates.
+ */
+export function cellLines(deps: CodeCellDeps, context: RenderContext, width: number, now: number, blocks: SelectionRow[][] = []): string[] {
   const pad = Math.max(0, Math.min(context.outputPad ?? 0, Math.floor((width - 1) / 2))), room = Math.max(1, width - pad * 2);
   const view = viewOf(deps, context, now);
   const control = view.args.cancel !== undefined || (view.args.reset && view.args.code === undefined);
   const header = control ? controlModel(view) : headerModel(view, deps, room);
-  const lines = [rowLine(header, room, now), ...control ? [] : bodyLines(view, deps, room)];
+  const body: SelectionRow[][] = [];
+  const lines = [rowLine(header, room, now), ...control ? [] : bodyLines(view, deps, room, body)];
+  blocks.push(...body.map(rows => rows.map(row => ({ ...row, y: row.y + 1, left: row.left + pad }))));
   const margin = " ".repeat(pad);
   return lines.map(line => margin + (visibleWidth(line) > room ? truncateToWidth(line, room, "…") : line));
 }
@@ -561,7 +581,16 @@ export function cellRenderers(deps: CodeCellDeps): ToolRenderers {
     renderShell: "self",
     renderCall: (_args, _theme, context): Component => {
       track(viewOf(deps, context, now()), deps);
-      return { render: width => cellLines(deps, context, width, now()), invalidate() {} };
+      let drawn: { readonly width: number; readonly blocks: readonly (readonly SelectionRow[])[] } | undefined;
+      return {
+        render: width => {
+          const blocks: SelectionRow[][] = [], lines = cellLines(deps, context, width, now(), blocks);
+          drawn = { width, blocks };
+          return lines;
+        },
+        selectionRows: (width, y) => drawn?.width === width ? drawn.blocks.find(rows => rows.some(row => row.y === y)) : undefined,
+        invalidate() {},
+      };
     },
     renderResult: (result, options, _theme, context): Component => {
       const state = context.state as RowState;

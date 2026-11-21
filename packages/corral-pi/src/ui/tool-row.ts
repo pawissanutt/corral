@@ -23,12 +23,13 @@ import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 
 import type { AgentToolResult, ToolRenderers } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
 import type { Ticker } from "./activity.ts";
 import { spinner } from "./frame.ts";
 import { PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING, RESET, plainLabel } from "./panels-view.ts";
+import { blockRows, selectionIn, shiftRows, wrappedRows, type DrawnRow, type SelectionRow } from "./selection.ts";
 
 /** What the call is doing now. `writing`: its arguments are still streaming; `waiting`: queued or started but not finished here. */
 export type RowState = "writing" | "running" | "ok" | "failed" | "waiting" | "needs-you" | "unknown";
@@ -332,53 +333,78 @@ function hintOf(model: RowModel): string | undefined {
   const hidden = model.hiddenHint ? flat(model.hiddenHint) : "";
   return /\d/.test(hidden) && !(model.outcome ?? "").includes(hidden) ? hidden : undefined;
 }
-/** Body rows, the last one ending with the muted `suffix` (`… 12 more lines`) when given. Text is clipped plain, then styled. */
-function bodyRows(lines: readonly BodyLine[], width: number, wrap: boolean, suffix?: string): string[] {
+interface BodyRow extends DrawnRow { readonly color: string; readonly tail?: string }
+/**
+ * Body rows, the last one ending with the muted `suffix` (`… 12 more lines`) when given. Text is clipped plain, then
+ * styled. `drawn` is what each row shows and copies: a clipped row copies what shows, without its `…`.
+ */
+function bodyRows(lines: readonly BodyLine[], width: number, wrap: boolean, suffix?: string): { readonly rows: string[]; readonly drawn: readonly DrawnRow[] } {
   const room = Math.max(1, width - BODY_INDENT), indent = " ".repeat(BODY_INDENT);
-  const rows = lines.flatMap(line => {
+  let next = 0;
+  const drawn: BodyRow[] = lines.flatMap(line => {
     const color = TONE[line.tone ?? "muted"]();
-    const plain = !wrap && line.wrap ? boundedWrap(bodyText(line.text).replace(/\s*\n\s*/g, " "), room, line.wrap)
-      : bodyText(line.text).split("\n").flatMap(text => wrap ? wrapTextWithAnsi(text, room) : [clipPlain(text, room)]);
-    return plain.map(text => ({ text, color }));
+    const rows = !wrap && line.wrap ? boundedWrap(bodyText(line.text).replace(/\s*\n\s*/g, " "), room, line.wrap, next++)
+      : bodyText(line.text).split("\n").flatMap(text => wrap ? wrappedRows(text, room, next++) : [clipRow(text, room, next++)]);
+    return rows.map(row => ({ ...row, color }));
   });
-  const last = rows[rows.length - 1];
+  const last = drawn[drawn.length - 1];
   if (suffix && last) {
-    const tail = ` ${suffix}`, keep = Math.max(0, room - visibleWidth(tail));
-    return rows.map(row => row === last
-      ? indent + row.color + clipPlain(row.text, keep) + PANEL_MUTED + clipPlain(tail, room - Math.min(keep, visibleWidth(row.text)), "") + RESET
-      : indent + row.color + row.text + RESET);
+    const tail = ` ${suffix}`, keep = Math.max(0, room - visibleWidth(tail)), text = clipPlain(last.text, keep);
+    drawn[drawn.length - 1] = { ...last, text, copy: text === last.text ? last.copy : clipPlain(last.text, keep - 1, ""),
+      tail: clipPlain(tail, room - Math.min(keep, visibleWidth(last.text)), "") };
   }
-  return rows.map(row => indent + row.color + row.text + RESET);
+  return { rows: drawn.map(row => indent + row.color + row.text + (row.tail ? PANEL_MUTED + row.tail : "") + RESET), drawn };
+}
+/** One source line clipped to `room`. */
+function clipRow(text: string, room: number, line: number): DrawnRow {
+  const shown = clipPlain(text, room);
+  return { text: shown, copy: shown === text ? text : clipPlain(text, room - 1, ""), line };
 }
 /** `text` wrapped to `room` and cut to `max` rows from the start or the end, the cut marked with `…`. */
-function boundedWrap(text: string, room: number, limit: NonNullable<BodyLine["wrap"]>): string[] {
-  const all = wrapTextWithAnsi(text, room), max = Math.max(1, Math.floor(limit.max));
+function boundedWrap(text: string, room: number, limit: NonNullable<BodyLine["wrap"]>, line: number): DrawnRow[] {
+  const all = wrappedRows(text, room, line), max = Math.max(1, Math.floor(limit.max));
   if (all.length <= max) return all;
   if (limit.from === "end") {
-    const kept = all.slice(-max);
-    return ["…" + clipPlain(kept[0]!, room - 1, ""), ...kept.slice(1)];
+    const kept = all.slice(-max), first = kept[0]!, shown = clipPlain(first.text, room - 1, "");
+    return [{ text: "…" + shown, copy: shown === first.text ? first.copy : shown, line, lead: 1 }, ...kept.slice(1)];
   }
-  const kept = all.slice(0, max), last = kept.length - 1;
-  kept[last] = clipPlain(kept[last]!, room - 1, "") + "…";
-  return kept;
+  const kept = all.slice(0, max), last = kept[kept.length - 1]!, shown = clipPlain(last.text, room - 1, "");
+  return [...kept.slice(0, -1), { text: shown + "…", copy: shown, line }];
 }
 
+/** The selection a row block offers at its local row `y`: its body, never the row line. */
+export type BlockSelection = (y: number) => readonly SelectionRow[] | undefined;
 /**
  * The whole row at `width`: the line, then the collapsed body (its last row ending with `… <hidden count>`), or the
- * expanded view. `time` is the time slot; `rowLine` and the renderers compute it.
+ * expanded view. `time` is the time slot; `rowLine` and the renderers compute it. `select` gives the body as one
+ * block for semantic selection: its text without the indent, the `…` of a cut or the hidden count, wrapped lines
+ * joined; an expanded component offers its own.
  */
-export function rowBlock(model: RowModel, width: number, now: number, expanded: boolean, time = timeOf(model, now)): { readonly lines: string[]; readonly view?: { readonly from: number; readonly to: number } } {
+export function rowBlock(model: RowModel, width: number, now: number, expanded: boolean, time = timeOf(model, now)): { readonly lines: string[]; readonly view?: { readonly from: number; readonly to: number }; readonly select: BlockSelection } {
   const body = model.body ?? [], hint = expanded ? undefined : hintOf(model);
   const laid = layout(model, width, now, time, body.length ? undefined : hint);
   const lines = [laid.line];
+  let select: BlockSelection;
   if (expanded && model.expanded) {
-    const full = model.expanded(Math.max(1, width - BODY_INDENT));
-    lines.push(...("render" in full ? full.render(Math.max(1, width - BODY_INDENT)).map(row => " ".repeat(BODY_INDENT) + row)
-      : bodyRows(full, width, true)));
+    const inner = Math.max(1, width - BODY_INDENT), full = model.expanded(inner);
+    if ("render" in full) {
+      lines.push(...full.render(inner).map(row => " ".repeat(BODY_INDENT) + row));
+      select = y => selectionIn(full, inner, y, 1, BODY_INDENT);
+    } else {
+      const rows = bodyRows(full, width, true);
+      lines.push(...rows.rows);
+      select = bodySelection(rows.drawn);
+    }
   } else {
-    lines.push(...bodyRows(body, width, expanded, hint ? `… ${hint}` : undefined));
+    const rows = bodyRows(body, width, expanded, hint ? `… ${hint}` : undefined);
+    lines.push(...rows.rows);
+    select = bodySelection(rows.drawn);
   }
-  return laid.view ? { lines, view: laid.view } : { lines };
+  return laid.view ? { lines, view: laid.view, select } : { lines, select };
+}
+function bodySelection(drawn: readonly DrawnRow[]): BlockSelection {
+  const rows = blockRows(drawn, 1, BODY_INDENT);
+  return y => y >= 1 && y <= rows.length ? rows : undefined;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -454,6 +480,7 @@ class ToolRow implements Component {
   private cached: RowModel | undefined;
   private member: RowMember | undefined;
   private view: { readonly from: number; readonly to: number; readonly open: () => void } | undefined;
+  private select: { readonly width: number; readonly pad: number; readonly pick: BlockSelection } | undefined;
   private hold: { readonly id: string; readonly release: () => void } | undefined;
   constructor(private readonly name: string, private readonly present: Presenter, private readonly deps: RowDeps,
     private readonly grouping?: RowGrouping) {}
@@ -499,7 +526,13 @@ class ToolRow implements Component {
     const time = timeOf(model, now, call.startedAt, call.durationMs);
     const block = rowBlock(model, room, now, call.expanded, time);
     this.view = block.view && model.view ? { from: block.view.from + pad, to: block.view.to + pad, open: () => model.view?.open() } : undefined;
+    this.select = { width, pad, pick: block.select };
     return block.lines.map(line => " ".repeat(pad) + line);
+  }
+  /** Semantic selection of the body as last drawn: output, text or the expanded view, never the row line. */
+  selectionRows(width: number, y: number): readonly SelectionRow[] | undefined {
+    const select = this.select;
+    return select?.width === width ? shiftRows(select.pick(y), 0, select.pad) : undefined;
   }
   /** A click on the view label opens it; any other click falls through to Pi, which toggles this row. */
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {

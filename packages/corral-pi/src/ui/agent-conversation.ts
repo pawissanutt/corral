@@ -9,6 +9,7 @@ import { duration, isLive, money, sparkline, timeLabel, toneColor, type AgentRow
 import { spinner } from "./frame.ts";
 import { bubble, mailSteers, type HelperChat, type Steer } from "./helper-chat.ts";
 import { PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
+import { shiftRows } from "./selection.ts";
 
 export interface AgentConversationHost {
   row(): AgentRow | undefined; chat: HelperChat; color(hue: number): string; now(): number;
@@ -65,6 +66,8 @@ export class AgentConversation {
     this.scroll = new ScrollView({
       render: width => this.render(width),
       handleMouse: event => this.mouse(event),
+      selectionRows: (width, y) => y >= this.chatStart && y < this.chatStart + this.chatRows
+        ? shiftRows(host.chat.selectionRows(width, y - this.chatStart), this.chatStart, 0) : undefined,
       invalidate: () => host.chat.invalidate(),
     }, { primary: true, follow: "end", scrollbar: "auto" });
   }

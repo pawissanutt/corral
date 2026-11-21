@@ -1,7 +1,34 @@
+diff --git a/dist/components/box.js b/dist/components/box.js
+--- a/dist/components/box.js
++++ b/dist/components/box.js
+@@ -1,4 +1,4 @@
+-import { dispatchMouseToChildLines, renderChildLines, } from "../tui.js";
++import { dispatchMouseToChildLines, renderChildLines, selectionRowsFromChildLines, } from "../tui.js";
+ import { flattenLines, visibleWidth } from "../utils.js";
+ /**
+  * Box component - a container that applies padding and background to all children
+@@ -49,6 +49,14 @@
+             child.invalidate?.();
+         }
+     }
++    /** Semantic selection: the rows of the child at `y`, inside the padding. */
++    selectionRows(width, y) {
++        const contentWidth = Math.max(1, width - this.paddingX * 2);
++        if (this.childLines?.width !== contentWidth)
++            return undefined;
++        return selectionRowsFromChildLines(this.childLines, y - this.paddingY)
++            ?.map(row => ({ ...row, y: this.paddingY + row.y, left: this.paddingX + row.left }));
++    }
+     handleMouse(event) {
+         const contentWidth = Math.max(1, event.width - this.paddingX * 2);
+         const contentY = event.y - this.paddingY;
 diff --git a/dist/components/editor.js b/dist/components/editor.js
 --- a/dist/components/editor.js
 +++ b/dist/components/editor.js
-@@ -491,1 +491,7 @@
+@@ -488,6 +488,12 @@
+         }
+         return result;
+     }
 +    selectionRows(width) {
 +        const left = Math.min(this.paddingX, Math.max(0, Math.floor((width - 1) / 2)));
 +        return this.buildVisualLineMap(this.lastWidth).slice(this.scrollOffset, this.scrollOffset + this.renderedVisibleLineCount)
@@ -9,80 +36,9 @@ diff --git a/dist/components/editor.js b/dist/components/editor.js
 +                text: this.state.lines[logicalLine].slice(startCol, startCol + length) }));
 +    }
      handleMouse(event) {
-diff --git a/dist/components/input.js b/dist/components/input.js
---- a/dist/components/input.js
-+++ b/dist/components/input.js
-@@ -36,1 +36,5 @@
-+    selectionRows(width) {
-+        const left = visibleWidth(this.prompt);
-+        return [{ y: 0, left, logicalLine: 0, text: sliceByColumn(this.value, this.renderedStartColumn, Math.max(0, width - left), true) }];
-+    }
-     getValue() {
-diff --git a/dist/tui.js b/dist/tui.js
---- a/dist/tui.js
-+++ b/dist/tui.js
-@@ -116,1 +116,10 @@
-+    selectionRows(width, y) {
-+        if (this.mouseLayout?.width !== width) return undefined;
-+        let top = 0;
-+        for (const { component, height } of this.mouseLayout.children) {
-+            if (y >= top && y < top + height)
-+                return component.selectionRows?.(width, y - top)?.map(row => ({ ...row, y: top + row.y }));
-+            top += height;
-+        }
-+    }
-     handleMouse(event) {
-diff --git a/dist/tui-alt-screen.js b/dist/tui-alt-screen.js
---- a/dist/tui-alt-screen.js
-+++ b/dist/tui-alt-screen.js
-@@ -1106,1 +1106,12 @@
-+        if (!event.release && !(event.button & 32)) {
-+            this.fieldRows = undefined;
-+            const overlay = this.renderedOverlayLayouts.findLast(l => event.x >= l.col && event.x < l.col + l.width && event.y >= l.row && event.y < l.row + l.height);
-+            const boxes = overlay ? [{ component: overlay.entry.component, rect: { x: overlay.col, y: overlay.row, width: overlay.width }, clip: { y: overlay.row, height: overlay.height } }] : this.currentLayout ? getLayoutBoxesAt(this.currentLayout, event.x, event.y) : [];
-+            for (const box of boxes) {
-+                const top = box.rect.y - (box.lineOffset ?? 0);
-+                const rows = box.component.selectionRows?.(box.rect.width, event.y - top)?.map(row => ({ ...row, y: top + row.y, left: box.rect.x + row.left }))
-+                    .filter(row => row.y >= box.clip.y && row.y < box.clip.y + box.clip.height);
-+                if (rows?.some(row => row.y === event.y)) { this.fieldRows = rows; break; }
-+            }
-+        }
-         const anchorScrollView = this.selectionAnchor?.scrollView;
-@@ -1166,1 +1177,1 @@
--        const scrollView = !this.hasOverlay() && this.currentLayout
-+        const scrollView = !this.fieldRows && !this.hasOverlay() && this.currentLayout
-@@ -1216,1 +1227,21 @@
-+        if (this.fieldRows) {
-+            let out = "", last;
-+            for (const row of this.fieldRows) {
-+                if (row.y < selection.start.row || row.y > selection.end.row) continue;
-+                const width = visibleWidth(row.text);
-+                let from = 0, to = width;
-+                if (row.y === selection.start.row) {
-+                    const col = Math.max(0, selection.start.col - row.left);
-+                    from = getGraphemeCellRange(row.text, col)?.start ?? Math.min(width, col);
-+                }
-+                if (row.y === selection.end.row) {
-+                    const col = selection.end.col - row.left;
-+                    to = selection.end.boundary || col < 0 ? Math.max(0, col) : (getGraphemeCellRange(row.text, col)?.end ?? width);
-+                }
-+                if (last !== undefined && last !== row.logicalLine) out += "\n";
-+                last = row.logicalLine;
-+                out += sliceByColumn(row.text, from, Math.max(0, to - from), true);
-+            }
-+            return out || undefined;
-+        }
-         let sourceLines = this.previousScreen;
-@@ -1398,1 +1429,7 @@
-+            if (this.fieldRows) {
-+                const field = this.fieldRows.find(field => field.y === row);
-+                if (!field) return line;
-+                minColumn = field.left;
-+                maxColumn = field.left + visibleWidth(field.text);
-+            }
-             const columns = this.getSelectionColumns(line, row, screenSelection, minColumn, maxColumn);
+         const autocompleteStartRow = this.renderedVisibleLineCount + 2;
+         if (this.autocompleteState &&
 diff --git a/dist/components/image.d.ts b/dist/components/image.d.ts
-index 0a1a84a9e425ef0e6d7df672535fe96a1adefb83..8ae85f57decd974101285962e099e3c2cddec635 100644
 --- a/dist/components/image.d.ts
 +++ b/dist/components/image.d.ts
 @@ -1,5 +1,5 @@
@@ -92,7 +48,7 @@ index 0a1a84a9e425ef0e6d7df672535fe96a1adefb83..8ae85f57decd974101285962e099e3c2
  /**
   * Converts base64 image data to base64 PNG data, or returns null if it cannot.
   * Called synchronously during rendering.
-@@ -10,6 +10,8 @@ export type ImageTranscoder = (base64Data: string, mimeType: string) => string |
+@@ -10,6 +10,8 @@
   * Without one, such images render as text fallbacks.
   */
  export declare function setImageTranscoder(transcoder: ImageTranscoder | undefined): void;
@@ -101,7 +57,7 @@ index 0a1a84a9e425ef0e6d7df672535fe96a1adefb83..8ae85f57decd974101285962e099e3c2
  export interface ImageTheme {
      fallbackColor: (str: string) => string;
  }
-@@ -34,6 +36,7 @@ export declare class Image implements Component {
+@@ -34,6 +36,7 @@
      constructor(base64Data: string, mimeType: string, theme: ImageTheme, options?: ImageOptions, dimensions?: ImageDimensions);
      /** Get the Kitty image ID used by this image (if any). */
      getImageId(): number | undefined;
@@ -110,7 +66,6 @@ index 0a1a84a9e425ef0e6d7df672535fe96a1adefb83..8ae85f57decd974101285962e099e3c2
      render(width: number): readonly string[];
  }
 diff --git a/dist/components/image.js b/dist/components/image.js
-index 78719cdf0b8c336512256fed7054f06c8bd77c87..ae543c62186b10d7d785116cb65b465ef70d7992 100644
 --- a/dist/components/image.js
 +++ b/dist/components/image.js
 @@ -1,6 +1,13 @@
@@ -127,7 +82,7 @@ index 78719cdf0b8c336512256fed7054f06c8bd77c87..ae543c62186b10d7d785116cb65b465e
  // Backstop for callers that recreate Image instances. Keyed by source data, least recently used first.
  const pngCache = new Map();
  /**
-@@ -41,6 +48,12 @@ export class Image {
+@@ -41,6 +48,12 @@
          this.dimensions = dimensions || getImageDimensions(base64Data, mimeType) || { widthPx: 800, heightPx: 600 };
          this.imageId = options.imageId;
      }
@@ -140,11 +95,24 @@ index 78719cdf0b8c336512256fed7054f06c8bd77c87..ae543c62186b10d7d785116cb65b465e
      /** Get the Kitty image ID used by this image (if any). */
      getImageId() {
          return this.imageId;
+diff --git a/dist/components/input.js b/dist/components/input.js
+--- a/dist/components/input.js
++++ b/dist/components/input.js
+@@ -33,6 +33,10 @@
+         this.placeholder = options.placeholder ?? "";
+         this.placeholderStyle = options.placeholderStyle ?? ((text) => text);
+     }
++    selectionRows(width) {
++        const left = visibleWidth(this.prompt);
++        return [{ y: 0, left, logicalLine: 0, text: sliceByColumn(this.value, this.renderedStartColumn, Math.max(0, width - left), true) }];
++    }
+     getValue() {
+         return this.value;
+     }
 diff --git a/dist/components/markdown.d.ts b/dist/components/markdown.d.ts
-index e2a21e415faac531300d9793b603524a77a13848..0d973081f1e7fa787f7411abdc7c41b1fadb698b 100644
 --- a/dist/components/markdown.d.ts
 +++ b/dist/components/markdown.d.ts
-@@ -83,6 +83,12 @@ export declare class Markdown implements Component {
+@@ -83,6 +83,12 @@
      private getStylePrefix;
      private getDefaultInlineStyleContext;
      private renderToken;
@@ -157,32 +125,31 @@ index e2a21e415faac531300d9793b603524a77a13848..0d973081f1e7fa787f7411abdc7c41b1
      private renderInlineTokens;
      private getOrderedListMarker;
      private getUnorderedListMarker;
-@@ -101,6 +107,11 @@ export declare class Markdown implements Component {
-      * consistently with the rest of the renderer.
+@@ -102,6 +108,11 @@
       */
      private wrapCellText;
-+    /**
+     /**
 +     * A table narrower than 50 columns: each row becomes a block of `<header>  <cell>` rows, with a blank row between
 +     * records.
 +     */
 +    private renderStackedTable;
-     /**
++    /**
       * Render a table with width-aware cell wrapping.
       * Cells that don't fit are wrapped to multiple lines.
+      */
 diff --git a/dist/components/markdown.js b/dist/components/markdown.js
-index 609f249725058d088dc767176f1b04625efb1b4d..4b96f4ad3cb38c25ba754f9aa81e1b5e8c46b51f 100644
 --- a/dist/components/markdown.js
 +++ b/dist/components/markdown.js
-@@ -2,7 +2,7 @@ import { Marked, Tokenizer } from "marked";
+@@ -2,7 +2,7 @@
  import markedCjkFriendly from "marked-cjk-friendly";
  import { renderLatex } from "../latex.js";
  import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.js";
 -import { applyBackgroundToLine, cjkPunctuationRegex, flattenLines, visibleWidth, wrapTextWithAnsi } from "../utils.js";
-+import { applyBackgroundToLine, cjkPunctuationRegex, extractAnsiCode, flattenLines, getGraphemeSegmenter, visibleWidth, wrapTextWithAnsi } from "../utils.js";
++import { applyBackgroundToLine, cjkPunctuationRegex, extractAnsiCode, flattenLines, getGraphemeSegmenter, selectionPieces, stripTerminalSequences, visibleWidth, wrapTextWithAnsi } from "../utils.js";
  const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
  class MarkdownTokenizer extends Tokenizer {
      url(src) {
-@@ -207,6 +207,158 @@ markdownParser.use({
+@@ -207,6 +207,158 @@
      tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong },
      extensions: [...LATEX_MARKDOWN_EXTENSIONS],
  });
@@ -341,7 +308,174 @@ index 609f249725058d088dc767176f1b04625efb1b4d..4b96f4ad3cb38c25ba754f9aa81e1b5e
  export class Markdown {
      text;
      paddingX; // Left/right padding
-@@ -334,7 +486,7 @@ export class Markdown {
+@@ -264,6 +416,7 @@
+         // Don't render anything if there's no actual text
+         if (!text || text.trim() === "") {
+             this.blocks = undefined;
++            this.selectionLayout = undefined;
+             const result = [];
+             // Update cache
+             this.cachedText = this.text;
+@@ -289,6 +442,7 @@
+         const blocks = new Map();
+         this.blocks = new WeakRef(blocks);
+         const contentLines = [];
++        const selectionBlocks = [];
+         for (let i = 0; i < tokens.length; i++) {
+             const token = tokens[i];
+             const nextTokenType = tokens[i + 1]?.type;
+@@ -299,10 +453,12 @@
+             }
+             if (reuseBlocks)
+                 blocks.set(token.raw, block);
++            selectionBlocks.push({ top: this.paddingY + contentLines.length, height: block.lines.length });
+             for (const line of block.lines) {
+                 contentLines.push(line);
+             }
+         }
++        this.selectionLayout = { width, blocks: selectionBlocks };
+         // Add top/bottom padding (empty lines)
+         const bgFn = this.defaultTextStyle?.bgColor;
+         const emptyLine = " ".repeat(width);
+@@ -320,6 +476,137 @@
+         this.cachedLines = result;
+         return result.length > 0 ? result : [""];
+     }
++    /**
++     * Semantic selection: the rows of the top-level block drawn at `y`. Prose joins its wrapped rows; a code block gives
++     * its code without the language label, the block indent or a wrapped line's hanging indent; a list keeps its
++     * markers and a quote drops its bars, each joining its wrapped rows. Spacing rows are left out. Tables and other
++     * blocks offer none, so the screen selection applies there.
++     */
++    selectionRows(width, y) {
++        const layout = this.selectionLayout;
++        if (!layout || layout.width !== width)
++            return undefined;
++        const index = layout.blocks.findIndex((block) => y >= block.top && y < block.top + block.height);
++        if (index < 0)
++            return undefined;
++        const contentWidth = Math.max(1, width - this.paddingX * 2);
++        const text = (this.options.transform?.(this.text, contentWidth) ?? this.text).replace(/\t/g, "   ");
++        const cached = this.cachedTokens?.deref();
++        let tokens = cached?.source === text ? cached.tokens : undefined;
++        if (!tokens) {
++            tokens = markdownParser.lexer(text);
++            trimPartialClosingFences(tokens);
++            removeHtmlCommentBlocks(tokens);
++        }
++        if (tokens.length !== layout.blocks.length)
++            return undefined;
++        const { top, height } = layout.blocks[index];
++        const marks = this.blockSelection(tokens[index], tokens[index + 1]?.type, contentWidth);
++        if (!marks || marks.length !== height)
++            return undefined;
++        const rows = [];
++        for (let i = 0; i < marks.length; i++) {
++            const mark = marks[i];
++            if (mark)
++                rows.push({ y: top + i, left: this.paddingX + mark.left, logicalLine: mark.line, text: mark.text });
++        }
++        return rows.length > 0 ? rows : undefined;
++    }
++    /**
++     * One mark per row renderBlock() draws for `token` at content `width`: the row's source line, the column its text
++     * starts at and the text, or undefined for a row that is spacing or chrome. Undefined for a block without
++     * selection.
++     */
++    blockSelection(token, nextTokenType, width) {
++        const marks = [];
++        if (token.type === "code") {
++            // Mirrors renderCodeBlock(): the label row, then each line, wrapped below its hanging indent.
++            if (token.lang)
++                marks.push(undefined);
++            const indent = visibleWidth(this.theme.codeBlockIndent ?? "  ");
++            const room = Math.max(1, width - indent);
++            const source = token.text.split("\n");
++            for (let i = 0; i < source.length; i++) {
++                const line = source[i];
++                if (visibleWidth(line) <= room) {
++                    marks.push({ line: i, left: indent, text: line });
++                    continue;
++                }
++                const ownIndent = /^ */.exec(line)?.[0].length ?? 0;
++                const hang = Math.min(ownIndent + CODE_HANG, Math.floor(room / 3));
++                const pieces = selectionPieces(line, wrapProse(line, room - hang));
++                if (!pieces)
++                    return undefined;
++                pieces.forEach((piece, row) => marks.push({ line: i, left: indent + (row === 0 ? 0 : hang), text: piece.text }));
++            }
++            if (nextTokenType && nextTokenType !== "space")
++                marks.push(undefined);
++            return marks;
++        }
++        const prose = token.type === "paragraph" || token.type === "heading" || token.type === "text";
++        if (!prose && token.type !== "list" && token.type !== "blockquote")
++            return undefined;
++        let line = 0;
++        let previous;
++        const tokenLines = this.renderToken(token, width, nextTokenType).flatMap((line) => isImageLine(line) ? line.split("\n") : [line]);
++        for (const source of tokenLines) {
++            if (isImageLine(source)) {
++                marks.push(undefined);
++                previous = undefined;
++                continue;
++            }
++            const rows = wrapProse(source, width).map((row) => stripTerminalSequences(row));
++            if (prose) {
++                const plain = stripTerminalSequences(source);
++                const pieces = selectionPieces(plain, rows);
++                if (!pieces)
++                    return undefined;
++                for (const piece of pieces) {
++                    let text = piece.text;
++                    let left = 0;
++                    // A level 3+ heading draws its `### ` marker.
++                    const marker = token.type === "heading" && line + piece.line === 0 ? /^#+ /.exec(text)?.[0] : undefined;
++                    if (marker && token.depth >= 3) {
++                        text = text.slice(marker.length);
++                        left = marker.length;
++                    }
++                    marks.push(text.trim() === "" ? undefined : { line: line + piece.line, left, text });
++                }
++                line += plain.split("\n").length;
++                continue;
++            }
++            // Lists and quotes are already wrapped with their prefixes: a row without an item marker continues the line
++            // above it, and the wrap dropped a space there unless it cut a long word.
++            for (const row of rows) {
++                let text = row.trimEnd();
++                let left = 0;
++                if (token.type === "blockquote") {
++                    const bars = /^(?:│ ?)+/.exec(text)?.[0] ?? "";
++                    left = bars.length;
++                    text = text.slice(bars.length);
++                }
++                const lead = /^ */.exec(text)?.[0].length ?? 0;
++                left += lead;
++                text = text.slice(lead);
++                if (text === "") {
++                    marks.push(undefined);
++                    previous = undefined;
++                    continue;
++                }
++                const item = token.type === "list" && /^(?:[-+*]|\d+[.)]) /.test(text);
++                if (previous && !item) {
++                    if (!/[/-]$/.test(previous.text) && previous.left + visibleWidth(previous.text) < width)
++                        previous.text += " ";
++                }
++                else {
++                    line++;
++                }
++                previous = { line, left, text };
++                marks.push(previous);
++            }
++        }
++        return marks;
++    }
+     /** Render one top-level block to output lines: wrapped, with margins, and padded or backgrounded to the width. */
+     renderBlock(block, token, nextTokenType, width, contentWidth) {
+         this.blockHighlightedCode = block.highlightedCode;
+@@ -334,7 +621,7 @@
                  lines.push(line);
                  continue;
              }
@@ -350,7 +484,7 @@ index 609f249725058d088dc767176f1b04625efb1b4d..4b96f4ad3cb38c25ba754f9aa81e1b5e
                  const lineWithMargins = leftMargin + wrappedLine + rightMargin;
                  if (bgFn) {
                      lines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
-@@ -480,27 +632,7 @@ export class Markdown {
+@@ -480,27 +767,7 @@
                  break;
              }
              case "code": {
@@ -379,7 +513,7 @@ index 609f249725058d088dc767176f1b04625efb1b4d..4b96f4ad3cb38c25ba754f9aa81e1b5e
                  if (nextTokenType && nextTokenType !== "space") {
                      lines.push(""); // Add spacing after code blocks (unless space token follows)
                  }
-@@ -564,7 +696,7 @@ export class Markdown {
+@@ -564,7 +831,7 @@
                  }
                  for (const quoteLine of renderedQuoteLines) {
                      const styledLine = applyQuoteStyle(quoteLine);
@@ -388,7 +522,7 @@ index 609f249725058d088dc767176f1b04625efb1b4d..4b96f4ad3cb38c25ba754f9aa81e1b5e
                      for (const wrappedLine of wrappedLines) {
                          lines.push(this.theme.quoteBorder("│ ") + wrappedLine);
                      }
-@@ -598,6 +730,51 @@ export class Markdown {
+@@ -598,6 +865,51 @@
          }
          return lines;
      }
@@ -440,7 +574,7 @@ index 609f249725058d088dc767176f1b04625efb1b4d..4b96f4ad3cb38c25ba754f9aa81e1b5e
      renderInlineTokens(tokens, styleContext) {
          let result = "";
          const resolvedStyleContext = styleContext ?? this.getDefaultInlineStyleContext();
-@@ -745,7 +922,7 @@ export class Markdown {
+@@ -745,7 +1057,7 @@
                  }
                  const itemLines = this.renderToken(itemToken, itemWidth, undefined, styleContext);
                  for (const line of itemLines) {
@@ -449,7 +583,7 @@ index 609f249725058d088dc767176f1b04625efb1b4d..4b96f4ad3cb38c25ba754f9aa81e1b5e
                          const linePrefix = renderedAnyLine ? continuationPrefix : firstPrefix;
                          lines.push(linePrefix + wrappedLine);
                          renderedAnyLine = true;
-@@ -778,17 +955,70 @@ export class Markdown {
+@@ -778,11 +1090,11 @@
      /**
       * Wrap a table cell to fit into a column.
       *
@@ -463,10 +597,10 @@ index 609f249725058d088dc767176f1b04625efb1b4d..4b96f4ad3cb38c25ba754f9aa81e1b5e
          return lines.map((line, index) => {
              // Reset text styles after each non-final fragment, then restore the surrounding style before padding and borders.
              const styleReset = index < lines.length - 1 ? "\x1b[22;23;24;25;27;28;29;39m" : "";
-             return `${line}${styleReset}${stylePrefix}`;
+@@ -790,6 +1102,59 @@
          });
      }
-+    /**
+     /**
 +     * A table narrower than STACKED_TABLE_WIDTH: each row becomes a block of `<header>  <cell>` rows, the header bold in a
 +     * column as wide as the longest header (at most a third of the width), with a blank row between records. When that
 +     * leaves the cells under 12 columns, each header takes its own row and its cell follows, indented two columns. A
@@ -519,10 +653,11 @@ index 609f249725058d088dc767176f1b04625efb1b4d..4b96f4ad3cb38c25ba754f9aa81e1b5e
 +        }
 +        return lines;
 +    }
-     /**
++    /**
       * Render a table with width-aware cell wrapping.
       * Cells that don't fit are wrapped to multiple lines.
-@@ -799,6 +1029,13 @@ export class Markdown {
+      */
+@@ -799,6 +1164,13 @@
          if (numCols === 0) {
              return lines;
          }
@@ -536,11 +671,51 @@ index 609f249725058d088dc767176f1b04625efb1b4d..4b96f4ad3cb38c25ba754f9aa81e1b5e
          // Calculate border overhead: "│ " + (n-1) * " │ " + " │"
          // = 2 + (n-1) * 3 + 2 = 3n + 1
          const borderOverhead = 3 * numCols + 1;
+diff --git a/dist/components/mouse-region.js b/dist/components/mouse-region.js
+--- a/dist/components/mouse-region.js
++++ b/dist/components/mouse-region.js
+@@ -10,6 +10,9 @@
+     render(width) {
+         return this.child.render(width);
+     }
++    selectionRows(width, y) {
++        return this.child.selectionRows?.(width, y);
++    }
+     handleMouse(event) {
+         const childResult = dispatchMouseEvent(this.child, event);
+         return childResult ?? this.onMouse(event);
+diff --git a/dist/components/text.js b/dist/components/text.js
+--- a/dist/components/text.js
++++ b/dist/components/text.js
+@@ -1,4 +1,4 @@
+-import { applyBackgroundToLine, flattenLines, visibleWidth, wrapTextWithAnsi } from "../utils.js";
++import { applyBackgroundToLine, flattenLines, selectionPieces, stripTerminalSequences, visibleWidth, wrapTextWithAnsi } from "../utils.js";
+ /**
+  * Text component - displays multi-line text with word wrapping
+  */
+@@ -41,6 +41,18 @@
+         this.cachedWidth = undefined;
+         this.cachedLines = undefined;
+     }
++    /** Semantic selection: the text's rows, one block, wrapped rows joined; the padding is not part of it. */
++    selectionRows(width, y) {
++        if (!this.text || this.text.trim() === "")
++            return undefined;
++        const paddingX = Math.min(this.paddingX, Math.max(0, Math.floor((width - 1) / 2)));
++        const contentWidth = Math.max(1, width - paddingX * 2);
++        const source = stripTerminalSequences(this.text.replace(/\t/g, "   "));
++        const pieces = selectionPieces(source, wrapTextWithAnsi(source, contentWidth));
++        if (!pieces || y < this.paddingY || y >= this.paddingY + pieces.length)
++            return undefined;
++        return pieces.map((piece, i) => ({ y: this.paddingY + i, left: paddingX, logicalLine: piece.line, text: piece.text }));
++    }
+     render(width) {
+         // Check cache
+         if (this.cachedLines && this.cachedText === this.text && this.cachedWidth === width) {
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index b7a963c09ad68b1ad6ebf3f191c78603c5988ed2..5694ee27be1004ed5c1a8073d358e53ad2ee0e8a 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
-@@ -5,7 +5,7 @@ export { Box } from "./components/box.ts";
+@@ -5,7 +5,7 @@
  export { CancellableLoader } from "./components/cancellable-loader.ts";
  export { Editor, type EditorOptions, type EditorTheme } from "./components/editor.ts";
  export { HStack } from "./components/h-stack.ts";
@@ -549,11 +724,23 @@ index b7a963c09ad68b1ad6ebf3f191c78603c5988ed2..5694ee27be1004ed5c1a8073d358e53a
  export { Input } from "./components/input.ts";
  export { Loader, type LoaderIndicatorOptions } from "./components/loader.ts";
  export { type DefaultTextStyle, Markdown, type MarkdownOptions, type MarkdownTheme } from "./components/markdown.ts";
+@@ -29,9 +29,9 @@
+ export { isAppleTerminalSession, ProcessTerminal, type Terminal } from "./terminal.ts";
+ export { parseTerminalColorSchemeReport, type RgbColor, type TerminalColorScheme, type TerminalColors, } from "./terminal-colors.ts";
+ export { allocateImageId, type CellDimensions, calculateImageRows, deleteAllKittyImages, deleteKittyImage, detectCapabilities, encodeITerm2, encodeKitty, getCapabilities, getCellDimensions, getGifDimensions, getImageDimensions, getJpegDimensions, getPngDimensions, getTerminalColorMode, getWebpDimensions, hyperlink, type ImageDimensions, type ImageProtocol, type ImageRenderOptions, imageFallback, renderImage, resetCapabilitiesCache, setCapabilities, setCapabilityOverrides, setCellDimensions, type TerminalCapabilities, } from "./terminal-image.ts";
+-export { type Component, Container, CURSOR_MARKER, compositeTuiLine, type Focusable, isFocusable, isViewportTUI, type OverlayAnchor, type OverlayBounds, type OverlayHandle, type OverlayMargin, type OverlayOptions, type OverlayUnfocusOptions, renderFakeCursor, type SizeValue, type TUI, type TuiInputListener, type TuiInputListenerResult, type TuiMode, type TuiMouseButton, type TuiMouseEvent, type TuiMouseEventResult, type TuiMouseEventType, type TuiStopOptions, type ViewportTUI, } from "./tui.ts";
++export { type Component, Container, CURSOR_MARKER, compositeTuiLine, type Focusable, isFocusable, isViewportTUI, type OverlayAnchor, type OverlayBounds, type OverlayHandle, type OverlayMargin, type OverlayOptions, type OverlayUnfocusOptions, renderFakeCursor, type SelectionRow, type SizeValue, type TUI, type TuiInputListener, type TuiInputListenerResult, type TuiMode, type TuiMouseButton, type TuiMouseEvent, type TuiMouseEventResult, type TuiMouseEventType, type TuiStopOptions, type ViewportTUI, } from "./tui.ts";
+ export { TuiAltScreen, type TuiAltScreenOptions } from "./tui-alt-screen.ts";
+ export { TuiMainScreen, type TuiMainScreenRenderState } from "./tui-main-screen.ts";
+-export { getOsc8LinkAtColumn, replaceControlCharacters, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, } from "./utils.ts";
++export { getOsc8LinkAtColumn, replaceControlCharacters, selectionPieces, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, } from "./utils.ts";
+ export type { WheelScrollLines } from "./wheel-scroll.ts";
+ //# sourceMappingURL=index.d.ts.map
+\ No newline at end of file
 diff --git a/dist/index.js b/dist/index.js
-index 59f005cb5972e69d173a90ce07d31199cfd4272a..d4793bf89f07c7337be13ecf4c02b0500d5d4961 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -9,7 +9,7 @@ export { Box } from "./components/box.js";
+@@ -9,7 +9,7 @@
  export { CancellableLoader } from "./components/cancellable-loader.js";
  export { Editor } from "./components/editor.js";
  export { HStack } from "./components/h-stack.js";
@@ -562,3 +749,198 @@ index 59f005cb5972e69d173a90ce07d31199cfd4272a..d4793bf89f07c7337be13ecf4c02b050
  export { Input } from "./components/input.js";
  export { Loader } from "./components/loader.js";
  export { Markdown } from "./components/markdown.js";
+@@ -46,5 +46,5 @@
+ export { TuiAltScreen } from "./tui-alt-screen.js";
+ export { TuiMainScreen } from "./tui-main-screen.js";
+ // Utilities
+-export { getOsc8LinkAtColumn, replaceControlCharacters, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, } from "./utils.js";
++export { getOsc8LinkAtColumn, replaceControlCharacters, selectionPieces, sliceByColumn, stripTerminalSequences, truncateToWidth, visibleWidth, wrapTextWithAnsi, } from "./utils.js";
+ //# sourceMappingURL=index.js.map
+\ No newline at end of file
+diff --git a/dist/tui-alt-screen.js b/dist/tui-alt-screen.js
+--- a/dist/tui-alt-screen.js
++++ b/dist/tui-alt-screen.js
+@@ -1106,6 +1106,17 @@
+         const button = event.button & 3;
+         if (button !== 0 && !(event.release && button === 3))
+             return;
++        if (!event.release && !(event.button & 32)) {
++            this.fieldRows = undefined;
++            const overlay = this.renderedOverlayLayouts.findLast(l => event.x >= l.col && event.x < l.col + l.width && event.y >= l.row && event.y < l.row + l.height);
++            const boxes = overlay ? [{ component: overlay.entry.component, rect: { x: overlay.col, y: overlay.row, width: overlay.width }, clip: { y: overlay.row, height: overlay.height } }] : this.currentLayout ? getLayoutBoxesAt(this.currentLayout, event.x, event.y) : [];
++            for (const box of boxes) {
++                const top = box.rect.y - (box.lineOffset ?? 0);
++                const rows = box.component.selectionRows?.(box.rect.width, event.y - top)?.map(row => ({ ...row, y: top + row.y, left: box.rect.x + row.left }))
++                    .filter(row => row.y >= box.clip.y && row.y < box.clip.y + box.clip.height);
++                if (rows?.some(row => row.y === event.y)) { this.fieldRows = rows; break; }
++            }
++        }
+         const anchorScrollView = this.selectionAnchor?.scrollView;
+         const point = this.getSelectionPoint(event, anchorScrollView);
+         if (event.release) {
+@@ -1166,7 +1177,7 @@
+         }
+         this.stopSelectionAutoScroll();
+         this.selectionPressActive = true;
+-        const scrollView = !this.hasOverlay() && this.currentLayout
++        const scrollView = !this.fieldRows && !this.hasOverlay() && this.currentLayout
+             ? getScrollViewsAt(this.currentLayout, event.x, event.y)[0]
+             : undefined;
+         const anchor = this.getSelectionPoint(event, scrollView);
+@@ -1216,6 +1227,26 @@
+         const selection = this.getSelectionBounds();
+         if (!selection)
+             return undefined;
++        if (this.fieldRows) {
++            let out = "", last;
++            for (const row of this.fieldRows) {
++                if (row.y < selection.start.row || row.y > selection.end.row) continue;
++                const width = visibleWidth(row.text);
++                let from = 0, to = width;
++                if (row.y === selection.start.row) {
++                    const col = Math.max(0, selection.start.col - row.left);
++                    from = getGraphemeCellRange(row.text, col)?.start ?? Math.min(width, col);
++                }
++                if (row.y === selection.end.row) {
++                    const col = selection.end.col - row.left;
++                    to = selection.end.boundary || col < 0 ? Math.max(0, col) : (getGraphemeCellRange(row.text, col)?.end ?? width);
++                }
++                if (last !== undefined && last !== row.logicalLine) out += "\n";
++                last = row.logicalLine;
++                out += sliceByColumn(row.text, from, Math.max(0, to - from), true);
++            }
++            return out || undefined;
++        }
+         let sourceLines = this.previousScreen;
+         if (selection.start.scrollView) {
+             if (!this.currentLayout)
+@@ -1398,6 +1429,12 @@
+                 return line;
+             }
+             const lineWidth = visibleWidth(line);
++            if (this.fieldRows) {
++                const field = this.fieldRows.find(field => field.y === row);
++                if (!field) return line;
++                minColumn = field.left;
++                maxColumn = field.left + visibleWidth(field.text);
++            }
+             const columns = this.getSelectionColumns(line, row, screenSelection, minColumn, maxColumn);
+             if (columns.end <= columns.start)
+                 return line;
+diff --git a/dist/tui.d.ts b/dist/tui.d.ts
+--- a/dist/tui.d.ts
++++ b/dist/tui.d.ts
+@@ -65,6 +65,13 @@
+ export declare function dispatchMouseEvent(component: Component, event: TuiMouseEvent): TuiMouseDispatchResult | undefined;
+ /** Recreate local coordinates for a previously dispatched mouse target. */
+ export declare function retargetMouseEvent(event: TuiMouseEvent, target: TuiMouseDispatchTarget): TuiMouseEvent;
++/** One row of a selectable block: `text` drawn from column `left` of row `y`; rows of one `logicalLine` join without a break. */
++export interface SelectionRow {
++    y: number;
++    left: number;
++    logicalLine: number;
++    text: string;
++}
+ export interface Component {
+     /**
+      * Render the component to lines for the given viewport width
+@@ -77,6 +84,11 @@
+     /** Optional normalized mouse handler. */
+     handleMouse?(event: TuiMouseEvent): TuiMouseEventResult | undefined;
+     /**
++     * Optional semantic selection: the rows of the one content block at local row `y` when drawn `width` cells wide,
++     * in local coordinates. A press there selects and copies only those rows' text.
++     */
++    selectionRows?(width: number, y: number): readonly SelectionRow[] | undefined;
++    /**
+      * If true, component receives key release events (Kitty protocol).
+      * Default is false - release events are filtered out.
+      */
+diff --git a/dist/tui.js b/dist/tui.js
+--- a/dist/tui.js
++++ b/dist/tui.js
+@@ -135,6 +135,16 @@
+     }
+     return undefined;
+ }
++/** Delegate semantic selection using the same rendered child layout as mouse dispatch. */
++export function selectionRowsFromChildLines(layout, y) {
++    let top = 0;
++    for (let index = 0; index < layout.children.length; index++) {
++        const height = layout.parts[index].length;
++        if (y >= top && y < top + height)
++            return layout.children[index].selectionRows?.(layout.width, y - top)?.map(row => ({ ...row, y: top + row.y }));
++        top += height;
++    }
++}
+ /**
+  * Container - a component that contains other components
+  */
+@@ -158,6 +168,11 @@
+             child.invalidate?.();
+         }
+     }
++    selectionRows(width, y) {
++        if (this.childLines?.width !== width)
++            return undefined;
++        return selectionRowsFromChildLines(this.childLines, y);
++    }
+     handleMouse(event) {
+         if (event.y < 0 || event.y >= event.height)
+             return undefined;
+diff --git a/dist/utils.d.ts b/dist/utils.d.ts
+--- a/dist/utils.d.ts
++++ b/dist/utils.d.ts
+@@ -16,6 +16,14 @@
+ export declare function visibleWidth(str: string): number;
+ /** Remove ANSI, OSC, and APC control sequences while preserving visible text. */
+ export declare function stripTerminalSequences(str: string): string;
++/**
++ * Semantic selection of wrapped text: plain `source` as drawn in plain `rows`. Each row's text with the whitespace a
++ * wrap dropped after it kept at its end, and the source line it belongs to; undefined when a row is not found in order.
++ */
++export declare function selectionPieces(source: string, rows: readonly string[]): {
++    line: number;
++    text: string;
++}[] | undefined;
+ /** Replace each run of C0 and C1 control characters (ESC, BEL, newlines, ...) with one space. */
+ export declare function replaceControlCharacters(str: string): string;
+ interface GraphemeCellRange {
+diff --git a/dist/utils.js b/dist/utils.js
+--- a/dist/utils.js
++++ b/dist/utils.js
+@@ -1425,4 +1425,33 @@
+     }
+     return { before, beforeWidth, after, afterWidth };
+ }
++/**
++ * Semantic selection of wrapped text: plain `source` as drawn in plain `rows` (in order, each a piece of the source a
++ * wrap may have dropped whitespace around). Gives each row's text with the whitespace dropped after it kept at its end,
++ * so joining a line's rows gives back the source line, and the source line ("\n") the row belongs to. Undefined when a
++ * row is not found in order.
++ */
++export function selectionPieces(source, rows) {
++    const starts = [];
++    let at = 0;
++    for (let i = 0; i < rows.length; i++) {
++        const row = rows[i].trimEnd();
++        const newline = row === "" && i > 0 ? source.indexOf("\n", at) : -1;
++        const start = row === "" ? (newline < 0 ? at : newline + 1) : source.indexOf(row, at);
++        if (start < 0)
++            return undefined;
++        starts.push(start);
++        at = start + row.length;
++    }
++    let line = 0;
++    let counted = 0;
++    return starts.map((start, i) => {
++        for (; counted < start; counted++)
++            if (source[counted] === "\n")
++                line++;
++        const piece = source.slice(start, starts[i + 1] ?? source.length);
++        const end = piece.indexOf("\n");
++        return { line, text: end < 0 ? piece : piece.slice(0, end) };
++    });
++}
+ //# sourceMappingURL=utils.js.map
+\ No newline at end of file

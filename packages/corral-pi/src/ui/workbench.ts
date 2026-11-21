@@ -44,6 +44,7 @@ import type { SideSource } from "./sidebar.ts";
 import { plainLabel, PANEL_BG, PANEL_BLUE, PANEL_LINE, PANEL_TEXT, type PanelSnapshot } from "./panels-view.ts";
 import { rule, spinner, VIEW_INSET } from "./frame.ts";
 import { popupPlacement } from "./popup-placement.ts";
+import { shiftRows } from "./selection.ts";
 
 /** Below this many terminal rows the rule under the tab row goes first. */
 export const RULE_ROWS = 16;
@@ -88,6 +89,7 @@ function inset(component: Component): Component {
   return {
     render: width => component.render(Math.max(1, width - VIEW_INSET)).map(line => " " + line),
     handleMouse: event => component.handleMouse?.({ ...event, x: Math.max(0, event.x - 1), width: Math.max(1, event.width - VIEW_INSET) }),
+    selectionRows: (width, y) => shiftRows(component.selectionRows?.(Math.max(1, width - VIEW_INSET), y), 0, 1),
     invalidate: () => component.invalidate(),
   };
 }

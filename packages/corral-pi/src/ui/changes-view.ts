@@ -4,7 +4,7 @@
 // is not the session's default, and a view without changes is one empty-state paragraph. Every row keeps one blank
 // cell at each side of the main area.
 // Presentation only: every value comes from the ReviewStore read and the displayed patch.
-import { HStack, ScrollView, VStack, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { HStack, ScrollView, VStack, visibleWidth, type Component, type SelectionRow, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { Comparison } from "./panels-git.ts";
 import { comparisonLabel, fileStatus, type FileStat, type ReviewStore } from "./review-store.ts";
 import { ansi, tint, PACKAGED, type Appearance } from "./appearance.ts";
@@ -304,7 +304,11 @@ export function emptyLines(m: ChangesModel, width: number): string[] {
 const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
 /** Git header lines the diff does not draw; the header row and the hunk rows carry what they say. */
 const QUIET = /^(index |--- |\+\+\+ |(new|deleted) file mode |old mode |new mode |similarity index |dissimilarity index )/;
-export interface DiffFrame { readonly lines: string[]; readonly hunkRows: number[]; readonly hunkSources: number[] }
+export interface DiffFrame {
+  readonly lines: string[]; readonly hunkRows: number[]; readonly hunkSources: number[];
+  /** Per hunk, its code rows for semantic selection: the text after the line number and sign, wrapped rows joined. */
+  readonly hunkText: readonly (readonly SelectionRow[])[];
+}
 /**
  * The diff, each row exactly `width` cells with a one-cell margin each side: the `path ● author` header in bold,
  * each hunk row on the hunk surface (`@@ new file`, `@@ deleted file`, or the hunk line itself; the current hunk bold
@@ -312,13 +316,13 @@ export interface DiffFrame { readonly lines: string[]; readonly hunkRows: number
  * after a right-aligned line number (four cells or more; none on removed rows) and its `+`/`−` sign.
  */
 export function diffLines(m: ChangesModel, width: number, color: (hue: number) => string = () => PANEL_TEXT, shortPaths = false): DiffFrame {
-  const lines: string[] = [], hunkRows: number[] = [], hunkSources: number[] = [];
+  const lines: string[] = [], hunkRows: number[] = [], hunkSources: number[] = [], hunkText: SelectionRow[][] = [];
   const inner = innerOf(width), canvas = CANVAS(), ink = currentInk();
   const put = (row: string) => lines.push(framed(row, width));
   const say = (style: string, text: string) => { for (const row of wrap(plainLabel(text), inner)) put(line([[style, row]], [], inner, canvas)); };
   for (const note of m.notes) say(PANEL_ERROR, note);
   const d = m.diff;
-  if (d.kind === "message") { for (const [i, text] of d.lines.entries()) say(i ? PANEL_MUTED : PANEL_TEXT, text); return { lines, hunkRows, hunkSources }; }
+  if (d.kind === "message") { for (const [i, text] of d.lines.entries()) say(i ? PANEL_MUTED : PANEL_TEXT, text); return { lines, hunkRows, hunkSources, hunkText }; }
   const source = d.text.split("\n"); if (source.at(-1) === "") source.pop();
   const total = source.filter(row => HUNK.test(row)).length, current = Math.max(0, Math.min(total - 1, m.hunk));
   const highest = Math.max(0, ...source.map(row => HUNK.exec(row)).map(h => h ? Number(h[3]) + Number(h[4] ?? 1) : 0));
@@ -336,7 +340,7 @@ export function diffLines(m: ChangesModel, width: number, color: (hue: number) =
     const h = HUNK.exec(raw);
     if (raw.startsWith("diff ")) { newNo = undefined; return; }
     if (h) {
-      hunk++; hunkRows.push(lines.length); hunkSources.push(index); newNo = Number(h[3]);
+      hunk++; hunkRows.push(lines.length); hunkSources.push(index); hunkText.push([]); newNo = Number(h[3]);
       const created = h[1] === "0" && h[2] === "0", deleted = h[3] === "0" && h[4] === "0";
       const text = created ? "@@ new file" : deleted ? "@@ deleted file" : code(raw).trimEnd();
       const on = hunk === current;
@@ -353,11 +357,14 @@ export function diffLines(m: ChangesModel, width: number, color: (hue: number) =
     const lineNo = kind === "add" || kind === "ctx" ? String(newNo++) : "";
     const mark = kind === "add" ? "+" : kind === "del" ? "−" : kind === "ctx" ? " " : "";
     const text = code(kind === "meta" ? raw : raw.slice(1)), lead = digits + 1;
-    wrap(text, Math.max(1, inner - lead - mark.length)).forEach((chunk, k) => put(line([[ink.number, k ? " ".repeat(lead) : lineNo.padStart(digits) + " "],
-      [style, k ? " ".repeat(mark.length) : mark], [style, chunk]], [], inner, NORMAL + back)));
+    wrap(text, Math.max(1, inner - lead - mark.length)).forEach((chunk, k) => {
+      // The margin, the line number and the sign are not the code; a `\ No newline` row is no code at all.
+      if (kind !== "meta" && width >= 3) hunkText[hunk]?.push({ y: lines.length, left: 1 + lead + mark.length, logicalLine: index, text: chunk });
+      put(line([[ink.number, k ? " ".repeat(lead) : lineNo.padStart(digits) + " "], [style, k ? " ".repeat(mark.length) : mark], [style, chunk]], [], inner, NORMAL + back));
+    });
   });
   if (!total) say(PANEL_MUTED, source.some(row => !QUIET.test(row) && !row.startsWith("diff ")) ? "No text hunks in this diff." : "Empty diff.");
-  return { lines, hunkRows, hunkSources };
+  return { lines, hunkRows, hunkSources, hunkText };
 }
 
 export interface ChangesHost {
@@ -397,11 +404,13 @@ export class ChangesView {
   private readonly color: (hue: number) => string;
   constructor(private readonly host: ChangesHost) {
     this.color = hue => host.color?.(hue) ?? PANEL_TEXT;
+    let hunkText: { readonly width: number; readonly hunks: DiffFrame["hunkText"] } | undefined;
     this.diff = new ScrollView({ render: width => {
       const frame = diffLines(host.model(), width, this.color, this.shortPaths);
-      this.hunkRows = frame.hunkRows; this.hunkSources = frame.hunkSources;
+      this.hunkRows = frame.hunkRows; this.hunkSources = frame.hunkSources; hunkText = { width, hunks: frame.hunkText };
       return frame.lines;
-    }, handleMouse: event => {
+    }, selectionRows: (width, y) => hunkText?.width === width ? hunkText.hunks.find(rows => rows.some(row => row.y === y)) : undefined,
+    handleMouse: event => {
       if (!host.click(event)) return undefined;
       host.focus();
       let index = -1; for (const [i, row] of this.hunkRows.entries()) if (row <= event.y) index = i;

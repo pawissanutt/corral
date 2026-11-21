@@ -59,6 +59,23 @@ function highlighted(content: string, path: string): Component {
   const lang = path ? getLanguageFromPath(path) : undefined, shown = content.replace(/\t/g, "   ");
   return new Text(lang ? highlightCode(shown, lang).join("\n") : shown, 0, 0);
 }
+/** The SDK's rendered diff. Selecting copies the code: each line's first row leaves out its sign and line number. */
+export function diffView(diff: string, path: string): Component {
+  const text: Component = new Text(renderDiff(diff, { filePath: path }), 0, 0);
+  return {
+    render: width => text.render(width),
+    invalidate: () => text.invalidate(),
+    selectionRows: (width, y) => {
+      let line: number | undefined;
+      return text.selectionRows?.(width, y)?.map(row => {
+        if (row.logicalLine === line) return row;
+        line = row.logicalLine;
+        const gutter = /^[-+ ] *\d+ /.exec(row.text)?.[0] ?? "";
+        return { ...row, left: row.left + gutter.length, text: row.text.slice(gutter.length) };
+      });
+    },
+  };
+}
 
 function readRange(args: Args): string {
   const offset = numberArg(args, "offset"), limit = numberArg(args, "limit");
@@ -137,7 +154,7 @@ const presentEdit: Presenter = call => {
   const details = recordOf(call.result?.details), diff = stringArg(details ?? {}, "diff");
   const stat = diffStat(stringArg(details ?? {}, "patch"), diff);
   return { ...base, ...(stat ? { outcome: stat } : {}),
-    ...(diff ? { expanded: () => new Text(renderDiff(diff, { filePath: path }), 0, 0) } : {}) };
+    ...(diff ? { expanded: () => diffView(diff, path) } : {}) };
 };
 
 const presentWrite: Presenter = call => {
