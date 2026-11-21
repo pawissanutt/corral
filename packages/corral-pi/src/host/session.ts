@@ -655,6 +655,7 @@ export class HostSession {
       append: value => { options.sessionManager.appendCustomEntry(QUESTION_ENTRY, value, { immediate: true }); },
       changed: question => {
         if (question) {
+          this.toolApprovals?.observeAnswer(question);
           this.remotePrompts.changed(question);
           options.events.emit("owner_question", { id: question.id, status: question.status });
           options.herdr?.questionChanged(question.id, question.status === "pending");
@@ -668,7 +669,7 @@ export class HostSession {
       },
     }) : undefined;
     this.ownerQuestions = questions;
-    this.toolApprovals = questions ? new ToolApprovals(questions, options.cwd) : undefined;
+    this.toolApprovals = questions ? new ToolApprovals(questions, options.cwd, writeApprovalRole) : undefined;
     this.localTools = [...(lspEnabled ? roleLocal : roleLocal.filter((tool) => !tool.name.startsWith("lsp_"))),
       ...(dialogEnabled && questions ? [askUserTool(async answer => {
         if (!this.dialogPi) throw new Error("dialog session is unavailable");
