@@ -9,6 +9,7 @@ const CHANGED: &str =
     "Detail changed while its pages were loading; refresh to fetch a current snapshot.";
 
 mod parts;
+mod transcript;
 mod walked;
 
 pub(super) use parts::PART_NAMES;
@@ -38,8 +39,20 @@ impl AppState {
         // The finder's list is walked: each page is asked for as the owner reaches it and adds
         // to those before, rather than all of them being fetched and merged up front.
         let walked = walked(&request.target);
-        if walked && request.page.is_none() && request.etag.is_none() {
-            // Revalidated page by page from its first: each unchanged page walked stays.
+        let session = matches!(request.target, DetailRef::Session { .. });
+        if session && let Some(cursor) = request.page.as_deref() {
+            let current = feed.with_untracked(|feed| {
+                feed.details.get(&key).is_some_and(|cache| {
+                    !cache.loading
+                        && matches!(cache.body(), Some(DetailBody::Session(page)) if page.older.as_deref() == Some(cursor))
+                })
+            });
+            if !current {
+                return vec![];
+            }
+        }
+        if (walked || session) && request.page.is_none() && request.etag.is_none() {
+            // Validate the newest held page, not the cursor of a previously read page.
             request.etag = feed.with_untracked(|feed| {
                 feed.details
                     .get(&key)
@@ -97,11 +110,19 @@ impl AppState {
                 });
             cache.loading = self.ready;
             cache.stale = true;
-            cache.error = (!self.ready).then(offline);
+            if !self.ready {
+                cache.error = Some(offline());
+            } else if !cache
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == transcript::HISTORY_CHANGED)
+            {
+                cache.error = None;
+            }
         });
-        // A walked list is revalidated from its first page, never from a page walked to.
+        // Refresh from the newest page, not from the page the owner last walked to.
         let remembered = DetailGet {
-            page: request.page.clone().filter(|_| !walked),
+            page: request.page.clone().filter(|_| !walked && !session),
             ..request.clone()
         };
         self.retained.select(&remembered, &id);
@@ -111,8 +132,9 @@ impl AppState {
             return vec![];
         }
         if let DetailRef::Session { id } = &request.target {
-            if let Some(reread) =
-                feed.with_untracked(|feed| feed.live.get(id.as_str()).map(|live| live.reread))
+            if request.page.is_none()
+                && let Some(reread) =
+                    feed.with_untracked(|feed| feed.live.get(id.as_str()).map(|live| live.reread))
             {
                 self.detail_reread.insert(key.clone(), reread);
             } else {
@@ -165,6 +187,9 @@ impl AppState {
         if self.detail_inflight.get(&key) != Some(&id) {
             return Ok(vec![]);
         }
+        if matches!(request.target, DetailRef::Session { .. }) {
+            return Ok(self.transcript_reply(feed, &key, id, request, outcome));
+        }
         let page: DetailReply = match outcome {
             Ok(value) => decode(value)?,
             Err((code, message)) => {
@@ -174,21 +199,6 @@ impl AppState {
                     && !walked(&request.target)
                 {
                     return Ok(self.restart_detail(feed, &key, id, request.target, message));
-                }
-                // `quick` with no chat that has not ended is a new thread, not a missing one:
-                // its page is empty and takes the message that starts the chat.
-                if code == corral_protocol::rpc::ErrorCode::NotFound
-                    && matches!(&request.target, DetailRef::Session { id } if id == QUICK_THREAD)
-                {
-                    let empty = DetailReply {
-                        etag: String::new(),
-                        as_of: String::new(),
-                        seq: 0,
-                        next: None,
-                        body: Some(DetailBody::Session(empty_quick_page())),
-                    };
-                    self.publish(feed, &key, &id, &request.target, vec![empty]);
-                    return Ok(vec![]);
                 }
                 let error = ClientError {
                     code: value(code).as_str().unwrap_or("unknown").into(),
@@ -226,39 +236,7 @@ impl AppState {
             if !pages.is_empty() || request.page.is_some() {
                 return Err("daemon returned not-modified inside a detail continuation".into());
             }
-            let valid = feed.with_untracked(|feed| {
-                feed.details.get(&key).is_some_and(|cache| {
-                    cache.merged.is_some()
-                        && cache.pages.first().is_some_and(|old| old.etag == page.etag)
-                })
-            });
-            if !valid {
-                return Err("daemon returned not-modified without a matching cached detail".into());
-            }
-            let reread = self.detail_reread.remove(&key);
-            feed.update(|feed| {
-                feed.settle_session(&request.target, reread);
-                if let Some(cache) = feed.details.get_mut(&key) {
-                    cache.loading = false;
-                    cache.stale = false;
-                    cache.error = None;
-                    if let Some(first) = cache.pages.first_mut() {
-                        first.as_of = page.as_of.clone();
-                        first.seq = page.seq;
-                    }
-                }
-                if let Some(operation) = feed.operations.get_mut(id.as_str()) {
-                    operation.loading = false;
-                    operation.value = Some(value(page));
-                    operation.error = None;
-                }
-            });
-            self.detail_pages.remove(&key);
-            self.detail_restarts.remove(&key);
-            self.detail_inflight.remove(&key);
-            self.detail_bytes.remove(&key);
-            self.touch_detail(feed, &request.target);
-            self.trim_retained(feed);
+            self.detail_unchanged(feed, &key, &id, &request.target, page)?;
             return Ok(vec![]);
         }
         let next = page.next.clone();
@@ -288,6 +266,56 @@ impl AppState {
         self.detail_restarts.remove(&key);
         self.publish(feed, &key, &id, &request.target, pages);
         Ok(vec![])
+    }
+
+    fn detail_unchanged(
+        &mut self,
+        feed: Signal<Feed>,
+        key: &str,
+        id: &str,
+        target: &DetailRef,
+        page: DetailReply,
+    ) -> Result<(), String> {
+        let valid = feed.with_untracked(|feed| {
+            feed.details.get(key).is_some_and(|cache| {
+                cache.merged.is_some()
+                    && cache.pages.first().is_some_and(|old| old.etag == page.etag)
+            })
+        });
+        if !valid {
+            return Err("daemon returned not-modified without a matching cached detail".into());
+        }
+        let reread = self.detail_reread.remove(key);
+        feed.update(|feed| {
+            feed.settle_session(target, reread);
+            if let Some(cache) = feed.details.get_mut(key) {
+                cache.loading = false;
+                cache.stale = false;
+                if !cache
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.code == transcript::HISTORY_CHANGED)
+                {
+                    cache.error = None;
+                }
+                if let Some(first) = cache.pages.first_mut() {
+                    first.as_of = page.as_of.clone();
+                    first.seq = page.seq;
+                }
+            }
+            if let Some(operation) = feed.operations.get_mut(id) {
+                operation.loading = false;
+                operation.value = Some(value(page));
+                operation.error = None;
+            }
+        });
+        self.detail_pages.remove(key);
+        self.detail_restarts.remove(key);
+        self.detail_inflight.remove(key);
+        self.detail_bytes.remove(key);
+        self.touch_detail(feed, target);
+        self.trim_retained(feed);
+        Ok(())
     }
 
     /// A detail that changed between two of its pages is read again from its first page under
@@ -384,11 +412,7 @@ impl AppState {
             }
         };
         self.detail_inflight.remove(key);
-        let reread = self.detail_reread.remove(key);
         feed.update(|feed| {
-            if matches!(&merged, Some(DetailBody::Session(_))) {
-                feed.settle_session(target, reread);
-            }
             if let Some(cache) = feed.details.get_mut(key) {
                 cache.pages = pages;
                 cache.merged = merged;
@@ -452,91 +476,6 @@ impl AppState {
     }
     fn retained_target(&self, feed: Signal<Feed>, key: &str) -> Option<DetailRef> {
         feed.with_untracked(|feed| feed.details.get(key).map(|cache| cache.target.clone()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The read the client sends next: its params, its correlation id and the request.
-    fn next_read(outgoing: &mut Vec<Outgoing>) -> (Value, Option<String>, DetailGet) {
-        let (_, params, tag) = outgoing.remove(0);
-        let get: DetailGet = serde_json::from_value(params.clone()).unwrap();
-        (params, tag, get)
-    }
-
-    fn transcript_page(etag: &str, next: Option<&str>) -> Value {
-        value(DetailReply {
-            etag: etag.into(),
-            as_of: "now".into(),
-            seq: 1,
-            next: next.map(str::to_owned),
-            body: Some(DetailBody::Session(SessionPage {
-                id: "B-1".into(),
-                role: "build".into(),
-                task: None,
-                run: None,
-                machine: None,
-                messages: vec![],
-                older: None,
-                replyable: true,
-                reply_refusal: None,
-                host: Default::default(),
-            })),
-        })
-    }
-
-    #[test]
-    fn a_transcript_that_changed_between_two_pages_is_read_again_from_the_first_page_instead_of_being_reported_as_a_conflict()
-     {
-        let runtime = nsh_core::element::Runtime::default();
-        let _entered = runtime.enter();
-        let feed = signal(Feed::default());
-        let mut app = AppState::new();
-        app.ready = true;
-        let target = DetailRef::Session { id: "B-1".into() };
-        let mut outgoing = app.detail_request(
-            feed,
-            "read".into(),
-            DetailGet {
-                target: target.clone(),
-                etag: None,
-                page: None,
-            },
-        );
-        let (params, tag, _) = next_read(&mut outgoing);
-        let mut outgoing = app
-            .detail_reply(feed, tag, params, Ok(transcript_page("v1", Some("p2"))))
-            .unwrap();
-        let (params, tag, get) = next_read(&mut outgoing);
-        assert_eq!(get.page.as_deref(), Some("p2"));
-        // corrald refuses the continuation of a transcript that changed since its first page.
-        let conflict = Err((
-            corral_protocol::rpc::ErrorCode::Conflict,
-            "changed".to_owned(),
-        ));
-        let mut outgoing = app.detail_reply(feed, tag, params, conflict).unwrap();
-        let (params, tag, get) = next_read(&mut outgoing);
-        assert_eq!(get.page, None);
-        assert_eq!(tag.as_deref(), Some("read"));
-        // A continuation answered under another etag starts again too.
-        let mut outgoing = app
-            .detail_reply(feed, tag, params, Ok(transcript_page("v2", Some("p2"))))
-            .unwrap();
-        let (params, tag, _) = next_read(&mut outgoing);
-        let mut outgoing = app
-            .detail_reply(feed, tag, params, Ok(transcript_page("v3", None)))
-            .unwrap();
-        let (params, tag, get) = next_read(&mut outgoing);
-        assert_eq!(get.page, None);
-        app.detail_reply(feed, tag, params, Ok(transcript_page("v4", None)))
-            .unwrap();
-        feed.with_untracked(|feed| {
-            let cache = &feed.details[&detail_key(&target)];
-            assert!(cache.error.is_none());
-            assert!(cache.merged.is_some());
-        });
     }
 }
 

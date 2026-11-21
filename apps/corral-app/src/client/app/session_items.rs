@@ -1,8 +1,6 @@
 use super::*;
 use crate::model::session::transcript::ItemFetch;
 
-const MAX_ITEM_BYTES: u64 = 4 * 1024 * 1024;
-
 pub(super) struct ItemAssembly {
     session: String,
     root: String,
@@ -36,26 +34,26 @@ impl ItemAssembly {
     }
 
     fn append(&mut self, page: SessionItemPage) -> Result<Option<SessionItem>, String> {
-        if page.bytes > MAX_ITEM_BYTES {
-            return Err("Transcript item exceeds the 4 MiB cache limit.".into());
-        }
+        let end = page.offset.checked_add(page.json.len() as u64);
         if self.bytes.is_some_and(|bytes| bytes != page.bytes)
             || page.offset != self.json.len() as u64
-            || page.offset.saturating_add(page.json.len() as u64) > page.bytes
+            || end.is_none_or(|end| end > page.bytes)
         {
             return Err(
                 "Transcript item continuation has inconsistent byte offsets or size.".into(),
             );
         }
         self.bytes = Some(page.bytes);
-        if page.next.is_some()
-            && (page.json.is_empty()
-                || page.offset.saturating_add(page.json.len() as u64) == page.bytes)
-        {
+        if page.next.is_some() && (page.json.is_empty() || end == Some(page.bytes)) {
             return Err(
                 "Transcript item continuation makes no progress or exceeds its size.".into(),
             );
         }
+        // Trust only the bytes received, not the header's advertised total. The retention
+        // budget can evict inactive assemblies; a mounted reader can finish a large item.
+        self.json
+            .try_reserve(page.json.len())
+            .map_err(|_| "Not enough memory for the complete transcript item.".to_owned())?;
         self.json.push_str(&page.json);
         if let Some(next) = page.next {
             self.token = next;
@@ -67,6 +65,35 @@ impl ItemAssembly {
         serde_json::from_str(&self.json)
             .map(Some)
             .map_err(|error| format!("Invalid complete transcript item: {error}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transcript_item_does_not_reject_large_total_before_fetching_fragments() {
+        let mut assembly = ItemAssembly {
+            session: "session".into(),
+            root: "first".into(),
+            token: "first".into(),
+            bytes: None,
+            json: String::new(),
+        };
+        assert!(
+            assembly
+                .append(SessionItemPage {
+                    json: "{".into(),
+                    offset: 0,
+                    bytes: 4 * 1024 * 1024 + 1,
+                    next: Some("next".into()),
+                })
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(assembly.json, "{");
+        assert_eq!(assembly.token, "next");
     }
 }
 

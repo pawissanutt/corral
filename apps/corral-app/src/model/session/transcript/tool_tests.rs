@@ -138,7 +138,10 @@ fn a_task_card_counts_and_lists_the_agents_its_call_passed() {
             },
         ],
     )]);
-    assert_eq!(fetches(&clipped, &Id::from(ID)), ["t-task"]);
+    assert_eq!(
+        fetches(&clipped, &Id::from(ID), &Default::default()),
+        ["t-task"]
+    );
     clipped.items.insert(
         "t-task".into(),
         ItemFetch::Ready(two_children(TWO_CHILDREN)),

@@ -188,14 +188,8 @@ pub(super) fn merge_pages(pages: &[DetailReply]) -> Result<Option<DetailBody>, S
     }
     merged
         .map(|body| {
-            let mut body: DetailBody = serde_json::from_value(body)
-                .map_err(|error| format!("invalid assembled detail: {error}"))?;
-            if let DetailBody::Session(session) = &mut body {
-                session
-                    .messages
-                    .sort_by(|left, right| left.at.cmp(&right.at));
-            }
-            Ok(body)
+            serde_json::from_value(body)
+                .map_err(|error| format!("invalid assembled detail: {error}"))
         })
         .transpose()
 }

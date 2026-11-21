@@ -51,7 +51,7 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
         DetailGet {
             target: history.clone(),
             etag: None,
-            page: Some("older-cursor".into()),
+            page: None,
         },
     );
     let (_, params, tag) = outgoing.remove(0);
@@ -62,7 +62,7 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
         run: None,
         machine: None,
         messages: vec![],
-        older: None,
+        older: Some("older-cursor".into()),
         replyable: false,
         reply_refusal: None,
         host: Default::default(),
@@ -75,7 +75,7 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
             etag: "old-page".into(),
             as_of: "now".into(),
             seq: 1,
-            next: None,
+            next: Some("older-cursor".into()),
             body: Some(body),
         })),
     )
@@ -156,10 +156,20 @@ fn aggregate_retention_plateaus_without_evicting_readers_or_unresolved_sends() {
             <= MAX_BYTES
     );
     assert!(feed.with_untracked(|feed| !feed.live.contains_key(last_scope.as_str())));
+    let older = app.detail_request(
+        feed,
+        "older-read".into(),
+        DetailGet {
+            target: history,
+            etag: None,
+            page: Some("older-cursor".into()),
+        },
+    );
+    assert_eq!(older.len(), 1);
     app.disconnected(feed);
     app.ready = true;
     let refreshed = app.refresh_details(feed);
     assert!(refreshed.iter().any(|(_, request, _)| {
-        request["kind"] == "session" && request["page"] == "older-cursor"
+        request["kind"] == "session" && request["page"].is_null() && request["etag"] == "old-page"
     }));
 }

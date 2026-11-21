@@ -235,9 +235,8 @@ pub struct TagFacts {
     pub action: Action,
 }
 
-/// Session transcript: one bounded page of messages, this device's sends the page does not
-/// hold yet, the controls to page through it, its source's state, then the open turn as the
-/// host streams it.
+/// Session transcript: newest recorded messages plus any earlier pages already read, this
+/// device's unmatched sends, its source's state and the open turn as the host streams it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transcript {
     pub messages: Vec<Message>,
@@ -245,7 +244,9 @@ pub struct Transcript {
     pub echoes: Vec<Echo>,
     /// Show the messages before these.
     pub older: Option<Action>,
-    /// Back to the latest messages, while an earlier page shows.
+    /// Identifies the next older page even when the preceding page displayed no new rows.
+    pub older_cursor: Option<String>,
+    /// Back to the latest messages, when a source shows a separate earlier page.
     pub newer: Option<Action>,
     /// A page is on its way while the shown one stays.
     pub paging: bool,
@@ -347,7 +348,7 @@ pub fn page(cache: Option<&DetailCache>) -> Option<&SessionPage> {
     }
 }
 
-/// The page token of the messages before the shown page, when the daemon has older ones.
+/// The token of the page before the loaded transcript, when the daemon has older messages.
 pub(crate) fn older_token(cache: &DetailCache) -> Option<String> {
     match cache.body()? {
         DetailBody::Session(page) => page.older.clone(),
