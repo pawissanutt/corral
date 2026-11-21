@@ -168,7 +168,11 @@ impl AppState {
                     if previous.as_ref() == Some(&page) {
                         return;
                     }
-                    let pins = if preview { self.preview_pins } else { self.pins };
+                    let pins = if preview {
+                        self.preview_pins
+                    } else {
+                        self.pins
+                    };
                     if pins.with_untracked(|pins| pins.get(&store)?.last.clone())
                         != Some(id.clone())
                     {
