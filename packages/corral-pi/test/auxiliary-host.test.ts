@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sdk from "@earendil-works/pi-coding-agent";
@@ -140,7 +140,9 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
 
 test("bound worker task slices finish their local lifecycle before collection", async () => {
   const assets = buildFixtureInstall();
-  const cwd = mkdtempSync(join(tmpdir(), "corral-slice-host-"));
+  const repo = mkdtempSync(join(tmpdir(), "corral-slice-host-"));
+  const cwd = join(repo, ".worktrees", "T-571-r2");
+  mkdirSync(cwd, { recursive: true });
   const originalFetch = globalThis.fetch;
   let host: HostSession | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -151,9 +153,9 @@ test("bound worker task slices finish their local lifecycle before collection", 
     if (!transport) throw new Error("fixture transport missing");
     const network = guardedFetch(transport);
     globalThis.fetch = network.fetch;
-    const identity = { store: "st-demo", project: "demo", role: "worker" as const, task: "T-571", run: "R1" };
+    const identity = { store: "st-demo", project: "demo", role: "worker" as const, task: "T-571", run: "R2" };
     const events = new EventLog();
-    const client = new CorralClient({ corral: writeFakeEngine(cwd).path, root: cwd, cwd, identity });
+    const client = new CorralClient({ corral: writeFakeEngine(repo).path, root: repo, cwd, identity });
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol",
       modules: { ...modules, role: workerRole(PACKAGE_ROOT) }, ui: "plain", client, events, network,
       capabilities: { catalog: 7, digest: "a".repeat(64), preset: "full", enabled: ["fleet"] },
@@ -168,9 +170,12 @@ test("bound worker task slices finish their local lifecycle before collection", 
     });
     fixtureTransport().script([
       { match: "slice lifecycle", toolCalls: [{ callId: "slice-task", name: "task", arguments: {
-        agents: [{ id: "slice-one", kind: "slice", title: "One slice", brief: "slice child brief", owns: [] }],
+        agents: [{ id: "slice-one", kind: "slice", title: "One slice", brief: "slice child brief", owns: ["owned.txt"] }],
       } }] },
       { match: "slice lifecycle", toolCalls: [{ callId: "slice-wait", name: "agent_wait", arguments: { ids: ["slice-one"] } }] },
+      { match: "slice child brief", toolCalls: [{ callId: "slice-write", name: "write", arguments: {
+        path: "owned.txt", content: "written from the worker's rerun checkout",
+      } }] },
       { match: "slice child brief", chunks: ["slice ", "completed"], afterFirstChunk: () => collecting.promise },
       { match: "slice lifecycle", text: "parent finished" },
     ]);
@@ -192,8 +197,9 @@ test("bound worker task slices finish their local lifecycle before collection", 
     ]);
     const results = host.session.messages.filter(message => message.role === "toolResult" && message.toolCallId.startsWith("slice-"));
     expect(results.map(message => message.role === "toolResult" && message.isError)).toEqual([false, false]);
+    expect(readFileSync(join(cwd, "owned.txt"), "utf8")).toBe("written from the worker's rerun checkout");
   } finally {
     collecting.resolve(); unsubscribe?.(); await host?.close();
-    globalThis.fetch = originalFetch; assets.cleanup(); rmSync(cwd, { recursive: true, force: true });
+    globalThis.fetch = originalFetch; assets.cleanup(); rmSync(repo, { recursive: true, force: true });
   }
 }, 30_000);
