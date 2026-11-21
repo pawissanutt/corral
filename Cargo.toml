@@ -6,7 +6,7 @@ members = ["crates/*"]
 exclude = ["crates/corral", "crates/corral-core", "crates/corral-ops", "crates/corral-tui"]
 
 [workspace.package]
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.94"
 license = "Apache-2.0"
