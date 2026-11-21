@@ -12,18 +12,18 @@ index 704476d..0f9acad 100644
  export declare const streamSimple: StreamFunction<"openai-codex-responses", SimpleStreamOptions>;
  export interface OpenAICodexWebSocketDebugStats {
 diff --git a/dist/api/openai-codex-responses.js b/dist/api/openai-codex-responses.js
-index e64cc02..f9dd1e6 100644
+index 532ea26..5d290d5 100644
 --- a/dist/api/openai-codex-responses.js
 +++ b/dist/api/openai-codex-responses.js
-@@ -360,6 +360,7 @@ export const streamSimple = (model, context, options) => {
+@@ -365,6 +365,7 @@ export const streamSimple = (model, context, options) => {
      }
      const base = {
          ...buildBaseOptions(model, context, options, apiKey),
 +        serviceTier: options?.serviceTier,
          toolChoice: options?.toolChoice,
      };
-     const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
-@@ -435,7 +436,7 @@ function buildRequestBody(model, context, options, cacheSessionId, grammarToolIn
+     const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : "off";
+@@ -455,7 +456,7 @@ function buildRequestBody(model, context, options, cacheSessionId, grammarToolIn
      }
      return body;
  }

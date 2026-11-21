@@ -1,11 +1,5 @@
-diff --git a/node_modules/@earendil-works/pi-tui/.bun-tag-7cb5a9121b71fd68 b/.bun-tag-7cb5a9121b71fd68
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@earendil-works/pi-tui/.bun-tag-806e85a16d2bedc7 b/.bun-tag-806e85a16d2bedc7
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/components/image.d.ts b/dist/components/image.d.ts
-index 7223aa9097336854f5cf326a3d5c753441a68dbf..8966fc510b2fdfa69ad1c0920c8a8fb86147c17b 100644
+index 0a1a84a9e425ef0e6d7df672535fe96a1adefb83..8ae85f57decd974101285962e099e3c2cddec635 100644
 --- a/dist/components/image.d.ts
 +++ b/dist/components/image.d.ts
 @@ -1,5 +1,5 @@
@@ -30,7 +24,7 @@ index 7223aa9097336854f5cf326a3d5c753441a68dbf..8966fc510b2fdfa69ad1c0920c8a8fb8
      getImageId(): number | undefined;
 +    handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined;
      invalidate(): void;
-     render(width: number): string[];
+     render(width: number): readonly string[];
  }
 diff --git a/dist/components/image.js b/dist/components/image.js
 index 78719cdf0b8c336512256fed7054f06c8bd77c87..ae543c62186b10d7d785116cb65b465ef70d7992 100644
@@ -64,7 +58,7 @@ index 78719cdf0b8c336512256fed7054f06c8bd77c87..ae543c62186b10d7d785116cb65b465e
      getImageId() {
          return this.imageId;
 diff --git a/dist/components/markdown.d.ts b/dist/components/markdown.d.ts
-index f7da0060a11fd291a66e16dcb34b1c11db79c09a..fe729165facacb60394e3a3e49c949a0981440e2 100644
+index e2a21e415faac531300d9793b603524a77a13848..0d973081f1e7fa787f7411abdc7c41b1fadb698b 100644
 --- a/dist/components/markdown.d.ts
 +++ b/dist/components/markdown.d.ts
 @@ -83,6 +83,12 @@ export declare class Markdown implements Component {
@@ -93,7 +87,7 @@ index f7da0060a11fd291a66e16dcb34b1c11db79c09a..fe729165facacb60394e3a3e49c949a0
       * Render a table with width-aware cell wrapping.
       * Cells that don't fit are wrapped to multiple lines.
 diff --git a/dist/components/markdown.js b/dist/components/markdown.js
-index ed2a34767da9ae4add2033304368b4d17c65362d..0e480668db4d03bbde70d3c6839e4c13dfbbe91c 100644
+index 609f249725058d088dc767176f1b04625efb1b4d..4b96f4ad3cb38c25ba754f9aa81e1b5e8c46b51f 100644
 --- a/dist/components/markdown.js
 +++ b/dist/components/markdown.js
 @@ -2,7 +2,7 @@ import { Marked, Tokenizer } from "marked";
@@ -264,7 +258,7 @@ index ed2a34767da9ae4add2033304368b4d17c65362d..0e480668db4d03bbde70d3c6839e4c13
  export class Markdown {
      text;
      paddingX; // Left/right padding
-@@ -332,7 +484,7 @@ export class Markdown {
+@@ -334,7 +486,7 @@ export class Markdown {
                  lines.push(line);
                  continue;
              }
@@ -273,7 +267,7 @@ index ed2a34767da9ae4add2033304368b4d17c65362d..0e480668db4d03bbde70d3c6839e4c13
                  const lineWithMargins = leftMargin + wrappedLine + rightMargin;
                  if (bgFn) {
                      lines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
-@@ -478,27 +630,7 @@ export class Markdown {
+@@ -480,27 +632,7 @@ export class Markdown {
                  break;
              }
              case "code": {
@@ -302,7 +296,7 @@ index ed2a34767da9ae4add2033304368b4d17c65362d..0e480668db4d03bbde70d3c6839e4c13
                  if (nextTokenType && nextTokenType !== "space") {
                      lines.push(""); // Add spacing after code blocks (unless space token follows)
                  }
-@@ -562,7 +694,7 @@ export class Markdown {
+@@ -564,7 +696,7 @@ export class Markdown {
                  }
                  for (const quoteLine of renderedQuoteLines) {
                      const styledLine = applyQuoteStyle(quoteLine);
@@ -311,7 +305,7 @@ index ed2a34767da9ae4add2033304368b4d17c65362d..0e480668db4d03bbde70d3c6839e4c13
                      for (const wrappedLine of wrappedLines) {
                          lines.push(this.theme.quoteBorder("│ ") + wrappedLine);
                      }
-@@ -596,6 +728,51 @@ export class Markdown {
+@@ -598,6 +730,51 @@ export class Markdown {
          }
          return lines;
      }
@@ -363,7 +357,7 @@ index ed2a34767da9ae4add2033304368b4d17c65362d..0e480668db4d03bbde70d3c6839e4c13
      renderInlineTokens(tokens, styleContext) {
          let result = "";
          const resolvedStyleContext = styleContext ?? this.getDefaultInlineStyleContext();
-@@ -743,7 +920,7 @@ export class Markdown {
+@@ -745,7 +922,7 @@ export class Markdown {
                  }
                  const itemLines = this.renderToken(itemToken, itemWidth, undefined, styleContext);
                  for (const line of itemLines) {
@@ -372,7 +366,7 @@ index ed2a34767da9ae4add2033304368b4d17c65362d..0e480668db4d03bbde70d3c6839e4c13
                          const linePrefix = renderedAnyLine ? continuationPrefix : firstPrefix;
                          lines.push(linePrefix + wrappedLine);
                          renderedAnyLine = true;
-@@ -776,17 +953,70 @@ export class Markdown {
+@@ -778,17 +955,70 @@ export class Markdown {
      /**
       * Wrap a table cell to fit into a column.
       *
@@ -445,7 +439,7 @@ index ed2a34767da9ae4add2033304368b4d17c65362d..0e480668db4d03bbde70d3c6839e4c13
      /**
       * Render a table with width-aware cell wrapping.
       * Cells that don't fit are wrapped to multiple lines.
-@@ -797,6 +1027,13 @@ export class Markdown {
+@@ -799,6 +1029,13 @@ export class Markdown {
          if (numCols === 0) {
              return lines;
          }

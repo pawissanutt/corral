@@ -93,7 +93,7 @@ class SettingsCard implements SelectorComponent {
     this.submenu?.invalidate();
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     return (this.submenu ?? this.card).render(width);
   }
 

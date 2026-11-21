@@ -8,7 +8,6 @@ import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 import { corralPiRoot } from "../auth/paths.ts";
 import { PROVIDERS, type ApiProviderId, type ProviderId, isApiProvider, isProviderId, validApiKey } from "../auth/providers.ts";
-import { SUPPLEMENTAL_MODELS } from "./supplemental-models.ts";
 
 export function nativeApiProvider(id: ApiProviderId): Provider {
   return id === "anthropic-api" ? anthropicProvider() : openaiProvider();
@@ -78,13 +77,10 @@ export async function createModelCatalog(
       refreshOnCreate: false,
       allowModelNetwork: false,
     });
-    // Add missing metadata and correct the old Astra subscription limit before Pi
-    // composes models.json, so explicit user entries and overrides still win.
+    // Keep the owner-selected Astra subscription window; explicit models.json overrides win.
     const provider = openaiCodexProvider();
-    const getModels = () => {
-      const listed = provider.getModels().map(model => model.id === "gpt-6-astra" ? { ...model, contextWindow: 600000 } : model);
-      return [...listed, ...(SUPPLEMENTAL_MODELS["openai-codex"] ?? []).filter(model => !listed.some(entry => entry.id === model.id))];
-    };
+    const getModels = () => provider.getModels().map(model =>
+      model.id === "gpt-6-astra" || model.id === "gpt-6.2-astra" ? { ...model, contextWindow: 600000 } : model);
     loaded.registerNativeProvider({ ...provider, getModels, getAllModels: getModels });
     const error = loaded.getError();
     if (error !== undefined) throw new ModelCatalogInvalid(error);
@@ -94,7 +90,7 @@ export async function createModelCatalog(
       // A configured URL, header or price cannot override the native paid route.
       if (isApiProvider(id)) {
         const listed = nativeApiProvider(id).getModels().map(model => ({ ...model, provider: id }));
-        return [id, [...listed, ...(SUPPLEMENTAL_MODELS[id] ?? []).filter(model => !listed.some(entry => entry.id === model.id))]] as const;
+        return [id, listed] as const;
       }
       return [id, [...loaded.getModels(id)]] as const;
     }));

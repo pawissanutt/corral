@@ -171,7 +171,7 @@ describe("shared model catalog", () => {
   });
 });
 
-describe("supplemental models", () => {
+describe("bundled models", () => {
   for (const provider of ["openai-codex", "openai"] as const) test(`resolves and lists GPT-6.2 metadata for ${provider} offline`, async () => {
     const policy = { providers: [provider], modelsPath: null };
     const runtime = await createModelCatalog(NO_CATALOG_CREDENTIALS, policy);

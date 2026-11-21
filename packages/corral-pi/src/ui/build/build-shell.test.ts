@@ -130,7 +130,7 @@ function shell(columns: number, rows: number, build: Build, extra: Partial<Panel
     registerMessageRenderer() {}, registerMarkdownTransformer() {}, sendMessage: (message: unknown) => { sent.push(message); },
   } as unknown as ExtensionAPI;
   // Toasts the panels show, with their placement; `hide` marks one gone.
-  const toasts: { readonly lines: () => string[]; readonly options: { readonly row?: unknown; readonly col?: unknown; readonly nonCapturing?: boolean }; hidden: boolean }[] = [];
+  const toasts: { readonly lines: () => readonly string[]; readonly options: { readonly row?: unknown; readonly col?: unknown; readonly nonCapturing?: boolean }; hidden: boolean }[] = [];
   const tui = { terminal: { rows, columns }, requestRender() {}, hasOverlay: () => false,
     showOverlay: (component: Component, options: { readonly row?: unknown; readonly col?: unknown; readonly nonCapturing?: boolean }) => {
       const toast = { lines: () => component.render(columns), options, hidden: false };

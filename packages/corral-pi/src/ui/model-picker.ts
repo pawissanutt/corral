@@ -72,7 +72,7 @@ class Picker<T> implements SelectorComponent {
     return this.live ? this.card.handleMouse?.(event) : { handled: true };
   }
 
-  render(width: number): string[] { return this.card.render(width); }
+  render(width: number): readonly string[] { return this.card.render(width); }
 
   dispose(): void {
     this.close();
