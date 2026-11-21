@@ -27,11 +27,11 @@ use crate::ui::kit::text::h3;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, MEASURE_PAGE, Token, color};
 
-/// Below this content width the table has no room for its five columns and its groups stack
+/// Below this content width the table has no room for its six columns and its groups stack
 /// as records (a narrow window, or a collapsed sidebar on a small screen).
-const TABLE_MIN: f32 = 600.0;
+const TABLE_MIN: f32 = 680.0;
 /// A terminal below this many Cells lists the groups as records too.
-const TERM_TABLE_MIN: usize = 60;
+const TERM_TABLE_MIN: usize = 72;
 /// A desktop section's sides, as the page head's.
 const SIDES: f32 = 18.0;
 /// One Cell where the surface reports none yet.
@@ -40,7 +40,7 @@ const COLUMN: f32 = 8.0;
 /// The Usage page on every form. test ids: "page-title" (desktop and terminal head),
 /// "usage" (the scroll), "seg-period-<n>", "seg-by-<n>", "field-usage-from", "field-usage-to",
 /// "btn-usage-apply", "usage-head", "usage-period", "usage-coverage", "usage-days",
-/// "usage-groups", "usage-row-<key>", "usage-quota", "btn-retry-usage".
+/// "usage-groups", "usage-row-<key>", "usage-estimate", "usage-quota", "btn-retry-usage".
 pub fn screen(app: AppState) -> AnyElement {
     shown::keep_loaded(app);
     let data = computed(move || shown::shown(app));
@@ -177,6 +177,11 @@ fn content(app: AppState, page: &Page, records: bool, room: usize) -> AnyElement
                 .map(|strip| block(days::strip(app, strip, room), 12.0, 4.0)),
         )
         .child(groups)
+        .child(block(
+            quiet(app, page.estimate_note.clone(), "usage-estimate"),
+            0.0,
+            4.0,
+        ))
         .child(block(quiet(app, page.quota, "usage-quota"), 0.0, 4.0))
         .child(block(quiet(app, page.disclaimer, "usage-note"), 4.0, 24.0))
         .into_element()

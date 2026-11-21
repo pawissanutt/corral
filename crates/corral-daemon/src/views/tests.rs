@@ -536,6 +536,42 @@ fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
             })
             .unwrap();
     }
+    // Same shape as Pi's `usage add`: subscription usage reports tokens but
+    // no billed amount. An API request can supply both tokens and reported USD.
+    for (model, billing, usd, output, cache_read, cache_write) in [
+        (
+            "openai-codex/gpt-6.2-sol",
+            "subscription",
+            None,
+            2_000_000,
+            500_000,
+            1_000_000,
+        ),
+        (
+            "anthropic-api/claude-sonnet-4-6",
+            "api",
+            Some(0.125),
+            0,
+            0,
+            0,
+        ),
+    ] {
+        fixture.apply(Op::UsageAdd {
+            usage: Usage {
+                task: Some(task.clone()),
+                run: Some(run.id.clone()),
+                at: "2026-02-02T12:00:00Z".parse().unwrap(),
+                model: model.into(),
+                input: 1_000_000,
+                output,
+                cache_read,
+                cache_write,
+                usd,
+                billing: Some(billing.into()),
+                ..Usage::default()
+            },
+        });
+    }
     let get = |from: &str, to: &str| DetailGet {
         target: DetailRef::UsageSeries {
             from: from.into(),
@@ -556,15 +592,27 @@ fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
         panic!("expected one local day")
     };
     assert_eq!(day.day, "2026-02-02");
+    let total = &day.summary.total;
+    assert_eq!((total.input, total.requests), (2_000_011, 3));
+    assert_eq!((total.usd, total.priced_requests), (Some(0.125), 1));
+    // Catalog total: $24.55 subscription equivalent + $3 API equivalent;
+    // the unknown model and the separately reported USD aren't added to it.
+    assert!((total.estimate_usd.unwrap() - 27.55).abs() < 1e-9);
+    assert_eq!(total.estimated_requests, 2);
     assert_eq!(
-        (day.summary.total.input, day.summary.total.requests),
-        (11, 1)
+        total.estimate_sources,
+        [
+            corral_types::pricing::CATALOG_SOURCE.to_owned(),
+            corral_types::pricing::CATALOG_SUPPLEMENTAL_SOURCE.to_owned()
+        ]
+        .into()
     );
     assert_eq!((day.summary.covered_runs, day.summary.total_runs), (0, 0));
     let [group] = day.summary.groups.as_slice() else {
         panic!("expected one profile")
     };
     assert_eq!(group.key.as_deref(), Some("shared-profile"));
+    assert_eq!(&group.total, total);
     assert_eq!((group.covered_runs, group.total_runs), (Some(0), Some(0)));
 
     let previous = detail(&fixture.shared, get("2026-02-01", "2026-02-02")).unwrap();
@@ -573,6 +621,8 @@ fn usage_detail_serves_local_day_totals_and_group_coverage_without_raw_rows() {
     };
     let day = &series.days[0];
     assert_eq!(day.summary.total.input, 19);
+    assert_eq!(day.summary.total.estimate_usd, None);
+    assert_eq!(day.summary.total.estimated_requests, 0);
     assert_eq!((day.summary.covered_runs, day.summary.total_runs), (1, 2));
     let group = &day.summary.groups[0];
     assert_eq!((group.covered_runs, group.total_runs), (Some(1), Some(2)));

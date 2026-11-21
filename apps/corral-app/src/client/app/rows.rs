@@ -280,7 +280,7 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
         DetailRef::Timeline { .. } | DetailRef::Burnup { .. } => {
             matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
         }
-        DetailRef::UsageSeries { .. } => topic == Topic::Usage,
+        DetailRef::UsageSeries { .. } => matches!(topic, Topic::Usage | Topic::Settings),
         _ => false,
     }
 }
@@ -298,8 +298,26 @@ pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
         DetailRef::Timeline { .. } | DetailRef::Burnup { .. } => {
             matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
         }
-        DetailRef::UsageSeries { .. } => topic == Topic::Usage,
+        DetailRef::UsageSeries { .. } => matches!(topic, Topic::Usage | Topic::Settings),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod usage_invalidation_tests {
+    use super::*;
+
+    #[test]
+    fn settings_changes_invalidate_grouped_usage_even_when_totals_match() {
+        let target = DetailRef::UsageSeries {
+            from: "2026-01-01".into(),
+            to: "2026-01-02".into(),
+            by: Some(corral_types::UsageBy::Model),
+            utc_offset_minutes: 0,
+            time_zone: None,
+        };
+        assert!(topic_affects(&target, Topic::Settings));
+        assert!(affected(&target, Topic::Settings, &BTreeSet::new()));
     }
 }
 

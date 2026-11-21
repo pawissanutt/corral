@@ -98,15 +98,18 @@ pub struct GroupRow {
     pub requests: String,
     pub input: String,
     pub output: String,
+    /// What the agents reported as the price.
     pub cost: String,
+    /// The API-equivalent estimate at configured or known rates: not a charge, not a quota.
+    pub estimate: String,
 }
 
 impl GroupRow {
     /// The figures in one line, for a form with no table.
     pub fn summary(&self) -> String {
         format!(
-            "covers {} runs · {} requests · {} in · {} out · {}",
-            self.covered, self.requests, self.input, self.output, self.cost
+            "covers {} runs · {} requests · {} in · {} out · reported {} · API est. {}",
+            self.covered, self.requests, self.input, self.output, self.cost, self.estimate
         )
     }
 }
@@ -125,12 +128,14 @@ pub struct Page {
     pub days: Option<DayStrip>,
     /// "By profile".
     pub group_title: String,
-    pub headers: [&'static str; 5],
+    pub headers: [&'static str; 6],
     pub rows: Vec<GroupRow>,
     /// The period's totals under the rows.
     pub total: Option<GroupRow>,
     /// That no harness reports quota or remaining allowance.
     pub quota: &'static str,
+    /// That the estimate column is separate from the reported cost.
+    pub estimate_note: String,
     /// Said in place of the rows.
     pub rows_empty: Option<&'static str>,
     /// One short paragraph on where the figures come from and what [`UNKNOWN`] means.
@@ -156,7 +161,9 @@ pub struct CustomRange {
 
 /// Dollars: whole above ten (`$1,061`), cents below (`$7.60`).
 fn money(value: f64) -> String {
-    if value >= 10.0 {
+    if value > 0.0 && value < 0.005 {
+        "<$0.01".to_owned()
+    } else if value >= 10.0 {
         format!("${}", count(value.round() as u64))
     } else {
         format!("${value:.2}")

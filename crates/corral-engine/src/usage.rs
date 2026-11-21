@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context, Result, ensure};
+use corral_types::pricing::request_price_with_source;
 pub use corral_types::{UsageBy, UsageDay, UsageGroup, UsageSummary, UsageTotal};
 use jiff::{
     Timestamp,
@@ -160,7 +161,9 @@ impl Bucket {
     }
 }
 
-fn add(total: &mut UsageTotal, usage: &Usage) -> Result<()> {
+type Estimate = Option<(f64, &'static str)>;
+
+fn add(total: &mut UsageTotal, usage: &Usage, estimate: Estimate) -> Result<()> {
     total.requests += 1;
     total.input = total
         .input
@@ -183,6 +186,18 @@ fn add(total: &mut UsageTotal, usage: &Usage) -> Result<()> {
         ensure!(usd.is_finite(), "usage USD total overflow");
         total.priced_requests += 1;
         total.usd = Some(usd);
+    }
+    if let Some((estimate, source)) = estimate {
+        let usd = total.estimate_usd.unwrap_or_default() + estimate;
+        ensure!(
+            usd.is_finite(),
+            "usage API-equivalent estimate total overflow"
+        );
+        total.estimated_requests += 1;
+        total.estimate_usd = Some(usd);
+        if !total.estimate_sources.contains(source) {
+            total.estimate_sources.insert(source.to_owned());
+        }
     }
     Ok(())
 }
@@ -292,6 +307,18 @@ impl Engine {
         })
     }
 
+    fn usage_estimate(&self, usage: &Usage) -> Estimate {
+        let (price, source) = request_price_with_source(&self.config.pricing, &usage.model)?;
+        // Requests report disjoint token categories; usd is independent evidence.
+        let usd = price.cost(
+            usage.input,
+            usage.output,
+            usage.cache_read,
+            usage.cache_write,
+        )?;
+        Some((usd, source))
+    }
+
     /// Roll up all recorded requests. Grouping does not change overall run coverage.
     pub fn usage_summary(&self, by: Option<UsageBy>) -> Result<UsageSummary> {
         self.usage_snapshot(|| {
@@ -300,7 +327,7 @@ impl Engine {
                 self.store.read_usage(
                     "SELECT document FROM usage ORDER BY seq",
                     None,
-                    |usage, _| add(&mut total, &usage),
+                    |usage, _| add(&mut total, &usage, self.usage_estimate(&usage)),
                 )?;
                 let (total_runs, covered_runs) = self.store.usage_run_counts()?;
                 return Ok(UsageSummary {
@@ -373,7 +400,8 @@ impl Engine {
             let Some(bucket) = select_bucket(buckets, window, day)? else {
                 return Ok(());
             };
-            add(&mut bucket.total, &usage)?;
+            let estimate = self.usage_estimate(&usage);
+            add(&mut bucket.total, &usage, estimate)?;
             let run_day = if let Some(zone) = local_zone {
                 local_start(row, 3, zone)?
             } else {
@@ -393,7 +421,7 @@ impl Engine {
                 };
                 let group = bucket.groups.entry(key).or_default();
                 group.covered_runs += u64::from(matched);
-                add(&mut group.total, &usage)?;
+                add(&mut group.total, &usage, estimate)?;
             }
             Ok(())
         })

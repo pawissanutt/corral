@@ -159,22 +159,24 @@ Verify and edit local prices before relying on estimates.
 
 To reproduce an update, inspect the source records by exact provider and model
 ID, compare their four cost fields, and update `starter_prices`, `CATALOG_DATE`,
-and `CATALOG_SOURCE` in `crates/corral-core/src/pricing.rs` along with this table.
+and `CATALOG_SOURCE` in `crates/corral-types/src/pricing.rs` along with this table.
 The `Store::init` date comment uses `CATALOG_DATE`. Do not map an unpriced
 subscription ID to a merely similar API model. Keep unknown models unpriced
-until verified.
+until verified. The newer GPT-6.2 Sol and Astra base rates use Pi's exact
+`packages/corral-pi/src/host/supplemental-models.ts` metadata, labeled
+`catalog@pi-supplemental`; long-context tiers are not included.
 
 ## Amazon Bedrock catalog
 
 Bedrock runs (`vendor = "amazon-bedrock"`) are priced from a second frozen
-layer, `crates/corral-core/src/pricing_bedrock.json`, consulted after the
+layer, `crates/corral-types/src/pricing_bedrock.json`, consulted after the
 built-in catalog. It holds the input, output, cache read and cache write rates
-(USD per million tokens) of all 197 chat models in pi-ai 1.5.0
+(USD per million tokens) of chat models in pi-ai 1.5.2
 `dist/providers/data/amazon-bedrock.json`, keyed by the bare Bedrock model ID
 that Pi records (for example `us.anthropic.claude-sonnet-4-5-20250929-v1:0`).
 Lookups are exact: Bedrock IDs are not mapped onto the `claude-*` keys because
 regional and global Bedrock rates differ. Provenance is
-`catalog-bedrock@pi-ai-1.5.0`; config prices still override it.
+`catalog-bedrock@pi-ai-1.5.2`; config prices still override it.
 
 To regenerate after a Pi upgrade, rewrite the file from the new pi-ai JSON
 (`type == "chat"` entries, `cost.cacheRead`/`cacheWrite` as

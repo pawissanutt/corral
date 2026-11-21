@@ -138,6 +138,7 @@ fn usage_rollups_keep_unassociated_requests_but_count_only_exact_run_matches() {
                 cache_write: 20,
                 priced_requests: 3,
                 usd: Some(0.375),
+                ..UsageTotal::default()
             },
             groups: vec![],
             covered_runs: 2,
@@ -200,6 +201,7 @@ fn usage_rollups_keep_unassociated_requests_but_count_only_exact_run_matches() {
             cache_write: 8,
             priced_requests: 0,
             usd: None,
+            ..UsageTotal::default()
         }
     );
     assert_eq!(by_profile[1].total.priced_requests, 2);

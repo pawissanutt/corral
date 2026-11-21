@@ -23,6 +23,46 @@ fn task() -> Task {
 }
 
 #[test]
+fn live_usage_prices_use_config_overrides_without_guessing_model_equivalences() {
+    use corral_types::pricing::request_price_with_source;
+
+    let config = Config::check(
+        Path::new("."),
+        r#"
+[pricing."gpt-6.1-sol"]
+input = 3.0
+output = 9.0
+cache_read = 0.0
+[pricing.custom]
+input = 7.0
+output = 8.0
+aliases = ["openai/custom-id"]
+"#,
+    )
+    .unwrap();
+    let lookup = |model| request_price_with_source(&config.pricing, model);
+    let (price, source) = lookup("openai-codex/gpt-6.1-sol").unwrap();
+    assert_eq!(source, "config");
+    // Preserve 0 on cache read but use input on omitted cache write.
+    assert_eq!(
+        price.cost(1_000_000, 1_000_000, 1_000_000, 1_000_000),
+        Some(15.0)
+    );
+    let (price, source) = lookup("openai/custom-id").unwrap();
+    assert_eq!((price.input, source), (7.0, "config"));
+    assert!(lookup("llama.cpp/gpt-6.1-sol").is_none());
+    assert!(lookup("openai-codex/gpt-6.1-terra").is_none());
+    for model in ["gpt-6.2-sol", "gpt-6.2-astra"] {
+        let api_id = format!("openai/{model}");
+        let subscription_id = format!("openai-codex/{model}");
+        let api = request_price_with_source(&config.pricing, &api_id).unwrap();
+        let subscription = request_price_with_source(&config.pricing, &subscription_id).unwrap();
+        assert_eq!(api, subscription);
+        assert_eq!(api.1, corral_types::pricing::CATALOG_SUPPLEMENTAL_SOURCE);
+    }
+}
+
+#[test]
 fn parses_complete_contract_and_preserves_builtins() {
     let root = crate::tests::tempdir();
     std::fs::create_dir(root.path().join("app")).unwrap();

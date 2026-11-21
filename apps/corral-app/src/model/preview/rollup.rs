@@ -437,6 +437,25 @@ fn add(total: &mut UsageTotal, row: &corral_types::Usage) {
         total.priced_requests += 1;
         total.usd = Some(total.usd.unwrap_or(0.0) + usd);
     }
+    if let Some(estimate) = list_price(row) {
+        total.estimated_requests += 1;
+        total.estimate_usd = Some(total.estimate_usd.unwrap_or(0.0) + estimate);
+    }
+}
+
+/// The sample's list-price estimate: a request on a named model is priced at one illustrative
+/// rate per million tokens; one without a model has no price to estimate from.
+fn list_price(row: &corral_types::Usage) -> Option<f64> {
+    if row.model.is_empty() {
+        return None;
+    }
+    let per_million = |tokens: u64, rate: f64| tokens as f64 / 1_000_000.0 * rate;
+    Some(
+        per_million(row.input, 3.0)
+            + per_million(row.output, 15.0)
+            + per_million(row.cache_read, 0.3)
+            + per_million(row.cache_write, 3.75),
+    )
 }
 
 /// Re-serve every derived detail the app holds, so an open page follows the change; one whose

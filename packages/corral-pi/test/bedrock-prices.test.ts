@@ -11,7 +11,7 @@ type Entry = { id: string; type: string; cost: { input: number; output: number; 
 
 const piAiRoot = dirname(createRequire(join(PACKAGE_ROOT, "package.json")).resolve("@earendil-works/pi-ai/package.json"));
 const catalog = JSON.parse(readFileSync(join(piAiRoot, "dist/providers/data/amazon-bedrock.json"), "utf8"))["bedrock-converse-stream"] as Record<string, Entry>;
-const frozen = JSON.parse(readFileSync(join(REPO, "crates/corral-core/src/pricing_bedrock.json"), "utf8")) as Record<string, Rates>;
+const frozen = JSON.parse(readFileSync(join(REPO, "crates/corral-types/src/pricing_bedrock.json"), "utf8")) as Record<string, Rates>;
 
 test("frozen Bedrock rates equal pi-ai's catalog for every chat ID, with no extra IDs", () => {
   const chat = Object.values(catalog).filter((m) => m.type === "chat");

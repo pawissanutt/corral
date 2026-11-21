@@ -1,12 +1,13 @@
 //! Data shared unchanged by the simple engine, CLI and wire protocol.
 
-use std::{fmt, path::PathBuf};
+use std::{collections::BTreeSet, fmt, path::PathBuf};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 mod op;
+pub mod pricing;
 
 pub use op::{ConfigProblem, Next, Op, Refusal};
 
@@ -469,6 +470,19 @@ pub struct UsageTotal {
     pub priced_requests: u64,
     /// Sum of reported prices; `None` if no requests reported a price.
     pub usd: Option<f64>,
+    /// Sum of known API-equivalent estimates, not a reported charge or subscription bill.
+    /// `None` means no estimate is available; coverage is `estimated_requests` of `requests`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimate_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub estimated_requests: u64,
+    /// Sources used for the known estimates, not for the reported prices.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub estimate_sources: BTreeSet<String>,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]

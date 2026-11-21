@@ -74,19 +74,9 @@ impl UsageEntry {
         self.price_source = None;
         self.estimated_usd = self.model.as_deref().and_then(|model| {
             let (price, source) = config.price_with_source(model)?;
-            // Token counters are disjoint categories in Pi and Claude transcripts.
-            let number = |n| serde_json::Number::from(n).as_f64().unwrap_or_default();
-            let cost = (number(self.input) * price.input
-                + number(self.output) * price.output
-                + number(self.cache_read) * price.cache_read.unwrap_or(price.input)
-                + number(self.cache_write) * price.cache_write.unwrap_or(price.input))
-                / 1_000_000.0;
-            if cost.is_finite() {
-                self.price_source = Some(source.to_owned());
-                Some(cost)
-            } else {
-                None
-            }
+            let cost = price.cost(self.input, self.output, self.cache_read, self.cache_write)?;
+            self.price_source = Some(source.to_owned());
+            Some(cost)
         });
         self.unpriced_tokens = if self.estimated_usd.is_some() {
             0

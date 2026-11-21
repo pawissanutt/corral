@@ -5,7 +5,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use corral_types::ConfigProblem;
+use corral_types::{
+    ConfigProblem,
+    pricing::{Price, pricing_problems},
+};
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -29,6 +32,8 @@ pub struct Config {
     pub profiles: BTreeMap<String, Profile>,
     pub projects: BTreeMap<String, Project>,
     pub routing: Vec<RoutingRule>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub pricing: BTreeMap<String, Price>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub daemon: Option<DaemonConfig>,
 }
@@ -45,6 +50,7 @@ impl Default for Config {
             profiles: builtin_profiles(),
             projects: BTreeMap::new(),
             routing: Vec::new(),
+            pricing: BTreeMap::new(),
             daemon: None,
         }
     }
@@ -237,7 +243,10 @@ impl Config {
 
     /// Collect independent problems rather than stopping at the first bad reference.
     pub fn validate(&self, root: &Path) -> Vec<ConfigProblem> {
-        let mut problems = Vec::new();
+        let mut problems: Vec<_> = pricing_problems(&self.pricing)
+            .into_iter()
+            .map(|(key, message)| problem(key, message))
+            .collect();
         if self.limits.running == 0 {
             problems.push(problem("limits.running", "must be greater than zero"));
         }

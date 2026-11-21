@@ -1,7 +1,6 @@
-//! corral's recorded usage over the chosen period as the Usage page. The head says first how
-//! many of the runs started in the period reported any usage, since a harness that reports no
-//! usage leaves its runs out of every total; a note says how many requests reported tokens
-//! without a price, since the cost leaves those out. Then the per-day view and one table
+//! corral's recorded usage over the chosen period as the Usage page. Run coverage counts
+//! only requests on each run's start day; costs also include requests on later days. A note
+//! says how many requests reported tokens without a price. Then the per-day view and one table
 //! grouped by the selected key, each group with its own coverage and reasons, the period's
 //! total under it.
 
@@ -43,13 +42,13 @@ fn unpriced(total: &UsageTotal) -> u64 {
     total.requests.saturating_sub(total.priced_requests)
 }
 
-/// The head's line: "covers N of M runs; the other K ran on a harness that reports no usage".
+/// The head's line names runs with no usage evidence.
 fn covers(summary: &UsageSummary) -> String {
     let (covered, total) = (summary.covered_runs, summary.total_runs);
     if total == 0 {
         "no run started in this period".to_owned()
     } else if covered >= total {
-        format!("covers all {total} runs started in this period")
+        format!("all {total} runs reported usage on their start day")
     } else {
         let rest = total - covered;
         let other = if rest == 1 {
@@ -57,27 +56,62 @@ fn covers(summary: &UsageSummary) -> String {
         } else {
             format!("the other {rest}")
         };
-        format!("covers {covered} of {total} runs; {other} ran on a harness that reports no usage")
+        format!("{covered} of {total} runs reported usage on their start day; {other} did not")
     }
 }
 
-/// What else the totals leave out: requests that reported tokens without a price.
-fn coverage(summary: &UsageSummary) -> Option<Coverage> {
-    let missing = unpriced(&summary.total);
-    (missing > 0).then(|| Coverage {
-        reasons: vec![format!(
-            "{} of the {} requests reported tokens but no price: their tokens are counted, \
-             their cost is not.",
-            count(missing),
-            count(summary.total.requests)
-        )],
-    })
+/// Requests left out of the API-equivalent estimate: no applicable rate was known.
+fn unestimated(total: &UsageTotal) -> u64 {
+    total.requests.saturating_sub(total.estimated_requests)
 }
 
-/// A cost, or [`UNKNOWN`] where no request reported a price.
+/// Explain missing prices and the start-day limitation of run coverage.
+fn coverage(summary: &UsageSummary) -> Option<Coverage> {
+    let total = &summary.total;
+    let mut reasons = Vec::new();
+    let missing = unpriced(total);
+    if missing > 0 {
+        reasons.push(format!(
+            "{} of the {} requests reported tokens but no price: their tokens are counted, \
+             their reported cost is not.",
+            count(missing),
+            count(total.requests)
+        ));
+    }
+    let left_out = unestimated(total);
+    if left_out > 0 {
+        reasons.push(format!(
+            "The API-equivalent estimate covers {} of the {} requests; {} had no API rate \
+             known for their model.",
+            count(total.estimated_requests),
+            count(total.requests),
+            count(left_out)
+        ));
+    }
+    if summary.covered_runs < summary.total_runs && total.estimate_usd.is_some() {
+        reasons.push(
+            "Run coverage counts only usage on each run's start day; later requests are still included. Runs without any reported usage are not included."
+                .to_owned(),
+        );
+    }
+    (!reasons.is_empty()).then_some(Coverage { reasons })
+}
+
+/// A reported cost, or [`UNKNOWN`] where no request reported a price.
 fn cost(total: &UsageTotal) -> String {
     total.usd.map_or_else(|| UNKNOWN.to_owned(), money)
 }
+
+/// The API-equivalent estimate, or [`UNKNOWN`] where no request could be priced.
+fn estimate(total: &UsageTotal) -> String {
+    total.estimate_usd.map_or_else(|| UNKNOWN.to_owned(), money)
+}
+
+/// Said under the table: what the estimate column is and is not, beside the reported one.
+const ESTIMATE_NOTE: &str = "Reported is the price agent hosts recorded. API est. is an \
+                             API-equivalent estimate: the tokens at configured or known API \
+                             rates. It is not a charge or a subscription quota, and is never \
+                             added to Reported.";
 
 /// Said under the table: corral holds no quota for any harness.
 const QUOTA: &str = "Quota is unknown: no harness reports quota or remaining allowance.";
@@ -89,8 +123,15 @@ fn add(sum: &mut UsageTotal, total: &UsageTotal) {
     sum.cache_read += total.cache_read;
     sum.cache_write += total.cache_write;
     sum.priced_requests += total.priced_requests;
+    sum.estimated_requests += total.estimated_requests;
+    sum.estimate_sources
+        .extend(total.estimate_sources.iter().cloned());
     if let Some(usd) = total.usd {
         sum.usd = Some(sum.usd.unwrap_or(0.0) + usd);
+    }
+    // An unknown part adds nothing: the sum is unknown only where every part is.
+    if let Some(usd) = total.estimate_usd {
+        sum.estimate_usd = Some(sum.estimate_usd.unwrap_or(0.0) + usd);
     }
 }
 
@@ -174,7 +215,7 @@ fn group_coverage(group: &UsageGroup) -> (String, bool, Option<String>) {
             if covered < total {
                 runs_missing = true;
                 reasons.push(format!(
-                    "{} ran on a harness that reports no usage",
+                    "{} without matching usage in this group on the start day",
                     plural(total - covered, "run", "runs")
                 ));
             }
@@ -187,6 +228,13 @@ fn group_coverage(group: &UsageGroup) -> (String, bool, Option<String>) {
         reasons.push(format!(
             "{} with tokens but no price",
             plural(unpriced, "request", "requests")
+        ));
+    }
+    let left_out = unestimated(&group.total);
+    if left_out > 0 {
+        reasons.push(format!(
+            "{} not in the estimate (no API rate known)",
+            plural(left_out, "request", "requests")
         ));
     }
     let reasons = (!reasons.is_empty()).then(|| reasons.join(" · "));
@@ -254,6 +302,7 @@ fn group_row(
         input: figure(|t| tokens(t.input)),
         output: figure(|t| tokens(t.output)),
         cost: figure(cost),
+        estimate: figure(estimate),
     }
 }
 
@@ -304,7 +353,10 @@ fn day_strip(days: Days, series: &UsageSeries) -> DayStrip {
                 plural(total.requests, "request", "requests")
             );
             if total.usd.is_some() {
-                hint.push_str(&format!(" · {}", cost(total)));
+                hint.push_str(&format!(" · reported {}", cost(total)));
+            }
+            if total.estimate_usd.is_some() {
+                hint.push_str(&format!(" · API-equivalent estimate {}", estimate(total)));
             }
             if summary.total_runs > 0 {
                 hint.push_str(&format!(
@@ -438,9 +490,30 @@ pub fn page(state: &State, feed: &Feed) -> Page {
         coverage: summary.as_ref().and_then(coverage),
         days: series.map(|series| day_strip(days, series)),
         group_title: format!("By {}", header(by).to_lowercase()),
-        headers: [header(by), "Runs", "Input", "Output", "Cost"],
+        headers: [
+            header(by),
+            "Runs",
+            "Input",
+            "Output",
+            "Reported",
+            "API est.",
+        ],
         total: summary.as_ref().filter(|_| !rows.is_empty()).map(total_row),
         quota: QUOTA,
+        estimate_note: summary.as_ref().map_or_else(
+            || ESTIMATE_NOTE.to_owned(),
+            |summary| {
+                let sources = &summary.total.estimate_sources;
+                if sources.is_empty() {
+                    ESTIMATE_NOTE.to_owned()
+                } else {
+                    format!(
+                        "{ESTIMATE_NOTE} Rate sources: {}.",
+                        sources.iter().cloned().collect::<Vec<_>>().join(", ")
+                    )
+                }
+            },
+        ),
         rows,
         rows_empty,
         disclaimer: DISCLAIMER,
@@ -531,7 +604,7 @@ mod tests {
         );
         let page = page(&state, &feed);
         assert!(page.head.contains("1 of 3 runs"), "{}", page.head);
-        assert!(page.head.contains("harness that reports no usage"));
+        assert!(page.head.contains("reported usage on their start day"));
         assert!(page.coverage.unwrap().reasons[0].contains("no price"));
         let total = page.total.as_ref().unwrap();
         assert_eq!(total.covered, "1 of 3");
@@ -543,7 +616,7 @@ mod tests {
                 .reasons
                 .as_deref()
                 .unwrap()
-                .contains("harness that reports no usage")
+                .contains("without matching usage in this group on the start day")
         );
         let pi = page.rows.iter().find(|row| row.key == "pi").unwrap();
         assert_eq!(pi.covered, "1 of 1");
@@ -554,6 +627,109 @@ mod tests {
         assert_eq!(
             days.bars.iter().filter(|bar| bar.fraction == 1.0).count(),
             1
+        );
+    }
+
+    /// The estimate is its own column: it sums across days without ever joining the
+    /// reported cost, stays unknown where nothing could be priced, and its coverage names the
+    /// requests without a rate and the start-day limitation of run coverage.
+    #[test]
+    fn estimate_is_kept_apart_from_reported_cost_and_its_coverage_is_stated() {
+        let pi = |requests, priced, usd, estimated, estimate| UsageGroup {
+            key: Some("pi".into()),
+            total: UsageTotal {
+                requests,
+                priced_requests: priced,
+                usd,
+                estimated_requests: estimated,
+                estimate_usd: estimate,
+                ..UsageTotal::default()
+            },
+            covered_runs: Some(1),
+            total_runs: Some(2),
+        };
+        let codex = UsageGroup {
+            key: Some("codex".into()),
+            total: UsageTotal {
+                requests: 1,
+                ..UsageTotal::default()
+            },
+            covered_runs: Some(1),
+            total_runs: Some(1),
+        };
+        let day = |day: &str, groups: Vec<UsageGroup>| UsageDay {
+            day: day.into(),
+            summary: UsageSummary {
+                total: groups.iter().fold(UsageTotal::default(), |mut sum, group| {
+                    add(&mut sum, &group.total);
+                    sum
+                }),
+                covered_runs: groups.iter().filter_map(|g| g.covered_runs).sum(),
+                total_runs: groups.iter().filter_map(|g| g.total_runs).sum(),
+                groups,
+            },
+        };
+        let series = UsageSeries {
+            days: vec![
+                day("2025-11-14", vec![pi(2, 2, Some(0.5), 2, Some(1.25))]),
+                day("2025-11-15", vec![pi(2, 0, None, 1, Some(0.75)), codex]),
+            ],
+        };
+        let mut feed = Feed {
+            now: 1_763_200_000,
+            ..Feed::default()
+        };
+        let state = State::default();
+        let target = series_request(&state, &local(&feed));
+        feed.details.insert(
+            detail_key(&target),
+            DetailCache {
+                target,
+                pages: Vec::new(),
+                loading: false,
+                stale: false,
+                error: None,
+                merged: Some(DetailBody::UsageSeries(series)),
+            },
+        );
+        let page = page(&state, &feed);
+        assert_eq!(page.headers[4..], ["Reported", "API est."]);
+        assert!(page.estimate_note.contains("not a charge"));
+        let total = page.total.as_ref().unwrap();
+        assert_eq!(total.cost, "$0.50");
+        assert_eq!(total.estimate, "$2.00");
+        assert_eq!(
+            estimate(&UsageTotal {
+                estimate_usd: Some(0.002),
+                ..UsageTotal::default()
+            }),
+            "<$0.01"
+        );
+        assert_eq!(
+            estimate(&UsageTotal {
+                estimate_usd: Some(0.0),
+                ..UsageTotal::default()
+            }),
+            "$0.00"
+        );
+        let pi = page.rows.iter().find(|row| row.key == "pi").unwrap();
+        assert_eq!((pi.cost.as_str(), pi.estimate.as_str()), ("$0.50", "$2.00"));
+        assert!(
+            pi.reasons
+                .as_deref()
+                .unwrap()
+                .contains("not in the estimate")
+        );
+        let codex = page.rows.iter().find(|row| row.key == "codex").unwrap();
+        assert_eq!(
+            (codex.cost.as_str(), codex.estimate.as_str()),
+            (UNKNOWN, UNKNOWN)
+        );
+        let reasons = page.coverage.unwrap().reasons.join(" ");
+        assert!(reasons.contains("covers 3 of the 5 requests"), "{reasons}");
+        assert!(
+            reasons.contains("later requests are still included"),
+            "{reasons}"
         );
     }
 }
