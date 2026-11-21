@@ -131,6 +131,16 @@ impl AppState {
     /// one last opened; keys Ask to the chat New assistant started; and settles the chat
     /// operations wherever they were sent from, so a new chat opens from any page.
     pub(super) fn follow_agents(self) {
+        // The open picker snapshots its rows for keyboard walking. Dismiss that snapshot
+        // rather than acting on A-1 from a different enrollment after a reconnect.
+        let source = computed(move || {
+            let preview = self.data.get() == DataState::Fixture;
+            self.feed.with(|feed| pin_key(feed, preview))
+        });
+        effect(move || {
+            let _ = source.get();
+            self.close_agents();
+        });
         effect(move || {
             if let Ok(encoded) = self.pins.with(Pins::encode) {
                 let _ = Storage::set_item(AGENTS_KEY, &encoded);
