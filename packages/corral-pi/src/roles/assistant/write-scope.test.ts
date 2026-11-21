@@ -86,6 +86,21 @@ test("write scope allows only bound Markdown memory with safe lexical and canoni
   expect(classifyWriteScope("memory/notes.md", scope).action).toBe("deny");
 }));
 
+test.skipIf(process.platform !== "linux")("write scope refuses lossy realpaths instead of matching another file", () => fixture((workspace, root) => {
+  const invalid = (suffix: string) => Buffer.concat([Buffer.from(`${workspace}/${suffix}`), Buffer.from([0xff])]);
+  const file = invalid("file-"), directory = invalid("dir-");
+  writeFileSync(file, "");
+  mkdirSync(directory);
+  writeFileSync(join(workspace, "file-\ufffd"), "");
+  mkdirSync(join(workspace, "dir-\ufffd"));
+  symlinkSync(file, join(root, "file"));
+  symlinkSync(directory, join(root, "dir"));
+  const scope = { cwd: root, root, buildWorktree: true };
+  expect(classifyWriteScope("file", scope).action).toBe("deny");
+  expect(classifyWriteScope("dir/new.txt", scope).action).toBe("deny");
+  expect(classifyWriteScope(join(workspace, "file-\ufffd"), scope).action).toBe("ask");
+}));
+
 test("write scope denies destinations that cannot resolve to regular files or new file locations", () => fixture((workspace, root) => {
   const scope = { cwd: root, root, buildWorktree: true };
   symlinkSync("./loop", join(root, "loop"));
