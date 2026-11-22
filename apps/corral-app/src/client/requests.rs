@@ -53,6 +53,8 @@ pub enum ClientRequest {
         request_id: String,
         request: DetailGet,
     },
+    OpenHtml(super::html::OpenHtml),
+    CancelHtml(String),
     SessionItem {
         session: String,
         token: String,

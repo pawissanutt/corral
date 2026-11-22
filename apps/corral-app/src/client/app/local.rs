@@ -2,6 +2,7 @@ use super::*;
 
 impl AppState {
     fn clear_local_projection(&mut self, feed: Signal<Feed>) {
+        self.interrupt_html();
         self.outbox = None;
         self.namespace = None;
         self.offline = super::super::offline::Cache::default();
@@ -45,6 +46,7 @@ impl AppState {
     }
 
     pub async fn forget_local(&mut self, feed: Signal<Feed>) -> Result<(), String> {
+        self.interrupt_html();
         if let Some((store, device)) = &self.namespace {
             super::super::offline::Cache::forget_namespace(store, device).await?;
         } else {

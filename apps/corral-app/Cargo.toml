@@ -49,7 +49,7 @@ snow = { version = "=0.10.0", default-features = false, features = ["default-res
 wasm-bindgen = "=0.2.130"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "CloseEvent", "BinaryType", "Window", "Crypto", "Performance", "Location", "History", "Blob", "BlobPropertyBag", "Url"] }
+web-sys = { version = "0.3", features = ["WebSocket", "MessageEvent", "CloseEvent", "BinaryType", "Window", "Crypto", "Performance", "Location", "History", "Blob", "BlobPropertyBag", "Url", "Document", "HtmlElement", "Node"] }
 futures-channel = "0.3"
 futures-core = "0.3"
 

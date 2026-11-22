@@ -106,6 +106,9 @@ impl AppState {
         error_data: Option<Value>,
     ) -> Result<Vec<Outgoing>, String> {
         if method == DETAIL_GET {
+            if let Some(tag) = tag.as_ref().filter(|tag| tag.starts_with(html::TAG_PREFIX)) {
+                return Ok(self.html_reply(tag, params, outcome).await);
+            }
             return self.detail_reply(feed, tag, params, outcome);
         }
         if matches!(

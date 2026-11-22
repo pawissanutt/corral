@@ -10,6 +10,7 @@ mod durable;
 mod durable_native;
 #[cfg(target_arch = "wasm32")]
 mod durable_web;
+pub(crate) mod html;
 mod map;
 mod offline;
 mod outbox;

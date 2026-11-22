@@ -23,6 +23,10 @@ impl AppState {
     ) -> Vec<Outgoing> {
         let mut request = match request {
             DetailGet {
+                target: DetailRef::SessionFileChunk { .. },
+                ..
+            } => return vec![],
+            DetailGet {
                 target: DetailRef::SessionItem { id, token },
                 ..
             } => {
@@ -148,6 +152,9 @@ impl AppState {
         outcome: Result<Value, (corral_protocol::rpc::ErrorCode, String)>,
     ) -> Result<Vec<Outgoing>, String> {
         let request: DetailGet = decode(params)?;
+        if matches!(&request.target, DetailRef::SessionFileChunk { .. }) {
+            return Ok(vec![]);
+        }
         if let DetailRef::SessionItem { id, token } = &request.target {
             return self.session_item_reply(feed, tag, id, token, outcome);
         }
@@ -191,6 +198,18 @@ impl AppState {
                 return Ok(vec![]);
             }
         };
+        if matches!(&page.body, Some(DetailBody::SessionFileChunk(_))) {
+            self.detail_failed(
+                feed,
+                &key,
+                &id,
+                ClientError {
+                    code: "invalid_reply".into(),
+                    message: "Unexpected HTML snapshot chunk in a detail read.".into(),
+                },
+            );
+            return Ok(vec![]);
+        }
         if walked(&request.target) {
             return Ok(self.walked_reply(feed, id, key, request, page));
         }

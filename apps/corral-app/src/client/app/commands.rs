@@ -132,6 +132,11 @@ impl AppState {
                 request_id,
                 request,
             } => self.detail_request(feed, request_id, request),
+            ClientRequest::OpenHtml(request) => self.open_html(feed, request),
+            ClientRequest::CancelHtml(id) => {
+                self.cancel_html(&id);
+                vec![]
+            }
             ClientRequest::SessionItem { session, token } => {
                 self.session_item(feed, session, token)
             }

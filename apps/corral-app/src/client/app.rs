@@ -4,6 +4,7 @@ mod commands;
 mod details;
 mod devices;
 mod events;
+mod html;
 mod local;
 mod rows;
 mod scopes;
@@ -57,7 +58,8 @@ pub(super) const CAPS: &[&str] = &[
     #[cfg(not(windows))]
     corral_protocol::device::PUSH_V1,
     SESSION_STATE_V1,
-    corral_protocol::app::SESSION_FILES_V1,
+    SESSION_FILES_V1,
+    SESSION_HTML_V1,
     BUILD_V1,
 ];
 
@@ -120,6 +122,7 @@ pub(super) struct AppState {
     changes_cursor: Option<u64>,
     device_walk: Option<(String, Vec<DeviceInfo>)>,
     uploads: BTreeMap<String, uploads::Upload>,
+    html: Option<html::HtmlTransfer>,
 }
 impl AppState {
     pub fn new() -> Self {
@@ -141,9 +144,11 @@ impl AppState {
             changes_cursor: None,
             device_walk: None,
             uploads: BTreeMap::new(),
+            html: None,
         }
     }
     pub fn welcomed(&mut self, feed: Signal<Feed>, welcome: &wire::Welcome) {
+        self.interrupt_html();
         self.ready = false;
         feed.update(|feed| {
             feed.mark_stale();
@@ -152,6 +157,7 @@ impl AppState {
         });
     }
     pub fn disconnected(&mut self, feed: Signal<Feed>) {
+        self.interrupt_html();
         self.ready = false;
         self.changes_inflight = false;
         self.device_walk = None;
@@ -183,6 +189,7 @@ impl AppState {
         let same_namespace = self.namespace.as_ref() == Some(&namespace);
         let refresh_only = self.ready && same_namespace;
         if !same_namespace && self.namespace.is_some() {
+            self.interrupt_html();
             self.session_scopes.clear();
             self.terminal_scopes.clear();
             self.uploads.clear();
@@ -460,6 +467,17 @@ impl AppState {
                     .get(id)
                     .is_some_and(|upload| upload.accepts(tag))
             }),
+            DETAIL_GET
+                if tag
+                    .as_deref()
+                    .is_some_and(|tag| tag.starts_with(html::TAG_PREFIX)) =>
+            {
+                tag.as_deref().is_some_and(|tag| {
+                    self.html
+                        .as_ref()
+                        .is_some_and(|transfer| transfer.accepts(tag))
+                })
+            }
             _ => true,
         });
     }
