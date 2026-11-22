@@ -53,8 +53,8 @@ pub struct TopicState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DetailCache {
-    /// Record IDs kept as display boundaries across transcript refreshes.
-    pub transcript_seams: BTreeSet<String>,
+    /// Presentation identities kept across transcript refreshes, never transcript content.
+    pub transcript_seams: super::session::transcript::TranscriptSeams,
     pub target: DetailRef,
     pub pages: Vec<DetailReply>,
     pub loading: bool,
