@@ -49,11 +49,15 @@ says shell rules are not a sandbox.
 
 `off → planning → review → off`. From `review`, "Keep planning" returns to `planning`.
 
-The phase is a transcript custom entry `corral_plan_mode`
-`{version: 1, phase, revision, at, title?, id?, digest?, path?, left?, approved?}` appended at
-every transition. `PlanMode` (`src/host/plan-mode.ts`) keeps no phase of its own: it reads the
-current branch, cached by leaf id. A restart therefore restores the phase, and rewinding to a
-turn before plan mode was entered leaves it.
+Entering, submitting, returning to planning and leaving each append a transcript custom
+entry `corral_plan_mode` `{version: 1, phase, revision, at, title?, id?, digest?, path?, left?}`.
+An approval appends none: a review ends as approved exactly when its kickoff message, whose
+first line is `[corral plan approved <card id>]`, is in the transcript. No approval can
+therefore be recorded without its kickoff, lost with it, or outlive a rewind of it.
+
+`PlanMode` (`src/host/plan-mode.ts`) keeps no phase of its own: it reads the current branch,
+cached by leaf id. A restart restores the phase, and rewinding to a turn before plan mode was
+entered leaves it.
 
 ### Files
 
@@ -105,9 +109,9 @@ the run goes on. Nothing is sent while an approval is being carried out, whose o
 must not be followed by the planning contract.
 
 There is no notice for the owner's feedback on a submitted plan. The contract and the
-`plan_submit` result both say that approval arrives only as a message beginning with
-`[corral plan approved]` and that any other owner message is feedback, so the agent needs no
-host message tied to one particular input.
+`plan_submit` result both say that approval arrives only as a host message whose first line
+is `[corral plan approved <id>]` and that any other owner message is feedback, so the agent
+needs no host message tied to one particular input.
 
 The contract, adapted from omp's: change nothing and run only read-only commands; only the
 plan file is writable; resolve facts by reading and ask the owner only about intent, with a
@@ -200,22 +204,26 @@ On an execute answer the host, in order:
      Where the SDK refuses to compact (a session smaller than `keepRecentTokens`), the host
      appends the same compaction entry directly and calls `session.refreshContext()`, as
      rewind does.
-4. Records `phase: off` with `approved: {title, revision, digest, path, context, model}`.
-5. Submits the kickoff message (`assets/plan-approved.md`) as automated input: the copy's
-   path, the owner's note, instructions to open a `corral_todo` plan from the plan's steps
-   and verify each step, and the plan inline unless the context was just reset to it. It is
-   admitted through `RemoteOwner.start`: ordered against pause like every admission, refused
-   rather than parked in a paused session's held queue, and holding that order until its
-   turn is open, so a pause that follows cancels the turn. The Build record notes
+4. Submits the kickoff message as automated input: the line `[corral plan approved <card id>]`,
+   then `assets/plan-approved.md` with the copy's path, the owner's note, instructions to
+   open a `corral_todo` plan from the plan's steps and verify each step, and the plan inline
+   unless the context was just reset to it. It is admitted through `RemoteOwner.start`:
+   ordered against pause like every admission, refused rather than parked in a paused
+   session's held queue, and holding that order until its turn is open, so a pause that
+   follows cancels the turn. The Build record notes
    `Approved plan: <title> (revision N, <context option>)` rather than the plan text.
+5. The review ends when that kickoff message is in the transcript. From the answer until
+   then the approval is pending: a second answer reports `started`, entering or leaving plan
+   mode is refused, and no planning contract is sent. If the turn ends without the kickoff
+   having reached the transcript, the pending state is dropped and the review is answerable
+   again.
 
-Any failure in steps 1 to 3 leaves the phase at `review` with the card still open, and posts
-the reason as a transcript note. A choice is refused while the session could start nothing:
-during a compaction, or while the owner has paused it. The pause is checked again after the
-context is prepared and decided for good inside the admission order: a pause that wins keeps
-the review, and one that loses cancels the plan's turn. If the kickoff is refused or fails,
-the same submission is put back under the same card, so an approved plan either starts or
-stays reviewable.
+Because nothing is recorded before the kickoff itself, any refusal, failure or restart on the
+way leaves the same review open, and the reason is posted as a transcript note. A choice is
+refused while the session could start nothing: during a compaction, or while the owner has
+paused it. The pause is checked again after the context is prepared and decided for good
+inside the admission order: a pause that wins keeps the review, and one that loses cancels
+the plan's turn.
 
 ## Wire contract
 

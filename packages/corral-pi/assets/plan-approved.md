@@ -1,4 +1,3 @@
-[corral plan approved]
 The owner approved the plan "{{title}}" (revision {{revision}}). Plan mode is off and normal tool access is restored.
 {{context}}{{note}}
 

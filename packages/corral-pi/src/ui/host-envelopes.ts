@@ -1,7 +1,8 @@
 // The worker's and reviewer's kickoffs as the quiet rows host-notices.ts draws. Each matches only the whole message
 // the role writes (`kickoff` in src/roles/worker/index.ts and src/roles/reviewer/index.ts); any other text returns
-// undefined and stays the owner's bubble. The plan-mode kickoff (`assets/plan-approved.md`) is matched by its opening
-// alone: the whole plan follows it, and belongs behind the row rather than in a bubble.
+// undefined and stays the owner's bubble. The plan-mode kickoff (the host's `[corral plan approved <id>]` line, then
+// `assets/plan-approved.md`) is matched by its opening alone: the whole plan follows it, and belongs behind the row
+// rather than in a bubble.
 import type { NoticeRow } from "./host-notices.ts";
 
 /**
@@ -22,7 +23,7 @@ const REVIEWER = new RegExp(`^${template("Read {} in full and follow it: that fi
   + "notes), instead of writing a verdict notes file and running the shell command. Use corral_artifact for evidence files and "
   + "ask_user for owner questions.")}(?:\\n\\n\\[corral review request \\[[^\\n]*\\]\\])?$`);
 
-const PLAN_APPROVED = /^\[corral plan approved\]\nThe owner approved the plan "([^\n]*)" \(revision (\d+)\)\. Plan mode is off /;
+const PLAN_APPROVED = /^\[corral plan approved [^\]\n]*\]\nThe owner approved the plan "([^\n]*)" \(revision (\d+)\)\. Plan mode is off /;
 
 const FOLLOWS = (file: string) => `the agent follows its prompt file ${file.slice(file.lastIndexOf("/") + 1)}`;
 

@@ -128,8 +128,8 @@ for (const variant of VARIANTS) {
       expect(resets).toHaveLength(1);
       expect(resets[0]?.summary).toContain(PLAN.trimEnd());
       expect(texts().some(text => text.includes("Plan a --version flag") || text === "Submitted." || text.includes("tampered"))).toBeFalse();
-      expect(texts().find(text => text.startsWith("[corral plan approved]"))).toContain("Execute the plan in the summary above");
-      expect(readFileSync(plan.record.approved?.path ?? "", "utf8")).toBe(PLAN);
+      expect(texts().find(text => text.startsWith("[corral plan approved "))).toContain("Execute the plan in the summary above");
+      expect(readFileSync(plan.approved?.path ?? "", "utf8")).toBe(PLAN);
       expect(existsSync(outside)).toBeTrue();
       expect(live.dialogs.entries().some(entry => entry.card.kind === "plan_review")).toBeFalse();
     }), 120_000);

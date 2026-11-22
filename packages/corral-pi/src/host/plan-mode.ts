@@ -1,5 +1,5 @@
 // Plan mode (docs/plans/pi-plan-mode.md). The agent plans read-only with the owner, submits one plan
-// document, and the owner's review choice starts execution. The phase lives in the transcript, so a
+// document, and the owner's review choice starts execution. The phase is read from the transcript, so a
 // restart restores it and a rewind undoes it. Nothing here changes the system prompt or the tool list.
 import { createHash, randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -21,20 +21,22 @@ const PLAN_MAX_BYTES = 256 * 1024;
 const DOC_PAGE_BYTES = 40 * 1024;
 const TITLE_BYTES = 160;
 
-const Approved = z.object({ title: z.string(), revision: z.number(), digest: z.string(), path: z.string(),
-  context: z.enum(["keep", "compact", "clean"]), model: z.string().optional() });
 const Saved = z.object({ version: z.literal(1), phase: z.enum(["off", "planning", "review"]),
   revision: z.number().int().nonnegative(), at: z.number(), title: z.string().optional(),
   // A submission: its own id, the digest of its text and the write-once copy that review and execution read.
   id: z.string().optional(), digest: z.string().optional(), path: z.string().optional(),
   // The owner left without approving.
-  left: z.boolean().optional(), approved: Approved.optional() });
+  left: z.boolean().optional() });
 export type PlanRecord = z.infer<typeof Saved>;
 export type PlanPhase = PlanRecord["phase"];
 export type PlanChoice = "execute" | "execute_clean" | "execute_compact" | "revise";
+/** A plan whose kickoff reached the transcript. */
+export interface ApprovedPlan { readonly title: string; readonly revision: number; readonly path: string }
 type NoteKind = "contract" | "left" | "pointer";
 
-export interface PlanEntry { readonly type: string; readonly customType?: string; readonly data?: unknown; readonly details?: unknown }
+export interface PlanEntry {
+  readonly type: string; readonly customType?: string; readonly data?: unknown; readonly details?: unknown; readonly message?: unknown;
+}
 
 export interface PlanHost {
   /** The session's state directory: the plan document and the copies of its submissions live here. */
@@ -80,18 +82,35 @@ const COMPACT_INSTRUCTIONS = "The owner approved a plan and execution starts nex
   + "and the files, symbols and code paths that were discovered. Drop tool output already reflected in the plan, superseded "
   + "drafts and anything the plan itself states. Do not restate the plan; it is delivered in full after this summary.";
 const CHANGED = "the submitted plan's copy is missing or was changed; choose Keep planning and have it submitted again";
+const STARTING = "The approved plan is starting; wait for it";
 
 const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
 const heading = (text: string): string | undefined => /^[ \t]*#[ \t]+(.+?)[ \t]*$/m.exec(text)?.[1]?.trim() || undefined;
 const slug = (title: string): string => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "plan";
 // A rewind rolls the revision back, so the submission's own id is what makes a card and its copy unique.
 const cardId = (record: PlanRecord): string => `plan-${record.revision}-${record.id ?? ""}`;
+/** The first line of the message that starts an approved plan. It names the submission, and is the approval's only record. */
+const kickoffLine = (card: string): string => `[corral plan approved ${card}]`;
 
-interface Scan { record: PlanRecord; due: readonly NoteKind[] }
+function userText(entry: PlanEntry): string | undefined {
+  const message = entry.type === "message" ? entry.message as { role?: unknown; content?: unknown } | undefined : undefined;
+  if (message?.role !== "user") return undefined;
+  if (typeof message.content === "string") return message.content;
+  return Array.isArray(message.content)
+    ? message.content.map((part: { type?: unknown; text?: unknown }) => part.type === "text" && typeof part.text === "string" ? part.text : "").join("")
+    : undefined;
+}
 
-/** The phase and what the model has not yet been told about it, read from the branch alone. */
+interface Scan { record: PlanRecord; approved?: ApprovedPlan; due: readonly NoteKind[] }
+
+/**
+ * The phase and what the model has not yet been told about it, read from the branch alone. A review ends as
+ * approved exactly when its kickoff is in the transcript: no separate record could be written without it, lost
+ * with it, or outlive a rewind of it.
+ */
 function scan(entries: readonly PlanEntry[]): Scan {
   let record = OFF, announced = false, told = false;
+  let approved: ApprovedPlan | undefined;
   let due: Exclude<NoteKind, "contract"> | undefined;
   for (const entry of entries) {
     if (entry.type === "custom" && entry.customType === PLAN_ENTRY) {
@@ -101,21 +120,27 @@ function scan(entries: readonly PlanEntry[]): Scan {
       due = next.phase === "off" && next.left && told ? "left" : undefined;
       if (next.phase === "off") announced = told = false;
       record = next;
+      approved = undefined;
     } else if (entry.type === "compaction") {
       // A summary is not the contract, and a later one can lose an approved plan's text.
       announced = false;
-      if (record.phase === "off" && record.approved) due = "pointer";
+      if (approved) due = "pointer";
     } else if (entry.type === "custom_message" && entry.customType === PLAN_NOTE) {
       const kinds = (entry.details as { kinds?: unknown } | undefined)?.kinds;
       for (const kind of Array.isArray(kinds) ? kinds : []) {
         if (kind === "contract") announced = told = true;
         else if (kind === due) due = undefined;
       }
+    } else if (record.phase === "review" && record.path && userText(entry)?.split("\n", 1)[0] === kickoffLine(cardId(record))) {
+      approved = { title: record.title ?? "Plan", revision: record.revision, path: record.path };
+      record = { version: 1, phase: "off", revision: record.revision, at: record.at };
+      announced = told = false;
+      due = undefined;
     }
   }
   // The read-only rules hold in review too, so a turn there needs the contract as much as a planning one.
   if (record.phase !== "off") return { record, due: announced ? [] : ["contract"] };
-  return { record, due: due ? [due] : [] };
+  return { record, ...(approved ? { approved } : {}), due: due ? [due] : [] };
 }
 
 export class PlanMode {
@@ -123,7 +148,11 @@ export class PlanMode {
   readonly path: string;
   private cache: { leaf: string | null; scan: Scan } | undefined;
   private submitted: { card: string; body: string } | undefined;
+  /** An approval is being carried out, up to the admission of its kickoff. */
   private starting = false;
+  /** The card whose kickoff the session took but the transcript does not hold yet. */
+  private kickoff: string | undefined;
+  private seen: PlanPhase = "off";
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly host: PlanHost) { this.path = join(host.dir, PLAN_FILE); }
@@ -136,26 +165,41 @@ export class PlanMode {
 
   get record(): PlanRecord { return this.read().record; }
   get phase(): PlanPhase { return this.record.phase; }
+  /** The plan whose kickoff started the work now under way, until plan mode is entered again. */
+  get approved(): ApprovedPlan | undefined { return this.read().approved; }
   /** The id of the open review card, which names one submission. */
   get review(): string | undefined {
     const record = this.record;
     return record.phase === "review" ? cardId(record) : undefined;
   }
+  /** An approval is on its way into the transcript: nothing else may decide or change the mode meanwhile. */
+  private get pending(): boolean { return this.starting || (this.kickoff !== undefined && this.kickoff === this.review); }
 
   onChange(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   }
 
-  private write(record: Omit<PlanRecord, "version" | "at">, at = (this.host.now ?? Date.now)()): void {
-    this.host.append({ ...record, version: 1, at });
+  private write(record: Omit<PlanRecord, "version" | "at">): void {
+    this.host.append({ ...record, version: 1, at: (this.host.now ?? Date.now)() });
     this.cache = undefined;
     this.announce();
   }
 
   private announce(): void {
+    this.seen = this.phase;
     this.host.changed();
     for (const listener of [...this.listeners]) { try { listener(); } catch { /* A view does not own the mode. */ } }
+  }
+
+  /** The transcript grew: an approval's kickoff may have arrived in it, which ends the review. */
+  refresh(): void {
+    if (this.phase !== this.seen) this.announce();
+  }
+
+  /** The turn ended. A kickoff that was taken but never reached the transcript no longer holds the review. */
+  turnEnded(): void {
+    this.kickoff = undefined;
   }
 
   brief(): { phase: "planning" | "review"; title?: string; revision?: number } | undefined {
@@ -197,15 +241,15 @@ export class PlanMode {
 
   /** What the starting turn needs to know about the mode, as one message; the transcript records what it covered. */
   turnMessage(): { customType: string; content: string; display: boolean; details: { kinds: readonly NoteKind[] } } | undefined {
-    const { record, due } = this.read();
-    // While an approval is being carried out, its own compaction must not be answered with the planning contract.
-    if (!due.length || this.starting) return undefined;
+    const { approved, due } = this.read();
+    // An approval's own compaction and its kickoff turn must not be answered with the planning contract.
+    if (!due.length || this.pending) return undefined;
     const content = due.map(kind => kind === "contract"
       ? this.host.prompts.contract({ path: this.path, existing: this.exists(), askUser: this.host.askUser })
       : kind === "left" ? "[corral plan mode]\nPlan mode is off: the owner left it without approving a plan. Normal tool access is "
         + `restored. The draft at \`${this.path}\` is not approved; do not implement it unless the owner asks.`
-      : `[corral plan reference]\nThe approved plan for this work, "${record.approved?.title ?? "Plan"}", is at `
-        + `\`${record.approved?.path ?? this.path}\`. If you are still executing it and its details are no longer in context, `
+      : `[corral plan reference]\nThe approved plan for this work, "${approved?.title ?? "Plan"}", is at `
+        + `\`${approved?.path ?? this.path}\`. If you are still executing it and its details are no longer in context, `
         + "read it. Ignore this if that work is finished or unrelated.").join("\n\n");
     return { customType: PLAN_NOTE, content, display: false, details: { kinds: due } };
   }
@@ -213,7 +257,7 @@ export class PlanMode {
   private exists(): boolean { return lstatSync(this.path, { throwIfNoEntry: false })?.isFile() === true; }
 
   private idle(): void {
-    const busy = this.host.busy();
+    const busy = this.pending ? STARTING : this.host.busy();
     if (busy) throw new BridgeRefusal("plan_mode_unavailable", busy);
   }
 
@@ -273,9 +317,9 @@ export class PlanMode {
     mkdirSync(join(this.host.dir, "plans"), { recursive: true });
     writeFileSync(copy, body, { flag: "wx", mode: 0o600 });
     this.write({ phase: "review", revision: next, title: named, id, digest: sha(body), path: copy });
-    return "Submitted for the owner's review. End your turn now and do not implement. Approval arrives only as a message "
-      + "that begins with [corral plan approved]; any other message from the owner is feedback, so revise the plan and "
-      + "call plan_submit again.";
+    return "Submitted for the owner's review. End your turn now and do not implement. Approval arrives only as a host "
+      + "message whose first line is [corral plan approved <id>]; any other message from the owner is feedback, so revise "
+      + "the plan and call plan_submit again.";
   }
 
   /** A submission's copy as it is on disk now, or undefined when it is missing or no longer matches its digest. */
@@ -324,7 +368,7 @@ export class PlanMode {
   /** The owner's review choice, from the terminal or a card answer. Refused while it could not be carried out. */
   choose(choice: PlanChoice, text?: string): AnswerStatus {
     if (this.phase !== "review") return "missing";
-    if (this.starting) return "started";
+    if (this.pending) return "started";
     // Neither the plan nor the feedback could start a turn now, and the review would be gone.
     const blocked = this.host.blocked();
     if (blocked) throw new BridgeRefusal("plan_mode_unavailable", blocked);
@@ -342,7 +386,7 @@ export class PlanMode {
    */
   ownerSpoke(): void {
     const { phase, revision, title } = this.record;
-    if (phase === "review" && !this.starting) this.write({ phase: "planning", revision, title });
+    if (phase === "review" && !this.pending) this.write({ phase: "planning", revision, title });
   }
 
   private async revise(feedback?: string): Promise<void> {
@@ -358,6 +402,10 @@ export class PlanMode {
     if (!sent) this.host.note("The plan feedback was not delivered; send it again.", "error");
   }
 
+  /**
+   * Carry out an approval. Nothing is recorded for it: the review ends when the kickoff itself is in the
+   * transcript, so a refusal, a failure or a restart at any point before that leaves the same review open.
+   */
   private async execute(context: PlanContext, note?: string): Promise<void> {
     this.starting = true;
     try {
@@ -366,35 +414,23 @@ export class PlanMode {
       await this.host.stopTurn();
       // Read after the planning turn can no longer touch it: what runs must be what the digest names, now.
       const plan = this.copy(record);
-      if (plan === undefined || !record.path || !record.digest) {
+      if (plan === undefined || !record.path) {
         this.submitted = undefined;
         throw new Error(CHANGED);
       }
-      const title = record.title ?? "Plan", { revision, digest, path } = record;
+      const title = record.title ?? "Plan", { revision, path } = record, card = cardId(record);
       if (context === "compact") await this.host.compact(COMPACT_INSTRUCTIONS);
       // The reset summary carries the plan itself, so the cleared context holds it whatever happens next.
       else if (context === "clean") await this.host.reset(this.host.prompts.reset({ path, title, revision, plan }));
-      // The owner may have paused while the context was prepared. Nothing awaits between this check and the
-      // kickoff's admission, so a pause either lands before it and keeps the review, or after the plan started.
+      // The owner may have paused while the context was prepared; the admission order then decides for good.
       const blocked = this.host.blocked();
       if (blocked) throw new Error(blocked);
-      const model = this.host.model();
-      this.write({ phase: "off", revision, approved: { title, revision, digest, path, context, ...(model ? { model } : {}) } });
+      const kickoff = `${kickoffLine(card)}\n${this.host.prompts.approved({ path, title, revision, plan, context, note, todo: this.host.todo })}`;
+      this.kickoff = card;
+      if (!await this.host.submit(kickoff, "auto")) throw new Error("the session did not take it");
       this.host.approved?.(`Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})`);
-      const kickoff = this.host.prompts.approved({ path, title, revision, plan, context, note, todo: this.host.todo });
-      let refusal: string | undefined;
-      try {
-        if (!await this.host.submit(kickoff, "auto")) refusal = "the session did not take it";
-      } catch (error) {
-        refusal = error instanceof Error ? error.message : String(error);
-      }
-      if (refusal !== undefined) {
-        // A plan that did not start stays reviewable: the same submission is put back under the same card.
-        const { version: _version, at, ...same } = record;
-        this.write(same, at);
-        this.host.note(`The approved plan was not started: ${refusal}. The review is open again.`, "error");
-      }
     } catch (error) {
+      this.kickoff = undefined;
       this.host.note(`The plan was not started: ${error instanceof Error ? error.message : String(error)}. The review is still open.`, "error");
       this.announce();
     } finally {

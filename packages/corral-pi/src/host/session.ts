@@ -1101,10 +1101,11 @@ export class HostSession {
             const result = await plan.command(args);
             if (!result.review) this.notice(result.text, "text", ctx.ui);
             else if (!await this.planReview?.show()) {
-              // Without the pager the same choices are a plain selection.
+              // Without the pager the same choices are a plain selection, for the submission that was asked about.
+              const review = plan.review;
               const picked = await ctx.ui.select(result.text, PLAN_OPTIONS.map(option => option.label));
               const option = PLAN_OPTIONS.find(candidate => candidate.label === picked);
-              if (option) plan.choose(option.id);
+              if (option && plan.review === review) plan.choose(option.id);
             }
           } catch (error) {
             this.notice(error instanceof Error ? error.message : String(error), "error", ctx.ui);
@@ -1373,8 +1374,11 @@ export class HostSession {
     this.unobserveTranscript?.();
     // Reconcile names written before Corral mirrored Pi's session_info into the Build journal.
     this.syncBuildTitle(session);
-    this.unobserveTranscript = observeTranscriptEntries(session.sessionManager,
-      () => this.liveEvents.entry(), () => this.liveEvents.stateChanged());
+    this.unobserveTranscript = observeTranscriptEntries(session.sessionManager, () => {
+      this.liveEvents.entry();
+      // A user message is in the transcript now; an approved plan's kickoff ends its review there.
+      this.planMode?.refresh();
+    }, () => this.liveEvents.stateChanged());
     this.startedInputFacts = undefined;
     this.remoteUsage = undefined;
     session.setQueueObserver({
@@ -1454,6 +1458,7 @@ export class HostSession {
         this.turnFacts.toolStarted(this.turn, event.toolCallId);
       } else if (event.type === "agent_settled") {
         this.turnEnded(event.aborted);
+        this.planMode?.turnEnded();
         this.remoteBuild.refreshExit();
       } else if (event.type === "session_info_changed") {
         // InteractiveMode /name emits this after appending session_info. It is not a prompt.
