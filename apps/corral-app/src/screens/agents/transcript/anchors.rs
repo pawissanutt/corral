@@ -1,12 +1,14 @@
 //! Where each message of a mounted transcript starts, by its anchor, per session scope: the
 //! rows report their place as they are laid out, the view following the transcript reads which
-//! row the reader is at from its scroll offset, and a reading position waiting to be restored
-//! scrolls there once its row has been laid out (at any width). The items of a recorded
-//! message report their place in it too, by their stable keys, so the reader stays on the item
-//! they read while rows arrive above and below it in the same update. An opened group's calls
-//! report theirs by their call ids, through the parts they are drawn in (the group's rows in the
-//! group, the message's column of items in it), so the reader stays on the call they read while
-//! calls join the group before and after it.
+//! row the reader is at from its scroll offset, and each view scrolled up from its end holds
+//! its reader there (at any width): every later layout that moves their row, or what is above
+//! them in it, scrolls the view back to them (rows of a page above filling in after it showed,
+//! too), until the reader scrolls on their own, follows the end or the view goes. The items of
+//! a recorded message report their place in it too, by their stable keys, so the reader stays
+//! on the item they read while rows arrive above and below it in the same update. An opened
+//! group's calls report theirs by their call ids, through the parts they are drawn in (the
+//! group's rows in the group, the message's column of items in it), so the reader stays on the
+//! call they read while calls join the group before and after it.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -27,6 +29,14 @@ pub(super) enum Mark {
         height: f32,
         items: Vec<(String, f32, f32)>,
     },
+    /// This far below the row's top, its items as they are placed now (key, top, height; as
+    /// for `Held`): the reader held as rows above, or items above theirs, grow or shrink later.
+    /// The reader moves with the last item that started at or above them, whatever its height
+    /// does (what grows in it grows below its top), else with the row's top.
+    Kept {
+        into: f32,
+        items: Vec<(String, f32, f32)>,
+    },
 }
 
 impl Mark {
@@ -40,6 +50,14 @@ impl Mark {
     ) -> f32 {
         let (into, was, items) = match self {
             Self::Top(into) => return top + into,
+            Self::Kept { into, items } => {
+                let held = items
+                    .iter()
+                    .filter(|(_, was_top, _)| *was_top <= *into)
+                    .rev()
+                    .find_map(|(key, was_top, _)| Some((*was_top, now(key)?.0)));
+                return top + into + held.map_or(0.0, |(was_top, now_top)| now_top - was_top);
+            }
             Self::Held {
                 into,
                 height,
@@ -103,9 +121,24 @@ struct Rows {
     /// The parts items are drawn in (a message's column of items, an opened group and its
     /// rows), by key: they only place the items within them.
     parts: BTreeMap<String, Item>,
-    /// A reading position to restore once its row is placed, and whether it holds the reader
-    /// while rows arrive above (rather than reopening where they left).
-    pending: Option<(String, Mark, ElementRef, bool)>,
+    /// Where each view of the scope scrolled up from its end holds its reader, by the view.
+    holds: BTreeMap<u64, Hold>,
+    /// Places were reported since the holds were last settled.
+    dirty: bool,
+}
+
+/// A reader a view holds in place, scrolled up from its end, until they scroll on their own,
+/// the view follows the end again or shows another scope, or it goes. Every layout that moves
+/// their row or the items in it scrolls the view back to them, then takes their place again
+/// from that layout, so later layouts are read against the one the reader saw last.
+struct Hold {
+    /// The row the reader is at.
+    anchor: String,
+    /// Where in that row.
+    mark: Mark,
+    /// The view's scroll offset, as it last reported it or was last scrolled to; none until
+    /// either.
+    at: Option<f32>,
 }
 
 impl Rows {
@@ -127,11 +160,74 @@ impl Rows {
         }
         Some((top, item.height))
     }
+
+    /// The row at scroll offset `offset` and how far into it, as `at` says.
+    fn at(&self, offset: f32) -> Option<(String, f32)> {
+        let offset = offset - self.prefix();
+        let tops = self.tops.iter().map(|(anchor, (_, top, _))| (anchor, *top));
+        tops.clone()
+            .filter(|(_, top)| *top <= offset + 1.0)
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .or_else(|| tops.min_by(|a, b| a.1.total_cmp(&b.1)))
+            .map(|(anchor, top)| (anchor.clone(), offset - top))
+    }
+
+    /// The placed items of row `row` (key, top, height in the row), sorted by top.
+    fn items_of(&self, row: &str) -> Vec<(String, f32, f32)> {
+        let mut items: Vec<_> = self
+            .items
+            .iter()
+            .filter(|(_, item)| item.row == row)
+            .filter_map(|(key, _)| {
+                let (top, height) = self.item(row, key)?;
+                Some((key.clone(), top, height))
+            })
+            .collect();
+        items.sort_by(|a, b| a.1.total_cmp(&b.1));
+        items
+    }
+
+    /// A place was reported: the holds read it once this layout's places are all in.
+    fn touched(&mut self) -> bool {
+        self.dirty |= !self.holds.is_empty();
+        self.dirty
+    }
+}
+
+/// Settles `scope`'s holds after this layout when `touched` says they wait for it. Each report
+/// asks, as the task runs only while the owner that asked lives (a row can go first); the
+/// first to run settles and the others find nothing to do. Only views that scroll hold
+/// readers, so with none mounted there is nothing to ask.
+fn queue(scope: &str, touched: bool) {
+    if touched && SCROLLERS.with(|scrollers| !scrollers.borrow().is_empty()) {
+        let scope = scope.to_owned();
+        after_answer(move || {
+            for (view, at) in settle(&scope) {
+                let scroller = SCROLLERS.with(|scrollers| scrollers.borrow().get(&view).copied());
+                if let Some(scroller) = scroller {
+                    scroller.scroll_to_offset(px(at), false);
+                }
+            }
+        });
+    }
 }
 
 thread_local! {
     static SCOPES: RefCell<BTreeMap<String, Rows>> = const { RefCell::new(BTreeMap::new()) };
     static TOKENS: Cell<u64> = const { Cell::new(0) };
+    /// What each mounted view holding readers scrolls, by the view.
+    static SCROLLERS: RefCell<BTreeMap<u64, ElementRef>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+/// A view that holds its readers by scrolling `scroller`, for as long as the current owner
+/// lives: the token its holds go by.
+pub(super) fn view(scroller: ElementRef) -> u64 {
+    let view = token();
+    SCROLLERS.with(|scrollers| scrollers.borrow_mut().insert(view, scroller));
+    cleanup(move || {
+        SCROLLERS.with(|scrollers| scrollers.borrow_mut().remove(&view));
+    });
+    view
 }
 
 /// A token for one render of a row, so a later render's place is not forgotten with an
@@ -145,9 +241,13 @@ pub(super) fn token() -> u64 {
 }
 
 pub(super) fn set_origin(scope: &str, token: u64, y: f32) {
-    SCOPES.with(|scopes| {
-        scopes.borrow_mut().entry(scope.into()).or_default().origin = Some((token, y))
+    let touched = SCOPES.with(|scopes| {
+        let mut scopes = scopes.borrow_mut();
+        let rows = scopes.entry(scope.into()).or_default();
+        rows.origin = Some((token, y));
+        rows.touched()
     });
+    queue(scope, touched);
 }
 
 fn clear_origin(scope: &str, token: u64) {
@@ -170,36 +270,22 @@ pub(crate) fn content_origin(scope: String, body: View) -> View {
     body.on_layout(move |frame: &Bounds<Points>| set_origin(&scope, token, frame.origin.y.0))
 }
 
-fn scroll(scroller: ElementRef, at: f32) {
-    after_answer(move || scroller.scroll_to_offset(px(at.max(0.0)), false));
-}
-
-/// Row `anchor` of `scope` starts at `top` and is `height` high; a reading position waiting
-/// for it is restored.
+/// Row `anchor` of `scope` starts at `top` and is `height` high; the readers held in the scope
+/// are kept where they were once this layout's places are all in (the row's items report
+/// theirs after it).
 pub(super) fn placed(scope: &str, anchor: &str, token: u64, top: f32, height: f32) {
-    let restore = SCOPES.with(|scopes| {
+    let touched = SCOPES.with(|scopes| {
         let mut scopes = scopes.borrow_mut();
         let rows = scopes.entry(scope.to_owned()).or_default();
         rows.tops.insert(anchor.to_owned(), (token, top, height));
-        match &rows.pending {
-            Some((key, ..)) if key == anchor => rows.pending.take(),
-            _ => None,
-        }
+        rows.touched()
     });
-    if let Some((anchor, mark, scroller, _)) = restore {
-        // Read where the row and its items are once this layout's places are all in: the
-        // row's items report theirs after it.
-        let scope = scope.to_owned();
-        after_answer(move || {
-            if let Some(at) = offset(&scope, &anchor, &mark) {
-                scroller.scroll_to_offset(px(at.max(0.0)), false);
-            }
-        });
-    }
+    queue(scope, touched);
 }
 
 /// The scroll offset of `mark` in row `anchor` of `scope`, as the row and its items are placed
 /// now; none while the row is not.
+#[cfg(test)]
 pub(super) fn offset(scope: &str, anchor: &str, mark: &Mark) -> Option<f32> {
     SCOPES.with(|scopes| {
         let scopes = scopes.borrow();
@@ -240,7 +326,7 @@ pub(super) fn part_placed(
 }
 
 fn place(scope: &str, key: &str, item: Item, part: bool) {
-    SCOPES.with(|scopes| {
+    let touched = SCOPES.with(|scopes| {
         let mut scopes = scopes.borrow_mut();
         let rows = scopes.entry(scope.to_owned()).or_default();
         let placed = if part {
@@ -249,7 +335,9 @@ fn place(scope: &str, key: &str, item: Item, part: bool) {
             &mut rows.items
         };
         placed.insert(key.to_owned(), item);
+        rows.touched()
     });
+    queue(scope, touched);
 }
 
 /// The render `token` of item or part `key` is gone.
@@ -281,37 +369,35 @@ pub(super) fn forget(scope: &str, anchor: &str, token: u64) {
     });
 }
 
-/// Scrolls `scroller` to `offset` into row `anchor` of `scope`: now when the row is placed,
-/// else as soon as it is.
-pub(super) fn restore(scope: &str, anchor: String, offset: f32, scroller: ElementRef) {
-    let top = SCOPES.with(|scopes| {
+/// View `view` of `scope` holds its reader `offset` into row `anchor`:
+/// it scrolls there once the row is placed (now when it is), and keeps them there.
+pub(super) fn restore(scope: &str, view: u64, anchor: String, offset: f32) {
+    let touched = SCOPES.with(|scopes| {
         let mut scopes = scopes.borrow_mut();
         let rows = scopes.entry(scope.to_owned()).or_default();
-        let top = rows
-            .tops
-            .get(&anchor)
-            .map(|(_, top, _)| rows.prefix() + *top);
-        rows.pending = match top {
-            Some(_) => None,
-            None => Some((anchor, Mark::Top(offset), scroller, false)),
+        let hold = Hold {
+            anchor,
+            mark: Mark::Top(offset),
+            at: None,
         };
-        top
+        rows.holds.insert(view, hold);
+        rows.touched()
     });
-    if let Some(top) = top {
-        scroll(scroller, top + offset);
-    }
+    queue(scope, touched);
 }
 
-/// Scrolls `scroller` back to `offset` into row `anchor` of `scope` once the row is placed
-/// again: rows were added above the reader, before the row or at its own front, so where it
-/// was last placed no longer holds. Kept on the item read, by its key, which replies joining
-/// the row below it in the same update leave where it was too.
-pub(super) fn hold(scope: &str, anchor: String, offset: f32, scroller: ElementRef) {
+/// View `view` of `scope` holds its reader `offset` into row `anchor`, scrolling back there
+/// once the row is placed again: rows were added above the reader, before the row or at its
+/// own front, so where it was last placed no longer holds. Kept on the item read, by its key,
+/// which replies joining the row below it in the same update leave where it was too.
+pub(super) fn hold(scope: &str, view: u64, anchor: String, offset: f32) {
     let mark = mark(scope, &anchor, offset);
     SCOPES.with(|scopes| {
         let mut scopes = scopes.borrow_mut();
         let rows = scopes.entry(scope.to_owned()).or_default();
-        rows.pending = Some((anchor, mark, scroller, true));
+        let at = rows.holds.get(&view).and_then(|hold| hold.at);
+        let hold = Hold { anchor, mark, at };
+        rows.holds.insert(view, hold);
     });
 }
 
@@ -322,47 +408,94 @@ pub(super) fn mark(scope: &str, anchor: &str, offset: f32) -> Mark {
         let mut scopes = scopes.borrow_mut();
         let rows = scopes.entry(scope.to_owned()).or_default();
         match rows.tops.remove(anchor) {
-            Some((_, _, height)) => {
-                let mut items: Vec<_> = rows
-                    .items
-                    .iter()
-                    .filter(|(_, item)| item.row == anchor)
-                    .filter_map(|(key, _)| {
-                        let (top, height) = rows.item(anchor, key)?;
-                        Some((key.clone(), top, height))
-                    })
-                    .collect();
-                items.sort_by(|a, b| a.1.total_cmp(&b.1));
-                Mark::Held {
-                    into: offset,
-                    height,
-                    items,
-                }
-            }
+            Some((_, _, height)) => Mark::Held {
+                into: offset,
+                height,
+                items: rows.items_of(anchor),
+            },
             None => Mark::Top(offset),
         }
     })
 }
 
-/// No reading position waits to be restored in `scope`.
-pub(super) fn cancel(scope: &str) {
+/// View `view` of `scope` holds its reader no more: it follows the end, shows another scope or
+/// went.
+pub(super) fn release(scope: &str, view: u64) {
     SCOPES.with(|scopes| {
         if let Some(rows) = scopes.borrow_mut().get_mut(scope) {
-            rows.pending = None;
+            rows.holds.remove(&view);
         }
     });
 }
 
-/// The reader scrolled on their own in `scope`: rows that arrived above without moving theirs
-/// hold nothing any more, so a later change of that row's height does not move them.
-pub(super) fn moved(scope: &str) {
+/// View `view` of `scope`, scrolled up from its end, is at `offset`.
+/// Unless it is where the view was last scrolled to, the reader scrolled on their own: they
+/// are held where they are now, by the row they are at and its items as placed now, and a
+/// place held from before (a row still to be placed again, as rows arrived above) holds
+/// nothing any more.
+pub(super) fn scrolled(scope: &str, view: u64, offset: f32) {
     SCOPES.with(|scopes| {
-        if let Some(rows) = scopes.borrow_mut().get_mut(scope)
-            && rows.pending.as_ref().is_some_and(|(.., held)| *held)
-        {
-            rows.pending = None;
+        let mut scopes = scopes.borrow_mut();
+        let rows = scopes.entry(scope.to_owned()).or_default();
+        let ours = rows.holds.get(&view).and_then(|hold| hold.at);
+        if ours.is_some_and(|at| (at - offset).abs() <= 1.0) {
+            return;
+        }
+        match rows.at(offset) {
+            Some((anchor, into)) => {
+                let items = rows.items_of(&anchor);
+                let hold = Hold {
+                    anchor,
+                    mark: Mark::Kept { into, items },
+                    at: Some(offset),
+                };
+                rows.holds.insert(view, hold);
+            }
+            None => {
+                rows.holds.remove(&view);
+            }
         }
     });
+}
+
+/// Settles the holds of `scope` after a layout that reported places: each view whose reader's
+/// row is placed and moved (with what is above them in it) is scrolled back to them, given as
+/// the view and the offset; then where every held reader is, is taken again from this
+/// layout. Nothing when no place was reported since the last time.
+pub(super) fn settle(scope: &str) -> Vec<(u64, f32)> {
+    SCOPES.with(|scopes| {
+        let mut scopes = scopes.borrow_mut();
+        let Some(rows) = scopes.get_mut(scope) else {
+            return Vec::new();
+        };
+        if !std::mem::take(&mut rows.dirty) {
+            return Vec::new();
+        }
+        let prefix = rows.prefix();
+        let mut moves = Vec::new();
+        let views: Vec<u64> = rows.holds.keys().copied().collect();
+        for view in views {
+            let hold = &rows.holds[&view];
+            let Some(&(_, top, height)) = rows.tops.get(&hold.anchor) else {
+                continue;
+            };
+            let now = |key: &str| rows.item(&hold.anchor, key);
+            let at = (prefix + hold.mark.offset(top, height, now)).max(0.0);
+            let items = rows.items_of(&hold.anchor);
+            let Some(hold) = rows.holds.get_mut(&view) else {
+                continue;
+            };
+            hold.mark = Mark::Kept {
+                into: at - prefix - top,
+                items,
+            };
+            if hold.at.is_none_or(|was| (was - at).abs() > 0.5) {
+                hold.at = Some(at);
+                moves.push((view, at));
+            }
+        }
+        moves
+    })
 }
 
 /// The row of `scope` the reader is at with the view scrolled to `offset`: the last row that
@@ -370,15 +503,5 @@ pub(super) fn moved(scope: &str) {
 /// control for earlier messages) it is the first row, the view starting before it, so rows
 /// that arrive above keep it in place too.
 pub(super) fn at(scope: &str, offset: f32) -> Option<(String, f32)> {
-    SCOPES.with(|scopes| {
-        let scopes = scopes.borrow();
-        let rows = scopes.get(scope)?;
-        let offset = offset - rows.prefix();
-        let tops = rows.tops.iter().map(|(anchor, (_, top, _))| (anchor, *top));
-        tops.clone()
-            .filter(|(_, top)| *top <= offset + 1.0)
-            .max_by(|a, b| a.1.total_cmp(&b.1))
-            .or_else(|| tops.min_by(|a, b| a.1.total_cmp(&b.1)))
-            .map(|(anchor, top)| (anchor.clone(), offset - top))
-    })
+    SCOPES.with(|scopes| scopes.borrow().get(scope)?.at(offset))
 }

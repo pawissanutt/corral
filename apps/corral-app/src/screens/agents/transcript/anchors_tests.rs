@@ -1,5 +1,90 @@
 use super::anchors::{self, Mark};
 
+/// An older page first showed its text and thinking as previews; its full continuation came
+/// after, above the reader, with no new first message and no new row. The hold on the reader
+/// was spent when the page was first placed, so the rows filling in above slid the reader down.
+/// A view scrolled up holds its reader through every later layout, from the place it saw last,
+/// until the reader scrolls on their own (then from there) or follows the end; another view of
+/// the same scope holds its own.
+#[test]
+fn rows_filling_in_above_after_a_page_showed_keep_the_reader_until_they_scroll() {
+    let scope = "B-relayout";
+    let (view, second) = (anchors::token(), anchors::token());
+    let reader = "B-relayout/entry/e5";
+    let (earlier, read) = (format!("{reader}|2"), format!("{reader}|1"));
+    let settled = || -> Vec<f32> {
+        let moves = anchors::settle(scope);
+        moves.into_iter().map(|(_, at)| at).collect()
+    };
+    let row = |anchor: &str, top: f32, height: f32| {
+        anchors::placed(scope, anchor, anchors::token(), top, height)
+    };
+    // The reader's message holds a preview (40) then the item they read (60), 10 into it.
+    let items = |preview: f32| {
+        let token = anchors::token();
+        anchors::item_placed(scope, reader, &earlier, None, token, 0.0, preview);
+        anchors::item_placed(scope, reader, &read, None, token, preview, 60.0);
+        preview + 60.0
+    };
+    anchors::set_origin(scope, anchors::token(), 0.0);
+    row("B-relayout/entry/e3", 0.0, 200.0);
+    row("B-relayout/entry/e4", 200.0, 200.0);
+    let high = items(40.0);
+    row(reader, 400.0, high);
+    row("B-relayout/entry/e6", 400.0 + high, 300.0);
+    assert!(settled().is_empty(), "nothing holds a reader at the end");
+
+    // The reader scrolls up to 50 into their message; a second view of the scope reads e3.
+    anchors::scrolled(scope, view, 450.0);
+    anchors::scrolled(scope, second, 20.0);
+    assert!(settled().is_empty(), "scrolling alone moves no one");
+
+    // The older page shows above as a 60 high preview: the first message changed.
+    anchors::hold(scope, view, reader.to_owned(), 50.0);
+    row("B-relayout/entry/e1", 0.0, 60.0);
+    row("B-relayout/entry/e3", 60.0, 200.0);
+    row("B-relayout/entry/e4", 260.0, 200.0);
+    row(reader, 460.0, high);
+    assert_eq!(settled(), [510.0, 80.0], "each view keeps its reader");
+    // The scroll the hold made comes back: it is not the reader's own.
+    anchors::scrolled(scope, view, 510.0);
+
+    // Later the page fills in: its message grows to 300, and the preview in the reader's own
+    // message to 140, above the item they read. Nothing new shows, the first message stays.
+    row("B-relayout/entry/e1", 0.0, 300.0);
+    row("B-relayout/entry/e3", 300.0, 200.0);
+    row("B-relayout/entry/e4", 500.0, 200.0);
+    let high = items(140.0);
+    row(reader, 700.0, high);
+    assert_eq!(
+        settled(),
+        [700.0 + 140.0 + 10.0, 320.0],
+        "the reader stays 10 into the item they read"
+    );
+    assert!(settled().is_empty(), "settled once per layout");
+    anchors::scrolled(scope, view, 850.0);
+    row("B-relayout/entry/e6", 700.0 + high, 360.0);
+    assert!(settled().is_empty(), "a row growing below moves no one");
+
+    // The reader scrolls on their own to 20 into e4: they are held there, not where they were.
+    anchors::scrolled(scope, view, 520.0);
+    anchors::release(scope, second);
+    row("B-relayout/entry/e1", 0.0, 100.0);
+    row("B-relayout/entry/e3", 100.0, 200.0);
+    row("B-relayout/entry/e4", 300.0, 200.0);
+    row(reader, 500.0, high);
+    assert_eq!(
+        settled(),
+        [320.0],
+        "held where they scrolled to; the other view let go"
+    );
+
+    // Back at the end, nothing holds them.
+    anchors::release(scope, view);
+    row("B-relayout/entry/e1", 0.0, 400.0);
+    assert!(settled().is_empty());
+}
+
 /// An opened group was one item of its message: when calls joined it before and after the one
 /// the reader was in, its height changed, nothing held the reader and the view slid down by
 /// the calls that joined below. Its calls are placed by their ids through the group's rows, the
