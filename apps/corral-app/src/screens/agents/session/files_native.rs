@@ -2,6 +2,7 @@
 use std::{
     io::Write,
     process::{Command, Stdio},
+    sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 
@@ -10,15 +11,16 @@ use tempfile::NamedTempFile;
 
 use crate::client::html::{HtmlFinish, HtmlSink};
 
-use super::{PREFIX, SUFFIX, Slot, escape};
+use super::{ABANDONED, PREFIX, SUFFIX, Slot, Stop, escape};
 
 pub(super) struct NativePreview {
     file: NamedTempFile,
     slot: Slot,
+    stop: Stop,
 }
 
 impl NativePreview {
-    pub(super) fn new() -> Result<Self, String> {
+    pub(super) fn new(stop: Stop) -> Result<Self, String> {
         let slot = Slot::reserve()?;
         let mut file = tempfile::Builder::new()
             .prefix("corral-preview-")
@@ -26,12 +28,20 @@ impl NativePreview {
             .tempfile()
             .map_err(|error| error.to_string())?;
         file.write_all(PREFIX).map_err(|error| error.to_string())?;
-        Ok(Self { file, slot })
+        Ok(Self { file, slot, stop })
+    }
+
+    fn abandoned(&self) -> Result<(), String> {
+        match self.stop.load(Ordering::Relaxed) {
+            true => Err(ABANDONED.into()),
+            false => Ok(()),
+        }
     }
 }
 
 impl HtmlSink for NativePreview {
     fn append(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.abandoned()?;
         self.file
             .write_all(&escape(bytes))
             .map_err(|error| error.to_string())
@@ -47,11 +57,14 @@ impl HtmlSink for NativePreview {
 }
 
 impl NativePreview {
-    fn launch(self) -> Result<(), String> {
-        let Self { mut file, slot } = self;
-        file.write_all(SUFFIX)
-            .and_then(|()| file.flush())
+    fn launch(mut self) -> Result<(), String> {
+        self.file
+            .write_all(SUFFIX)
+            .and_then(|()| self.file.flush())
             .map_err(|error| error.to_string())?;
+        // The file may have been left while the launch waited for this thread.
+        self.abandoned()?;
+        let Self { file, slot, .. } = self;
         let launcher = if cfg!(target_os = "macos") {
             "open"
         } else {
@@ -92,5 +105,24 @@ impl NativePreview {
             })
             .map_err(|error| error.to_string())?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_abandoned_snapshot_is_deleted_without_reaching_the_launcher() {
+        let stop = Stop::default();
+        let mut preview = NativePreview::new(stop.clone()).unwrap();
+        preview.append(b"<p>first chunk</p>").unwrap();
+        let path = preview.file.path().to_owned();
+        assert!(path.exists());
+        // Left after its last chunk arrived, before the blocking launch ran.
+        stop.store(true, Ordering::Relaxed);
+        assert_eq!(preview.append(b"more"), Err(ABANDONED.to_owned()));
+        assert_eq!(preview.launch(), Err(ABANDONED.to_owned()));
+        assert!(!path.exists());
     }
 }
