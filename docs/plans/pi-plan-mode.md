@@ -215,7 +215,8 @@ On an execute answer the host, in order:
    unless the context was just reset to it. It is admitted through `RemoteOwner.start`:
    ordered against pause like every admission, refused rather than parked in a paused
    session's held queue, and holding that order until its turn is open, so a pause that
-   follows cancels the turn.
+   follows cancels the turn. It starts a run or is refused: it is never queued into another
+   run, which it could outlive to be drained later after the owner had decided otherwise.
 5. The review ends when that kickoff message is in the transcript, and only then does the
    Build record note `Approved plan: <title> (revision N, <context option>)`. From the answer
    until then the approval is pending: a second answer reports `started`, and entering or

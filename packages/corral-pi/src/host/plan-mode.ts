@@ -155,9 +155,10 @@ export class PlanMode {
   private starting = false;
   /** The approval's own compaction or reset is running. */
   private preparing = false;
-  /** The kickoff on its way into the transcript: its card, its text, and what the Build record will say of it. */
-  private kickoff: { readonly card: string; readonly text: string; readonly journal: string } | undefined;
-  private seen: PlanPhase = "off";
+  /** The kickoff on its way into the transcript: its card, its text, its plan, and what the Build record will say of it. */
+  private kickoff: { readonly card: string; readonly text: string; readonly path: string; readonly journal: string } | undefined;
+  /** The phase the views were last told; unknown until the first change, as after a restart. */
+  private seen: PlanPhase | undefined;
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly host: PlanHost) { this.path = join(host.dir, PLAN_FILE); }
@@ -199,13 +200,13 @@ export class PlanMode {
 
   /** The transcript grew: an approval's kickoff may have arrived in it, which ends the review and is the approval. */
   refresh(): void {
-    if (this.phase === this.seen) return;
+    // The kickoff is settled by what the transcript holds, whatever the views were last told.
     const kickoff = this.kickoff;
-    if (kickoff && this.review === undefined) {
+    if (kickoff && this.review !== kickoff.card) {
       this.kickoff = undefined;
-      if (this.approved) this.host.approved?.(kickoff.journal);
+      if (this.approved?.path === kickoff.path) this.host.approved?.(kickoff.journal);
     }
-    this.announce();
+    if (this.phase !== this.seen) this.announce();
   }
 
   /** The turn ended. A kickoff that was taken but never reached the transcript no longer holds the review. */
@@ -446,7 +447,7 @@ export class PlanMode {
       const blocked = this.host.blocked();
       if (blocked) throw new Error(blocked);
       const text = `${kickoffLine(card)}\n${this.host.prompts.approved({ path, title, revision, plan, context, note, todo: this.host.todo })}`;
-      this.kickoff = { card, text, journal: `Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})` };
+      this.kickoff = { card, text, path, journal: `Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})` };
       if (!await this.host.submit(text, "auto", card)) throw new Error("the session did not take it");
     } catch (error) {
       this.kickoff = undefined;

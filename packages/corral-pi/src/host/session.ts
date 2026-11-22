@@ -466,13 +466,15 @@ export class HostSession {
       stopTurn: async () => { if (this.open) await this.cancelRun(undefined, "owner"); },
       compact: instructions => this.planCompact(instructions),
       reset: summary => this.planResetContext(summary),
-      // The kickoff is ordered against pause and never parked in a paused session's held queue, so "queued"
-      // only ever means queued into the running turn.
       submit: async (text, origin, kickoff) => {
-        const input: SessionInput = { text, origin, busyPolicy: "steer" };
-        const result = await (origin === "auto" ? options.startInput?.(input, kickoff) ?? this.submitOpened(input, kickoff)
-          : this.submitLocal(input));
-        return result.disposition === "started" || result.disposition === "queued";
+        if (origin === "owner") {
+          const result = await this.submitLocal({ text, origin, busyPolicy: "steer" });
+          return result.disposition === "started" || result.disposition === "queued";
+        }
+        // The kickoff starts a run or is refused. Ordered against pause, it is never parked in a paused session's
+        // held queue; and never queued into another run, which it could outlive to be drained by a later one.
+        const input: SessionInput = { text, origin, busyPolicy: "prompt" };
+        return (await (options.startInput?.(input, kickoff) ?? this.submitOpened(input, kickoff))).disposition === "started";
       },
       model: () => this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : undefined,
       changed: () => { this.liveEvents.stateChanged(); this.panels?.refresh(); },

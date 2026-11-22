@@ -22,7 +22,7 @@ async function planning(session: { blocked?: string; kickoff?: "taken" | "refuse
   /** A user message in the transcript; the host alone tags the one it admitted as a kickoff. */
   const user = (text: string, kickoff?: string) => {
     add({ type: "message", message: { role: "user", content: text, ...(kickoff === undefined ? {} : { [PLAN_KICKOFF]: kickoff }) } });
-    plan.refresh();
+    running.refresh();
   };
   const host: PlanHost = {
     dir, cwd: dir, prompts: { contract: () => "CONTRACT", reset: () => "", approved: () => "EXECUTE" }, askUser: false, todo: false,
@@ -40,9 +40,11 @@ async function planning(session: { blocked?: string; kickoff?: "taken" | "refuse
     model: () => undefined, changed: () => {}, note: text => { notes.push(text); }, approved: summary => { journal.push(summary); },
   };
   const plan = new PlanMode(host);
+  // The instance the host is running: a restart replaces it over the same transcript.
+  let running = plan;
   await plan.enter();
   writeFileSync(plan.path, "# Same plan\n");
-  return { plan, notes, journal, sent, add, user, restarted: () => new PlanMode(host),
+  return { plan, notes, journal, sent, add, user, restarted: () => running = new PlanMode(host),
     rewind: (length: number) => { entries.length = length; leaf++; } };
 }
 
@@ -120,14 +122,27 @@ test("an approval is durable only with its kickoff, and holds the mode until the
   // the same words from anyone else approve nothing,
   user(kickoff.text);
   expect(plan.review).toBe(review);
-  // and a host that stops here has approved nothing: the same review is open after a restart, with no Build note.
-  expect(restarted().review).toBe(review);
+  // and nothing is approved yet, for this host or for one that restarts here.
   expect(journal).toEqual([]);
   // When the message the host admitted as the kickoff is in the transcript, that is the approval.
   user(kickoff.text, kickoff.kickoff);
   expect(plan.phase).toBe("off");
   expect(plan.approved?.path).toBe(copy);
-  expect(restarted().approved?.path).toBe(copy);
+  expect(journal).toEqual(["Approved plan: Same plan (revision 1, context kept)"]);
+});
+
+test("a host that restarts during a review still has it, and records its approval", async () => {
+  const { plan, journal, restarted } = await planning();
+  plan.submit();
+  const review = plan.review, copy = plan.record.path;
+  // Given a new host over the same transcript, which has told its views nothing yet:
+  const again = restarted();
+  expect(again.review).toBe(review);
+  // When the owner executes there:
+  expect(again.choose("execute")).toBe("started");
+  await settle();
+  // Then the plan is approved and the Build record says so.
+  expect(again.approved?.path).toBe(copy);
   expect(journal).toEqual(["Approved plan: Same plan (revision 1, context kept)"]);
 });
 
