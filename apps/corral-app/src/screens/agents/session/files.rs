@@ -79,7 +79,9 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     });
     let browsing = computed(move || shown.with(|files| files.as_ref().is_some_and(|f| f.browsing)));
     let content = dynamic(move || {
-        let (beside, browsing, column) = (beside.get(), browsing.get(), column.get());
+        let beside = beside.get();
+        // On a split view selection updates the editor, not the tree's scroll container.
+        let browsing = !beside && browsing.get();
         let back = back.clone();
         untracked(|| {
             let explorer = || tree::explorer(app, shown, back.clone());
@@ -98,7 +100,7 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                     .flex_row()
                     .child(
                         view()
-                            .w(column)
+                            .w(move || column.get())
                             .flex_none()
                             .min_h(px(0.0))
                             .flex_col()

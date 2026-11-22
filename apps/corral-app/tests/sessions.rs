@@ -110,13 +110,25 @@ fn explorer_keeps_one_tree_to_the_left_of_an_open_file() {
     wait_in_tree(&mut app, "file-entry-reports");
     app.press("id:file-entry-reports").unwrap();
     wait_in_tree(&mut app, "file-entry-reports/index.html");
+    let original_tree = app
+        .screen()
+        .layout_nodes()
+        .into_iter()
+        .find(|n| n.test_id.as_deref() == Some("files-tree") && !n.hidden)
+        .unwrap()
+        .id;
     app.press("id:file-entry-reports/index.html").unwrap();
     wait_in_tree(&mut app, "session-file-source");
     let nodes = app.screen().layout_nodes();
     let mut trees = nodes
         .iter()
         .filter(|n| !n.hidden && n.test_id.as_deref() == Some("files-tree"));
-    let tree = trees.next().unwrap().bounds;
+    let mounted = trees.next().unwrap();
+    assert_eq!(
+        mounted.id, original_tree,
+        "opening a file remounted the explorer scroll container"
+    );
+    let tree = mounted.bounds;
     assert!(trees.next().is_none());
     let preview = nodes
         .iter()
