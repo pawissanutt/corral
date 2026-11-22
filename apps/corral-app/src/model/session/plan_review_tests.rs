@@ -1,10 +1,12 @@
 use corral_protocol::detail::{CardKind, DetailBody, PlanModeDocPage};
+use corral_protocol::session_host::SessionCardAnswered;
 use corral_protocol::session_state::SessionState;
 
 use super::plan_review::target;
 use super::questions_tests::{SESSION, answers, card, feed_with, option, question};
+use super::transcript::LiveSession;
 use super::{Action, Body, DockAction, State, Tab};
-use crate::model::daemon::{ClientError, DetailCache, Feed, detail_key};
+use crate::model::daemon::{ClientError, DetailCache, Feed, Operation, detail_key};
 use crate::model::effect::Effect;
 use crate::model::health::daemon_env;
 use crate::model::nav::Form;
@@ -236,6 +238,78 @@ fn execute_goes_out_only_from_the_page_showing_the_plan_document() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].card, CARD);
     assert_eq!(sent[0].answers[0].options, ["execute"]);
+}
+
+/// The host says `started` before it carries an execute out, and one that fails afterwards
+/// leaves the same card waiting: the note typed for the executor must still be in the field
+/// then, and be forgotten only once the host no longer briefs the card.
+#[test]
+fn a_started_execute_keeps_the_note_until_the_review_is_gone() {
+    const CARD: &str = "plan-5-2b7d9e40";
+    const NOTE: &str = "mind the migration";
+    let mut whole = card(
+        CARD,
+        CardKind::PlanReview,
+        vec![question(vec![option("execute"), option("revise")], true)],
+    );
+    whole.body = Some("the whole plan".into());
+    let mut feed = feed_with(whole, SessionState::default());
+    let session = Id::from(SESSION);
+    let mut state = State::default();
+    state.act(
+        Action::Dock(DockAction::Bring {
+            session: session.clone(),
+            card: CARD.into(),
+        }),
+        &feed,
+    );
+    state.act(
+        Action::Dock(DockAction::Text {
+            session: session.clone(),
+            card: CARD.into(),
+            question: 0,
+            text: NOTE.into(),
+        }),
+        &feed,
+    );
+    let effects = state.act(
+        Action::Dock(DockAction::Choose {
+            session: session.clone(),
+            card: CARD.into(),
+            option: "execute".into(),
+        }),
+        &feed,
+    );
+    let Some(Effect::SessionCardAnswer { key, answer }) = effects.first() else {
+        panic!("Execute sent no answer: {effects:?}");
+    };
+    assert_eq!(answer.answers[0].text.as_deref(), Some(NOTE));
+    let started = SessionCardAnswered {
+        status: "started".into(),
+    };
+    feed.operations.insert(
+        key.clone(),
+        Operation {
+            method: "session.card.answer".into(),
+            loading: false,
+            value: serde_json::to_value(started).ok(),
+            error: None,
+            refusal: None,
+        },
+    );
+    let note = |state: &State| {
+        let draft = state.ui(SESSION).dock.drafts.get(CARD);
+        draft.map(|draft| draft.text(0).to_owned())
+    };
+
+    state.settle(&feed);
+    assert_eq!(note(&state).as_deref(), Some(NOTE));
+
+    let mut closed = LiveSession::default();
+    closed.replace_state(Some(Box::new(SessionState::default())));
+    feed.live.insert(session, closed);
+    state.settle(&feed);
+    assert_eq!(note(&state), None);
 }
 
 /// The owner approves what the view shows: a new submission's review must never draw the

@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use corral_protocol::detail::DetailGet;
+use corral_protocol::detail::{CardKind, DetailGet};
 use corral_protocol::session_host::{SessionActionDone, SessionCardAnswered};
 use corral_protocol::session_state::CardBrief;
 
@@ -18,7 +18,7 @@ use crate::model::session::queue;
 use crate::model::session::read_state::ReadState;
 use crate::model::session::{Action, Cx, Focus, Host, State, Ui};
 
-use super::{CardsRead, DockAction, Pending, card, fold, refusal, target};
+use super::{CardsRead, DockAction, Pending, card, fold, kind, refusal, target};
 
 /// Reads the cards behind the briefs `ids`.
 pub(super) fn read(state: &mut State, session: Id, ids: Vec<String>, feed: &Feed) -> Vec<Effect> {
@@ -56,7 +56,10 @@ pub(in crate::model::session) fn settle(ui: &mut Ui, scope: &str, feed: &Feed) {
             continue;
         };
         match pending {
-            Pending::Card { card } => answered(ui, card, operation, feed.now),
+            Pending::Card { card } => {
+                let kind = kind(feed, scope, &card);
+                answered(ui, card, kind, operation, feed.now);
+            }
             Pending::Action { what } => match refusal(operation) {
                 Some(why) => ui
                     .notices
@@ -119,7 +122,7 @@ pub(in crate::model::session) fn settle(ui: &mut Ui, scope: &str, feed: &Feed) {
     }
 }
 
-fn answered(ui: &mut Ui, card: String, operation: &Operation, now: u64) {
+fn answered(ui: &mut Ui, card: String, kind: Option<CardKind>, operation: &Operation, now: u64) {
     if let Some(why) = refusal(operation) {
         ui.notices
             .push(Hue::Fail, format!("Answer not taken: {why}"), now);
@@ -145,7 +148,11 @@ fn answered(ui: &mut Ui, card: String, operation: &Operation, now: u64) {
         }
         _ => {}
     }
-    ui.dock.drafts.remove(&card);
+    // A plan review's answer is taken before it is carried out: an execute that fails afterwards
+    // leaves the same card waiting, so its note stays until the host no longer briefs the card.
+    if kind != Some(CardKind::PlanReview) {
+        ui.dock.drafts.remove(&card);
+    }
     if ui.dock.open.as_deref() == Some(card.as_str()) {
         ui.dock.open = None;
         ui.focus = Focus::Composer;
