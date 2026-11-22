@@ -3,7 +3,10 @@
 //! row the reader is at from its scroll offset, and a reading position waiting to be restored
 //! scrolls there once its row has been laid out (at any width). The items of a recorded
 //! message report their place in it too, by their stable keys, so the reader stays on the item
-//! they read while rows arrive above and below it in the same update.
+//! they read while rows arrive above and below it in the same update. An opened group's calls
+//! report theirs by their call ids, through the parts they are drawn in (the group's rows in the
+//! group, the message's column of items in it), so the reader stays on the call they read while
+//! calls join the group before and after it.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -16,9 +19,9 @@ pub(super) enum Mark {
     /// This far below the row's top.
     Top(f32),
     /// This far below the top of a row that was `height` high, its items as they were placed
-    /// (key, top, height; all within the row's column of items, sorted by top). Rows arrive
-    /// above and below the reader, the row's own earlier items read from the page before and
-    /// later replies joining it included: the reader moves with the item they read.
+    /// (key, top, height; all in the row, sorted by top; an opened group's calls with it).
+    /// Rows arrive above and below the reader, the row's own earlier items read from the page
+    /// before and later replies joining it included: the reader moves with the item they read.
     Held {
         into: f32,
         height: f32,
@@ -44,9 +47,11 @@ impl Mark {
             } => (*into, *height, items),
         };
         // Items still there as they were move as the item read does: rows arrive only at the
-        // row's front and end. The last of them that started at or above the reader holds
-        // them, else the first. Item tops leave out the row's head, so one starting just
-        // under the reader can count as above; it moves as the reader's does all the same.
+        // row's front and end, calls only at a group's. The last of them that started at or
+        // above the reader holds them (a call of an opened group rather than the group), else
+        // the first. A row whose column of items does not report its place counts its items
+        // from the column's top, so one starting just under the reader can count as above; it
+        // moves as the reader's does all the same.
         let same = items.iter().filter_map(|(key, was_top, was_high)| {
             let (now_top, now_high) = now(key)?;
             ((now_high - was_high).abs() < 0.5).then_some((*was_top, now_top))
@@ -64,12 +69,26 @@ impl Mark {
     }
 }
 
-/// Where an item of a row is placed in it.
+/// Where an item (or a part items are drawn in) of a row is placed: in the part or item
+/// `within`, by its key, else in the row.
 struct Item {
     row: String,
+    within: Option<String>,
     token: u64,
     top: f32,
     height: f32,
+}
+
+impl Item {
+    fn new(row: &str, within: Option<&str>, token: u64, top: f32, height: f32) -> Self {
+        Self {
+            row: row.to_owned(),
+            within: within.map(str::to_owned),
+            token,
+            top,
+            height,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -77,11 +96,31 @@ struct Rows {
     /// Each row's top and height in the transcript, with the token of the render that placed
     /// it.
     tops: BTreeMap<String, (u64, f32, f32)>,
-    /// Each keyed item's place in its row's column of items.
+    /// Each keyed item's place, the reader held by them.
     items: BTreeMap<String, Item>,
+    /// The parts items are drawn in (a message's column of items, an opened group and its
+    /// rows), by key: they only place the items within them.
+    parts: BTreeMap<String, Item>,
     /// A reading position to restore once its row is placed, and whether it holds the reader
     /// while rows arrive above (rather than reopening where they left).
     pending: Option<(String, Mark, ElementRef, bool)>,
+}
+
+impl Rows {
+    /// Where item `key` of row `row` is in the row (top and height), through the parts (and
+    /// items) it is drawn in; none while one of them is not placed.
+    fn item(&self, row: &str, key: &str) -> Option<(f32, f32)> {
+        let item = self.items.get(key).filter(|item| item.row == row)?;
+        let mut top = item.top;
+        let mut within = item.within.as_deref();
+        while let Some(key) = within {
+            let part = self.parts.get(key).or_else(|| self.items.get(key));
+            let part = part.filter(|part| part.row == row)?;
+            top += part.top;
+            within = part.within.as_deref();
+        }
+        Some((top, item.height))
+    }
 }
 
 thread_local! {
@@ -120,48 +159,77 @@ pub(super) fn placed(scope: &str, anchor: &str, token: u64, top: f32, height: f3
         // row's items report theirs after it.
         let scope = scope.to_owned();
         after_answer(move || {
-            let at = SCOPES.with(|scopes| {
-                let scopes = scopes.borrow();
-                let rows = scopes.get(&scope)?;
-                let (_, top, height) = rows.tops.get(&anchor)?;
-                Some(mark.offset(*top, *height, |key| {
-                    rows.items
-                        .get(key)
-                        .filter(|item| item.row == anchor)
-                        .map(|item| (item.top, item.height))
-                }))
-            });
-            if let Some(at) = at {
+            if let Some(at) = offset(&scope, &anchor, &mark) {
                 scroller.scroll_to_offset(px(at.max(0.0)), false);
             }
         });
     }
 }
 
-/// Item `key` of row `row` of `scope` starts `top` into the row's column of items and is
-/// `height` high.
-pub(super) fn item_placed(scope: &str, row: &str, key: &str, token: u64, top: f32, height: f32) {
+/// The scroll offset of `mark` in row `anchor` of `scope`, as the row and its items are placed
+/// now; none while the row is not.
+pub(super) fn offset(scope: &str, anchor: &str, mark: &Mark) -> Option<f32> {
+    SCOPES.with(|scopes| {
+        let scopes = scopes.borrow();
+        let rows = scopes.get(scope)?;
+        let (_, top, height) = rows.tops.get(anchor)?;
+        Some(mark.offset(*top, *height, |key| rows.item(anchor, key)))
+    })
+}
+
+/// Item `key` of row `row` of `scope` starts `top` into the part `within` (else into the row)
+/// and is `height` high.
+pub(super) fn item_placed(
+    scope: &str,
+    row: &str,
+    key: &str,
+    within: Option<&str>,
+    token: u64,
+    top: f32,
+    height: f32,
+) {
+    let item = Item::new(row, within, token, top, height);
+    place(scope, key, item, false);
+}
+
+/// Part `key` of row `row` of `scope`, that items are drawn in, starts `top` into the part
+/// `within` (else into the row) and is `height` high.
+pub(super) fn part_placed(
+    scope: &str,
+    row: &str,
+    key: &str,
+    within: Option<&str>,
+    token: u64,
+    top: f32,
+    height: f32,
+) {
+    let part = Item::new(row, within, token, top, height);
+    place(scope, key, part, true);
+}
+
+fn place(scope: &str, key: &str, item: Item, part: bool) {
     SCOPES.with(|scopes| {
         let mut scopes = scopes.borrow_mut();
         let rows = scopes.entry(scope.to_owned()).or_default();
-        let item = Item {
-            row: row.to_owned(),
-            token,
-            top,
-            height,
+        let placed = if part {
+            &mut rows.parts
+        } else {
+            &mut rows.items
         };
-        rows.items.insert(key.to_owned(), item);
+        placed.insert(key.to_owned(), item);
     });
 }
 
-/// The render `token` of item `key` is gone.
+/// The render `token` of item or part `key` is gone.
 pub(super) fn item_forget(scope: &str, key: &str, token: u64) {
     SCOPES.with(|scopes| {
         let mut scopes = scopes.borrow_mut();
-        if let Some(rows) = scopes.get_mut(scope)
-            && rows.items.get(key).is_some_and(|item| item.token == token)
-        {
-            rows.items.remove(key);
+        if let Some(rows) = scopes.get_mut(scope) {
+            for placed in [&mut rows.items, &mut rows.parts] {
+                if placed.get(key).is_some_and(|item| item.token == token) {
+                    placed.remove(key);
+                }
+            }
         }
     });
 }
@@ -204,16 +272,30 @@ pub(super) fn restore(scope: &str, anchor: String, offset: f32, scroller: Elemen
 /// was last placed no longer holds. Kept on the item read, by its key, which replies joining
 /// the row below it in the same update leave where it was too.
 pub(super) fn hold(scope: &str, anchor: String, offset: f32, scroller: ElementRef) {
+    let mark = mark(scope, &anchor, offset);
     SCOPES.with(|scopes| {
         let mut scopes = scopes.borrow_mut();
         let rows = scopes.entry(scope.to_owned()).or_default();
-        let mark = match rows.tops.remove(&anchor) {
+        rows.pending = Some((anchor, mark, scroller, true));
+    });
+}
+
+/// The reader `offset` into row `anchor` of `scope`, by the row and its items as last placed;
+/// the row's place is forgotten, as rows were added above it.
+pub(super) fn mark(scope: &str, anchor: &str, offset: f32) -> Mark {
+    SCOPES.with(|scopes| {
+        let mut scopes = scopes.borrow_mut();
+        let rows = scopes.entry(scope.to_owned()).or_default();
+        match rows.tops.remove(anchor) {
             Some((_, _, height)) => {
                 let mut items: Vec<_> = rows
                     .items
                     .iter()
                     .filter(|(_, item)| item.row == anchor)
-                    .map(|(key, item)| (key.clone(), item.top, item.height))
+                    .filter_map(|(key, _)| {
+                        let (top, height) = rows.item(anchor, key)?;
+                        Some((key.clone(), top, height))
+                    })
                     .collect();
                 items.sort_by(|a, b| a.1.total_cmp(&b.1));
                 Mark::Held {
@@ -223,9 +305,8 @@ pub(super) fn hold(scope: &str, anchor: String, offset: f32, scroller: ElementRe
                 }
             }
             None => Mark::Top(offset),
-        };
-        rows.pending = Some((anchor, mark, scroller, true));
-    });
+        }
+    })
 }
 
 /// No reading position waits to be restored in `scope`.

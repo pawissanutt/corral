@@ -14,6 +14,8 @@
 //! `echo-<command id>`.
 
 mod anchors;
+#[cfg(test)]
+mod anchors_tests;
 pub(crate) mod attachments;
 mod bubbles;
 mod build_cards;
@@ -186,11 +188,19 @@ fn anchored(transcript: &Transcript, anchor: &str, block: AnyElement) -> AnyElem
         .into_element()
 }
 
-/// An item of message `anchor`, placed in it by its stable key so the reading position holds
-/// on to the item it is in while rows arrive above and below.
-fn placed(scope: &str, anchor: &str, key: &str, row: AnyElement) -> AnyElement {
+/// An item of message `anchor`, placed in the part `within` (else in the message) by its
+/// stable key so the reading position holds on to the item it is in while rows arrive above
+/// and below.
+fn placed(
+    scope: &str,
+    anchor: &str,
+    key: &str,
+    within: Option<&str>,
+    row: AnyElement,
+) -> AnyElement {
     let token = anchors::token();
     let (scope, anchor, key) = (scope.to_owned(), anchor.to_owned(), key.to_owned());
+    let within = within.map(str::to_owned);
     {
         let (scope, key) = (scope.clone(), key.clone());
         cleanup(move || anchors::item_forget(&scope, &key, token));
@@ -199,10 +209,35 @@ fn placed(scope: &str, anchor: &str, key: &str, row: AnyElement) -> AnyElement {
         .min_w(px(0.0))
         .on_layout(move |frame: &Bounds<Points>| {
             let (top, height) = (frame.origin.y.0, frame.size.height.0);
-            anchors::item_placed(&scope, &anchor, &key, token, top, height);
+            anchors::item_placed(&scope, &anchor, &key, within.as_deref(), token, top, height);
         })
         .child(row)
         .into_element()
+}
+
+/// `part` of message `anchor` that items are drawn in (its column of items, an opened group
+/// and its rows), placed by `key` in the part `within` (else in the message), so the items in
+/// it are placed in the message.
+fn part(scope: &str, anchor: &str, key: &str, within: Option<&str>, part: View) -> View {
+    let token = anchors::token();
+    let (scope, anchor, key) = (scope.to_owned(), anchor.to_owned(), key.to_owned());
+    let within = within.map(str::to_owned);
+    {
+        let (scope, key) = (scope.clone(), key.clone());
+        cleanup(move || anchors::item_forget(&scope, &key, token));
+    }
+    part.on_layout(move |frame: &Bounds<Points>| {
+        let (top, height) = (frame.origin.y.0, frame.size.height.0);
+        anchors::part_placed(&scope, &anchor, &key, within.as_deref(), token, top, height);
+    })
+}
+
+/// Where a keyed item of a mounted transcript is drawn: its scope, its message and its key.
+#[derive(Clone, Copy)]
+struct Spot<'a> {
+    scope: &'a str,
+    anchor: &'a str,
+    key: &'a str,
 }
 
 /// The transcript: a stale notice when its source is unreachable, the control for earlier
@@ -238,7 +273,7 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
                 .after
                 .iter()
                 .enumerate()
-                .map(|(n, entry)| item(app, entry, next + n)),
+                .map(|(n, entry)| item(app, entry, next + n, None)),
         )
     });
     let stale = transcript
@@ -304,15 +339,15 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
     }
 }
 
-/// One item of a message, numbered `n` across the page.
-fn item(app: AppState, entry: &MessageItem, n: usize) -> AnyElement {
+/// One item of a message, numbered `n` across the page, drawn at `spot` when it is keyed.
+fn item(app: AppState, entry: &MessageItem, n: usize, spot: Option<Spot<'_>>) -> AnyElement {
     let id = n.to_string();
     let body = match entry {
         MessageItem::Paragraph(words) => paragraph(app, words),
         MessageItem::Prose(words) => prose::prose(app, words, &id),
         MessageItem::Thinking(thought) => prose::thinking(app, thought, &id),
         MessageItem::Tool(call) => tool::tool(app, call, &id),
-        MessageItem::Group(folded) => group::group(app, folded, &id),
+        MessageItem::Group(folded) => group::group(app, folded, &id, spot),
         MessageItem::Cell(cell) => code_cell::cell(app, cell, &id),
         MessageItem::Build(card) => build_cards::card(app, card, &id),
         MessageItem::Answered(answer) => bubbles::answered(app, answer, &id),
@@ -336,14 +371,27 @@ fn item(app: AppState, entry: &MessageItem, n: usize) -> AnyElement {
 fn message(app: AppState, scope: &str, message: &Message, first: usize) -> AnyElement {
     let form = app.form;
     let keyed = message.keys.len() == message.items.len();
+    // An agent's items are drawn in a column beside its avatar, under its head.
+    let column =
+        (keyed && message.kind == MessageKind::Agent).then(|| format!("{}#items", message.anchor));
+    let column_of = |items: View| match &column {
+        Some(key) => part(scope, &message.anchor, key, None, items),
+        None => items,
+    };
     let mut items = message
         .items
         .iter()
         .enumerate()
         .map(|(n, entry)| {
-            let row = item(app, entry, first + n);
-            match message.keys.get(n).filter(|_| keyed) {
-                Some(key) => placed(scope, &message.anchor, key, row),
+            let key = message.keys.get(n).filter(|_| keyed);
+            let spot = key.map(|key| Spot {
+                scope,
+                anchor: &message.anchor,
+                key,
+            });
+            let row = item(app, entry, first + n, spot);
+            match key {
+                Some(key) => placed(scope, &message.anchor, key, column.as_deref(), row),
                 None => row,
             }
         })
@@ -380,7 +428,7 @@ fn message(app: AppState, scope: &str, message: &Message, first: usize) -> AnyEl
                     .child(term::space(1.0))
                     .child(head),
             )
-            .child(view().pl(term::cells(2.0)).children(items))
+            .child(column_of(view().pl(term::cells(2.0))).children(items))
             .into_element();
     }
     let sides = if form == Form::Phone { 16.0 } else { 24.0 };
@@ -409,7 +457,7 @@ fn message(app: AppState, scope: &str, message: &Message, first: usize) -> AnyEl
                 ),
         )
         .child(
-            view()
+            column_of(view())
                 .flex_1()
                 .min_w(px(0.0))
                 .child(view().mb(px(3.0)).child(head))
