@@ -40,6 +40,46 @@ impl Extension {
     }
 }
 
+/// An Ask slot understood by a built-in feature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot {
+    Facts,
+}
+
+impl Slot {
+    fn command(self, extension: &Extension) -> Option<&str> {
+        match self {
+            Self::Facts => extension.facts.as_deref(),
+        }
+    }
+}
+
+impl Config {
+    /// Return the name and command line of a project's sole enabled provider.
+    /// Ambiguous configurations fail closed; `config check` names the conflict.
+    pub fn extension_for_slot(&self, project: &str, slot: Slot) -> Option<(&str, &str)> {
+        if !self.projects.contains_key(project) {
+            return None;
+        }
+        let mut providers = self.slot_providers(project, slot);
+        let provider = providers.next()?;
+        providers.next().is_none().then_some(provider)
+    }
+
+    fn slot_providers<'a>(
+        &'a self,
+        project: &str,
+        slot: Slot,
+    ) -> impl Iterator<Item = (&'a str, &'a str)> {
+        self.extensions.iter().filter_map(move |(name, extension)| {
+            (extension.enabled && extension.includes_project(project))
+                .then(|| slot.command(extension))
+                .flatten()
+                .map(|line| (name.as_str(), line))
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExtensionTool {
@@ -108,13 +148,7 @@ pub(super) fn validate(config: &Config, problems: &mut Vec<ConfigProblem>) {
             }
         }
         let providers: Vec<_> = config
-            .extensions
-            .iter()
-            .filter(|(_, extension)| {
-                extension.enabled
-                    && extension.facts.is_some()
-                    && extension.includes_project(project)
-            })
+            .slot_providers(project, Slot::Facts)
             .map(|(name, _)| format!("{name:?}"))
             .collect();
         if providers.len() > 1 {

@@ -6,7 +6,10 @@ use anyhow::{Context, Result, ensure};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
-use crate::{Activity, ProjectDelta, ProjectFacts, Revision, TreeFacts, delta, git, structure};
+use crate::{
+    Activity, ProjectDelta, ProjectFacts, Revision, TreeFacts, delta, git, provider::Reply,
+    structure,
+};
 
 /// Rebuildable system map cache in `<workspace>/.corral-next/cache/system-map/`.
 #[derive(Debug, Clone)]
@@ -59,6 +62,9 @@ impl FactsCache {
                 skipped_non_utf8_paths: 0,
                 dependencies: vec![],
                 module_references: vec![],
+                changes: None,
+                dependents: None,
+                tests: None,
             });
         }
         self.get("deltas", &format!("{base_tree}-{head_tree}"), || {
@@ -72,6 +78,26 @@ impl FactsCache {
                 skipped_non_utf8_paths,
             ))
         })
+    }
+
+    /// Cache a validated extension reply, separately from built-in facts. The
+    /// namespace identifies the provider configuration and repository; the reply
+    /// is reused for commits that share the same tree(s).
+    pub fn provider_reply(
+        &self,
+        namespace: &[u8],
+        revision: &Revision,
+        base: Option<&Revision>,
+        load: impl FnOnce() -> Result<Reply>,
+    ) -> Result<Reply> {
+        let tree = object_id(revision.tree())?;
+        let trees = if let Some(base) = base {
+            format!("{}-{tree}", object_id(base.tree())?)
+        } else {
+            tree
+        };
+        let namespace = Sha256::digest(namespace);
+        self.get("provider-v1", &format!("{namespace:x}-{trees}"), load)
     }
 
     fn get<T: Serialize + DeserializeOwned>(

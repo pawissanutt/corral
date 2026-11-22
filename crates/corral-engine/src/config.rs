@@ -17,7 +17,7 @@ use crate::model::Task;
 
 mod extension;
 mod profile;
-pub use extension::{Extension, ExtensionTool};
+pub use extension::{Extension, ExtensionTool, Slot};
 pub use profile::{ModelSelector, Profile};
 
 mod wrap;

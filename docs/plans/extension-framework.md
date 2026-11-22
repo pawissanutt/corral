@@ -96,8 +96,10 @@ Called by the daemon's background worker. Deadline: 10 minutes. Output ceiling: 
 {"v": 1, "query": "delta", "repo": "/abs/repo", "base": "<commit>", "head": "<commit>", "want": ["changes", "dependents", "tests"]}
 ```
 
-The answer is JSON Lines, one row per line, ending with one `done` row. A missing `done` row means the
-output was cut short and the whole answer is discarded.
+The answer is JSON Lines, one object per line with a `type` field naming the row (for example,
+`{"type":"test","path":"tests/example.rs","name":"example"}`). A single `done` row must come last.
+Missing `done`, malformed rows, or a command failure discard the whole answer; built-in facts remain
+available with the provider error.
 
 | Row | Fields |
 |---|---|
@@ -105,14 +107,18 @@ output was cut short and the whole answer is discarded.
 | `definition` | `path`, `name` (full name within the file), `line`, `end_line`, `kind` |
 | `reference` | `from`, `to` (file paths), `kind` (`import`, `use`, `call`), `count` |
 | `change` | `change` (`added`, `removed`, `changed`), `fact` (`definition`, `reference`), `path`, `name`, `line`; for a reference also `to_path`, `to_name` |
-| `dependent` | `path`, `name`, `line`, `of` (the changed definition it depends on) |
+| `dependent` | `path`, `name`, `line`, `of` (full name of the changed definition it depends on) |
 | `test` | `path`, `name` |
 | `done` | `provided` (which `want` entries were answered), `skipped` (reason → count), `omitted` (limit → count) |
 
-Rows speak only of files and definitions; Corral derives packages and modules and does all aggregation. A
-`want` entry missing from `done.provided` shows in the app as "not provided", not as zero. Corral draws the
-map from its own facts first and adds the extension's rows when they arrive, cached per tree hash under
-`.corral-next/cache/`.
+Rows speak only of files and definitions; Corral derives packages and modules and does all aggregation.
+Line numbers are one-based, and a reference count is positive. Paths must exist in the snapshot commit
+(or, for a delta, in base for removed changes and in head otherwise). A row with any unknown path is
+dropped and counted once. A `want` entry missing from `done.provided` is "not provided", not zero;
+only rows in provided categories can contribute facts. Providing `references` replaces the snapshot's
+syntactic references and their rollups, even when the extension found none. Declared dependencies
+still come from built-in facts. Corral draws from its own facts first and adds the extension's rows
+when they arrive, cached per tree hash and provider configuration under `.corral-next/cache/`.
 
 ## 5. React: `on` and `run`
 

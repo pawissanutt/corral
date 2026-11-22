@@ -58,6 +58,7 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
                 language: lang.to_owned(),
                 lines,
                 read_status,
+                definitions: vec![],
             }
         })
         .collect();
@@ -69,20 +70,7 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
     let modules: BTreeSet<_> = files.iter().map(|file| file.module.clone()).collect();
     let scanner = Scanner::new(&files, &containers, &dependencies, &entries);
     let mut refs = BTreeMap::new();
-    let mut module_refs = BTreeMap::new();
     let mut spawn_counts = BTreeMap::new();
-    let mut package_counts = BTreeMap::<_, (bool, u64)>::new();
-    for dep in &dependencies {
-        if let Some(target) = &dep.target
-            && dep.section != "workspace.dependencies"
-            && dep.container != *target
-        {
-            package_counts
-                .entry((&dep.container, target))
-                .or_default()
-                .0 = true;
-        }
-    }
     for (path, text) in source_text {
         let from = by_path[path.as_str()];
         let scan = scanner.scan(from, &text);
@@ -94,39 +82,22 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
             };
             coverage.resolved_references += 1;
             *refs.entry((&from.path, &to.path, kind)).or_default() += 1;
-            *module_refs
-                .entry((&from.module, &to.module, kind))
-                .or_default() += 1;
-            if from.container != to.container {
-                package_counts
-                    .entry((&from.container, &to.container))
-                    .or_default()
-                    .1 += 1;
-            }
         }
         for process in scan.spawns {
             *spawn_counts.entry((&from.path, process)).or_default() += 1;
         }
     }
+    let file_references = references(refs, ReferenceBasis::Syntax);
+    let (module_references, package_edges) = roll_up(
+        &file_references,
+        ReferenceBasis::Syntax,
+        &by_path,
+        &dependencies,
+    );
     Ok(TreeFacts {
-        file_references: references(refs),
-        module_references: references(module_refs),
-        package_edges: package_counts
-            .into_iter()
-            .map(|((from, to), (declared, references))| {
-                let kind = match (declared, references) {
-                    (true, 0) => PackageEdgeKind::DeclaredOnly,
-                    (true, _) => PackageEdgeKind::DeclaredAndReferenced,
-                    (false, _) => PackageEdgeKind::ReferencedOnly,
-                };
-                PackageEdge {
-                    from: from.clone(),
-                    to: to.clone(),
-                    kind,
-                    references,
-                }
-            })
-            .collect(),
+        file_references,
+        module_references,
+        package_edges,
         spawns: spawn_counts
             .into_iter()
             .map(|((path, process), count)| SpawnFact {
@@ -161,7 +132,64 @@ fn directory_nodes(mut packages: Vec<ContainerFact>) -> Vec<ContainerFact> {
     nodes
 }
 
-fn references<T: Clone>(counts: BTreeMap<(&T, &T, ReferenceKind), u64>) -> Vec<Reference<T>> {
+/// Build the two rollups for a snapshot's uniform reference basis. Declared
+/// dependencies contribute package edges even if there are no references.
+pub(crate) fn roll_up(
+    file_references: &[Reference<String>],
+    basis: ReferenceBasis,
+    by_path: &BTreeMap<&str, &FileFact>,
+    dependencies: &[DependencyFact],
+) -> (Vec<Reference<ModuleId>>, Vec<PackageEdge>) {
+    let mut module_counts = BTreeMap::<_, u64>::new();
+    let mut package_counts = BTreeMap::<_, (bool, u64)>::new();
+    for dep in dependencies {
+        if let Some(target) = &dep.target
+            && dep.section != "workspace.dependencies"
+            && dep.container != *target
+        {
+            package_counts
+                .entry((&dep.container, target))
+                .or_default()
+                .0 = true;
+        }
+    }
+    for reference in file_references {
+        let from = by_path[reference.from.as_str()];
+        let to = by_path[reference.to.as_str()];
+        let count = module_counts
+            .entry((&from.module, &to.module, reference.kind))
+            .or_default();
+        *count = count.saturating_add(reference.count);
+        if from.container != to.container {
+            let (_, count) = package_counts
+                .entry((&from.container, &to.container))
+                .or_default();
+            *count = count.saturating_add(reference.count);
+        }
+    }
+    let packages = package_counts
+        .into_iter()
+        .map(|((from, to), (declared, references))| {
+            let kind = match (declared, references) {
+                (true, 0) => PackageEdgeKind::DeclaredOnly,
+                (true, _) => PackageEdgeKind::DeclaredAndReferenced,
+                (false, _) => PackageEdgeKind::ReferencedOnly,
+            };
+            PackageEdge {
+                from: from.clone(),
+                to: to.clone(),
+                kind,
+                references,
+            }
+        })
+        .collect();
+    (references(module_counts, basis), packages)
+}
+
+fn references<T: Clone>(
+    counts: BTreeMap<(&T, &T, ReferenceKind), u64>,
+    basis: ReferenceBasis,
+) -> Vec<Reference<T>> {
     counts
         .into_iter()
         .map(|((from, to, kind), count)| Reference {
@@ -169,7 +197,7 @@ fn references<T: Clone>(counts: BTreeMap<(&T, &T, ReferenceKind), u64>) -> Vec<R
             to: to.clone(),
             kind,
             count,
-            basis: ReferenceBasis::Syntax,
+            basis,
         })
         .collect()
 }

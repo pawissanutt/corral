@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::provider::{ChangeFact, DefinitionFact, DependentFact, TestCandidate};
+
 /// An immutable resolved revision. Obtain it with [`crate::resolve_revision`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Revision {
@@ -55,6 +57,8 @@ pub struct FileFact {
     pub read_status: ReadStatus,
     pub container: String,
     pub module: ModuleId,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub definitions: Vec<DefinitionFact>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,12 +143,14 @@ pub struct DependencyFact {
 pub enum ReferenceKind {
     Use,
     Import,
+    Call,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceBasis {
     Syntax,
+    Resolved,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,6 +221,13 @@ pub struct ProjectDelta {
     pub skipped_non_utf8_paths: u64,
     pub dependencies: Vec<DependencyChange>,
     pub module_references: Vec<ModuleReferenceChange>,
+    /// None means not provided; Some(empty) means the provider found no rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes: Option<Vec<ChangeFact>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependents: Option<Vec<DependentFact>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests: Option<Vec<TestCandidate>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

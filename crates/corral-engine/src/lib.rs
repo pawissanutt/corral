@@ -11,6 +11,7 @@ mod dispatch;
 pub mod error;
 pub mod events;
 pub mod extension;
+pub mod facts;
 mod land;
 pub mod model;
 #[cfg(unix)]

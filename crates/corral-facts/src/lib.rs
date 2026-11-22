@@ -11,6 +11,7 @@ mod delta;
 mod git;
 mod manifests;
 mod model;
+pub mod provider;
 mod structure;
 mod syntax;
 

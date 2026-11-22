@@ -50,6 +50,9 @@ pub(crate) fn compare(
         skipped_non_utf8_paths,
         dependencies,
         module_references,
+        changes: None,
+        dependents: None,
+        tests: None,
     }
 }
 

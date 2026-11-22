@@ -17,6 +17,7 @@ sha2.workspace = true
 rusqlite = { version = "0.40", features = ["bundled"] }
 glob = "0.3"
 libc = "0.2"
+corral-facts.workspace = true
 corral-git.workspace = true
 corral-herdr.workspace = true
 corral-types.workspace = true
