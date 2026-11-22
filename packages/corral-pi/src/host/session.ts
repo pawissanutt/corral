@@ -470,15 +470,14 @@ export class HostSession {
       stopTurn: () => this.planStopTurn(),
       compact: instructions => this.planCompact(instructions),
       reset: summary => this.planResetContext(summary),
+      // Plan mode's own inputs start a run or are refused: queued into another run, an answer to a review would
+      // be acknowledged before it had any effect, and could outlive that run to be drained by a later one. The
+      // kickoff is also ordered against pause and never parked in a paused session's held queue.
       submit: async (text, origin, kickoff) => {
-        if (origin === "owner") {
-          const result = await this.submitLocal({ text, origin, busyPolicy: "steer" });
-          return result.disposition === "started" || result.disposition === "queued";
-        }
-        // The kickoff starts a run or is refused. Ordered against pause, it is never parked in a paused session's
-        // held queue; and never queued into another run, which it could outlive to be drained by a later one.
         const input: SessionInput = { text, origin, busyPolicy: "prompt" };
-        return (await (options.startInput?.(input, kickoff) ?? this.submitOpened(input, kickoff))).disposition === "started";
+        const result = await (origin === "auto" ? options.startInput?.(input, kickoff) ?? this.submitOpened(input, kickoff)
+          : this.submitOpened(input));
+        return result.disposition === "started";
       },
       model: () => this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : undefined,
       changed: () => { this.liveEvents.stateChanged(); this.panels?.refresh(); },

@@ -84,8 +84,10 @@ export class PlanReviewUi {
     try {
       if (choice && this.plan.review === id) await this.plan.choose(choice, feedback);
     } catch (error) {
-      // A choice the session cannot carry out now leaves the review pending; /plan reopens it.
-      this.options.notice(error instanceof Error ? error.message : String(error));
+      // A choice the session cannot carry out now leaves the review pending; /plan reopens it. Feedback that
+      // was typed goes to the composer, where it is still the owner's to send.
+      if (feedback?.trim()) ui.setEditorText(feedback);
+      this.options.notice(`${error instanceof Error ? error.message : String(error)}${feedback?.trim() ? ". Your feedback is in the composer." : ""}`);
     }
     return true;
   }

@@ -114,9 +114,10 @@ test("an approval is durable only with its kickoff, and holds the mode until the
   await settle();
   const kickoff = sent[0];
   if (!kickoff) throw new Error("no kickoff was submitted");
-  // Then nothing else decides or changes the mode meanwhile,
-  expect(plan.choose("execute_clean")).toBe("started");
-  expect(() => plan.leave()).toThrow("The approved plan is starting");
+  // Then nothing else decides or changes the mode meanwhile, and a second answer is told so,
+  expect(() => plan.choose("execute_clean")).toThrow("already being answered");
+  expect(() => plan.choose("revise", "Use a flag parser")).toThrow("already being answered");
+  expect(() => plan.leave()).toThrow("already being answered");
   expect(sent).toHaveLength(1);
   // only the kickoff's own run goes without the planning contract,
   expect(plan.turnMessage(kickoff.text)).toBeUndefined();
@@ -146,7 +147,9 @@ test("feedback the session does not take leaves the review open for it", async (
   taking.plan.submit();
   expect(await taking.plan.choose("revise", "Use a flag parser")).toBe("delivered");
   expect(taking.sent[0]?.text).toContain("Use a flag parser");
+  // Until it does, no other answer can override it.
   expect(taking.plan.phase).toBe("review");
+  expect(() => taking.plan.choose("execute")).toThrow("already being answered");
   taking.plan.ownerSpoke();
   expect(taking.plan.phase).toBe("planning");
 });

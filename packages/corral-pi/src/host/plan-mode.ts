@@ -85,7 +85,7 @@ const COMPACT_INSTRUCTIONS = "The owner approved a plan and execution starts nex
   + "and the files, symbols and code paths that were discovered. Drop tool output already reflected in the plan, superseded "
   + "drafts and anything the plan itself states. Do not restate the plan; it is delivered in full after this summary.";
 const CHANGED = "the submitted plan's copy is missing or was changed; choose Keep planning and have it submitted again";
-const STARTING = "The approved plan is starting; wait for it";
+const ANSWERING = "This review is already being answered; wait for it";
 
 const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
 const heading = (text: string): string | undefined => /^[ \t]*#[ \t]+(.+?)[ \t]*$/m.exec(text)?.[1]?.trim() || undefined;
@@ -157,6 +157,8 @@ export class PlanMode {
   private preparing = false;
   /** The kickoff on its way into the transcript: its card, its text, its plan, and what the Build record will say of it. */
   private kickoff: { readonly card: string; readonly text: string; readonly path: string; readonly journal: string; admitted: boolean } | undefined;
+  /** The review whose feedback the session took but the transcript does not hold yet. */
+  private feedback: { readonly card: string; admitted: boolean } | undefined;
   /** The phase the views were last told; unknown until the first change, as after a restart. */
   private seen: PlanPhase | undefined;
   private readonly listeners = new Set<() => void>();
@@ -178,8 +180,10 @@ export class PlanMode {
     const record = this.record;
     return record.phase === "review" ? cardId(record) : undefined;
   }
-  /** An approval is on its way into the transcript: nothing else may decide or change the mode meanwhile. */
-  private get pending(): boolean { return this.starting || (this.kickoff !== undefined && this.kickoff.card === this.review); }
+  /** An approval is on its way into the transcript. */
+  private get approving(): boolean { return this.starting || (this.kickoff !== undefined && this.kickoff.card === this.review); }
+  /** One answer to the review is being carried out: nothing else may answer it or change the mode meanwhile. */
+  private get pending(): boolean { return this.approving || (this.feedback !== undefined && this.feedback.card === this.review); }
 
   onChange(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -215,6 +219,7 @@ export class PlanMode {
    */
   turnEnded(): void {
     if (this.kickoff?.admitted) this.kickoff = undefined;
+    if (this.feedback?.admitted) this.feedback = undefined;
   }
 
   brief(): { phase: "planning" | "review"; title?: string; revision?: number } | undefined {
@@ -276,7 +281,7 @@ export class PlanMode {
   private exists(): boolean { return lstatSync(this.path, { throwIfNoEntry: false })?.isFile() === true; }
 
   private idle(): void {
-    const busy = this.pending ? STARTING : this.host.busy();
+    const busy = this.pending ? ANSWERING : this.host.busy();
     if (busy) throw new BridgeRefusal("plan_mode_unavailable", busy);
   }
 
@@ -387,7 +392,8 @@ export class PlanMode {
   /** The owner's review choice, from the terminal or a card answer. Refused while it could not be carried out. */
   choose(choice: PlanChoice, text?: string): AnswerStatus | Promise<AnswerStatus> {
     if (this.phase !== "review") return "missing";
-    if (this.pending) return "started";
+    // One answer at a time, said out loud: a second one must not be taken for carried out, nor override the first.
+    if (this.pending) throw new BridgeRefusal("plan_mode_unavailable", ANSWERING);
     // Neither the plan nor the feedback could start a turn now, and the review would be gone.
     const blocked = this.host.blocked();
     if (blocked) throw new BridgeRefusal("plan_mode_unavailable", blocked);
@@ -402,25 +408,35 @@ export class PlanMode {
    */
   ownerSpoke(): void {
     const { phase, revision, title } = this.record;
-    if (phase === "review" && !this.pending) this.write({ phase: "planning", revision, title });
+    if (phase !== "review" || this.approving) return;
+    this.feedback = undefined;
+    this.write({ phase: "planning", revision, title });
   }
 
   /**
    * Keep planning. Feedback is the owner's message: like any owner message it withdraws the review when it
-   * reaches the model, so feedback the session does not take leaves the review, and the owner's text, as they were.
+   * reaches the model. It starts a turn or is refused, never queued, so "delivered" means taken; feedback the
+   * session does not take leaves the review, and the owner's text, as they were.
    */
   private revise(feedback?: string): AnswerStatus | Promise<AnswerStatus> {
-    const text = feedback?.trim();
-    if (!text) {
+    const text = feedback?.trim(), card = this.review;
+    if (!text || card === undefined) {
       const { revision, title } = this.record;
       this.write({ phase: "planning", revision, title });
       this.host.note("Back to planning. Tell the agent what to change.");
       return "delivered";
     }
+    this.feedback = { card, admitted: false };
+    const feedbackSent = this.feedback;
     return this.host.submit("[corral plan review]\nThe owner reviewed the plan and wants changes before approving:\n"
       + `${text}\n\nRevise \`${this.path}\`, then call plan_submit again.`, "owner").then(taken => {
-      if (!taken) throw new BridgeRefusal("plan_mode_unavailable", "The session did not take the feedback; the review is still open");
-      return "delivered";
+      if (!taken) throw new Error("refused");
+      feedbackSent.admitted = true;
+      return "delivered" as const;
+    }).catch(() => {
+      if (this.feedback === feedbackSent) this.feedback = undefined;
+      throw new BridgeRefusal("plan_mode_unavailable",
+        "The session did not take the feedback, so the review is still open. Wait for the agent's turn to end, then send it again");
     });
   }
 

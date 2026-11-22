@@ -166,8 +166,11 @@ terminal and the app answer the same submission; the first answer wins.
 Any answer may carry text. With an execute option it is passed to the executor as the
 owner's note. Text with no option is `revise`. Feedback given with `revise` is sent as the
 owner's message and withdraws the review the way any owner message does, when it reaches the
-model; if the session does not take it, the answer is refused and the review stays open, so
-the owner's text is not lost. `revise` without text returns to planning at once. Dismissing puts the card aside and stays in
+model. It starts a turn or is refused, never queued, so `delivered` means taken; if the
+session does not take it, the answer is refused and the review stays open, so the owner's
+text is not lost (the terminal puts it in the composer). `revise` without text returns to
+planning at once. One answer is carried out at a time: while an approval or feedback is on
+its way into the transcript, any other answer to that review is refused, not acknowledged. Dismissing puts the card aside and stays in
 `review`. An ordinary owner message during `review` is feedback: the phase returns to
 `planning` and the message is delivered normally. The review is withdrawn at the moment that
 message enters the transcript, and only if the host's queue tagged that very message as the
