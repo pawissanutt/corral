@@ -31,6 +31,15 @@ pub struct EventFilter {
     pub project: Option<String>,
 }
 
+/// Coordinates recorded in a `done` event, unaffected by later landing attempts.
+#[derive(Debug, Deserialize)]
+pub struct SubmittedRevision {
+    pub sha: String,
+    /// Absent on submissions made before the coordinates were recorded.
+    pub base_sha: Option<String>,
+    pub project: Option<String>,
+}
+
 impl Store {
     pub fn latest_seq(&self) -> Result<u64> {
         self.connection
@@ -173,6 +182,17 @@ impl Store {
             .context("count engine events")?
             .try_into()
             .context("event count must not be negative")
+    }
+
+    pub fn submitted_revision(&self, task: &str, run: &str) -> Result<Option<SubmittedRevision>> {
+        use rusqlite::OptionalExtension;
+        let detail: Option<String> = self.connection.query_row(
+            "SELECT detail FROM events WHERE task=?1 AND run=?2 AND kind='done' ORDER BY seq DESC LIMIT 1",
+            params![task, run], |row| row.get(0),
+        ).optional().context("read submitted revision")?;
+        detail
+            .map(|detail| serde_json::from_str(&detail).context("decode submitted revision"))
+            .transpose()
     }
 
     /// The diff registered by `done` for the specified worker's last submission.

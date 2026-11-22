@@ -381,7 +381,7 @@ impl RowPage {
     }
 }
 
-fn paginate(body: &mut DetailBody, offset: usize) -> Result<Option<usize>> {
+pub(super) fn paginate(body: &mut DetailBody, offset: usize) -> Result<Option<usize>> {
     let mut page = RowPage::new(offset);
     macro_rules! paginate_fields {
         ($model:ident, $($field:ident),+ $(,)?) => {{
@@ -406,6 +406,8 @@ fn paginate(body: &mut DetailBody, offset: usize) -> Result<Option<usize>> {
             model.child_rows = Some(rows);
         }
         DetailBody::Review(model) => paginate_fields!(model, checks, files),
+        DetailBody::SystemMap(model) => paginate_fields!(model, rows),
+        DetailBody::SystemReview(model) => paginate_fields!(model, rows),
         DetailBody::Timeline(model) => paginate_fields!(model, runs, events),
         DetailBody::Burnup(model) => paginate_fields!(model, events),
         DetailBody::UsageSeries(model) => paginate_fields!(model, days),

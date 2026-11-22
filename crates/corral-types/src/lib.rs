@@ -6,11 +6,15 @@ use jiff::Timestamp;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
+pub mod facts;
 mod op;
 pub mod pricing;
+mod system;
 mod task_metadata;
 
+pub use facts::*;
 pub use op::{ConfigProblem, Next, Op, Refusal};
+pub use system::*;
 pub use task_metadata::{BUILTIN_TAGS, TASK_SIZES, TaskDifficulty, normalize_tags, validate_tag};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

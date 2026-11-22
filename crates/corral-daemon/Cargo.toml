@@ -13,6 +13,7 @@ jiff.workspace = true
 corral-engine.workspace = true
 corral-herdr.workspace = true
 corral-types.workspace = true
+corral-facts.workspace = true
 corral-protocol.workspace = true
 clap.workspace = true
 tempfile.workspace = true

@@ -3,16 +3,10 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use corral_types::{ChangeKind, DependentFact, TestCandidate};
+
 use super::{ProviderCoverage, Reply, Row, enum_name};
 use crate::{ProjectDelta, TreeFacts};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChangeKind {
-    Added,
-    Removed,
-    Changed,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "fact", rename_all = "snake_case", try_from = "WireChangedFact")]
@@ -56,21 +50,6 @@ pub struct ChangeFact {
     pub path: String,
     pub name: String,
     pub line: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DependentFact {
-    pub path: String,
-    pub name: String,
-    pub line: u64,
-    /// Full name of the changed definition that this definition depends on.
-    pub of: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TestCandidate {
-    pub path: String,
-    pub name: String,
 }
 
 impl Reply {

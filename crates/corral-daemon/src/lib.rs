@@ -16,6 +16,7 @@ mod react;
 mod server;
 mod sessions;
 mod state;
+mod system;
 mod topics;
 mod views;
 
@@ -121,6 +122,7 @@ fn run_with_runner(root: &Path, options: RunOptions, runner: Option<RunnerFactor
         })
         .transpose()?;
     let started = (|| -> Result<_> {
+        system::start(&shared)?;
         topics::start_session_live(&shared)?;
         if let Some(listener) = app_listener {
             app::serve_listener(
@@ -155,6 +157,7 @@ fn run_with_runner(root: &Path, options: RunOptions, runner: Option<RunnerFactor
     shared.wait_ops();
     shared.close();
     topics::join_session_live(&shared);
+    shared.system.wait_stopped(Duration::from_secs(3));
     shared.wait_workers(Duration::from_secs(3));
     drop(socket);
     result?;
@@ -190,18 +193,21 @@ fn poll_loop(shared: &Shared, store: &Store, mut seq: u64, mut version: u64) {
             // Sample data_version first so a non-event commit racing this scan is seen next time.
             let observed_version = store.data_version()?;
             let head = store.latest_seq()?;
-            if head != seq || observed_version != version {
-                shared.latest_seq.fetch_max(head, Ordering::AcqRel);
-                shared.publish();
-                version = observed_version;
-            }
+            let changed = head != seq || observed_version != version;
             while seq < head {
                 let events = store.event_page(None, Some(seq), head.checked_add(1), false, 128)?;
                 let Some(last) = events.last() else { break };
+                shared.system.observe(&events);
                 shared.devices().observe(&events);
                 seq = last.seq;
             }
             seq = head;
+            if changed {
+                shared.latest_seq.fetch_max(head, Ordering::AcqRel);
+                shared.publish();
+                version = observed_version;
+            }
+            shared.system.refresh(shared)?;
             Ok(())
         })();
         if let Err(error) = result {

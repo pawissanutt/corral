@@ -488,6 +488,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "corral-engine",
+ "corral-facts",
  "corral-herdr",
  "corral-protocol",
  "corral-types",
@@ -537,6 +538,7 @@ name = "corral-facts"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "corral-types",
  "regex",
  "serde",
  "serde_json",

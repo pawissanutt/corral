@@ -10,7 +10,7 @@ use std::{
 
 use serde_json::{Map, Value};
 
-use super::{CommandContext, run};
+use super::{CommandContext, run, run_cancellable};
 
 fn large_request() -> Map<String, Value> {
     Map::from_iter([("data".into(), Value::String("x".repeat(512 * 1024)))])
@@ -89,6 +89,24 @@ fn deadline_still_applies_when_shell_closed_all_pipes() {
     .unwrap_err();
     assert!(error.to_string().contains("timed out"), "{error:#}");
     assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn cancellation_interrupts_a_running_extension() {
+    let cwd = tempfile::tempdir().unwrap();
+    let ready = cwd.path().join("ready");
+    // A descendant holds stdout and stderr open. Cancel only after it has read
+    // the request and created the marker, not on a guessed startup delay.
+    let error = run_cancellable(
+        "(cat >/dev/null; : >ready; exec sleep 4) &",
+        Map::new(),
+        &context(cwd.path(), &BTreeMap::new()),
+        Duration::from_secs(2),
+        1024,
+        &|| ready.is_file(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("cancelled"), "{error:#}");
 }
 
 #[test]

@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::Health;
-use corral_types::UsageSummary;
+use corral_types::{SystemRow, UsageSummary};
 
 use crate::rows::{AgentRow, AssistantRow, PlanRow, ProjectRow, SettingsSnapshot, TaskRow};
 use crate::session_state::{SendPolicy, SessionState};
@@ -19,6 +19,8 @@ pub enum Topic {
     Tasks,
     Plans,
     Projects,
+    /// Project fact observations (`system.v1`).
+    System,
     Agents,
     /// Shared rows for clients granted `assistant.v1` or `build.v1`.
     Assistant,
@@ -74,6 +76,11 @@ pub enum SubDelta {
     Projects {
         #[serde(flatten)]
         delta: RowsDelta<ProjectRow>,
+    },
+    System {
+        #[serde(flatten)]
+        #[schemars(with = "RowsDelta<crate::schema_types::SystemRow>")]
+        delta: RowsDelta<SystemRow>,
     },
     Agents {
         #[serde(flatten)]

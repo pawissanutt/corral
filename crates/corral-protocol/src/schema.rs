@@ -256,6 +256,7 @@ fn document() -> Value {
                 Refused,
                 Expired,
                 TooLarge,
+                Busy,
                 Unavailable,
                 Internal,
             ],

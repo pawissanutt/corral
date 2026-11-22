@@ -17,6 +17,7 @@ use corral_protocol::{
     rows::*,
     subscription::{BoardCursor, Topic},
 };
+use corral_types::SystemRow;
 use serde::Serialize;
 
 use crate::state::Shared;
@@ -34,6 +35,7 @@ pub(crate) enum Rows {
     Usage(Vec<UsageSummary>),
     Assistant(Vec<AssistantRow>),
     Settings(Vec<SettingsSnapshot>),
+    System(Vec<SystemRow>),
 }
 
 macro_rules! each {
@@ -47,6 +49,7 @@ macro_rules! each {
             Rows::Usage($rows) => $body,
             Rows::Assistant($rows) => $body,
             Rows::Settings($rows) => $body,
+            Rows::System($rows) => $body,
         }
     };
 }
@@ -69,6 +72,7 @@ impl Rows {
             Self::Usage(_) => "usage".into(),
             Self::Assistant(rows) => rows[index].id.as_str().into(),
             Self::Settings(_) => "settings".into(),
+            Self::System(rows) => rows[index].project.as_str().into(),
         }
     }
 
@@ -114,7 +118,7 @@ const EXTERNAL_POLL: Duration = Duration::from_secs(2);
 /// so probing agents never holds the cache lock for health or SQLite-only reads.
 #[derive(Default)]
 pub(crate) struct RowCache {
-    entries: [Mutex<Option<Observation>>; 9],
+    entries: [Mutex<Option<Observation>>; 10],
 }
 
 struct Observation {
@@ -134,6 +138,7 @@ impl RowCache {
             Topic::Usage => 5,
             Topic::Settings => 6,
             Topic::Assistant => 7,
+            Topic::System => 9,
             _ => bail!("unsupported row topic"),
         };
         self.get_at(shared, topic, index, false)
@@ -197,6 +202,9 @@ fn read(shared: &Shared, topic: Topic, builds: bool) -> Result<Rows> {
     }
     if topic == Topic::Settings {
         return settings(shared);
+    }
+    if topic == Topic::System {
+        return Ok(Rows::System(shared.system.rows(shared)?));
     }
     if topic == Topic::Projects {
         let revision = shared.config_fingerprint();

@@ -25,6 +25,7 @@ use crate::{server, state::Shared};
 mod fake_host;
 mod pi_build;
 mod pi_chat;
+mod system;
 
 pub(super) struct Fixture {
     dir: tempfile::TempDir,

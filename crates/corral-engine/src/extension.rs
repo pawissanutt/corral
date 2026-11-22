@@ -43,7 +43,6 @@ pub fn attempt_main(_args: &[std::ffi::OsString]) -> u8 {
 /// Returns raw stdout on success; on failure only the stderr tail is diagnostic.
 /// The runner must exclusively own child reaping (no host-wide SIGCHLD reaper).
 /// On timeout it signals the process group, then waits to reap the shell.
-#[cfg(unix)]
 pub fn run(
     line: &str,
     request: Map<String, Value>,
@@ -51,16 +50,31 @@ pub fn run(
     timeout: Duration,
     max_stdout: usize,
 ) -> Result<Vec<u8>> {
-    unix::run(line, request, context, timeout, max_stdout)
+    run_cancellable(line, request, context, timeout, max_stdout, &|| false)
+}
+
+/// Like `run`, but check a nonblocking cancellation predicate while exchanging
+/// pipes. Cancellation uses the same kill-and-reap path as a deadline.
+#[cfg(unix)]
+pub fn run_cancellable(
+    line: &str,
+    request: Map<String, Value>,
+    context: &CommandContext<'_>,
+    timeout: Duration,
+    max_stdout: usize,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<u8>> {
+    unix::run(line, request, context, timeout, max_stdout, cancelled)
 }
 
 #[cfg(not(unix))]
-pub fn run(
+pub fn run_cancellable(
     _line: &str,
     _request: Map<String, Value>,
     _context: &CommandContext<'_>,
     _timeout: Duration,
     _max_stdout: usize,
+    _cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<u8>> {
     anyhow::bail!("extension commands are supported only on Unix")
 }
@@ -86,8 +100,15 @@ mod unix {
     const STDERR_LIMIT: usize = 4 * 1024;
     const CHUNK: usize = 16 * 1024;
     // A shell can exit without generating a pipe event (e.g. its descendants hold
-    // the descriptors). Check its status independently of poll readiness.
+    // the descriptors). Check its status and cancellation independently of pipe readiness.
     const STATUS_INTERVAL: Duration = Duration::from_millis(25);
+
+    struct Limits<'a> {
+        started: Instant,
+        timeout: Duration,
+        max_stdout: usize,
+        cancelled: &'a dyn Fn() -> bool,
+    }
 
     pub(super) fn run(
         line: &str,
@@ -95,7 +116,9 @@ mod unix {
         context: &CommandContext<'_>,
         timeout: Duration,
         max_stdout: usize,
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<u8>> {
+        ensure!(!cancelled(), "extension command cancelled");
         request.insert("v".into(), Value::from(1));
         let input = serde_json::to_vec(&request).context("encode extension request")?;
         let started = Instant::now();
@@ -171,8 +194,13 @@ mod unix {
         let mut capture = Capture::default();
         let setup = pipes.nonblocking();
         let can_drain = setup.is_ok();
-        let result = setup
-            .and_then(|()| pipes.exchange(pid, &input, started, timeout, max_stdout, &mut capture));
+        let limits = Limits {
+            started,
+            timeout,
+            max_stdout,
+            cancelled,
+        };
+        let result = setup.and_then(|()| pipes.exchange(pid, &input, limits, &mut capture));
         let Err(error) = result else {
             // exchange observed a successful exit without reaping it. A supervisor exits
             // only after killing the line's group.
@@ -252,14 +280,19 @@ mod unix {
             &mut self,
             pid: libc::pid_t,
             mut input: &[u8],
-            started: Instant,
-            timeout: Duration,
-            max_stdout: usize,
+            limits: Limits<'_>,
             capture: &mut Capture,
         ) -> Result<()> {
+            let Limits {
+                started,
+                timeout,
+                max_stdout,
+                cancelled,
+            } = limits;
             let mut shell_exited = false;
             let mut buf = [0; CHUNK];
             loop {
+                ensure!(!cancelled(), "extension command cancelled");
                 let remaining = timeout.saturating_sub(started.elapsed());
                 ensure!(
                     !remaining.is_zero(),
@@ -280,11 +313,7 @@ mod unix {
                     pollfd(&self.stdout, libc::POLLIN),
                     pollfd(&self.stderr, libc::POLLIN),
                 ];
-                let delay = if shell_exited {
-                    remaining
-                } else {
-                    remaining.min(STATUS_INTERVAL)
-                };
+                let delay = remaining.min(STATUS_INTERVAL);
                 // Round up to avoid spinning when less than a millisecond remains.
                 let millis = (delay.as_millis() + 1).min(libc::c_int::MAX as u128) as libc::c_int;
                 // SAFETY: fds is a live array of pollfd values, with each nonnegative fd

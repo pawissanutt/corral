@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use corral_facts::{
-    FactsCache, ProjectDelta, ProjectFacts, Revision,
+    FactsCache, ProjectDelta, ProjectFacts, Revision, TreeFacts,
     provider::{ProviderCoverage, Reply},
     resolve_revision,
 };
@@ -33,9 +33,11 @@ pub struct FactsReader<'a> {
     cache: FactsCache,
     project: &'a str,
     settings: &'a Project,
+    base: Option<&'a str>,
     provider: Option<(&'a str, &'a str)>,
     timeout: Duration,
     max_stdout: usize,
+    cancelled: Option<&'a dyn Fn() -> bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -59,14 +61,53 @@ impl<'a> FactsReader<'a> {
             root,
             project,
             settings,
+            base: settings.base.as_deref().or(config.defaults.base.as_deref()),
             provider: config.extension_for_slot(project, Slot::Facts),
             timeout: TIMEOUT,
             max_stdout: MAX_STDOUT,
+            cancelled: None,
         })
+    }
+
+    /// Allow a background reader to terminate its provider during shutdown.
+    pub fn with_cancellation(mut self, cancelled: &'a dyn Fn() -> bool) -> Self {
+        self.cancelled = Some(cancelled);
+        self
+    }
+
+    /// Use the same project base as dispatch. Detached projects without an
+    /// inferred base can still be inspected at their checkout HEAD.
+    pub fn base_branch(&self) -> Result<Option<String>> {
+        match self.base {
+            Some(branch) => Ok(Some(branch.to_owned())),
+            None => corral_git::default_branch(&self.repo)
+                .with_context(|| format!("discover default branch for project {}", self.project)),
+        }
+    }
+
+    pub fn project_tip(&self, branch: Option<&str>) -> Result<String> {
+        let reference = match branch {
+            Some(branch) => {
+                corral_git::validate_branch_name(branch).context("validate project base branch")?;
+                format!("refs/heads/{branch}")
+            }
+            None => "HEAD".into(),
+        };
+        corral_git::rev_sha(&self.repo, &reference).context("resolve project base")
     }
 
     pub fn resolve_revision(&self, rev: &str) -> Result<Revision> {
         resolve_revision(&self.repo, rev)
+    }
+
+    /// Older done events recorded only the head. A landing attempt may have
+    /// moved the run's recorded base; limit it to the history of that head.
+    pub fn legacy_submitted_base(&self, base: &str, head: &str) -> Result<String> {
+        corral_git::merge_base(&self.repo, base, head).context("resolve legacy submission base")
+    }
+
+    pub fn builtin_tree(&self, rev: &Revision) -> Result<TreeFacts> {
+        self.cache.tree_facts(&self.repo, rev.tree())
     }
 
     pub fn builtin_snapshot(&self, rev: &Revision) -> Result<ProjectFacts> {
@@ -146,8 +187,17 @@ impl<'a> FactsReader<'a> {
                     env: &self.settings.env,
                     hold: None,
                 };
-                let output =
-                    extension::run(line, request, &context, self.timeout, self.max_stdout)?;
+                let output = match self.cancelled {
+                    Some(cancelled) => extension::run_cancellable(
+                        line,
+                        request,
+                        &context,
+                        self.timeout,
+                        self.max_stdout,
+                        cancelled,
+                    ),
+                    None => extension::run(line, request, &context, self.timeout, self.max_stdout),
+                }?;
                 Reply::parse(&output, want)
             })?;
             merge(reply)

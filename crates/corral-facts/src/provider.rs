@@ -6,46 +6,13 @@ mod snapshot;
 
 use std::collections::BTreeMap;
 
+pub use corral_types::{DefinitionFact, ProviderCoverage};
+
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, de::value::StringDeserializer};
 
 pub use self::delta::{ChangeFact, ChangeKind, ChangedFact, DependentFact, TestCandidate};
 use crate::{ReadStatus, ReferenceKind};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DefinitionFact {
-    pub name: String,
-    pub line: u64,
-    pub end_line: u64,
-    pub kind: String,
-}
-
-/// Which requested categories the provider answered, including empty results.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProviderCoverage {
-    pub provided: Vec<String>,
-    pub not_provided: Vec<String>,
-    pub skipped: BTreeMap<String, u64>,
-    pub omitted: BTreeMap<String, u64>,
-    pub dropped_unknown_files: u64,
-}
-
-impl ProviderCoverage {
-    /// Describe a missing or unusable reply without reporting a zero result.
-    pub fn unavailable(want: &[&str]) -> Self {
-        Self {
-            provided: Vec::new(),
-            not_provided: want.iter().map(|&category| category.to_owned()).collect(),
-            skipped: BTreeMap::new(),
-            omitted: BTreeMap::new(),
-            dropped_unknown_files: 0,
-        }
-    }
-
-    pub fn provides(&self, category: &str) -> bool {
-        self.provided.iter().any(|entry| entry == category)
-    }
-}
 
 /// An entire validated reply, stored separately from the built-in facts.
 #[derive(Debug, Serialize, Deserialize)]

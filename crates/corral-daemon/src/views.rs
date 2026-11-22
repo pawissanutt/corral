@@ -5,6 +5,7 @@ mod review;
 pub(crate) mod rows;
 mod session_files;
 mod session_parts;
+mod system;
 mod terminal_screen;
 mod transcript;
 
@@ -44,6 +45,9 @@ impl std::fmt::Display for NotFound {
 impl std::error::Error for NotFound {}
 
 pub(crate) fn detail(shared: &Shared, query: DetailGet) -> Result<DetailReply> {
+    if let Some(reply) = system::read(shared, &query)? {
+        return Ok(reply);
+    }
     let engine = shared.engine()?;
     if let Some(reply) = session_files::read(shared, &engine, &query)? {
         return Ok(reply);

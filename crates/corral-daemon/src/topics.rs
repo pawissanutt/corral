@@ -22,6 +22,7 @@ pub(crate) struct Subscriptions<'a> {
     session_fleet: bool,
     session_state: bool,
     build_rows: bool,
+    system: bool,
 }
 
 impl<'a> Subscriptions<'a> {
@@ -34,6 +35,7 @@ impl<'a> Subscriptions<'a> {
             session_fleet: false,
             session_state: false,
             build_rows: false,
+            system: false,
         }
     }
 
@@ -41,6 +43,14 @@ impl<'a> Subscriptions<'a> {
         self.session_fleet = caps.iter().any(|cap| cap == wire::app::SESSION_FLEET_V1);
         self.session_state = caps.iter().any(|cap| cap == wire::app::SESSION_STATE_V1);
         self.build_rows = caps.iter().any(|cap| cap == wire::app::BUILD_V1);
+        self.system = caps.iter().any(|cap| cap == wire::app::SYSTEM_V1);
+        if !self.system {
+            self.rows.retain(|sub| sub.topic != Topic::System);
+        }
+    }
+
+    pub(crate) fn has_system(&self) -> bool {
+        self.system
     }
 
     pub fn open(&mut self, open: SubOpen) -> Result<()> {
@@ -52,12 +62,17 @@ impl<'a> Subscriptions<'a> {
         }
         ensure!(open.scope.is_none(), "topic does not take a scope");
         ensure!(
+            open.topic != Topic::System || self.system,
+            "system.v1 required"
+        );
+        ensure!(
             matches!(
                 open.topic,
                 Topic::Health
                     | Topic::Tasks
                     | Topic::Plans
                     | Topic::Projects
+                    | Topic::System
                     | Topic::Agents
                     | Topic::Assistant
                     | Topic::Usage

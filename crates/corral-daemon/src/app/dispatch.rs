@@ -56,6 +56,7 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | app::SESSION_FLEET_V1
                         | app::SESSION_STATE_V1
                         | app::BUILD_V1
+                        | app::SYSTEM_V1
                         | wire::detail::STREAM_TERMINAL_V1
                         | wire::REVIEW_V1
                         | wire::TIMELINE_V1
@@ -221,6 +222,13 @@ pub(crate) fn serve(
         app::DETAIL_GET => answer!({
             use wire::detail::{DetailGet, DetailRef};
             let query: DetailGet = decode(params)?;
+            if matches!(
+                query.target,
+                DetailRef::SystemMap { .. } | DetailRef::SystemReview { .. }
+            ) && !topics.has_system()
+            {
+                return Err(Failure::new(ErrorCode::InvalidParams, "system.v1 required"));
+            }
             if matches!(
                 query.target,
                 DetailRef::SessionFiles { .. }

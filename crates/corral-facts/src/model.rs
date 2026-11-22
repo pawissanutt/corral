@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::provider::{ChangeFact, DefinitionFact, DependentFact, TestCandidate};
+pub use corral_types::facts::*;
+
+use crate::provider::ChangeFact;
 
 /// An immutable resolved revision. Obtain it with [`crate::resolve_revision`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -61,130 +63,6 @@ pub struct FileFact {
     pub definitions: Vec<DefinitionFact>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReadStatus {
-    Complete,
-    Unsupported,
-    Failed,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Coverage {
-    pub complete: u64,
-    pub unsupported: u64,
-    pub failed: u64,
-    pub skipped_non_utf8_paths: u64,
-    /// Resolved and unresolved counts refer to detected syntax occurrences, not all uses of symbols.
-    pub resolved_references: u64,
-    pub unresolved_references: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct ContainerFact {
-    /// Repository-relative directory; empty for a root container.
-    pub path: String,
-    pub name: String,
-    pub kind: ContainerKind,
-    pub workspace_status: WorkspaceStatus,
-    /// Other manifests in this directory share its map node and source files.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub other_packages: Vec<PackageIdentity>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct PackageIdentity {
-    pub name: String,
-    pub kind: ContainerKind,
-    pub workspace_status: WorkspaceStatus,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ContainerKind {
-    Cargo,
-    Npm,
-    Python,
-    Folder,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceStatus {
-    Member,
-    Excluded,
-    SeparateWorkspace,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct ModuleId {
-    pub container: String,
-    /// First segment under the container's source root (or the container itself).
-    pub path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct DependencyFact {
-    pub container: String,
-    pub manifest: String,
-    pub section: String,
-    pub alias: String,
-    pub package: String,
-    pub requirement: String,
-    /// Structured manifest options (e.g. Cargo features), in normalized text form.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub options: Option<String>,
-    /// A local container path, if this declaration could be associated with one.
-    pub target: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReferenceKind {
-    Use,
-    Import,
-    Call,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReferenceBasis {
-    Syntax,
-    Resolved,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Reference<T> {
-    pub from: T,
-    pub to: T,
-    pub kind: ReferenceKind,
-    pub basis: ReferenceBasis,
-    pub count: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PackageEdge {
-    pub from: String,
-    pub to: String,
-    pub kind: PackageEdgeKind,
-    pub references: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PackageEdgeKind {
-    DeclaredAndReferenced,
-    DeclaredOnly,
-    ReferencedOnly,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SpawnFact {
-    pub path: String,
-    pub process: String,
-    pub count: u64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Activity {
     pub days_7: Vec<ActivityEntry>,
@@ -236,18 +114,4 @@ pub struct FileChange {
     pub added: u64,
     pub removed: u64,
     pub binary: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DependencyChange {
-    pub before: Option<DependencyFact>,
-    pub after: Option<DependencyFact>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModuleReferenceChange {
-    pub from: ModuleId,
-    pub to: ModuleId,
-    pub before: u64,
-    pub after: u64,
 }

@@ -25,6 +25,7 @@ pub(crate) struct Shared {
     config_fingerprint: Mutex<Option<[u8; 32]>>,
     pub(crate) latest_seq: AtomicU64,
     pub(crate) row_cache: crate::views::RowCache,
+    pub(crate) system: crate::system::System,
     pub(crate) harness_inventory: crate::harnesses::Inventory,
     pub(crate) terminal_cache: crate::topics::TerminalCache,
     pub(crate) session_live: crate::topics::SessionLive,
@@ -74,6 +75,7 @@ impl Shared {
             config_fingerprint,
             latest_seq: AtomicU64::new(0),
             row_cache: Default::default(),
+            system: Default::default(),
             harness_inventory: Default::default(),
             terminal_cache: Default::default(),
             session_live: Default::default(),
@@ -242,9 +244,11 @@ impl Shared {
     pub(crate) fn stop(&self) {
         self.lock().stop = true;
         self.changed.notify_all();
+        self.system.stop();
     }
 
     pub(crate) fn close(&self) {
+        self.system.stop();
         let mut state = self.lock();
         state.closed = true;
         state.stop = true;

@@ -96,7 +96,7 @@ impl Engine {
                     Some(&run.id),
                     EventKind::Done,
                     self.actor,
-                    json!({"sha":run.head_sha,"summary":summary}),
+                    json!({"sha":run.head_sha,"base_sha":run.base_sha,"project":task.project,"summary":summary}),
                 )?;
                 Ok((Some(run), true))
             })?;
