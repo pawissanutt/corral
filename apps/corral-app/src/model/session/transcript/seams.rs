@@ -257,7 +257,6 @@ fn covers_tool(old: &Pair<'_>, new: &Pair<'_>) -> bool {
 /// Keep the visible recorded anchors or retain the old snapshot. No carried seam is used to
 /// pass the guard unless the replacement has the old records in order with compatible items.
 /// A reader on its first page must get the same protection as a paged view.
-/// Ordinary in-place updates of a deeper snapshot can still publish if they keep its cuts.
 pub(crate) fn preserve_anchors(
     feed: &Feed,
     held: &DetailCache,
@@ -377,10 +376,6 @@ pub(crate) fn preserve_anchors(
             return held_layout.starts.is_subset(&layout.starts);
         }
     }
-    // Do not accept an equal anchor ID after losing the items at a rolling first-page cut.
-    // Larger windows retain the existing fallback for compatible in-place rewrites.
-    held.pages.len() > 1
-        && held_layout
-            .starts
-            .is_subset(&recorded_layout(replacement, feed, |_, _| true).starts)
+    // Bubble starts alone cannot prove that the items inside those bubbles survived.
+    false
 }

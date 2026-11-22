@@ -339,7 +339,11 @@ fn changed_transcript_refresh_revalidates_loaded_history_before_publishing() {
         feed,
         get,
         None,
-        page("v2", &[("2", &["new leaf"])], Some("new-older")),
+        page(
+            "v2",
+            &[("2", &["old leaf"]), ("3", &["new leaf"])],
+            Some("new-older"),
+        ),
     );
     assert_eq!(
         shown(feed),
@@ -352,15 +356,16 @@ fn changed_transcript_refresh_revalidates_loaded_history_before_publishing() {
             feed,
             get,
             Some("new-older"),
-            page("v2", &[("1", &["current prefix"])], None)
+            page("v2", &[("1", &["old prefix"])], None)
         )
         .is_empty()
     );
     assert_eq!(
         shown(feed),
         [
-            ("1".to_owned(), vec!["current prefix".to_owned()]),
-            ("2".to_owned(), vec!["new leaf".to_owned()])
+            ("1".to_owned(), vec!["old prefix".to_owned()]),
+            ("2".to_owned(), vec!["old leaf".to_owned()]),
+            ("3".to_owned(), vec!["new leaf".to_owned()])
         ]
     );
 }
@@ -619,7 +624,7 @@ fn regrouped_tool_result_keeps_its_anchor_and_can_read_older() {
 }
 
 #[test]
-fn a_rewrite_with_a_lost_seam_keeps_the_previous_snapshot() {
+fn rewind_inside_a_merged_bubble_keeps_the_previous_snapshot() {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();
     let feed = signal(Feed::default());
@@ -648,7 +653,8 @@ fn a_rewrite_with_a_lost_seam_keeps_the_previous_snapshot() {
         feed,
         get,
         None,
-        page("v2", &[("3", &["tail"])], Some("new-older")),
+        // Bubble 2 still exists after the rewind, but its merged tail record 3 does not.
+        page("v2", &[("2", &["seam"])], Some("new-older")),
     );
     assert!(
         reply(
@@ -656,7 +662,7 @@ fn a_rewrite_with_a_lost_seam_keeps_the_previous_snapshot() {
             feed,
             get,
             Some("new-older"),
-            page("v2", &[("1", &["earlier"]), ("2", &["rewritten"])], None)
+            page("v2", &[("1", &["earlier"])], None)
         )
         .is_empty()
     );
