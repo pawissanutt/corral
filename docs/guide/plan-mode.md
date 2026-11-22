@@ -54,6 +54,10 @@ the new model.
 Sending an ordinary message while a plan is waiting counts as feedback. The review closes and
 the agent goes back to planning.
 
+In the app the execute choices stay unavailable until the whole plan has been read from the
+host; **Keep planning** and **Not now** are always available. A choice is refused while the
+session is paused or compacting, because it could not start then.
+
 What you review is a copy taken when the agent submitted, and that copy is what runs. A later
 change to the working plan file does not alter a plan you are reviewing or have approved.
 

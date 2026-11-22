@@ -98,6 +98,12 @@ of the branch decides what the next turn still needs:
 | `left` | The owner left without approving, after the contract had been given | Plan mode is off; the draft is not approved |
 | `pointer` | A compaction happened after an approval | Where the approved plan's copy is |
 
+Pi can also compact inside a run and continue without `before_agent_start`. The host answers
+`session_compact` the same way, appending whatever is due to the transcript at once; Pi
+builds its next request from the transcript after that event, so the contract is back before
+the run goes on. Nothing is sent while an approval is being carried out, whose own compaction
+must not be followed by the planning contract.
+
 There is no notice for the owner's feedback on a submitted plan. The contract and the
 `plan_submit` result both say that approval arrives only as a message beginning with
 `[corral plan approved]` and that any other owner message is feedback, so the agent needs no
@@ -204,7 +210,9 @@ On an execute answer the host, in order:
 
 Any failure in steps 1 to 3 leaves the phase at `review` with the card still open, and posts
 the reason as a transcript note. A choice is refused while the session could start nothing:
-during a compaction, or while the owner has paused it. If the kickoff is refused or fails,
+during a compaction, or while the owner has paused it. The pause is checked again after the
+context is prepared, with nothing awaited between that check and the kickoff's admission, so
+a pause either keeps the review or arrives after the plan started. If the kickoff is refused or fails,
 the same submission is put back under the same card, so an approved plan either starts or
 stays reviewable.
 

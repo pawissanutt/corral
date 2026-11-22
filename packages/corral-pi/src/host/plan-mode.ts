@@ -198,7 +198,8 @@ export class PlanMode {
   /** What the starting turn needs to know about the mode, as one message; the transcript records what it covered. */
   turnMessage(): { customType: string; content: string; display: boolean; details: { kinds: readonly NoteKind[] } } | undefined {
     const { record, due } = this.read();
-    if (!due.length) return undefined;
+    // While an approval is being carried out, its own compaction must not be answered with the planning contract.
+    if (!due.length || this.starting) return undefined;
     const content = due.map(kind => kind === "contract"
       ? this.host.prompts.contract({ path: this.path, existing: this.exists(), askUser: this.host.askUser })
       : kind === "left" ? "[corral plan mode]\nPlan mode is off: the owner left it without approving a plan. Normal tool access is "
@@ -373,6 +374,10 @@ export class PlanMode {
       if (context === "compact") await this.host.compact(COMPACT_INSTRUCTIONS);
       // The reset summary carries the plan itself, so the cleared context holds it whatever happens next.
       else if (context === "clean") await this.host.reset(this.host.prompts.reset({ path, title, revision, plan }));
+      // The owner may have paused while the context was prepared. Nothing awaits between this check and the
+      // kickoff's admission, so a pause either lands before it and keeps the review, or after the plan started.
+      const blocked = this.host.blocked();
+      if (blocked) throw new Error(blocked);
       const model = this.host.model();
       this.write({ phase: "off", revision, approved: { title, revision, digest, path, context, ...(model ? { model } : {}) } });
       this.host.approved?.(`Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})`);

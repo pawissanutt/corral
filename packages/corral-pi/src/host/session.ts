@@ -1074,6 +1074,12 @@ export class HostSession {
         const message = plan.turnMessage();
         return message ? { message } : undefined;
       });
+      // Pi can compact inside a run and go on without before_agent_start, and a summary is not the contract.
+      // Its next request is built from the transcript after this event, so the entry appended here is in it.
+      pi.on("session_compact", () => {
+        const message = plan.turnMessage();
+        if (message) this.session.sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
+      });
       pi.registerTool(planSubmitTool(() => plan));
       if (this.options.ui !== "plain") {
         this.planReview = new PlanReviewUi(plan, {

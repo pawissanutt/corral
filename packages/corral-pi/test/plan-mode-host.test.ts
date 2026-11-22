@@ -172,3 +172,18 @@ test("a plan review is withdrawn only by an owner message the session takes", ()
   await live.drained();
   expect(plan.phase).toBe("planning");
 }), 120_000);
+
+test("a compaction inside a planning run is followed by the contract before the run goes on",
+  () => planning({ settings: { compaction: { keep_recent_tokens: 1 } }, projectText: false }, async (live, plan) => {
+    // Given a planning turn whose first response reports a context past the model's window:
+    fixtureTransport().script([{ ...write("plan", plan.path, PLAN), usage: { input: 50_000_000, output: 1 } },
+      { text: "SUMMARY" }, { text: "Planned." }]);
+    await live.session.prompt("Plan a --version flag", { source: "extension" });
+    await live.drained();
+    // Then Pi compacted before its next request, and the contract follows the summary inside the same run.
+    const order = (live.session.sessionManager.getEntries() as { type: string; customType?: string; message?: { role?: string } }[])
+      .flatMap(entry => entry.type === "compaction" ? ["compaction"]
+        : entry.type === "custom_message" && entry.customType === PLAN_NOTE ? ["contract"]
+        : entry.type === "message" && entry.message?.role === "assistant" ? ["assistant"] : []);
+    expect(order).toEqual(["contract", "assistant", "compaction", "contract", "assistant"]);
+  }), 120_000);

@@ -17,7 +17,9 @@ async function planning(session: { blocked?: string; kickoff?: "refused" | "thro
   const plan = new PlanMode({
     dir, cwd: dir, prompts: { contract: () => "CONTRACT", reset: () => "", approved: () => "" }, askUser: false, todo: false,
     entries: () => entries, leaf: () => String(leaf), append: record => { add({ type: "custom", customType: PLAN_ENTRY, data: record }); },
-    busy: () => undefined, blocked: () => session.blocked, stopTurn: async () => {}, compact: async () => {}, reset: async () => {},
+    busy: () => undefined, blocked: () => session.blocked, stopTurn: async () => {},
+    // The owner pauses while the approved plan's context is being summarised.
+    compact: async () => { session.blocked = "The session is paused"; }, reset: async () => {},
     submit: async () => {
       if (session.kickoff === "throws") throw new Error("the held queue could not be saved");
       return session.kickoff !== "refused";
@@ -62,6 +64,14 @@ test("an approval the session cannot start leaves the same review open", async (
   blocked.plan.submit();
   expect(() => blocked.plan.choose("execute")).toThrow("The session is paused");
   expect(blocked.plan.phase).toBe("review");
+
+  // A pause that lands while the context is prepared is seen before the kickoff, and nothing starts.
+  const pausing = await planning();
+  pausing.plan.submit();
+  expect(pausing.plan.choose("execute_compact")).toBe("started");
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(pausing.plan.phase).toBe("review");
+  expect(pausing.notes.join("\n")).toContain("The session is paused");
 
   // A kickoff the session does not take, or fails to take, puts the submission back under the same card.
   for (const kickoff of ["refused", "throws"] as const) {
