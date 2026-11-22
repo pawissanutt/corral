@@ -10,9 +10,12 @@
 //! joined in offset order) and read again when the host's cards change. Only the read made for
 //! the card under review is drawn: a newer submission has a new card, so its view never shows
 //! an earlier one's text. A host that does not serve it, or a read that fails, leaves the card's
-//! own body, which holds the plan's first 8 KiB, with why.
+//! own body, which holds the plan's first 8 KiB, with why. An execute option runs the whole
+//! plan, so it cannot be chosen until the whole plan is shown: read whole for this card, or
+//! carried whole by the card (a body the host did not clip). Keep planning and Not now always
+//! can.
 
-use corral_protocol::detail::{CardKind, DetailBody, DetailRef, PlanModeDocPage};
+use corral_protocol::detail::{CardKind, DetailBody, DetailRef, PlanModeDocPage, SessionCard};
 use corral_protocol::session_host::CardAnswer;
 use corral_protocol::session_state::CardBrief;
 
@@ -52,6 +55,23 @@ fn whole<'f>(feed: &'f Feed, session: &str, card: &str) -> Option<&'f PlanModeDo
         }
         _ => None,
     }
+}
+
+/// Why an execute option of `card` cannot be chosen: an execute answer runs the whole plan, so
+/// it waits until the whole plan is shown, either read whole for this card or carried whole by
+/// the card itself. None once it is.
+fn unread(feed: &Feed, session: &str, card: &SessionCard) -> Option<&'static str> {
+    if whole(feed, session, &card.id).is_some() || (card.body.is_some() && !card.body_more) {
+        return None;
+    }
+    let failed = feed
+        .detail(&target(session, &card.id))
+        .is_some_and(|cache| cache.error.is_some());
+    Some(if failed {
+        "the whole plan could not be read; retry, or answer in the terminal"
+    } else {
+        "the whole plan is not read yet"
+    })
 }
 
 /// The plan review the owner opened, as the host's state briefs it.
@@ -196,7 +216,7 @@ pub(super) fn review(cx: &Cx<'_>, inert: Option<String>) -> Option<PlanReview> {
     let draft = cx.ui.dock.drafts.get(&brief.id);
     let picks = draft.map(|draft| draft.picks(0)).unwrap_or_default();
     let question = card.and_then(|card| card.questions.first());
-    let options = question.map_or_else(Vec::new, |question| {
+    let mut options = question.map_or_else(Vec::new, |question| {
         choice::options(&brief.id, question, picks, enabled, |option| {
             Action::Dock(DockAction::Choose {
                 session: cx.id.clone(),
@@ -205,6 +225,23 @@ pub(super) fn review(cx: &Cx<'_>, inert: Option<String>) -> Option<PlanReview> {
             })
         })
     });
+    let unread = card
+        .and_then(|card| unread(cx.feed, cx.id.as_str(), card))
+        .map(|why| match standing(cx, &brief.id, true).0 {
+            // A read that will not come: the note over the plan says why.
+            Some((Hue::Held, _)) => "the whole plan cannot be read here; answer in the terminal",
+            _ => why,
+        });
+    if let Some(why) = unread {
+        for option in options
+            .iter_mut()
+            .filter(|option| option.option != REVISE && option.unavailable.is_none())
+        {
+            option.unavailable = Some(why.to_owned());
+            option.needs_text = None;
+            option.action = None;
+        }
+    }
     let asking = picks.iter().any(|pick| pick == REVISE);
     let (label, placeholder) = if asking {
         ("Feedback", "What should change? Enter sends it, empty too")
@@ -287,13 +324,21 @@ pub(super) fn choose(
     option: &str,
     feed: &Feed,
 ) -> Vec<Effect> {
-    let Some(found) = dock::card(feed, session.as_str(), card_id)
-        .and_then(|card| card.questions.first())
+    let Some(card) = dock::card(feed, session.as_str(), card_id) else {
+        return Vec::new();
+    };
+    let Some(found) = card
+        .questions
+        .first()
         .and_then(|question| question.options.iter().find(|found| found.id == option))
     else {
         return Vec::new();
     };
-    if let Some(why) = &found.unavailable {
+    // Only Keep planning may answer a plan that is not shown whole, whatever chose the option.
+    let unread = (option != REVISE)
+        .then(|| unread(feed, session.as_str(), card))
+        .flatten();
+    if let Some(why) = found.unavailable.as_deref().or(unread) {
         state.ui_mut(session).notices.push(
             Hue::Held,
             format!("{}: unavailable: {why}", found.label),

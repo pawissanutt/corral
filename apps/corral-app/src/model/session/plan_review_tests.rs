@@ -85,6 +85,79 @@ fn cached(card: &str, body: Option<&str>, error: Option<ClientError>) -> DetailC
     }
 }
 
+/// An execute answer runs the whole plan: while only the card's clipped start is shown (the
+/// document's read pending, or failed), Execute must not go out by any route, and Keep planning
+/// still must.
+#[test]
+fn execute_waits_for_the_whole_plan_while_keep_planning_does_not() {
+    const CARD: &str = "plan-3-77aa01bc";
+    let mut clipped = card(
+        CARD,
+        CardKind::PlanReview,
+        vec![question(vec![option("execute"), option("revise")], true)],
+    );
+    clipped.body = Some("the plan's start".into());
+    clipped.body_more = true;
+    let mut feed = feed_with(clipped, SessionState::default());
+    let session = Id::from(SESSION);
+    let choose = |state: &mut State, feed: &Feed, option: &str| {
+        answers(&state.act(
+            Action::Dock(DockAction::Choose {
+                session: Id::from(SESSION),
+                card: CARD.into(),
+                option: option.into(),
+            }),
+            feed,
+        ))
+    };
+    let opened = || {
+        let mut state = State::default();
+        state.act(
+            Action::Dock(DockAction::Bring {
+                session: Id::from(SESSION),
+                card: CARD.into(),
+            }),
+            &feed,
+        );
+        state
+    };
+    let offered = |state: &State, feed: &Feed| {
+        let page = super::page(feed, state, &session, daemon_env(feed, Form::Desktop));
+        let options = page.dock.plan.map(|plan| plan.options).unwrap_or_default();
+        options
+            .into_iter()
+            .map(|option| option.unavailable.is_some())
+            .collect::<Vec<_>>()
+    };
+
+    let mut state = opened();
+    assert_eq!(offered(&state, &feed), [true, false]);
+    assert!(choose(&mut state, &feed, "execute").is_empty());
+
+    let mut revising = opened();
+    assert!(choose(&mut revising, &feed, "revise").is_empty());
+    let sent = choose(&mut revising, &feed, "revise");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].answers[0].options, ["revise"]);
+
+    let refused = ClientError {
+        code: "not_found".into(),
+        message: String::new(),
+    };
+    let failed = cached(CARD, None, Some(refused));
+    feed.details.insert(detail_key(&failed.target), failed);
+    assert_eq!(offered(&state, &feed), [true, false]);
+    assert!(choose(&mut state, &feed, "execute").is_empty());
+
+    let read = cached(CARD, Some("the plan's start and its rest"), None);
+    feed.details.insert(detail_key(&read.target), read);
+    assert_eq!(offered(&state, &feed), [false, false]);
+    let sent = choose(&mut state, &feed, "execute");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].card, CARD);
+    assert_eq!(sent[0].answers[0].options, ["execute"]);
+}
+
 /// The owner approves what the view shows: a new submission's review must never draw the
 /// document read for an earlier one, neither while its own read is pending nor after it failed.
 #[test]
