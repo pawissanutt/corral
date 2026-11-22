@@ -57,6 +57,8 @@ export interface HostConfig {
   readonly quickSummary?: boolean;
   readonly summary?: SummaryProfile;
   readonly ui?: UiMode;
+  /** `--plan`: start in plan mode unless the conversation is already planning. */
+  readonly planMode?: boolean;
 }
 
 type Json = Record<string, unknown>;
@@ -207,7 +209,7 @@ export function parseRunFlags(command: "run" | "chat", argv: readonly string[], 
   const { values } = parseArgs({ args: [...argv], options: {
     ...modelFlags, dir: { type: "string" }, socket: { type: "string" }, "prompt-file": { type: "string" },
     corral: { type: "string" }, project: { type: "string" }, headless: { type: "boolean" },
-    ...(command === "chat" ? { new: { type: "boolean" } } as const : {}),
+    ...(command === "chat" ? { new: { type: "boolean" }, plan: { type: "boolean" } } as const : {}),
   } });
   if (!values.dir && (command === "run" || values.dir !== undefined)) {
     throw new Error(`corral-pi ${command} requires --dir <session-directory>`);
@@ -234,6 +236,7 @@ export function parseRunFlags(command: "run" | "chat", argv: readonly string[], 
     sessionDir: join(dir, "sessions"), runtimeDir: join(dir, "runtime"),
     ...(!values.dir ? { terminalChat: true } as const : {}),
     freshSession: values.new === true || env.CORRAL_FRESH === "1",
+    ...(values.plan ? { planMode: true } : {}),
     ...(values["prompt-file"] ? { promptFile: resolve(cwd, values["prompt-file"]) } : {}),
     ...workspaceSettings(root, role, run, settings),
     ...(values.dir ? modelSettings(values) : { ...modelSettings(values, "startup"), startupModel: startupModelSetting(settings) }),

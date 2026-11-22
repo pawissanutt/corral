@@ -1,0 +1,84 @@
+// The terminal's plan review: the submitted plan in the pager, with the owner's choices as its keys. The app
+// answers the same submission through its card; whichever answers first closes the other.
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { PlanChoice, PlanMode } from "../host/plan-mode.ts";
+import { openPager, type PagerAction, type PagerLine } from "./pager.ts";
+
+const CHOICES: Readonly<Record<string, PlanChoice>> = { e: "execute", c: "execute_clean", s: "execute_compact" };
+const ACTIONS: readonly PagerAction[] = [
+  { key: "e", label: "execute" }, { key: "c", label: "clean context" }, { key: "s", label: "compacted" },
+  { key: "m", label: "model" }, { key: "k", label: "keep planning" },
+];
+
+export interface PlanReviewOptions {
+  model(): string | undefined;
+  /** Pi's own model selector; absent where this host has none to open. */
+  selectModel?(): boolean;
+  notice(text: string): void;
+}
+
+export class PlanReviewUi {
+  private ui: ExtensionUIContext | undefined;
+  private shown: AbortController | undefined;
+  /** The submission the review opened for unasked, so each is offered once. */
+  private offered: string | undefined;
+  /** The submission to return to once a model selection settles. */
+  private selecting: string | undefined;
+
+  constructor(private readonly plan: PlanMode, private readonly options: PlanReviewOptions) {}
+
+  install(pi: ExtensionAPI): void {
+    pi.on("session_start", (_event, ctx) => { if (ctx.mode === "tui") this.ui = ctx.ui; });
+    // The agent submits inside its turn; the review opens once that turn has ended.
+    pi.on("agent_settled", () => {
+      const id = this.plan.review;
+      if (id === undefined || id === this.offered) return;
+      this.offered = id;
+      void this.show();
+    });
+    pi.on("model_select", () => {
+      const id = this.selecting;
+      this.selecting = undefined;
+      if (id !== undefined && id === this.plan.review) void this.show();
+    });
+    const unsubscribe = this.plan.onChange(() => { if (this.plan.review === undefined) this.shown?.abort(); });
+    pi.on("session_shutdown", () => {
+      unsubscribe();
+      this.shown?.abort();
+    });
+  }
+
+  /** Open the review of the pending submission; false when there is none or no terminal to draw it in. */
+  async show(): Promise<boolean> {
+    const ui = this.ui, id = this.plan.review;
+    if (!ui || id === undefined) return false;
+    if (this.shown) return true;
+    const { title, revision } = this.plan.record;
+    const text = this.plan.reviewText();
+    const lines: (string | PagerLine)[] = text === undefined
+      ? ["The plan file changed after it was submitted. Choose keep planning and have it submitted again."]
+      : text.split("\n").map(line => /^#{1,6}\s/.test(line) ? { text: line, heading: true } : line);
+    const control = this.shown = new AbortController();
+    let key: string | undefined;
+    try {
+      key = await openPager(ui, { title: `Plan review · ${title ?? "Plan"} · revision ${revision} · ${this.options.model() ?? "no model"}`,
+        lines, wrap: true, actions: ACTIONS }, control.signal);
+    } finally {
+      if (this.shown === control) this.shown = undefined;
+    }
+    if (key === undefined || this.plan.review !== id) return true;
+    if (key === "m") {
+      if (this.options.selectModel?.()) this.selecting = id;
+      else this.options.notice("Change the model with /model, then reopen the review with /plan.");
+    } else if (key === "k") {
+      const feedback = await ui.input("What should change in the plan?", "Feedback for the agent; leave empty to type it as a message");
+      // Esc on the feedback returns to the review rather than deciding anything.
+      if (feedback === undefined) return this.show();
+      if (this.plan.review === id) this.plan.choose("revise", feedback);
+    } else {
+      const choice = CHOICES[key];
+      if (choice) this.plan.choose(choice);
+    }
+    return true;
+  }
+}

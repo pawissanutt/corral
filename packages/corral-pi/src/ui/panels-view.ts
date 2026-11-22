@@ -38,6 +38,8 @@ export interface PanelSnapshot {
   readonly steering: number;
   readonly followUps: number;
   readonly queue?: readonly QueuedItem[];
+  /** Plan mode's phase while it is on. */
+  readonly planMode?: "planning" | "review";
 }
 export interface PanelFile { readonly path: string; readonly status: string; readonly originalPath?: string }
 export interface PanelLine {

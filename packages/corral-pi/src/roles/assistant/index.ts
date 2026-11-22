@@ -4,6 +4,7 @@ import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import { requestContract, sessionTodoTool } from "../common/todo.ts";
 import { askUserContract } from "../common/ask-user.ts";
 import { calibrationReader } from "../common/family.ts";
+import { planPrompts } from "../common/plan-mode.ts";
 import type { RoleModule, UpstreamTool } from "../types.ts";
 import { assistantShellRefusal } from "./guard.ts";
 export const CONTRACT_ASSET = "assets/assistant-contract.md";
@@ -31,6 +32,7 @@ export function assistantRole(root: string): RoleModule {
     },
     calibration: calibrationReader(root, "assistant"),
     shellRefusal: assistantShellRefusal,
+    planMode: planPrompts(root),
   };
 }
 

@@ -9,7 +9,7 @@ const CARD_MAX_BYTES = 12 * 1024;
 const BODY_MAX_BYTES = 8 * 1024;
 export const CARD_OPTION_MAX = 64;
 
-export type CardKind = "question" | "select" | "confirm" | "input" | "exit" | "child_question" | "board_plan";
+export type CardKind = "question" | "select" | "confirm" | "input" | "exit" | "child_question" | "board_plan" | "plan_review";
 export interface CardOption {
   id: string; label: string; detail?: string; unavailable?: string; needs_text?: string; destructive: boolean;
 }

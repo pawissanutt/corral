@@ -2,6 +2,7 @@ import type { BuildSettings } from "../../build/types.ts";
 import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import { askUserContract } from "../common/ask-user.ts";
 import { calibrationReader } from "../common/family.ts";
+import { planPrompts } from "../common/plan-mode.ts";
 import { requestContract, sessionTodoTool } from "../common/todo.ts";
 import type { RoleContext, RoleModule, UpstreamTool } from "../types.ts";
 import { buildShellRefusal, installBuildGuard } from "./guard.ts";
@@ -72,6 +73,7 @@ export function buildRole(root: string): RoleModule {
     calibration: calibrationReader(root, "build"),
     shellRefusal: buildShellRefusal,
     extend: installBuildGuard,
+    planMode: planPrompts(root),
   };
 }
 

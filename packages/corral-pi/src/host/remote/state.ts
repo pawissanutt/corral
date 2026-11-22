@@ -35,6 +35,8 @@ const LAND_TAIL_LINES = 8, LAND_TAIL_BYTES = 200;
 const CONFLICT_PATHS = 20, CONFLICT_BYTES = 240;
 interface BoardBrief { open: number; blocked: number; failed: number; proposed: boolean }
 interface PlanBrief { done: number; total: number; current?: string; stale: boolean }
+/** Plan mode while it is on; `plan` above is the todo ledger. */
+interface PlanModeBrief { phase: "planning" | "review"; title?: string; revision?: number }
 interface Capability { id: string; unavailable?: string }
 export interface SessionState {
   mode: "interactive" | "headless"; turn: number; open: boolean; paused: boolean;
@@ -42,7 +44,7 @@ export interface SessionState {
   effort?: string; effort_levels: readonly string[]; usage: UsageBrief;
   queue: QueuedInput[]; queue_total: number; cards: CardBrief[]; exit?: ExitBrief;
   children: Counts; jobs: Counts; changes?: number; board?: BoardBrief; plan?: PlanBrief;
-  notices: HostNotice[]; can: Capability[];
+  plan_mode?: PlanModeBrief; notices: HostNotice[]; can: Capability[];
 }
 
 export type SessionPart = "cards" | "children" | "jobs" | "changes" | "usage" | "plan" | "context" | "board" | "record" | "models" | "commands";
@@ -153,7 +155,7 @@ const REMOTE_CAPABILITIES: Readonly<Record<string, string | undefined>> = {
   changes: "changes", usage: "usage", plan: "plan", context: "context", commands: "commands", board: "board",
   board_plan_task: "board_plan_task",
   record: "record", exit_open: "exit", compact: "compact", export: "export", owner_bash: "shell",
-  model_favorite: "model_favorite",
+  model_favorite: "model_favorite", plan_mode: "plan_mode", plan_mode_doc: "plan_mode_doc",
 };
 
 export function capabilities(registry: RemoteRegistry, options: { open: boolean; closing: boolean; rewind: boolean }): Capability[] {
@@ -168,7 +170,7 @@ export function capabilities(registry: RemoteRegistry, options: { open: boolean;
   for (const capability of can) {
     if (options.closing) capability.unavailable = "Session is stopping";
     else if (capability.id === "jobs" && !registry.get("job_output")) capability.unavailable = "Managed jobs are not enabled";
-    else if (options.open && (capability.id === "model" || capability.id === "compact" || capability.id === "export")) {
+    else if (options.open && ["model", "compact", "export", "plan_mode"].includes(capability.id)) {
       capability.unavailable = "Wait for the current turn to finish";
     }
   }

@@ -28,7 +28,8 @@ export function shellDisposition(draft: string): ShellDisposition | undefined {
  * `Message`, plus the last typed input's disposition while it still matters: pending admission,
  * queued, or refused with its reason. Started and handled input adds nothing. `target` names who
  * the message goes to, in that receiver's colour, when it is not the session's own agent. `shell` replaces the
- * receiver while the draft is an owner `!command`: `→ shell` and where its output goes.
+ * receiver while the draft is an owner `!command`: `→ shell` and where its output goes. Plan mode adds `PLAN`
+ * (`PLAN · review` while a submitted plan awaits the owner).
  */
 export function composerTitle(snapshot: PanelSnapshot | null,
   target?: { readonly label: string; readonly color: string }, shell?: ShellDisposition): string {
@@ -40,7 +41,8 @@ export function composerTitle(snapshot: PanelSnapshot | null,
     : "";
   const to = shell ? ` ${PANEL_TEXT}→ shell${PANEL_MUTED} · ${shell === "agent" ? "output goes to the agent" : "output stays here"}`
     : target ? ` ${target.color}→ ${plainLabel(target.label)}${PANEL_MUTED}` : "";
-  return PANEL_MUTED + "Message" + to + state;
+  const plan = snapshot?.planMode ? ` · ${PANEL_BLUE}PLAN${snapshot.planMode === "review" ? " · review" : ""}${PANEL_MUTED}` : "";
+  return PANEL_MUTED + "Message" + plan + to + state;
 }
 
 function border(focused: boolean): string { return PANEL_BG + (focused ? PANEL_BLUE : PANEL_LINE); }

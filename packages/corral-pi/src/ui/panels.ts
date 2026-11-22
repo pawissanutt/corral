@@ -1084,6 +1084,12 @@ export class NativePanels implements PanelSurface {
     this.build.openFinish();
     return true;
   }
+  /** Pi's own model selector, as its key opens it. False when the interactive editor is not running. */
+  selectModel(): boolean {
+    if (!this.ui || !this.nativeAction || this.disposed) return false;
+    this.nativeAction("app.model.select");
+    return true;
+  }
   /** `/board`: the Board view, when the interactive panels are running. */
   showBoard(): void {
     if (!this.build || !this.options.build?.board || !this.ui || this.disposed) return;

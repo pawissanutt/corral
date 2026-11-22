@@ -69,6 +69,9 @@ import { TodoLedger, installPlanCommand } from "../ui/todo.ts";
 import type { HostCapabilities, ModelChoice, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { askUserTool, localQuestionAsk } from "./ask-user.ts";
+import { PLAN_ENTRY, PLAN_OPTIONS, PLAN_SUBMIT_TOOL, PlanMode, planSubmitTool } from "./plan-mode.ts";
+import { registerPlanMode } from "./remote/plan.ts";
+import { PlanReviewUi } from "../ui/plan-review.ts";
 import { isToolApproval, PENDING_MAX, PendingQuestions, QUESTION_ENTRY, validAnswer } from "./pending-questions.ts";
 import { OwnerQuestionUi } from "../ui/owner-questions.ts";
 import { registerCacheStats } from "../ui/cache-stats.ts";
@@ -143,6 +146,8 @@ export interface HostSessionOptions {
   readonly summary?: SummaryOptions;
   readonly promptFile?: string;
   readonly todo?: boolean;
+  /** `--plan`: a session that is not already planning starts in plan mode. */
+  readonly planMode?: boolean;
   /** The session's recorded snapshot; when present it decides todo. */
   readonly capabilities?: HostCapabilities;
   /** The snapshot's settings and project-text trust; absent loads no optional guidance. */
@@ -309,6 +314,10 @@ export function providerErrorClass(message: string): string {
   return "unknown";
 }
 
+/** The SDK's refusals for a session with nothing left to summarise; neither is a failure of the caller's intent. */
+const uncompactable = (error: unknown): boolean =>
+  error instanceof Error && /^(Nothing to compact|Already compacted)/.test(error.message);
+
 /** Changes "since session" compares against the HEAD each root had when this session first read it. */
 const REVIEW_BASE_ENTRY = "corral_review_base";
 const panelStats = (stats: { readonly tokens: { readonly total: number }; readonly cost: number }) => ({ tokens: stats.tokens.total, cost: stats.cost });
@@ -349,6 +358,11 @@ export class HostSession {
   private readonly localTools: readonly ToolDefinition[];
   private dialogPi: ExtensionAPI | undefined;
   private readonly ownerQuestions: PendingQuestions | undefined;
+  /** Present for the roles that ship plan-mode prompts. */
+  readonly planMode: PlanMode | undefined;
+  private planReview: PlanReviewUi | undefined;
+  /** The summary a clean-context reset writes in place of a model-made one. */
+  private planReset: string | undefined;
   private readonly remotePrompts: RemotePrompts;
   private readonly local: LocalControlPlane;
   private questionUi: OwnerQuestionUi | undefined;
@@ -421,12 +435,37 @@ export class HostSession {
       this.panels?.refresh();
     });
     this.dialogs = new RemoteDialogs(() => this.liveEvents.stateChanged(), {
-      entries: () => [...questionEntries(this.ownerQuestions), ...this.remoteBuild.entries()],
+      entries: () => {
+        const review = this.planMode?.card();
+        return [...questionEntries(this.ownerQuestions), ...this.remoteBuild.entries(), ...(review ? [review] : [])];
+      },
       absent: id => questionStatus(this.ownerQuestions?.status(id) ?? "missing"),
       shared: () => this.attached === "interactive",
     });
     this.provider = options.provider ?? "openai-codex";
     this.local = new LocalControlPlane(options.build?.dir ?? options.runtimeDir ?? options.agentDir, options.identity);
+    const planPrompts = options.modules.role.planMode;
+    this.planMode = planPrompts ? new PlanMode({
+      dir: options.build?.dir ?? options.runtimeDir ?? options.agentDir, cwd: options.cwd, prompts: planPrompts,
+      askUser: options.capabilities?.enabled.includes("ask_user") === true,
+      todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
+      entries: () => this.session.sessionManager.getBranch(),
+      leaf: () => this.session.sessionManager.getLeafId(),
+      append: record => { this.session.sessionManager.appendCustomEntry(PLAN_ENTRY, record, { immediate: true }); },
+      busy: () => !this.remoteActionsReady ? "Session is not accepting plan actions"
+        : this.open || this.session.isStreaming || this.session.isCompacting ? "Stop the current turn or wait for it to finish" : undefined,
+      stopTurn: async () => { if (this.open) await this.cancelRun(undefined, "owner"); },
+      compact: instructions => this.planCompact(instructions),
+      reset: summary => this.planResetContext(summary),
+      submit: async (text, origin) => {
+        const result = await (origin === "auto" ? this.submitAutomated(text) : this.submitLocal({ text, origin, busyPolicy: "steer" }));
+        return result.disposition === "started" || result.disposition === "queued";
+      },
+      model: () => this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : undefined,
+      changed: () => { this.liveEvents.stateChanged(); this.panels?.refresh(); },
+      note: (text, tone = "text") => { this.addMark({ kind: "note", tone, at: Date.now(), text }); },
+      approved: summary => { this.buildControls?.noteOwnerInput(summary); },
+    }) : undefined;
     const sessionRoot = options.build?.dir ?? options.sessionDir;
     const retained = sessionRoot ? new RetainedChildren(sessionRoot) : undefined;
     this.remoteDefaultModel = options.model.startsWith(`${this.provider}/`) ? options.model : `${this.provider}/${options.model}`;
@@ -704,8 +743,9 @@ export class HostSession {
       throw new Error("module_invalid: mcp.enabled needs its configured settings");
     }
     const search = options.capabilities?.enabled.includes("tool_search") === true;
+    // plan_submit stays out of localTools, which children inherit; it is present in every phase so the tool list is stable.
     this.baseLoadout = [...role.upstreamTools.filter(name => !local.includes(name)), ...corralToolNames(specs), ...local,
-      ...(mcp ? MCP_CONTROLS : []), ...(mcp && search ? ["mcp_activate"] : []), ...(search ? ["tool_search"] : []),
+      ...(this.planMode ? [PLAN_SUBMIT_TOOL] : []), ...(mcp ? MCP_CONTROLS : []), ...(mcp && search ? ["mcp_activate"] : []), ...(search ? ["tool_search"] : []),
       ...(options.capabilities?.enabled.includes("codemode") ? ["codemode"] : [])];
     if (new Set(this.loadout).size !== this.loadout.length) throw new Error("module_invalid: the loadout names a tool twice");
     this.settings = {
@@ -970,7 +1010,15 @@ export class HostSession {
     const pi = api;
     this.dialogPi = pi;
     registerCacheStats(pi);
-    if (this.options.quickSummary) pi.on("session_before_compact", async event => {
+    if (this.options.quickSummary || this.planMode) pi.on("session_before_compact", async event => {
+      // A clean-context reset supplies its own summary and keeps no earlier entry: a null first-kept entry
+      // is the session manager's own "nothing kept", which the compaction result's type does not name.
+      const reset = this.planReset;
+      if (reset !== undefined) {
+        return { compaction: { summary: reset, firstKeptEntryId: null as unknown as string,
+          tokensBefore: event.preparation.tokensBefore, details: { corral_plan_reset: true } } };
+      }
+      if (!this.options.quickSummary) return undefined;
       try {
         const model = this.session.model;
         if (!model) throw new Error("model_unavailable: quick summary has no session model");
@@ -1012,6 +1060,40 @@ export class HostSession {
       if (this.bound) this.commands?.bound();
       this.liveEvents.stateChanged();
     });
+    const plan = this.planMode;
+    if (plan) {
+      // The mode reaches the model as a conversation message, so the system prompt never changes with it.
+      pi.on("before_agent_start", () => {
+        const message = plan.turnMessage();
+        return message ? { message } : undefined;
+      });
+      pi.registerTool(planSubmitTool(() => plan));
+      if (this.options.ui !== "plain") {
+        this.planReview = new PlanReviewUi(plan, {
+          model: () => this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : undefined,
+          selectModel: () => this.panels?.selectModel() ?? false,
+          notice: text => { this.addMark({ kind: "note", tone: "text", at: Date.now(), text }); },
+        });
+        this.planReview.install(pi);
+      }
+      pi.registerCommand("plan", {
+        description: "Toggle plan mode; /plan <request> starts planning it, /plan off leaves",
+        handler: async (args, ctx) => {
+          try {
+            const result = await plan.command(args);
+            if (!result.review) this.notice(result.text, "text", ctx.ui);
+            else if (!await this.planReview?.show()) {
+              // Without the pager the same choices are a plain selection.
+              const picked = await ctx.ui.select(result.text, PLAN_OPTIONS.map(option => option.label));
+              const option = PLAN_OPTIONS.find(candidate => candidate.label === picked);
+              if (option) plan.choose(option.id);
+            }
+          } catch (error) {
+            this.notice(error instanceof Error ? error.message : String(error), "error", ctx.ui);
+          }
+        },
+      });
+    }
     const code = this.code;
     if (code) {
       pi.registerTool(codemodeTool(code, (names) =>
@@ -1132,6 +1214,7 @@ export class HostSession {
       ...(this.controls.bashRules ? { rules: this.controls.bashRules } : {}),
       ...(this.toolApprovals ? { approvals: this.toolApprovals } : {}),
       ...(writeScope === undefined ? {} : { writeScope }),
+      ...(plan ? { plan } : {}),
       events: this.options.events, corral, currentTurn: () => this.currentTurn(),
     });
     if (!this.loadout.includes("bash")) {
@@ -1190,6 +1273,7 @@ export class HostSession {
       // A build session's record keeps what the owner asked for, verbatim.
       if (event.source === "interactive" && !event.text.startsWith("/")) {
         if (await this.options.paneInput?.(event.text, event.images)) return { action: "handled" as const };
+        this.planMode?.ownerSpoke();
         this.buildControls?.noteOwnerInput(event.text);
       }
       return { action: "continue" as const };
@@ -1491,6 +1575,7 @@ export class HostSession {
       compact: instructions => this.session.compact(instructions),
       export: this.exportable() ? () => this.reportedExport() : undefined,
     });
+    if (this.planMode) registerPlanMode(registry, this.planMode);
   }
 
   private remoteCommands() {
@@ -1620,6 +1705,32 @@ export class HostSession {
     await this.remoteChanges.captureBase(this.workspaceGit.worktree);
     await this.ledger?.restore().catch(() => false);
     await this.questionUi?.recover();
+    const plan = this.planMode;
+    if (plan && this.options.planMode && plan.phase === "off") {
+      this.addMark({ kind: "note", tone: "text", at: Date.now(), text: await plan.enter() });
+    } else if (plan?.review !== undefined) {
+      this.addMark({ kind: "note", tone: "text", at: Date.now(), text: `"${plan.record.title ?? "Plan"}" is awaiting your review: /plan` });
+    }
+  }
+
+  /** Summarise the planning discussion before an approved plan runs; a session too small to compact is left as it is. */
+  private async planCompact(instructions: string): Promise<void> {
+    try { await this.session.compact(instructions); }
+    catch (error) { if (!uncompactable(error)) throw error; }
+  }
+
+  /** Replace the model's context with `summary`. Where the SDK declines to compact, the same entry is appended directly. */
+  private async planResetContext(summary: string): Promise<void> {
+    this.planReset = summary;
+    try { await this.session.compact(); }
+    catch (error) {
+      if (!uncompactable(error)) throw error;
+      this.session.sessionManager.appendCompaction(summary, null, this.session.getContextUsage()?.tokens ?? 0,
+        { corral_plan_reset: true }, true);
+      this.session.refreshContext();
+    } finally {
+      this.planReset = undefined;
+    }
   }
 
   private commandNoticeSeen(key: string): boolean {
@@ -1655,6 +1766,7 @@ export class HostSession {
         return { disposition: "handled" };
       }, error => ({ disposition: "rejected", reason: utf8Prefix(error instanceof Error ? error.message : String(error), 256) }));
     }
+    if (input.origin === "owner") this.planMode?.ownerSpoke();
     const tag = this.queue.bridgeInput(input, { ...source, socketId, transcriptId });
     return this.promptInput(input, tag, images).then(result => {
       if (input.origin === "owner" && (result.disposition === "started" || result.disposition === "queued")) {
@@ -1840,7 +1952,7 @@ export class HostSession {
       activity: this.liveEvents.activity, last_error: this.turnError ?? undefined, model,
       effort: effort_levels.length ? session.thinkingLevel : undefined, effort_levels, usage,
       queue, queue_total, cards, exit, children: this.liveEvents.childCounts, jobs: jobCounts(jobs, recovered.length),
-      board, plan, changes: this.remoteChanges.count, notices: this.liveEvents.notices, can: capabilities(this.remoteRegistry, {
+      board, plan, plan_mode: this.planMode?.brief(), changes: this.remoteChanges.count, notices: this.liveEvents.notices, can: capabilities(this.remoteRegistry, {
         open: this.open || session.isStreaming || session.isCompacting, closing: this.closing, rewind: this.checkpoints !== undefined,
       }),
     };
@@ -1898,6 +2010,7 @@ export class HostSession {
       skills: this.runtime.services.resourceLoader.getSkills().skills.map(skill => skill.name),
       ledger: this.ledger?.current ?? null, ledgerStale: this.ledger?.unavailable ?? true,
       ledgerContinued: this.ledger?.continued ?? null,
+      ...(this.planMode && this.planMode.phase !== "off" ? { planMode: this.planMode.phase } : {}),
       inspector: {
         session: session.sessionId, boundSession: this.boundSessionId ?? null,
         turn: this.turn, turnOpen: this.open,

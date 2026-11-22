@@ -28,8 +28,8 @@ export function commandsPart(registry: RemoteRegistry, input: {
   if (registry.get("board_refresh")) commands.push({ name: "board", description: "Refresh the build board", source: "host" });
   if (registry.get("export")) commands.push({ name: EXPORT_COMMAND, description: "Attach an offline HTML session export", source: "host" });
   if (input.rewind) commands.push({ name: "rewind", description: "Restore a recorded turn", source: "host", args_hint: "[--list]" });
-  if (registry.get("plan")) commands.push({ name: "todo", description: "Show the session plan", source: "host" },
-    { name: "plan", description: "Show the session plan", source: "host" });
+  if (registry.get("plan")) commands.push({ name: "todo", description: "Show the session plan", source: "host" });
+  if (registry.get("plan_mode")) commands.push({ name: "plan", description: "Toggle plan mode", source: "host", args_hint: "[request | off]" });
   const seen = new Set(commands.map(command => command.name));
   function add(name: string, description: string | undefined, source: SlashCommand["source"]) {
     if (seen.has(name) || Object.hasOwn(HIDDEN, name) || !name || Buffer.byteLength(name) > 256) return;
@@ -44,13 +44,15 @@ export function commandsPart(registry: RemoteRegistry, input: {
 
 /** Commands with a host action use the same preflight when typed instead of picked. */
 export function typedSessionAction(registry: RemoteRegistry, text: string) {
-  const command = /^\/(finish|board|compact|corral-export)(?:[ \t]+([\s\S]*))?$/.exec(text);
+  const command = /^\/(finish|board|compact|corral-export|plan)(?:[ \t]+([\s\S]*))?$/.exec(text);
   if (!command) return;
   const name = command[1], args = command[2]?.trim();
-  const method = name === "finish" ? "exit_open" : name === "board" ? "board_refresh" : name === "compact" ? "compact" : "export";
+  const method = name === "finish" ? "exit_open" : name === "board" ? "board_refresh" : name === "compact" ? "compact"
+    : name === "plan" ? "plan_mode" : "export";
   const run = registry.get(method);
   if (!run) return;
   return Promise.resolve().then(() => {
+    if (method === "plan_mode") return run({ command: args ?? "" });
     if (args && method !== "compact") throw new BridgeRefusal("bad_input", "this command does not take arguments");
     return run(method === "compact" && args ? { instructions: args } : {});
   });

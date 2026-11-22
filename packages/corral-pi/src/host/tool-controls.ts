@@ -11,6 +11,7 @@ import {
 import { type HookSettings, HookSettingsSchema, type Hooks } from "../capabilities/hooks.ts";
 import { classifyWriteScope } from "../roles/assistant/write-scope.ts";
 import type { Role } from "../roles/types.ts";
+import type { PlanMode } from "./plan-mode.ts";
 import type { ShellTool, ToolApprovals } from "./tool-approvals.ts";
 
 export interface HostControls {
@@ -48,6 +49,8 @@ export interface ToolControls {
   readonly approvals?: ToolApprovals;
   /** Undefined for roles without a parent-session write guard; null for an unbound build. */
   readonly writeScope?: Parameters<typeof classifyWriteScope>[1] | null;
+  /** Plan mode's refusals, and the plan document it keeps out of the write-scope decision. */
+  readonly plan?: Pick<PlanMode, "refusal" | "writesPlan">;
   readonly events: EventLog;
   readonly corral: ReadonlySet<string>;
   currentTurn(): number | undefined;
@@ -79,7 +82,12 @@ export function installToolControls(pi: ExtensionAPI, controls: ToolControls): v
       controls.events.emit("bash_rule_denied", { tool_call_id: event.toolCallId, fixed: true, ...(nested ? { nested: true } : {}) });
       return { block: true, reason: fixed };
     }
-    if (controls.writeScope !== undefined && (toolName === "edit" || toolName === "write")) {
+    const planned = controls.plan?.refusal(toolName, input);
+    if (planned !== undefined) {
+      controls.events.emit("plan_mode_denied", { tool_call_id: event.toolCallId, tool: toolName, ...(nested ? { nested: true } : {}) });
+      return { block: true, reason: planned };
+    }
+    if (controls.writeScope !== undefined && (toolName === "edit" || toolName === "write") && !controls.plan?.writesPlan(toolName, input)) {
       if (!controls.writeScope || typeof input.path !== "string") {
         return { block: true, reason: "File changes require a bound session directory and a target path; nothing was written." };
       }

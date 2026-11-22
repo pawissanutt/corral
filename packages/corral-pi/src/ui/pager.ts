@@ -253,10 +253,20 @@ export class PagerView implements Component {
 
 /**
  * A framed read-only overlay: title in the border, `a–b / n` position, wheel, arrows, PgUp/PgDn, Home/End; `d`
- * switches to the exact records when given. Resolves the key of the action that closed it, or undefined for q/Esc.
+ * switches to the exact records when given. Resolves the key of the action that closed it, or undefined for q/Esc
+ * and for `signal`, which closes a pager whose subject was settled elsewhere.
  */
-export async function openPager(ui: ExtensionUIContext, input: PagerInput): Promise<string | undefined> {
-  return ui.custom<string | undefined>((tui, _theme, _keys, done) =>
-    new PagerView(input, () => tui.terminal.rows, () => tui.requestRender(), key => done(key)),
-  { overlay: true, overlayOptions: PLACE });
+export async function openPager(ui: ExtensionUIContext, input: PagerInput, signal?: AbortSignal): Promise<string | undefined> {
+  if (signal?.aborted) return undefined;
+  let close: (() => void) | undefined;
+  const abort = () => close?.();
+  signal?.addEventListener("abort", abort, { once: true });
+  try {
+    return await ui.custom<string | undefined>((tui, _theme, _keys, done) => {
+      close = () => done(undefined);
+      return new PagerView(input, () => tui.terminal.rows, () => tui.requestRender(), key => done(key));
+    }, { overlay: true, overlayOptions: PLACE });
+  } finally {
+    signal?.removeEventListener("abort", abort);
+  }
 }

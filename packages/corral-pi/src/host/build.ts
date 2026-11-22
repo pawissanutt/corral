@@ -83,6 +83,7 @@ export function buildHostConfig(launch: BuildLaunchOptions, record: BuildSession
     provider: (record.route ?? launch).provider, model: (record.route ?? launch).model,
     effort: (record.route ?? launch).effort, fallback: (record.route ?? launch).fallback,
     aws: (record.route ?? launch).aws,
+    ...(local.plan ? { planMode: true } : {}),
   };
 }
 

@@ -101,4 +101,19 @@ export interface RoleModule {
   readonly shellRefusal?: (command: string, bare?: boolean) => string | undefined;
   /** Optional role commands (slash commands). Tools registered here are never activated. */
   extend?(pi: ExtensionAPI, context: RoleContext): void;
+  /** The role's plan-mode prompts; a role without them has no plan mode. */
+  readonly planMode?: PlanPrompts;
+}
+
+/** How the context was prepared for executing an approved plan. */
+export type PlanContext = "keep" | "compact" | "clean";
+
+/** Plan-mode messages, sent as conversation messages so the system prompt never changes with the mode. */
+export interface PlanPrompts {
+  /** The planning contract; `existing` says the plan file is already there. */
+  contract(input: { path: string; existing: boolean; askUser: boolean }): string;
+  /** The message that starts execution of an approved plan. */
+  approved(input: {
+    path: string; title: string; revision: number; plan: string; context: PlanContext; note?: string; todo: boolean;
+  }): string;
 }

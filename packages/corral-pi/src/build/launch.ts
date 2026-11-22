@@ -14,6 +14,8 @@ export interface LocalBuildOptions {
   readonly id?: string;
   readonly socket?: string;
   readonly headless: boolean;
+  /** `--plan`: start in plan mode. */
+  readonly plan?: boolean;
 }
 
 function buildDataRoot(value: string | undefined, env: NodeJS.ProcessEnv, cwd: string): string {
@@ -48,7 +50,7 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
     ...modelFlags, "data-dir": { type: "string" }, socket: { type: "string" }, corral: { type: "string" },
     project: { type: "string" }, profile: { type: "string" }, name: { type: "string" }, resume: { type: "string" },
     id: { type: "string" },
-    here: { type: "boolean" }, headless: { type: "boolean" },
+    here: { type: "boolean" }, headless: { type: "boolean" }, plan: { type: "boolean" },
   } as const;
   const { values } = parseArgs({ args: [...argv], options });
   if (values.id !== undefined) {
@@ -88,7 +90,7 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
       ...route, ...(corral ? { corral } : { bare: true }),
       ...(workspaceRoot ? { workspaceRoot } : {}), ...(corral && project ? { project } : {}),
       ...(values.name ? { name: values.name } : {}), ...(resuming ? { resume } : {}), settings },
-    local: { headless: values.headless === true || !process.stdin.isTTY,
+    local: { headless: values.headless === true || !process.stdin.isTTY, ...(values.plan ? { plan: true } : {}),
       ...(values.id !== undefined ? { id: values.id } : {}),
       ...(values.socket ? { socket: resolve(cwd, values.socket) } : {}) },
     startupModel: workspaceRoot ? startupModelSetting(raw) : null,

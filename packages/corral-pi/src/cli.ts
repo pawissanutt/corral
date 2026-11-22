@@ -5,8 +5,8 @@ import { restrictEnvironment } from "./host/restrict.ts";
 
 const usage = `Usage:
   corral-pi run --dir <run-dir> [--socket <path>] [--prompt-file <path>] [--corral <path>] [model flags]
-  corral-pi chat [--new | --dir <chat-dir>] [--socket <path>] [--corral <path>] [model flags]
-  corral-pi build [--data-dir <path>] [--id <id>] [--name <name>] [--profile <name>] [--here] [--socket <path>] [--corral <path>] [--headless] [model flags]
+  corral-pi chat [--new | --dir <chat-dir>] [--plan] [--socket <path>] [--corral <path>] [model flags]
+  corral-pi build [--data-dir <path>] [--id <id>] [--name <name>] [--profile <name>] [--here] [--plan] [--socket <path>] [--corral <path>] [--headless] [model flags]
   corral-pi build --resume <id> [--data-dir <path>] [--socket <path>] [--corral <path>] [--headless]
   corral-pi build --prune [--session <id> [--json]] [--dry-run] [--data-dir <path>]
   corral-pi login [--provider <id>] [--auth-dir <path>]
@@ -15,6 +15,7 @@ Model flags: --model [<provider>/]<id>, --provider <id>, --effort <level>, --aws
 New terminal chat and Build sessions use a saved startup model or ask you to choose one.\nFor new headless sessions without an available default, pass --model <provider/model>.
 Fallback: repeat --fallback <provider>/<model> to try models in order when a subscription quota is exhausted.
 Sessions can also take --project <name> and --headless; non-interactive launches are headless by default.
+--plan starts chat or Build in plan mode: the agent plans with you and waits for your approval before changing anything.
 `;
 
 export async function main(argv = process.argv.slice(2), compiled = fileURLToPath(import.meta.url).startsWith("/$bunfs/")): Promise<void> {
