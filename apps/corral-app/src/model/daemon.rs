@@ -53,6 +53,8 @@ pub struct TopicState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DetailCache {
+    /// Record IDs kept as display boundaries across transcript refreshes.
+    pub transcript_seams: BTreeSet<String>,
     pub target: DetailRef,
     pub pages: Vec<DetailReply>,
     pub loading: bool,
@@ -381,6 +383,7 @@ impl Feed {
         self.details.insert(
             key,
             DetailCache {
+                transcript_seams: Default::default(),
                 target,
                 pages: Vec::new(),
                 loading: false,
@@ -475,6 +478,7 @@ mod tests {
         feed.details.insert(
             detail_key(&target),
             DetailCache {
+                transcript_seams: Default::default(),
                 target,
                 pages: Vec::new(),
                 loading: false,

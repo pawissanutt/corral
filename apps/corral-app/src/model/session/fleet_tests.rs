@@ -231,6 +231,7 @@ fn the_part_of_the_agents_tab_buttons_are_built_from_is_equal_across_a_clock_tic
         feed.details.insert(
             daemon::detail_key(&jobs),
             DetailCache {
+                transcript_seams: Default::default(),
                 target: jobs.clone(),
                 pages: Vec::new(),
                 loading: false,

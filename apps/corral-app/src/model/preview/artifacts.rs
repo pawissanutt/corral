@@ -115,6 +115,7 @@ fn serve(feed: &mut Feed, target: &DetailRef, pages: usize) {
     feed.details.insert(
         detail_key(target),
         DetailCache {
+            transcript_seams: Default::default(),
             target: target.clone(),
             pages: replies,
             loading: false,

@@ -24,6 +24,7 @@ fn cache(target: DetailRef, body: DetailBody) -> (String, DetailCache) {
     (
         daemon::detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: Vec::new(),
             loading: false,

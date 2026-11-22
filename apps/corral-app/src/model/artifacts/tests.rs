@@ -39,6 +39,7 @@ fn task(feed: &mut Feed, id: &str, project: &str) {
     feed.details.insert(
         detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: Vec::new(),
             loading: false,
@@ -66,6 +67,7 @@ fn served(feed: &mut Feed, target: &DetailRef, pages: Vec<Vec<Artifact>>, more: 
     feed.details.insert(
         detail_key(target),
         DetailCache {
+            transcript_seams: Default::default(),
             target: target.clone(),
             pages,
             loading: false,

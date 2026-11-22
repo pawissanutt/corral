@@ -562,6 +562,7 @@ fn put_pages(feed: &mut Feed, target: &DetailRef, pages: Vec<(JobOutputPage, Opt
     feed.details.insert(
         detail_key(target),
         DetailCache {
+            transcript_seams: Default::default(),
             target: target.clone(),
             pages: replies,
             loading: false,

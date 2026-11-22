@@ -187,6 +187,7 @@ pub(super) fn put(feed: &mut Feed, target: DetailRef, body: DetailBody) {
     feed.details.insert(
         detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: vec![reply],
             loading: false,

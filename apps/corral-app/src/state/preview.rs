@@ -52,6 +52,7 @@ impl AppState {
                 feed.details.insert(
                     crate::model::daemon::detail_key(&target),
                     crate::model::daemon::DetailCache {
+                        transcript_seams: Default::default(),
                         target,
                         pages: Vec::new(),
                         merged: None,

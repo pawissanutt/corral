@@ -62,6 +62,7 @@ fn coverage_is_stated_overall_and_per_group_with_the_reason_the_rest_is_missing(
     feed.details.insert(
         detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: Vec::new(),
             loading: false,
@@ -227,6 +228,7 @@ fn estimate_is_kept_apart_from_reported_cost_and_its_coverage_is_stated() {
     feed.details.insert(
         detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: Vec::new(),
             loading: false,

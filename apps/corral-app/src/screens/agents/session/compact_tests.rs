@@ -33,6 +33,7 @@ fn ask_shows_the_chat_when_its_page_was_left_on_another_view() {
     feed.details.insert(
         detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: Vec::new(),
             loading: false,

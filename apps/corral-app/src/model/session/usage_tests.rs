@@ -43,6 +43,7 @@ fn feed_with(usage: SessionUsage, brief: UsageBrief, can: Vec<Capability>) -> Fe
     feed.details.insert(
         detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: vec![DetailReply {
                 etag: "e1".into(),

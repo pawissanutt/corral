@@ -71,6 +71,7 @@ pub(super) fn feed_with(card: SessionCard, state: SessionState) -> Feed {
     feed.details.insert(
         detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: vec![DetailReply {
                 etag: "e1".into(),

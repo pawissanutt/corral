@@ -219,6 +219,7 @@ mod tests {
             feed.details.insert(
                 detail_key(&target),
                 DetailCache {
+                    transcript_seams: Default::default(),
                     target,
                     pages: Vec::new(),
                     loading: false,

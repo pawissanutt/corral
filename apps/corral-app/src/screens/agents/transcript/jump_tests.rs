@@ -186,6 +186,7 @@ fn a_combined_publish_counts_new_rows_inside_the_same_assistant_tail() {
         }
         all.extend(latest);
         let cache = DetailCache {
+            transcript_seams: Default::default(),
             target: DetailRef::Session {
                 id: scope.to_string(),
             },

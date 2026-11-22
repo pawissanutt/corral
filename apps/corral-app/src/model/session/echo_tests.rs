@@ -36,6 +36,7 @@ fn serve(feed: &mut Feed, messages: Vec<SessionMessage>) {
     feed.details.insert(
         daemon::detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: Vec::new(),
             loading: false,

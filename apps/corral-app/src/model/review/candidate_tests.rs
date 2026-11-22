@@ -59,6 +59,7 @@ fn serve(feed: &mut Feed, review: ReviewDetail) {
     feed.details.insert(
         detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: vec![],
             loading: false,

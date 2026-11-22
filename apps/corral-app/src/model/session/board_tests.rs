@@ -36,6 +36,7 @@ fn feed(brief: Option<BoardBrief>, tasks: Vec<BoardTask>) -> Feed {
     feed.details.insert(
         detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: vec![DetailReply {
                 etag: "e1".into(),
@@ -108,6 +109,7 @@ fn brief_tab(brief: Result<&str, &str>) -> super::PlanTask {
     feed.details.insert(
         detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: Vec::new(),
             loading: false,

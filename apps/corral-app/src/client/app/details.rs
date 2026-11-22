@@ -136,6 +136,7 @@ impl AppState {
                 .details
                 .entry(key.clone())
                 .or_insert_with(|| DetailCache {
+                    transcript_seams: Default::default(),
                     target: request.target.clone(),
                     pages: vec![],
                     loading: false,

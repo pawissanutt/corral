@@ -26,6 +26,7 @@ fn apply_capture(
         .details
         .entry(detail_key(&target))
         .or_insert_with(|| DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: vec![],
             loading: false,

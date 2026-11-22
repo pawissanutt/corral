@@ -111,7 +111,10 @@ impl AppState {
             let operations = self.retained.operations.get(&key).into_iter().flatten();
             key.len()
                 + cache.map_or(0, |cache| {
-                    bytes(&cache.pages) + bytes(&cache.merged) + bytes(&cache.target)
+                    bytes(&cache.pages)
+                        + bytes(&cache.merged)
+                        + bytes(&cache.target)
+                        + bytes(&cache.transcript_seams)
                 })
                 + self.detail_bytes.get(&key).copied().unwrap_or(0)
                 + self.retained.requests.get(&key).map_or(0, bytes)

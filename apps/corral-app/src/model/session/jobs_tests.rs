@@ -45,6 +45,7 @@ fn opened(text: &str, offset: u64, bytes: u64, next: Option<&str>) -> JobOutputV
     feed.details.insert(
         daemon::detail_key(&target),
         DetailCache {
+            transcript_seams: Default::default(),
             target,
             pages: vec![DetailReply {
                 etag: "e1".into(),
