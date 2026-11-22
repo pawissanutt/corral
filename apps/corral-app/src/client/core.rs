@@ -76,6 +76,7 @@ fn row_key(topic: Topic, row: &Value) -> Option<String> {
             row["run"]["task"].as_str()?,
             row["run"]["id"].as_str()?
         )),
+        Topic::System => text(&row["project"]),
         Topic::Usage => Some("usage".into()),
         Topic::Settings => Some("settings".into()),
         _ => text(&row["id"]),

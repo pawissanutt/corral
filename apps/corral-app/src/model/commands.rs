@@ -607,7 +607,7 @@ pub fn run(
 }
 
 /// The key that opens the page, as a static key cap for renderers: its place's key where the
-/// place opens it, Usage's and Artifacts' own. Timeline has none.
+/// place opens it, Usage's, Artifacts' and System's own. Timeline has none.
 pub const fn destination_key(destination: Destination) -> Option<&'static str> {
     match destination {
         Destination::Home => Some("h"),
@@ -617,6 +617,7 @@ pub const fn destination_key(destination: Destination) -> Option<&'static str> {
         Destination::Timeline => None,
         Destination::Usage => Some("u"),
         Destination::Artifacts => Some("f"),
+        Destination::System => Some("m"),
         Destination::Settings => Some(","),
     }
 }

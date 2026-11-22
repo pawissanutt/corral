@@ -14,6 +14,7 @@ pub mod landing;
 pub(crate) mod markdown;
 pub mod sessions;
 pub mod settings;
+pub mod system;
 pub mod task;
 pub mod tasks;
 pub mod timeline;
@@ -154,9 +155,11 @@ fn screen(app: AppState, destination: Destination) -> AnyElement {
         Destination::Home => home::screen(app),
         Destination::Tasks => tasks::screen(app),
         Destination::Sessions => sessions::screen(app),
-        Destination::Feed | Destination::Timeline | Destination::Usage | Destination::Artifacts => {
-            activity::screen(app, destination)
-        }
+        Destination::Feed
+        | Destination::Timeline
+        | Destination::Usage
+        | Destination::Artifacts
+        | Destination::System => activity::screen(app, destination),
         Destination::Settings => settings::screen(app),
     }
 }

@@ -412,6 +412,7 @@ const fn page_short(page: Destination) -> &'static str {
         Destination::Timeline => "Time",
         Destination::Usage => "Use",
         Destination::Artifacts => "Files",
+        Destination::System => "Map",
         _ => "Feed",
     }
 }

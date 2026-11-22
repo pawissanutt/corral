@@ -216,6 +216,7 @@ impl AppState {
                 feed.synced = None;
                 feed.plans.clear();
                 feed.projects.clear();
+                feed.systems.clear();
                 feed.agents.clear();
                 feed.assistants.clear();
                 feed.usage = None;
@@ -271,6 +272,7 @@ impl AppState {
         for (topic, cap) in [
             (Topic::Plans, PLANS_V1),
             (Topic::Projects, PROJECTS_V1),
+            (Topic::System, SYSTEM_V1),
             (Topic::Agents, AGENTS_V1),
             (Topic::Assistant, ASSISTANT_V1),
             (Topic::Usage, USAGE_V1),

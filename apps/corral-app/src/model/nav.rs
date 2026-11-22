@@ -27,7 +27,7 @@ pub const ASK_BUTTON_LABEL: &str = "Ask (opens the composer)";
 pub const SEARCH_LABEL: &str = "Search";
 
 /// A page the navigation opens directly: the four places' own pages and Settings. Activity has
-/// four pages; every other place has one.
+/// five pages; every other place has one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Destination {
     /// What waits on the owner, then what is working.
@@ -44,13 +44,15 @@ pub enum Destination {
     Usage,
     /// Activity › Artifacts: the finder over every task's artifacts.
     Artifacts,
+    /// Activity › System: the map of one project's packages, modules, files and definitions.
+    System,
     /// Settings.
     Settings,
 }
 
 impl Destination {
     /// Destinations in navigation order.
-    pub const ALL: [Destination; 8] = [
+    pub const ALL: [Destination; 9] = [
         Self::Home,
         Self::Tasks,
         Self::Sessions,
@@ -58,11 +60,17 @@ impl Destination {
         Self::Timeline,
         Self::Usage,
         Self::Artifacts,
+        Self::System,
         Self::Settings,
     ];
     /// Activity's pages, in the order the sidebar lists them.
-    pub const ACTIVITY: [Destination; 4] =
-        [Self::Feed, Self::Timeline, Self::Usage, Self::Artifacts];
+    pub const ACTIVITY: [Destination; 5] = [
+        Self::Feed,
+        Self::Timeline,
+        Self::Usage,
+        Self::Artifacts,
+        Self::System,
+    ];
     /// The display label.
     pub const fn label(self) -> &'static str {
         match self {
@@ -73,6 +81,7 @@ impl Destination {
             Self::Timeline => "Timeline",
             Self::Usage => "Usage",
             Self::Artifacts => "Artifacts",
+            Self::System => "System",
             Self::Settings => "Settings",
         }
     }
@@ -86,6 +95,7 @@ impl Destination {
             Self::Timeline => "timeline",
             Self::Usage => "usage",
             Self::Artifacts => "artifacts",
+            Self::System => "system",
             Self::Settings => "settings",
         }
     }
@@ -106,7 +116,9 @@ impl Destination {
             Self::Home => Area::Home,
             Self::Tasks => Area::Tasks,
             Self::Sessions => Area::Sessions,
-            Self::Feed | Self::Timeline | Self::Usage | Self::Artifacts => Area::Activity,
+            Self::Feed | Self::Timeline | Self::Usage | Self::Artifacts | Self::System => {
+                Area::Activity
+            }
             Self::Settings => Area::Settings,
         }
     }
@@ -130,7 +142,7 @@ pub enum Area {
     Home,
     Tasks,
     Sessions,
-    /// Feed, Timeline, Usage and Artifacts.
+    /// Feed, Timeline, Usage, Artifacts and System.
     Activity,
     Settings,
 }
@@ -195,8 +207,10 @@ impl Area {
 }
 
 /// Every key that opens a place or one of Activity's pages: the places' own, the former
-/// destinations' (`n p r`), and Usage's and Artifacts' (`u f`), which they keep.
-pub const PLACE_KEYS: [&str; 10] = ["h", "t", "s", "a", ",", "n", "p", "r", "u", "f"];
+/// destinations' (`n p r`), and Usage's, Artifacts' and System's (`u f m`).
+pub const PLACE_KEYS: [&str; 11] = [
+    "h", "t", "s", "a", ",", "n", "p", "r", "u", "f", "m",
+];
 
 /// A tab of the task page. The page is the one place tabs stay: the diff needs the width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -492,6 +506,7 @@ impl NavState {
         match key {
             'u' => Some(Destination::Usage),
             'f' => Some(Destination::Artifacts),
+            'm' => Some(Destination::System),
             _ => Area::from_key(key).map(|area| self.page_of(area)),
         }
     }

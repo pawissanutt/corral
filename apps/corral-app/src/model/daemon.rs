@@ -2,7 +2,7 @@
 //! `corral_types` values the daemon serves; the app derives groups and rails from them.
 use crate::model::Id;
 use corral_protocol::{Health, app::*, detail::*, rows::*};
-use corral_types::{Event, Refusal, UsageSummary};
+use corral_types::{Event, Refusal, SystemRow, UsageSummary};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[path = "daemon_board.rs"]
@@ -137,6 +137,9 @@ pub struct Feed {
     /// Configured workspace projects (`Topic::Projects`, `projects.v1`). With the topic's
     /// complete page applied, an empty map means the workspace has no project management.
     pub projects: BTreeMap<Id, ProjectRow>,
+    /// Each project's fact observation (`Topic::System`, `system.v1`), by project id: whether
+    /// its map is building, the configured extension and its last error.
+    pub systems: BTreeMap<Id, SystemRow>,
     /// Live runs by `<task>_<run>`, the same id as their terminal scope.
     pub agents: BTreeMap<Id, AgentRow>,
     pub assistants: BTreeMap<Id, AssistantRow>,

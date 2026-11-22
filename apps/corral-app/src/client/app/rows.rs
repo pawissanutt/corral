@@ -15,6 +15,11 @@ impl Keyed for ProjectRow {
         self.id.clone()
     }
 }
+impl Keyed for corral_types::SystemRow {
+    fn key(&self) -> String {
+        self.project.clone()
+    }
+}
 impl Keyed for AgentRow {
     fn key(&self) -> String {
         format!("{}_{}", self.run.task, self.run.id)
@@ -80,6 +85,12 @@ impl AppState {
                     changed = apply(&mut feed.projects, delta.rows, delta.left, replacement)
                 });
                 Topic::Projects
+            }
+            SubDelta::System { delta } => {
+                feed.update(|feed| {
+                    changed = apply(&mut feed.systems, delta.rows, delta.left, replacement)
+                });
+                Topic::System
             }
             SubDelta::Agents { delta } => {
                 feed.update(|feed| {
@@ -281,6 +292,8 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
             matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
         }
         DetailRef::UsageSeries { .. } => matches!(topic, Topic::Usage | Topic::Settings),
+        // A project's row moves its revision whenever any of its map's details changes.
+        DetailRef::SystemMap { project, .. } => topic == Topic::System && changed.contains(project),
         _ => false,
     }
 }
@@ -299,6 +312,7 @@ pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
             matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
         }
         DetailRef::UsageSeries { .. } => matches!(topic, Topic::Usage | Topic::Settings),
+        DetailRef::SystemMap { .. } => topic == Topic::System,
         _ => false,
     }
 }

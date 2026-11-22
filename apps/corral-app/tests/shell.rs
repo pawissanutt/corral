@@ -123,7 +123,7 @@ fn desktop_sidebar_reaches_every_place_and_activity_page() {
         assert_eq!(app.screen().count("id:nav-usage").unwrap(), 0);
     }
     app.press("id:nav-activity").unwrap();
-    for slug in ["feed", "timeline", "usage", "artifacts"] {
+    for slug in ["feed", "timeline", "usage", "artifacts", "system"] {
         app.wait_for(&format!("id:nav-{slug}")).unwrap();
         app.press(&format!("id:nav-{slug}")).unwrap();
         app.wait_for("id:page-title").unwrap();
@@ -149,7 +149,7 @@ fn phone_tabs_reach_every_place_and_activity_page() {
 
     app.press("id:tab-activity").unwrap();
     assert_text(&mut app, "page-title", "Activity");
-    for slug in ["feed", "timeline", "usage", "artifacts"] {
+    for slug in ["feed", "timeline", "usage", "artifacts", "system"] {
         app.wait_for(&format!("id:nav-{slug}")).unwrap();
         app.press(&format!("id:nav-{slug}")).unwrap();
         app.wait_for_gone("id:nav-feed", Duration::from_secs(5))

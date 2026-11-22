@@ -17,6 +17,7 @@ impl AppState {
             feed.board = Board::default();
             feed.plans.clear();
             feed.projects.clear();
+            feed.systems.clear();
             feed.topics.remove("projects");
             feed.health = None;
             feed.drafts.clear();
