@@ -21,7 +21,7 @@ const NAMED: usize = 3;
 /// What a row folds by.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Fold {
-    /// The row's own key; a group opens by its first row's.
+    /// The row's own key; a group's key normally comes from its first row.
     pub key: String,
     /// The tool's recorded name.
     pub tool: String,
@@ -116,7 +116,7 @@ fn settle(run: &mut Vec<Tool>, out: &mut Vec<MessageItem>, cx: Cx<'_>) {
         out.extend(rows.into_iter().map(MessageItem::Tool));
         return;
     }
-    let key = format!("group:{}", first.fold.key);
+    let key = group_key(&rows, first, cx);
     let open = cx.open(&key);
     let row = summarised(&rows, key, cx);
     out.push(MessageItem::Group(Group {
@@ -124,6 +124,23 @@ fn settle(run: &mut Vec<Tool>, out: &mut Vec<MessageItem>, cx: Cx<'_>) {
         rows: if open { rows } else { Vec::new() },
         open,
     }));
+}
+
+/// Keep a toggled group's key if a split record gains earlier calls of the same kind.
+fn group_key(rows: &[Tool], first: &Tool, cx: Cx<'_>) -> String {
+    const PREFIX: &str = "group:";
+    let mut key = PREFIX.to_owned();
+    if !cx.ui.expanded.is_empty() {
+        for row in rows {
+            key.push_str(&row.fold.key);
+            if cx.ui.expanded.contains(&key) {
+                return key;
+            }
+            key.truncate(PREFIX.len());
+        }
+    }
+    key.push_str(&first.fold.key);
+    key
 }
 
 /// A file target without its `:from-to` range.

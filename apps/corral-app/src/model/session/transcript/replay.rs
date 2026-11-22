@@ -749,6 +749,9 @@ pub fn transcript(
         .filter(|id| !id.is_empty())
         .collect();
     let mut boundary = false;
+    // A split record keeps its anchor but gains items at its front. Track the first recorded
+    // row before adding child steers or mail, which can stay ahead of it across pages.
+    let mut first = None;
     let mut timed: Vec<_> = recorded
         .iter()
         .enumerate()
@@ -758,11 +761,11 @@ pub fn transcript(
             if message.items.is_empty() && message.footer.is_none() {
                 return None;
             }
+            first.get_or_insert_with(|| item_key(&message.anchor, m.items.len()));
             Some((
                 millis(m.at.as_deref()),
                 std::mem::take(&mut boundary),
                 message,
-                m.items.len(),
             ))
         })
         .collect();
@@ -776,19 +779,14 @@ pub fn transcript(
         let place = at.and_then(|at| {
             timed
                 .iter()
-                .position(|(when, _, _, _)| when.is_some_and(|when| when > at))
+                .position(|(when, _, _)| when.is_some_and(|when| when > at))
         });
-        timed.insert(place.unwrap_or(timed.len()), (at, false, bubble, 0));
+        timed.insert(place.unwrap_or(timed.len()), (at, false, bubble));
     }
-    // A record split across pages keeps its anchor when its earlier items arrive, but not its
-    // item count; recorded records never grow at their end.
-    let first = timed
-        .first()
-        .map(|(_, _, message, count)| item_key(&message.anchor, *count));
     let messages: Vec<Message> = merged(
         timed
             .into_iter()
-            .map(|(_, seam, message, _)| (seam, message))
+            .map(|(_, seam, message)| (seam, message))
             .collect(),
     )
     .into_iter()

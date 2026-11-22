@@ -4,7 +4,7 @@ use corral_protocol::detail::{
 
 use super::super::Ui;
 use super::replay::transcript;
-use super::{MessageItem, ToolState, Transcript};
+use super::{Action, MessageItem, ToolState, Transcript};
 use crate::model::Id;
 use crate::model::daemon::{self, DetailCache};
 
@@ -138,4 +138,48 @@ fn a_failed_call_ends_a_group() {
     assert_eq!(before.row.state, ToolState::Ok);
     assert_eq!(after.row.state, ToolState::Ok);
     assert!(!before.open && before.rows.is_empty());
+}
+
+#[test]
+fn an_open_group_stays_open_when_a_split_record_gains_an_earlier_call() {
+    let read = |id: &str| {
+        called(
+            id,
+            "read",
+            r#"{"path":"src/lib.rs"}"#,
+            SessionToolState::Done,
+            "fn main() {}\n",
+        )
+    };
+    let mut feed = feed_with(vec![said(
+        "assistant",
+        "2026-11-15T10:00:00Z",
+        vec![read("c2"), read("c3")],
+    )]);
+    let before = shown(&feed);
+    let [MessageItem::Group(group)] = before.messages[0].items.as_slice() else {
+        panic!("the two reads fold into one group");
+    };
+    let Some(Action::Expand { key, .. }) = &group.row.action else {
+        panic!("the group can be opened");
+    };
+    let mut ui = Ui::default();
+    ui.expanded.insert(key.clone());
+
+    let target = DetailRef::Session { id: ID.into() };
+    let Some(DetailBody::Session(page)) = feed
+        .details
+        .get_mut(&daemon::detail_key(&target))
+        .and_then(|cache| cache.merged.as_mut())
+    else {
+        panic!("a served session page");
+    };
+    page.messages[0].items.insert(0, read("c1"));
+    let after = transcript(&Id::from(ID), &ui, feed.detail(&target), &feed);
+    let [MessageItem::Group(group)] = after.messages[0].items.as_slice() else {
+        panic!("the earlier read joins the same group");
+    };
+    assert!(group.open);
+    assert_eq!(group.rows.len(), 3);
+    assert_eq!(&group.row.fold.key, key);
 }
