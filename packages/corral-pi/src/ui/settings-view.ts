@@ -454,6 +454,35 @@ export class SettingsPage {
     const detailWidth = wide ? Math.max(1, w - listWidth - 3) : w;
     const list = this.listLines(listWidth);
     const detail = this.detailLines(detailWidth, wide ? budget : budget - list.lines.length - 1);
+    const natural = wide ? Math.max(list.lines.length, detail.lines.length) : list.lines.length + 1 + detail.lines.length;
+    if (this.choosing && rows > 0 && natural > budget) {
+      // Replace the overview temporarily rather than letting an active choice fall below the viewport.
+      hits.clear();
+      lines.length = 0;
+      if (rows >= 4) {
+        add(0, 0, head.to, { kind: "back" });
+        lines.push(head.line);
+      }
+      if (this.query !== undefined && rows - lines.length >= 2) lines.push(this.searchRow(w));
+      if (rows - lines.length >= 3) {
+        const label = this.choosing.id === "startup" ? "STARTUP MODEL" : PERSONAL.find(spec => spec.id === this.choosing?.id)?.label ?? "";
+        lines.push(groupRule("CHOOSE", label, w));
+      }
+      const compact = this.choiceLines(w, rows - lines.length);
+      for (const [row, index] of compact.at) add(lines.length + row, 0, w, { kind: "choice", index });
+      this.hits = hits;
+      return [...lines, ...compact.lines].map(line => truncateToWidth(line, w, "…"));
+    }
+    if (!this.choosing && rows > 0 && list.lines.length > budget) {
+      if (budget < 1) { lines.pop(); if (lines.length >= rows) lines.length = Math.max(0, rows - 1); }
+      const count = rows - lines.length, selected = [...list.at].find(([, id]) => id === this.selected)?.[0] ?? 0;
+      const first = Math.max(0, Math.min(list.lines.length - count, selected - Math.floor(count / 2)));
+      for (const [row, id] of list.at) if (row >= first && row < first + count) {
+        add(lines.length + row - first, 0, w, { kind: "row", id });
+      }
+      this.hits = hits;
+      return [...lines, ...list.lines.slice(first, first + count)].map(line => truncateToWidth(line, w, "…"));
+    }
     const top = lines.length;
     if (wide) {
       const height = Math.max(list.lines.length, detail.lines.length), from = listWidth + 3;
@@ -550,22 +579,34 @@ export class SettingsPage {
       return { lines, at };
     }
     lines.push("", groupRule("CHOOSE", "", width));
-    const choices = this.choices(id), shown = this.shownChoices();
-    if (id === "startup" && this.models?.state === "loading") lines.push(muted("Reading signed-in models…"));
-    if (id === "startup" && this.models?.state === "error") lines.push(`${PANEL_WARNING}Models unavailable · ${this.models.error}${PANEL_TEXT}`);
-    if (!shown.length) { lines.push(muted(this.query ? `No choice matches “${plainLabel(this.query)}”` : "Nothing to choose")); return { lines, at }; }
-    // The choices fit the rows left, at least CHOICES_MIN, scrolled to keep the highlighted one; markers say what is hidden.
-    // The highlighted choice's note in full under the choices when its row clips it (a long billing route).
-    const noteRoom = Math.max(0, Math.floor(width * 0.45)), note = choices[choosing.index]?.note ?? "";
-    const full = note && visibleWidth(note) > noteRoom ? wrap(muted(note), Math.max(1, width - 4)).map(row => "    " + row) : [];
-    const room = Number.isFinite(budget) ? Math.max(CHOICES_MIN, budget - lines.length - full.length) : shown.length;
-    let first = 0, count = shown.length;
-    if (shown.length > room) {
-      count = Math.max(1, room - 2);
-      const at = Math.max(0, shown.indexOf(choosing.index));
-      first = Math.max(0, Math.min(shown.length - count, at - Math.floor(count / 2)));
+    const picker = this.choiceLines(width, Math.max(CHOICES_MIN, budget - lines.length));
+    for (const [row, index] of picker.at) at.set(lines.length + row, index);
+    return { lines: [...lines, ...picker.lines], at };
+  }
+
+  /** Window the choices around the active row. In a tiny frame that row beats headings, notes and markers. */
+  private choiceLines(width: number, budget: number): { readonly lines: string[]; readonly at: Map<number, number> } {
+    const lines: string[] = [], at = new Map<number, number>(), choosing = this.choosing;
+    if (!choosing) return { lines, at };
+    const id = choosing.id, choices = this.choices(id), shown = this.shownChoices();
+    if (!shown.length) {
+      lines.push(muted(this.query ? `No choice matches “${plainLabel(this.query)}”` : "Nothing to choose"));
+      return { lines, at };
     }
-    if (first > 0) lines.push(muted(`  ↑ ${first} more`));
+    if (budget > 1 && id === "startup") {
+      if (this.models?.state === "loading") lines.push(muted("Reading signed-in models…"));
+      if (this.models?.state === "error") lines.push(`${PANEL_WARNING}Models unavailable · ${this.models.error}${PANEL_TEXT}`);
+    }
+    const noteRoom = Math.max(0, Math.floor(width * 0.45)), note = choices[choosing.index]?.note ?? "";
+    const available = budget - lines.length;
+    const full = note && visibleWidth(note) > noteRoom ? wrap(muted(note), Math.max(1, width - 4))
+      .slice(0, Math.max(0, available - 1)).map(row => "    " + row) : [];
+    const room = available - full.length;
+    const markers = room >= 3 && shown.length > room;
+    const count = Math.min(shown.length, markers ? room - 2 : room);
+    const active = Math.max(0, shown.indexOf(choosing.index));
+    const first = Math.max(0, Math.min(shown.length - count, active - Math.floor(count / 2)));
+    if (markers && first > 0) lines.push(muted(`  ↑ ${first} more`));
     const current = this.current(id);
     for (const index of shown.slice(first, first + count)) {
       const choice = choices[index]!, highlighted = index === choosing.index;
@@ -576,7 +617,7 @@ export class SettingsPage {
       lines.push(listRow(`${mark} ${label}`, note, highlighted, width, true));
     }
     const rest = shown.length - first - count;
-    if (rest > 0) lines.push(muted(`  ↓ ${rest} more`));
+    if (markers && rest > 0) lines.push(muted(`  ↓ ${rest} more`));
     lines.push(...full);
     return { lines, at };
   }

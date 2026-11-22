@@ -74,11 +74,17 @@ test("startup model input stays separate from explicit choices and managed launc
     const piToml = join(settings, "pi.toml");
     const chat = (...flags: string[]) => parseRunFlags("chat", flags, "/assets", {}, root);
     const build = (...flags: string[]) => parseBuildFlags(flags, "/assets", {}, root);
+    const daemonBuild = (...flags: string[]) => parseBuildFlags(["--headless", "--id", "B-managed", ...flags],
+      "/assets", { CORRAL_PI_MANAGED_BUILD: "1" }, root).launch;
     expect(chat().startupModel).toBeNull();
     expect(build().startupModel).toBeNull();
+    expect(build("--headless", "--id", "B-managed").launch.model).toBeUndefined();
+    expect(daemonBuild().model).toBe("gpt-6.1-sol");
     writeFileSync(piToml, '[startup]\nmodel = "openai-codex/gpt-6.2-sol"\n');
     expect(chat().startupModel).toBe("openai-codex/gpt-6.2-sol");
     expect(build().startupModel).toBe("openai-codex/gpt-6.2-sol");
+    expect(daemonBuild().model).toBe("openai-codex/gpt-6.2-sol");
+    expect(daemonBuild("--profile", "demo").model).toBe("anthropic/claude-opus-4-8");
     for (const launch of [chat, (...flags: string[]) => build(...flags).launch]) {
       expect(launch().model).toBeUndefined();
       expect(launch("--model", "anthropic/claude-opus-4-8").provider).toBe("anthropic");

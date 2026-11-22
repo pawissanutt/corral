@@ -5,14 +5,18 @@ import { readPersonalPreferences, savePersonalPreference } from "./preferences.t
 import { listStartupModels } from "./startup-model.ts";
 import { readWorkspaceStartup, saveWorkspaceStartup, type WorkspaceStartup } from "./startup-preference.ts";
 
+const workspaceIO = { readWorkspaceStartup, saveWorkspaceStartup, listStartupModels };
+
 /** Owner-only callbacks. These are not tools and never change a live session's model. */
-export function terminalSettings(role: HostIdentity["role"], root: string, corral: string): SettingsControl {
+export function terminalSettings(role: HostIdentity["role"], root: string, corral: string, io = workspaceIO): SettingsControl {
   let startup: WorkspaceStartup | undefined;
-  let bareModel: string | null;
+  let bareModel: string | null | undefined;
+  let generation = 0;
   const canSetStartup = role === "assistant" || role === "build";
   const bare = !corral && role === "build";
   return {
     async read() {
+      const reading = ++generation;
       const personal = readPersonalPreferences();
       let workspace: WorkspaceSettings;
       if (!canSetStartup) {
@@ -25,26 +29,32 @@ export function terminalSettings(role: HostIdentity["role"], root: string, corra
       } else {
         startup = undefined;
         try {
-          startup = await readWorkspaceStartup(root, corral);
-          workspace = { editable: true, name: basename(root) || root, startupModel: startup.model };
+          const loaded = await io.readWorkspaceStartup(root, corral);
+          if (reading === generation) startup = loaded;
+          workspace = { editable: true, name: basename(root) || root, startupModel: loaded.model };
         } catch (error) {
           workspace = { editable: false, reason: error instanceof Error ? error.message : "Cannot read the workspace startup model." };
         }
       }
       return { personal, workspace };
     },
-    listStartupModels: () => listStartupModels(),
+    listStartupModels: () => io.listStartupModels(),
     async setStartupModel(selector) {
-      if (!canSetStartup || (!bare && !startup)) throw new Error("The startup model is not editable here. Reopen Settings to try again.");
-      if (selector !== null && !(await listStartupModels()).some(model => model.selector === selector)) {
+      // Capture the selection's revision before any await. Reopening Settings may fetch a newer one.
+      const expected = startup, expectedBare = bareModel, saving = generation;
+      if (!canSetStartup || (bare ? expectedBare === undefined : expected === undefined)) {
+        throw new Error("The startup model is not editable here. Reopen Settings to try again.");
+      }
+      if (selector !== null && !(await io.listStartupModels()).some(model => model.selector === selector)) {
         throw new Error("This model is not available for both new chats and Builds. Sign in or choose another model.");
       }
       if (bare) {
-        if (readPersonalPreferences().startupModel !== bareModel) throw new Error("The startup model changed elsewhere; reopen Settings.");
+        if (readPersonalPreferences().startupModel !== expectedBare) throw new Error("The startup model changed elsewhere; reopen Settings.");
         savePersonalPreference("startupModel", selector);
-        bareModel = selector;
-      } else if (startup) {
-        startup = await saveWorkspaceStartup(root, corral, startup, selector);
+        if (saving === generation) bareModel = selector;
+      } else if (expected) {
+        const saved = await io.saveWorkspaceStartup(root, corral, expected, selector);
+        if (saving === generation && startup === expected) startup = saved;
       }
     },
     async setPersonal(patch) {

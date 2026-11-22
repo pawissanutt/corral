@@ -87,6 +87,35 @@ test("Esc out of a view is guarded: a second Esc right after it never reaches Pi
   try { expect(fresh.panels.handleInput(KEY.esc)).toBeFalse(); } finally { fresh.stop(); }
 });
 
+test("leaving the SDK Settings selector guards a rapid second Esc from interrupting Chat", () => {
+  let now = 1_000_000;
+  const h = shell(80, 24, () => snapshot({ streaming: true }), {
+    scheduler: { now: () => now, every: () => () => {} },
+    settings: {
+      read: async () => ({ workspace: { editable: false, reason: "profile" },
+        personal: { appearance: "dark", density: "comfortable", motion: "animate", bell: "off" } }),
+      listStartupModels: async () => [], setStartupModel: async () => {}, setPersonal: async () => {},
+    },
+  });
+  try {
+    let closed = 0;
+    const keys = h.panels.presentation().selectorPresentation?.settings?.({
+      tui: { requestRender() {} } as unknown as sdk.SettingsSelectorRequest["tui"], items: [],
+      change() {}, cancel() { closed++; },
+    });
+    expect(h.panels.workbench.view).toBe("settings");
+    h.prompt(); // the SDK, not NativePanels, owns the open selector's keys
+    expect(h.panels.handleInput(KEY.esc)).toBeFalse();
+    keys?.handleInput?.(KEY.esc);
+    h.promptEnd();
+    expect(closed).toBe(1);
+    expect(h.panels.workbench.view).toBe("conversation");
+    expect(h.panels.handleInput(KEY.esc)).toBeTrue();
+    now += 700;
+    expect(h.panels.handleInput(KEY.esc)).toBeFalse();
+  } finally { h.stop(); }
+});
+
 test("the terminal title is set once per attention change, and the bell rings only when it is on", async () => {
   let streaming = false, waiting: PendingQuestion[] = [];
   const question = { id: "Q-1", status: "pending", expires: Number.MAX_SAFE_INTEGER,

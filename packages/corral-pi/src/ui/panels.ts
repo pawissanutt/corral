@@ -323,7 +323,13 @@ export class NativePanels implements PanelSurface {
       this.refresh();
     };
     this.workbench.openSettings();
-    page.open(() => { left(); finish(); });
+    page.open(() => {
+      // The focused SDK selector sees Esc after the panel input router has returned.
+      // Treat leaving Settings like the other owned views before Pi restores its editor.
+      this.escGuard.arm();
+      left();
+      finish();
+    });
     this.refresh();
     return settingsKeys(page, left);
   }

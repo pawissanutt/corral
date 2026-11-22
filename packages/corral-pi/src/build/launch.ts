@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { corralPiDirectory } from "../auth/paths.ts";
-import { findWorkspaceRoot, modelFlags, modelSettings, rejectRemovedModelOptions, startupModelSetting } from "../host/config.ts";
+import { findWorkspaceRoot, modelFlags, modelSettings, qualifiedModel, rejectRemovedModelOptions, startupModelSetting } from "../host/config.ts";
 import type { BuildLaunchOptions, BuildSessionRecord } from "./types.ts";
 import { buildProfileArgs, readWorkspaceToml } from "./profiles.ts";
 import { validateBuildId } from "./session-store.ts";
@@ -72,9 +72,20 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
   const profile = parseArgs({ args: profileArgs, options: modelFlags }).values;
   const raw = resuming ? {} : readWorkspaceToml(workspaceRoot ?? repoRoot, "pi.toml");
   const settings = readBuildSettings({ workspaceRoot, repoRoot }, raw);
+  const flags = { ...profile, ...values };
+  const managed = !resuming && values.headless === true && values.id !== undefined && env.CORRAL_PI_MANAGED_BUILD === "1";
+  if (managed && flags.model === undefined && flags.provider === undefined) {
+    const saved = (raw.startup as { model?: unknown } | undefined)?.model;
+    if (saved !== undefined) {
+      if (typeof saved !== "string" || !qualifiedModel(saved)) throw new Error(".corral-next/pi.toml: startup.model must be a known <provider>/<model>");
+      flags.model = saved;
+    }
+  }
+  // Native daemon Builds keep the behavior of the existing Project default route.
+  const route = managed ? modelSettings(flags) : modelSettings(flags, "startup");
   return {
     launch: { version: 1, assets, dataRoot, repoRoot, here: values.here === true,
-      ...modelSettings({ ...profile, ...values }, "startup"), ...(corral ? { corral } : { bare: true }),
+      ...route, ...(corral ? { corral } : { bare: true }),
       ...(workspaceRoot ? { workspaceRoot } : {}), ...(corral && project ? { project } : {}),
       ...(values.name ? { name: values.name } : {}), ...(resuming ? { resume } : {}), settings },
     local: { headless: values.headless === true || !process.stdin.isTTY,

@@ -88,6 +88,8 @@ impl PiRunner<'_> {
             .arg(crate::binary_path()?)
             .current_dir(launch.cwd)
             .env("CORRAL_NEXT_ROOT", launch.workspace)
+            // A daemon Build's Project default retains its existing route, unlike a new terminal launch.
+            .env("CORRAL_PI_MANAGED_BUILD", "1")
             .env_remove("CORRAL_ACTOR")
             .env_remove("CORRAL_TASK")
             .env_remove("CORRAL_RUN")

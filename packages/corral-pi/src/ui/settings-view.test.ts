@@ -189,8 +189,8 @@ test("a short view keeps the highlighted model among the choices it shows", asyn
   expect(lines.join("\n")).toContain("more");
 });
 
-test("Settings is a main view over the open one: the transcript and draft stay, and closing returns to the view under it", async () => {
-  const { page } = host();
+test("Settings keeps the chosen model visible in a clipped frame and restores the transcript and draft", async () => {
+  const { page, startup } = host();
   const wb = new NativeWorkbench({ cwd: "/tmp", identity: { store: "s", project: "p", role: "assistant", assistant: "A-test" },
     snapshot: () => null, changed() {}, canInteract: () => false, settingsPage: page });
   let supplied: Component | undefined;
@@ -198,7 +198,7 @@ test("Settings is a main view over the open one: the transcript and draft stay, 
     editor: new Text("REAL_EDITOR_DRAFT", 0, 0), footer: new Text("REAL_FOOTER", 0, 0), mainView: transcript => { supplied = transcript; return wb.mount(transcript); } });
   try {
     await flush();
-    const screen = () => stripTerminalSequences(renderLayoutFrame(viewport.root, 120, 30, () => {}).lines.join("\n"));
+    const screen = (width = 120, height = 30) => plain(renderLayoutFrame(viewport.root, width, height, () => {}).lines).join("\n");
     expect(supplied).toBe(viewport.transcript);
     wb.setView("usage");
     wb.openSettings();
@@ -212,6 +212,16 @@ test("Settings is a main view over the open one: the transcript and draft stay, 
     expect(wb.view).toBe("settings");
     expect(shown).toContain("‹ Chat · Settings");
     expect(shown).not.toContain("REAL_TRANSCRIPT");
+    const keys = settingsKeys(page, () => {});
+    screen(64, 14);
+    keys.handleInput?.(ENTER);
+    keys.handleInput?.(DOWN);
+    const choosing = screen(64, 14);
+    expect(choosing.split("\n").some(line => line.includes("▌") && line.includes("openai/gpt-6"))).toBeTrue();
+    expect(choosing).toContain("OpenAI · API key");
+    keys.handleInput?.(ENTER);
+    await flush();
+    expect(startup).toEqual(["openai/gpt-6"]);
     wb.closeSettings();
     expect(wb.view).toBe("conversation");
     expect(wb.focused).toBeFalse();
