@@ -280,6 +280,27 @@ ROWS
     assert_eq!(delta.changes, None);
     assert_eq!(delta.tests.unwrap()[0].name, "candidate");
     assert_eq!(delta.dependents.unwrap()[0].of, "lib");
+
+    // A changed provider command must miss the snapshot cache, even for the
+    // same tree. Answered with no resolved references is different from absent.
+    let mut config = fixture.config.clone();
+    config.extensions.get_mut("fixture").unwrap().facts = Some("exec sh ../provider.sh".into());
+    fixture.script(
+        r#"printf '%s\n' '{"type":"done","provided":["references"],"skipped":{},"omitted":{}}'"#,
+    );
+    let reconfigured = FactsReader::new(fixture.workspace.path(), &config, "sample").unwrap();
+    let mut facts = reconfigured.builtin_snapshot(&base).unwrap();
+    let report = reconfigured.enrich_snapshot(&mut facts).unwrap();
+    assert_eq!(report.error, None);
+    assert_eq!(report.coverage.provided, ["references"]);
+    assert!(facts.structure.file_references.is_empty());
+    assert!(facts.structure.module_references.is_empty());
+    assert_eq!(facts.structure.package_edges.len(), 1);
+    assert_eq!(
+        facts.structure.package_edges[0].kind,
+        PackageEdgeKind::DeclaredOnly
+    );
+    assert_eq!(facts.structure.package_edges[0].references, 0);
 }
 
 #[test]
