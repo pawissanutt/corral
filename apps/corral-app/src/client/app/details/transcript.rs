@@ -38,22 +38,50 @@ fn history_missing(cache: &DetailCache, pages: &[DetailReply], current: &Session
     else {
         return false;
     };
-    // A new tail can push the prior oldest record, or part of it, out of the same page depth.
-    pages.len() < cache.pages.len()
-        || held.messages.first().is_some_and(|oldest| {
-            if oldest.id.is_empty() {
-                return false;
+    let Some(first) = held.messages.first().filter(|m| !m.id.is_empty()) else {
+        return pages.len() < cache.pages.len();
+    };
+    // A continuation is transport metadata, not another item. Tool results can move
+    // between a standalone record and their call when the page boundary changes.
+    // Check the source span here; payload/anchor compatibility is checked at publish.
+    let records = || pages.iter().filter_map(session).flat_map(|p| &p.messages);
+    fn result_id(item: &SessionItem) -> Option<&str> {
+        match item {
+            SessionItem::ToolCall {
+                call_id,
+                result: Some(_),
+                call: None,
+                paired: false,
+                ..
+            } if !call_id.is_empty() => Some(call_id),
+            _ => None,
+        }
+    }
+    let ordinary = |item: &&SessionItem| {
+        !matches!(item, SessionItem::Continuation { .. }) && result_id(item).is_none()
+    };
+    let wanted = first.items.iter().filter(ordinary).count();
+    let mut fragments = records().filter(|m| m.id == first.id).peekable();
+    if (wanted > 0 || first.items.is_empty()) && fragments.peek().is_none() {
+        return true;
+    }
+    if fragments.flat_map(|m| &m.items).filter(ordinary).count() < wanted {
+        return true;
+    }
+    let mut results: BTreeSet<_> = first.items.iter().filter_map(result_id).collect();
+    if !results.is_empty() {
+        for item in records().flat_map(|m| &m.items) {
+            if let SessionItem::ToolCall {
+                call_id,
+                result: Some(_),
+                ..
+            } = item
+            {
+                results.remove(call_id.as_str());
             }
-            let mut fragments = pages
-                .iter()
-                .filter_map(session)
-                .flat_map(|page| &page.messages)
-                .filter(|message| message.id == oldest.id);
-            fragments.next().is_none_or(|first| {
-                first.items.len() + fragments.map(|part| part.items.len()).sum::<usize>()
-                    < oldest.items.len()
-            })
-        })
+        }
+    }
+    !results.is_empty()
 }
 
 impl AppState {

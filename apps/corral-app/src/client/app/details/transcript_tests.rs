@@ -314,42 +314,73 @@ fn append_with_a_moved_seam_keeps_anchors_and_can_read_older() {
     assert_eq!(anchors(feed), ["0", "1", "2"]);
 }
 
+fn with_tool(mut page: Value, row: usize, part: &str) -> Value {
+    use corral_protocol::detail::SessionToolState;
+    let body = &mut page["body"]["body"]["messages"][row];
+    if part == "result" {
+        body["author"] = value("toolResult");
+        body["items"] = Value::Array(vec![]);
+    }
+    body["items"]
+        .as_array_mut()
+        .unwrap()
+        .push(value(SessionItem::ToolCall {
+            call_id: "call-1".into(),
+            name: "bash".into(),
+            arguments: if part == "result" { "" } else { "{}" }.into(),
+            summary: String::new(),
+            state: if part == "call" {
+                SessionToolState::Running
+            } else {
+                SessionToolState::Done
+            },
+            paired: part == "paired",
+            call: (part != "result").then(|| "call JSON".into()),
+            result: (part != "call").then(|| "result JSON".into()),
+            output: (part != "call").then(|| "answer".into()),
+            elapsed_ms: None,
+            diff: None,
+            content: None,
+        }));
+    page
+}
+
+#[test]
+fn a_continued_tool_needs_no_extra_history_when_its_result_moves() {
+    let part = |stamp, id, kind, continued| {
+        let mut wire = with_tool(page(stamp, &[(id, &[])], Some("more history")), 0, kind);
+        if continued {
+            wire["body"]["body"]["messages"][0]["items"]
+                .as_array_mut()
+                .unwrap()
+                .push(value(SessionItem::Continuation {
+                    token: "fragment".into(),
+                    bytes: 3000,
+                }));
+        }
+        decode::<DetailReply>(wire).unwrap()
+    };
+    let paired = part("old", "call", "paired", true);
+    let held = DetailCache {
+        target: target(),
+        transcript_seams: Default::default(),
+        merged: paired.body.clone(),
+        pages: vec![paired],
+        loading: false,
+        stale: false,
+        error: None,
+    };
+    let mut pages = vec![part("fresh", "result", "result", true)];
+    assert!(history_missing(&held, &pages, session(&pages[0]).unwrap()));
+    pages.push(part("fresh", "call", "call", false));
+    assert!(!history_missing(&held, &pages, session(&pages[0]).unwrap()));
+}
+
 #[test]
 fn regrouped_tool_result_keeps_its_anchor_and_can_read_older() {
     use crate::model::session::{
         Ui,
         transcript::{MessageItem, transcript},
-    };
-    use corral_protocol::detail::SessionToolState;
-
-    let with_tool = |mut page: Value, row: usize, part: &str| {
-        let body = &mut page["body"]["body"]["messages"][row];
-        if part == "result" {
-            body["author"] = value("toolResult");
-            body["items"] = Value::Array(vec![]);
-        }
-        body["items"]
-            .as_array_mut()
-            .unwrap()
-            .push(value(SessionItem::ToolCall {
-                call_id: "call-1".into(),
-                name: "bash".into(),
-                arguments: if part == "result" { "" } else { "{}" }.into(),
-                summary: String::new(),
-                state: if part == "call" {
-                    SessionToolState::Running
-                } else {
-                    SessionToolState::Done
-                },
-                paired: part == "paired",
-                call: (part != "result").then(|| "call JSON".into()),
-                result: (part != "call").then(|| "result JSON".into()),
-                output: (part != "call").then(|| "answer".into()),
-                elapsed_ms: None,
-                diff: None,
-                content: None,
-            }));
-        page
     };
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();
