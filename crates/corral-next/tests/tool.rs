@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use corral_engine::{Engine, NewTask, Op, Role, Run};
 use serde_json::Value;
 use std::{fs, process::Command};
 
@@ -41,6 +42,7 @@ context = { run = "sh fixture.sh", about = "Find context" }
     let request: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(request["v"], 1);
     assert_eq!(request["args"], serde_json::json!(["--example", "value"]));
+    assert_eq!(request.get("head"), Some(&Value::Null));
 
     // A session targeting another workspace must not import its run identity.
     let other = tempfile::tempdir().unwrap();
@@ -59,4 +61,102 @@ context = { run = "sh fixture.sh", about = "Find context" }
     let request: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(request["task"].is_null());
     assert!(request["run"].is_null());
+}
+
+#[test]
+fn tool_receives_submitted_head_after_worktree_moves() {
+    let root = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "submitted",
+    ]);
+    let submitted = git(&["rev-parse", "HEAD"]);
+    let engine = Engine::init(root.path(), None).unwrap();
+    fs::write(
+        engine.state_dir.join("corral.toml"),
+        "[extensions.fixture.tools]\necho = { run = 'cat' }\n",
+    )
+    .unwrap();
+    let task = engine
+        .apply(
+            Op::New {
+                task: NewTask {
+                    title: "fixture".into(),
+                    ..NewTask::default()
+                },
+            },
+            false,
+        )
+        .unwrap()
+        .task
+        .unwrap();
+    engine
+        .store
+        .insert_run(&Run {
+            id: "R1".into(),
+            task: task.id.clone(),
+            role: Role::Worker,
+            profile: "generic".into(),
+            harness: "generic".into(),
+            model: None,
+            effort: None,
+            worktree: root.path().into(),
+            branch: "task".into(),
+            base: "main".into(),
+            base_sha: submitted.clone(),
+            session: None,
+            started: jiff::Timestamp::now(),
+            ended: None,
+            outcome: None,
+            summary: None,
+            head_sha: Some(submitted.clone()),
+            quiet_since: None,
+        })
+        .unwrap();
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "later",
+    ]);
+    assert_ne!(git(&["rev-parse", "HEAD"]), submitted);
+    let output = Command::new(env!("CARGO_BIN_EXE_corral-next"))
+        .arg("--root")
+        .arg(root.path())
+        .args(["tool", "echo"])
+        .current_dir(root.path())
+        .env("CORRAL_NEXT_ROOT", root.path())
+        .env("CORRAL_TASK", &task.id)
+        .env("CORRAL_RUN", "R1")
+        .env_remove("CORRAL_PROJECT")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(request["v"], 1);
+    assert_eq!(request["head"], submitted);
 }

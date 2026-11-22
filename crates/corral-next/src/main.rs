@@ -492,6 +492,10 @@ fn tool(
         ),
         ("base".into(), json!(run.as_ref().map(|run| &run.base_sha))),
         (
+            "head".into(),
+            json!(run.as_ref().and_then(|run| run.head_sha.as_ref())),
+        ),
+        (
             "task".into(),
             json!(task.as_ref().map(|task| json!({
                 "id": task.id,

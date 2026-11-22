@@ -66,9 +66,11 @@ waits for them. Section 6 is the exception and says how it is bounded.
 - `corral-next tool` lists the current project's tools; `corral-next tool <name> [args...]` runs one and
   prints its stdout unchanged. Corral does not parse it.
 - stdin carries what Corral knows about the caller, so the extension need not ask back:
-  `{"v": 1, "args": [...], "role": "worker", "repo": "/abs/worktree", "base": "<commit>", "task": {id, title,
-  body, parent, depends_on}, "run": "R2"}`. Task, run and role default from `CORRAL_TASK`, `CORRAL_RUN` and
-  `CORRAL_ACTOR`, which every agent session already has. The working directory is the agent's worktree.
+  `{"v": 1, "args": [...], "role": "worker", "repo": "/abs/worktree", "base": "<commit>", "head": "<submitted commit>",
+  "task": {id, title, body, parent, depends_on}, "run": "R2"}`. Task, run and role default from `CORRAL_TASK`,
+  `CORRAL_RUN` and `CORRAL_ACTOR`, which every agent session already has. `head` is null without a submitted
+  commit; when present, a tool must use it rather than the worktree's mutable `HEAD` to inspect the submitted
+  change. The working directory is the agent's worktree.
 - When a project has tools, the run prompt (`crates/corral-engine/src/prompt.rs`) gains one fixed section
   listing each tool's name and its `about` line. Nothing runs while dispatching.
 - `record = true` stores a tool's first output in a run as an artifact. Deadline: 60 s.

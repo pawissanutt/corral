@@ -55,11 +55,13 @@ run prompts; dispatch does not run them.
 A normal request looks like:
 
 ```json
-{"v":1,"args":["extra"],"role":"worker","repo":"/absolute/worktree","base":"commit","task":{"id":"T-1","title":"Fix login","body":"Details","parent":null,"depends_on":[]},"run":"R1"}
+{"v":1,"args":["extra"],"role":"worker","repo":"/absolute/worktree","base":"commit","head":"submitted-commit","task":{"id":"T-1","title":"Fix login","body":"Details","parent":null,"depends_on":[]},"run":"R1"}
 ```
 
-`task`, `run`, and `base` can be null outside a run. `role` reflects the caller; `repo`
-is the run worktree or project repository. The answer is arbitrary stdout, not JSON.
+`task`, `run`, and `base` can be null outside a run. `head` is the run's submitted
+commit, or null when there is none. When present, a tool must use `head`, not the
+worktree's mutable `HEAD`, to inspect the submitted change. `role` reflects the caller;
+`repo` is the run worktree or project repository. The answer is arbitrary stdout, not JSON.
 
 The included `context.py` searches tracked worktree files for literal words from the task
 title using `git grep`, returning at most 100 lines. Without a task title it reports that
