@@ -184,9 +184,9 @@ pub(super) fn read(
             )
             .map(Some);
         }
-        DetailRef::SessionPlanModeDoc { id } => {
+        DetailRef::SessionPlanModeDoc { id, card } => {
             check_after()?;
-            let (page, next, etag) = plan_mode_doc(shared, &query.target, id, after)?;
+            let (page, next, etag) = plan_mode_doc(shared, &query.target, id, card, after)?;
             return details::reply(
                 query,
                 engine.store.latest_seq()?,
@@ -248,17 +248,25 @@ fn plan_mode_doc(
     shared: &Shared,
     target: &DetailRef,
     id: &str,
+    card: &str,
     after: Option<&str>,
 ) -> Result<(PlanModeDocPage, Option<String>, String)> {
+    #[derive(Serialize)]
+    struct Doc<'a> {
+        card: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        after: Option<&'a str>,
+    }
     let previous = after
         .map(|token| brief_cursor(token).context("invalid: malformed plan document cursor"))
         .transpose()?;
-    let args = Args {
-        after,
-        ..Args::default()
-    };
-    let Page { body, next }: Page<PlanModeDocPage> =
-        host_call(shared, id, "plan_mode_doc", args, HostCall::Read)?;
+    let Page { body, next }: Page<PlanModeDocPage> = host_call(
+        shared,
+        id,
+        "plan_mode_doc",
+        Doc { card, after },
+        HostCall::Read,
+    )?;
     let range = (body.body.len(), body.bytes, body.offset);
     let head = (target, &body.title, body.revision);
     let etag = match brief_range("plan document", range, previous, next.as_deref())? {

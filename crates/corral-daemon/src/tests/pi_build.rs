@@ -156,6 +156,9 @@ fn a_plan_mode_document_of_two_pages_joins_through_next() {
     let split = front.len();
     let cursor = format!("{STAMP}.{split}");
     let script = Script::default().reply_result("plan_mode_doc", move |_, request, _| {
+        if request["args"]["card"] != "plan-2-ab12" {
+            return Err(("plan_mode_doc_missing", "another submission"));
+        }
         let mut page = match request["args"]["after"].as_str() {
             None => json!({"body": front, "offset": 0, "next": cursor}),
             Some(after) if after == cursor => json!({"body": back, "offset": split}),
@@ -168,7 +171,7 @@ fn a_plan_mode_document_of_two_pages_joins_through_next() {
     });
     let _host = terminal(&fixture, id, script);
     let mut owner = Client::connect_with(&fixture.unix_server(), vec![wire::BUILD_V1.into()]);
-    let mut query = json!({"kind": "session_plan_mode_doc", "id": id});
+    let mut query = json!({"kind": "session_plan_mode_doc", "id": id, "card": "plan-2-ab12"});
     let first: DetailReply = owner.ok(wire::app::DETAIL_GET, &query);
     query["page"] = json!(first.next.as_deref().expect("expected a continuation"));
     let second: DetailReply = owner.ok(wire::app::DETAIL_GET, &query);

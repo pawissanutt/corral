@@ -126,8 +126,11 @@ pub enum DetailRef {
     SessionPlan {
         id: String,
     },
+    /// The plan document of one submission: `card` is its `plan_review` card, so a page never
+    /// belongs to another submission.
     SessionPlanModeDoc {
         id: String,
+        card: String,
     },
     SessionEvents {
         id: String,

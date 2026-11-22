@@ -3073,7 +3073,11 @@
             "type": "object"
           },
           {
+            "description": "The plan document of one submission: `card` is its `plan_review` card, so a page never\nbelongs to another submission.",
             "properties": {
+              "card": {
+                "type": "string"
+              },
               "id": {
                 "type": "string"
               },
@@ -3084,7 +3088,8 @@
             },
             "required": [
               "kind",
-              "id"
+              "id",
+              "card"
             ],
             "type": "object"
           },
@@ -11857,6 +11862,16 @@
           },
           "x-required-in": [
             28
+          ]
+        },
+        {
+          "name": "card",
+          "required": false,
+          "schema": {
+            "type": "string"
+          },
+          "x-required-in": [
+            19
           ]
         },
         {
