@@ -50,6 +50,7 @@ corral-types = { path = "crates/corral-types" }
 corral-protocol = { path = "crates/corral-protocol" }
 corral-herdr = { path = "crates/corral-herdr" }
 corral-git = { path = "crates/corral-git" }
+corral-facts = { path = "crates/corral-facts" }
 corral-ops = { path = "crates/corral-ops" }
 corral-daemon = { path = "crates/corral-daemon" }
 corral-tui = { path = "crates/corral-tui" }

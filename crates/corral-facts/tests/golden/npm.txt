@@ -1,0 +1,42 @@
+file {"path":"notes/readme.md","language":"Markdown","lines":1,"test":false,"read_status":"unsupported","container":"","module":{"container":"","path":"notes"}}
+file {"path":"package.json","language":"JSON","lines":1,"test":false,"read_status":"complete","container":"","module":{"container":"","path":""}}
+file {"path":"packages/lib/package.json","language":"JSON","lines":1,"test":false,"read_status":"complete","container":"packages/lib","module":{"container":"packages/lib","path":""}}
+file {"path":"packages/lib/src/index.ts","language":"TypeScript","lines":1,"test":false,"read_status":"complete","container":"packages/lib","module":{"container":"packages/lib","path":""}}
+file {"path":"src/main.ts","language":"TypeScript","lines":4,"test":false,"read_status":"complete","container":"","module":{"container":"","path":"main"}}
+file {"path":"src/util.test.ts","language":"TypeScript","lines":1,"test":true,"read_status":"complete","container":"","module":{"container":"","path":"util.test"}}
+file {"path":"src/util.ts","language":"TypeScript","lines":1,"test":false,"read_status":"complete","container":"","module":{"container":"","path":"util"}}
+container {"path":"","name":"app","kind":"npm","workspace_status":"member"}
+container {"path":"packages/lib","name":"@local/lib","kind":"npm","workspace_status":"member"}
+module {"container":"","path":""}
+module {"container":"","path":"main"}
+module {"container":"","path":"notes"}
+module {"container":"","path":"util"}
+module {"container":"","path":"util.test"}
+module {"container":"packages/lib","path":""}
+dependency {"container":"","manifest":"package.json","section":"dependencies","alias":"@local/lib","package":"@local/lib","requirement":"workspace:*","target":"packages/lib"}
+file-reference {"from":"packages/lib/src/index.ts","to":"src/util.ts","kind":"import","basis":"syntax","count":1}
+file-reference {"from":"src/main.ts","to":"packages/lib/src/index.ts","kind":"import","basis":"syntax","count":1}
+file-reference {"from":"src/main.ts","to":"src/util.ts","kind":"import","basis":"syntax","count":1}
+file-reference {"from":"src/util.test.ts","to":"src/util.ts","kind":"import","basis":"syntax","count":1}
+module-reference {"from":{"container":"","path":"main"},"to":{"container":"","path":"util"},"kind":"import","basis":"syntax","count":1}
+module-reference {"from":{"container":"","path":"main"},"to":{"container":"packages/lib","path":""},"kind":"import","basis":"syntax","count":1}
+module-reference {"from":{"container":"","path":"util.test"},"to":{"container":"","path":"util"},"kind":"import","basis":"syntax","count":1}
+module-reference {"from":{"container":"packages/lib","path":""},"to":{"container":"","path":"util"},"kind":"import","basis":"syntax","count":1}
+package-edge {"from":"","to":"packages/lib","kind":"declared_and_referenced","references":1}
+package-edge {"from":"packages/lib","to":"","kind":"referenced_only","references":1}
+spawn {"path":"src/main.ts","process":"git","count":1}
+coverage {"complete":6,"unsupported":1,"failed":0,"skipped_non_utf8_paths":0,"resolved_references":4,"unresolved_references":1}
+activity-7 {"path":"notes/readme.md","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-7 {"path":"package.json","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-7 {"path":"packages/lib/package.json","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-7 {"path":"packages/lib/src/index.ts","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-7 {"path":"src/main.ts","commits":1,"added":4,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-7 {"path":"src/util.test.ts","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-7 {"path":"src/util.ts","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-30 {"path":"notes/readme.md","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-30 {"path":"package.json","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-30 {"path":"packages/lib/package.json","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-30 {"path":"packages/lib/src/index.ts","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-30 {"path":"src/main.ts","commits":1,"added":4,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-30 {"path":"src/util.test.ts","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}
+activity-30 {"path":"src/util.ts","commits":1,"added":1,"removed":0,"last_commit":"head","last_committed_at":1735689600,"last_subject":"npm base"}

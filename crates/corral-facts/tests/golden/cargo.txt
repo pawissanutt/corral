@@ -1,0 +1,60 @@
+file {"path":"Cargo.toml","language":"TOML","lines":3,"test":false,"read_status":"complete","container":"","module":{"container":"","path":""}}
+file {"path":"crates/a/Cargo.toml","language":"TOML","lines":7,"test":false,"read_status":"complete","container":"crates/a","module":{"container":"crates/a","path":""}}
+file {"path":"crates/a/src/lib.rs","language":"Rust","lines":5,"test":false,"read_status":"complete","container":"crates/a","module":{"container":"crates/a","path":""}}
+file {"path":"crates/a/src/util.rs","language":"Rust","lines":1,"test":false,"read_status":"complete","container":"crates/a","module":{"container":"crates/a","path":"util"}}
+file {"path":"crates/a/tests/smoke.rs","language":"Rust","lines":1,"test":true,"read_status":"complete","container":"crates/a","module":{"container":"crates/a","path":"tests"}}
+file {"path":"crates/b/Cargo.toml","language":"TOML","lines":3,"test":false,"read_status":"complete","container":"crates/b","module":{"container":"crates/b","path":""}}
+file {"path":"crates/b/src/api.rs","language":"Rust","lines":2,"test":false,"read_status":"complete","container":"crates/b","module":{"container":"crates/b","path":"api"}}
+file {"path":"crates/b/src/lib.rs","language":"Rust","lines":1,"test":false,"read_status":"complete","container":"crates/b","module":{"container":"crates/b","path":""}}
+file {"path":"crates/c/Cargo.toml","language":"TOML","lines":3,"test":false,"read_status":"complete","container":"crates/c","module":{"container":"crates/c","path":""}}
+file {"path":"crates/c/src/lib.rs","language":"Rust","lines":1,"test":false,"read_status":"complete","container":"crates/c","module":{"container":"crates/c","path":""}}
+file {"path":"crates/d/Cargo.toml","language":"TOML","lines":3,"test":false,"read_status":"complete","container":"crates/d","module":{"container":"crates/d","path":""}}
+file {"path":"crates/d/src/lib.rs","language":"Rust","lines":1,"test":false,"read_status":"complete","container":"crates/d","module":{"container":"crates/d","path":""}}
+container {"path":"","name":"(root files)","kind":"folder","workspace_status":"separate_workspace"}
+container {"path":"crates/a","name":"a","kind":"cargo","workspace_status":"member"}
+container {"path":"crates/b","name":"b","kind":"cargo","workspace_status":"member"}
+container {"path":"crates/c","name":"c","kind":"cargo","workspace_status":"excluded"}
+container {"path":"crates/d","name":"d","kind":"cargo","workspace_status":"member"}
+module {"container":"","path":""}
+module {"container":"crates/a","path":""}
+module {"container":"crates/a","path":"tests"}
+module {"container":"crates/a","path":"util"}
+module {"container":"crates/b","path":""}
+module {"container":"crates/b","path":"api"}
+module {"container":"crates/c","path":""}
+module {"container":"crates/d","path":""}
+dependency {"container":"crates/a","manifest":"crates/a/Cargo.toml","section":"dependencies","alias":"c","package":"c","requirement":"../c","options":"{ features = [\"extra\"], path = \"../c\" }","target":"crates/c"}
+dependency {"container":"crates/a","manifest":"crates/a/Cargo.toml","section":"dependencies","alias":"registry_c","package":"c","requirement":"99","options":"{ package = \"c\", version = \"99\" }","target":null}
+dependency {"container":"crates/a","manifest":"crates/a/Cargo.toml","section":"dependencies","alias":"renamed","package":"b","requirement":"../b","options":"{ package = \"b\", path = \"../b\" }","target":"crates/b"}
+file-reference {"from":"crates/a/src/lib.rs","to":"crates/a/src/util.rs","kind":"use","basis":"syntax","count":1}
+file-reference {"from":"crates/a/src/lib.rs","to":"crates/b/src/api.rs","kind":"use","basis":"syntax","count":2}
+file-reference {"from":"crates/a/src/lib.rs","to":"crates/d/src/lib.rs","kind":"use","basis":"syntax","count":1}
+file-reference {"from":"crates/a/tests/smoke.rs","to":"crates/a/src/util.rs","kind":"use","basis":"syntax","count":1}
+module-reference {"from":{"container":"crates/a","path":""},"to":{"container":"crates/a","path":"util"},"kind":"use","basis":"syntax","count":1}
+module-reference {"from":{"container":"crates/a","path":""},"to":{"container":"crates/b","path":"api"},"kind":"use","basis":"syntax","count":2}
+module-reference {"from":{"container":"crates/a","path":""},"to":{"container":"crates/d","path":""},"kind":"use","basis":"syntax","count":1}
+module-reference {"from":{"container":"crates/a","path":"tests"},"to":{"container":"crates/a","path":"util"},"kind":"use","basis":"syntax","count":1}
+package-edge {"from":"crates/a","to":"crates/b","kind":"declared_and_referenced","references":2}
+package-edge {"from":"crates/a","to":"crates/c","kind":"declared_only","references":0}
+package-edge {"from":"crates/a","to":"crates/d","kind":"referenced_only","references":1}
+spawn {"path":"crates/a/src/lib.rs","process":"git","count":1}
+coverage {"complete":12,"unsupported":0,"failed":0,"skipped_non_utf8_paths":0,"resolved_references":5,"unresolved_references":1}
+activity-7 {"path":"crates/a/Cargo.toml","commits":1,"added":1,"removed":1,"last_commit":"head","last_committed_at":1737417600,"last_subject":"change"}
+activity-7 {"path":"crates/a/src/lib.rs","commits":1,"added":4,"removed":1,"last_commit":"head","last_committed_at":1737417600,"last_subject":"change"}
+activity-30 {"path":"Cargo.toml","commits":1,"added":3,"removed":0,"last_commit":"ancestor","last_committed_at":1735689600,"last_subject":"base"}
+activity-30 {"path":"crates/a/Cargo.toml","commits":2,"added":8,"removed":1,"last_commit":"head","last_committed_at":1737417600,"last_subject":"change"}
+activity-30 {"path":"crates/a/src/lib.rs","commits":2,"added":6,"removed":1,"last_commit":"head","last_committed_at":1737417600,"last_subject":"change"}
+activity-30 {"path":"crates/a/src/util.rs","commits":1,"added":1,"removed":0,"last_commit":"ancestor","last_committed_at":1735689600,"last_subject":"base"}
+activity-30 {"path":"crates/a/tests/smoke.rs","commits":1,"added":1,"removed":0,"last_commit":"ancestor","last_committed_at":1735689600,"last_subject":"base"}
+activity-30 {"path":"crates/b/Cargo.toml","commits":1,"added":3,"removed":0,"last_commit":"ancestor","last_committed_at":1735689600,"last_subject":"base"}
+activity-30 {"path":"crates/b/src/api.rs","commits":1,"added":2,"removed":0,"last_commit":"ancestor","last_committed_at":1735689600,"last_subject":"base"}
+activity-30 {"path":"crates/b/src/lib.rs","commits":1,"added":1,"removed":0,"last_commit":"ancestor","last_committed_at":1735689600,"last_subject":"base"}
+activity-30 {"path":"crates/c/Cargo.toml","commits":1,"added":3,"removed":0,"last_commit":"ancestor","last_committed_at":1735689600,"last_subject":"base"}
+activity-30 {"path":"crates/c/src/lib.rs","commits":1,"added":1,"removed":0,"last_commit":"ancestor","last_committed_at":1735689600,"last_subject":"base"}
+activity-30 {"path":"crates/d/Cargo.toml","commits":1,"added":3,"removed":0,"last_commit":"ancestor","last_committed_at":1735689600,"last_subject":"base"}
+activity-30 {"path":"crates/d/src/lib.rs","commits":1,"added":1,"removed":0,"last_commit":"ancestor","last_committed_at":1735689600,"last_subject":"base"}
+delta-file {"path":"crates/a/Cargo.toml","added":1,"removed":1,"binary":false}
+delta-file {"path":"crates/a/src/lib.rs","added":4,"removed":1,"binary":false}
+delta-dependency {"before":{"container":"crates/a","manifest":"crates/a/Cargo.toml","section":"dependencies","alias":"c","package":"c","requirement":"../c","options":"{ path = \"../c\" }","target":"crates/c"},"after":{"container":"crates/a","manifest":"crates/a/Cargo.toml","section":"dependencies","alias":"c","package":"c","requirement":"../c","options":"{ features = [\"extra\"], path = \"../c\" }","target":"crates/c"}}
+delta-module-reference {"from":{"container":"crates/a","path":""},"to":{"container":"crates/b","path":"api"},"before":1,"after":2}
+delta-module-reference {"from":{"container":"crates/a","path":""},"to":{"container":"crates/d","path":""},"before":0,"after":1}

@@ -532,6 +532,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "corral-facts"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "corral-git"
 version = "0.5.0"
 dependencies = [
