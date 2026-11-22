@@ -54,8 +54,8 @@ impl Row {
                 } else {
                     "no errors"
                 };
+                // A reported zero is said, so it reads apart from no report at all.
                 match health.skipped {
-                    0 => format!("{on} · {failing}"),
                     1 => format!("{on} · {failing} · 1 event skipped"),
                     n => format!("{on} · {failing} · {n} events skipped"),
                 }
@@ -346,6 +346,9 @@ context = { run = "idx context", about = "Starting points" }
         assert!(!rows[0].enabled && rows[0].health.is_none());
         assert!(rows[1].enabled && rows[1].failing());
         assert_eq!(rows[1].shapes, "tool context · slot facts");
+        // A reported zero skipped count is shown; no report says none.
+        assert!(rows[1].status().contains("0 events skipped"));
+        assert!(!rows[0].status().contains("skipped"));
     }
 
     /// A tool's command line inside an inline table is a form value, so its text field shows

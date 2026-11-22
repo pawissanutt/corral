@@ -3,6 +3,7 @@
 //! under the rows. With none, one sentence and the guide. IDs: `seg-config-extensions-<name>`,
 //! `config-extension-<name>`, `btn-config-extensions-guide`.
 
+use nsh_base::link;
 use nsh_core::prelude::*;
 
 use super::super::parts::{cell, space};
@@ -154,18 +155,23 @@ fn row(app: AppState, shown: &Row, chosen: bool) -> AnyElement {
         .into_element()
 }
 
-/// Opens the extensions guide outside the app.
+/// The extensions guide as a link with its address in view: a terminal draws it as a
+/// hyperlink it opens itself, and one without hyperlinks still shows where the guide is.
 fn guide(app: AppState) -> AnyElement {
     view()
         .flex_row()
-        .child(button(
-            app,
-            extensions::GUIDE_LABEL,
-            ButtonKind::Quiet,
-            "btn-config-extensions-guide",
-            || {
-                drop(open_url(extensions::GUIDE_URL));
-            },
-        ))
+        .min_w(px(0.0))
+        .child(
+            link()
+                .href(extensions::GUIDE_URL)
+                .test_id("btn-config-extensions-guide")
+                .min_w(px(0.0))
+                .child(cell(
+                    app,
+                    format!("{}: {}", extensions::GUIDE_LABEL, extensions::GUIDE_URL),
+                    Token::Focus,
+                    false,
+                )),
+        )
         .into_element()
 }
