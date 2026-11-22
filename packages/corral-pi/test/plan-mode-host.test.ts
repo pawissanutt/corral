@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { EventLog } from "../src/bridge/events.ts";
+import type { SubmitResult } from "../src/bridge/protocol.ts";
 import type { CapabilityGuidance } from "../src/capabilities/guidance.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { PLAN_NOTE, type PlanMode } from "../src/host/plan-mode.ts";
@@ -270,6 +271,47 @@ test("an approval made while the previous turn settles starts after it has settl
   await until(() => plan.phase === "off" && !live.session.isStreaming, "the approved plan to run");
   await live.drained();
   expect(order.slice(0, 2)).toEqual(["settled", "kickoff"]);
+}), 120_000);
+
+test("a kickoff whose admission comes up while another turn settles is refused, not deferred", () => planning(undefined, async (live, plan, _cwd, owner) => {
+  writeFileSync(plan.path, PLAN);
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+  await live.session.prompt("Plan a --version flag", { source: "extension" });
+  await live.drained();
+  const review = plan.review;
+  // Given the kickoff waits in the admission order behind another operation,
+  const ahead = Promise.withResolvers<void>(), admission = Promise.withResolvers<SubmitResult>();
+  void (owner as unknown as { order(operation: () => Promise<void>): Promise<void> }).order(() => ahead.promise);
+  const start = owner.start.bind(owner);
+  owner.start = (input, kickoff) => {
+    const result = start(input, kickoff);
+    void result.then(admission.resolve);
+    return result;
+  };
+  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  // and meanwhile an independent turn starts and reaches its settle hooks:
+  const hooks = Promise.withResolvers<void>(), settling = Promise.withResolvers<void>();
+  const runner = (live.session as unknown as { _extensionRunner: { emit(event: { type: string }): Promise<unknown> } })._extensionRunner;
+  const emit = runner.emit.bind(runner);
+  runner.emit = async event => {
+    if (event.type === "agent_settled") {
+      settling.resolve();
+      await hooks.promise;
+    }
+    return emit(event);
+  };
+  fixtureTransport().script([{ text: "Independent." }]);
+  void live.session.prompt("an independent input", { source: "extension" });
+  await settling.promise;
+  // When the kickoff's turn in the order comes, it is refused there and then:
+  ahead.resolve();
+  expect(await admission.promise).toMatchObject({ disposition: "rejected", reason: "busy" });
+  hooks.resolve();
+  await until(() => !live.session.isStreaming, "the independent turn to settle");
+  await live.drained();
+  // Then nothing was deferred into that turn's settle: the review is still open and the order is free.
+  expect(plan.review).toBe(review);
+  expect(await within(owner.pause(), 5_000, "a pause after the refused kickoff")).toMatchObject({ paused: true });
 }), 120_000);
 
 test("a compaction inside a planning run is followed by the contract before the run goes on",

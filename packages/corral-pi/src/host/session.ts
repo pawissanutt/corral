@@ -1867,11 +1867,14 @@ export class HostSession {
   }
 
   /**
-   * Submit input and, when it starts a run, return only once that run's turn is open (or the run has ended).
-   * Pi reports a start before the turn can be cancelled; a caller ordering admissions against pause needs no
-   * such gap.
+   * Start input now or refuse it, and when it starts a run, return only once that run's turn is open (or the
+   * run has ended). Pi reports a start before the turn can be cancelled; a caller ordering admissions against
+   * pause needs no such gap.
    */
   async submitOpened(input: SessionInput, planKickoff?: string): Promise<SubmitResult> {
+    // Checked in the same tick as the call into Pi. A turn that is open for the host is running or still
+    // settling, and Pi would queue this input or defer it into its settle list, where it can be dropped.
+    if (this.open) return { disposition: "rejected", reason: "busy" };
     const result = await this.submitLocal(input, undefined, planKickoff === undefined ? undefined : { planKickoff });
     if (result.disposition === "started" && result.turn !== undefined && this.turn < result.turn) {
       await new Promise<void>(resolve => { this.openWaiters.push(resolve); });
