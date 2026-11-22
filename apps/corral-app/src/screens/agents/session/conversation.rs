@@ -71,37 +71,26 @@ impl Head {
     }
 }
 
+/// Each conversation is mounted by its full scope. Capture the target itself: NSH
+/// disposes owner-local reactive storage before calling the owner's cleanups.
+fn pin_child(scope: String, watch: impl Fn(DetailRef, bool) + 'static) {
+    let target = DetailRef::Session { id: scope };
+    watch(target.clone(), true);
+    cleanup(move || watch(target, false));
+}
+
 /// The conversation's head, what it asks, and its following transcript.
-pub(super) fn page(app: AppState, tab: Tab, jump: impl Fn() -> u32 + 'static) -> AnyElement {
+pub(super) fn page(
+    app: AppState,
+    tab: Tab,
+    scope: String,
+    jump: impl Fn() -> u32 + 'static,
+) -> AnyElement {
     let form = app.form;
     let phone = form == Form::Phone;
     // A parent subscription does not pin a child's transcript pages or item assemblies.
-    let child = tab.part(|t| {
-        of(t).map(|c| DetailRef::Session {
-            id: c.scope.to_string(),
-        })
-    });
     let source = untracked(|| app.scope());
-    let pinned = stored(None::<DetailRef>);
-    effect(move || {
-        let wanted = child.get().flatten();
-        let previous = pinned.replace(wanted.clone());
-        if previous != wanted {
-            untracked(|| {
-                if let Some(old) = previous {
-                    source.watch_detail(old, false);
-                }
-                if let Some(new) = wanted {
-                    source.watch_detail(new, true);
-                }
-            });
-        }
-    });
-    cleanup(move || {
-        if let Some(old) = pinned.try_with(Option::take).flatten() {
-            source.watch_detail(old, false);
-        }
-    });
+    pin_child(scope, move |target, open| source.watch_detail(target, open));
     let more = signal(false);
     let shape = tab.part(|t| of(t).map(Head::of));
     let facts = tab.part(|t| of(t).map(|c| c.facts.clone()));
@@ -319,4 +308,28 @@ fn content(app: AppState, said: &Transcript, end: Option<EndLine>) -> AnyElement
         .child(transcript::transcript(app, said))
         .children(end)
         .into_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nsh_core::element::{Runtime, create_root};
+    use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn disposing_child_releases_the_mounted_scope() {
+        let runtime = Runtime::default();
+        let _entered = runtime.enter();
+        let scope = "B-parent/child/reader";
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let (owner, ()) = create_root(|| {
+            let events = events.clone();
+            pin_child(scope.into(), move |target, open| {
+                events.borrow_mut().push((target, open));
+            });
+        });
+        owner.dispose();
+        let child = DetailRef::Session { id: scope.into() };
+        assert_eq!(*events.borrow(), [(child.clone(), true), (child, false)]);
+    }
 }

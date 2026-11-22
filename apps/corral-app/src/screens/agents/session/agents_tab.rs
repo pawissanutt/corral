@@ -99,7 +99,7 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             None => Shown::None,
             Some(None) => Shown::List,
             Some(Some(Opened::Conversation(conversation))) => {
-                Shown::Conversation(conversation.child.clone())
+                Shown::Conversation(conversation.scope.to_string())
             }
             Some(Some(Opened::Job(output))) => Shown::Job(output.job.clone()),
         })
@@ -109,9 +109,9 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
         untracked(|| match shown {
             Shown::None => None,
             Shown::List => Some(list(app, tab)),
-            Shown::Conversation(_) => {
-                Some(conversation::page(app, tab, move || page.with(|p| p.jump)))
-            }
+            Shown::Conversation(scope) => Some(conversation::page(app, tab, scope, move || {
+                page.with(|p| p.jump)
+            })),
             Shown::Job(_) => Some(job::output(app, tab)),
         })
     })
