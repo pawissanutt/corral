@@ -38,15 +38,20 @@ pub(crate) fn check(
         .extensions
         .get(name)
         .with_context(|| format!("unknown extension {name:?}"))?;
-    let project = project
-        .or_else(|| env::var("CORRAL_PROJECT").ok().filter(|p| !p.is_empty()))
-        .or_else(|| {
-            config
-                .projects
-                .keys()
-                .find(|p| extension.includes_project(p))
-                .cloned()
-        });
+    let project = project.or_else(|| {
+        // With no eligible project, run a workspace-level sample even if the
+        // caller's shell inherited a project context.
+        let first_eligible = config
+            .projects
+            .keys()
+            .find(|p| extension.includes_project(p))?;
+        Some(
+            env::var("CORRAL_PROJECT")
+                .ok()
+                .filter(|p| !p.is_empty())
+                .unwrap_or_else(|| first_eligible.clone()),
+        )
+    });
     let empty_env = BTreeMap::new();
     let (cwd, env) = if let Some(project) = project.as_deref() {
         let settings = config
@@ -59,10 +64,6 @@ pub(crate) fn check(
         );
         (root.join(&settings.path), &settings.env)
     } else {
-        ensure!(
-            extension.projects.is_none(),
-            "extension {name:?} does not include any project"
-        );
         (root.to_path_buf(), &empty_env)
     };
     let context = CommandContext {

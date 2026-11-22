@@ -20,12 +20,12 @@ running anything and rejects overlapping enabled `facts` providers for a project
 
 `corral-next ext check example [--project site]` runs each line once, even for a disabled
 extension. **This runs real commands and can have side effects.** The project comes from
-`--project`, then `CORRAL_PROJECT`, then the first eligible project by name. With no
-configured projects, an unrestricted extension runs from the workspace root. Each line gets
-one JSON object with `v: 1` and `sample: true` on stdin and runs with a 10-second deadline
-and a 1 MiB stdout limit. The check prints each
-line's stdout or error and exits nonzero if any line fails. Configuring an extension does
-not run it during normal task operations.
+`--project`, then `CORRAL_PROJECT`, then the first eligible project by name. If no project
+is eligible (for example, `projects = []`), omit `--project` to run from the workspace root;
+any inherited `CORRAL_PROJECT` is ignored. Each line gets one JSON object with `v: 1` and
+`sample: true` on stdin and runs with a 10-second deadline and a 1 MiB stdout limit. The
+check prints each line's stdout or error and exits nonzero if any line fails. Configuring
+an extension does not run it during normal task operations.
 
 ## PATH commands (`corral`)
 

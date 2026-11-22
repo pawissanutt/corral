@@ -57,6 +57,40 @@ context = { run = "true", about = "Find context", record = true }
 
 #[cfg(unix)]
 #[test]
+fn ext_check_with_empty_project_scope_runs_at_workspace_root() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join(".corral-next");
+    fs::create_dir(&dir).unwrap();
+    fs::create_dir(root.path().join("site")).unwrap();
+    fs::write(
+        dir.join("corral.toml"),
+        r#"
+[projects.site]
+path = "site"
+
+[extensions.example]
+projects = []
+facts = 'test -d .corral-next && test -z "$CORRAL_PROJECT" && printf checked'
+"#,
+    )
+    .unwrap();
+    let output = cli(root.path(), &["config", "check"]);
+    assert!(output.status.success(), "{output:?}");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_corral-next"))
+        .arg("--root")
+        .arg(root.path())
+        .args(["ext", "check", "example", "--json"])
+        .env("CORRAL_PROJECT", "site")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report, json!([{"line": "facts", "stdout": "checked"}]));
+}
+
+#[cfg(unix)]
+#[test]
 fn ext_check_runs_every_line_once_even_after_a_failure() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join(".corral-next");
