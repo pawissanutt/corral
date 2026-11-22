@@ -81,14 +81,24 @@ export class PlanReviewUi {
       if (feedback === undefined) return this.show();
     }
     const choice = key === "k" ? "revise" : CHOICES[key];
-    try {
-      if (choice && this.plan.review === id) await this.plan.choose(choice, feedback);
-    } catch (error) {
-      // A choice the session cannot carry out now leaves the review pending; /plan reopens it. Feedback that
-      // was typed goes to the composer, where it is still the owner's to send.
-      if (feedback?.trim()) ui.setEditorText(feedback);
-      this.options.notice(`${error instanceof Error ? error.message : String(error)}${feedback?.trim() ? ". Your feedback is in the composer." : ""}`);
+    if (!choice) return true;
+    // Typed feedback that was not delivered stays the owner's: it joins whatever the composer already holds.
+    const keep = (why: string) => {
+      const typed = feedback?.trim();
+      if (typed) {
+        const draft = ui.getEditorText();
+        ui.setEditorText(draft.trim() ? `${draft}\n\n${typed}` : typed);
+      }
+      this.options.notice(`${why}${typed ? ". Your feedback is in the composer." : ""}`);
+    };
+    if (this.plan.review !== id) {
+      // The review was answered elsewhere while the feedback was being typed.
+      if (feedback?.trim()) keep("This review was answered from another device");
+      return true;
     }
+    // A choice the session cannot carry out now leaves the review pending; /plan reopens it.
+    try { await this.plan.choose(choice, feedback); }
+    catch (error) { keep(error instanceof Error ? error.message : String(error)); }
     return true;
   }
 }
