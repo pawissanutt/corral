@@ -101,8 +101,9 @@ captures the integration tip, rebases the committed candidate onto it when neces
 and checks the prepared head. Finish runs any missing gate and, under review policy,
 requests an independent reviewer when needed. The review compares that head to the
 captured base, not to where the build originally started. A clean rebase is not a failure: the resulting
-commit can still need a gate or review. If Git finds a conflict, the host attempts to
-abort and reports the conflicted paths; resolve them in the build worktree. A failing
+commit can still need a gate or review. If Git finds a conflict, the host reports the paths and aborts only when it can
+identify the rebase as its own. Otherwise it leaves the operation in place; inspect
+`git status` in the build worktree before continuing. A failing
 gate reports its command and log. Repair the candidate before offering it for Land.
 
 The final choice covers a specific base and head. A previously passing gate on the

@@ -126,7 +126,7 @@ test("a gate leaving only a staged source change cannot record a pass", async ()
   } finally { await f.close(); }
 });
 
-test.each(["assume-unchanged", "skip-worktree"])("a dirty source hidden by %s cannot earn a receipt", async flag => {
+for (const flag of ["assume-unchanged", "skip-worktree"]) test(`a dirty source hidden by ${flag} cannot earn a receipt`, async () => {
   const f = fixture();
   try {
     const ran = join(f.root, "ran");

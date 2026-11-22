@@ -120,9 +120,9 @@ a slug or ID; optionally include a summary. Explain the candidate and evidence f
 <!-- corral-only -->
 Prepare before asking the owner to Land. build_verify and build_review prepare the candidate
 against the current integration tip before collecting evidence. Finish brings the exact
-candidate, evidence and available choices together. If preparation conflicts, the host
-aborts the rebase; resolve the reported conflict in the build worktree, not the owner's
-checkout. If a check fails or review requests changes, fix the candidate, commit and
+candidate, evidence and available choices together. If preparation conflicts, read the
+reported paths and recovery status. The host aborts only a rebase it can identify as
+its own. Never abort an unidentified Git operation or repair in the owner's checkout. If a check fails or review requests changes, fix the candidate, commit and
 prepare it again. Report a blocker when it cannot be fixed.
 
 The owner alone chooses Keep, Iterate or Land. Keep retains the branch and Iterate

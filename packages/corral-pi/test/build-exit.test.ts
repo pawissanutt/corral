@@ -47,6 +47,7 @@ function fixture(settings: { policy?: ExitPolicy; conflict?: boolean; dirtyBase?
   const repo = { candidate: head, tip: base, dirty: false, ancestor: !settings.conflict };
   const calls: string[][] = [];
   const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
+  let reflogAction: string | undefined;
   const underlying = git();
   const run: Run = async (argv, options) => {
     calls.push([...argv]);
@@ -56,12 +57,16 @@ function fixture(settings: { policy?: ExitPolicy; conflict?: boolean; dirtyBase?
     if (argv[0] === "rev-parse" && !argv.includes("--abbrev-ref")) return ok(argv.at(-1) === "HEAD" && options.cwd !== "/primary" ? repo.candidate : repo.tip);
     if (argv[0] === "symbolic-ref") return ok(options.cwd === "/primary" ? "refs/heads/main" : "refs/heads/build/parser");
     if (argv[0] === "merge-base") return argv.includes("--is-ancestor") ? { code: repo.ancestor ? 0 : 1, stdout: "", stderr: "" } : ok(repo.ancestor ? repo.tip : base);
+    if (argv[0] === "reflog") return ok(`${reflogAction} (start): checkout ${repo.tip}`);
     if (argv.includes("rebase") && settings.conflict) {
-      if (argv.includes("--abort")) return ok("");
-      mkdirSync(join(dir, "rebase-merge"));
+      const state = join(dir, "rebase-merge");
+      if (argv.includes("--abort")) { rmSync(state, { recursive: true }); return ok(""); }
+      reflogAction = options.env?.GIT_REFLOG_ACTION;
+      mkdirSync(state);
+      for (const [key, value] of Object.entries({ "head-name": "refs/heads/build/parser", "orig-head": repo.candidate, onto: repo.tip })) writeFileSync(join(state, key), value + "\n");
       return { code: 1, stdout: "", stderr: "conflict" };
     }
-    if (argv.includes("--diff-filter=U")) return ok("src/parser.ts\n");
+    if (argv.includes("--diff-filter=U")) return ok("src/parser.ts\0");
     if (argv.includes("--name-only") && settings.dirtyBase) return ok("src/parser.ts\n");
     if (argv[0] === "worktree") return ok("worktree /primary\0HEAD " + repo.tip + (settings.dirtyBase ? "\0branch refs/heads/main\0\0" : "\0branch refs/heads/other\0\0"));
     if (argv[0] === "status" && options.cwd !== "/primary") return ok(repo.dirty ? " M src/parser.ts\n" : "");
