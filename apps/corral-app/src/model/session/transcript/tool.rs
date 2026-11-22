@@ -568,6 +568,18 @@ pub(super) fn present(call: &Call<'_>) -> Row {
         .or_else(|| tool_corral::present(call))
         .or_else(|| tool_local::present(call))
         .unwrap_or_else(|| fallback(call));
+    // The helper's archive id is assigned by the host; neither the tool-call id nor
+    // a billing request id necessarily names its transcript.
+    if matches!(call.name, "explore" | "oracle" | "corral_expert")
+        && let Some(id) = call.details.get("conversationId").and_then(Value::as_str)
+        && let Ok(action) = super::super::fleet::AgentLookup::of(call.session).check(id)
+    {
+        row.expanded.extend(text("Conversation ID", id));
+        row.view = Some(ToolView {
+            label: "Open conversation",
+            action,
+        });
+    }
     if call.state == CallState::NotRun {
         row.state = ToolState::Waiting;
         row.outcome = "not run".to_owned();

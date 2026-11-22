@@ -373,7 +373,8 @@ streamed words and running tools after the recorded messages until the transcrip
 and it keeps to the newest rows unless the owner scrolled up. A session without a Pi host shows a read-only log instead: the pane's screen for a run on another harness, or the kept tail of `session.log` for a headless run that has ended.
 
 The **Agents** list shows recent children. To read a retained child that no longer appears
-there, use **Open an agent by id** with its exact ID from the parent session. The bounded
+there, use **Open an agent by id** with its exact ID from the parent session. Recorded
+helper tool results that include a conversation ID also offer **Open conversation** directly. The bounded
 list is a summary, not the retention limit for child transcript files.
 
 **New** in Sessions' head starts a named assistant session in corrald, which opens on its page once corrald made it, or opens the New build sheet (`N`).

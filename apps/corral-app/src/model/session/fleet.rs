@@ -124,7 +124,7 @@ pub struct AgentLookup {
 }
 
 impl AgentLookup {
-    fn of(session: &Id) -> Self {
+    pub(super) fn of(session: &Id) -> Self {
         Self {
             session: session.clone(),
             field: ops::LOOKUP_FIELD,
