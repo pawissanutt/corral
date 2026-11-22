@@ -1,6 +1,35 @@
 # Extensions
 
-Corral can run external commands named `corral-ext-<name>` that you install on `PATH`.
+## Configured commands (`corral-next`)
+
+In `.corral-next/corral.toml`, name an extension and give it one or more shell commands:
+
+```toml
+[extensions.example]
+projects = ["site"]  # omit for every project
+facts = "my-indexer facts"
+on = ["landed"]
+run = "my-notifier"
+
+[extensions.example.tools]
+context = { run = "my-indexer context", about = "Find starting points" }
+```
+
+`enabled` defaults to `true`. `corral-next config check` validates the block without
+running anything and rejects overlapping enabled `facts` providers for a project.
+
+`corral-next ext check example [--project site]` runs each line once, even for a disabled
+extension. **This runs real commands and can have side effects.** The project comes from
+`--project`, then `CORRAL_PROJECT`, then the first eligible project by name. With no
+configured projects, an unrestricted extension runs from the workspace root. Each line gets
+one JSON object with `v: 1` and `sample: true` on stdin and runs with a 10-second deadline
+and a 1 MiB stdout limit. The check prints each
+line's stdout or error and exits nonzero if any line fails. Configuring an extension does
+not run it during normal task operations.
+
+## PATH commands (`corral`)
+
+The older `corral` CLI can run external commands named `corral-ext-<name>` that you install on `PATH`.
 This is the first stage of the extension framework in the approved T-381 plan: command
 discovery only. Corral does not register, configure, sandbox or talk a protocol to these
 commands; it starts them exactly as a shell would start any other program.

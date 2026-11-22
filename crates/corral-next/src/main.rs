@@ -1,5 +1,6 @@
 mod args;
 mod editor;
+mod ext;
 mod hook;
 mod import;
 mod output;
@@ -23,7 +24,9 @@ use corral_engine::{
 };
 use jiff::Timestamp;
 
-use args::{ArtifactCommand, Cli, Command, ConfigCommand, Id, Text, UsageCommand, Verdict};
+use args::{
+    ArtifactCommand, Cli, Command, ConfigCommand, ExtCommand, Id, Text, UsageCommand, Verdict,
+};
 use output::{Output, TaskView};
 
 fn main() -> ExitCode {
@@ -82,8 +85,12 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
     }
     let root = Engine::discover_root(&cwd, out.root)?;
     if let Command::Config(ConfigCommand::Check) = command {
-        check_config(&root, out)?;
+        let config = checked_config(&root)?;
+        out.value(&config, |out, _| writeln!(out, "Configuration is valid"))?;
         return Ok(0);
+    }
+    if let Command::Ext(ExtCommand::Check { name, project }) = command {
+        return ext::check(&root, &checked_config(&root)?, &name, project, out);
     }
     if let Command::Import {
         dir,
@@ -316,7 +323,7 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
         Command::Pipeline { task } => engine.advance(&task)?,
         #[cfg(unix)]
         Command::PiStartup(_) => unreachable!("handled before opening the engine"),
-        Command::Init { .. } | Command::Config(_) | Command::Import { .. } => {
+        Command::Init { .. } | Command::Config(_) | Command::Ext(_) | Command::Import { .. } => {
             unreachable!("handled before opening the engine")
         }
     }
@@ -327,18 +334,17 @@ fn apply(engine: &Engine, out: &mut Output<'_>, op: Op, force: bool) -> Result<(
     out.applied(&engine.apply(op, force)?)
 }
 
-fn check_config(root: &Path, out: &mut Output<'_>) -> Result<()> {
+fn checked_config(root: &Path) -> Result<Config> {
     let path = root.join(".corral-next/corral.toml");
     let text = std::fs::read_to_string(&path)
         .with_context(|| format!("read configuration {}", path.display()))?;
-    let config = Config::check(root, &text).map_err(|problems| {
+    Config::check(root, &text).map_err(|problems| {
         let mut message = String::from("configuration problems:");
         for problem in problems {
             message.push_str(&format!("\n  {problem}"));
         }
         anyhow::anyhow!(message)
-    })?;
-    out.value(&config, |out, _| writeln!(out, "Configuration is valid"))
+    })
 }
 
 fn watch_sync(engine: &Engine, out: &mut Output<'_>) -> Result<()> {

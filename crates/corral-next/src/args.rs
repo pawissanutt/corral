@@ -196,6 +196,9 @@ pub(crate) enum Command {
     /// Check the workspace configuration.
     #[command(subcommand)]
     Config(ConfigCommand),
+    /// Work with configured extensions.
+    #[command(subcommand)]
+    Ext(ExtCommand),
     #[command(hide = true)]
     Pipeline { task: String },
 }
@@ -303,6 +306,17 @@ pub(crate) enum UsageCommand {
 #[derive(Subcommand)]
 pub(crate) enum ConfigCommand {
     Check,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ExtCommand {
+    /// Run every line of an extension once with sample input (may have side effects).
+    Check {
+        name: String,
+        /// Project context (otherwise CORRAL_PROJECT or the first eligible project).
+        #[arg(long)]
+        project: Option<String>,
+    },
 }
 
 fn from_name<T: DeserializeOwned>(name: &str) -> Result<T, serde::de::value::Error> {

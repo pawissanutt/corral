@@ -10,6 +10,7 @@ pub mod config;
 mod dispatch;
 pub mod error;
 pub mod events;
+pub mod extension;
 mod land;
 pub mod model;
 #[cfg(unix)]

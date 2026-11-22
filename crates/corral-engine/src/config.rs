@@ -15,7 +15,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::error::refuse;
 use crate::model::Task;
 
+mod extension;
 mod profile;
+pub use extension::{Extension, ExtensionTool};
 pub use profile::{ModelSelector, Profile};
 
 mod wrap;
@@ -34,6 +36,8 @@ pub struct Config {
     #[serde(deserialize_with = "deserialize_profiles")]
     pub profiles: BTreeMap<String, Profile>,
     pub projects: BTreeMap<String, Project>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub extensions: BTreeMap<String, Extension>,
     pub routing: Vec<RoutingRule>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub pricing: BTreeMap<String, Price>,
@@ -52,6 +56,7 @@ impl Default for Config {
             harnesses: builtin_harnesses(),
             profiles: builtin_profiles(),
             projects: BTreeMap::new(),
+            extensions: BTreeMap::new(),
             routing: Vec::new(),
             pricing: BTreeMap::new(),
             daemon: None,
@@ -389,6 +394,7 @@ impl Config {
                 }
             }
         }
+        extension::validate(self, &mut problems);
         for (index, rule) in self.routing.iter().enumerate() {
             self.check_profile(
                 &rule.profile,
