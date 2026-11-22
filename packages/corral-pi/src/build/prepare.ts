@@ -3,6 +3,7 @@ import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { checked, type Run } from "./corral-cli.ts";
 import { checkCheckoutSupport, checkLandingEnvironment } from "./fast-forward.ts";
+import { checkIndexVisibility } from "./index-visibility.ts";
 import { buildProject, gateInputFingerprint } from "./gate.ts";
 import { landingBaseFromRef, landingBaseLookups } from "./git.ts";
 import type { BuildContext, LandCandidate } from "./types.ts";
@@ -119,6 +120,7 @@ export async function checkSource(git: Run, context: BuildContext): Promise<void
     throw new Error("The build worktree is no longer a checkout of the session's repository.");
   }
   await checkIdle(git, worktree);
+  await checkIndexVisibility(git, worktree);
   if ((await checked(git, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"], worktree)).trim()) {
     throw new Error("Commit or stash uncommitted build changes before landing.");
   }
