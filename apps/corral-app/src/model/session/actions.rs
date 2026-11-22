@@ -248,20 +248,47 @@ fn host_row(
     )
 }
 
-/// Compact context (`/compact`, optional instructions after it in the `/` menu).
+/// Plan mode's switch, named for where it leads. It carries no `/` name: the host's own `/plan`
+/// takes a request after it and is sent as typed.
+fn plan_mode(cx: &Cx<'_>) -> ActionRow {
+    let on = cx.state.is_some_and(|state| state.plan_mode.is_some());
+    with(
+        row(
+            "plan-mode",
+            if on {
+                "Leave plan mode"
+            } else {
+                "Enter plan mode"
+            },
+            None,
+            Action::Command(CommandAction::Host {
+                session: cx.id.clone(),
+                action: SessionAction::PlanMode { enabled: !on },
+                what: "Plan mode",
+            }),
+        ),
+        None,
+        blocked(cx, "plan_mode", "this session's host has no plan mode"),
+    )
+}
+
+/// Compact context (`/compact`, optional instructions after it in the `/` menu) and plan mode.
 fn message(cx: &Cx<'_>) -> Option<ActionGroup> {
     talks(cx).then(|| ActionGroup {
         title: "Message",
-        rows: vec![host_row(
-            cx,
-            "compact",
-            "Compact context",
-            "/compact",
-            "compact",
-            "this session's host does not compact its context",
-            SessionAction::Compact { instructions: None },
-            "Compact",
-        )],
+        rows: vec![
+            host_row(
+                cx,
+                "compact",
+                "Compact context",
+                "/compact",
+                "compact",
+                "this session's host does not compact its context",
+                SessionAction::Compact { instructions: None },
+                "Compact",
+            ),
+            plan_mode(cx),
+        ],
     })
 }
 

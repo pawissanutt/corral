@@ -254,6 +254,8 @@ pub(super) fn fresh(feed: &Feed, id: &str) -> Parts {
                 total: totals(0, 0, None),
             },
         },
+        plan_mode: None,
+        plan_doc: String::new(),
         events: Vec::new(),
     };
     parts.event(&at, "ready", "{}".into());
@@ -445,6 +447,10 @@ pub(super) fn seed(feed: &mut Feed, id: &str) {
         });
     }
     host.parts = Some(Box::new(parts));
+    let model = feed.assistants.get(id).and_then(|row| row.model.clone());
+    if let Some(host) = feed.hosts.get_mut(id) {
+        super::plan_mode::seed(host, model.as_deref(), at(17));
+    }
 }
 
 /// A host that a build session runs on gets its parts once its row is recorded.

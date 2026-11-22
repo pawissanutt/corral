@@ -1,0 +1,336 @@
+//! Plan review: the plan a session in plan mode submitted, waiting for the owner's choice. Its
+//! card (`plan_review`) is one line in the dock until the owner opens it; open, the whole plan
+//! document takes the conversation's place and the dock holds the host's options (Execute, with
+//! a clean or a compacted context, Keep planning), the session's model with the way to change
+//! it, and one text field: the owner's feedback with Keep planning, a note to the executor with
+//! an execute option. Keep planning asks for that feedback first; choosing it again, or Enter in
+//! the field, sends it, words or none.
+//!
+//! The document is read whole from the host (`SessionPlanModeDoc`, paged, joined in offset
+//! order) and read again when the host's cards change. A host that does not serve it, or a read
+//! that fails, leaves the card's own body, which holds the plan's first 8 KiB, with why.
+
+use corral_protocol::detail::{CardKind, DetailBody, DetailRef, PlanModeDocPage};
+use corral_protocol::session_host::CardAnswer;
+use corral_protocol::session_state::CardBrief;
+
+use crate::model::Id;
+use crate::model::daemon::Feed;
+use crate::model::effect::Effect;
+use crate::model::hue::Hue;
+use crate::model::nav::Form;
+
+use super::choice::{self, ChoiceOption};
+use super::dock::{self, CardsRead, DockAction};
+use super::questions::TextRow;
+use super::tabs::load;
+use super::{Action, Can, Cx, Focus, Host, PickerAction, PickerKind, State};
+
+/// The host part the whole document is served by.
+const CAPABILITY: &str = "plan_mode_doc";
+/// The option that returns to planning: its text is the owner's feedback.
+const REVISE: &str = "revise";
+
+pub fn target(session: &str) -> DetailRef {
+    DetailRef::SessionPlanModeDoc {
+        id: session.to_owned(),
+    }
+}
+
+/// The plan document, once every byte of it has been read.
+fn whole<'f>(feed: &'f Feed, session: &str) -> Option<&'f PlanModeDocPage> {
+    match feed.detail(&target(session))?.body()? {
+        DetailBody::SessionPlanModeDoc(page)
+            if page.offset == 0 && page.body.len() as u64 == page.bytes =>
+        {
+            Some(page)
+        }
+        _ => None,
+    }
+}
+
+/// The plan review the owner opened, as the host's state briefs it.
+fn opened<'a>(cx: &Cx<'a>) -> Option<&'a CardBrief> {
+    cx.state?
+        .cards
+        .iter()
+        .find(|brief| brief.kind == CardKind::PlanReview && cx.ui.dock.opened.contains(&brief.id))
+}
+
+/// The plan document in the conversation's place.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanDoc {
+    pub title: String,
+    /// `revision 2 · anthropic/claude-opus-5-5`: only the facts reported.
+    pub facts: String,
+    /// The plan's Markdown: the whole document once read, else what the card carries.
+    pub body: Option<String>,
+    /// Where the read of the whole document stands, or why the card's part is all there is.
+    pub note: Option<(Hue, String)>,
+    pub retry: Option<Action>,
+    /// Back to the conversation; the card stays pending.
+    pub back: Action,
+}
+
+fn not_now(cx: &Cx<'_>, brief: &CardBrief) -> Action {
+    Action::Dock(DockAction::Dismiss {
+        session: cx.id.clone(),
+        card: brief.id.clone(),
+    })
+}
+
+/// Why the whole document is not shown, with Retry after a failed read.
+fn standing(cx: &Cx<'_>, clipped: bool) -> (Option<(Hue, String)>, Option<Action>) {
+    let target = target(cx.id.as_str());
+    let rest = if clipped {
+        "this is its start, and the rest is in the session's terminal"
+    } else {
+        "this is the part its card carries"
+    };
+    if let Some(error) = cx
+        .feed
+        .detail(&target)
+        .and_then(|cache| cache.error.as_ref())
+    {
+        let why = if error.message.is_empty() {
+            error.code.as_str()
+        } else {
+            error.message.as_str()
+        };
+        return (
+            Some((
+                Hue::Fail,
+                format!("The whole plan could not be read ({why}); {rest}."),
+            )),
+            Some(Action::Refresh(target)),
+        );
+    }
+    let unserved = match cx.can(CAPABILITY) {
+        Can::Absent => Some("This host does not serve the whole plan".to_owned()),
+        Can::Unavailable(why) => Some(format!("The whole plan cannot be read now ({why})")),
+        Can::Yes | Can::Unknown if cx.host != Host::Running => {
+            Some("The whole plan can be read once the host runs".to_owned())
+        }
+        Can::Yes | Can::Unknown => None,
+    };
+    match unserved {
+        Some(why) => (Some((Hue::Held, format!("{why}; {rest}."))), None),
+        None => (Some((Hue::Neutral, "Reading the whole plan…".into())), None),
+    }
+}
+
+/// The document of the plan review the owner opened; none while none is open.
+pub(super) fn doc(cx: &Cx<'_>) -> Option<PlanDoc> {
+    let brief = opened(cx)?;
+    let card = dock::card(cx.feed, cx.id.as_str(), &brief.id);
+    let page = whole(cx.feed, cx.id.as_str());
+    let revision = cx
+        .state
+        .and_then(|state| state.plan_mode.as_ref())
+        .and_then(|plan| plan.revision)
+        .or_else(|| page.map(|page| page.revision));
+    let facts: Vec<String> = [revision.map(|n| format!("revision {n}")), cx.model()]
+        .into_iter()
+        .flatten()
+        .collect();
+    let (body, (note, retry)) = match page {
+        Some(page) => (Some(page.body.clone()), (None, None)),
+        None => (
+            card.and_then(|card| card.body.clone()),
+            standing(cx, card.is_some_and(|card| card.body_more)),
+        ),
+    };
+    Some(PlanDoc {
+        title: brief.title.clone(),
+        facts: facts.join(" · "),
+        body: body.filter(|body| !body.trim().is_empty()),
+        note,
+        retry,
+        back: not_now(cx, brief),
+    })
+}
+
+/// The read of the whole document while its review is open: once, while the host serves it.
+pub(super) fn fetches(cx: &Cx<'_>) -> Option<Action> {
+    opened(cx)?;
+    load(cx, Ok(target(cx.id.as_str())), Some(CAPABILITY))
+}
+
+/// The opened review's choices in the dock.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanReview {
+    /// `dock-<card>`.
+    pub id: String,
+    pub card: String,
+    /// The card's question: `How should this plan proceed?`.
+    pub title: String,
+    /// `Model: anthropic/claude-opus-5-5`; an execute option runs on it.
+    pub model: String,
+    /// Opens the session's model list.
+    pub change: Action,
+    pub options: Vec<ChoiceOption>,
+    /// The owner's feedback or note.
+    pub words: TextRow,
+    /// Keep planning waits for the owner's feedback: the field takes the keys.
+    pub asking: bool,
+    /// Enter in the field: sends Keep planning with its text.
+    pub submit: Option<Action>,
+    pub not_now: Action,
+    pub hint: Vec<(&'static str, &'static str)>,
+    pub sending: bool,
+    pub inert: Option<String>,
+    pub read: Option<CardsRead>,
+}
+
+/// The choices of the plan review the owner opened, from its card when read.
+pub(super) fn review(cx: &Cx<'_>, inert: Option<String>) -> Option<PlanReview> {
+    let brief = opened(cx)?;
+    let card = dock::card(cx.feed, cx.id.as_str(), &brief.id);
+    let sending = dock::sending(cx.ui, cx.feed, &brief.id);
+    let enabled = !sending && inert.is_none();
+    let draft = cx.ui.dock.drafts.get(&brief.id);
+    let picks = draft.map(|draft| draft.picks(0)).unwrap_or_default();
+    let question = card.and_then(|card| card.questions.first());
+    let options = question.map_or_else(Vec::new, |question| {
+        choice::options(&brief.id, question, picks, enabled, |option| {
+            Action::Dock(DockAction::Choose {
+                session: cx.id.clone(),
+                card: brief.id.clone(),
+                option: option.to_owned(),
+            })
+        })
+    });
+    let asking = picks.iter().any(|pick| pick == REVISE);
+    let (label, placeholder) = if asking {
+        ("Feedback", "What should change? Enter sends it, empty too")
+    } else {
+        ("Note", "Optional: for the executor, or what should change")
+    };
+    let hint = if cx.env.form == Form::Phone {
+        Vec::new()
+    } else {
+        vec![
+            ("↑↓", "select"),
+            ("1-9", "pick"),
+            ("⏎", "choose"),
+            ("esc", "not now"),
+        ]
+    };
+    Some(PlanReview {
+        id: format!("dock-{}", brief.id),
+        card: brief.id.clone(),
+        title: question.map_or_else(|| brief.title.clone(), |question| question.text.clone()),
+        model: format!(
+            "Model: {}",
+            cx.model().unwrap_or_else(|| "not reported".into())
+        ),
+        change: Action::Picker(PickerAction::Open {
+            session: cx.id.clone(),
+            kind: PickerKind::Model,
+        }),
+        options,
+        words: TextRow::new(
+            cx.id,
+            &brief.id,
+            0,
+            label,
+            draft
+                .map(|draft| draft.text(0).to_owned())
+                .unwrap_or_default(),
+            placeholder,
+        ),
+        asking,
+        submit: (enabled && card.is_some()).then(|| {
+            Action::Dock(DockAction::Submit {
+                session: cx.id.clone(),
+                card: brief.id.clone(),
+            })
+        }),
+        not_now: not_now(cx, brief),
+        hint,
+        sending,
+        inert,
+        read: card.is_none().then(|| dock::card_read(cx)),
+    })
+}
+
+/// The answer's option and the owner's text, when any was typed.
+fn answer(option: &str, text: &str) -> Vec<CardAnswer> {
+    let text = text.trim();
+    vec![CardAnswer {
+        options: vec![option.to_owned()],
+        text: (!text.is_empty()).then(|| text.to_owned()),
+    }]
+}
+
+fn typed(state: &State, session: &Id, card: &str) -> (bool, String) {
+    let draft = state.ui(session.as_str()).dock.drafts.get(card);
+    (
+        draft.is_some_and(|draft| draft.picks(0).iter().any(|pick| pick == REVISE)),
+        draft
+            .map(|draft| draft.text(0).to_owned())
+            .unwrap_or_default(),
+    )
+}
+
+/// Chooses an option of the review: an execute option goes out with the note typed so far;
+/// Keep planning with no feedback yet asks for it first, and goes out when chosen again.
+pub(super) fn choose(
+    state: &mut State,
+    session: &Id,
+    card_id: &str,
+    option: &str,
+    feed: &Feed,
+) -> Vec<Effect> {
+    let Some(found) = dock::card(feed, session.as_str(), card_id)
+        .and_then(|card| card.questions.first())
+        .and_then(|question| question.options.iter().find(|found| found.id == option))
+    else {
+        return Vec::new();
+    };
+    if let Some(why) = &found.unavailable {
+        state.ui_mut(session).notices.push(
+            Hue::Held,
+            format!("{}: unavailable: {why}", found.label),
+            feed.now,
+        );
+        return Vec::new();
+    }
+    if dock::sending(state.ui(session.as_str()), feed, card_id) {
+        return Vec::new();
+    }
+    let (asking, text) = typed(state, session, card_id);
+    if option == REVISE && !asking && text.trim().is_empty() {
+        let ui = state.ui_mut(session);
+        *ui.dock
+            .drafts
+            .entry(card_id.to_owned())
+            .or_default()
+            .picks_mut(0) = vec![REVISE.to_owned()];
+        ui.focus = Focus::Dock;
+        return Vec::new();
+    }
+    dock::send(state, session, card_id, answer(option, &text), false)
+}
+
+/// The owner's feedback or note; an option waiting for it stays chosen.
+pub(super) fn text(state: &mut State, session: &Id, card: &str, text: String) {
+    *state
+        .ui_mut(session)
+        .dock
+        .drafts
+        .entry(card.to_owned())
+        .or_default()
+        .text_mut(0) = Some(text);
+}
+
+/// Enter in the field: Keep planning with the text, which the host also reads from an answer
+/// that names no option. Nothing typed and nothing asked for sends nothing.
+pub(super) fn submit(state: &mut State, session: &Id, card: &str, feed: &Feed) -> Vec<Effect> {
+    let (asking, text) = typed(state, session, card);
+    if (!asking && text.trim().is_empty()) || dock::sending(state.ui(session.as_str()), feed, card)
+    {
+        return Vec::new();
+    }
+    dock::send(state, session, card, answer(REVISE, &text), false)
+}

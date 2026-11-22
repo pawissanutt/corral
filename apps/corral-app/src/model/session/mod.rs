@@ -45,6 +45,7 @@ mod land;
 mod log;
 mod notices;
 mod plan;
+mod plan_review;
 mod proof;
 mod questions;
 mod queue;
@@ -70,6 +71,8 @@ mod exit_tests;
 mod keys_tests;
 #[cfg(test)]
 mod picker_tests;
+#[cfg(test)]
+mod plan_review_tests;
 #[cfg(test)]
 mod plan_tests;
 #[cfg(test)]
@@ -133,6 +136,7 @@ pub use plan::{
     HistoryLine, Ledger, LedgerStep, PlanAction, PlanTab, PlanUi, StepRow,
     StepState as PlanStepState, ledger, plan_tab,
 };
+pub use plan_review::{PlanDoc, PlanReview};
 pub use proof::{ProofAction, ProofTab, ProofUi, proof_tab};
 pub use questions::{
     AnswerCard, AnswerTab, QuestionDock, QuestionLine, QuestionView, Review, ReviewRow,
@@ -669,6 +673,8 @@ pub enum Body {
     Changes(ChangesTab),
     Files(FilesView),
     Board(BoardTab),
+    /// The plan document of the plan review the owner opened.
+    PlanReview(PlanDoc),
     Task(TaskTab),
     Proof(ProofTab),
     /// A session without a Pi host: its read-only log.
@@ -800,7 +806,10 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         (None, Tab::Board) => Body::Board(board_tab(&cx)),
         (None, Tab::Task) => Body::Task(task_tab(&cx)),
         (None, Tab::Proof) => Body::Proof(proof_tab(&cx)),
-        (None, Tab::Chat) => Body::Chat(chat(&cx)),
+        (None, Tab::Chat) => match plan_review::doc(&cx) {
+            Some(doc) => Body::PlanReview(doc),
+            None => Body::Chat(chat(&cx)),
+        },
     };
     let details = details(&cx, &state.panel);
     let mut fetches: Vec<Action> = transcript::fetches(feed, id, ui)
@@ -821,6 +830,7 @@ pub fn page(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
         Body::Task(_) => task::fetches(&cx),
         Body::Proof(_) => proof::fetches(&cx),
         Body::Agents(_) => fleet::fetches(&cx, state),
+        Body::PlanReview(_) => plan_review::fetches(&cx).into_iter().collect(),
         Body::Chat(_) | Body::Log(_) => Vec::new(),
     });
     if details.is_some() {

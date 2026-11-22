@@ -179,6 +179,7 @@ pub(super) fn card(
 fn title(brief: &CardBrief) -> String {
     match (brief.kind, &brief.child) {
         (CardKind::ChildQuestion, Some(child)) => format!("{child} asks: {}", brief.title),
+        (CardKind::PlanReview, _) => format!("Plan to review: {}", brief.title),
         _ => brief.title.clone(),
     }
 }
@@ -191,6 +192,7 @@ pub(super) fn line(cx: &Cx<'_>, brief: &CardBrief, oldest: bool) -> AsideLine {
     if oldest && cx.env.form != Form::Phone {
         text.push_str(match brief.kind {
             CardKind::ChildQuestion => " · Alt+A to answer",
+            CardKind::PlanReview => " · Alt+A to review",
             _ => " · Alt+A to choose",
         });
     }

@@ -1,6 +1,7 @@
 //! The dock above the composer: what waits on the owner and the owner's queued input, each
 //! present only when it has content, in the terminal UI's order: a docked choice (an exit
-//! choice, a child's question, a proposed board plan), the owner questions, the queue. A select,
+//! choice, a child's question, a proposed board plan, a plan review, whose opened form is
+//! `plan_review`'s), the owner questions, the queue. A select,
 //! confirm or input card and an opened question card take the composer's place.
 //!
 //! The host's state briefs the waiting cards; their bodies are read from `SessionCards`, and a
@@ -26,6 +27,7 @@ use crate::model::{Id, Live};
 
 use super::choice::{self, ChoiceCard};
 use super::dialog::{self, DecisionCard};
+use super::plan_review::{self, PlanReview};
 use super::questions::{self, AnswerCard, QuestionDock};
 use super::queue::{self, QueueDock};
 use super::{Action, Cx, Focus, State, Ui, exit};
@@ -264,6 +266,8 @@ pub struct Dock {
     /// The first docked choice the owner opened: the exit choice, a child's question, a
     /// proposed board plan.
     pub choice: Option<ChoiceCard>,
+    /// The plan review the owner opened: its choices, while its document has the main view.
+    pub plan: Option<PlanReview>,
     pub questions: Option<QuestionDock>,
     pub queue: Option<QueueDock>,
     /// A select, confirm or input card, drawn in the composer's place.
@@ -287,6 +291,7 @@ pub struct Dock {
 impl Dock {
     pub fn is_empty(&self) -> bool {
         self.choice.is_none()
+            && self.plan.is_none()
             && self.questions.is_none()
             && self.queue.is_none()
             && self.decision.is_none()
@@ -355,7 +360,7 @@ fn kind(feed: &Feed, session: &str, id: &str) -> Option<CardKind> {
 pub(super) const fn docked(kind: CardKind) -> bool {
     matches!(
         kind,
-        CardKind::Exit | CardKind::ChildQuestion | CardKind::BoardPlan
+        CardKind::Exit | CardKind::ChildQuestion | CardKind::BoardPlan | CardKind::PlanReview
     )
 }
 
@@ -503,19 +508,29 @@ pub(super) fn act(state: &mut State, action: DockAction, feed: &Feed) -> Vec<Eff
             question,
             text,
         } => {
-            questions::text(state, &session, &card, question, text, feed);
+            if kind(feed, session.as_str(), &card) == Some(CardKind::PlanReview) {
+                plan_review::text(state, &session, &card, text);
+            } else {
+                questions::text(state, &session, &card, question, text, feed);
+            }
             Vec::new()
         }
         DockAction::Submit { session, card } => match kind(feed, session.as_str(), &card) {
             Some(CardKind::Input) => dialog::submit(state, &session, &card, feed),
             Some(CardKind::Question) => questions::submit(state, &session, &card, feed),
+            Some(CardKind::PlanReview) => plan_review::submit(state, &session, &card, feed),
             _ => Vec::new(),
         },
         DockAction::Choose {
             session,
             card,
             option,
-        } => choice::choose(state, &session, &card, &option, feed),
+        } => match kind(feed, session.as_str(), &card) {
+            Some(CardKind::PlanReview) => {
+                plan_review::choose(state, &session, &card, &option, feed)
+            }
+            _ => choice::choose(state, &session, &card, &option, feed),
+        },
         DockAction::Dismiss { session, card } => fold::dismiss(state, &session, card, feed),
         DockAction::Confirm { session, yes } => choice::confirm(state, &session, yes, feed),
         DockAction::Own { session, card } => {
@@ -580,6 +595,7 @@ pub fn dock(cx: &Cx<'_>) -> Dock {
     };
     let inert = reads::inert(cx).filter(|_| !state.cards.is_empty());
     let (choice, waiting, more) = fold::docked_cards(cx, &state.cards, inert.clone());
+    let plan = plan_review::review(cx, inert.clone());
     let dialog_card = state
         .cards
         .iter()
@@ -601,10 +617,12 @@ pub fn dock(cx: &Cx<'_>) -> Dock {
         .or(wanted);
     // A card shown open says where the read stands itself; the dock's line would repeat it.
     let shown_read = choice.as_ref().is_some_and(|c| c.read.is_some())
+        || plan.as_ref().is_some_and(|c| c.read.is_some())
         || dialog_card.as_ref().is_some_and(|c| c.read.is_some())
         || answer.as_ref().is_some_and(|c| c.read.is_some());
     Dock {
         choice,
+        plan,
         questions: questions::dock(cx, &state.cards),
         queue,
         decision: dialog_card,

@@ -131,6 +131,7 @@ pub(super) fn answer(feed: &mut Feed, answer: &SessionCardAnswer) -> Result<Valu
         CardKind::Exit => exit(feed, &id, index, answer),
         CardKind::ChildQuestion => parts_ops::answer_child(feed, &id, index, answer),
         CardKind::BoardPlan => parts_ops::answer_plan(feed, &id, index, answer),
+        CardKind::PlanReview => super::plan_mode::answer(feed, &id, index, answer),
         _ => {
             if let Some(host) = feed.hosts.get_mut(id.as_str()) {
                 host.pending.remove(index);
@@ -480,6 +481,9 @@ pub(super) fn action(feed: &mut Feed, request: &SessionActionRequest) -> Result<
         SessionAction::BoardRefresh => return parts_ops::board_refresh(feed, &id),
         SessionAction::ModelFavorite { model, favorite } => {
             return parts_ops::favorite(feed, &id, model, *favorite);
+        }
+        SessionAction::PlanMode { enabled } => {
+            return super::plan_mode::toggle(feed, &id, *enabled);
         }
         SessionAction::Export => return Err("this session's host does not export sessions".into()),
         SessionAction::Shell { .. } => {

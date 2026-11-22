@@ -1,5 +1,5 @@
 //! Which waiting cards the dock shows open. A docked choice (an exit choice, a child's question,
-//! a proposed board plan) is one line until the owner opens it: by pressing its line, Alt+A,
+//! a proposed board plan, a plan review) is one line until the owner opens it: by pressing its line, Alt+A,
 //! Alt+↓, the needs-you chip, or from elsewhere (Bring, or Answer from outside the page); Not now
 //! and Esc fold it back. The exit choice Finish… asked for opens by itself once the host docks
 //! it, and so does the card an Answer from outside the page named, once briefed. Alt+↓ also
@@ -17,7 +17,7 @@ use crate::model::nav::Form;
 use crate::model::session::choice::{self, ChoiceCard};
 use crate::model::session::keys::{KeyAction, KeyBinding, bind};
 use crate::model::session::questions::{self, AnswerCard};
-use crate::model::session::{Action, Cx, Focus, State, Ui};
+use crate::model::session::{Action, Cx, Focus, State, Tab, Ui};
 
 use super::{
     AsideLine, Asked, CardsRead, DockAction, briefs, card, decision, docked, kind, leave, send,
@@ -43,6 +43,13 @@ fn open(ui: &mut Ui, card: String, kind: CardKind) {
         CardKind::Question => {
             ui.dock.open = Some(card);
             ui.focus = Focus::Questions;
+        }
+        // The plan's document takes the conversation's place.
+        CardKind::PlanReview => {
+            ui.dock.opened.insert(card);
+            ui.tab = Tab::Chat;
+            ui.sub = None;
+            ui.focus = Focus::Dock;
         }
         kind if docked(kind) => {
             ui.dock.opened.insert(card);
@@ -135,10 +142,10 @@ pub(super) fn dismiss(state: &mut State, session: &Id, card: String, feed: &Feed
                 ui.dock.exit_wanted = false;
             }
             ui.focus = Focus::Composer;
-            let words = if kind == CardKind::Exit {
-                "The exit choice is waiting · Finish to reopen"
-            } else {
-                "The choice is still waiting · press its line to reopen"
+            let words = match kind {
+                CardKind::Exit => "The exit choice is waiting · Finish to reopen",
+                CardKind::PlanReview => "The plan is still waiting · press its line to reopen",
+                _ => "The choice is still waiting · press its line to reopen",
             };
             ui.notices.push(Hue::Neutral, words, now);
             Vec::new()
@@ -239,7 +246,12 @@ pub(super) fn docked_cards(
     let mut opened = None;
     let mut lines = Vec::new();
     for brief in cards.iter().filter(|brief| docked(brief.kind)) {
-        if opened.is_none() && cx.ui.dock.opened.contains(&brief.id) {
+        let open = cx.ui.dock.opened.contains(&brief.id);
+        // An opened plan review is the plan view's: neither a choice card nor a line.
+        if open && brief.kind == CardKind::PlanReview {
+            continue;
+        }
+        if opened.is_none() && open {
             let body = card(cx.feed, cx.id.as_str(), &brief.id);
             opened = Some(choice::card(cx, brief, body, inert.clone()));
         } else {

@@ -5,7 +5,7 @@
 //! state, the session's row or the served page; what none of them says is not shown.
 
 use corral_protocol::rows::{AssistantLocation, AssistantState};
-use corral_protocol::session_state::{ExitBrief, ExitPhase};
+use corral_protocol::session_state::{ExitBrief, ExitPhase, SessionState};
 use corral_types::SessionStatus;
 
 use crate::model::Live;
@@ -220,6 +220,38 @@ fn ended(cx: &Cx<'_>) -> StateWord {
     }
 }
 
+/// Where the host's turn stands.
+fn turn_word(cx: &Cx<'_>, state: &SessionState) -> StateWord {
+    if state.paused {
+        return word(false, Some("○"), Hue::Held, "Paused");
+    }
+    if state.open {
+        let line = activity::line(cx.state, cx.live, cx.feed);
+        return match line {
+            Some(line) if !line.spinner => word(
+                false,
+                line.glyph,
+                line.hue,
+                with_elapsed(&capitalised(&line.phase), cx),
+            ),
+            _ => word(true, None, Hue::Worker, with_elapsed("Working", cx)),
+        };
+    }
+    if !state.cards.is_empty() {
+        return word(false, Some("▲"), Hue::You, "Waiting for you");
+    }
+    word(false, None, Hue::Neutral, "Idle")
+}
+
+/// `PLAN · Idle`, `PLAN · review · Waiting for you`: the turn's word while the session is in
+/// plan mode.
+fn planned(state: &SessionState, mut word: StateWord) -> StateWord {
+    if let Some(tag) = super::status::plan_tag(state) {
+        word.words = format!("{tag} · {}", word.words);
+    }
+    word
+}
+
 /// The state word, in the order the screens design gives: an ended session, then what the link
 /// and the host presence say, then a build's exit status, then the turn.
 pub fn state_word(cx: &Cx<'_>) -> StateWord {
@@ -254,25 +286,7 @@ pub fn state_word(cx: &Cx<'_>) -> StateWord {
         };
     }
     if let Some(state) = cx.state {
-        if state.paused {
-            return word(false, Some("○"), Hue::Held, "Paused");
-        }
-        if state.open {
-            let line = activity::line(cx.state, cx.live, cx.feed);
-            return match line {
-                Some(line) if !line.spinner => word(
-                    false,
-                    line.glyph,
-                    line.hue,
-                    with_elapsed(&capitalised(&line.phase), cx),
-                ),
-                _ => word(true, None, Hue::Worker, with_elapsed("Working", cx)),
-            };
-        }
-        if !state.cards.is_empty() {
-            return word(false, Some("▲"), Hue::You, "Waiting for you");
-        }
-        return word(false, None, Hue::Neutral, "Idle");
+        return planned(state, turn_word(cx, state));
     }
     if let Some(run) = cx.run {
         return match &run.status {

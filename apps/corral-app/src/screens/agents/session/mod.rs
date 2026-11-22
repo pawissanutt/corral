@@ -27,6 +27,7 @@ mod files;
 mod header;
 mod pager;
 mod plan;
+mod plan_review;
 mod proof;
 mod questions;
 mod sidebar;

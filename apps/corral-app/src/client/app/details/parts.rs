@@ -13,7 +13,10 @@ pub(in super::super) const PART_NAMES: &[&str] = &[
 fn part_of(target: &DetailRef, scope: &str, parts: &BTreeSet<String>) -> bool {
     let named = |part: &str| parts.contains(part);
     match target {
-        DetailRef::SessionCards { id } => id == scope && named("cards"),
+        // The plan document changes with its review card.
+        DetailRef::SessionCards { id } | DetailRef::SessionPlanModeDoc { id } => {
+            id == scope && named("cards")
+        }
         DetailRef::SessionModels { id } => id == scope && named("models"),
         DetailRef::SessionChild { id, .. } => id == scope && named("children"),
         DetailRef::Session { id } => {

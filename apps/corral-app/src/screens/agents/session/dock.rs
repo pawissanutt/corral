@@ -1,6 +1,6 @@
 //! Above the composer, each only while it has content, in the terminal UI's order
 //! (`session::Dock`): the docked choice the owner opened (a build's exit choice, a child's
-//! question, a proposed board plan), every other waiting choice as one line (`▲ docs asks: … ·
+//! question, a proposed board plan; a plan review's card is `plan_review`'s), every other waiting choice as one line (`▲ docs asks: … ·
 //! Alt+A to answer`, up to three, then `+n more`) that opens it when pressed; where a chosen exit
 //! stands; the owner questions; the queue, one header line that unfolds to its rows with small
 //! Edit, ↑, ↓ and Remove controls (not on the phone); where the read of the waiting cards stands
@@ -29,7 +29,7 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 use super::super::run;
 use super::body::conversation;
 use super::header::popup;
-use super::{cards, exit};
+use super::{cards, exit, plan_review};
 
 /// The phone's least touch target.
 const TARGET: f32 = 44.0;
@@ -54,6 +54,7 @@ pub(super) fn dock(app: AppState, page: Memo<SessionPage>, measured: bool) -> An
                 let queue = d.queue.is_some() && form != Form::Phone;
                 queue
                     || d.choice.is_some()
+                    || d.plan.is_some()
                     || d.decision.is_some()
                     || !d.waiting.is_empty()
                     || d.questions.is_some()
@@ -66,6 +67,7 @@ pub(super) fn dock(app: AppState, page: Memo<SessionPage>, measured: bool) -> An
         .test_id("session-dock")
         .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
         .child(cards::choice(app, page))
+        .child(plan_review::choices(app, page))
         .child(waiting(app, dock))
         .child(exit::progress(app, page))
         .child(questions(app, dock))

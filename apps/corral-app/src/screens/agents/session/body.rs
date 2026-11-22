@@ -15,7 +15,7 @@ use crate::ui::tokens::{FONT_TEXT, MEASURE_CONVERSATION, MEASURE_RECORD, Token, 
 
 use super::super::run;
 use super::super::transcript;
-use super::{agents_tab, board, changes, files, pager, proof, task, usage};
+use super::{agents_tab, board, changes, files, pager, plan_review, proof, task, usage};
 
 /// The rows a terminal's conversation or view keeps however much waits in the dock.
 const MAIN_ROWS: f32 = 6.0;
@@ -45,6 +45,10 @@ pub(super) fn view_bar(app: AppState, page: Memo<SessionPage>) -> AnyElement {
     }
     let shown = computed(move || {
         page.with(|p| {
+            // The plan's way back puts its review aside; the card stays pending.
+            if let Body::PlanReview(doc) = &p.body {
+                return Some(("Plan review".to_owned(), doc.back.clone()));
+            }
             let on_view = p.tab != session::Tab::Chat || p.sub.is_some();
             on_view.then(|| {
                 let label = p
@@ -118,6 +122,7 @@ enum Shown {
     Changes,
     Files,
     Board,
+    PlanReview,
     Task,
     Proof,
     Log,
@@ -134,6 +139,7 @@ pub(super) fn main(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             Body::Changes(_) => Shown::Changes,
             Body::Files(_) => Shown::Files,
             Body::Board(_) => Shown::Board,
+            Body::PlanReview(_) => Shown::PlanReview,
             Body::Task(_) => Shown::Task,
             Body::Proof(_) => Shown::Proof,
             Body::Log(_) => Shown::Log,
@@ -161,6 +167,8 @@ pub(super) fn main(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                     // Give the explorer and its editor the whole available workspace.
                     Shown::Files => return files::tab(app, page),
                     Shown::Board => board::tab(app, page),
+                    // The plan keeps to the prose measure itself.
+                    Shown::PlanReview => return plan_review::document(app, page),
                     Shown::Task => task::tab(app, page),
                     Shown::Proof => proof::tab(app, page),
                     Shown::Log => pager::pager(app, page),

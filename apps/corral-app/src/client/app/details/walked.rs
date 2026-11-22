@@ -176,6 +176,32 @@ pub(super) fn merge_pages(pages: &[DetailReply]) -> Result<Option<DetailBody>, S
         }
         return Ok(Some(DetailBody::BuildPlanTask(brief)));
     }
+    // The plan document arrives the same way.
+    if let Some(DetailBody::SessionPlanModeDoc(first)) =
+        pages.first().and_then(|page| page.body.as_ref())
+    {
+        let mut parts = Vec::with_capacity(pages.len());
+        for page in pages {
+            let Some(DetailBody::SessionPlanModeDoc(part)) = &page.body else {
+                return Err("Plan page kind changed.".into());
+            };
+            if part.revision != first.revision || part.bytes != first.bytes {
+                return Err("Plan page identity changed.".into());
+            }
+            parts.push(part);
+        }
+        parts.sort_by_key(|part| part.offset);
+        let mut plan = first.clone();
+        plan.body.clear();
+        plan.offset = parts.first().map_or(0, |part| part.offset);
+        for part in parts {
+            plan.body.push_str(&part.body);
+            if plan.body.len() > MAX_DETAIL_BYTES {
+                return Err("Plan exceeds this device's bounded byte cache.".into());
+            }
+        }
+        return Ok(Some(DetailBody::SessionPlanModeDoc(plan)));
+    }
     let mut merged: Option<Value> = None;
     for page in pages {
         if let Some(body) = &page.body {

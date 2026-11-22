@@ -182,6 +182,8 @@ const BUILD_CAN: &[&str] = &[
     "plan",
     "context",
     "commands",
+    "plan_mode",
+    "plan_mode_doc",
     "board",
     "record",
     "exit",

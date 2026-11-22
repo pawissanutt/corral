@@ -6,7 +6,9 @@
 //! `parts_ops.rs`; the sample build's content in `parts_sample.rs`.
 
 use corral_protocol::detail::*;
-use corral_protocol::session_state::{BoardBrief, Counts, PlanBrief, SessionState, UsageBrief};
+use corral_protocol::session_state::{
+    BoardBrief, Counts, PlanBrief, PlanModeBrief, SessionState, UsageBrief,
+};
 use corral_protocol::subscription::{
     SessionAgentMessage, SessionChild, SessionChildVerdict, SessionFleet,
 };
@@ -59,6 +61,9 @@ pub(super) struct Parts {
     pub(super) context_tokens: u64,
     pub(super) context: SessionContext,
     pub(super) plan: SessionPlan,
+    /// Plan mode, while the session is in it, and its one plan document.
+    pub(super) plan_mode: Option<PlanModeBrief>,
+    pub(super) plan_doc: String,
     /// The catalog; the current model and effort are the row's.
     pub(super) models: SessionModels,
     pub(super) commands: SessionCommands,
@@ -168,6 +173,7 @@ impl Parts {
             context_percent: Some(self.percent()),
         };
         state.effort_levels = self.levels(state.model.as_deref());
+        state.plan_mode = self.plan_mode.clone();
         let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
         state.children = self.children_counts();
         state.jobs = Counts {
@@ -274,6 +280,7 @@ fn scope_of(target: &DetailRef) -> Option<&str> {
         | DetailRef::SessionUsage { id }
         | DetailRef::SessionContext { id }
         | DetailRef::SessionPlan { id }
+        | DetailRef::SessionPlanModeDoc { id }
         | DetailRef::SessionEvents { id }
         | DetailRef::SessionCommands { id }
         | DetailRef::BuildBoard { id }
@@ -313,6 +320,9 @@ fn serve_part(
             cards: host.pending.clone(),
         }),
         DetailRef::SessionEvents { .. } => DetailBody::SessionEvents(events(host)),
+        DetailRef::SessionPlanModeDoc { .. } => {
+            return super::plan_mode::serve(feed, target, id.as_str());
+        }
         DetailRef::SessionJobOutput { job, .. } => {
             let pages = output(host, job, page)?;
             put_pages(feed, target, pages);

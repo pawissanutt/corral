@@ -4,7 +4,7 @@
 //! unpriced member carries `+`; a context window the host did not report is `ctx –`; a quiet
 //! time or a queue the host did not report is not shown.
 
-use corral_protocol::session_state::UsageBrief;
+use corral_protocol::session_state::{PlanModePhase, SessionState, UsageBrief};
 
 use crate::model::hue::Hue;
 
@@ -26,6 +26,8 @@ pub const METER_CELLS: u8 = 12;
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatusBar {
     pub role: RolePill,
+    /// `PLAN`, `PLAN · review`: the session is in plan mode.
+    pub plan: Option<&'static str>,
     pub cost: Cost,
     pub meter: ContextMeter,
     /// `<provider>/<model> · effort high`.
@@ -75,6 +77,15 @@ pub struct ContextMeter {
 pub struct Alert {
     pub hue: Hue,
     pub text: String,
+}
+
+/// `PLAN` while the session plans, `PLAN · review` while its plan waits for the owner; none
+/// outside plan mode.
+pub fn plan_tag(state: &SessionState) -> Option<&'static str> {
+    state.plan_mode.as_ref().map(|plan| match plan.phase {
+        PlanModePhase::Review => "PLAN · review",
+        PlanModePhase::Planning | PlanModePhase::Other => "PLAN",
+    })
 }
 
 pub fn role_pill(role: &SessionRole) -> RolePill {
@@ -226,6 +237,7 @@ pub fn status(cx: &Cx<'_>) -> StatusBar {
     };
     StatusBar {
         role,
+        plan: cx.state.and_then(plan_tag),
         cost: Cost {
             text: cost_text(cost, partial),
             partial,

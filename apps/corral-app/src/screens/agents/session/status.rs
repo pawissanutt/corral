@@ -68,8 +68,13 @@ fn face(app: AppState, status: &StatusBar, measured: bool) -> AnyElement {
     } else {
         hue_ink(status.meter.hue)
     };
-    let mut parts = vec![
-        pill,
+    let mut parts = vec![pill];
+    parts.extend(
+        status
+            .plan
+            .map(|plan| words(plan.into(), color(Token::Ink), false)),
+    );
+    parts.extend([
         words(status.cost.text.clone(), quiet, true),
         words(
             if phone {
@@ -80,7 +85,7 @@ fn face(app: AppState, status: &StatusBar, measured: bool) -> AnyElement {
             meter_ink,
             true,
         ),
-    ];
+    ]);
     if !phone {
         parts.extend(
             [&status.model_effort, &status.quiet, &status.queued]

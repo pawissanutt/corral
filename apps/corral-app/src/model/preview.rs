@@ -21,6 +21,7 @@ mod pi;
 mod pi_control;
 mod pi_rows;
 mod pi_script;
+mod plan_mode;
 mod rollup;
 mod sample;
 mod session_ops;
