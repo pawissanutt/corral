@@ -381,6 +381,9 @@ fn helper(call: &Call<'_>, kind: &'static str) -> Row {
             }
             return row;
         }
+        CallState::Failed if str_of(details, "error").is_some() => {
+            return row.failed_with(str_of(details, "error").unwrap_or(call.text));
+        }
         CallState::Failed if !details.is_object() => return row.failed_with(call.text),
         CallState::Done | CallState::Failed => {}
     }

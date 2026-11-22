@@ -546,6 +546,24 @@ pub(super) fn card(
     else {
         return None;
     };
+    // The cell summary can omit a late or out-of-window nested call. Its settlement
+    // still names the saved conversation in the parent's recorded history.
+    if title == "corral_code_call" {
+        let entry: Value = serde_json::from_str(data.as_deref()?).ok()?;
+        let id = entry.get("conversation_id")?.as_str()?;
+        let view = super::tool::conversation_view(entry.get("tool")?.as_str()?, cx.id, id)?;
+        let mut marker = quiet(
+            "↗",
+            Hue::Neutral,
+            format!("Open helper conversation: {id}"),
+            Vec::new(),
+            key,
+            rest,
+            cx,
+        );
+        marker.action = Some(view.action);
+        return Some(MessageItem::Marker(marker));
+    }
     if FACT_ENTRIES.contains(&title.as_str()) {
         return None;
     }
