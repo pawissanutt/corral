@@ -68,35 +68,6 @@ impl ItemAssembly {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn transcript_item_does_not_reject_large_total_before_fetching_fragments() {
-        let mut assembly = ItemAssembly {
-            session: "session".into(),
-            root: "first".into(),
-            token: "first".into(),
-            bytes: None,
-            json: String::new(),
-        };
-        assert!(
-            assembly
-                .append(SessionItemPage {
-                    json: "{".into(),
-                    offset: 0,
-                    bytes: 4 * 1024 * 1024 + 1,
-                    next: Some("next".into()),
-                })
-                .unwrap()
-                .is_none()
-        );
-        assert_eq!(assembly.json, "{");
-        assert_eq!(assembly.token, "next");
-    }
-}
-
 impl AppState {
     pub(super) fn session_item(
         &mut self,
@@ -215,5 +186,34 @@ impl AppState {
                 Ok(vec![])
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transcript_item_does_not_reject_large_total_before_fetching_fragments() {
+        let mut assembly = ItemAssembly {
+            session: "session".into(),
+            root: "first".into(),
+            token: "first".into(),
+            bytes: None,
+            json: String::new(),
+        };
+        assert!(
+            assembly
+                .append(SessionItemPage {
+                    json: "{".into(),
+                    offset: 0,
+                    bytes: 4 * 1024 * 1024 + 1,
+                    next: Some("next".into()),
+                })
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(assembly.json, "{");
+        assert_eq!(assembly.token, "next");
     }
 }
