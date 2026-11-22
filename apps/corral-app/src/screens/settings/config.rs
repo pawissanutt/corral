@@ -1,6 +1,6 @@
 //! Settings › Configuration: the `corral.toml` editor. The page reads the file once it opens,
-//! shows one part at a time (Workspace, Projects, Profiles, Harnesses, Routing, Artifacts, or
-//! the whole File as text), and keeps a save bar pinned under it: what is unsaved, Save,
+//! shows one part at a time (Workspace, Projects, Profiles, Harnesses, Routing, Artifacts,
+//! Extensions, or the whole File as text), and keeps a save bar pinned under it: what is unsaved, Save,
 //! Discard and Read again. A refused save leaves the draft and lists its reasons at the top, each
 //! naming a field a button to it (a syntax error's to File), and on the field itself. Over them
 //! the page says when the file changed elsewhere since it was read (with Read again) and when
@@ -14,6 +14,7 @@ use super::config_fields::{edit, entry, field};
 use super::parts::{cell, frame, space};
 use super::{config_profiles, config_routing};
 
+mod extensions;
 mod harnesses;
 use crate::model::Form;
 use crate::model::settings::document::Path;
@@ -30,13 +31,14 @@ use crate::ui::kit::text::h3;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, MEASURE_FORM, Token, color};
 
-const PARTS: [(Part, &str); 7] = [
+const PARTS: [(Part, &str); 8] = [
     (Part::Workspace, "Workspace"),
     (Part::Projects, "Projects"),
     (Part::Profiles, "Profiles"),
     (Part::Harnesses, "Harnesses"),
     (Part::Routing, "Routing"),
     (Part::Artifacts, "Artifacts"),
+    (Part::Extensions, "Extensions"),
     (Part::File, "File"),
 ];
 
@@ -276,6 +278,11 @@ fn part(app: AppState, selected: Part, shape: Shape, live: Memo<Live>) -> AnyEle
             }
             if selected == Part::Routing {
                 return config_routing::routing(app, &groups, live);
+            }
+            if selected == Part::Extensions
+                && let Some(listed) = &listed
+            {
+                return extensions::part(app, listed, groups, live);
             }
             let mut parts = Vec::new();
             if let Some(note) = note {

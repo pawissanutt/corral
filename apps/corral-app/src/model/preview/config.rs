@@ -4,7 +4,7 @@
 //! leaving the text unchanged, or replaces it and re-projects the settings and project rows
 //! from it.
 
-use corral_protocol::rows::SettingsSnapshot;
+use corral_protocol::rows::{ExtensionHealth, SettingsSnapshot};
 use corral_types::{ConfigProblem, Refusal};
 use serde_json::{Map, Value, json};
 
@@ -89,7 +89,34 @@ gate = ["bun test"]
 reviewer = "omp-sol-review"
 profile = "codex-terra"
 running = 2
+
+[extensions.codeindex]
+projects = ["corral"]        # omit for every project
+facts = "codeindex corral-facts"
+[extensions.codeindex.tools]
+context = { run = "codeindex corral-context", about = "Starting points for this task", record = true }
+
+[extensions.notify]
+on = ["blocked", "ready", "landed"]
+run = "ntfy publish corral-sample"
 "#;
+
+/// What the sample's daemon reports of an extension: `notify` has been failing.
+fn health(name: &str, block: &Value) -> ExtensionHealth {
+    let shapes = [("tools", "tool"), ("facts", "ask"), ("run", "react")]
+        .into_iter()
+        .filter(|(key, _)| block.get(key).is_some_and(|value| !value.is_null()))
+        .map(|(_, shape)| shape.to_owned())
+        .collect();
+    let failing = name == "notify";
+    ExtensionHealth {
+        name: name.to_owned(),
+        shapes,
+        enabled: block["enabled"].as_bool().unwrap_or(true),
+        last_error: failing.then(|| "ntfy: connection refused (exit 1)".to_owned()),
+        skipped: if failing { 2 } else { 0 },
+    }
+}
 
 const DAEMON: &str = r#"
 [daemon]                     # read when corrald starts; changing it needs a restart
@@ -151,8 +178,20 @@ fn revision(text: &str) -> String {
 /// The settings snapshot for `text`: the parsed configuration, its revision and the engine's
 /// defaults, around the listener and devices `base` carries.
 pub(super) fn snapshot(text: &str, base: SettingsSnapshot) -> SettingsSnapshot {
+    let config = parsed(text);
+    let extensions = config
+        .get("extensions")
+        .and_then(Value::as_object)
+        .map(|blocks| {
+            blocks
+                .iter()
+                .map(|(name, block)| health(name, block))
+                .collect()
+        })
+        .unwrap_or_default();
     SettingsSnapshot {
-        config: parsed(text),
+        config,
+        extensions,
         revision: Some(revision(text)),
         built_in_defaults: Some(built_in()),
         project_defaults: Some(project_defaults()),

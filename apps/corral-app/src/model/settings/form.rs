@@ -9,7 +9,7 @@ use toml_edit::{DocumentMut, Item};
 
 use super::document::{self, Path};
 use super::editor::{Editor, Part, Typed};
-use super::harnesses;
+use super::{extensions, harnesses};
 use crate::model::daemon::Feed;
 
 /// What a field edits.
@@ -212,14 +212,18 @@ pub fn shape(editor: &Editor, feed: &Feed) -> Shape {
             let groups = entries
                 .chosen
                 .as_deref()
-                .map(|name| vec![entry(&doc, feed, part, name, &profiles)])
+                .map(|name| match part {
+                    Part::Extensions => extensions::groups(&doc, name),
+                    _ => vec![entry(&doc, feed, part, name, &profiles)],
+                })
                 .unwrap_or_default();
-            let empty = match part {
-                Part::Projects => Some("No projects: corral manages no repository yet."),
-                Part::Profiles => Some("No profiles: dispatch has nothing to run."),
-                _ => None,
+            let (note, empty) = match part {
+                Part::Projects => (None, Some("No projects: corral manages no repository yet.")),
+                Part::Profiles => (None, Some("No profiles: dispatch has nothing to run.")),
+                Part::Extensions => (Some(extensions::NOTE), Some(extensions::EMPTY)),
+                _ => (None, None),
             };
-            (None, Some(entries), groups, empty)
+            (note, Some(entries), groups, empty)
         }
     };
     Shape::Form {
@@ -297,6 +301,7 @@ fn listed(editor: &Editor, doc: &DocumentMut, part: Part) -> Entries {
         noun: match part {
             Part::Projects => "project",
             Part::Profiles => "profile",
+            Part::Extensions => "extension",
             _ => "harness",
         },
     }
@@ -461,6 +466,7 @@ pub fn anchors(doc: &DocumentMut) -> Vec<Path> {
         ]));
         anchors.extend(RULE_KEYS.iter().map(|key| Path::rule(index, key)));
     }
+    anchors.extend(extensions::anchors(doc));
     anchors
 }
 
@@ -468,6 +474,9 @@ pub fn anchors(doc: &DocumentMut) -> Vec<Path> {
 pub fn locate(path: &Path) -> Option<(Part, Option<String>, Option<&'static str>)> {
     use super::document::Seg;
     let keys: Vec<&Seg> = path.0.iter().collect();
+    if matches!(keys.first(), Some(Seg::Key(root)) if root == "extensions") {
+        return extensions::locate(&keys);
+    }
     match keys.as_slice() {
         [Seg::Key(root), Seg::Key(key)] => {
             let part = match root.as_str() {

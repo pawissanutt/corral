@@ -82,6 +82,7 @@ pub fn unset(path: &Path, live: &Live, feed: &Feed) -> String {
             None => "unset · corral's default".into(),
         },
         ["projects", project, key] => project_unset(live, feed, project, key),
+        ["extensions", rest @ ..] => super::extensions::unset(rest).unwrap_or("unset").into(),
         ["profiles", _, "model" | "effort"] => "unset · the harness's default".into(),
         ["profiles", _, "args"] => "No extra arguments.".into(),
         ["harnesses", _, "model_flag" | "effort_flag"] => {

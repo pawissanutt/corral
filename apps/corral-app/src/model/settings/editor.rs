@@ -29,18 +29,20 @@ pub enum Part {
     Harnesses,
     Routing,
     Artifacts,
+    Extensions,
     /// The whole file as text, for anything the form does not cover.
     File,
 }
 
 impl Part {
-    pub const ALL: [Part; 7] = [
+    pub const ALL: [Part; 8] = [
         Part::Workspace,
         Part::Projects,
         Part::Profiles,
         Part::Harnesses,
         Part::Routing,
         Part::Artifacts,
+        Part::Extensions,
         Part::File,
     ];
 
@@ -52,6 +54,7 @@ impl Part {
             Part::Harnesses => "Harnesses",
             Part::Routing => "Routing",
             Part::Artifacts => "Artifacts",
+            Part::Extensions => "Extensions",
             Part::File => "File",
         }
     }
@@ -62,6 +65,7 @@ impl Part {
             Part::Projects => Some("projects"),
             Part::Profiles => Some("profiles"),
             Part::Harnesses => Some("harnesses"),
+            Part::Extensions => Some("extensions"),
             _ => None,
         }
     }

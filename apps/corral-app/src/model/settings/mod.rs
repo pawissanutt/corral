@@ -5,6 +5,7 @@ pub mod connect;
 pub mod document;
 pub mod editor;
 mod edits;
+pub mod extensions;
 pub mod form;
 pub mod harnesses;
 pub mod inherit;

@@ -323,6 +323,7 @@ fn typed_field(app: AppState, field: &Field, typed: Typed, live: Memo<Live>) -> 
 fn switch(app: AppState, path: &Path, inherit: bool, live: Memo<Live>) -> AnyElement {
     let read = path.clone();
     let current = computed(move || live.with(|live| live.draft.flag(&read)));
+    let unset_reads = Some(crate::model::settings::extensions::unset_on(path));
     let mut options = vec![(Some(true), "on"), (Some(false), "off")];
     if inherit {
         options.push((None, "inherit"));
@@ -334,8 +335,9 @@ fn switch(app: AppState, path: &Path, inherit: bool, live: Memo<Live>) -> AnyEle
             let id = format!("seg-config-{path}-{word}");
             dynamic(move || {
                 let chosen = current.get() == value
-                    // A workspace switch left unset reads as off, as the engine defaults it.
-                    || (!inherit && value == Some(false) && current.get().is_none());
+                    // A switch left unset reads as the engine defaults it: off, except an
+                    // extension's `enabled`.
+                    || (!inherit && value == unset_reads && current.get().is_none());
                 let path = path.clone();
                 untracked(|| {
                     button(
