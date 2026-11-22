@@ -68,7 +68,21 @@ mod unix {
         request.insert("v".into(), Value::from(1));
         let input = serde_json::to_vec(&request).context("encode extension request")?;
         let started = Instant::now();
-        let mut child = Command::new("sh")
+        let foreign_root = std::env::var_os("CORRAL_NEXT_ROOT").is_some_and(|value| {
+            let inherited = std::path::Path::new(&value);
+            inherited
+                .canonicalize()
+                .unwrap_or_else(|_| inherited.to_path_buf())
+                != context
+                    .root
+                    .canonicalize()
+                    .unwrap_or_else(|_| context.root.to_path_buf())
+        });
+        let mut command = Command::new("sh");
+        if foreign_root {
+            command.env_remove("CORRAL_TASK").env_remove("CORRAL_RUN");
+        }
+        let mut child = command
             .args(["-c", line])
             .current_dir(context.cwd)
             .envs(context.env)

@@ -78,6 +78,21 @@ pub(super) fn validate(config: &Config, problems: &mut Vec<ConfigProblem>) {
             check_line(&tool.run, format!("{key}.tools.{tool_name}.run"), problems);
         }
     }
+    if config.projects.is_empty() {
+        let mut tools: BTreeMap<&str, &str> = BTreeMap::new();
+        for (name, extension) in &config.extensions {
+            if extension.enabled && extension.projects.is_none() {
+                for tool in extension.tools.keys() {
+                    if let Some(previous) = tools.insert(tool, name) {
+                        problems.push(problem(
+                            "extensions",
+                            format!("duplicate unscoped tool {tool:?}: {previous:?}, {name:?}"),
+                        ));
+                    }
+                }
+            }
+        }
+    }
     for project in config.projects.keys() {
         let mut tools: BTreeMap<&str, &str> = BTreeMap::new();
         for (name, extension) in &config.extensions {
