@@ -476,8 +476,10 @@ function bodyLines(view: View, deps: CodeCellDeps, width: number, blocks: Select
   const single = cell.recorded && cell.children.length === 1 && omittedTotal(cell) === 0;
   const showConversation = (child: ChildOutcome, indent: string) => {
     const id = expanded ? helperConversationId(child.tool, child.conversationId) : undefined;
-    if (id) lines.push(...wrapTextWithAnsi(`Conversation ID: ${id}`, Math.max(1, width - indent.length))
-      .map(line => muted(line, width, indent)));
+    if (!id) return;
+    const drawn = wrappedRows(`Conversation ID: ${id}`, Math.max(1, width - indent.length));
+    blocks.push(blockRows(drawn, lines.length, indent.length));
+    lines.push(...drawn.map(row => muted(row.text, width, indent)));
   };
   if (single) showConversation(cell.children[0]!, INDENT);
   else {
