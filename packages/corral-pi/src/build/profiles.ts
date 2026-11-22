@@ -14,8 +14,16 @@ export function readWorkspaceToml(root: string, file: "pi.toml" | "corral.toml")
 }
 
 export function readBuildProfiles(root: string): BuildProfile[] {
-  const { build } = readWorkspaceToml(root, "pi.toml") as { build?: { profiles?: Record<string, unknown> } };
-  return Object.entries(build?.profiles ?? {}).map(([name, value]) => {
+  const { build } = readWorkspaceToml(root, "pi.toml") as { build?: { profiles?: unknown } };
+  return parseBuildProfiles(build?.profiles);
+}
+
+export function parseBuildProfiles(profiles: unknown): BuildProfile[] {
+  if (profiles === undefined) return [];
+  if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) {
+    throw new Error(".corral-next/pi.toml: build.profiles must be a table");
+  }
+  return Object.entries(profiles).map(([name, value]) => {
     const profile = value as (Partial<BuildProfile> & { connection?: unknown }) | undefined;
     if (profile?.connection !== undefined) {
       const provider = profile.connection === "openai-api" ? "openai" : "anthropic-api";

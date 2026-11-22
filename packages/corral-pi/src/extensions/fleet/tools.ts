@@ -37,7 +37,8 @@ export function agentCommunicationTools(control: AgentCommunication): ToolDefini
   }];
 }
 /** Model-callable controls only; exit and board decisions remain owner-only. */
-export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKind[] = ["slice", "explore", "review"], wake?: InputWake): ToolDefinition[] {
+export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKind[] = ["slice", "explore", "review"], wake?: InputWake,
+  guidance: "generic" | "build" = "generic"): ToolDefinition[] {
   const communication = agentCommunicationTools({ message: (to, text, options) => runtime.message("parent", to, text, options), roster: () => runtime.rosterText() });
   if (!allowedKinds.length) return communication;
   return [
@@ -48,8 +49,14 @@ export function fleetTools(runtime: FleetRuntime, allowedKinds: readonly ChildKi
         + "Returns ids and states immediately. Reports arrive as messages; agent_wait can collect them explicitly. Children cannot delegate or write Git state.",
       promptSnippet: "Start independent implementation, exploration or review children without blocking",
       promptGuidelines: [
-        "Use task for substantial independent implementation, not trivial edits. Give children non-overlapping owned files, the full requirements and expected checks; they inherit none of your conversation.",
-        "Keep useful separate work for yourself. Use after only for real dependencies, and unique lowercase ids for the entire session. Choose a configured profile or an approved provider/model.",
+        ...(guidance === "build" ? [
+          "For Build implementation and bounded read-only exploration, follow the effective Build delegation policy. Pass a matching route's exact kind and profile to task; use the default profile for unmatched assignments. Report unavailable routes instead of substituting another profile.",
+          "Give implementation children non-overlapping owned files; use kind explore and owns: [] for read-only work. Include full requirements and expected checks or evidence; children inherit none of your conversation.",
+          "Keep useful separate work for yourself. Use after only for real dependencies, and unique lowercase ids for the entire session.",
+        ] : [
+          "Use task for substantial independent implementation, not trivial edits. Give children non-overlapping owned files, the full requirements and expected checks; they inherit none of your conversation.",
+          "Keep useful separate work for yourself. Use after only for real dependencies, and unique lowercase ids for the entire session. Choose a configured profile or an approved provider/model.",
+        ]),
         "Collect and reconcile every child report and outside-ownership edit before claiming completion. Do not run shared checks while children are still editing. Children grant no review or board authority.",
       ],
       parameters: Type.Object({ agents: Type.Array(Type.Object({

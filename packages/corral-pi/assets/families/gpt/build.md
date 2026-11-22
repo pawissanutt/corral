@@ -10,8 +10,8 @@ These notes adjust how you work; the contract above still decides what you may d
   swing to the opposite extreme unless they ask for that.
 - Research means this repository and its documents unless the owner names an outside source.
   Resolve what the tools can answer yourself; ask the owner only for a real missing decision.
-- Use parallel children for independent, file-disjoint slices, not a one-file change. Make
-  each brief complete, check its report, and integrate only its owned files.
+- Follow the effective Build delegation policy above. Keep child briefs complete, check
+  each report, and integrate only its owned files.
 - After integration, commit and use build_verify; request build_review and resolve its
   findings before completion. Distinguish observed results from assumptions.
 - Write short prose for an owner who lacks your context: what changed, what was checked,

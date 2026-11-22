@@ -83,7 +83,8 @@ test("workspace startup model applies to direct Chat and Build without overridin
       expect(launch("--provider", "anthropic").model).toBe("claude-opus-4-8");
     }
     expect(build("--profile", "demo").model).toBe("anthropic/claude-opus-4-8");
-    expect(build("--resume", "existing").model).toBe("gpt-6.1-sol");
+    expect(build("--resume", "B-existing").model).toBe("gpt-6.1-sol");
+    expect(() => build("--resume=")).toThrow("Invalid build session id");
     expect(parseRunFlags("chat", ["--dir", "managed"], "/assets", {}, root).model).toBe("gpt-6.1-sol");
     expect(parseRunFlags("run", ["--dir", "managed"], "/assets", {}, root).model).toBe("gpt-6.1-sol");
     writeFileSync(piToml, '[startup]\nmodel = "not-qualified"\n');

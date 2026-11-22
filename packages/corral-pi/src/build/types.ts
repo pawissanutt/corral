@@ -26,15 +26,28 @@ export interface BuildProfile {
   readonly description?: string;
 }
 
+export interface BuildDelegationRoute {
+  readonly match: string;
+  readonly kind: "explore" | "slice";
+  readonly profile: string;
+  readonly strategy: "when_delegating" | "prefer_child";
+}
+
+export interface BuildDelegation {
+  readonly mode: "standard" | "proactive";
+  readonly routes: readonly BuildDelegationRoute[];
+}
+
 export interface BuildSettings {
   /** Unset in config means `review`; outside a corral workspace it is `none`. */
   readonly exitPolicy: ExitPolicy;
-  /** Children running at once, 1 to `MAX_PARALLEL_LIMIT`. Default 3. */
+  /** Children running at once, 1 to `MAX_PARALLEL_LIMIT`. Default 32. */
   readonly maxParallel: number;
   /** Configured profiles. The runtime adds `default` (the parent's model) when it is absent. */
   readonly profiles: readonly BuildProfile[];
+  readonly delegation?: BuildDelegation;
 }
-export const DEFAULT_MAX_PARALLEL = 3;
+export const DEFAULT_MAX_PARALLEL = 32;
 export const MAX_PARALLEL_LIMIT = 32;
 /** Children one `task` call may start. */
 export const MAX_CHILDREN_PER_CALL = 32;

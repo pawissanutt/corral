@@ -429,7 +429,7 @@ fn unbound_launch_uses_none_and_bare_defaults_with_source_or_compiled_assets() {
         .unwrap();
         let launch = message(reader);
         assert_eq!(launch["settings"]["exit_policy"], "none");
-        assert_eq!(launch["settings"]["max_parallel"], 3);
+        assert_eq!(launch["settings"]["max_parallel"], 32);
         assert!(launch.get("workspace_root").is_none());
         assert!(launch.get("project").is_none());
         assert_eq!(launch["provider"], "openai-codex");
@@ -730,7 +730,7 @@ fn bare_command_ignores_workspace_configuration_and_omits_all_workspace_bindings
     assert_eq!(launch["here"], true);
     assert_eq!(launch["name"], "local");
     assert_eq!(launch["model"], "gpt-6.1-sol");
-    assert_eq!(launch["settings"]["max_parallel"], 3);
+    assert_eq!(launch["settings"]["max_parallel"], 32);
     assert_eq!(launch["settings"]["profiles"], json!([]));
     for key in ["workspace_root", "project", "corral"] {
         assert!(launch.get(key).is_none(), "bare launch carried {key}");

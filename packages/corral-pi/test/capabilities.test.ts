@@ -3,8 +3,12 @@ import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 import { CredentialsUnavailable } from "../src/auth/paths.ts";
 import { PROVIDER_IDS, type ProviderId, PROVIDERS } from "../src/auth/providers.ts";
 import type { AuthModule } from "../src/auth/types.ts";
+import { boundFleetSettings } from "../src/extensions/fleet/settings.ts";
+import { auxiliarySettings } from "../src/extensions/subagent/settings.ts";
 import { childProfileProviders, providerCapabilities, providerTransport, sessionRoutes } from "../src/host/capabilities.ts";
+import { workspaceSettings } from "../src/host/config.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
+import engineDefaults from "./fixtures/default-capabilities.json" with { type: "json" };
 
 function fixture(enabled: readonly ProviderId[]): AuthModule {
   const entries = new Map<string, Credential>(enabled.map((provider) => [
@@ -26,6 +30,18 @@ function fixture(enabled: readonly ProviderId[]): AuthModule {
     transport(context) { return async () => new Response(context.provider); },
   };
 }
+
+test("standalone worker and assistant child limits match the engine capability defaults", () => {
+  // The Rust capability snapshot test keeps these values tied to the engine resolver.
+  const { fleet, subagents } = engineDefaults.assistant.features;
+  expect(fleet.settings.max_parallel).toBe(32);
+  expect(subagents.settings.max_parallel).toBe(32);
+  for (const role of ["worker", "assistant"] as const) {
+    const { capabilities, guidance } = workspaceSettings("/unused", role, undefined, {});
+    expect(boundFleetSettings(role, capabilities.enabled, guidance.settings).maxParallel).toBe(fleet.settings.max_parallel);
+    expect(auxiliarySettings(role, capabilities.enabled, guidance.settings).explore).toEqual(subagents.settings);
+  }
+});
 
 test("availability intersects policy and credentials, not the initial provider", async () => {
   // Given two corral-owned logins and a standalone session.

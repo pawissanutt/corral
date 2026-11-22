@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+const DEFAULT_MAX_PARALLEL: u8 = 32;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BuildCfg {
@@ -25,7 +27,7 @@ pub struct BuildApiCfg {
 impl Default for BuildCfg {
     fn default() -> Self {
         Self {
-            max_parallel: 3,
+            max_parallel: DEFAULT_MAX_PARALLEL,
             profiles: BTreeMap::new(),
             api: None,
         }
@@ -34,7 +36,7 @@ impl Default for BuildCfg {
 
 impl BuildCfg {
     pub fn is_default(&self) -> bool {
-        self.max_parallel == 3 && self.profiles.is_empty() && self.api.is_none()
+        self.max_parallel == DEFAULT_MAX_PARALLEL && self.profiles.is_empty() && self.api.is_none()
     }
 
     /// Problems independent of workspace paths or the host's provider registry.
@@ -192,7 +194,7 @@ build_exit = "gate"
                     .any(|error| error.contains("name must"))
             );
         }
-        cfg.build.max_parallel = 3;
+        cfg.build.max_parallel = DEFAULT_MAX_PARALLEL;
         for model in ["id", "/id", "provider/", "provider/id with spaces"] {
             cfg.build.profiles.clear();
             cfg.build.profiles.insert(
@@ -211,7 +213,7 @@ build_exit = "gate"
             );
         }
         cfg.build.profiles.clear();
-        for max in [1, 8] {
+        for max in [1, 32] {
             cfg.build.max_parallel = max;
             assert!(cfg.build.problems().is_empty());
         }
@@ -226,5 +228,14 @@ build_exit = "gate"
         let parsed: Config = toml::from_str(&old).unwrap();
         assert_eq!(parsed.build, BuildCfg::default());
         assert_eq!(parsed.to_toml().as_bytes(), old.as_bytes());
+
+        let explicit: Config = toml::from_str("[build]\nmax_parallel = 3\n").unwrap();
+        assert_eq!(
+            toml::from_str::<Config>(&explicit.to_toml())
+                .unwrap()
+                .build
+                .max_parallel,
+            3
+        );
     }
 }

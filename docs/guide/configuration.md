@@ -77,25 +77,66 @@ Sections: [limits](#limits) · [resources](#resources) · [dispatch](#dispatch) 
 
 ## build
 
-Build sessions use workspace settings for child concurrency and named child profiles.
-`max_parallel` defaults to 3 and must be between 1 and 32. At most 16 profiles may be
-configured. Profile names start with a lowercase letter and contain at most 32 lowercase
-letters, digits or hyphens. Each model is a `provider/id`; `effort` and `description`
-are optional.
+For app and terminal Build sessions, set child concurrency, child profiles and delegation
+policy in `.corral-next/pi.toml` at the Corral workspace root. A standalone Build reads
+that file at the Git top-level, or in the start directory outside Git. Resume rereads
+current settings from the recorded root, not the directory used to run the resume command.
+
+`[build] max_parallel` sets the per-session cap for running children (1–32, default 32).
+Set a lower value, such as `3`, to limit concurrency. This does not change the maximum of
+32 children in one `task` call or any board [running-task limits](#limits). Eligible non-Build
+fleets and Explore also default to 32. Where the engine supplies role capability settings,
+explicit lower `fleet.max_parallel` and `subagents.max_parallel` values still apply. These
+limits are separate from `[build]`.
 
 ```toml
 [build]
 max_parallel = 3
 
-[build.profiles.reviewer]
-model = "anthropic/claude-opus-4-8"
-effort = "high"
-description = "Independent implementation slice"
+[build.profiles.trace]
+model = "openai-codex/gpt-6.1-sol"
+effort = "medium"
+description = "Read-only execution-path tracing"
+
+[build.delegation]
+mode = "proactive"
+
+[[build.delegation.routes]]
+match = "Trace how a request is validated before it reaches storage"
+kind = "explore"
+profile = "trace"
+strategy = "prefer_child"
+
+[[build.delegation.routes]]
+match = "Implement an independent storage adapter against a stable interface"
+kind = "slice"
+profile = "default"
 ```
 
-The provider must be known to corral and approved for the host. A missing `default`
-profile inherits the parent model and effort. See [build sessions](build-sessions.md)
-for child behavior and exit policy.
+Each child profile names a `provider/id`; `effort` and `description` are optional.
+The provider must be known to Corral and approved for the host. You can configure
+`[build.profiles.default]`; otherwise `default` inherits the parent's launch model and effort.
+It is also used for delegated work that matches no route.
+
+`standard` (the default) keeps the usual delegation judgment; `proactive` encourages
+starting substantial independent slices or useful bounded read-only exploration earlier.
+Proactive works without any profiles or routes. For each assignment, the parent picks the
+first clearly applicable route in file order, in either mode:
+
+| Route field | Meaning |
+|---|---|
+| `match` | Description of the scoped work, not a keyword to trigger on. |
+| `kind` | `explore` for read-only research or `slice` for implementation. Both use the Build `task` tool. |
+| `profile` | A name in `[build.profiles]` or `default`; this is not the standalone Explore tool's `code` or `docs` setting. |
+| `strategy` | `when_delegating` (default) picks the kind and profile for work already being delegated. `prefer_child` can justify one meaningful standalone slice or a substantive bounded read-only question. Neither delegates trivial work nor allows overlapping writers. |
+
+Invalid delegation settings or unknown profile references refuse launch. A valid route
+can still be unavailable at runtime; the parent reports it rather than silently substituting
+another child profile. It can continue inline only when allowed by the existing controls.
+To roll back proactive mode, remove `mode` or set it to `"standard"`; routes still apply.
+Remove the entire `[build.delegation]` section and its route tables to restore standard mode
+without routes. The concurrency cap is independent of this rollback. See [build sessions](build-sessions.md#delegation)
+for workflow and ownership.
 
 ## search
 
@@ -335,7 +376,7 @@ root itself is a repository and no subdirectory is, the root becomes one project
 | `default_profile` | none | Profile for this project's runs (older files call this `default_agent`, still accepted). |
 | `base` | repo's current branch | Branch new runs start from and land on. |
 | `review` | none | Project-level override of the [review](#review) policy. |
-| `build_exit` | `"review"` | Build-session Land policy: `"review"` requires an approving in-session review and full gate, or an owner's recorded reason to override the review; `"gate"` requires the full gate only; `"none"` disables Land. See [build sessions](build-sessions.md#leaving-the-session). |
+| `build_exit` | `"review"` | Build-session Land policy: `"review"` requires an approving in-session review and full gate, or an owner's recorded reason to override the review; `"gate"` requires the full gate only; `"none"` disables Land. See [build sessions](build-sessions.md#finish). |
 | `dispatch` | inherited | Partial project override of the three [dispatch](#dispatch) policy fields. |
 | `post_land` | empty | Ordered opt-in named argv hooks with explicit cwd, env, timeouts and retry bounds; see [post-land operations](post-land.md). |
 

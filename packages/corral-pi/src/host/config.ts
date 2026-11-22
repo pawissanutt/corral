@@ -8,6 +8,7 @@ import { TOML } from "bun";
 import type { AwsBinding } from "../auth/aws.ts";
 import type { CapabilityGuidance } from "../capabilities/guidance.ts";
 import { type ProviderId, isAwsRegion, isProviderId } from "../auth/providers.ts";
+import { DEFAULT_MAX_PARALLEL } from "../build/types.ts";
 import type { CapabilitySet, HostIdentity } from "../roles/types.ts";
 import { WebSettingsSchema } from "../extensions/web/settings.ts";
 import { McpSettingsSchema } from "./mcp-settings.ts";
@@ -149,7 +150,7 @@ export function workspaceSettings(root: string, role: keyof typeof ABILITIES, ru
     settings: {
       ...Object.fromEntries(["lsp", "browser", "hooks", "bash_rules"].flatMap(key =>
         raw[key] && typeof raw[key] === "object" ? [[key, raw[key] as Json]] : [])),
-      ...(enabled.includes("subagents") ? { subagents: { model: null, max_parallel: 3, max_turns: 12, timeout_secs: 120 } } : {}),
+      ...(enabled.includes("subagents") ? { subagents: { model: null, max_parallel: DEFAULT_MAX_PARALLEL, max_turns: 12, timeout_secs: 120 } } : {}),
       ...(enabled.includes("oracle") ? { oracle: { model: null, timeout_secs: 120 } } : {}),
       ...(enabled.includes("expert") ? { expert: raw.expert as Json } : {}),
       ...(enabled.includes("background_shell") ? { background_shell: JobSettingsSchema.parse(raw.background_shell ?? {

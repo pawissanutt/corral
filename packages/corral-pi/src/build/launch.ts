@@ -5,9 +5,10 @@ import { isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { corralPiDirectory } from "../auth/paths.ts";
 import { findWorkspaceRoot, modelFlags, modelSettings, rejectRemovedModelOptions } from "../host/config.ts";
-import { DEFAULT_MAX_PARALLEL, type BuildLaunch } from "./types.ts";
-import { buildProfileArgs, readBuildProfiles, readWorkspaceToml } from "./profiles.ts";
+import type { BuildLaunch, BuildSessionRecord } from "./types.ts";
+import { buildProfileArgs, readWorkspaceToml } from "./profiles.ts";
 import { validateBuildId } from "./session-store.ts";
+import { readBuildSettings } from "./settings.ts";
 
 export interface LocalBuildOptions {
   readonly id?: string;
@@ -54,27 +55,36 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
     validateBuildId(values.id);
     if (values.resume !== undefined) throw new Error("--id and --resume are mutually exclusive");
   }
-  const workspaceRoot = findWorkspaceRoot(env, cwd);
-  const git = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" });
-  const repoRoot = git.status === 0 ? git.stdout.trim() : cwd;
+  // Resume binds to session.json, not to workspace discovery in the caller's directory.
+  const resume = values.resume;
+  const resuming = resume !== undefined;
+  if (resuming) validateBuildId(resume);
+  const workspaceRoot = resuming ? undefined : findWorkspaceRoot(env, cwd);
+  const git = resuming ? undefined : spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" });
+  const repoRoot = git?.status === 0 ? git.stdout.trim() : cwd;
   const projects = workspaceRoot && readWorkspaceToml(workspaceRoot, "corral.toml").projects as Record<string, { path?: string }> | undefined;
   const project = values.project ?? (workspaceRoot && projects ? Object.entries(projects).find(([, entry]) =>
     typeof entry.path === "string" && resolvedRepo(resolve(workspaceRoot, entry.path)) === repoRoot)?.[0] : undefined);
   const corral = values.corral ? resolve(cwd, values.corral) : workspaceRoot ? "corral-next" : undefined;
   const dataRoot = buildDataRoot(values["data-dir"], env, cwd);
-  const profileArgs = values.profile ? buildProfileArgs(workspaceRoot ?? cwd, values.profile) : [];
+  const profileArgs = values.profile && !resuming ? buildProfileArgs(workspaceRoot ?? cwd, values.profile) : [];
   rejectRemovedModelOptions(profileArgs);
   const profile = parseArgs({ args: profileArgs, options: modelFlags }).values;
-  const settings = workspaceRoot && !values.resume ? readWorkspaceToml(workspaceRoot, "pi.toml") : undefined;
+  const raw = resuming ? {} : readWorkspaceToml(workspaceRoot ?? repoRoot, "pi.toml");
+  const settings = readBuildSettings({ workspaceRoot, repoRoot }, raw);
   return {
     launch: { version: 1, assets, dataRoot, repoRoot, here: values.here === true,
-      ...modelSettings({ ...profile, ...values }, settings), ...(corral ? { corral } : { bare: true }),
+      ...modelSettings({ ...profile, ...values }, workspaceRoot ? raw : undefined), ...(corral ? { corral } : { bare: true }),
       ...(workspaceRoot ? { workspaceRoot } : {}), ...(corral && project ? { project } : {}),
-      ...(values.name ? { name: values.name } : {}), ...(values.resume ? { resume: values.resume } : {}),
-      settings: { exitPolicy: workspaceRoot ? "review" : "none", maxParallel: DEFAULT_MAX_PARALLEL,
-        profiles: readBuildProfiles(workspaceRoot ?? cwd) } },
+      ...(values.name ? { name: values.name } : {}), ...(resuming ? { resume } : {}), settings },
     local: { headless: values.headless === true || !process.stdin.isTTY,
       ...(values.id !== undefined ? { id: values.id } : {}),
       ...(values.socket ? { socket: resolve(cwd, values.socket) } : {}) },
   };
+}
+
+export function bindBuildResume(launch: BuildLaunch, record: BuildSessionRecord): BuildLaunch {
+  return { ...launch, repoRoot: record.repoRoot, workspaceRoot: record.workspaceRoot, project: record.project,
+    here: record.here, bare: record.bare, corral: record.bare ? undefined : launch.corral ?? "corral-next",
+    settings: readBuildSettings(record) };
 }

@@ -4,7 +4,7 @@ import { fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, stat
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { authDir } from "../src/auth/paths.ts";
-import { parseBuildFlags } from "../src/build/launch.ts";
+import { bindBuildResume, parseBuildFlags } from "../src/build/launch.ts";
 import { createSession, listSessions, loadSession, saveSession, sessionDir } from "../src/build/session-store.ts";
 import { prepareWorktree } from "../src/build/worktree.ts";
 import type { BuildLaunch } from "../src/build/types.ts";
@@ -28,7 +28,8 @@ test("build flags retain paths, AWS settings and launch data", () => {
     "--provider", "amazon-bedrock", "--model", "amazon-bedrock/model", "--aws-profile", "sandbox", "--aws-region", "us-west-2"], dir,
     { CORRAL_NEXT_ROOT: dir }, dir);
   expect(launch).toMatchObject({ dataRoot: join(dir, "data"), repoRoot: dir, workspaceRoot: dir, here: true,
-    settings: { exitPolicy: "review", maxParallel: 3 }, aws: { profile: "sandbox", region: "us-west-2" } });
+    settings: { exitPolicy: "review", maxParallel: 32, profiles: [], delegation: { mode: "standard", routes: [] } },
+    aws: { profile: "sandbox", region: "us-west-2" } });
   expect(local.headless).toBeTrue();
   expect(buildHostConfig(launch, createSession(launch, { worktree: dir, branch: null, base: null }), dir, local).aws).toEqual(launch.aws);
 });
@@ -42,6 +43,71 @@ test("build infers the configured project through workspace and project aliases"
   symlinkSync(repo, join(ws, "project-link"), "dir");
   writeFileSync(join(ws, ".corral-next", "corral.toml"), '[projects.demo]\npath = "project-link"\n');
   expect(parseBuildFlags([], "/assets", { CORRAL_NEXT_ROOT: alias }, repo).launch.project).toBe("demo");
+});
+
+function writePiConfig(root: string, source: string): void {
+  mkdirSync(join(root, ".corral-next"), { recursive: true });
+  writeFileSync(join(root, ".corral-next", "pi.toml"), source);
+}
+
+test("standalone Build reads the Git root, or its start directory outside Git", () => {
+  const root = directory(), subdir = join(root, "nested");
+  mkdirSync(subdir);
+  execFileSync("git", ["init", "--quiet", root]);
+  writePiConfig(root, '[build]\nmax_parallel = 4\n[build.delegation]\nmode = "proactive"\n');
+  writePiConfig(subdir, '[build.delegation]\nmode = "wrong"\n');
+  const nongit = directory();
+  writePiConfig(nongit, '[build]\nmax_parallel = 4\n[build.delegation]\nmode = "proactive"\n');
+  for (const [cwd, repoRoot] of [[subdir, root], [nongit, nongit]] as const) {
+    expect(parseBuildFlags([], "/assets", {}, cwd).launch).toMatchObject({ bare: true, repoRoot,
+      settings: { exitPolicy: "none", maxParallel: 4, profiles: [], delegation: { mode: "proactive", routes: [] } } });
+  }
+});
+
+test("Build route settings retain order and reject invalid fields and profile references", () => {
+  const root = directory();
+  const profile = '[build.profiles.fern]\nmodel = "openai-codex/example"\n';
+  const route = '[[build.delegation.routes]]\nmatch = "Trace calls crossing two package boundaries"\nkind = "explore"\nprofile = "fern"\n';
+  const second = '[[build.delegation.routes]]\nmatch = "Implement an independent migration"\nkind = "slice"\nprofile = "default"\nstrategy = "prefer_child"\n';
+  const parse = () => parseBuildFlags([], "/assets", { CORRAL_NEXT_ROOT: root }, root).launch.settings;
+  writePiConfig(root, profile + route + second);
+  expect(parse().delegation).toEqual({ mode: "standard", routes: [
+    { match: "Trace calls crossing two package boundaries", kind: "explore", profile: "fern", strategy: "when_delegating" },
+    { match: "Implement an independent migration", kind: "slice", profile: "default", strategy: "prefer_child" },
+  ] });
+  for (const [source, field] of [
+    ['[build.delegation]\nmode = "automatic"', "mode"],
+    ['[build]\ndelegation = true', "delegation"],
+    ['[build.delegation]\nroutes = "invalid"', "routes"],
+    [profile + route.replace('kind = "explore"', 'kind = "review"'), "kind"],
+    [profile + route.replace('match = "Trace calls crossing two package boundaries"', 'match = "  "'), "match"],
+    [profile + route.replace('profile = "fern"\n', ''), "profile"],
+    [route, "unknown Build child profile"],
+    [profile + route + 'strategy = "always"', "strategy"],
+    [profile + route + 'stratgey = "prefer_child"', "stratgey"],
+    ['[build]\nmax_parallel = 33', "max_parallel"],
+  ] as const) {
+    writePiConfig(root, source);
+    expect(parse).toThrow(field);
+  }
+});
+
+test("resume reads the current settings at the recorded workspace or standalone root", () => {
+  const caller = directory(), workspace = directory(), repo = directory();
+  writePiConfig(caller, '[build.delegation]\nmode = "invalid caller setting"\n');
+  writePiConfig(repo, '[build]\nmax_parallel = 2\n');
+  for (const workspaceRoot of [workspace, undefined]) {
+    const start = parseBuildFlags([], "/assets", { CORRAL_NEXT_ROOT: workspaceRoot }, repo).launch;
+    const record = createSession(start, { worktree: repo, branch: null, base: null });
+    const { launch } = parseBuildFlags(["--resume", record.id], "/assets", { CORRAL_NEXT_ROOT: caller }, caller);
+    writePiConfig(workspaceRoot ?? repo, '[build]\nmax_parallel = 7\n[build.delegation]\nmode = "proactive"\n');
+    const bound = bindBuildResume(launch, record);
+    expect(bound).toMatchObject({ repoRoot: repo, settings: { maxParallel: 7, delegation: { mode: "proactive", routes: [] } } });
+    expect(bound.workspaceRoot).toBe(workspaceRoot);
+    expect(bound.corral).toBe(workspaceRoot ? "corral-next" : undefined);
+    writePiConfig(workspaceRoot ?? repo, '[[build.delegation.routes]]\nmatch = "Trace a caller"\nkind = "explore"\nprofile = "missing"\n');
+    expect(() => bindBuildResume(launch, record)).toThrow("unknown Build child profile");
+  }
 });
 
 test("a build under a legacy installation leaves its saved logins reachable", () => {
@@ -139,9 +205,12 @@ test("a headless build takes --id and records its socket", async () => {
     "commit", "--allow-empty", "-m", "base"]);
   mkdirSync(sessionDir(data, id), { recursive: true, mode: 0o700 });
   const assets = scriptedFixtureInstall(dir, [{ text: "ready" }]);
-  const env = { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, CORRAL_NEXT_ROOT: dir };
+  const other = directory();
+  writePiConfig(other, '[build.delegation]\nmode = "invalid caller setting"\n');
   const run = async (socket: string, args: string[], transcript?: string): Promise<string> => {
-    const child = launch(assets, ["build", "--headless", "--data-dir", data, "--socket", socket, "--corral", "/unused/corral", ...args], dir, env);
+    const cwd = transcript ? other : dir;
+    const env = { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, CORRAL_NEXT_ROOT: cwd };
+    const child = launch(assets, ["build", "--headless", "--data-dir", data, "--socket", socket, "--corral", "/unused/corral", ...args], cwd, env);
     try {
       await child.output(/session socket ready/);
       const connection = await connect(socket);

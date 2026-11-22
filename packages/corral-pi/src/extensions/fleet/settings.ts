@@ -1,10 +1,10 @@
 import { z } from "zod";
-import type { ChildKind } from "../../build/types.ts";
+import { DEFAULT_MAX_PARALLEL, MAX_PARALLEL_LIMIT, type ChildKind } from "../../build/types.ts";
 import type { Role } from "../../roles/types.ts";
 import { ExploreSettingsSchema } from "../subagent/settings.ts";
 
 const FleetSettingsSchema = z.object({
-  max_parallel: z.number().int().min(1).max(32).default(3),
+  max_parallel: z.number().int().min(1).max(MAX_PARALLEL_LIMIT).default(DEFAULT_MAX_PARALLEL),
   max_turns: z.number().int().min(1).max(200).default(60),
   timeout_secs: z.number().int().min(60).max(7200).default(1800),
 }).strict();

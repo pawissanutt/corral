@@ -85,7 +85,7 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     },
   });
   const board = context.session.bare ? undefined : createBoard({ context, run, tmpDir: join(context.dir, "board"), changed: options.changed, now: options.now });
-  const fleetDefinitions = fleetTools(fleet, undefined, options.wake);
+  const fleetDefinitions = fleetTools(fleet, undefined, options.wake, "build");
   const task = fleetDefinitions.find(tool => tool.name === "task")!;
   const start = task.execute;
   const previousIds = new Set(buildJournal.record().slices.map(child => child.id));

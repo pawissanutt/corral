@@ -1,7 +1,7 @@
 {
   "assistant": {
     "catalog": 11,
-    "digest": "5503f29288a04aa9e866807be752b15ec8897140715a065b7c744c47fbfd101b",
+    "digest": "b597bd8f9258e1c0ad34c7469cc9bd54640041555afa5efd7c93f9ddfd6c3728",
     "features": {
       "ask_user": {
         "enabled": true,
@@ -44,7 +44,7 @@
       "fleet": {
         "enabled": true,
         "settings": {
-          "max_parallel": 3,
+          "max_parallel": 32,
           "max_turns": 60,
           "timeout_secs": 1800
         },
@@ -92,7 +92,7 @@
       "subagents": {
         "enabled": true,
         "settings": {
-          "max_parallel": 3,
+          "max_parallel": 32,
           "max_turns": 12,
           "model": null,
           "timeout_secs": 120
@@ -136,7 +136,7 @@
   },
   "pm": {
     "catalog": 11,
-    "digest": "a1881d5a3e7b25be263b574bdd75084a07500b8df5e0dfb2bb0ea0515a155f09",
+    "digest": "36c1ead3e0e7f4ab45e92388b7abbbec349288029eda065c79523853f0f73825",
     "features": {
       "ask_user": {
         "enabled": true,
@@ -218,7 +218,7 @@
       "subagents": {
         "enabled": true,
         "settings": {
-          "max_parallel": 3,
+          "max_parallel": 32,
           "max_turns": 12,
           "model": null,
           "timeout_secs": 120

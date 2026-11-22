@@ -50,6 +50,34 @@ scopes, and see attribution and changes outside assigned ownership.
 **Board** shows workspace tasks and blocked or failed work. Refresh it and review
 proposed plans; you can file a proposal, file and start its tasks, or dismiss it.
 
+## Delegation
+
+Build uses `standard` delegation unless configured otherwise. To encourage the parent to
+start substantial independent slices or useful bounded read-only exploration earlier, add
+this to `.corral-next/pi.toml` at the workspace root (Git top-level for a standalone build,
+or the start directory outside Git):
+
+```toml
+[build.delegation]
+mode = "proactive"
+```
+
+You do not need to configure any profiles or routes. The parent uses the `default`
+child profile for unmatched work: a configured `default` if present, otherwise the
+parent's launch model and effort. [Optional routes](configuration.md#build) describe
+scoped assignments and select a child kind and profile in either mode. The parent
+interprets the routes and calls `task`; the host does not automatically start children.
+If a configured route is unavailable, the parent reports it rather than substituting a
+profile, and only continues inline when allowed.
+
+The parent keeps trivial or tightly coupled work inline, assigns each writer distinct
+owned files, and integrates and checks child results. Delegation does not change approval
+or spending limits, independent review, or who chooses the exit. Cancelling a child leaves
+any edits it already made in the shared worktree. The per-session concurrency cap defaults
+to 32; set a lower `[build] max_parallel` in the same file to limit simultaneous children.
+To restore the original delegation policy, remove the `[build.delegation]` section and
+its route tables. Policy changes take effect on the next launch or resume.
+
 ## Write and command approvals
 
 For the parent build, edit and write inside the session worktree work normally, as does
@@ -129,7 +157,8 @@ A standalone Git build prepares against its starting branch, with no Corral gate
 Stopping a session stops its host; resume it in the app or with
 `corral-pi build --resume <id>`. Resume uses the recorded checkout and refuses if
 a separate build worktree no longer has its recorded branch or belongs to another
-repository. A stopped build is read-only until resumed.
+repository. It rereads the current delegation policy from the recorded workspace or
+standalone root, not the caller's directory. A stopped build is read-only until resumed.
 
 To remove a finished build, choose **Remove** from its Agents row, or use:
 

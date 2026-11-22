@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync, statSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { buildIsRunning, errorMessage, hasOwnerMessage, inspectBuildCleanup, pruneBuildSession, pruneBuilds, removeBuild } from "../build/cleanup.ts";
-import { parseBuildFlags, parsePruneFlags, type LocalBuildOptions } from "../build/launch.ts";
+import { bindBuildResume, parseBuildFlags, parsePruneFlags, type LocalBuildOptions } from "../build/launch.ts";
 import { createSession, loadSession, saveSession, sessionDir } from "../build/session-store.ts";
 import { prepareWorktree } from "../build/worktree.ts";
 import type { BuildContext, BuildLaunch, BuildSessionRecord } from "../build/types.ts";
@@ -133,7 +133,9 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
       } else await pruneBuilds(prune.dataRoot, prune.dryRun, line => process.stdout.write(`${line}\n`));
       return;
     }
-    const { launch, local } = parseBuildFlags(argv, assets);
+    const parsed = parseBuildFlags(argv, assets);
+    let { launch } = parsed;
+    const { local } = parsed;
     resume = launch.resume;
     if (launch.provider === "llama.cpp") {
       throw new LaunchRefused("Local inference is unavailable in a build session", "Local inference (llama.cpp) is unavailable in a build session.",
@@ -148,7 +150,6 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
         throw new LaunchRefused(detail, `Build ${id} cannot resume: its session record is missing or unreadable (${detail}).`,
           `Use a recorded session id with ${resumeCommand("<id>")}, or start a new one with \`${startCommand}\`.`);
       }
-      if ((record.bare === true) !== (launch.bare === true)) throw new Error("Resume must use the same workspace association as the saved build session");
       if (await buildIsRunning(launch.dataRoot, record)) throw new Error(`Build ${id} is already running`);
       if (record.cleaned) throw new Error(`Build ${id} no longer has a worktree; its conversation is retained`);
       validateBuildResume(record);
@@ -156,6 +157,7 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
         throw new LaunchRefused("The build session has no recorded transcript to resume", `Build ${id} has no recorded conversation to resume.`,
           `Start a new build with \`${startCommand}\`.`);
       }
+      launch = bindBuildResume(launch, record);
     } else {
       const draft = createSession(launch, { worktree: launch.repoRoot, branch: null, base: null }, local.id);
       if (existsSync(join(sessionDir(launch.dataRoot, draft.id), "session.json"))) {

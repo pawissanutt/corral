@@ -24,7 +24,7 @@ pub struct ExploreSettings {
 impl Default for ExploreSettings {
     fn default() -> Self {
         Self {
-            max_parallel: 3,
+            max_parallel: 32,
             model: None,
             max_turns: 12,
             timeout_secs: 120,
@@ -42,7 +42,7 @@ pub struct FleetSettings {
 impl Default for FleetSettings {
     fn default() -> Self {
         Self {
-            max_parallel: 3,
+            max_parallel: 32,
             max_turns: 60,
             timeout_secs: 1800,
         }
@@ -81,8 +81,8 @@ pub(super) fn timeout_ok(timeout: u32) -> Result<(), String> {
 pub(crate) fn explore_settings(config: &CapabilitySettings) -> Result<CapabilitySettings, String> {
     let settings: ExploreSettings =
         serde_json::from_value(serde_json::json!(config)).map_err(|e| e.to_string())?;
-    if !(1..=16).contains(&settings.max_parallel) || !(1..=64).contains(&settings.max_turns) {
-        return Err("subagents needs max_parallel=1-16 and max_turns=1-64".into());
+    if !(1..=32).contains(&settings.max_parallel) || !(1..=64).contains(&settings.max_turns) {
+        return Err("subagents needs max_parallel=1-32 and max_turns=1-64".into());
     }
     model_ok(settings.model.as_deref())?;
     timeout_ok(settings.timeout_secs)?;
@@ -127,7 +127,7 @@ mod tests {
                 assert_eq!(snapshot.enabled("fleet"), preset != "strict");
                 if preset != "strict" {
                     let settings = &snapshot.features["fleet"].settings;
-                    assert_eq!(settings["max_parallel"], 3);
+                    assert_eq!(settings["max_parallel"], 32);
                     assert_eq!(settings["max_turns"], 60);
                     assert_eq!(settings["timeout_secs"], 1800);
                 }
@@ -214,7 +214,7 @@ mod tests {
                     "{preset}/{role:?}"
                 );
                 if explore {
-                    assert_eq!(snapshot.features["subagents"].settings["max_parallel"], 3);
+                    assert_eq!(snapshot.features["subagents"].settings["max_parallel"], 32);
                 }
             }
         }
@@ -260,7 +260,6 @@ mod tests {
     #[test]
     fn bounded_auxiliary_settings() {
         let empty = CapabilitySettings::new();
-        assert_eq!(explore_settings(&empty).unwrap()["max_parallel"], 3);
         assert_eq!(
             oracle_settings(&empty).unwrap()["model"],
             serde_json::Value::Null
@@ -268,6 +267,9 @@ mod tests {
         for key in ["max_parallel", "max_turns", "timeout_secs"] {
             assert!(explore_settings(&[(key.into(), 0.into())].into()).is_err());
         }
+        let parallel = |n: u32| [("max_parallel".into(), n.into())].into();
+        assert_eq!(explore_settings(&parallel(32)).unwrap()["max_parallel"], 32);
+        assert!(explore_settings(&parallel(33)).is_err());
         assert!(oracle_settings(&[("model".into(), "".into())].into()).is_err());
     }
 }
