@@ -134,7 +134,9 @@ test("an owner message withdraws the plan review only when the session takes it"
   await live.drained();
   const review = plan.review;
   expect(review).toBeDefined();
-  fixtureTransport().script([{ text: "Noted." }]);
+  const notes = () => (live.session.sessionManager.getEntries() as { type: string; customType?: string; details?: { kinds?: string[] } }[])
+    .filter(entry => entry.type === "custom_message" && entry.customType === PLAN_NOTE).map(entry => entry.details?.kinds);
+  fixtureTransport().script([{ text: "Noted." }, { text: "Revising." }]);
   fixtureTransport().holdNext();
   const held = fixtureTransport().whenHeld();
   void live.submitLocal({ text: "an automated note", origin: "auto", busyPolicy: "steer" });
@@ -147,12 +149,25 @@ test("an owner message withdraws the plan review only when the session takes it"
   // And typed in the terminal, where Pi refuses only after the input hook has run:
   await expect(live.session.prompt("Change step 1", { source: "interactive" })).rejects.toThrow("already processing");
   expect(plan.review).toBe(review);
+
+  // When the terminal reply is queued into the running turn, it reaches the model there:
+  await live.session.prompt("Change step 1", { source: "interactive", streamingBehavior: "steer" });
+  expect(plan.phase).toBe("planning");
   fixtureTransport().release();
   await until(() => !live.session.isStreaming, "the held turn to end");
   await live.drained();
-  // And once the session takes the terminal message, it is the owner's feedback.
-  fixtureTransport().script([{ text: "Revising." }]);
-  await live.session.prompt("Change step 1", { source: "interactive" });
+  // Then no reply notice is left over for some later turn.
+  expect(plan.turnMessage()).toBeUndefined();
+  expect(notes()).toEqual([["contract"]]);
+
+  // Given the plan is submitted again, when a terminal message starts a run:
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }, { text: "Revising again." }]);
+  await live.session.prompt("Submit it again", { source: "extension" });
   await live.drained();
+  expect(plan.phase).toBe("review");
+  await live.session.prompt("Change step 2", { source: "interactive" });
+  await live.drained();
+  // Then that run is the one told it is the owner's reply.
   expect(plan.phase).toBe("planning");
+  expect(notes()).toEqual([["contract"], ["replied"]]);
 }), 120_000);

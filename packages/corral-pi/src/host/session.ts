@@ -363,8 +363,10 @@ export class HostSession {
   private planReview: PlanReviewUi | undefined;
   /** The summary a clean-context reset writes in place of a model-made one. */
   private planReset: string | undefined;
-  /** Terminal input that will withdraw a pending plan review if its run starts. */
+  /** Owner input that withdraws a pending plan review when its run starts, where that run is told. */
   private planReply: string | undefined;
+  /** Terminal input that withdraws a pending plan review once it is in the queue of the running turn. */
+  private planQueuedReply: string | undefined;
   private readonly remotePrompts: RemotePrompts;
   private readonly local: LocalControlPlane;
   private questionUi: OwnerQuestionUi | undefined;
@@ -456,6 +458,7 @@ export class HostSession {
       append: record => { this.session.sessionManager.appendCustomEntry(PLAN_ENTRY, record, { immediate: true }); },
       busy: () => !this.remoteActionsReady ? "Session is not accepting plan actions"
         : this.open || this.session.isStreaming || this.session.isCompacting ? "Stop the current turn or wait for it to finish" : undefined,
+      compacting: () => this.session.isCompacting,
       stopTurn: async () => { if (this.open) await this.cancelRun(undefined, "owner"); },
       compact: instructions => this.planCompact(instructions),
       reset: summary => this.planResetContext(summary),
@@ -1066,7 +1069,7 @@ export class HostSession {
     if (plan) {
       // The mode reaches the model as a conversation message, so the system prompt never changes with it.
       pi.on("before_agent_start", event => {
-        // Feedback typed in the terminal withdraws a pending review only here, once its run really starts.
+        // The owner's reply withdraws a pending review only here, once its run really starts.
         if (this.planReply !== undefined && event.messageType === "user" && event.prompt === this.planReply) plan.ownerSpoke();
         this.planReply = undefined;
         const message = plan.turnMessage();
@@ -1278,9 +1281,9 @@ export class HostSession {
       // A build session's record keeps what the owner asked for, verbatim.
       if (event.source === "interactive" && !event.text.startsWith("/")) {
         if (await this.options.paneInput?.(event.text, event.images)) return { action: "handled" as const };
-        // Pi checks the model and its login after this hook. A message queued into the running turn is
-        // already taken; one that starts a run is the owner's reply only when that run begins.
-        if (event.streamingBehavior !== undefined) this.planMode?.ownerSpoke();
+        // Pi checks the model and its login, and queues, after this hook: the message is the owner's reply
+        // to a pending plan review only once its run begins or it is in the queue.
+        if (event.streamingBehavior !== undefined) this.planQueuedReply = event.text;
         else this.planReply = event.text;
         this.buildControls?.noteOwnerInput(event.text);
       }
@@ -1449,6 +1452,11 @@ export class HostSession {
         this.syncBuildTitle(session);
       } else if (event.type === "queue_update") {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
+        const reply = this.planQueuedReply;
+        if (reply !== undefined && (event.steering.includes(reply) || event.followUp.includes(reply))) {
+          this.planQueuedReply = undefined;
+          this.planMode?.ownerSpoke(false);
+        }
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
         const message = event.message.errorMessage ?? "";
         const provider = isProviderId(event.message.provider) ? event.message.provider : this.provider;
@@ -1774,13 +1782,19 @@ export class HostSession {
         return { disposition: "handled" };
       }, error => ({ disposition: "rejected", reason: utf8Prefix(error instanceof Error ? error.message : String(error), 256) }));
     }
-    // The review is withdrawn before the turn starts, so that turn is told; a message Pi refuses puts it back.
-    const restoreReview = input.origin === "owner" ? this.planMode?.ownerSpoke() : undefined;
+    // An owner message answers a pending plan review only if the session takes it: a run it starts withdraws
+    // the review in before_agent_start, and one queued into the running turn withdraws it here.
+    const reply = input.origin === "owner" && this.planMode?.review !== undefined;
+    if (reply) this.planReply = input.text;
     const tag = this.queue.bridgeInput(input, { ...source, socketId, transcriptId });
     return this.promptInput(input, tag, images).then(result => {
-      const taken = result.disposition === "started" || result.disposition === "queued";
-      if (!taken) restoreReview?.();
-      if (input.origin === "owner" && taken) this.buildControls?.noteOwnerInput(source?.text ?? input.text);
+      if (reply && result.disposition !== "started") {
+        if (this.planReply === input.text) this.planReply = undefined;
+        if (result.disposition === "queued") this.planMode?.ownerSpoke(false);
+      }
+      if (input.origin === "owner" && (result.disposition === "started" || result.disposition === "queued")) {
+        this.buildControls?.noteOwnerInput(source?.text ?? input.text);
+      }
       return result;
     });
   }

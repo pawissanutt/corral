@@ -8,7 +8,7 @@ const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 /** A plan mode over an in-memory branch, already planning with a plan file written. */
-async function planning() {
+async function planning(session: { compacting?: boolean; takes?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "plan-mode-unit-"));
   dirs.push(dir);
   const entries: PlanEntry[] = [], notes: string[] = [];
@@ -17,8 +17,9 @@ async function planning() {
   const plan = new PlanMode({
     dir, cwd: dir, prompts: { contract: () => "CONTRACT", reset: () => "", approved: () => "" }, askUser: false, todo: false,
     entries: () => entries, leaf: () => String(leaf), append: record => { add({ type: "custom", customType: PLAN_ENTRY, data: record }); },
-    busy: () => undefined, stopTurn: async () => {}, compact: async () => {}, reset: async () => {},
-    submit: async () => true, model: () => undefined, changed: () => {}, note: text => { notes.push(text); },
+    busy: () => undefined, compacting: () => session.compacting === true, stopTurn: async () => {}, compact: async () => {},
+    reset: async () => {}, submit: async () => session.takes !== false, model: () => undefined, changed: () => {},
+    note: text => { notes.push(text); },
   });
   await plan.enter();
   writeFileSync(plan.path, "# Same plan\n");
@@ -50,6 +51,23 @@ test("a submission whose copy changed after it was shown is not executed", async
   // Then nothing is approved and the review stays open.
   expect(plan.phase).toBe("review");
   expect(notes.join("\n")).toContain("missing or was changed");
+});
+
+test("an approval the session cannot start leaves the same review open", async () => {
+  // During a compaction the session takes no turn, so the choice is refused before anything changes.
+  const compacting = await planning({ compacting: true });
+  compacting.plan.submit();
+  expect(() => compacting.plan.choose("execute")).toThrow("Wait for the running compaction to finish");
+  expect(compacting.plan.phase).toBe("review");
+
+  // A kickoff the session does not take puts the submission back under the same card.
+  const refusing = await planning({ takes: false });
+  refusing.plan.submit();
+  const review = refusing.plan.review;
+  expect(refusing.plan.choose("execute")).toBe("started");
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(refusing.plan.review).toBe(review);
+  expect(refusing.notes.join("\n")).toContain("The review is open again");
 });
 
 test("a reply to a review after a compaction is told with the contract, in one turn", async () => {

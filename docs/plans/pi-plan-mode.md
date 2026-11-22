@@ -151,8 +151,10 @@ Any answer may carry text. With an execute option it is passed to the executor a
 owner's note. Text with no option is `revise`. Dismissing puts the card aside and stays in
 `review`. An ordinary owner message during `review` is feedback: the phase returns to
 `planning` and the message is delivered normally. The review is withdrawn only for a message
-the session takes: one typed in the terminal withdraws it when its run starts, and one sent
-through the socket puts the same review back if it is refused.
+the session takes. One that starts a run withdraws it as that run starts, and the run is told
+it is the owner's reply. One queued into a running turn withdraws it once it is queued and
+needs no notice, because it reaches the model inside that turn. A refused message leaves the
+review open.
 
 **Different model.** The review shows the session's current model with a change control that
 opens the existing model picker. The session is idle during review, so the existing
@@ -197,7 +199,9 @@ On an execute answer the host, in order:
    the plan text.
 
 Any failure in steps 1 to 3 leaves the phase at `review` with the card still open, and posts
-the reason as a transcript note.
+the reason as a transcript note. A choice is refused while a compaction is running, when the
+session could start nothing. If the session does not take the kickoff, the same submission is
+put back under the same card, so an approved plan either starts or stays reviewable.
 
 ## Wire contract
 

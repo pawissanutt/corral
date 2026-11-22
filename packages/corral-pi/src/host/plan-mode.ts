@@ -50,6 +50,8 @@ export interface PlanHost {
   append(record: PlanRecord): void;
   /** Why the mode cannot change now; undefined when the session is bound and idle. */
   busy(): string | undefined;
+  /** A compaction is running, during which the session takes no new turn. */
+  compacting(): boolean;
   stopTurn(): Promise<void>;
   compact(instructions: string): Promise<void>;
   /** Replace the model's context with `summary`, keeping no earlier entry. */
@@ -321,10 +323,14 @@ export class PlanMode {
     return this.choose(choice as PlanChoice, text);
   }
 
-  /** The owner's review choice, from the terminal or a card answer. */
+  /** The owner's review choice, from the terminal or a card answer. Refused while it could not be carried out. */
   choose(choice: PlanChoice, text?: string): AnswerStatus {
     if (this.phase !== "review") return "missing";
     if (this.starting) return "started";
+    // Neither the plan nor the feedback could start a turn now, and the review would be gone.
+    if (this.host.compacting()) {
+      throw new BridgeRefusal("plan_mode_unavailable", "Wait for the running compaction to finish, then choose again");
+    }
     if (choice === "revise") {
       void this.revise(text);
       return "delivered";
@@ -334,19 +340,13 @@ export class PlanMode {
   }
 
   /**
-   * An ordinary owner message during review is feedback: the review is withdrawn and planning resumes. The
-   * returned function puts the same review back, for a message the session then refused.
+   * An ordinary owner message the session took during review is feedback: the review is withdrawn and planning
+   * resumes. `told` is for a message that starts a run, which is given the reply notice; one queued into the
+   * running turn reaches the model there and leaves nothing to tell a later turn.
    */
-  ownerSpoke(): (() => void) | undefined {
-    const review = this.record;
-    if (review.phase !== "review" || this.starting) return undefined;
-    this.write({ phase: "planning", revision: review.revision, title: review.title, replied: true });
-    return () => {
-      const { phase, revision, replied } = this.record;
-      if (phase !== "planning" || !replied || revision !== review.revision) return;
-      const { version: _version, at, ...same } = review;
-      this.write(same, at);
-    };
+  ownerSpoke(told = true): void {
+    const { phase, revision, title } = this.record;
+    if (phase === "review" && !this.starting) this.write({ phase: "planning", revision, title, ...(told ? { replied: true } : {}) });
   }
 
   private async revise(feedback?: string): Promise<void> {
@@ -383,7 +383,10 @@ export class PlanMode {
       this.host.approved?.(`Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})`);
       const kickoff = this.host.prompts.approved({ path, title, revision, plan, context, note, todo: this.host.todo });
       if (!await this.host.submit(kickoff, "auto")) {
-        this.host.note(`The approved plan was not delivered to the agent. Ask it to execute ${path}.`, "error");
+        // A plan that did not start stays reviewable: the same submission is put back under the same card.
+        const { version: _version, at, ...same } = record;
+        this.write(same, at);
+        this.host.note("The session did not take the approved plan, so it was not started. The review is open again.", "error");
       }
     } catch (error) {
       this.host.note(`The plan was not started: ${error instanceof Error ? error.message : String(error)}. The review is still open.`, "error");

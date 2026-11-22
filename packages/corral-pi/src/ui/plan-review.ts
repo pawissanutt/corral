@@ -70,14 +70,20 @@ export class PlanReviewUi {
     if (key === "m") {
       if (this.options.selectModel?.()) this.selecting = id;
       else this.options.notice("Change the model with /model, then reopen the review with /plan.");
-    } else if (key === "k") {
-      const feedback = await ui.input("What should change in the plan?", "Feedback for the agent; leave empty to type it as a message");
+      return true;
+    }
+    let feedback: string | undefined;
+    if (key === "k") {
+      feedback = await ui.input("What should change in the plan?", "Feedback for the agent; leave empty to type it as a message");
       // Esc on the feedback returns to the review rather than deciding anything.
       if (feedback === undefined) return this.show();
-      if (this.plan.review === id) this.plan.choose("revise", feedback);
-    } else {
-      const choice = CHOICES[key];
-      if (choice) this.plan.choose(choice);
+    }
+    const choice = key === "k" ? "revise" : CHOICES[key];
+    try {
+      if (choice && this.plan.review === id) this.plan.choose(choice, feedback);
+    } catch (error) {
+      // A choice the session cannot carry out now leaves the review pending; /plan reopens it.
+      this.options.notice(error instanceof Error ? error.message : String(error));
     }
     return true;
   }
