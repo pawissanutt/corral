@@ -99,14 +99,34 @@ fn a_split_record_growing_above_the_reader_holds_their_row_and_is_not_new() {
         },
         "another reply below still counts"
     );
-    // The message was 500 high with the reader 300 into it; its earlier items add 200 above.
-    let (top, height) = (40.0, 500.0);
-    let mark = Mark::Bottom(height - 300.0);
+    // The message was 500 high with the reader 300 into it, in its last item; its earlier items
+    // add 200 above. Items are keyed from the record's end, so the ones shown keep their keys.
+    let key = |from_end: usize| format!("{record}|{from_end}");
+    let mark = Mark::Held {
+        into: 300.0,
+        height: 500.0,
+        items: vec![(key(2), 0.0, 200.0), (key(1), 200.0, 280.0)],
+    };
+    let now = [
+        (key(4), 0.0, 100.0),
+        (key(3), 100.0, 100.0),
+        (key(2), 200.0, 200.0),
+        (key(1), 400.0, 280.0),
+    ];
+    let top = 40.0;
     assert_eq!(
-        mark.offset(top, height + 200.0),
+        mark.offset(top, 700.0, |wanted| placed(&now, wanted)),
         top + 500.0,
         "the reader stays on the item they read"
     );
+}
+
+/// Where item `wanted` is among `items` (key, top, height).
+fn placed(items: &[(String, f32, f32)], wanted: &str) -> Option<(f32, f32)> {
+    items
+        .iter()
+        .find(|(key, ..)| key == wanted)
+        .map(|(_, top, height)| (*top, *height))
 }
 
 #[test]
@@ -193,9 +213,12 @@ fn a_combined_publish_counts_new_rows_inside_the_same_assistant_tail() {
         [MessageItem::Group(_)]
     ));
 
+    // The reader is 40 into the merged tail: in its folded calls, under the bubble's head.
+    let held = before.messages.last().unwrap().clone();
+    assert_eq!(held.keys.len(), held.items.len());
     let mut place = Place {
         scope: Some(scope.clone()),
-        top: Some((reader.id.clone(), 12.0)),
+        top: Some((held.anchor.clone(), 40.0)),
         ..Place::default()
     };
     let show = |place: &mut Place, transcript: &Transcript| {
@@ -231,9 +254,32 @@ fn a_combined_publish_counts_new_rows_inside_the_same_assistant_tail() {
     assert_eq!(
         show(&mut place, &after),
         Shown::Up {
-            held: Some((scope, reader.id, 12.0)),
+            held: Some((scope, held.anchor.clone(), 40.0)),
             arrived: 2,
         },
         "the older row is held above, the existing group remains one row, and both fresh rows count"
+    );
+    assert_eq!(tail.keys.len(), tail.items.len());
+    assert_eq!(
+        tail.keys[0], held.keys[0],
+        "the folded calls keep their key when a later call joins them"
+    );
+
+    // Laid out: the bubble's head takes 20 above its items, the group 30, each paragraph 40.
+    // It was at 100, 86 high; the older row adds 50 above, the paragraphs 80 inside it below.
+    let mark = Mark::Held {
+        into: 40.0,
+        height: 86.0,
+        items: vec![(held.keys[0].clone(), 0.0, 30.0)],
+    };
+    let now = [
+        (tail.keys[0].clone(), 0.0, 30.0),
+        (tail.keys[1].clone(), 30.0, 40.0),
+        (tail.keys[2].clone(), 70.0, 40.0),
+    ];
+    assert_eq!(
+        mark.offset(150.0, 166.0, |wanted| placed(&now, wanted)),
+        150.0 + 40.0,
+        "the reader moves with the rows above, not with the paragraphs below them"
     );
 }

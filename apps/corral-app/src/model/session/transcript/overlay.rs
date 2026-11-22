@@ -92,6 +92,7 @@ pub(super) fn overlay(
             tag: None,
             tag_facts: None,
             items,
+            keys: Vec::new(),
             footer: None,
             live: true,
         }]

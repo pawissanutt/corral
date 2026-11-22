@@ -385,6 +385,7 @@ fn message(
             .count(),
     };
     let mut items = Vec::new();
+    let mut keys = Vec::new();
     let mut facts = None;
     let mut notice = false;
     let count = resolved.len();
@@ -466,6 +467,13 @@ fn message(
                 "unsupported item · this version of the app cannot show it".into(),
             ))),
         }
+        // Rows a recorded item made are keyed by it, the second and later ones by their place.
+        let made = items.len() - keys.len();
+        let key = item_key(&anchor, count - n);
+        keys.extend((0..made).map(|k| match k {
+            0 => key.clone(),
+            k => format!("{key}/{k}"),
+        }));
     }
     let owner = avatar(&message.author).0 == "Y" && !notice;
     let quiet = notice || host_made(&message.author);
@@ -488,6 +496,7 @@ fn message(
             tag: None,
             tag_facts: None,
             items,
+            keys,
             footer: None,
             live: false,
         };
@@ -602,6 +611,7 @@ fn message(
         tag: None,
         tag_facts: None,
         items,
+        keys,
         footer: marks::footer(message, facts, cx),
         live: false,
     }
@@ -648,6 +658,11 @@ fn merged(
                 MessageKind::Bubble => false,
             }
         {
+            if keyed(last) && keyed(&message) {
+                last.keys.extend(message.keys);
+            } else {
+                last.keys.clear();
+            }
             last.items.extend(message.items);
             if message.footer.is_some() {
                 last.footer = message.footer;
@@ -662,7 +677,18 @@ fn merged(
     let mut message_ends = Vec::with_capacity(ends.len());
     let mut ends = ends.into_iter().peekable();
     for (bubble, message) in bubbles.iter_mut().enumerate() {
+        let whole = keyed(message);
         message.items = group::fold(std::mem::take(&mut message.items), cx);
+        // A folded run keeps the key of its first call.
+        let mut keys = std::mem::take(&mut message.keys).into_iter();
+        if whole {
+            for item in &message.items {
+                message.keys.extend(keys.next());
+                if let MessageItem::Group(group) = item {
+                    keys.by_ref().take(group.count - 1).for_each(drop);
+                }
+            }
+        }
         let mut items = message.items.iter();
         let mut consumed = 0;
         let mut drawn = 0;
@@ -682,6 +708,11 @@ fn merged(
         rows += super::message_rows(message);
     }
     (bubbles, message_ends)
+}
+
+/// Every item of `message` has its key.
+fn keyed(message: &Message) -> bool {
+    message.keys.len() == message.items.len()
 }
 
 /// The time a recorded message was written, in epoch milliseconds.

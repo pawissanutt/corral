@@ -506,6 +506,7 @@ pub(super) fn report_message(
         tag: None,
         tag_facts: None,
         items,
+        keys: Vec::new(),
         footer: Some(super::Footer {
             words: format!("report · {files}"),
             open,
@@ -593,6 +594,7 @@ pub(super) fn bubble(id: String, head: Rich, items: Vec<MessageItem>) -> Message
         tag: None,
         tag_facts: None,
         items,
+        keys: Vec::new(),
         footer: None,
         live: false,
     }

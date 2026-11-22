@@ -221,6 +221,10 @@ pub struct Message {
     /// What the tag stands for, opened from it: a device the roster does not name, by its id.
     pub tag_facts: Option<TagFacts>,
     pub items: Vec<MessageItem>,
+    /// Each item's stable key, from the recorded item it starts with (counted from its record's
+    /// end, so a split record's earlier items leave it alone): the reader holds on to the item
+    /// they read across rows arriving above and below it. Empty when items have no such source.
+    pub keys: Vec<String>,
     /// An assistant message's model, unusual stop and usage.
     pub footer: Option<Footer>,
     /// The live turn's message, still being written: drawn with the streaming mark.

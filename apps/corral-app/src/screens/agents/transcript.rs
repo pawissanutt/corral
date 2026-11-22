@@ -186,6 +186,25 @@ fn anchored(transcript: &Transcript, anchor: &str, block: AnyElement) -> AnyElem
         .into_element()
 }
 
+/// An item of message `anchor`, placed in it by its stable key so the reading position holds
+/// on to the item it is in while rows arrive above and below.
+fn placed(scope: &str, anchor: &str, key: &str, row: AnyElement) -> AnyElement {
+    let token = anchors::token();
+    let (scope, anchor, key) = (scope.to_owned(), anchor.to_owned(), key.to_owned());
+    {
+        let (scope, key) = (scope.clone(), key.clone());
+        cleanup(move || anchors::item_forget(&scope, &key, token));
+    }
+    view()
+        .min_w(px(0.0))
+        .on_layout(move |frame: &Bounds<Points>| {
+            let (top, height) = (frame.origin.y.0, frame.size.height.0);
+            anchors::item_placed(&scope, &anchor, &key, token, top, height);
+        })
+        .child(row)
+        .into_element()
+}
+
 /// The transcript: a stale notice when its source is unreachable, the control for earlier
 /// messages, every message of the page in order (or why there are none), this device's sends
 /// the page does not hold yet, the live turn and the quiet rows after it, then the note. Desktop centres it at the mockup's measure; the phone uses
@@ -193,10 +212,11 @@ fn anchored(transcript: &Transcript, anchor: &str, block: AnyElement) -> AnyElem
 pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
     let form = app.form;
     provide_styles(app);
+    let scope = transcript.scope.to_string();
     let mut next = 0;
     let mut messages = Vec::new();
     for message in &transcript.messages {
-        let block = self::message(app, message, next);
+        let block = self::message(app, &scope, message, next);
         messages.push(anchored(transcript, &message.anchor, block));
         next += message.items.len() + usize::from(message.footer.is_some());
     }
@@ -207,7 +227,7 @@ pub fn transcript(app: AppState, transcript: &Transcript) -> AnyElement {
             .map(|sent| bubbles::echo(app, sent)),
     );
     for message in &transcript.live {
-        let block = self::message(app, message, next);
+        let block = self::message(app, &scope, message, next);
         messages.push(anchored(transcript, &message.anchor, block));
         next += message.items.len() + usize::from(message.footer.is_some());
     }
@@ -313,13 +333,20 @@ fn item(app: AppState, entry: &MessageItem, n: usize) -> AnyElement {
 /// bubble with its lead; an agent's message (`.tm`) with its avatar in its hue, the header line,
 /// then its items in recorded order and the turn's footer. A live message carries the streaming
 /// mark in its header.
-fn message(app: AppState, message: &Message, first: usize) -> AnyElement {
+fn message(app: AppState, scope: &str, message: &Message, first: usize) -> AnyElement {
     let form = app.form;
+    let keyed = message.keys.len() == message.items.len();
     let mut items = message
         .items
         .iter()
         .enumerate()
-        .map(|(n, entry)| item(app, entry, first + n))
+        .map(|(n, entry)| {
+            let row = item(app, entry, first + n);
+            match message.keys.get(n).filter(|_| keyed) {
+                Some(key) => placed(scope, &message.anchor, key, row),
+                None => row,
+            }
+        })
         .collect::<Vec<_>>();
     if let Some(footer) = &message.footer {
         items.push(rows::footer(
