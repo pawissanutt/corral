@@ -561,6 +561,17 @@ fn fallback(call: &Call<'_>) -> Row {
     }
 }
 
+/// Only a host-supplied reference from a readable helper can open a conversation.
+pub(super) fn conversation_view(name: &str, scope: &Id, id: &str) -> Option<ToolView> {
+    if !matches!(name, "explore" | "oracle" | "corral_expert") {
+        return None;
+    }
+    Some(ToolView {
+        label: "Open conversation",
+        action: super::super::fleet::AgentLookup::of(scope).check(id).ok()?,
+    })
+}
+
 /// The row for `call`, by its family's presenter. A call of a stopped turn reads `not run`.
 pub(super) fn present(call: &Call<'_>) -> Row {
     let mut row = tool_files::present(call)
@@ -570,15 +581,11 @@ pub(super) fn present(call: &Call<'_>) -> Row {
         .unwrap_or_else(|| fallback(call));
     // The helper's archive id is assigned by the host; neither the tool-call id nor
     // a billing request id necessarily names its transcript.
-    if matches!(call.name, "explore" | "oracle" | "corral_expert")
-        && let Some(id) = call.details.get("conversationId").and_then(Value::as_str)
-        && let Ok(action) = super::super::fleet::AgentLookup::of(call.session).check(id)
+    if let Some(id) = call.details.get("conversationId").and_then(Value::as_str)
+        && let Some(view) = conversation_view(call.name, call.session, id)
     {
         row.expanded.extend(text("Conversation ID", id));
-        row.view = Some(ToolView {
-            label: "Open conversation",
-            action,
-        });
+        row.view = Some(view);
     }
     if call.state == CallState::NotRun {
         row.state = ToolState::Waiting;

@@ -131,6 +131,11 @@ fn child(outcome: &Value, settled: bool, cx: Cx<'_>) -> Tool {
         row.outcome = "outcome not recorded".to_owned();
         row.hue = Hue::Held;
     }
+    let conversation = str_of(outcome, "conversationId").and_then(|id| {
+        let view = super::tool::conversation_view(name, cx.id, id)?;
+        row.view = Some(view);
+        Some(format!("Conversation ID: {id}"))
+    });
     let late = outcome.get("late").and_then(Value::as_bool) == Some(true);
     Tool {
         state: row.state,
@@ -152,6 +157,7 @@ fn child(outcome: &Value, settled: bool, cx: Cx<'_>) -> Tool {
             .body
             .into_iter()
             .take(usize::from(ok == Some(false)))
+            .chain(conversation)
             .map(|row| super::line(&row, super::LineClass::Dim))
             .collect(),
         open: false,
