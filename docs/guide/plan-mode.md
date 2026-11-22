@@ -54,19 +54,22 @@ the new model.
 Sending an ordinary message while a plan is waiting counts as feedback. The review closes and
 the agent goes back to planning.
 
+What you review is a copy taken when the agent submitted, and that copy is what runs. A later
+change to the working plan file does not alter a plan you are reviewing or have approved.
+
 A clean context stays in the same session and transcript: rewind, export and the Build record
-keep working. The agent is told the earlier conversation was cleared and receives the whole
-plan as its brief.
+keep working. The cleared conversation is replaced by the approved plan itself, which is the
+agent's whole brief.
 
 ## After approval
 
-Normal tool access returns. The agent receives the plan inline, keeps a copy under `plans/`
-in the session directory, and opens a todo list with one step per plan step when the todo
-list is enabled. If the conversation is compacted later, the agent is pointed back to the
-approved plan's file.
+Normal tool access returns. The agent has the plan in its context and the path of the
+submitted copy under `plans/` in the session directory, and opens a todo list with one step
+per plan step when the todo list is enabled. If the conversation is compacted later, the
+agent is pointed back to that copy.
 
-If the plan could not be started (for example the plan file changed after it was submitted),
-a note in the transcript says why and the review stays open.
+If the plan could not be started (for example the submitted copy is missing), a note in the
+transcript says why and the review stays open.
 
 ## Older daemons and apps
 

@@ -50,7 +50,7 @@ says shell rules are not a sandbox.
 `off → planning → review → off`. From `review`, "Keep planning" returns to `planning`.
 
 The phase is a transcript custom entry `corral_plan_mode`
-`{version: 1, phase, revision, at, title?, digest?, left?, replied?, approved?}` appended at
+`{version: 1, phase, revision, at, title?, id?, digest?, path?, left?, replied?, approved?}` appended at
 every transition. `PlanMode` (`src/host/plan-mode.ts`) keeps no phase of its own: it reads the
 current branch, cached by leaf id. A restart therefore restores the phase, and rewinding to a
 turn before plan mode was entered leaves it.
@@ -62,8 +62,10 @@ turn before plan mode was entered leaves it.
 
 - `<state dir>/plan.md`: the one plan document of the session. The agent creates and revises
   it with the ordinary `write` and `edit` tools.
-- `<state dir>/plans/<revision>-<slug>.md`: the copy made at each approval. The executor is
-  given this path.
+- `<state dir>/plans/<revision>-<slug>-<id>.md`: the write-once copy made at each submission.
+  The review and the execution read this copy, never the working file, so the owner approves
+  exactly the text they were shown. `<id>` is random: a rewind rolls the revision back, and a
+  resubmission must not replace an earlier copy or reuse its card.
 
 The plan is session state, not part of the candidate: it is never written into the worktree.
 
@@ -127,14 +129,14 @@ role's local tools rather than among them, so children never inherit it.
 - Parameters: `{ title?: string }`. The title defaults to the first `# ` heading, then `Plan`.
 - Outside `planning` it fails with `Plan mode is not active; nothing was submitted.`
 - It fails if `plan.md` is missing, empty or over 256 KiB, naming the path.
-- On success it moves to `review`, increments `revision`, records the SHA-256 digest, and
-  returns `Submitted for the owner's review. End your turn now and do not implement; the
+- On success it writes the submission's copy, moves to `review`, increments `revision`,
+  records the submission's id, copy path and SHA-256 digest, and returns `Submitted for the owner's review. End your turn now and do not implement; the
   owner's choice arrives as a later message.`
 
 ### Review
 
 One durable card of kind `plan_review`, with no expiry. Its id is
-`plan-<revision>-<digest prefix>`, so an answer to an older submission is `missing`. The
+`plan-<revision>-<submission id>`, so an answer to an older submission is `missing`. The
 terminal and the app answer the same submission; the first answer wins.
 
 | Id | Label | Effect |
@@ -147,7 +149,8 @@ terminal and the app answer the same submission; the first answer wins.
 Any answer may carry text. With an execute option it is passed to the executor as the
 owner's note. Text with no option is `revise`. Dismissing puts the card aside and stays in
 `review`. An ordinary owner message during `review` is feedback: the phase returns to
-`planning` and the message is delivered normally.
+`planning` and the message is delivered normally. If the session refuses that message, the
+same review is put back.
 
 **Different model.** The review shows the session's current model with a change control that
 opens the existing model picker. The session is idle during review, so the existing
@@ -161,17 +164,18 @@ and Esc for not now. It opens once per submission when the agent's turn ends and
 the four choices as a plain selection from `/plan`.
 
 **App.** A dedicated plan view renders the whole document as Markdown with the four actions,
-the model control and a feedback composer. The document is read in 40 KiB pages; the card
+the model control and a feedback composer. The document is read in 40 KiB pages under the
+card's id, so the app never shows one submission's text beside another's choices; the card
 body carries the first 8 KiB for older apps.
 
 ### Executing an approved plan
 
 On an execute answer the host, in order:
 
-1. Checks the phase is `review` and `plan.md` still matches the submitted digest.
+1. Checks the phase is `review` and reads the submission's copy, which must still match its
+   digest.
 2. Cancels the turn if one is still open.
-3. Writes the plan to `plans/<revision>-<slug>.md`.
-4. Applies the context option:
+3. Applies the context option:
    - `execute`: nothing.
    - `execute_compact`: `session.compact(<instructions>)`, where the instructions keep
      rationale, rejected alternatives, owner preferences and discovered files, drop tool
@@ -179,16 +183,19 @@ On an execute answer the host, in order:
      and "Already compacted" are not failures; execution continues with the context as it is.
    - `execute_clean`: `session.compact()` with a pending reset. The single
      `session_before_compact` handler returns a host-written summary with a null first-kept
-     entry, the session manager's own "nothing kept". Where the SDK refuses to compact (a
-     session smaller than `keepRecentTokens`), the host appends the same compaction entry
-     directly and calls `session.refreshContext()`, as rewind does.
-5. Records `phase: off` with `approved: {title, revision, digest, path, context, model}`.
-6. Submits the kickoff message (`assets/plan-approved.md`) as automated input: the plan
-   inline, the copy's path, the owner's note, and instructions to open a `corral_todo` plan
-   from the plan's steps and verify each step. The Build record notes
-   `Approved plan: <title> (revision N, <context option>)` rather than the plan text.
+     entry, the session manager's own "nothing kept". The summary is the approved plan with
+     a short header, so the cleared context holds the plan whatever happens afterwards.
+     Where the SDK refuses to compact (a session smaller than `keepRecentTokens`), the host
+     appends the same compaction entry directly and calls `session.refreshContext()`, as
+     rewind does.
+4. Records `phase: off` with `approved: {title, revision, digest, path, context, model}`.
+5. Submits the kickoff message (`assets/plan-approved.md`) as automated input: the copy's
+   path, the owner's note, instructions to open a `corral_todo` plan from the plan's steps
+   and verify each step, and the plan inline unless the context was just reset to it. The
+   Build record notes `Approved plan: <title> (revision N, <context option>)` rather than
+   the plan text.
 
-Any failure in steps 1 to 4 leaves the phase at `review` with the card still open, and posts
+Any failure in steps 1 to 3 leaves the phase at `review` with the card still open, and posts
 the reason as a transcript note.
 
 ## Wire contract
@@ -198,10 +205,10 @@ Host registry methods (`packages/corral-pi/src/host/remote/plan.ts`):
 | Method | Arguments | Result | Refusals |
 |---|---|---|---|
 | `plan_mode` | `{enabled: boolean}`, or `{command: string}` for a typed `/plan` | `{text}` | `plan_mode_unavailable` while a turn is open, compacting or not ready |
-| `plan_mode_doc` | `{after?: string}` | `{title, revision, body, bytes, offset, next?}` | `plan_mode_doc_missing`; `stale_page` when the document changed between pages |
+| `plan_mode_doc` | `{card: string, after?: string}` | `{title, revision, body, bytes, offset, next?}` | `plan_mode_doc_missing` when `card` is not the open review; `stale_page` when it stopped being so between pages |
 
-`plan_mode_doc` serves `plan.md` in any phase, with the same cursor format as
-`board_plan_task`.
+`plan_mode_doc` serves the copy of the submission that `card` reviews, with the same cursor
+format as `board_plan_task`.
 
 State: `SessionState.plan_mode?: {phase: "planning" | "review", title?: string, revision?: number}`,
 absent when off. `SessionState.plan` remains the todo ledger. Capability ids: `plan_mode`
@@ -214,8 +221,9 @@ Rust (`crates/corral-protocol`, schema regenerated):
   `PlanModeBrief {phase: PlanModePhase, title: Option<String>, revision: Option<u32>}`;
   `PlanModePhase {Planning, Review, #[serde(other)] Other}`.
 - `SessionAction::PlanMode {enabled: bool}`, forwarded to `plan_mode`.
-- `DetailRef::SessionPlanModeDoc {id}` and `DetailBody::SessionPlanModeDoc(PlanModeDocPage
-  {title, revision, body, bytes, offset})`. The daemon reads it like `board_plan_task`;
+- `DetailRef::SessionPlanModeDoc {id, card}` and `DetailBody::SessionPlanModeDoc(PlanModeDocPage
+  {title, revision, body, bytes, offset})`. The card id is part of the reference, so a
+  client's cache of one submission can never answer for another. The daemon reads it like `board_plan_task`;
   `plan_mode_doc_missing` becomes `NotFound` and `stale_page` becomes `Conflict`.
 
 Version skew: an old daemon rewrites the kind to `other` and drops the new state field, so
@@ -226,9 +234,11 @@ the app's dedicated view needs the new daemon. The card stays answerable in the 
 - Host: `test/plan-mode-host.test.ts` runs the production `HostSession` with a scripted
   provider through both reset paths (a session the SDK refuses to compact, and one it
   compacts). It checks that a worktree write is refused while planning and only the plan
-  file is written, that the submission is the open `plan_review` card, and that after
-  "Execute with clean context" the model's context holds the reset summary and the plan,
-  none of the planning conversation, and writes work again.
+  file is written, that the review keeps showing the submitted text after the working file
+  changes, and that after "Execute with clean context" the reset summary holds that text,
+  none of the planning conversation survives, and writes work again. A second test keeps the
+  review open when the session refuses the owner's reply. `src/host/plan-mode.test.ts`
+  checks that a resubmission after a rewind gets its own card and copy.
 - Protocol: `plan_mode_state_card_and_action_are_typed`, and `checked_in_schema_is_current`.
 - Daemon: `a_plan_mode_document_of_two_pages_joins_through_next`.
 - App: the model test for the `plan_review` view.
