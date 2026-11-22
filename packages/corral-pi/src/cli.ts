@@ -12,7 +12,7 @@ const usage = `Usage:
   corral-pi login [--provider <id>] [--auth-dir <path>]
   corral-pi models [--provider <id>]
 Model flags: --model [<provider>/]<id>, --provider <id>, --effort <level>, --aws-profile <name>, --aws-region <region>.
-Terminal chat and new Build sessions: set [startup] model in .corral-next/pi.toml to override the built-in default.
+New terminal chat and Build sessions use a saved startup model or ask you to choose one.\nFor new headless sessions without an available default, pass --model <provider/model>.
 Fallback: repeat --fallback <provider>/<model> to try models in order when a subscription quota is exhausted.
 Sessions can also take --project <name> and --headless; non-interactive launches are headless by default.
 `;

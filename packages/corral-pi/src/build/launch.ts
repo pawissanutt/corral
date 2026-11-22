@@ -4,8 +4,8 @@ import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { corralPiDirectory } from "../auth/paths.ts";
-import { findWorkspaceRoot, modelFlags, modelSettings, rejectRemovedModelOptions } from "../host/config.ts";
-import type { BuildLaunch, BuildSessionRecord } from "./types.ts";
+import { findWorkspaceRoot, modelFlags, modelSettings, rejectRemovedModelOptions, startupModelSetting } from "../host/config.ts";
+import type { BuildLaunchOptions, BuildSessionRecord } from "./types.ts";
 import { buildProfileArgs, readWorkspaceToml } from "./profiles.ts";
 import { validateBuildId } from "./session-store.ts";
 import { readBuildSettings } from "./settings.ts";
@@ -42,7 +42,7 @@ function resolvedRepo(path: string): string | undefined {
 }
 
 export function parseBuildFlags(argv: readonly string[], assets: string, env = process.env,
-  cwd = process.cwd()): { launch: BuildLaunch; local: LocalBuildOptions } {
+  cwd = process.cwd()): { launch: BuildLaunchOptions; local: LocalBuildOptions; startupModel: string | null } {
   rejectRemovedModelOptions(argv);
   const options = {
     ...modelFlags, "data-dir": { type: "string" }, socket: { type: "string" }, corral: { type: "string" },
@@ -74,17 +74,20 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
   const settings = readBuildSettings({ workspaceRoot, repoRoot }, raw);
   return {
     launch: { version: 1, assets, dataRoot, repoRoot, here: values.here === true,
-      ...modelSettings({ ...profile, ...values }, workspaceRoot ? raw : undefined), ...(corral ? { corral } : { bare: true }),
+      ...modelSettings({ ...profile, ...values }, "startup"), ...(corral ? { corral } : { bare: true }),
       ...(workspaceRoot ? { workspaceRoot } : {}), ...(corral && project ? { project } : {}),
       ...(values.name ? { name: values.name } : {}), ...(resuming ? { resume } : {}), settings },
     local: { headless: values.headless === true || !process.stdin.isTTY,
       ...(values.id !== undefined ? { id: values.id } : {}),
       ...(values.socket ? { socket: resolve(cwd, values.socket) } : {}) },
+    startupModel: workspaceRoot ? startupModelSetting(raw) : null,
   };
 }
 
-export function bindBuildResume(launch: BuildLaunch, record: BuildSessionRecord): BuildLaunch {
-  return { ...launch, repoRoot: record.repoRoot, workspaceRoot: record.workspaceRoot, project: record.project,
+export function bindBuildResume(launch: BuildLaunchOptions, record: BuildSessionRecord): BuildLaunchOptions {
+  // A pre-route record must use the transcript selection, never a model from today's flags or workspace.
+  return { ...launch, ...(record.route ?? { provider: undefined, model: undefined }),
+    repoRoot: record.repoRoot, workspaceRoot: record.workspaceRoot, project: record.project,
     here: record.here, bare: record.bare, corral: record.bare ? undefined : launch.corral ?? "corral-next",
     settings: readBuildSettings(record) };
 }

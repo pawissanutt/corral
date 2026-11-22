@@ -52,8 +52,8 @@ export const MAX_PARALLEL_LIMIT = 32;
 /** Children one `task` call may start. */
 export const MAX_CHILDREN_PER_CALL = 32;
 
-/** Options derived from the local build flags. */
-export interface BuildLaunch extends BuildRoute {
+/** Options derived from the local build flags, before choosing the startup model. */
+export interface BuildLaunchOptions extends Partial<BuildRoute> {
   readonly version: 1;
   readonly assets: string;
   /** `$XDG_DATA_HOME/corral/corral-pi`; build sessions live under `<dataRoot>/build/`. */
@@ -73,6 +73,12 @@ export interface BuildLaunch extends BuildRoute {
   /** A build session id to resume instead of starting one. */
   readonly resume?: string;
   readonly settings: BuildSettings;
+}
+
+/** A new build with its route resolved, ready to make a session record. */
+export interface BuildLaunch extends BuildLaunchOptions {
+  readonly provider: ProviderId;
+  readonly model: string;
 }
 
 /** `<dataRoot>/build/<id>/session.json`, rewritten atomically. The launcher lists these to resume. */

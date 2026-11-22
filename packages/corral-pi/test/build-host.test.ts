@@ -9,6 +9,7 @@ import { createSession, listSessions, loadSession, saveSession, sessionDir } fro
 import { prepareWorktree } from "../src/build/worktree.ts";
 import type { BuildLaunch } from "../src/build/types.ts";
 import { buildHostConfig, validateBuildResume } from "../src/host/build.ts";
+import { resolveStartupModel } from "../src/host/startup-model.ts";
 import { connect } from "./support/bridge-client.ts";
 import { scriptedFixtureInstall } from "./support/fixture-install.ts";
 import { launch } from "./support/pi-process.ts";
@@ -22,7 +23,7 @@ function directory(): string {
 }
 afterEach(() => { for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-test("build flags retain paths, AWS settings and launch data", () => {
+test("build flags retain paths, AWS settings and launch data", async () => {
   const dir = directory();
   const { launch, local } = parseBuildFlags(["--data-dir", "data", "--here", "--name", "A Build", "--headless",
     "--provider", "amazon-bedrock", "--model", "amazon-bedrock/model", "--aws-profile", "sandbox", "--aws-region", "us-west-2"], dir,
@@ -31,7 +32,9 @@ test("build flags retain paths, AWS settings and launch data", () => {
     settings: { exitPolicy: "review", maxParallel: 32, profiles: [], delegation: { mode: "standard", routes: [] } },
     aws: { profile: "sandbox", region: "us-west-2" } });
   expect(local.headless).toBeTrue();
-  expect(buildHostConfig(launch, createSession(launch, { worktree: dir, branch: null, base: null }), dir, local).aws).toEqual(launch.aws);
+  const choice = (await resolveStartupModel({ ...launch, role: "build", headless: true }))!;
+  const record = createSession({ ...launch, ...choice }, { worktree: dir, branch: null, base: null });
+  expect(buildHostConfig(launch, record, dir, local).aws).toEqual(launch.aws);
 });
 
 test("build infers the configured project through workspace and project aliases", () => {
@@ -98,7 +101,7 @@ test("resume reads the current settings at the recorded workspace or standalone 
   writePiConfig(repo, '[build]\nmax_parallel = 2\n');
   for (const workspaceRoot of [workspace, undefined]) {
     const start = parseBuildFlags([], "/assets", { CORRAL_NEXT_ROOT: workspaceRoot }, repo).launch;
-    const record = createSession(start, { worktree: repo, branch: null, base: null });
+    const record = createSession({ ...start, ...fixtureModel }, { worktree: repo, branch: null, base: null });
     const { launch } = parseBuildFlags(["--resume", record.id], "/assets", { CORRAL_NEXT_ROOT: caller }, caller);
     writePiConfig(workspaceRoot ?? repo, '[build]\nmax_parallel = 7\n[build.delegation]\nmode = "proactive"\n');
     const bound = bindBuildResume(launch, record);
@@ -115,11 +118,12 @@ test("a build under a legacy installation leaves its saved logins reachable", ()
   const env = { XDG_DATA_HOME: data };
   mkdirSync(join(data, "corral", "pi-native", "auth"), { recursive: true });
   const { launch } = parseBuildFlags(["--name", "A Build"], dir, env, dir);
-  saveSession(launch.dataRoot, createSession(launch, { worktree: dir, branch: null, base: null }));
+  saveSession(launch.dataRoot, createSession({ ...launch, ...fixtureModel }, { worktree: dir, branch: null, base: null }));
   expect(authDir(env)).toBe(join(data, "corral", "pi-native", "auth"));
 });
 
-const fixtureLaunch = (dir: string) => parseBuildFlags(["--name", "A Build"], dir, {}, dir).launch;
+const fixtureModel = { provider: "openai-codex", model: "gpt-6.1-sol" } as const;
+const fixtureLaunch = (dir: string): BuildLaunch => ({ ...parseBuildFlags(["--name", "A Build"], dir, {}, dir).launch, ...fixtureModel });
 
 test("build session records round trip privately and list newest first, skipping broken records", () => {
   const dir = directory();
@@ -207,6 +211,7 @@ test("a headless build takes --id and records its socket", async () => {
   const assets = scriptedFixtureInstall(dir, [{ text: "ready" }]);
   const other = directory();
   writePiConfig(other, '[build.delegation]\nmode = "invalid caller setting"\n');
+  const startModel = "openai-codex/gpt-6.2-sol";
   const run = async (socket: string, args: string[], transcript?: string): Promise<string> => {
     const cwd = transcript ? other : dir;
     const env = { PATH: process.env.PATH, HOME: dir, TMPDIR: dir, CORRAL_NEXT_ROOT: cwd };
@@ -222,7 +227,7 @@ test("a headless build takes --id and records its socket", async () => {
         };
         const hello = await call("hello");
         expect(hello).toMatchObject({ role: "build", session_id: id, pid: child.child.pid });
-        expect((await call("get_state")).mode).toBe("headless");
+        expect(await call("get_state")).toMatchObject({ mode: "headless", model: startModel });
         const record = loadSession(data, id);
         expect(record).toMatchObject({ id, socket, sessionFile: hello.session_file, pid: child.child.pid, workspaceRoot: dir });
         if (transcript === undefined) {
@@ -241,6 +246,9 @@ test("a headless build takes --id and records its socket", async () => {
       } finally { connection.close(); }
     } finally { await child.stop(); }
   };
-  const transcript = await run(join(dir, "start.sock"), ["--here", "--id", id]);
+  const transcript = await run(join(dir, "start.sock"), ["--here", "--id", id, "--model", startModel]);
+  // A pre-route record resumes its conversation, not the workspace's new default.
+  saveSession(data, { ...loadSession(data, id), route: undefined });
+  writePiConfig(dir, '[startup]\nmodel = "anthropic/no-such-model"\n');
   await run(join(dir, "resume.sock"), ["--resume", id], transcript);
 }, 20_000);

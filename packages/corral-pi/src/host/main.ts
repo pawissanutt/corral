@@ -12,7 +12,7 @@ import { CorralClient } from "../tools/corral.ts";
 import type { HostConfig } from "./config.ts";
 import type { BuildContext } from "../build/types.ts";
 import { saveSession } from "../build/session-store.ts";
-import { inheritTranscript, openSession, restoreModelChoice, siblingTranscript } from "./lifecycle.ts";
+import { inheritTranscript, openSession, restoreModelChoice, SessionResumeRefused, siblingTranscript } from "./lifecycle.ts";
 import { loadModules } from "./modules.ts";
 import { CredentialsUnavailable } from "../auth/paths.ts";
 import { type DestinationRule, PROVIDERS, hostRules, isApiProvider, isProviderId } from "../auth/providers.ts";
@@ -33,6 +33,7 @@ import { SessionRecord } from "./session-record.ts";
 import { summaryOptions } from "./summary.ts";
 import { childProfileProviders, interactiveModels, providerTransport, sessionRoutes } from "./capabilities.ts";
 import { readBuildProfiles } from "../build/profiles.ts";
+import { resolveStartupModel } from "./startup-model.ts";
 
 interface HostOverrides {
   build?: BuildContext;
@@ -42,11 +43,22 @@ export async function runHost(config: HostConfig, overrides: HostOverrides = {})
   const events = new EventLog();
   const id = config.local?.id ?? config.identity.assistant
     ?? [config.identity.task, config.identity.run].filter(Boolean).join("/");
+  const openRecord = (socket?: string) => new SessionRecord(config.local.dir, id, config.identity.role, config.cwd,
+    config.terminalChat && config.freshSession, socket);
+  const existing = config.terminalChat && openRecord().transcript;
+  if (config.terminalChat && !existing) {
+    const choice = await resolveStartupModel({ ...config, role: "assistant",
+      headless: config.local.headless || !process.stdout.isTTY || headlessEnabled(config.capabilities),
+      workspace: { root: config.root, corral: config.corral, model: config.startupModel ?? null },
+      local: config.capabilities?.llama_cpp });
+    if (!choice) return;
+    config = { ...config, ...choice };
+  }
   preparePrivateDirectory(config.local.dir);
   const bridge = await startBridge({ path: config.local.socket, sessionId: id || config.identity.role, events });
   try {
-    const record = new SessionRecord(config.local.dir, id, config.identity.role, config.cwd,
-      config.terminalChat && config.freshSession, bridge.path);
+    const record = openRecord(bridge.path);
+    if (existing && !record.transcript) throw new SessionResumeRefused(existing, "the recorded Chat changed during launch; try again");
     await runSession(config, overrides, events, bridge, record);
   } catch (error) {
     await bridge.close();
@@ -56,7 +68,7 @@ export async function runHost(config: HostConfig, overrides: HostOverrides = {})
 
 async function runSession(config: HostConfig, overrides: HostOverrides, events: EventLog,
   bridge: BridgeServer, record: SessionRecord): Promise<void> {
-  const launchProvider = config.provider ?? "openai-codex";
+  const launchProvider = config.provider;
   restrictEnvironment(process.env, config.aws || config.summary?.provider === "amazon-bedrock" ? "amazon-bedrock" : launchProvider);
   const rawFetch = globalThis.fetch.bind(globalThis);
   process.env.CORRAL_NEXT_ROOT = config.root;
@@ -81,11 +93,20 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     if (sibling) transcript = inheritTranscript(sibling, config.sessionDir);
   }
   const sessionManager = openSession(sdk, config.cwd, config.sessionDir, transcript);
-  const launch = { provider: launchProvider, model: config.model.startsWith(`${launchProvider}/`)
-    ? config.model.slice(launchProvider.length + 1) : config.model };
+  const launch = config.model === undefined || launchProvider === undefined ? undefined : {
+    provider: launchProvider, model: config.model.startsWith(`${launchProvider}/`)
+      ? config.model.slice(launchProvider.length + 1) : config.model,
+  };
   const resumed = record.transcript ? restoreModelChoice(sessionManager, interactiveModels(config.identity.role),
     config.fallback, record.legacyAnthropicApi) : undefined;
-  const { provider, model } = resumed ?? launch;
+  const choice = resumed ?? launch;
+  if (record.transcript && (config.terminalChat || overrides.build) && !resumed &&
+      (config.terminalChat || !launch || sessionManager.getBranch().some(entry => entry.type === "model_change"))) {
+    throw new SessionResumeRefused(record.transcript, "no supported saved model selection; start a new conversation instead");
+  }
+  if (!choice) throw new Error("missing launch model");
+  const { provider, model } = choice;
+  if (provider === "llama.cpp" && overrides.build) throw new Error("Local inference (llama.cpp) is unavailable in a build session");
   const effort = resumed ? sessionManager.getBranch().findLast(entry => entry.type === "thinking_level_change")?.thinkingLevel : config.effort;
   const modules = await loadModules(assets, config.identity.role, provider);
   // A worker's child profiles join the session's routes like fallbacks; its own model stays bound.

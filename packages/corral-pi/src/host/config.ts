@@ -45,8 +45,10 @@ export interface HostConfig {
   readonly capabilities?: HostCapabilities;
   /** The snapshot's settings and project-text trust; absent from a corral that predates them. */
   readonly guidance?: CapabilityGuidance;
-  readonly model: string;
+  readonly model?: string;
   readonly provider?: ProviderId;
+  /** Used only when starting a new terminal conversation without an explicit model. */
+  readonly startupModel?: string | null;
   readonly fallback?: readonly ModelChoice[];
   /** The non-secret Amazon Bedrock binding corral read at dispatch; absent means none. */
   readonly aws?: AwsBinding;
@@ -78,24 +80,39 @@ export function rejectRemovedModelOptions(argv: readonly string[]): void {
   }
 }
 
-export function modelSettings(values: { model?: string; provider?: string; effort?: string; fallback?: readonly string[];
-  "aws-profile"?: string; "aws-region"?: string }, settings?: Json) {
-  if (values.model === undefined && values.provider === undefined) {
-    const model = (settings?.startup as { model?: unknown } | undefined)?.model;
-    if (model !== undefined) {
-      if (typeof model !== "string" || !/^[^/]+\/[^\s\0]+$/.test(model) || !isProviderId(model.split("/", 1)[0])) {
-        throw new Error(".corral-next/pi.toml: startup.model must be a known <provider>/<model>");
-      }
-      values = { ...values, model };
-    }
+type ModelFlags = { model?: string; provider?: string; effort?: string; fallback?: readonly string[];
+  "aws-profile"?: string; "aws-region"?: string };
+
+export function qualifiedModel(selector: string): ModelChoice | undefined {
+  const match = /^([^/]+)\/([^\s\p{Cc}]+)$/u.exec(selector);
+  return match && isProviderId(match[1]) ? { provider: match[1], model: match[2]! } : undefined;
+}
+
+export function startupModelSetting(settings: Json): string | null {
+  const value = (settings.startup as { model?: unknown } | undefined)?.model;
+  return typeof value === "string" ? value : null;
+}
+
+export function checkLaunchFallback(selector: string, fallbacks: readonly ModelChoice[] = []): void {
+  if (fallbacks.some(choice => `${choice.provider}/${choice.model}` === selector)) {
+    throw new Error(`--fallback ${selector} matches the launch model`);
   }
+}
+
+export function modelSettings(values: ModelFlags): { provider: ProviderId; model: string; effort?: string; aws?: AwsBinding; fallback?: ModelChoice[] };
+export function modelSettings(values: ModelFlags, mode: "startup"): { provider?: ProviderId; model?: string; effort?: string; aws?: AwsBinding; fallback?: ModelChoice[] };
+export function modelSettings(values: ModelFlags, mode?: "startup") {
   const prefix = values.model?.split("/", 1)[0];
   const qualified = values.model?.includes("/") && isProviderId(prefix) ? prefix : undefined;
-  const provider = values.provider ?? qualified ?? "openai-codex";
-  if (!isProviderId(provider) || (qualified && qualified !== provider)) throw new Error("invalid --provider or conflicting --model provider");
-  const model = values.model ?? (provider === "openai-codex" ? "gpt-6.1-sol"
-    : provider === "anthropic" ? "claude-opus-4-8" : undefined);
-  if (!model || /\s|\0/.test(model) || model === `${provider}/`) throw new Error(`pass --model <${provider}/id>`);
+  const provider = values.provider ?? qualified ?? (mode === "startup" && values.model === undefined ? undefined : "openai-codex");
+  if ((provider !== undefined && !isProviderId(provider)) || (qualified && qualified !== provider)) {
+    throw new Error("invalid --provider or conflicting --model provider");
+  }
+  // Only engine-managed run/chat retain their historical implicit launch route.
+  const model = values.model ?? (mode !== "startup" ? (provider === "openai-codex" ? "gpt-6.1-sol"
+    : provider === "anthropic" ? "claude-opus-4-8" : undefined) : undefined);
+  if ((model !== undefined && (!model || /\s|\0/.test(model) || model === `${provider}/`)) ||
+      (mode !== "startup" && model === undefined)) throw new Error(`pass --model <${provider}/id>`);
   const region = values["aws-region"];
   const profile = values["aws-profile"];
   let aws: AwsBinding | undefined;
@@ -105,13 +122,12 @@ export function modelSettings(values: { model?: string; provider?: string; effor
     }
     aws = { profile, region };
   }
-  const selector = `${provider}/${model.startsWith(`${provider}/`) ? model.slice(provider.length + 1) : model}`;
   const fallback = values.fallback?.map(value => {
-    const match = /^([^/]+)\/([^\s\0]+)$/.exec(value);
-    if (!match || !isProviderId(match[1])) throw new Error("--fallback requires a known <provider>/<model>");
-    if (value === selector) throw new Error(`--fallback ${value} matches the launch model`);
-    return { provider: match[1], model: match[2]! };
+    const choice = qualifiedModel(value);
+    if (!choice) throw new Error("--fallback requires a known <provider>/<model>");
+    return choice;
   });
+  if (model !== undefined) checkLaunchFallback(qualified ? model : `${provider}/${model}`, fallback);
   return { provider, model, ...(values.effort ? { effort: values.effort } : {}),
     ...(aws ? { aws } : {}), ...(fallback?.length ? { fallback } : {}) };
 }
@@ -178,6 +194,13 @@ export function findWorkspaceRoot(env: NodeJS.ProcessEnv, cwd: string): string |
   }
 }
 
+// Engine-managed launches always resolve a route during flag parsing.
+export function parseRunFlags(command: "run", argv: readonly string[], assets: string,
+  env?: NodeJS.ProcessEnv, cwd?: string): HostConfig & ModelChoice;
+export function parseRunFlags(command: "run" | "chat", argv: readonly ["--dir", string, ...string[]], assets: string,
+  env?: NodeJS.ProcessEnv, cwd?: string): HostConfig & ModelChoice;
+export function parseRunFlags(command: "run" | "chat", argv: readonly string[], assets: string,
+  env?: NodeJS.ProcessEnv, cwd?: string): HostConfig;
 export function parseRunFlags(command: "run" | "chat", argv: readonly string[], assets: string,
   env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): HostConfig {
   rejectRemovedModelOptions(argv);
@@ -212,6 +235,7 @@ export function parseRunFlags(command: "run" | "chat", argv: readonly string[], 
     ...(!values.dir ? { terminalChat: true } as const : {}),
     freshSession: values.new === true || env.CORRAL_FRESH === "1",
     ...(values["prompt-file"] ? { promptFile: resolve(cwd, values["prompt-file"]) } : {}),
-    ...workspaceSettings(root, role, run, settings), ...modelSettings(values, !values.dir ? settings : undefined),
+    ...workspaceSettings(root, role, run, settings),
+    ...(values.dir ? modelSettings(values) : { ...modelSettings(values, "startup"), startupModel: startupModelSetting(settings) }),
   };
 }

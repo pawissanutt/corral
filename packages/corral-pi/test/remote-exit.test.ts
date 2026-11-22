@@ -36,7 +36,7 @@ async function withBuild(run: (fixture: Fixture) => Promise<void>) {
     const socket = join(root, "build.sock");
     const assets = scriptedFixtureInstall(root, []);
     const child = launch(assets, ["build", "--headless", "--name", "fixture", "--id", ID, "--project", "demo", "--data-dir", data,
-      "--socket", socket, "--corral", "/unused/corral"], repo, env);
+      "--model", "openai-codex/gpt-6.1-sol", "--socket", socket, "--corral", "/unused/corral"], repo, env);
     try {
       await child.output(/session socket ready/);
       const client = await connect(socket);

@@ -65,7 +65,7 @@ test("fallback uses explicit ordered provider models and cannot point at the lau
   expect(() => parse(["--max-usd", "3"])).toThrow();
 });
 
-test("workspace startup model applies to direct Chat and Build without overriding explicit choices", () => {
+test("startup model input stays separate from explicit choices and managed launch defaults", () => {
   const root = mkdtempSync(join(tmpdir(), "corral-startup-model-"));
   try {
     const settings = join(root, ".corral-next");
@@ -73,22 +73,22 @@ test("workspace startup model applies to direct Chat and Build without overridin
     writeFileSync(join(settings, "corral.toml"), '[profiles.demo]\nharness = "pi"\nmodel = "anthropic/claude-opus-4-8"\n');
     const piToml = join(settings, "pi.toml");
     const chat = (...flags: string[]) => parseRunFlags("chat", flags, "/assets", {}, root);
-    const build = (...flags: string[]) => parseBuildFlags(flags, "/assets", {}, root).launch;
-    expect(chat().model).toBe("gpt-6.1-sol");
-    expect(build().model).toBe("gpt-6.1-sol");
+    const build = (...flags: string[]) => parseBuildFlags(flags, "/assets", {}, root);
+    expect(chat().startupModel).toBeNull();
+    expect(build().startupModel).toBeNull();
     writeFileSync(piToml, '[startup]\nmodel = "openai-codex/gpt-6.2-sol"\n');
-    for (const launch of [chat, build]) {
-      expect(launch()).toMatchObject({ provider: "openai-codex", model: "openai-codex/gpt-6.2-sol" });
+    expect(chat().startupModel).toBe("openai-codex/gpt-6.2-sol");
+    expect(build().startupModel).toBe("openai-codex/gpt-6.2-sol");
+    for (const launch of [chat, (...flags: string[]) => build(...flags).launch]) {
+      expect(launch().model).toBeUndefined();
       expect(launch("--model", "anthropic/claude-opus-4-8").provider).toBe("anthropic");
-      expect(launch("--provider", "anthropic").model).toBe("claude-opus-4-8");
+      expect(launch("--provider", "anthropic")).toMatchObject({ provider: "anthropic", model: undefined });
     }
-    expect(build("--profile", "demo").model).toBe("anthropic/claude-opus-4-8");
-    expect(build("--resume", "B-existing").model).toBe("gpt-6.1-sol");
+    expect(build("--profile", "demo").launch.model).toBe("anthropic/claude-opus-4-8");
+    expect(build("--resume", "B-existing").startupModel).toBeNull();
     expect(() => build("--resume=")).toThrow("Invalid build session id");
     expect(parseRunFlags("chat", ["--dir", "managed"], "/assets", {}, root).model).toBe("gpt-6.1-sol");
     expect(parseRunFlags("run", ["--dir", "managed"], "/assets", {}, root).model).toBe("gpt-6.1-sol");
-    writeFileSync(piToml, '[startup]\nmodel = "not-qualified"\n');
-    expect(() => chat()).toThrow("startup.model");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

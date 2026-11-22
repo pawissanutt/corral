@@ -303,7 +303,8 @@ test("the real build entry binds and advertises all build tools without creating
   git("-c", "user.name=Build Test", "-c", "user.email=build@example.test", "commit", "--allow-empty", "-m", "base");
   const data = join(work, "data");
   const socket = join(work, "build.sock");
-  const child = launch(assets.dir, ["build", "--here", "--data-dir", data, "--socket", socket, "--corral", "/unused/corral"], repo,
+  const child = launch(assets.dir, ["build", "--here", "--model", "openai-codex/gpt-6.1-sol", "--data-dir", data, "--socket", socket,
+    "--corral", "/unused/corral"], repo,
     { PATH: process.env.PATH, HOME: work, TMPDIR: work, XDG_DATA_HOME: data });
   let client: TestClient | undefined;
   try {

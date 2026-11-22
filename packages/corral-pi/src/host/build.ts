@@ -5,9 +5,11 @@ import { buildIsRunning, errorMessage, hasOwnerMessage, inspectBuildCleanup, pru
 import { bindBuildResume, parseBuildFlags, parsePruneFlags, type LocalBuildOptions } from "../build/launch.ts";
 import { createSession, loadSession, saveSession, sessionDir } from "../build/session-store.ts";
 import { prepareWorktree } from "../build/worktree.ts";
-import type { BuildContext, BuildLaunch, BuildSessionRecord } from "../build/types.ts";
+import type { BuildContext, BuildLaunchOptions, BuildRoute, BuildSessionRecord } from "../build/types.ts";
 import { RemovedModelOption, sessionSocket, workspaceSettings, type HostConfig } from "./config.ts";
 import { runHost } from "./main.ts";
+import { readSessionRecord } from "./session-record.ts";
+import { resolveStartupModel, StartupModelRequired } from "./startup-model.ts";
 
 /** A refused launch or resume: the error's message keeps the code and detail; `what` and `fix` are what the owner reads. */
 class LaunchRefused extends Error {
@@ -70,7 +72,7 @@ export function validateBuildResume(record: BuildSessionRecord): void {
 }
 
 /** Build the same rich-host configuration for a new build and an explicitly resumed one. */
-export function buildHostConfig(launch: BuildLaunch, record: BuildSessionRecord, assets: string, local: LocalBuildOptions): HostConfig {
+export function buildHostConfig(launch: BuildLaunchOptions, record: BuildSessionRecord, assets: string, local: LocalBuildOptions): HostConfig {
   const dir = sessionDir(launch.dataRoot, record.id);
   return {
     identity: { store: "build", project: record.project ?? "", role: "build" },
@@ -87,6 +89,8 @@ export function buildHostConfig(launch: BuildLaunch, record: BuildSessionRecord,
 /** The two lines a stopped launch prints: what happened, then the command or action that fixes it. */
 function refusalLines(error: unknown, resume: string | undefined): readonly [string, string] {
   if (error instanceof LaunchRefused) return [error.what, error.fix];
+  if (error instanceof StartupModelRequired) return [`${startCommand} stopped: ${error.message}`,
+    "Set a startup model in Settings or pass an explicit --model."];
   const message = error instanceof Error ? error.message : String(error);
   const command = startCommand;
   return [`${command} stopped: ${message}`, resume ? `Run ${resumeCommand(resume)} to try again.`
@@ -135,9 +139,9 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
     }
     const parsed = parseBuildFlags(argv, assets);
     let { launch } = parsed;
-    const { local } = parsed;
+    const { local, startupModel } = parsed;
     resume = launch.resume;
-    if (launch.provider === "llama.cpp") {
+    if (!resume && launch.provider === "llama.cpp") {
       throw new LaunchRefused("Local inference is unavailable in a build session", "Local inference (llama.cpp) is unavailable in a build session.",
         `Choose another provider with \`${startCommand} --provider <provider>\`.`);
     }
@@ -159,11 +163,21 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
       }
       launch = bindBuildResume(launch, record);
     } else {
-      const draft = createSession(launch, { worktree: launch.repoRoot, branch: null, base: null }, local.id);
-      if (existsSync(join(sessionDir(launch.dataRoot, draft.id), "session.json"))) {
-        throw new LaunchRefused("Build id already recorded", `Build ${draft.id} already has a session record.`,
-          `Run ${resumeCommand(draft.id)} to reopen it, or choose a new id.`);
-      }
+      const assertNewId = (id: string) => {
+        if (existsSync(join(sessionDir(launch.dataRoot, id), "session.json"))) {
+          throw new LaunchRefused("Build id already recorded", `Build ${id} already has a session record.`,
+            `Run ${resumeCommand(id)} to reopen it, or choose a new id.`);
+        }
+      };
+      if (local.id) assertNewId(local.id);
+      const choice = await resolveStartupModel({ ...launch, role: "build", headless: local.headless || !process.stdout.isTTY,
+        ...(launch.workspaceRoot && launch.corral ? { workspace: { root: launch.workspaceRoot, corral: launch.corral, model: startupModel } } : {}),
+        ...(launch.bare ? { modelsPath: join(launch.dataRoot, "models.json") } : {}),
+      });
+      if (!choice) return;
+      const ready = { ...launch, ...choice };
+      const draft = createSession(ready, { worktree: launch.repoRoot, branch: null, base: null }, local.id);
+      assertNewId(draft.id);
       try {
         if (launch.bare) {
           const repository = spawnSync("git", ["-C", launch.repoRoot, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
@@ -189,7 +203,11 @@ export async function buildCommand(argv: readonly string[], assets: string): Pro
     const dir = sessionDir(launch.dataRoot, record.id);
     const config = buildHostConfig(launch, record, assets, local);
     record = { ...record, socket: config.local.socket, pid: process.pid };
-    saveSession(launch.dataRoot, record);
+    // Keep historical billing metadata until the host has migrated the transcript's provider
+    // alias. A failed resume must not erase the information needed by the next attempt.
+    const previousRoute = resume ? readSessionRecord(dir).route as (BuildRoute & { connection?: unknown }) | undefined : undefined;
+    const legacyRoute = previousRoute?.provider === "anthropic" && previousRoute.connection === "anthropic-api" ? previousRoute : undefined;
+    saveSession(launch.dataRoot, legacyRoute ? { ...record, route: legacyRoute } : record);
     const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral ?? "" };
     // Pi ends an ordinary quit with process.exit(0); this prints after the terminal is restored.
     const session = record;

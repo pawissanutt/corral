@@ -41,7 +41,7 @@ function setup(root: string): Fixture {
   writeFileSync(join(workspace, "corral.toml"), '[defaults]\nbase = "main"\n[projects.demo]\npath = "repo"\n');
   const build = (name: string) => {
     const { launch } = parseBuildFlags(["--data-dir", data, "--name", name], root, {}, repo);
-    const record = createSession(launch, prepareWorktree(repo, name, false));
+    const record = createSession({ ...launch, provider: "openai-codex", model: "gpt-6.1-sol" }, prepareWorktree(repo, name, false));
     saveSession(data, record);
     return record;
   };
