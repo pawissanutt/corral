@@ -1,6 +1,6 @@
 // First-party native panels over the existing InteractiveMode, never a second agent/editor loop.
 import type * as Sdk from "@earendil-works/pi-coding-agent";
-import type { ExtensionAPI, ExtensionUIContext, InteractiveChatPresentation, InteractiveModeOptions } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext, InteractiveChatPresentation, InteractiveModeOptions, SelectorComponent } from "@earendil-works/pi-coding-agent";
 import { decodeKittyPrintable, isKeyRelease, matchesKey, TuiAltScreen, visibleWidth, type Component, type OverlayHandle, type Terminal, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { HostIdentity } from "../roles/types.ts";
 import { LIVE_CHILD_STATES, type BuildUi, type FleetControl } from "../build/types.ts";
@@ -35,6 +35,7 @@ import { quietNote } from "./mark-rows.ts";
 import { effortPicker, modelPicker, optionPicker } from "./model-picker.ts";
 import type { FavoriteModels } from "../host/model-favorites.ts";
 import { settingsCard } from "./settings-card.ts";
+import { SettingsPage, settingsKeys, type PersonalSettings, type SettingsControl } from "./settings-view.ts";
 import { ownerBashPresenter } from "./owner-bash.ts";
 import { planLedger } from "./plan-detail.ts";
 import type { PlanSurface } from "./todo.ts";
@@ -88,6 +89,10 @@ export interface NativePanelsOptions {
   readonly dialogs?: RemoteDialogs;
   /** The workspace's favorite models, which the model picker lists first and marks; absent: no favorites. */
   readonly modelFavorites?: FavoriteModels;
+  /** The owner's saved settings: `/settings` and F2 Settings… open the Settings page on them; absent: Pi's settings card. */
+  readonly settings?: SettingsControl;
+  /** The saved personal Display defaults this terminal opens with; F2 Display changes them for this session only. */
+  readonly personal?: PersonalSettings;
 }
 /** Views a tool row's clickable label can open by name; `plan` is the sidebar's Plan tab. */
 export type PanelView = "chat" | "agents" | "changes" | "task" | "proof" | "artifacts" | "usage" | "board" | "plan";
@@ -186,6 +191,8 @@ export class NativePanels implements PanelSurface {
   private disposed = false;
   /** A build session's docked dialogs, message target and conversation entries; absent in every other role. */
   readonly build: BuildController | undefined;
+  /** The Settings page over the main view, when the host offers saved settings. */
+  private readonly settingsPage: SettingsPage | undefined;
   private readonly unsubscribeBuild: readonly (() => void)[] = [];
   private pi: ExtensionAPI | undefined;
   /** The session's transcript, read for the words that started each turn in the rewind picker. */
@@ -202,6 +209,13 @@ export class NativePanels implements PanelSurface {
   };
   constructor(private readonly options: NativePanelsOptions) {
     const scheduler = options.scheduler ?? SYSTEM_SCHEDULER;
+    // The saved personal defaults are this terminal's starting Display; session_start applies them with the theme.
+    const personal = options.personal;
+    if (personal) { this.appearance = personal.appearance; this.density = personal.density; this.motion = personal.motion; this.bell = personal.bell; }
+    this.settingsPage = options.settings ? new SettingsPage({
+      control: options.settings, role: options.identity.role, session: () => this.display(),
+      apply: patch => this.applyDisplay(patch), changed: () => this.refresh(),
+    }) : undefined;
     this.snapshots = new PassCache(() => options.snapshot());
     this.activity = new Activity(() => scheduler.now());
     this.clock = new ActivityClock(scheduler, () => this.activity.busy(), () => this.refresh(), () => this.motion === "still");
@@ -233,6 +247,7 @@ export class NativePanels implements PanelSurface {
       ...(build ? { receiver: () => "parent" } : {}),
     });
     this.workbench = new NativeWorkbench({ ...options, ...(build && this.build ? { build, buildController: this.build } : {}), fleet: () => this.options.fleetControl,
+      ...(this.settingsPage ? { settingsPage: this.settingsPage } : {}),
       childCards: {
         watch: (id, askedAt, settled) => this.attachedDialogs()?.watch(childQuestionCard(id, askedAt), settled),
         adopt: <T>(bind: (close: () => void) => void, open: () => T): T => this.adoption.with(bind, open),
@@ -282,11 +297,63 @@ export class NativePanels implements PanelSurface {
       selectorPresentation: {
         model: request => modelPicker(request, host, this.options.modelFavorites),
         thinking: request => effortPicker(request, host),
-        settings: request => settingsCard(request, host),
+        // `/settings` opens the Settings page on the host's saved settings, not Pi's session settings; Pi's nested
+        // lists (a `title`) and hosts without saved settings keep Pi's settings in the card.
+        settings: request => request.title === undefined && this.settingsPage ? this.showSettings(() => request.cancel()) : settingsCard(request, host),
         options: request => optionPicker(request, host),
       },
       bashPresentation: ownerBashPresenter({ cwd: this.options.cwd, ticker: () => this.disposed ? undefined : this.ticker }),
     };
+  }
+  /**
+   * The Settings page over the main view, and the component that holds Pi's focus in the composer's place for it
+   * (Pi keeps the draft in its editor and restores it as that component closes). Esc at the page's top or its back
+   * line calls `finish`, which closes the component; however Pi closes it, the view under the page shows again.
+   * Undefined (Pi's own settings) before the panels have a terminal, and once disposed.
+   */
+  private showSettings(finish: () => void): SelectorComponent | undefined {
+    const page = this.settingsPage;
+    if (!page || !this.terminal || this.disposed) return undefined;
+    let open = true;
+    const left = () => {
+      if (!open) return;
+      open = false;
+      page.closed();
+      this.workbench.closeSettings();
+      this.refresh();
+    };
+    this.workbench.openSettings();
+    page.open(() => { left(); finish(); });
+    this.refresh();
+    return settingsKeys(page, left);
+  }
+  /** F2 Settings…: the same page, its key row in the composer's place through `ui.custom`. */
+  private async openSettings(): Promise<void> {
+    const ui = this.ui;
+    if (!ui || !this.canInteract) return;
+    await ui.custom<void>((_tui, _theme, _keys, done) => {
+      const keys = this.showSettings(() => done());
+      if (!keys) done();
+      return keys ?? { render: () => [], invalidate() {} };
+    });
+  }
+  /** This terminal's Display values now. */
+  private display(): PersonalSettings {
+    return { appearance: this.appearance, density: this.density, motion: this.motion, bell: this.bell };
+  }
+  /** This terminal's Display: F2 changes it for this session; a saved personal setting changes it too. */
+  private applyDisplay(patch: Partial<PersonalSettings>): void {
+    if (this.disposed) return;
+    const { appearance, density, motion, bell } = patch;
+    if (appearance !== undefined) {
+      this.appearance = appearance; setPanelAppearance(appearance); setCanvasAppearance(appearance); setAgentHueAppearance(appearance);
+      if (this.ui && this.themeCtor) this.ui.setTheme(panelTheme(this.themeCtor, this.ui.theme.getColorMode(), appearance));
+      this.requestRender?.(true);
+    }
+    if (density !== undefined) { this.density = density; this.updateDensity?.(); }
+    if (motion !== undefined) { this.motion = motion; setMotion(motion); this.clock.sync(); }
+    if (bell !== undefined) this.bell = bell;
+    this.refresh();
   }
   /** The Plan presentation `/todo` drives; undefined until the panels have a terminal, and once disposed. */
   planSurface(): PlanSurface | undefined { return this.terminal && !this.disposed ? this.planView : undefined; }
@@ -1107,23 +1174,16 @@ export class NativePanels implements PanelSurface {
       panel("workspace", "toggle", "Sidebar: collapse or expand", sidebarKeyLabel(this.sidebarToggle)),
       ...(build?.refresh ? [build.refresh] : []),
     ];
+    // Saved settings open the Settings page; the Display rows below change only this terminal, for this session.
+    if (this.settingsPage) items.push(action("workspace", "settings", "Saved settings…", "", () => this.openSettings()));
     for (const appearance of Object.keys(PACKAGED) as Appearance[]) items.push(action("display", `appearance.${appearance}`,
-      `Appearance: ${appearance}`, "", () => {
-        this.appearance = appearance; setPanelAppearance(appearance); setCanvasAppearance(appearance); setAgentHueAppearance(appearance);
-        if (this.ui && this.themeCtor) this.ui.setTheme(panelTheme(this.themeCtor, this.ui.theme.getColorMode(), appearance));
-        this.requestRender?.(true);
-        this.refresh();
-      }, ready, appearance === this.appearance));
+      `Appearance: ${appearance}`, "", () => this.applyDisplay({ appearance }), ready, appearance === this.appearance));
     for (const density of ["comfortable", "compact"] as const) items.push(action("display", `density.${density}`,
-      `Density: ${density}`, "", () => {
-        this.density = density; this.updateDensity?.(); this.refresh();
-      }, ready, density === this.density));
+      `Density: ${density}`, "", () => this.applyDisplay({ density }), ready, density === this.density));
     for (const motion of ["animate", "still"] as const) items.push(action("display", `motion.${motion}`,
-      `Motion: ${motion}`, "", () => {
-        this.motion = motion; setMotion(motion); this.clock.sync(); this.refresh();
-      }, ready, motion === this.motion));
+      `Motion: ${motion}`, "", () => this.applyDisplay({ motion }), ready, motion === this.motion));
     for (const bell of ["off", "on"] as const) items.push(action("display", `bell.${bell}`,
-      `Bell: ${bell}`, "", () => { this.bell = bell; this.refresh(); }, ready, bell === this.bell));
+      `Bell: ${bell}`, "", () => this.applyDisplay({ bell }), ready, bell === this.bell));
     items.push(action("help", "keys", "Show keys", "F1", () => this.showKeys()));
     return items;
   }

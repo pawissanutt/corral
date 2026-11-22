@@ -45,6 +45,7 @@ import { plainLabel, PANEL_BG, PANEL_BLUE, PANEL_LINE, PANEL_TEXT, type PanelSna
 import { rule, spinner, VIEW_INSET } from "./frame.ts";
 import { popupPlacement } from "./popup-placement.ts";
 import { shiftRows } from "./selection.ts";
+import type { SettingsPage } from "./settings-view.ts";
 
 /** Below this many terminal rows the rule under the tab row goes first. */
 export const RULE_ROWS = 16;
@@ -97,14 +98,15 @@ function inset(component: Component): Component {
 export function plainClick(event: TuiMouseEvent): boolean {
   return event.type === "click" && event.button === "left" && !event.shift && !event.alt && !event.ctrl && (event.clickCount ?? 1) === 1;
 }
-export type MainView = "task" | "conversation" | "agents" | "agent" | "changes" | "evidence" | "timeline" | "usage" | "artifacts" | "board";
+export type MainView = "task" | "conversation" | "agents" | "agent" | "changes" | "evidence" | "timeline" | "usage" | "artifacts" | "board"
+  | "settings";
 /**
  * The tab a view highlights: one agent's conversation highlights Agents, Timeline highlights Task, Artifacts
- * highlights Proof, Usage highlights Chat.
+ * highlights Proof, Usage highlights Chat. Settings highlights the tab of the view it opened over (`tabOf`).
  */
 const TAB_OF: Readonly<Record<MainView, TabId>> = {
   task: "task", timeline: "task", conversation: "conversation", agents: "agents", agent: "agents",
-  changes: "changes", evidence: "evidence", artifacts: "evidence", usage: "conversation", board: "board",
+  changes: "changes", evidence: "evidence", artifacts: "evidence", usage: "conversation", board: "board", settings: "conversation",
 };
 /** A sub-view's place, read on its highlighted tab when the row has room and in the footer's lead. */
 const PLACE: Readonly<Partial<Record<MainView, string>>> = {
@@ -114,6 +116,8 @@ const PLACE: Readonly<Partial<Record<MainView, string>>> = {
 const CONTEXT_OF: Readonly<Record<MainView, KeyContext>> = {
   task: "task", timeline: "lifecycle", conversation: "composer", agents: "agents", agent: "agent",
   changes: "changes", evidence: "proof", artifacts: "artifacts", usage: "usage", board: "board",
+  // Settings holds Pi's focus in the composer's place, as a dialog does, and draws its own keys there.
+  settings: "dialog",
 };
 const LETTERS: Readonly<Record<string, string>> = { Conflict: "U", New: "?", Renamed: "R", Deleted: "D", Added: "A", Modified: "M" };
 /** A child conversation's own keys; each acts only while the child's row offers it, else the letter is typing. */
@@ -198,6 +202,8 @@ export interface WorkbenchOptions {
   readonly mark?: () => HeaderInput["mark"];
   /** Told each frame whether any helper, child or job runs, so the shared clock keeps their spinners and times moving. */
   readonly live?: (live: boolean) => void;
+  /** The saved-settings page (`/settings`); absent: the host offers no durable settings and the view never opens. */
+  readonly settingsPage?: SettingsPage;
 }
 /** Main-area composition via the packaged SDK's public mainView hook; editor stays SDK-owned. */
 export class NativeWorkbench {
@@ -209,6 +215,9 @@ export class NativeWorkbench {
   readonly history: HistoryNavigator;
   private lifecycleScroll: ScrollView | undefined;
   private usageScroll: ScrollView | undefined;
+  private settingsScroll: ScrollView | undefined;
+  /** The view Settings opened over, which shows again as it closes; never `settings`. */
+  private settingsFrom: MainView = "conversation";
   readonly artifacts: ArtifactView; private artifactScroll: ScrollView | undefined;
   private evidenceScroll: ScrollView | undefined; private criterionIndex = 0; private criterionHits = new Map<number, number>();
   readonly images: NativeImageViewer;
@@ -371,6 +380,14 @@ export class NativeWorkbench {
   }
   setView(view: MainView): void {
     if (view === "board" && !this.boardView) return;
+    if (view === "settings") { this.openSettings(); return; }
+    // Settings stays over the main view until it closes: the view under it changes and shows once it does.
+    if (this.view === "settings") {
+      this.view = this.settingsFrom; this.setView(view);
+      this.settingsFrom = this.view; this.view = "settings"; this.focused = true;
+      this.options.changed();
+      return;
+    }
     if (this.view === "agent" && view !== "agent") { this.conversation?.remember(); this.leaveChild(); }
     if (view === "conversation") this.watch?.back();
     this.images.close();
@@ -422,6 +439,26 @@ export class NativeWorkbench {
     const build = this.options.build, id = this.agentKey === undefined ? undefined : childIdOf(this.agentKey);
     if (!build || id === undefined || build.target() !== id) return;
     if (this.options.buildController) this.options.buildController.reset(); else build.setTarget("parent");
+  }
+  /**
+   * Settings over the open view, which keeps its place (a paused transcript its scroll, an agent conversation its
+   * receiver) and shows again as `closeSettings` runs. Nothing opens without the host's settings.
+   */
+  openSettings(): void {
+    if (!this.options.settingsPage || this.view === "settings") return;
+    this.images.close();
+    this.settingsFrom = this.view; this.view = "settings";
+    this.settingsScroll?.scrollToStart();
+    this.focused = true; this.options.onFocusMain?.();
+    this.options.changed();
+  }
+  /** Settings closed: the view it opened over again, with the keys where they were (Chat's in the composer). */
+  closeSettings(): void {
+    if (this.view !== "settings") return;
+    this.view = this.settingsFrom;
+    if (this.view === "conversation") this.watch?.back();
+    this.focused = this.view !== "conversation";
+    this.options.changed();
   }
   /** F9: Chat, and in a build session the parent receives the message again. */
   chat(): void {
@@ -619,10 +656,16 @@ export class NativeWorkbench {
   }
   /** The tab a view highlights; Events belongs to Task in a task-bound session and to Chat otherwise. */
   private tabOf(view: MainView): TabId {
+    if (view === "settings") return this.tabOf(this.settingsFrom);
     return view === "timeline" && !this.options.identity.task ? "conversation" : TAB_OF[view];
   }
   private placeOf(view: MainView): string | undefined {
+    if (view === "settings") return `${this.settingsBack()} › Settings`;
     return view === "timeline" && !this.options.identity.task ? "Chat › Events" : PLACE[view];
+  }
+  /** Where Settings returns to, as its back line names it: `Chat`, `Chat › Usage`, `Agents`. */
+  private settingsBack(): string {
+    return this.placeOf(this.settingsFrom) ?? tabSpec(this.tabOf(this.settingsFrom)).label;
   }
   /** The main tabs of this role; a build session without a board (bare) has no Board tab. */
   private tabs(): readonly TabId[] {
@@ -743,6 +786,12 @@ export class NativeWorkbench {
       if (usageBackAt(event.x, event.y)) this.back(); else { this.focusMain(); this.options.changed(); }
       return { handled: true };
     }, invalidate() {} }), { primary: true, follow: "none", scrollbar: "auto" });
+    // Settings holds Pi's focus while it shows, so its clicks reach the page whether or not the panels take input.
+    const settings = this.options.settingsPage;
+    if (settings) this.settingsScroll = new ScrollView(inset({
+      render: width => settings.render(width, this.settingsScroll?.viewportHeight ?? 0, this.settingsBack()),
+      handleMouse: event => settings.handleMouse(event), invalidate() {},
+    }), { primary: true, follow: "none", scrollbar: "auto" });
     this.artifactScroll = new ScrollView(inset({ render: width => this.artifacts.render(width), handleMouse: event => {
       if (this.options.canInteract() && plainClick(event) && this.artifacts.backAt(event.x, event.y)) { this.back(); return { handled: true }; }
       const result = this.artifacts.handleMouse(event);
@@ -779,6 +828,7 @@ export class NativeWorkbench {
       { component: this.lifecycleScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "timeline" },
       { component: this.artifactScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "artifacts" && !this.images.isOpen },
       ...(this.boardView ? [{ component: this.boardView.scroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "board" }] : []),
+      ...(this.settingsScroll ? [{ component: this.settingsScroll, basis: 0, grow: 1, minSize: 1, visible: () => this.view === "settings" }] : []),
     ]);
     const rail = this.options.rail;
     // The rail fills the rows between the tab rule and the dock; header, tabs and rule span the full width.
@@ -929,9 +979,10 @@ export class NativeWorkbench {
     const draft = ui.getEditorText(); ui.setEditorText(draft + (draft ? "\n\n" : "") + reference + "\n");
     this.focused = false; this.options.changed(); // Never submit or overwrite the existing draft.
   }
-  /** The view one step back: an agent's conversation returns to Agents, Events to Task (Chat without a task), Artifacts to Proof, the rest to Chat. */
+  /** The view one step back: Settings to the view it opened over, an agent's conversation to Agents, Events to Task (Chat without a task), Artifacts to Proof, the rest to Chat. */
   private back(): void {
-    if (this.view === "agent") this.openAgents();
+    if (this.view === "settings") this.closeSettings();
+    else if (this.view === "agent") this.openAgents();
     else if (this.view === "timeline" && this.options.identity.task) this.setView("task");
     else if (this.view === "artifacts") this.setView("evidence");
     else this.setView("conversation");
@@ -1021,6 +1072,7 @@ export class NativeWorkbench {
       case "changes": return this.changesScroll;
       case "evidence": return this.evidenceScroll;
       case "board": return this.boardView?.scroll;
+      case "settings": return this.settingsScroll;
       case "conversation": return undefined;
     }
   }
