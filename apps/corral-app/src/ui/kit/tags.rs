@@ -181,7 +181,9 @@ pub(super) fn tag_row(
         let all = field.suggestions.clone();
         let shown = computed(move || meta::offered_tags(&all, &held(), &typed.get()));
         suggestions(app, OFFERED, "tags", shown, move |tag| {
-            add(tag);
+            if add(tag) {
+                typed.set(String::new());
+            }
         })
     };
 

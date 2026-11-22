@@ -137,6 +137,7 @@ fn a_new_task_keeps_its_tags_exactly_and_the_filter_finds_it() {
     app.type_text("id:field-verb-8", "Release blocker").unwrap();
     app.press("id:btn-tag-add").unwrap();
     app.wait_for("id:btn-tag-remove-0").unwrap();
+    app.type_text("id:field-verb-8", "test").unwrap();
     app.press("id:seg-tags-testing").unwrap();
     app.wait_for("id:btn-tag-remove-1").unwrap();
     app.type_text("id:field-verb-8", " padded").unwrap();
