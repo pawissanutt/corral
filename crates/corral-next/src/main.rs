@@ -8,6 +8,7 @@ mod output;
 mod pi_startup_cmd;
 
 use std::{
+    collections::BTreeMap,
     env,
     io::{self, Write},
     path::Path,
@@ -19,10 +20,12 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, error::ErrorKind};
 use corral_engine::{
-    Config, Engine, NewTask, Op, Status, Usage, UsageToken, events::EventFilter, refuse,
-    store::TaskFilter,
+    Config, Engine, NewTask, Op, Status, Task, Usage, UsageToken, config::ExtensionTool,
+    events::EventFilter, extension, refuse, store::TaskFilter,
 };
 use jiff::Timestamp;
+use serde::Serialize;
+use serde_json::{Map, json};
 
 use args::{
     ArtifactCommand, Cli, Command, ConfigCommand, ExtCommand, Id, Text, UsageCommand, Verdict,
@@ -91,6 +94,14 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
     }
     if let Command::Ext(ExtCommand::Check { name, project }) = command {
         return ext::check(&root, &checked_config(&root)?, &name, project, out);
+    }
+    if let Command::Tool {
+        project,
+        invocation,
+    } = command
+    {
+        tool(&root, &cwd, project.as_deref(), &invocation, out)?;
+        return Ok(0);
     }
     if let Command::Import {
         dir,
@@ -323,9 +334,11 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
         Command::Pipeline { task } => engine.advance(&task)?,
         #[cfg(unix)]
         Command::PiStartup(_) => unreachable!("handled before opening the engine"),
-        Command::Init { .. } | Command::Config(_) | Command::Ext(_) | Command::Import { .. } => {
-            unreachable!("handled before opening the engine")
-        }
+        Command::Init { .. }
+        | Command::Config(_)
+        | Command::Ext(_)
+        | Command::Tool { .. }
+        | Command::Import { .. } => unreachable!("handled before opening the engine"),
     }
     Ok(0)
 }
@@ -345,6 +358,207 @@ fn checked_config(root: &Path) -> Result<Config> {
         }
         anyhow::anyhow!(message)
     })
+}
+
+#[derive(Serialize)]
+struct ListedTool<'a> {
+    name: &'a str,
+    extension: &'a str,
+    about: Option<&'a str>,
+    #[serde(skip)]
+    definition: &'a ExtensionTool,
+}
+
+fn tool(
+    root: &Path,
+    cwd: &Path,
+    project_flag: Option<&str>,
+    invocation: &[String],
+    out: &mut Output<'_>,
+) -> Result<()> {
+    let task_id = tool_env("CORRAL_TASK");
+    let engine = task_id.as_ref().map(|_| Engine::open(root)).transpose()?;
+    let owner_config;
+    let (config, task) = if let Some((engine, id)) = engine.as_ref().zip(task_id.as_deref()) {
+        (&engine.config, Some(engine.store.require_task(id)?))
+    } else {
+        owner_config = Config::load(&root.join(".corral-next/corral.toml"))?;
+        (&owner_config, None)
+    };
+    let project = tool_project(config, root, cwd, project_flag, task.as_ref())?;
+    let mut tools = Vec::new();
+    for (name, extension) in &config.extensions {
+        if extension.enabled
+            && project.map_or_else(
+                || extension.projects.is_none(),
+                |project| extension.includes_project(project),
+            )
+        {
+            tools.extend(extension.tools.iter().map(|(tool, definition)| ListedTool {
+                name: tool,
+                extension: name,
+                about: definition.about.as_deref(),
+                definition,
+            }));
+        }
+    }
+    tools.sort_by_key(|tool| (tool.name, tool.extension));
+    let Some((name, args)) = invocation.split_first() else {
+        return out.value(tools.as_slice(), |out, tools| {
+            if tools.is_empty() {
+                return writeln!(out, "No tools configured for this project");
+            }
+            for group in tools.chunk_by(|a, b| a.name == b.name) {
+                for tool in group {
+                    write!(out, "{}", tool.name)?;
+                    if group.len() > 1 {
+                        write!(out, " (ambiguous: extension {:?})", tool.extension)?;
+                    }
+                    if let Some(about) = tool.about {
+                        write!(out, " — {about}")?;
+                    }
+                    writeln!(out)?;
+                }
+            }
+            Ok(())
+        });
+    };
+    let mut matching = tools.iter().filter(|tool| tool.name == name);
+    let entry = matching
+        .next()
+        .with_context(|| format!("unknown tool {name:?}; use corral-next tool to list tools"))?;
+    let mut providers = matching.map(|tool| tool.extension).peekable();
+    if providers.peek().is_some() {
+        let names = std::iter::once(entry.extension)
+            .chain(providers)
+            .map(|name| format!("{name:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!("ambiguous tool {name:?}; provided by extensions {names}");
+    }
+
+    let run = tool_env("CORRAL_RUN")
+        .map(|id| {
+            let (engine, task) = engine
+                .as_ref()
+                .zip(task.as_ref())
+                .context("CORRAL_RUN requires CORRAL_TASK")?;
+            engine
+                .store
+                .get_run(&task.id, &id)?
+                .with_context(|| format!("unknown run {id:?} for task {}", task.id))
+        })
+        .transpose()?;
+    let empty_env = BTreeMap::new();
+    let settings = project.and_then(|p| config.projects.get(p));
+    let project_env = settings.map_or(&empty_env, |settings| &settings.env);
+    let repo = run.as_ref().map_or_else(
+        || settings.map_or_else(|| root.to_path_buf(), |settings| root.join(&settings.path)),
+        |run| run.worktree.clone(),
+    );
+    let repo = repo.canonicalize().unwrap_or(repo);
+    let actor = tool_env("CORRAL_ACTOR");
+    let role = match actor.as_deref() {
+        Some("agent") => "worker",
+        Some(role) => role,
+        None => "owner",
+    };
+    let request = Map::from_iter([
+        ("args".into(), json!(args)),
+        ("role".into(), json!(role)),
+        (
+            "repo".into(),
+            json!(repo.to_str().context("tool repository path is not UTF-8")?),
+        ),
+        ("base".into(), json!(run.as_ref().map(|run| &run.base_sha))),
+        (
+            "task".into(),
+            json!(task.as_ref().map(|task| json!({
+                "id": task.id,
+                "title": task.title,
+                "body": task.body,
+                "parent": task.parent,
+                "depends_on": task.depends_on,
+            }))),
+        ),
+        ("run".into(), json!(run.as_ref().map(|run| &run.id))),
+    ]);
+    let context = extension::CommandContext {
+        root,
+        cwd,
+        project,
+        extension: entry.extension,
+        env: project_env,
+    };
+    let bytes = extension::run(
+        &entry.definition.run,
+        request,
+        &context,
+        Duration::from_secs(60),
+        1024 * 1024,
+    )
+    .map_err(|error| anyhow::anyhow!("tool {name:?}: {}", format!("{error:#}").escape_debug()))?;
+    let recorded = match (entry.definition.record, engine.as_ref(), run.as_ref()) {
+        (true, Some(engine), Some(run)) => {
+            engine.record_tool_output(&run.task, &run.id, name, &bytes)
+        }
+        _ => Ok(()),
+    };
+    // A tool's stdout is its interface, even under --json. Do not annotate it.
+    out.stdout.write_all(&bytes).context("write tool stdout")?;
+    recorded.with_context(|| format!("record output of tool {name:?}"))
+}
+
+fn tool_env(key: &str) -> Option<String> {
+    env::var(key).ok().filter(|value| !value.is_empty())
+}
+
+fn tool_project<'a>(
+    config: &'a Config,
+    root: &Path,
+    cwd: &Path,
+    explicit: Option<&str>,
+    task: Option<&Task>,
+) -> Result<Option<&'a str>> {
+    let requested = explicit
+        .map(str::to_owned)
+        .or_else(|| task.and_then(|task| task.project.clone()))
+        .or_else(|| tool_env("CORRAL_PROJECT"));
+    if let Some(name) = requested {
+        return config
+            .projects
+            .get_key_value(&name)
+            .map(|(name, _)| Some(name.as_str()))
+            .with_context(|| format!("unknown project {name:?}"));
+    }
+    if task.is_some() || config.projects.is_empty() {
+        return Ok(None);
+    }
+    if config.projects.len() == 1 {
+        return Ok(config.projects.keys().next().map(String::as_str));
+    }
+    // In a workspace with nested projects, the deepest containing path wins.
+    let mut candidates = config
+        .projects
+        .iter()
+        .filter_map(|(name, project)| {
+            let path = root.join(&project.path).canonicalize().ok()?;
+            cwd.starts_with(&path)
+                .then(|| (path.components().count(), name.as_str()))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_unstable();
+    let mut candidates = candidates.into_iter().rev();
+    if let Some((depth, project)) = candidates.next()
+        && candidates
+            .next()
+            .is_none_or(|(other_depth, _)| other_depth != depth)
+    {
+        return Ok(Some(project));
+    }
+    Err(anyhow::anyhow!(
+        "cannot determine the current project; use --project"
+    ))
 }
 
 fn watch_sync(engine: &Engine, out: &mut Output<'_>) -> Result<()> {

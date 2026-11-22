@@ -199,6 +199,15 @@ pub(crate) enum Command {
     /// Work with configured extensions.
     #[command(subcommand)]
     Ext(ExtCommand),
+    /// List project tools or run one and print its stdout unchanged.
+    Tool {
+        /// Select the project before specifying a tool name.
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Tool name followed by arguments to pass through (including flags).
+        #[arg(value_names = ["NAME", "ARGS"], trailing_var_arg = true, num_args = 0..)]
+        invocation: Vec<String>,
+    },
     #[command(hide = true)]
     Pipeline { task: String },
 }
@@ -335,6 +344,41 @@ fn duration(value: &str) -> anyhow::Result<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_preserves_arguments_after_the_name() {
+        let cli = Cli::try_parse_from([
+            "corral-next",
+            "tool",
+            "--project",
+            "site",
+            "context",
+            "--json",
+            "--project",
+            "two words",
+            "--",
+            "",
+        ])
+        .unwrap();
+        assert!(!cli.json);
+        assert!(matches!(
+            cli.command,
+            Command::Tool { project: Some(project), invocation }
+                if project == "site"
+                    && invocation == ["context", "--json", "--project", "two words", "--", ""]
+        ));
+    }
+
+    #[test]
+    fn tool_accepts_option_like_names_after_separator() {
+        let cli =
+            Cli::try_parse_from(["corral-next", "tool", "--json", "--", "--help", "--x"]).unwrap();
+        assert!(cli.json);
+        assert!(matches!(
+            cli.command,
+            Command::Tool { project: None, invocation } if invocation == ["--help", "--x"]
+        ));
+    }
 
     #[test]
     fn globals_work_with_nested_usage_commands() {

@@ -3,6 +3,45 @@ use std::fs;
 use crate::{Engine, artifacts::scan_globs, as_refusal, events::EventKind, tasks::NewTask};
 
 #[test]
+fn tool_output_is_recorded_once_per_run_and_name() {
+    let root = crate::tests::tempdir();
+    let engine = Engine::init(root.path(), None).unwrap();
+    engine
+        .store
+        .insert_task(&crate::tests::task("T-001"))
+        .unwrap();
+    engine
+        .store
+        .insert_run(&crate::tests::run("T-001", "R1"))
+        .unwrap();
+    engine
+        .store
+        .insert_run(&crate::tests::run("T-001", "R2"))
+        .unwrap();
+    engine
+        .record_tool_output("T-001", "R1", "context", b"first")
+        .unwrap();
+    engine
+        .record_tool_output("T-001", "R1", "context", b"second")
+        .unwrap();
+    engine
+        .record_tool_output("T-001", "R2", "context", b"other run")
+        .unwrap();
+    let artifacts = engine.list_artifacts(Some("T-001")).unwrap();
+    assert_eq!(artifacts.len(), 2);
+    assert_eq!(
+        engine.show_artifact(&artifacts[0].reference()).unwrap(),
+        b"first"
+    );
+    let catalog = engine
+        .store
+        .artifacts_before(Default::default(), None, 10)
+        .unwrap();
+    assert!(catalog.iter().any(|a| a.run.as_deref() == Some("R1")));
+    assert!(catalog.iter().any(|a| a.run.as_deref() == Some("R2")));
+}
+
+#[test]
 fn artifact_add_list_show_size_and_glob_scan() {
     let root = crate::tests::tempdir();
     let mut engine = Engine::init(root.path(), None).unwrap();

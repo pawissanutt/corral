@@ -245,6 +245,40 @@ impl Engine {
         })
     }
 
+    /// Record at most one successful output per tool and run, atomically with its event.
+    pub fn record_tool_output(
+        &self,
+        task: &str,
+        run: &str,
+        name: &str,
+        bytes: &[u8],
+    ) -> Result<()> {
+        self.store.transaction(|store| {
+            store.require_task(task)?;
+            let exists: bool = store.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM runs WHERE task=?1 AND id=?2)",
+                params![task, run], |row| row.get(0),
+            ).context("look up tool run")?;
+            anyhow::ensure!(exists, "run {run} does not exist for {task}");
+            let recorded: bool = store.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE task=?1 AND run=?2 AND kind='artifact' AND json_extract(detail, '$.tool_record')=?3)",
+                params![task, run, name], |row| row.get(0),
+            ).context("look up recorded tool output")?;
+            if !recorded {
+                let max = self.config.artifacts.max_bytes;
+                if bytes.len() as u64 > max {
+                    return Err(size_refusal(task, bytes.len() as u64, max));
+                }
+                let artifact = self.add_artifact_in(store, self.artifact_target(task, Some(run)), bytes, Some("tool"), name)?;
+                store.connection.execute(
+                    "UPDATE events SET detail=json_set(detail, '$.tool_record', ?1) WHERE kind='artifact' AND json_extract(detail, '$.reference')=?2",
+                    params![name, artifact.reference()],
+                ).context("mark recorded tool output")?;
+            }
+            Ok(())
+        })
+    }
+
     fn artifact_run(&self, store: &Store, task: &str) -> Result<Option<String>> {
         // Run-launched CLI commands inherit this context. Owner submissions
         // (including daemon RPCs) are task-level attachments.

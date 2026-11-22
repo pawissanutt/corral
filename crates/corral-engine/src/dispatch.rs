@@ -542,7 +542,7 @@ impl Engine {
         pending.dir = Some(dir.clone());
         let prompt_file = dir.join("prompt.md");
         let bin = crate::binary_path()?;
-        write_prompt(&prompt_file, &bin, task, &run, note)?;
+        write_prompt(&prompt_file, &bin, task, &run, note, &self.config)?;
         let label = format!("{} {}", task.id, task.title);
         let command = render_command(
             harness,
