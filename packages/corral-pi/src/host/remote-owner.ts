@@ -23,6 +23,15 @@ export class RemoteOwner {
 
   get paused(): boolean { return this.record.paused; }
 
+  /**
+   * Start automated input now or not at all. It is ordered against pause like every admission, but a paused
+   * session refuses it instead of parking it, and the order is held until its turn is open, so a pause that
+   * follows cancels that turn rather than finding nothing to cancel.
+   */
+  start(input: SessionInput): Promise<SubmitResult> {
+    return this.order(async () => this.paused ? { disposition: "rejected", reason: "paused" } : this.host.submitOpened(input));
+  }
+
   submit(input: SessionInput, images?: ImageContent[], requestId?: string, pane = false): Promise<SubmitResult> {
     const inputId = input.inputId ?? requestId;
     return this.order(async () => {

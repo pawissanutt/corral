@@ -130,6 +130,8 @@ export interface HostSessionOptions {
   readonly paneInput?: (text: string, images?: ImageContent[]) => Promise<boolean>;
   readonly transcriptRewound?: () => void;
   readonly automatedInput?: (input: SessionInput) => Promise<SubmitResult> | undefined;
+  /** Automated input that must start now or be refused, ordered against pause; never parked while paused. */
+  readonly startInput?: (input: SessionInput) => Promise<SubmitResult> | undefined;
   readonly cwd: string;
   readonly agentDir: string;
   readonly model: string;
@@ -365,6 +367,8 @@ export class HostSession {
   private planReview: PlanReviewUi | undefined;
   /** The summary a clean-context reset writes in place of a model-made one. */
   private planReset: string | undefined;
+  /** Callers of submitOpened waiting for the turn they started to open. */
+  private readonly openWaiters: (() => void)[] = [];
   private readonly remotePrompts: RemotePrompts;
   private readonly local: LocalControlPlane;
   private questionUi: OwnerQuestionUi | undefined;
@@ -462,10 +466,11 @@ export class HostSession {
       stopTurn: async () => { if (this.open) await this.cancelRun(undefined, "owner"); },
       compact: instructions => this.planCompact(instructions),
       reset: summary => this.planResetContext(summary),
-      // Straight to Pi, never through the held queue of a paused session: there "queued" would mean parked,
-      // while here it only ever means queued into the running turn.
+      // The kickoff is ordered against pause and never parked in a paused session's held queue, so "queued"
+      // only ever means queued into the running turn.
       submit: async (text, origin) => {
-        const result = await this.submitLocal({ text, origin, busyPolicy: "steer" });
+        const input: SessionInput = { text, origin, busyPolicy: "steer" };
+        const result = await (origin === "auto" ? options.startInput?.(input) ?? this.submitOpened(input) : this.submitLocal(input));
         return result.disposition === "started" || result.disposition === "queued";
       },
       model: () => this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : undefined,
@@ -1473,6 +1478,7 @@ export class HostSession {
     this.turn++;
     this.session.sessionManager.appendCustomEntry("corral_turn", this.turn, { immediate: true });
     this.open = true;
+    this.turnOpened();
     this.turnError = null;
     this.stopCause = undefined;
     if (this.recordsTurnMarks) this.turnFacts.start(this.turn, Date.now(), this.session.getSessionStats().cost);
@@ -1807,8 +1813,25 @@ export class HostSession {
     }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       resolve({ disposition: "rejected", reason: /already processing/i.test(message) ? "busy" : message.slice(0, 256) });
-    });
+    }).finally(() => { this.turnOpened(); });
     return promise;
+  }
+
+  private turnOpened(): void {
+    for (const opened of this.openWaiters.splice(0)) opened();
+  }
+
+  /**
+   * Submit input and, when it starts a run, return only once that run's turn is open (or the run has ended).
+   * Pi reports a start before the turn can be cancelled; a caller ordering admissions against pause needs no
+   * such gap.
+   */
+  async submitOpened(input: SessionInput): Promise<SubmitResult> {
+    const result = await this.submitLocal(input);
+    if (result.disposition === "started" && result.turn !== undefined && this.turn < result.turn) {
+      await new Promise<void>(resolve => { this.openWaiters.push(resolve); });
+    }
+    return result;
   }
   pendingOwnerQuestions() {
     return this.ownerQuestions?.pending().flatMap(record => {

@@ -9,7 +9,9 @@ import { EventLog } from "../src/bridge/events.ts";
 import type { CapabilityGuidance } from "../src/capabilities/guidance.ts";
 import { loadModules } from "../src/host/modules.ts";
 import { PLAN_NOTE, type PlanMode } from "../src/host/plan-mode.ts";
+import { RemoteOwner } from "../src/host/remote-owner.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
+import { SessionRecord } from "../src/host/session-record.ts";
 import { HostSession, authContext } from "../src/host/session.ts";
 import { assistantRole } from "../src/roles/assistant/index.ts";
 import type { HostIdentity } from "../src/roles/types.ts";
@@ -22,9 +24,9 @@ async function until(done: () => boolean, what: string): Promise<void> {
   await within((async () => { while (!done()) await new Promise(resolve => setTimeout(resolve, 5)); })(), 30_000, what);
 }
 
-/** An assistant host in a temporary workspace, already in plan mode; `pause` stands in for the owner's pause. */
+/** An assistant host in a temporary workspace with its production pause and admission order, already in plan mode. */
 async function planning(guidance: CapabilityGuidance | undefined,
-  run: (host: HostSession, plan: PlanMode, cwd: string, pause: (paused: boolean) => void) => Promise<void>): Promise<void> {
+  run: (host: HostSession, plan: PlanMode, cwd: string, owner: RemoteOwner) => Promise<void>): Promise<void> {
   const assets = buildFixtureInstall();
   const work = mkdtempSync(join(tmpdir(), "plan-mode-"));
   const cwd = join(work, "ws");
@@ -32,7 +34,7 @@ async function planning(guidance: CapabilityGuidance | undefined,
   const originalFetch = globalThis.fetch;
   const originalEnv = { ...process.env };
   let host: HostSession | undefined;
-  let paused = false;
+  let owner: RemoteOwner | undefined;
   try {
     restrictEnvironment(process.env);
     const sdk = await import("@earendil-works/pi-coding-agent");
@@ -42,17 +44,19 @@ async function planning(guidance: CapabilityGuidance | undefined,
     const network = guardedFetch(transport);
     globalThis.fetch = network.fetch;
     const identity: HostIdentity = { store: "st-demo", project: "", role: "assistant", assistant: "A-1" };
+    const events = new EventLog(), record = new SessionRecord(work, "A-1", "assistant", cwd, true);
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol",
       capabilities: { catalog: 8, digest: "b".repeat(64), preset: "standard", enabled: ["ask_user", "compaction"] },
-      ...(guidance ? { guidance } : {}), paused: () => paused,
-      ui: "plain", runtimeDir: work, client: new CorralClient({ corral: "", root: work, cwd, identity }), events: new EventLog(), network,
+      ...(guidance ? { guidance } : {}), paused: () => record.paused, startInput: input => owner?.start(input),
+      ui: "plain", runtimeDir: work, client: new CorralClient({ corral: "", root: work, cwd, identity }), events, network,
       modules: { ...modules, role: assistantRole(PACKAGE_ROOT) },
       sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")) });
     await host.session.bindExtensions({ mode: "tui", uiContext: { setStatus: () => {} } as unknown as ExtensionUIContext });
     await host.startLocal();
+    owner = new RemoteOwner(host, events, record, host.session.sessionFile ?? "", work);
     if (!host.planMode) throw new Error("the assistant role has no plan mode");
     await host.planMode.enter();
-    await run(host, host.planMode, cwd, value => { paused = value; });
+    await run(host, host.planMode, cwd, owner);
   } finally {
     await host?.close();
     globalThis.fetch = originalFetch;
@@ -131,7 +135,7 @@ for (const variant of VARIANTS) {
     }), 120_000);
 }
 
-test("a plan review is withdrawn only by an owner message the session takes", () => planning(undefined, async (live, plan, _cwd, pause) => {
+test("a plan review is withdrawn only by an owner message the session takes", () => planning(undefined, async (live, plan, _cwd, owner) => {
   // Given a submitted plan:
   writeFileSync(plan.path, PLAN);
   fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
@@ -141,10 +145,10 @@ test("a plan review is withdrawn only by an owner message the session takes", ()
   expect(review).toBeDefined();
 
   // A paused session would hold the plan instead of starting it, so the choice is refused.
-  pause(true);
+  await owner.pause();
   expect(() => answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toThrow("The session is paused");
   expect(plan.review).toBe(review);
-  pause(false);
+  await owner.resume();
 
   // Given an automated turn that is still running:
   fixtureTransport().script([{ text: "Noted." }]);
@@ -171,6 +175,30 @@ test("a plan review is withdrawn only by an owner message the session takes", ()
   await live.session.prompt("Change step 1", { source: "interactive" });
   await live.drained();
   expect(plan.phase).toBe("planning");
+}), 120_000);
+
+test("a pause that follows an approval cancels the plan's turn instead of missing it", () => planning(undefined, async (live, plan, _cwd, owner) => {
+  writeFileSync(plan.path, PLAN);
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+  await live.session.prompt("Plan a --version flag", { source: "extension" });
+  await live.drained();
+  // Given Pi is still admitting the approved plan's kickoff when the owner pauses:
+  const admission = Promise.withResolvers<void>(), preflight = Promise.withResolvers<void>();
+  const prompt = live.session.prompt.bind(live.session);
+  live.session.prompt = async (text, options) => {
+    preflight.resolve();
+    await admission.promise;
+    return prompt(text, options);
+  };
+  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  await preflight.promise;
+  const paused = owner.pause();
+  admission.resolve();
+  // Then the pause waits for that admission and cancels the turn it opened, rather than finding nothing to cancel.
+  expect(await paused).toMatchObject({ cancelled: true, paused: true });
+  await until(() => !live.session.isStreaming, "the cancelled turn to end");
+  await live.drained();
+  expect(plan.phase).toBe("off");
 }), 120_000);
 
 test("a compaction inside a planning run is followed by the contract before the run goes on",

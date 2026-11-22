@@ -203,16 +203,17 @@ On an execute answer the host, in order:
 4. Records `phase: off` with `approved: {title, revision, digest, path, context, model}`.
 5. Submits the kickoff message (`assets/plan-approved.md`) as automated input: the copy's
    path, the owner's note, instructions to open a `corral_todo` plan from the plan's steps
-   and verify each step, and the plan inline unless the context was just reset to it. It goes
-   straight to Pi, not through the held queue of a paused session, so "taken" means started
-   or queued into a running turn and never parked. The Build record notes
+   and verify each step, and the plan inline unless the context was just reset to it. It is
+   admitted through `RemoteOwner.start`: ordered against pause like every admission, refused
+   rather than parked in a paused session's held queue, and holding that order until its
+   turn is open, so a pause that follows cancels the turn. The Build record notes
    `Approved plan: <title> (revision N, <context option>)` rather than the plan text.
 
 Any failure in steps 1 to 3 leaves the phase at `review` with the card still open, and posts
 the reason as a transcript note. A choice is refused while the session could start nothing:
 during a compaction, or while the owner has paused it. The pause is checked again after the
-context is prepared, with nothing awaited between that check and the kickoff's admission, so
-a pause either keeps the review or arrives after the plan started. If the kickoff is refused or fails,
+context is prepared and decided for good inside the admission order: a pause that wins keeps
+the review, and one that loses cancels the plan's turn. If the kickoff is refused or fails,
 the same submission is put back under the same card, so an approved plan either starts or
 stays reviewable.
 
