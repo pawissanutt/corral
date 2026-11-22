@@ -136,6 +136,33 @@ fn transcript_first_paint_waits_for_no_older_page_and_prepend_joins_split_record
 }
 
 #[test]
+fn latest_page_refresh_does_not_chase_a_displaced_record() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    let get = read(&mut app, feed, None);
+    reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        page("v1", &[("1", &["old"])], Some("older")),
+    );
+    let get = read(&mut app, feed, None);
+    let next = reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        page("v2", &[("2", &["new"])], Some("v2-older")),
+    );
+    assert!(next.is_empty());
+    assert_eq!(shown(feed), [("2".into(), vec!["new".into()])]);
+}
+
+#[test]
 fn changed_transcript_refresh_revalidates_loaded_history_before_publishing() {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();
@@ -355,6 +382,14 @@ fn an_unreconciled_snapshot_survives_the_page_cap_until_explicit_latest() {
         )
         .is_empty()
     );
+    let get = read(&mut app, feed, Some("old cursor"));
+    reply(
+        &mut app,
+        feed,
+        get,
+        Some("old cursor"),
+        page("v1", &[("earlier", &["earlier"])], Some("earliest")),
+    );
     let before = shown(feed);
     let mut get = read(&mut app, feed, None);
     for row in (1..=MAX_PAGES).rev() {
@@ -382,7 +417,7 @@ fn an_unreconciled_snapshot_survives_the_page_cap_until_explicit_latest() {
         })
     };
     assert_eq!(error_code().as_deref(), Some(HISTORY_CHANGED));
-    assert!(read(&mut app, feed, Some("old cursor")).is_empty());
+    assert!(read(&mut app, feed, Some("earliest")).is_empty());
 
     let get = app.latest_transcript(feed, "B-1".into());
     let [(_, params, tag)]: [Outgoing; 1] = get.try_into().unwrap();

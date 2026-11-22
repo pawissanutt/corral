@@ -207,7 +207,10 @@ impl AppState {
         }
         let mut pages = self.detail_pages.remove(key).unwrap_or_default();
         pages.push(page);
-        if depth > 0
+        // Until the reader explicitly walks back, the view follows a single rolling
+        // newest page. Never reconstruct displaced history just to refresh that tail.
+        let reading_history = depth > 1 || (depth == 1 && self.detail_restarts.contains_key(key));
+        if reading_history
             && let Some(next) = next
             && feed.with_untracked(|feed| {
                 feed.details.get(key).is_some_and(|cache| {
