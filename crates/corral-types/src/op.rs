@@ -137,6 +137,14 @@ impl Next {
                 }
                 optional(f, "--kind", task.kind.as_deref())?;
                 optional(f, "--size", task.size.as_deref())?;
+                optional(
+                    f,
+                    "--difficulty",
+                    task.difficulty.map(|value| value.as_str()),
+                )?;
+                for tag in &task.tags {
+                    option(f, "--tag", tag)?;
+                }
                 optional(f, "--base", task.base.as_deref())?;
                 optional(f, "--parent", task.parent.as_deref())?;
                 if let Some((first, rest)) = task.depends_on.split_first() {
@@ -149,6 +157,22 @@ impl Next {
                 Ok(())
             }),
             Op::Edit { id, edit } => invocation(f, "edit", &[id], |f| {
+                if let Some(size) = &edit.size {
+                    option(f, "--size", size.as_deref().unwrap_or(""))?;
+                }
+                if let Some(difficulty) = edit.difficulty {
+                    option(
+                        f,
+                        "--difficulty",
+                        difficulty.map_or("", |value| value.as_str()),
+                    )?;
+                }
+                if let Some(tags) = &edit.tags {
+                    flag(f, " --clear-tags", tags.is_empty())?;
+                    for tag in tags {
+                        option(f, "--tag", tag)?;
+                    }
+                }
                 if let Some(base) = &edit.base {
                     option(f, "--base", base.as_deref().unwrap_or(""))?;
                 }

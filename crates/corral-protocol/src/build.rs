@@ -1,5 +1,6 @@
 //! Build operations and the app-safe board and record projections of a build session.
 use crate::session_state::{Counts, ExitBrief};
+use corral_types::TaskDifficulty;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +85,13 @@ pub struct BoardTask {
     pub title: String,
     pub status: String,
     pub phase: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::schema_types::TaskDifficulty>")]
+    pub difficulty: Option<TaskDifficulty>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,6 +119,11 @@ pub struct BoardTaskPlan {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<crate::schema_types::TaskDifficulty>")]
+    pub difficulty: Option<TaskDifficulty>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

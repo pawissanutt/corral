@@ -11,6 +11,8 @@ fn task() -> Task {
         priority: Priority::P2,
         kind: Some("ui".into()),
         size: Some("l".into()),
+        difficulty: None,
+        tags: Vec::new(),
         profile: None,
         base: None,
         parent: None,
@@ -235,6 +237,42 @@ profile = "omp"
     assert!(error.to_string().contains("no worker profile"));
     task.profile = Some("missing".into());
     assert!(config.resolve_profile(&task, None).is_err());
+}
+
+#[test]
+fn routing_tests_size_and_difficulty_independently() {
+    let config: Config = toml::from_str(
+        r#"
+[defaults]
+profile = "generic"
+[[routing]]
+size = ["xs"]
+difficulty = ["hard"]
+profile = "omo"
+[[routing]]
+size = ["xs"]
+profile = "omp"
+[[routing]]
+difficulty = ["hard"]
+profile = "claude"
+"#,
+    )
+    .unwrap();
+    for (size, difficulty, expected) in [
+        (Some("xs"), Some(TaskDifficulty::Hard), "omo"),
+        (Some("xs"), None, "omp"),
+        (Some("xs"), Some(TaskDifficulty::Routine), "omp"),
+        (Some("xl"), Some(TaskDifficulty::Hard), "claude"),
+        (None, Some(TaskDifficulty::Hard), "claude"),
+        (None, None, "generic"),
+    ] {
+        let task = Task {
+            size: size.map(str::to_owned),
+            difficulty,
+            ..Task::default()
+        };
+        assert_eq!(config.resolve_profile(&task, None).unwrap(), expected);
+    }
 }
 
 #[test]

@@ -1,11 +1,12 @@
 //! Tasks: every task in scope as one list grouped by status, beside the inspector of the
-//! selected one (`model::tasks`, `ui::kit::list`). A row shows the task's status, id, title,
-//! what is happening, its pipeline, project, profile, cost, age and its one next step; More
-//! holds every other operation. A plan's caret unfolds its children under it; Done and Dropped
-//! fold at the bottom, read a page at a time with Load older under them. The head carries the
-//! filter field (id, title or project words), the open count with the running slots, the
-//! inspector's switch and New task; under it the board's health (`ui::kit::board_status`), and
-//! the page fades while the board is last known.
+//! selected one (`model::tasks`, `ui::kit::list`). A row shows the task's status, id, title
+//! with its tags, what is happening, its pipeline, size, difficulty, project, profile, cost,
+//! age and its one next step; More holds every other operation. A plan's caret unfolds its
+//! children under it; Done and Dropped fold at the bottom, read a page at a time with Load older
+//! under them. The head carries the filter field (words, and `size:`, `difficulty:` and `tag:`
+//! met exactly), the open count with the running slots, the inspector's switch and New task;
+//! under it the board's health (`ui::kit::board_status`), and the page fades while the board is
+//! last known.
 
 mod inspector;
 
@@ -17,7 +18,7 @@ use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::list::{self, ListKey};
-use crate::model::tasks::{self, closed};
+use crate::model::tasks::{self, closed, meta};
 use crate::model::work::{Press, Record, Verb};
 use crate::model::{Form, Hue, Id, Live};
 use crate::screens::task::keep::keep_details;
@@ -330,7 +331,16 @@ fn row(app: AppState, key: &Id, columns: &[list::Column]) -> Row {
             dynamic(move || {
                 line.with(|line| {
                     line.as_ref().map(|line| {
-                        phone_lines(app, shown.clone(), line.title.clone(), line.now.clone())
+                        let lines =
+                            phone_lines(app, shown.clone(), line.title.clone(), line.now.clone());
+                        let facts = meta::line(line.size.as_deref(), line.difficulty, &line.tags);
+                        view()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .gap(px(2.0))
+                            .child(lines)
+                            .child(view().flex_row().child(cell_text(app, facts, true)))
+                            .into_element()
                     })
                 })
             }),
@@ -432,6 +442,11 @@ fn cell(
                                     .map(|parent| format!("in {parent}")),
                             )
                             .map(|tag| chip(app, tag, Hue::Neutral))
+                            .chain(
+                                meta::row_tags(&line.tags)
+                                    .into_iter()
+                                    .map(|tag| chip(app, tag, Hue::Neutral)),
+                            )
                             .collect();
                         cell_title(app, line.title.clone(), tags)
                     })
@@ -461,6 +476,8 @@ fn cell(
                     .map(|line| pipeline_marks(app, &line.pipeline))
             })
         }),
+        "size" => fact(|line| Some(meta::size_word(line.size.as_deref())), true),
+        "difficulty" => fact(|line| Some(meta::difficulty_word(line.difficulty)), true),
         "project" => fact(|line| line.project.clone(), true),
         "profile" => fact(|line| line.profile.clone(), true),
         "cost" => hinted(app, cell_mono(app, tasks::ABSENT, true), tasks::COST_ABSENT),

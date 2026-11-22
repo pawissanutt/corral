@@ -21,8 +21,19 @@ create the parent with `"$CORRAL" new "<plan title>" -p <project>`. For each ind
 verifiable slice, file `"$CORRAL" new "<child title>" -p <project> --parent <parent-id>`;
 add `--depends-on <id>,<id>` only for real prerequisites. Set the parent and child Markdown
 bodies with `"$CORRAL" edit <id> --body-file <file>`. State the goal, scope, acceptance and
-checks of each child so it can run without this conversation. Report the document and task
-IDs. A worker finishes the planning task with its normal `corral_done`.
+checks of each child so it can run without this conversation.
+
+When proposing or creating a task, normally estimate `--size <xs|s|m|l|xl>` by scope and
+`--difficulty <routine|standard|hard>` by technical complexity or uncertainty, independently
+of size and priority. Prefer applicable tags from the built-ins (`accessibility`, `bug`,
+`dependencies`, `documentation`, `performance`, `testing`) or existing custom labels seen in
+`"$CORRAL" list --json` or `show`. Repeat `--tag='<label>'` for each label, preserving its case
+and internal spaces. Honor the owner's supplied fields, including requests to omit them.
+If an estimate or label is unknown, omit it and mention the omission in the plan or handoff;
+do not invent filler. Do not rewrite metadata on the existing parent or other tasks unless asked.
+
+Report the document and task IDs. A worker finishes the planning task with its normal
+`corral_done`.
 
 ## Review a plan
 

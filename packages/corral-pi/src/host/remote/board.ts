@@ -24,9 +24,9 @@ function boardKeys(plan: BoardPlan): Map<string, string> {
 function boardPlan(plan: BoardPlan) {
   const keys = boardKeys(plan);
   // Reserve room for all twenty task identities so a clipped body cannot hide a dependency.
-  const tasks = plan.tasks.slice(0, 20).map(({ key, title, kind, size, profile, depends, body }) => ({
+  const tasks = plan.tasks.slice(0, 20).map(({ key, title, kind, size, difficulty, tags, profile, depends, body }) => ({
     key: keys.get(key)!, title: clipText(title, 240), kind: optionalText(kind, 64), size: optionalText(size, 64),
-    profile: optionalText(profile, 160), depends: fitRows(depends.map(key => keys.get(key) ?? key), 0, 32, 512),
+    difficulty, tags, profile: optionalText(profile, 160), depends: fitRows(depends.map(key => keys.get(key) ?? key), 0, 32, 512),
     body: "", body_bytes: Buffer.byteLength(body),
   }));
   const result = { title: clipText(plan.title, 512), project: optionalText(plan.project, 256), why: clipText(plan.why, 8 * KiB), tasks };
@@ -70,8 +70,8 @@ function boardPlanTask(plan: BoardPlan | undefined, key: string, after?: string)
 export function boardPart(board: Pick<BoardControl, "tasks" | "proposed"> | undefined, unavailable?: string) {
   const plan = board?.proposed();
   const proposed = plan === undefined ? undefined : boardPlan(plan);
-  const tasks = [...board?.tasks() ?? []].slice(-100).reverse().map(({ id, title, status, phase, depends, detail, updatedAt }) => ({
-    id, title: clipText(title, 512), status, phase, depends: fitRows(depends, 0, 64, KiB),
+  const tasks = [...board?.tasks() ?? []].slice(-100).reverse().map(({ id, title, status, phase, size, difficulty, tags, depends, detail, updatedAt }) => ({
+    id, title: clipText(title, 512), status, phase, size: optionalText(size, 64), difficulty, tags, depends: fitRows(depends, 0, 64, KiB),
     detail: optionalText(detail, 512), updated_at: isoTime(updatedAt),
   }));
   return { proposed, unavailable, tasks: fitRows(tasks, 0, 100, SESSION_PART_MAX - jsonBytes({ proposed, unavailable, tasks: [] })) };

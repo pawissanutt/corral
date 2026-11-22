@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import type { TaskDifficulty } from "./types.ts";
 
 export type Run = (argv: readonly string[], options: {
   cwd: string;
@@ -78,6 +79,9 @@ export interface TaskReadback {
   id: string;
   title: string;
   status: string;
+  size?: string | null;
+  difficulty?: TaskDifficulty | null;
+  tags?: string[];
   depends_on?: string[];
   blocked?: { reason: string } | null;
 }

@@ -202,6 +202,10 @@ pub struct VerbField {
     /// Values a free-text field offers beside what is typed (a project's local branches),
     /// narrowed to the typed words by [`crate::model::projects::suggest`].
     pub suggestions: Vec<String>,
+    /// A task's tags: the value holds one exact tag a line, each removable, and `suggestions`
+    /// are the tags offered beside a field for any other label
+    /// ([`crate::model::tasks::meta`]).
+    pub tags: bool,
 }
 
 /// One value a choice field offers: what is sent, and what its button says.

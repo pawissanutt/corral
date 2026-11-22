@@ -1,7 +1,7 @@
 use std::{env, fs, io::Write, path::Path, process::Command};
 
 use anyhow::{Context, Result, ensure};
-use corral_engine::{Engine, Task, TaskEdit};
+use corral_engine::{Engine, Task, TaskEdit, refuse};
 
 use crate::args::Edit;
 
@@ -13,6 +13,19 @@ pub(crate) fn prepare(engine: &Engine, flags: Edit) -> Result<(String, TaskEdit)
         priority: flags.priority,
         kind: flags.kind.map(nonempty),
         size: flags.size.map(nonempty),
+        difficulty: flags
+            .difficulty
+            .map(|value| {
+                nonempty(value)
+                    .map(|value| {
+                        value
+                            .parse()
+                            .map_err(|reason: String| refuse(reason, vec![]))
+                    })
+                    .transpose()
+            })
+            .transpose()?,
+        tags: (flags.clear_tags || !flags.tags.is_empty()).then_some(flags.tags),
         profile: flags.profile.map(nonempty),
         base: flags.base.map(nonempty),
         parent: flags.parent.map(nonempty),

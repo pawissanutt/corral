@@ -91,7 +91,14 @@ const PROJECT_KEYS: [&str; 11] = [
 ];
 const PROFILE_KEYS: [&str; 4] = ["harness", "model", "effort", "args"];
 const HARNESS_KEYS: [&str; 3] = ["command", "model_flag", "effort_flag"];
-const RULE_KEYS: [&str; 5] = ["kind", "size", "title_regex", "project", "profile"];
+const RULE_KEYS: [&str; 6] = [
+    "kind",
+    "size",
+    "difficulty",
+    "title_regex",
+    "project",
+    "profile",
+];
 const WORKSPACE: [(&str, &str); 7] = [
     ("limits", "running"),
     ("defaults", "profile"),
@@ -126,6 +133,7 @@ fn label(key: &str) -> &'static str {
         "effort_flag" => "Effort flag",
         "kind" => "Kinds",
         "size" => "Sizes",
+        "difficulty" => "Difficulties",
         "title_regex" => "Title pattern",
         "project" => "Project",
         "globs" => "Globs",
@@ -411,8 +419,10 @@ fn routing(doc: &DocumentMut, profiles: &[String]) -> Vec<Group> {
                 .map(|key| {
                     let path = Path::rule(index, key);
                     match *key {
-                        "kind" | "size" => field(path, key, Kind::Typed(Typed::Words))
-                            .note("comma-separated; any when empty"),
+                        "kind" | "size" | "difficulty" => {
+                            field(path, key, Kind::Typed(Typed::Words))
+                                .note("comma-separated; any when empty")
+                        }
                         "project" => {
                             field(path, key, Kind::Text).offer("Projects", projects.clone())
                         }

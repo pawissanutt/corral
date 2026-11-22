@@ -629,14 +629,36 @@
               "null"
             ]
           },
+          "difficulty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskDifficulty"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "type": "string"
           },
           "phase": {
             "type": "string"
           },
+          "size": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "title": {
             "type": "string"
@@ -671,6 +693,16 @@
             },
             "type": "array"
           },
+          "difficulty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TaskDifficulty"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "key": {
             "type": "string"
           },
@@ -691,6 +723,12 @@
               "string",
               "null"
             ]
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "title": {
             "type": "string"
@@ -9406,6 +9444,15 @@
           "events"
         ],
         "type": "object"
+      },
+      "TaskDifficulty": {
+        "enum": [
+          "routine",
+          "standard",
+          "hard"
+        ],
+        "type": "string",
+        "x-rust-type": "corral_types::TaskDifficulty"
       },
       "TaskRow": {
         "description": "One task in the open board or a plan. Checks are for its current HEAD and review round.",

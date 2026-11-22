@@ -4,6 +4,7 @@
 import { ScrollView, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { BoardPhase, BoardPlan, BoardTaskStatus } from "../../build/types.ts";
+import { taskMetadataLabel } from "./task-metadata.ts";
 import { duration, toneColor } from "../agents-model.ts";
 import { agentDensity } from "../agents-view.ts";
 import { keyCap, spinner } from "../frame.ts";
@@ -82,10 +83,12 @@ export function boardDetailLines(task: BoardTaskStatus, now: number): string[] {
   const stage = boardStage(task, []);
   const depends = task.depends.length ? "depends on " + task.depends.map(plainLabel).join(", ") : "no dependencies";
   const age = now - task.updatedAt;
+  const metadata = plainLabel(taskMetadataLabel(task));
   return [
     // The stage's `now` repeats the detail for blocked and failed tasks, so it is named once.
     `${stage.glyph} ${stage.word}` + (stage.now === plainLabel(task.detail ?? "") ? "" : " · " + stage.now),
     `corral status: ${plainLabel(task.status) || "unknown"} · ${depends}`,
+    ...(metadata ? [metadata] : []),
     ...(task.detail ?? "").split("\n").map(plainLabel).filter(Boolean),
     age < 1000 ? "updated just now" : `updated ${duration(age)} ago`,
   ];

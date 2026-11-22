@@ -1,7 +1,19 @@
 import { mkdir, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { json, type Run, type TaskReadback } from "./corral-cli.ts";
-import type { BoardControl, BoardPhase, BoardPlan, BoardPreview, BoardTaskPlan, BoardTaskStatus, BuildContext } from "./types.ts";
+import { TASK_DIFFICULTIES, TASK_SIZES, type BoardControl, type BoardPhase, type BoardPlan, type BoardPreview,
+  type BoardTaskPlan, type BoardTaskStatus, type BuildContext } from "./types.ts";
+
+// Leave room for all task keys and tags in the bounded remote preview. Brief text can be clipped; labels cannot.
+const PLAN_TAGS_BYTES = 8 * 1024;
+
+function checkedTags(task: BoardTaskPlan): string[] | undefined {
+  if (task.tags === undefined) return;
+  if (!Array.isArray(task.tags) || task.tags.some(tag => typeof tag !== "string" || !tag || /^\p{White_Space}|\p{White_Space}$|\p{Cc}/u.test(tag))) {
+    throw new Error(`Invalid tag for ${task.key}: use nonempty labels without surrounding whitespace or control characters.`);
+  }
+  return [...new Set(task.tags)];
+}
 
 function orderedTasks(plan: BoardPlan): BoardTaskPlan[] {
   if (!plan.title.trim() || !plan.tasks.length) throw new Error("A board plan needs a title and at least one task.");
@@ -26,7 +38,24 @@ function orderedTasks(plan: BoardPlan): BoardTaskPlan[] {
   return ordered;
 }
 
-export function validatePlan(plan: BoardPlan): void { orderedTasks(plan); }
+/** Validate before offering confirmation, keeping exactly the tags the engine will write. */
+export function validatePlan(plan: BoardPlan): BoardPlan {
+  orderedTasks(plan);
+  const tasks = plan.tasks.map(task => {
+    if (task.size !== undefined && !TASK_SIZES.some(size => size === task.size)) {
+      throw new Error(`Invalid size for ${task.key}: use ${TASK_SIZES.join(", ")}.`);
+    }
+    if (task.difficulty !== undefined && !TASK_DIFFICULTIES.some(difficulty => difficulty === task.difficulty)) {
+      throw new Error(`Invalid difficulty for ${task.key}: use ${TASK_DIFFICULTIES.join(", ")}.`);
+    }
+    const tags = checkedTags(task);
+    return tags === undefined ? task : { ...task, tags };
+  });
+  if (Buffer.byteLength(JSON.stringify(tasks.map(task => task.tags ?? []))) > PLAN_TAGS_BYTES) {
+    throw new Error("Board plan tags exceed the 8 KiB preview budget. Use fewer or shorter tags.");
+  }
+  return { ...plan, tasks };
+}
 
 export function boardTask(value: TaskReadback, known: ReadonlyMap<string, TaskReadback>, now: number, refusal?: string): BoardTaskStatus {
   const dependencies = value.depends_on ?? [];
@@ -45,7 +74,8 @@ export function boardTask(value: TaskReadback, known: ReadonlyMap<string, TaskRe
       break;
     default: phase = "backlog";
   }
-  return { id: value.id, title: value.title, status: value.status, phase, depends: dependencies, detail, updatedAt: now };
+  return { id: value.id, title: value.title, status: value.status, phase, depends: dependencies, detail, updatedAt: now,
+    size: value.size ?? undefined, difficulty: value.difficulty ?? undefined, tags: value.tags };
 }
 
 interface TaskResponse { task: TaskReadback }
@@ -116,7 +146,7 @@ export function createBoard(options: {
   }
   async function file(plan: BoardPlan, start: boolean): Promise<readonly BoardTaskStatus[]> {
     available();
-    const ordered = orderedTasks(plan);
+    const ordered = orderedTasks(validatePlan(plan));
     const project = plan.project ?? options.context.session.project;
     if (!project) throw new Error("Board plans require a configured project.");
     const args = [`--project=${project}`];
@@ -137,6 +167,7 @@ export function createBoard(options: {
         const depends = item.depends.map(key => ids.get(key) ?? key);
         const task = (await command(["new", ...args, "--parent", parent.id,
           ...(item.kind ? [`--kind=${item.kind}`] : []), ...(item.size ? [`--size=${item.size}`] : []),
+          ...(item.difficulty ? [`--difficulty=${item.difficulty}`] : []), ...(item.tags ?? []).map(tag => `--tag=${tag}`),
           ...(depends.length ? ["--depends-on", depends.join(",")] : []), "--", item.title])).task;
         ids.set(item.key, task.id);
         update(task);
@@ -153,11 +184,13 @@ export function createBoard(options: {
   return {
     tasks() { return statuses; },
     proposed() { return proposed; },
-    propose(plan) { if (!root) return; validatePlan(plan); proposed = structuredClone(plan); changed(); },
+    propose(plan) { if (!root) return; proposed = structuredClone(validatePlan(plan)); changed(); },
     async preview(plan): Promise<BoardPreview> {
-      available(); validatePlan(plan);
+      available();
       // The engine assigns IDs only when the owner confirms; preview shows the plan's actual keys.
-      return { tracker: plan.title, tasks: plan.tasks.map(task => ({ key: task.key, id: task.key, title: task.title, depends: task.depends })) };
+      const tasks = validatePlan(plan).tasks.map(({ key, title, depends, size, difficulty, tags }) =>
+        ({ key, id: key, title, depends, size, difficulty, tags }));
+      return { tracker: plan.title, tasks };
     },
     file(plan, start) {
       if (filing) return filing;

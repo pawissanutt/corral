@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BridgeRefusal, SESSION_PART_MAX } from "../src/bridge/protocol.ts";
+import { validatePlan } from "../src/build/board.ts";
 import { gitRun } from "../src/build/corral-cli.ts";
 import { createJournal } from "../src/build/record.ts";
 import type { BuildRecord } from "../src/build/record-types.ts";
@@ -14,14 +15,15 @@ import { capabilities } from "../src/host/remote/state.ts";
 
 const at = "2026-01-01T00:00:00Z";
 
-test("a clipped waiting board plan keeps every task key and its original body length", () => {
+test("a clipped waiting board plan keeps every task key, tag, and original body length", () => {
   const body = "大\0\n".repeat(7_000);
-  const plan: BoardPlan = { title: "A plan", project: "project", why: body, tasks: Array.from({ length: 20 }, (_, i) => ({
-    key: `task-${i}`, title: `Task ${i}`, depends: i === 0 ? [] : [`task-${i - 1}`], body,
-  })) };
+  const tags = ['"'.repeat(190), "bug"];
+  const plan = validatePlan({ title: "A plan", project: "project", why: body, tasks: Array.from({ length: 20 }, (_, i) => ({
+    key: `task-${i}`, title: `Task ${i}`, depends: i === 0 ? [] : [`task-${i - 1}`], body, tags,
+  })) });
   const part = boardPart({ proposed: () => plan, tasks: () => [{ id: "T-123", title: "Filed", status: "blocked", phase: "blocked",
     depends: ["T-122"], detail: "blocked by T-122", updatedAt: Date.parse(at) }] });
-  expect(part.proposed?.tasks.map(task => task.key)).toEqual(plan.tasks.map(task => task.key));
+  expect(part.proposed?.tasks.map(({ key, tags }) => ({ key, tags }))).toEqual(plan.tasks.map(({ key, tags }) => ({ key, tags })));
   expect(part.proposed?.tasks.every(task => task.body_bytes === Buffer.byteLength(body) && Buffer.byteLength(task.body) <= 2048)).toBeTrue();
   expect(part.tasks[0]).toMatchObject({ id: "T-123", phase: "blocked", depends: ["T-122"], updated_at: new Date(at).toISOString() });
   expect(Buffer.byteLength(JSON.stringify(part))).toBeLessThanOrEqual(SESSION_PART_MAX);

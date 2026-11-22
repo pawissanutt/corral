@@ -438,12 +438,21 @@ export interface ExitControl {
 
 // ---------- board fan-out ----------
 
-export interface BoardTaskPlan {
+export const TASK_SIZES = ["xs", "s", "m", "l", "xl"] as const;
+export const TASK_DIFFICULTIES = ["routine", "standard", "hard"] as const;
+export type TaskDifficulty = typeof TASK_DIFFICULTIES[number];
+
+export interface BoardTaskMetadata {
+  readonly size?: string;
+  readonly difficulty?: TaskDifficulty;
+  readonly tags?: readonly string[];
+}
+
+export interface BoardTaskPlan extends BoardTaskMetadata {
   /** Local key, unique in the plan; `depends` refers to keys or existing `T-<n>` ids. */
   readonly key: string;
   readonly title: string;
   readonly kind?: string;
-  readonly size?: string;
   readonly profile?: string;
   readonly depends: readonly string[];
   readonly body: string;
@@ -458,7 +467,7 @@ export interface BoardPlan {
 
 export type BoardPhase = "backlog" | "waiting" | "queued" | "running" | "gating" | "reviewing" | "landed" | "blocked" | "failed";
 
-export interface BoardTaskStatus {
+export interface BoardTaskStatus extends BoardTaskMetadata {
   readonly id: string;
   readonly title: string;
   /** corral's task status, verbatim. */
@@ -472,7 +481,7 @@ export interface BoardTaskStatus {
 
 export interface BoardPreview {
   readonly tracker: string;
-  readonly tasks: readonly { readonly key: string; readonly id: string; readonly title: string; readonly depends: readonly string[] }[];
+  readonly tasks: readonly (BoardTaskMetadata & { readonly key: string; readonly id: string; readonly title: string; readonly depends: readonly string[] })[];
 }
 
 export interface BoardControl {

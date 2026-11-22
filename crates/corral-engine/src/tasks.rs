@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use corral_types::{TASK_SIZES, normalize_tags};
 use jiff::Timestamp;
 use serde_json::json;
 
@@ -25,6 +26,8 @@ impl Engine {
                 })],
             ));
         }
+        validate_size(new.size.as_deref())?;
+        let tags = normalize_tags(new.tags).map_err(|reason| refuse(reason, vec![]))?;
         self.store.transaction(|store| {
             let now = Timestamp::now();
             let task = Task {
@@ -36,6 +39,8 @@ impl Engine {
                 priority: new.priority,
                 kind: new.kind,
                 size: new.size,
+                difficulty: new.difficulty,
+                tags,
                 profile: new.profile,
                 base: new.base,
                 parent: new.parent,
@@ -56,9 +61,19 @@ impl Engine {
         })
     }
 
-    pub fn edit_task(&self, id: &str, edit: TaskEdit) -> Result<Task> {
+    pub fn edit_task(&self, id: &str, mut edit: TaskEdit) -> Result<Task> {
         self.store.transaction(|store| {
             let mut task = store.require_task(id)?;
+            if let Some(size) = &edit.size
+                && size != &task.size
+            {
+                validate_size(size.as_deref())?;
+            }
+            edit.tags = edit
+                .tags
+                .map(normalize_tags)
+                .transpose()
+                .map_err(|reason| refuse(reason, vec![]))?;
             let detail = serde_json::to_value(&edit)?;
             if let Some(value) = edit.title {
                 task.title = value;
@@ -77,6 +92,12 @@ impl Engine {
             }
             if let Some(value) = edit.size {
                 task.size = value;
+            }
+            if let Some(value) = edit.difficulty {
+                task.difficulty = value;
+            }
+            if let Some(value) = edit.tags {
+                task.tags = value;
             }
             if let Some(value) = edit.profile {
                 task.profile = value;
@@ -338,6 +359,18 @@ pub(crate) fn next_force_approve(id: &str) -> Next {
         id: id.to_owned(),
         onto: None,
     })
+}
+
+fn validate_size(size: Option<&str>) -> Result<()> {
+    if let Some(size) = size
+        && !TASK_SIZES.contains(&size)
+    {
+        return Err(refuse(
+            format!("unknown size {size:?} ({})", TASK_SIZES.join(", ")),
+            vec![],
+        ));
+    }
+    Ok(())
 }
 
 fn planning(status: Status) -> bool {

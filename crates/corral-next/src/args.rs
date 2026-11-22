@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use corral_engine::{EventKind, Priority, Status, UsageBy};
+use corral_engine::{EventKind, Priority, Status, TaskDifficulty, UsageBy};
 use serde::de::{DeserializeOwned, value::StrDeserializer};
 
 #[derive(Parser)]
@@ -52,8 +52,15 @@ pub(crate) enum Command {
         priority: Priority,
         #[arg(long)]
         kind: Option<String>,
+        /// Estimated work volume: xs, s, m, l, xl.
         #[arg(long)]
         size: Option<String>,
+        /// Technical complexity or uncertainty: routine, standard, hard.
+        #[arg(long)]
+        difficulty: Option<TaskDifficulty>,
+        /// Repeat for multiple labels. Suggested: accessibility, bug, dependencies, documentation, performance, testing. Custom labels also work.
+        #[arg(long = "tag", value_name = "LABEL")]
+        tags: Vec<String>,
         /// Target branch for dispatch, overriding the project default.
         #[arg(long)]
         base: Option<String>,
@@ -215,8 +222,18 @@ pub(crate) struct Edit {
     pub priority: Option<Priority>,
     #[arg(long)]
     pub kind: Option<String>,
+    /// Set work volume (xs, s, m, l, xl); an empty value clears it.
     #[arg(long)]
     pub size: Option<String>,
+    /// Set difficulty (routine, standard, hard); an empty value clears it.
+    #[arg(long)]
+    pub difficulty: Option<String>,
+    /// Replace all tags with these labels. Repeat for multiple labels.
+    #[arg(long = "tag", value_name = "LABEL", conflicts_with = "clear_tags")]
+    pub tags: Vec<String>,
+    /// Remove all tags.
+    #[arg(long)]
+    pub clear_tags: bool,
     #[arg(long)]
     pub profile: Option<String>,
     /// Set the target branch for dispatch; an empty value clears it.

@@ -102,6 +102,8 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
             priority,
             kind,
             size,
+            difficulty,
+            tags,
             base,
             parent,
             depends_on,
@@ -112,6 +114,8 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
                 priority,
                 kind,
                 size,
+                difficulty,
+                tags,
                 base,
                 parent,
                 status: if idea {

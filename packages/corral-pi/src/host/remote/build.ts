@@ -3,6 +3,7 @@ import type { BuildControls } from "../../build/host-controls.ts";
 import { LIVE_CHILD_STATES, type BoardPlan, type ChildSnapshot, type ExitOption, type ExitState, type FleetControl } from "../../build/types.ts";
 import { boardEntry, exitEntry, finishEntry, type BuildEntry } from "../../ui/build/build-entries.ts";
 import { policyLabel } from "../../ui/build/build-dialogs.ts";
+import { taskMetadataLabel } from "../../ui/build/task-metadata.ts";
 import type { ChildMark } from "../transcript-marks.ts";
 import { cardOptions, cardQuestion, invalidAnswer, optionId, singleAnswer, type CardEntry, type CardOption } from "./cards.ts";
 import type { RemoteRegistry } from "./registry.ts";
@@ -179,8 +180,10 @@ export class RemoteBuild {
     const pending = this.planEpisode;
     if (this.filing) return;
     const title = plan.title;
-    const tasks = plan.tasks.map(task =>
-      `${task.key}: ${task.title}${task.depends.length ? ` (after ${task.depends.join(", ")})` : ""}`);
+    const tasks = plan.tasks.map(task => {
+      const metadata = taskMetadataLabel(task);
+      return `${task.key}: ${task.title}${task.depends.length ? ` (after ${task.depends.join(", ")})` : ""}${metadata ? ` · ${metadata}` : ""}`;
+    });
     const body = [pending.error, tasks.join("\n"), plan.why, ...plan.tasks.map(task => task.body && `${task.key}\n${task.body}`)]
       .filter(Boolean).join("\n\n");
     const meta = [plan.project, `${plan.tasks.length} tasks`].filter(Boolean).join(" · ");

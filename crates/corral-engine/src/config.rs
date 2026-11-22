@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use corral_types::{
-    ConfigProblem,
+    ConfigProblem, TaskDifficulty,
     pricing::{Price, pricing_problems},
 };
 use regex::Regex;
@@ -180,6 +180,8 @@ pub struct Project {
 pub struct RoutingRule {
     pub kind: Vec<String>,
     pub size: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub difficulty: Vec<TaskDifficulty>,
     pub title_regex: Option<String>,
     pub project: Option<String>,
     pub profile: String,
@@ -459,6 +461,10 @@ impl Config {
         for (index, rule) in self.routing.iter().enumerate() {
             if !matches_values(&rule.kind, task.kind.as_deref())
                 || !matches_values(&rule.size, task.size.as_deref())
+                || (!rule.difficulty.is_empty()
+                    && !task
+                        .difficulty
+                        .is_some_and(|value| rule.difficulty.contains(&value)))
                 || rule
                     .project
                     .as_deref()

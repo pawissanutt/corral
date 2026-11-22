@@ -1,6 +1,8 @@
 use std::{fs, path::Path, process::Command};
 
-use corral_engine::{Actor, Engine, EventKind, Priority, Status, events::EventFilter};
+use corral_engine::{
+    Actor, Engine, EventKind, Priority, Status, TaskDifficulty, events::EventFilter,
+};
 use serde_json::{Value, json};
 
 fn write_task(dir: &Path, id: &str, status: &str, metadata: &str) {
@@ -44,7 +46,7 @@ fn previews_and_imports_a_legacy_export_without_replacing_tasks_or_reusing_ids()
         &export,
         "T-010",
         "idea",
-        "  project: missing\n  priority: P1\n  kind: test\n  size: xs\n  parent: T-012\n  plan: T-099@P1\n  depends_on: [T-012, T-021, T-051, T-060]\n",
+        "  project: missing\n  priority: P1\n  kind: test\n  size: xs\n  difficulty: hard\n  parent: T-012\n  plan: T-099@P1\n  depends_on: [T-012, T-021, T-051, T-060]\n",
     );
     write_task(&export, "T-011", "ready", "  project: configured\n");
     write_task(
@@ -93,6 +95,8 @@ fn previews_and_imports_a_legacy_export_without_replacing_tasks_or_reusing_ids()
     assert_eq!(task.priority, Priority::P1);
     assert_eq!(task.kind.as_deref(), Some("test"));
     assert_eq!(task.size.as_deref(), Some("xs"));
+    assert_eq!(task.difficulty, Some(TaskDifficulty::Hard));
+    assert_eq!(engine.store.require_task("T-011").unwrap().difficulty, None);
     assert_eq!(task.parent.as_deref(), Some("T-012"));
     assert_eq!(task.depends_on, ["T-012", "T-051", "T-060"]);
     assert_eq!(task.created.to_string(), "2026-01-01T00:00:00Z");

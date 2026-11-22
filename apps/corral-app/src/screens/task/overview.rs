@@ -1,4 +1,4 @@
-//! The task page's Overview: Description (the body's Markdown), Children (a plan's), Depends
+//! The task page's Overview: Planning metadata, Description (the body's Markdown), Children (a plan's), Depends
 //! on, then Pipeline, Checks (each round's gate and review), Runs (each opening its session,
 //! the live reviewer's included) and Artifacts (the finder, narrowed to the task). On a wide
 //! desktop what is read (Description, Checks with the reviewer's notes, Children, Depends on)
@@ -7,14 +7,16 @@
 use nsh_core::prelude::*;
 
 use crate::model::review::{ReadyLink, Rounds};
-use crate::model::tasks::{self, page};
+use crate::model::tasks::{self, meta, page};
 use crate::model::work::Press;
-use crate::model::{Form, Id};
+use crate::model::{Form, Hue, Id};
 use crate::screens::markdown::{markdown, provide_styles};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
+use crate::ui::kit::chip::chip;
 use crate::ui::kit::more::press;
 use crate::ui::kit::status::pipeline_rows;
+use crate::ui::kit::text::dim;
 use crate::ui::term;
 use crate::ui::tokens::MEASURE_PROSE;
 
@@ -35,6 +37,7 @@ pub(crate) fn overview(app: AppState, id: Id) -> AnyElement {
     let form = app.form;
     let width = signal(0.0_f32);
     let wide = computed(move || form == Form::Desktop && width.get() >= TWO_COLUMNS);
+    let metadata = metadata(app, id.clone());
     let body = dynamic(move || {
         let wide = wide.get();
         let id = id.clone();
@@ -84,12 +87,50 @@ pub(crate) fn overview(app: AppState, id: Id) -> AnyElement {
     let page = view()
         .test_id("task-overview")
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
+        .child(metadata)
         .child(body);
     match form {
         Form::Terminal => page.child(term::blank()).into_element(),
         Form::Desktop => page.py(px(16.0)).into_element(),
         Form::Phone => page.px(px(18.0)).py(px(14.0)).into_element(),
     }
+}
+
+/// Keep the estimates and full set of labels readable even when the page's heading truncates.
+fn metadata(app: AppState, id: Id) -> AnyElement {
+    let line = computed(move || app.feed.with(|feed| tasks::line(feed, id.as_str())));
+    dynamic(move || {
+        let line = line.get()?;
+        let estimates = format!(
+            "Size {} · Difficulty {}",
+            meta::size_word(line.size.as_deref()),
+            meta::difficulty_word(line.difficulty)
+        );
+        let labels = view()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(if app.form == Form::Terminal {
+                term::cells(1.0)
+            } else {
+                px(6.0)
+            })
+            .child(dim(app, "Tags"))
+            .when(line.tags.is_empty(), |row| {
+                row.child(dim(app, meta::UNTAGGED))
+            })
+            .children(
+                line.tags
+                    .into_iter()
+                    .map(|tag| chip(app, tag, Hue::Neutral)),
+            );
+        let content = view()
+            .test_id("task-metadata")
+            .child(dim(app, estimates))
+            .child(labels)
+            .into_element();
+        Some(block(app, "Planning", None, content))
+    })
 }
 
 /// The body's Markdown, exactly as the engine stores it, kept to a readable line on desktop.

@@ -18,6 +18,7 @@ use corral_protocol::session_host::{SessionAction, SessionActionRequest};
 use crate::model::daemon::Feed;
 use crate::model::effect::Effect;
 use crate::model::hue::Hue;
+use crate::model::tasks::meta;
 use crate::model::{Id, Live};
 
 use super::actions::{ActionGroup, row};
@@ -115,6 +116,8 @@ pub struct BoardRow {
     pub now: String,
     /// `depends on T-41, T-42`.
     pub depends: Option<String>,
+    /// `size m · difficulty unset · bug`.
+    pub meta: String,
     /// The host's detail, when `now` does not already say it.
     pub detail: Option<String>,
     /// `12m ago`.
@@ -142,7 +145,7 @@ pub struct PlanTask {
     pub id: String,
     pub key: String,
     pub title: String,
-    /// `feature · M · deep`.
+    /// `feature · size m · difficulty hard · tags bug · omp`, an unset size or difficulty said.
     pub facts: Option<String>,
     /// `after T1, T2`.
     pub depends: Option<String>,
@@ -446,15 +449,11 @@ fn plan(cx: &Cx<'_>, plan: &BoardPlan) -> PlanCard {
             let open = cx.ui.board.opened.contains(&task.key);
             let body = task.body.trim();
             let shown = plan_brief::shown(cx, task, open);
-            let kind: Vec<&str> = [&task.kind, &task.size, &task.profile]
-                .into_iter()
-                .filter_map(|fact| fact.as_deref())
-                .collect();
             PlanTask {
                 id: format!("plan-task-{}", task.key),
                 key: task.key.clone(),
                 title: task.title.clone(),
-                facts: (!kind.is_empty()).then(|| kind.join(" · ")),
+                facts: Some(meta::plan_facts(task)),
                 depends: (!task.depends.is_empty())
                     .then(|| format!("after {}", task.depends.join(", "))),
                 preview: (!open)
@@ -509,6 +508,7 @@ fn rows(cx: &Cx<'_>, board: &BuildBoard) -> Vec<BoardRow> {
                 now: stage.now,
                 depends: (!task.depends.is_empty())
                     .then(|| format!("depends on {}", task.depends.join(", "))),
+                meta: meta::line(task.size.as_deref(), task.difficulty, &task.tags),
                 detail,
                 updated,
                 selected: cx.ui.board.selected.as_deref() == Some(task.id.as_str()),

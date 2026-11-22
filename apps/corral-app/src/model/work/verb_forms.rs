@@ -1,7 +1,7 @@
 //! The input an operation asks for before it runs, prefilled from the task as served, and the
 //! composer that collects it. A refusal's or Blocked card's next step that still needs words
 //! (a reply, a summary) opens the same composer with its own values in place.
-use corral_types::{Next, Op, Status, Task};
+use corral_types::{Next, Op, Status, TASK_SIZES, Task, TaskDifficulty};
 
 use super::verb_context::FormContext;
 use super::{Choice, Record, State, Verb, VerbField};
@@ -9,6 +9,7 @@ use crate::model::Id;
 use crate::model::act::Act;
 use crate::model::daemon::Feed;
 use crate::model::effect::Effect;
+use crate::model::tasks::meta;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerbComposer {
@@ -34,8 +35,6 @@ const VERDICTS: [&str; 2] = ["approve", "changes"];
 const YES_NO: [&str; 2] = ["no", "yes"];
 /// Where a new task starts: an Idea to think about, the Backlog, or Ready to dispatch.
 const NEW_STATUSES: [&str; 3] = ["idea", "backlog", "ready"];
-/// The sizes routing rules name; empty leaves the task unsized.
-const SIZES: [&str; 6] = ["", "xs", "s", "m", "l", "xl"];
 
 /// A free-text field.
 fn text(label: &'static str, placeholder: &'static str, value: impl Into<String>) -> VerbField {
@@ -47,6 +46,7 @@ fn text(label: &'static str, placeholder: &'static str, value: impl Into<String>
         multiline: false,
         choices: Vec::new(),
         suggestions: Vec::new(),
+        tags: false,
     }
 }
 
@@ -90,6 +90,58 @@ fn pick(label: &'static str, values: &[&str], value: impl Into<String>) -> VerbF
             })
             .collect(),
         ..text(label, "", value)
+    }
+}
+
+/// A planning scale (size, difficulty): unset first, then the scale. A value off the scale that
+/// an older task carries is offered as itself, so an edit that leaves it alone keeps it.
+fn scale(label: &'static str, values: &[&str], value: String) -> VerbField {
+    let mut choices = vec![Choice {
+        value: String::new(),
+        label: meta::UNSET.into(),
+    }];
+    choices.extend(values.iter().map(|value| Choice {
+        value: (*value).to_owned(),
+        label: (*value).to_owned(),
+    }));
+    if !value.is_empty() && !values.contains(&value.as_str()) {
+        choices.push(Choice {
+            value: value.clone(),
+            label: format!("{value} (kept)"),
+        });
+    }
+    VerbField {
+        choices,
+        ..text(label, "", value)
+    }
+}
+
+fn size(task: Option<&Task>) -> VerbField {
+    let value = task.and_then(|task| task.size.clone()).unwrap_or_default();
+    scale("Size", &TASK_SIZES, value)
+}
+
+fn difficulty(task: Option<&Task>) -> VerbField {
+    let names = TaskDifficulty::ALL.map(TaskDifficulty::as_str);
+    let value = task
+        .and_then(|task| task.difficulty)
+        .map(|difficulty| difficulty.as_str().to_owned())
+        .unwrap_or_default();
+    scale("Difficulty", &names, value)
+}
+
+/// The task's tags, each removable, with the built-in and the board's other tags offered and
+/// any other label typed in.
+fn tags(task: Option<&Task>, ctx: &FormContext) -> VerbField {
+    VerbField {
+        suggestions: ctx.tags.clone(),
+        tags: true,
+        ..text(
+            "Tags",
+            "Add a tag",
+            task.map(|task| meta::join_tags(&task.tags))
+                .unwrap_or_default(),
+        )
     }
 }
 
@@ -177,7 +229,9 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
                 "ui, bug, docs…; empty clears it",
                 of(task.and_then(|task| task.kind.as_ref())),
             ),
-            pick("Size", &SIZES, of(task.and_then(|task| task.size.as_ref()))),
+            size(task),
+            difficulty(task),
+            tags(task, ctx),
             text(
                 "Profile",
                 "Pinned worker profile; empty clears it",
@@ -248,7 +302,9 @@ pub(super) fn fields(verb: Verb, task: Option<&Task>, ctx: &FormContext) -> Vec<
             project(ctx, None),
             pick("Priority", &PRIORITIES, "P2"),
             text("Kind", "ui, bug, docs…", ""),
-            pick("Size", &SIZES, ""),
+            size(None),
+            difficulty(None),
+            tags(None, ctx),
             text("Parent", "Parent task id, for a plan's child", ""),
             text("Depends on", "Task ids, comma separated", ""),
             text("Base", "Empty uses the project's base", ""),

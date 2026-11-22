@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { createBuildControls, type BuildControls } from "../src/build/host-controls.ts";
@@ -11,6 +12,7 @@ import { gitRun, type Run } from "../src/build/corral-cli.ts";
 import { prepareWorktree } from "../src/build/worktree.ts";
 import type { BuildContext, ChildSpec, ExitRecord } from "../src/build/types.ts";
 import type { ChildHandle, ChildHooks, ChildRunner } from "../src/extensions/fleet/child.ts";
+import { boardPart } from "../src/host/remote/board.ts";
 import { RemoteBuild } from "../src/host/remote/build.ts";
 import { RemoteDialogs } from "../src/host/remote/dialogs.ts";
 import type { BuildEntry } from "../src/ui/build/build-entries.ts";
@@ -199,25 +201,42 @@ function terminalDecisions(controls: BuildControls) {
   return { dialogs, entries, appended: appended.promise };
 }
 
-test("a board filed from the terminal posts its entry once", async () => {
+test("owner-confirmed board_plan keeps agent metadata from the previews to CLI creation and posts once", async () => {
   const root = mkdtempSync(join(tmpdir(), "terminal-board-"));
+  const metadata = { size: "s", difficulty: "hard", tags: ["bug", "BUG", "--API, old"] };
   const { controls, calls } = fixture(root, undefined, true, false, async argv => {
     if (argv[3] !== "new") throw new Error(`unexpected board command: ${argv.join(" ")}`);
     const id = argv.includes("--parent") ? "T-002" : "T-001";
-    return { code: 0, stderr: "", stdout: JSON.stringify({ task: { id, title: argv.at(-1), status: "backlog" } }) };
+    const tags = argv.filter(arg => arg.startsWith("--tag=")).map(arg => arg.slice("--tag=".length));
+    const size = argv.find(arg => arg.startsWith("--size="))?.split("=")[1];
+    const difficulty = argv.find(arg => arg.startsWith("--difficulty="))?.split("=")[1];
+    return { code: 0, stderr: "", stdout: JSON.stringify({ task: { id, title: argv.at(-1), status: "backlog", size, difficulty, tags } }) };
   });
   const { dialogs, entries, appended } = terminalDecisions(controls);
   try {
-    controls.board!.propose({ title: "Plan", why: "", tasks: [{ key: "slice", title: "Slice", body: "", depends: [] }] });
+    const board = controls.board!;
+    const tool = controls.tools.find(tool => tool.name === "board_plan")!;
+    const args = validateToolArguments(tool, { type: "toolCall", id: "plan", name: tool.name, arguments: {
+      title: "Plan", why: "", tasks: [{ key: "slice", title: "Slice", body: "", depends: [], ...metadata, tags: [...metadata.tags, "bug"] }],
+    } });
+    expect((await tool.execute("plan", args, undefined, undefined, {} as never)).isError).not.toBe(true);
+    expect(await board.preview(board.proposed()!)).toMatchObject({ tasks: [{ id: "slice", ...metadata }] });
+    expect(boardPart(board).proposed?.tasks[0]).toMatchObject(metadata);
+    expect(calls).toEqual([]);
+
     const dock = dialogs.watch(card => card.kind === "board_plan", () => {})!;
     expect(await dock.answer([{ options: ["file"] }])).toBe("started");
     await within(appended, 2000, "board filing conversation entry");
     await expect(dialogs.resolve(dock.id, [{ options: ["file_start"] }], false, { source: "remote" }))
       .rejects.toMatchObject({ code: "invalid_card_answer" });
-    expect(calls.map(argv => argv[3])).toEqual(["new", "new"]);
+    expect(calls.map(argv => argv.slice(3))).toEqual([
+      ["new", "--project=app", "--", "Plan"],
+      ["new", "--project=app", "--parent", "T-001", "--size=s", "--difficulty=hard", "--tag=bug", "--tag=BUG", "--tag=--API, old", "--", "Slice"],
+    ]);
+    expect(boardPart(board).tasks[0]).toMatchObject({ id: "T-002", ...metadata });
     expect(entries).toHaveLength(1);
     expect(entries).toMatchObject([{ customType: "corral_build_board",
-      details: { filed: [{ id: "T-002", title: "Slice", depends: [] }], started: false } }]);
+      details: { filed: [{ id: "T-002", title: "Slice", depends: [], ...metadata }], started: false } }]);
   } finally { dialogs.close(); await controls.close(); rmSync(root, { recursive: true, force: true }); }
 });
 

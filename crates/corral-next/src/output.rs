@@ -92,7 +92,6 @@ impl Output<'_> {
             for (label, value) in [
                 ("Project", &task.project),
                 ("Kind", &task.kind),
-                ("Size", &task.size),
                 ("Profile", &task.profile),
                 ("Parent", &task.parent),
                 ("Base", &task.base),
@@ -101,6 +100,9 @@ impl Output<'_> {
                     writeln!(out, "{label}: {value}")?;
                 }
             }
+            writeln!(out, "Size: {}", task.size.as_deref().unwrap_or("unset"))?;
+            writeln!(out, "Difficulty: {}", difficulty(task))?;
+            writeln!(out, "Tags: {}", tags(task))?;
             if !task.depends_on.is_empty() {
                 writeln!(out, "Depends on: {}", task.depends_on.join(", "))?;
             }
@@ -184,21 +186,45 @@ pub(crate) struct TaskView {
 pub(crate) fn tasks(out: &mut impl Write, tasks: &[Task]) -> io::Result<()> {
     table(
         out,
-        ["ID", "STATUS", "PRI", "PROJECT", "TITLE"],
+        [
+            "ID",
+            "STATUS",
+            "PRI",
+            "PROJECT",
+            "SIZE",
+            "DIFFICULTY",
+            "TITLE",
+            "TAGS",
+        ],
         tasks.iter().map(|task| {
             [
                 task.id.as_str().into(),
                 task.status.as_str().into(),
                 task.priority.as_str().into(),
                 task.project.as_deref().unwrap_or("-").into(),
+                task.size.as_deref().unwrap_or("unset").into(),
+                difficulty(task).into(),
                 if task.title.contains(['\n', '\r']) {
                     task.title.replace(['\n', '\r'], " ").into()
                 } else {
                     task.title.as_str().into()
                 },
+                tags(task),
             ]
         }),
     )
+}
+
+fn difficulty(task: &Task) -> &'static str {
+    task.difficulty.map_or("unset", |value| value.as_str())
+}
+
+fn tags(task: &Task) -> Cow<'static, str> {
+    if task.tags.is_empty() {
+        "none".into()
+    } else {
+        format!("{:?}", task.tags).into()
+    }
 }
 
 pub(crate) fn log(out: &mut impl Write, events: &[Event]) -> io::Result<()> {

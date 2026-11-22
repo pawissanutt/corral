@@ -122,6 +122,7 @@ max_rounds = 2
 [[routing]]                  # optional; first match wins
 kind = ["ui"]
 size = ["l", "xl"]
+difficulty = ["standard", "hard"]
 title_regex = "(?i)tui|frontend"
 project = "corral"
 profile = "omp-opus"
@@ -129,6 +130,7 @@ profile = "omp-opus"
 
 Worker profile resolution: dispatch flag, task `profile`, first matching `[[routing]]`
 rule, project `profile`, `defaults.profile`. Project keys fall back to `[defaults]`.
+See [task metadata](../guide/task-metadata.md) for the independent size and difficulty predicates.
 
 Base branch resolution: dispatch flag, task `base`, project `base`, `defaults.base`, then
 the repository's default branch (what `refs/remotes/origin/HEAD` points at, else the branch
@@ -153,6 +155,7 @@ them, and the protocol carries them as they are: there is no second set of wire 
 ```rust
 pub enum Status { Idea, Backlog, Ready, Running, Blocked, Review, Done, Dropped }
 pub enum Priority { P0, P1, P2, P3 }            // default P2
+pub enum TaskDifficulty { Routine, Standard, Hard }
 pub enum Actor { Owner, Agent, Reviewer, Assistant, Auto }
 
 pub struct Task {
@@ -164,6 +167,8 @@ pub struct Task {
     pub priority: Priority,
     pub kind: Option<String>,
     pub size: Option<String>,
+    pub difficulty: Option<TaskDifficulty>,
+    pub tags: Vec<String>,
     pub profile: Option<String>,    // pinned worker profile
     pub base: Option<String>,       // branch to start from and land onto
     pub parent: Option<String>,     // a plan is a parent task with children
@@ -432,9 +437,9 @@ functions for every table; the daemon never writes SQL.
 
 ```
 init [--first-id N]
-new "<title>" [-p project] [--idea|--ready] [--priority P1] [--kind k] [--size s] [--base b] [--parent T] [--depends-on T,...]
+new "<title>" [-p project] [--idea|--ready] [--priority P1] [--kind k] [--size s] [--difficulty d] [--tag label]... [--base b] [--parent T] [--depends-on T,...]
 list [--status s] [--project p] [--all]      show <id>      log <id>
-edit <id> [--title t] [--body-file f] [--project p] [--priority P1] [--kind k] [--size s] [--profile p] [--base b] [--parent T] [--depends-on T,...]
+edit <id> [--title t] [--body-file f] [--project p] [--priority P1] [--kind k] [--size s] [--difficulty d] [--tag label ... | --clear-tags] [--profile p] [--base b] [--parent T] [--depends-on T,...]
                                               # with no flags: title and body through $EDITOR
 comment <id> "<text>"      move <id> <status> [--force]
 dispatch <id> [--profile p] [--base b] [--force]

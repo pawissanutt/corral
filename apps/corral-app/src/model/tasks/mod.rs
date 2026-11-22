@@ -6,12 +6,13 @@
 
 pub mod band;
 pub mod closed;
+pub mod meta;
 pub mod page;
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
-use corral_types::{Priority, Status};
+use corral_types::{Priority, Status, TaskDifficulty};
 
 use crate::model::daemon::{Feed, Link, Task};
 use crate::model::list::{Column, Section};
@@ -22,6 +23,7 @@ use crate::model::status::{OPEN, folds, status_look, status_word};
 use crate::model::{Id, TaskTab, work};
 
 pub use closed::Closed;
+pub use meta::Filter;
 
 pub const TITLE: &str = "Tasks";
 /// What the list says while the open tasks have not arrived.
@@ -31,10 +33,11 @@ pub const UNAVAILABLE: &str = "Tasks are unavailable until corrald serves the bo
 /// What the list says when the scope holds no task.
 pub const EMPTY: &str = "No tasks in this scope.";
 /// What the list says when the filter's words match no task.
-pub const NO_MATCH: &str = "No task matches these words.";
+pub const NO_MATCH: &str = "No task matches this filter.";
 /// The filter field's words before anything is typed, and its spoken name.
 pub const FILTER: &str = "Filter tasks…";
-pub const FILTER_LABEL: &str = "Filter tasks by id, title or project";
+pub const FILTER_LABEL: &str =
+    "Filter tasks by id, title, project or tag words, or size:, difficulty: and tag: exactly";
 /// A fact corrald does not serve: the Cost column's every cell, as no per-task cost is on the
 /// wire.
 pub const ABSENT: &str = "–";
@@ -124,25 +127,6 @@ pub fn page_tab(key: &str) -> Option<TaskTab> {
     TaskTab::ALL.get(at).copied()
 }
 
-/// The filter's words, each of which a task must contain in its id, title or project.
-pub fn words(filter: &str) -> Vec<String> {
-    filter.split_whitespace().map(str::to_lowercase).collect()
-}
-
-pub(crate) fn matches(task: &corral_types::Task, words: &[String]) -> bool {
-    if words.is_empty() {
-        return true;
-    }
-    let text = format!(
-        "{} {} {}",
-        task.id,
-        task.title,
-        task.project.as_deref().unwrap_or_default()
-    )
-    .to_lowercase();
-    words.iter().all(|word| text.contains(word.as_str()))
-}
-
 fn in_scope<'a>(feed: &'a Feed, scope: &'a Scope) -> impl Iterator<Item = &'a Task> {
     feed.board
         .tasks()
@@ -169,14 +153,14 @@ fn children<'a>(feed: &'a Feed, scope: &Scope, plan: &'a str) -> Vec<&'a Task> {
 /// The list's sections: a group per open status that has a task matching the filter, each
 /// unfolded plan followed by its children; then the Done and Dropped fold.
 pub fn sections(feed: &Feed, scope: &Scope, state: &State) -> Vec<Section> {
-    let words = words(&state.filter);
+    let filter = Filter::parse(&state.filter);
     let mut sections: Vec<Section> = OPEN
         .into_iter()
         .filter_map(|status| {
             let mut rows = Vec::new();
             let mut count = 0;
             let listed = in_scope(feed, scope)
-                .filter(|task| task.status() == status && matches(task.task(), &words));
+                .filter(|task| task.status() == status && filter.matches(task.task()));
             for task in listed {
                 count += 1;
                 rows.push(task.id.clone());
@@ -184,6 +168,7 @@ pub fn sections(feed: &Feed, scope: &Scope, state: &State) -> Vec<Section> {
                     rows.extend(
                         children(feed, scope, task.id.as_str())
                             .into_iter()
+                            .filter(|child| filter.matches(child.task()))
                             .map(|child| child_key(task.id.as_str(), child.id.as_str())),
                     );
                 }
@@ -202,7 +187,7 @@ pub fn sections(feed: &Feed, scope: &Scope, state: &State) -> Vec<Section> {
     sections.extend(closed::section(
         feed,
         scope,
-        &words,
+        &filter,
         &state.closed,
         state.unfolded.contains(closed::KEY),
     ));
@@ -271,6 +256,12 @@ pub struct TaskLine {
     pub project: Option<String>,
     /// The run's profile, else the one dispatch would pick.
     pub profile: Option<String>,
+    /// How much work, exactly as stored (an older task may carry a word off the scale).
+    pub size: Option<String>,
+    /// How complex or uncertain, apart from its size.
+    pub difficulty: Option<TaskDifficulty>,
+    /// Exact labels, in the task's order.
+    pub tags: Vec<String>,
     /// How long ago an open task last changed (`3h`); the date a closed one closed.
     pub age: String,
     pub next: Option<NextStep>,
@@ -283,6 +274,15 @@ impl TaskLine {
         if !self.now.is_empty() {
             spoken.push_str(", ");
             spoken.push_str(&self.now);
+        }
+        spoken.push_str(&format!(
+            ", size {}, difficulty {}",
+            meta::size_word(self.size.as_deref()),
+            meta::difficulty_word(self.difficulty)
+        ));
+        if !self.tags.is_empty() {
+            spoken.push_str(", tags ");
+            spoken.push_str(&self.tags.join(", "));
         }
         spoken
     }
@@ -326,6 +326,9 @@ fn line_of(task: &Task, feed: &Feed) -> TaskLine {
         pipeline: pipeline(task),
         project: task.project().map(str::to_owned),
         profile: profile_of(task),
+        size: task.task().size.clone(),
+        difficulty: task.task().difficulty,
+        tags: task.task().tags.clone(),
         age: if folds(status) {
             work::stamp_at(task.task().updated, feed)
         } else {
@@ -351,9 +354,7 @@ pub struct TaskFacts {
 }
 
 /// The facts the page's meta line shows, in order; the others are the inspector's.
-const META: [&str; 7] = [
-    "project", "priority", "kind", "size", "base", "profile", "round",
-];
+const META: [&str; 6] = ["project", "priority", "kind", "base", "profile", "round"];
 
 impl TaskFacts {
     /// The page's meta line: `project site · priority P1 · base main`.
@@ -392,7 +393,9 @@ pub fn facts(feed: &Feed, id: &str) -> Option<TaskFacts> {
     fact("project", line.project.clone());
     fact("priority", Some(priority_word(inner.priority).to_owned()));
     fact("kind", inner.kind.clone());
-    fact("size", inner.size.clone());
+    fact("size", Some(meta::size_word(inner.size.as_deref())));
+    fact("difficulty", Some(meta::difficulty_word(inner.difficulty)));
+    fact("tags", Some(meta::tags_word(&inner.tags)));
     fact(
         "base",
         run.map(|run| run.base.clone())
@@ -424,9 +427,9 @@ pub fn facts(feed: &Feed, id: &str) -> Option<TaskFacts> {
     })
 }
 
-/// A task row's columns. Profile gives way first as the list narrows, then project, then
-/// cost, then the phrase; with one project in scope the project column is left out. The title
-/// and the phrase stop growing at a readable line.
+/// A task row's columns. Profile, project, cost and the phrase give way before the planning
+/// estimates. With one project in scope the project column is left out. The title and phrase
+/// stop growing at a readable line.
 pub fn columns(scope: &Scope) -> Vec<Column> {
     let mut columns = vec![
         Column::fixed("status", "", 14.0, 1.0),
@@ -436,6 +439,10 @@ pub fn columns(scope: &Scope) -> Vec<Column> {
             .most(360.0, 40.0)
             .gives_way(4),
         Column::fixed("pipeline", "run gate rev land", 104.0, 7.0).short("stages"),
+        Column::fixed("size", "Size", 40.0, 5.0).gives_way(6),
+        Column::fixed("difficulty", "Difficulty", 70.0, 9.0)
+            .short("Diff.")
+            .gives_way(5),
     ];
     if scope.project().is_none() {
         columns.push(Column::fixed("project", "Project", 104.0, 12.0).gives_way(2));

@@ -8,8 +8,10 @@ use serde_json::Value;
 
 mod op;
 pub mod pricing;
+mod task_metadata;
 
 pub use op::{ConfigProblem, Next, Op, Refusal};
+pub use task_metadata::{BUILTIN_TAGS, TASK_SIZES, TaskDifficulty, normalize_tags, validate_tag};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -108,6 +110,9 @@ pub struct Task {
     pub priority: Priority,
     pub kind: Option<String>,
     pub size: Option<String>,
+    pub difficulty: Option<TaskDifficulty>,
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub profile: Option<String>,
     pub base: Option<String>,
     pub parent: Option<String>,
@@ -281,6 +286,9 @@ pub struct NewTask {
     pub priority: Priority,
     pub kind: Option<String>,
     pub size: Option<String>,
+    pub difficulty: Option<TaskDifficulty>,
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub profile: Option<String>,
     pub base: Option<String>,
     pub parent: Option<String>,
@@ -297,6 +305,8 @@ impl Default for NewTask {
             priority: Priority::P2,
             kind: None,
             size: None,
+            difficulty: None,
+            tags: Vec::new(),
             profile: None,
             base: None,
             parent: None,
@@ -330,6 +340,15 @@ pub struct TaskEdit {
         deserialize_with = "present"
     )]
     pub size: Option<Option<String>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    pub difficulty: Option<Option<TaskDifficulty>>,
+    /// Replace the exact tag list; an empty list clears it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",

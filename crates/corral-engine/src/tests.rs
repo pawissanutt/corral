@@ -19,6 +19,8 @@ pub(crate) fn task(id: &str) -> Task {
         priority: Priority::P2,
         kind: None,
         size: None,
+        difficulty: None,
+        tags: Vec::new(),
         profile: None,
         parent: None,
         base: None,

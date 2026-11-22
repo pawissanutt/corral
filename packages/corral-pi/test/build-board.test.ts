@@ -98,3 +98,11 @@ test("plan validation accepts existing tasks and rejects duplicate keys, unknown
   expect(() => validatePlan({ ...plan, tasks: [first!, { ...second!, depends: ["test"] }] })).toThrow("cycle");
   expect(() => validatePlan({ ...plan, tasks: Array.from({ length: 21 }, (_, i) => ({ ...second!, key: `key-${i}` })) })).toThrow("at most 20");
 });
+
+test("plan tag validation rejects malformed labels and plans whose tags cannot fit the preview", () => {
+  const task = plan.tasks[0]!;
+  for (const tag of ["", " padded", "padded\u00a0", "line\nbreak", "control\u0085inside"]) {
+    expect(() => validatePlan({ ...plan, tasks: [{ ...task, depends: [], tags: [tag] }] })).toThrow("Invalid tag");
+  }
+  expect(() => validatePlan({ ...plan, tasks: [{ ...task, depends: [], tags: ['"'.repeat(4096)] }] })).toThrow("preview budget");
+});

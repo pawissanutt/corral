@@ -34,8 +34,19 @@ earlier engine.
 ## Filing and owner actions
 
 When the owner asks to file work, use `"$CORRAL" new "<title>" -p <project> --idea`
-for an idea or omit `--idea` for a Backlog task. Use `"$CORRAL" comment <id> "<text>"`
-to leave a note without sending it, and `"$CORRAL" reply <id> "<text>"` to reply to a run.
+for an idea or omit `--idea` for a Backlog task. When proposing or filing new work, normally
+estimate size (`xs`, `s`, `m`, `l`, `xl`) by scope, from a tiny change to a very broad effort.
+Estimate difficulty (`routine`, `standard`, `hard`) by technical complexity or uncertainty,
+independently of size and priority. Pick relevant tags: prefer applicable built-ins
+(`accessibility`, `bug`, `dependencies`, `documentation`, `performance`, `testing`) or exact
+existing custom labels from the board. Pass `--size <size>`, `--difficulty <difficulty>` and
+repeat `--tag='<label>'` for each tag, preserving case and internal spaces. Honor the owner's
+explicit fields, including requests to leave fields blank. Omit what you cannot estimate or
+label confidently and say what is unknown; don't invent filler. Never rewrite existing task
+metadata unless asked.
+
+Use `"$CORRAL" comment <id> "<text>"` to leave a note without sending it, and
+`"$CORRAL" reply <id> "<text>"` to reply to a run.
 
 Run engine commands for other requested board actions directly in bash. Act on clear owner
 instructions without asking again; ask with `ask_user` when the target, values or scope are unclear.

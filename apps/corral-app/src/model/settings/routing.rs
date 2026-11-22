@@ -1,10 +1,10 @@
 //! Settings › Configuration › Routing in the owner's words: which worker profile a dispatch
 //! runs, in the engine's order (`corral-engine` `Config::resolve_profile`): a profile chosen at
 //! dispatch, the task's own, the first `[[routing]]` rule that matches, the task's project's,
-//! then the workspace default. A rule's keys are ANDed; `kind` and `size` match any listed
-//! word, and an unset or empty key restricts nothing, so a rule without keys is a catch-all and
-//! every rule below it, and both defaults, are never reached. A matched rule whose profile
-//! does not exist is refused, never passed over, so nothing here names a fallback for it.
+//! then the workspace default. A rule's keys are ANDed; `kind`, `size` and `difficulty` match
+//! any listed word, and an unset or empty key restricts nothing, so a rule without keys is a
+//! catch-all and every rule below it, and both defaults, are never reached. A matched rule whose
+//! profile does not exist is refused, never passed over, so nothing here names a fallback for it.
 
 use serde_json::{Map, Value as Json};
 use toml_edit::{DocumentMut, Item, Value};
@@ -315,7 +315,11 @@ fn rule(
 ) -> Rule {
     let mut problems = Vec::new();
     let mut clauses = Vec::new();
-    for (key, noun) in [("kind", "kind"), ("size", "size")] {
+    for (key, noun) in [
+        ("kind", "kind"),
+        ("size", "size"),
+        ("difficulty", "difficulty"),
+    ] {
         let item = document::get(doc, &Path::rule(index, key));
         if let Some(Value::String(_)) = item.and_then(Item::as_value) {
             problems.push(format!(
@@ -457,10 +461,10 @@ pub const WORKER_ONLY: &str =
 pub const PREVIEW_NOTE: &str =
     "Preview saves routing rules, but sample dispatch does not apply them.";
 
-pub const NEW_RULE: &str = "A new rule goes last and has no conditions, so it matches every task that reaches it until you add a kind, size, title pattern or project.";
+pub const NEW_RULE: &str = "A new rule goes last and has no conditions, so it matches every task that reaches it until you add a kind, size, difficulty, title pattern or project.";
 
 /// Said in an open catch-all rule's editor.
-pub const CATCH_ALL: &str = "No conditions: this rule matches every task that reaches it. Add a kind, size, title pattern or project to narrow it.";
+pub const CATCH_ALL: &str = "No conditions: this rule matches every task that reaches it. Add a kind, size, difficulty, title pattern or project to narrow it.";
 
 /// Said when there are no rules.
 pub const NO_RULES: &str = "No rules: a task without its own profile runs its project's profile, else the workspace default.";

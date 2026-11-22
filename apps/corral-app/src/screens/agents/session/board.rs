@@ -252,6 +252,7 @@ fn task_row(app: AppState, row: &BoardRow) -> AnyElement {
         .flex_1();
     let facts: Vec<String> = [
         Some(row.now.clone()),
+        Some(row.meta.clone()),
         row.depends.clone(),
         row.detail.clone(),
         row.updated.clone(),

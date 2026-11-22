@@ -25,6 +25,8 @@ pub struct FormContext {
     pub landing: Option<String>,
     /// The task project's local branches, newest tip first, offered as landing targets.
     pub branches: Vec<String>,
+    /// The tags a tag field offers: the built-in ones, then the others the board's tasks carry.
+    pub tags: Vec<String>,
 }
 
 fn config(feed: &Feed) -> Option<&serde_json::Map<String, Value>> {
@@ -56,6 +58,10 @@ fn route(rule: &Value, task: &corral_types::Task) -> Route {
     let project = text(rule.get("project"));
     if !listed("kind", task.kind.as_deref())
         || !listed("size", task.size.as_deref())
+        || !listed(
+            "difficulty",
+            task.difficulty.map(corral_types::TaskDifficulty::as_str),
+        )
         || project.is_some_and(|project| task.project.as_deref() != Some(project.as_str()))
     {
         return Route::Skips;
@@ -135,6 +141,7 @@ impl FormContext {
                         .is_none_or(|run| run.branch != *branch)
                 })
                 .collect(),
+            tags: crate::model::tasks::meta::known_tags(feed),
         }
     }
 }

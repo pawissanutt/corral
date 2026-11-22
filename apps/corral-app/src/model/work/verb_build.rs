@@ -1,9 +1,10 @@
 //! A composer's values become one engine operation here, field by field as `verb_forms` lists
 //! them. Nothing here checks whether the engine will accept it.
-use corral_types::{NewTask, Op, Priority, TaskEdit};
+use corral_types::{NewTask, Op, Priority, TaskDifficulty, TaskEdit, normalize_tags};
 
 use super::verb_forms::status;
 use super::{Record, Verb};
+use crate::model::tasks::meta;
 
 pub(super) fn op(
     record: &Record,
@@ -80,9 +81,11 @@ pub(super) fn op(
                 priority: priority(value(4))?,
                 kind: optional(5),
                 size: optional(6),
-                parent: optional(7),
-                depends_on: ids(value(8)),
-                base: optional(9),
+                difficulty: difficulty(value(7))?,
+                tags: tags(value(8))?,
+                parent: optional(9),
+                depends_on: ids(value(10)),
+                base: optional(11),
                 profile: None,
             },
         },
@@ -97,6 +100,18 @@ fn priority(value: &str) -> Result<Priority, String> {
         "P3" => Ok(Priority::P3),
         other => Err(format!("Unknown priority {other}.")),
     }
+}
+
+/// A difficulty field's value: empty leaves it unset.
+fn difficulty(value: &str) -> Result<Option<TaskDifficulty>, String> {
+    (!value.is_empty())
+        .then(|| value.parse::<TaskDifficulty>())
+        .transpose()
+}
+
+/// A tag field's value as the exact tag list the engine takes.
+fn tags(value: &str) -> Result<Vec<String>, String> {
+    normalize_tags(meta::split_tags(value))
 }
 
 /// Task ids from `T-1, T-2`.
@@ -123,10 +138,12 @@ fn edit(values: &[String], initial: &[String]) -> Result<TaskEdit, String> {
         priority: changed(3).map(priority).transpose()?,
         kind: cleared(4),
         size: cleared(5),
-        profile: cleared(6),
-        base: cleared(7),
-        parent: cleared(8),
-        depends_on: changed(9).map(ids),
+        difficulty: changed(6).map(difficulty).transpose()?,
+        tags: changed(7).map(tags).transpose()?,
+        profile: cleared(8),
+        base: cleared(9),
+        parent: cleared(10),
+        depends_on: changed(11).map(ids),
         ..TaskEdit::default()
     };
     if edit == TaskEdit::default() {
@@ -142,7 +159,7 @@ mod tests {
 
     #[test]
     fn an_edit_sends_only_changed_fields_and_an_emptied_field_clears() {
-        let initial: Vec<String> = ["Title", "Body", "web", "P2", "", "", "", "", "", ""]
+        let initial: Vec<String> = ["Title", "Body", "web", "P2", "", "", "", "", "", "", "", ""]
             .map(String::from)
             .to_vec();
         let mut values = initial.clone();
@@ -200,6 +217,56 @@ mod tests {
         assert_eq!(edit.body.as_deref(), Some(values[1].as_str()));
     }
 
+    /// An edit sent the metadata it showed, so a size off the scale was rewritten and tags
+    /// changed elsewhere were lost: untouched size, difficulty and tags stay out of the edit,
+    /// and a changed or emptied one goes out exactly, empty clearing it.
+    #[test]
+    fn an_edit_keeps_untouched_metadata_and_sends_what_changed() {
+        let task = corral_types::Task {
+            title: "Zoom".into(),
+            size: Some("huge".into()),
+            difficulty: Some(TaskDifficulty::Hard),
+            tags: vec!["bug".into(), "needs design".into()],
+            ..corral_types::Task::default()
+        };
+        let fields = super::super::verb_forms::fields(
+            Verb::Edit,
+            Some(&task),
+            &super::super::verb_context::FormContext::default(),
+        );
+        assert!(
+            fields[5]
+                .choices
+                .iter()
+                .any(|choice| choice.value == "huge")
+        );
+        assert!(fields[7].tags);
+        let initial: Vec<String> = fields.into_iter().map(|field| field.value).collect();
+        let record = Record::Task(Id::new("T-4"));
+        let sent = |change: &dyn Fn(&mut Vec<String>)| {
+            let mut values = initial.clone();
+            change(&mut values);
+            match op(&record, Verb::Edit, &values, &initial) {
+                Ok(Op::Edit { edit, .. }) => edit,
+                other => panic!("an edit, not {other:?}"),
+            }
+        };
+        let title = sent(&|values| values[0] = "Zoom presets".into());
+        assert_eq!(
+            (title.size, title.difficulty, title.tags),
+            (None, None, None)
+        );
+        let tags = sent(&|values| values[7] = meta::remove_tag(&values[7], "bug"));
+        assert_eq!(tags.tags, Some(vec!["needs design".to_owned()]));
+        assert_eq!(tags.size, None);
+        let cleared = sent(&|values| {
+            values[6].clear();
+            values[7].clear();
+        });
+        assert_eq!(cleared.difficulty, Some(None));
+        assert_eq!(cleared.tags, Some(Vec::new()));
+    }
+
     #[test]
     fn a_capture_carries_every_field_and_a_dispatch_leaves_untouched_defaults_to_the_engine() {
         let values: Vec<String> = [
@@ -210,6 +277,8 @@ mod tests {
             "P1",
             "ui",
             "s",
+            "hard",
+            "bug\nNeeds design",
             "T-1",
             "T-14, T-12",
             "release",
@@ -234,6 +303,8 @@ mod tests {
             )
         );
         assert_eq!(task.depends_on, ["T-14", "T-12"]);
+        assert_eq!(task.difficulty, Some(TaskDifficulty::Hard));
+        assert_eq!(task.tags, ["bug", "Needs design"]);
         assert_eq!(task.parent.as_deref(), Some("T-1"));
         let initial: Vec<String> = ["omp-sol", "main"].map(String::from).to_vec();
         let mut chosen = initial.clone();

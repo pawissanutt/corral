@@ -9,7 +9,7 @@
 //! the keyboard's menu and the composer an operation that asks for input opens.
 
 use nsh_base::{button as press_target, context_menu, menu, menu_item, submenu};
-use nsh_core::element::{StyleRefinement, color as for_appearance};
+use nsh_core::element::StyleRefinement;
 use nsh_core::prelude::*;
 
 use crate::model::commands::CONFIRM_CANCEL;
@@ -24,6 +24,7 @@ use crate::ui::kit::marks::hue_ink;
 use crate::ui::kit::overlay::{Modal, counted, counted_context, modal};
 use crate::ui::kit::suggest::suggestions;
 use crate::ui::kit::walk::walk;
+use crate::ui::kit::{entry, tags};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -527,22 +528,12 @@ fn composer(app: AppState) -> Modal {
         .iter()
         .enumerate()
         .map(|(index, field)| {
-            let caption = text(field.label)
-                .number_of_lines(1u32)
-                .text_color(color(Token::Ink2));
-            let caption = match form {
-                Form::Terminal => caption,
-                Form::Desktop => caption
-                    .font_family(FONT_TEXT)
-                    .text_size(px(12.0))
-                    .font_weight(FontWeight::SEMIBOLD),
-                Form::Phone => caption
-                    .font_family(FONT_TEXT)
-                    .text_size(px(14.0))
-                    .font_weight(FontWeight::SEMIBOLD),
-            };
+            let caption = entry::caption(form, field.label);
             if !field.choices.is_empty() {
                 return choice_row(app, field, index, values, caption);
+            }
+            if field.tags {
+                return tags::tag_row(app, field, index, values, send);
             }
             // A prose field keeps its line breaks: Return breaks the line there, and Tab reaches
             // Send; a one-line field sends on Return.
@@ -567,53 +558,8 @@ fn composer(app: AppState) -> Modal {
                         }
                     });
                 })
-                .on_submit(move |_: &str| send())
-                .min_w(px(0.0))
-                .text_color(color(Token::Ink))
-                .placeholder_color(move || for_appearance(color(Token::Ink4)))
-                .caret_color(move || for_appearance(color(Token::Ink)))
-                .selection_color(move || for_appearance(color(Token::Sel)))
-                .bg(AdaptiveColor::TRANSPARENT)
-                .border_1()
-                .border_color(color(Token::Rule2))
-                .focus(|s| s.border_color(color(Token::Focus)));
-            let entry = match (form, multiline) {
-                (Form::Terminal, false) => entry.h(term::rows(1.0)).px(term::cells(1.0)),
-                (Form::Terminal, true) => entry
-                    .min_h(term::rows(3.0))
-                    .max_h(term::rows(8.0))
-                    .px(term::cells(1.0)),
-                (Form::Desktop, false) => entry
-                    .font_family(FONT_TEXT)
-                    .text_size(px(13.0))
-                    .h(px(32.0))
-                    .px(px(10.0))
-                    .rounded(px(6.0)),
-                (Form::Desktop, true) => entry
-                    .font_family(FONT_TEXT)
-                    .text_size(px(13.0))
-                    .line_height(px(19.0))
-                    .min_h(px(96.0))
-                    .max_h(px(288.0))
-                    .px(px(10.0))
-                    .py(px(7.0))
-                    .rounded(px(6.0)),
-                (Form::Phone, false) => entry
-                    .font_family(FONT_TEXT)
-                    .text_size(px(16.0))
-                    .min_h(px(TARGET))
-                    .px(px(12.0))
-                    .rounded(px(10.0)),
-                (Form::Phone, true) => entry
-                    .font_family(FONT_TEXT)
-                    .text_size(px(16.0))
-                    .line_height(px(22.0))
-                    .min_h(px(TARGET * 2.5))
-                    .max_h(px(240.0))
-                    .px(px(12.0))
-                    .py(px(10.0))
-                    .rounded(px(10.0)),
-            };
+                .on_submit(move |_: &str| send());
+            let entry = entry::look(entry, form, multiline);
             let offered = (!field.suggestions.is_empty()).then(|| {
                 let all = field.suggestions.clone();
                 let typed = computed(move || {

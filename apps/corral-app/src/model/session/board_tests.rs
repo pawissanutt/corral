@@ -73,6 +73,8 @@ fn brief_tab(brief: Result<&str, &str>) -> super::PlanTask {
                 title: "Token store".into(),
                 kind: None,
                 size: None,
+                difficulty: None,
+                tags: Vec::new(),
                 profile: None,
                 depends: Vec::new(),
                 body: CLIPPED.into(),

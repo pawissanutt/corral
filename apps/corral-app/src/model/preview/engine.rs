@@ -7,8 +7,8 @@ mod pipeline;
 use corral_protocol::detail::TaskDetail;
 use corral_protocol::op::{OP_SUBMIT, OpReply};
 use corral_types::{
-    Actor, Blocked, EventKind, NewTask, Next, Op, Origin, Outcome, Refusal, Role, Status, Task,
-    TaskEdit,
+    Actor, Blocked, EventKind, NewTask, Next, Op, Origin, Outcome, Refusal, Role, Status,
+    TASK_SIZES, Task, TaskEdit, normalize_tags,
 };
 use serde_json::{Value, json};
 
@@ -96,7 +96,7 @@ fn apply(feed: &mut Feed, op: &Op, force: bool) -> Applied {
     };
     let mut rec = record(feed, &id).ok_or_else(|| Fail::Missing(format!("task {id} not found")))?;
     match op {
-        Op::Edit { edit, .. } => self::edit(feed, rec, edit),
+        Op::Edit { edit, .. } => self::edit(feed, rec, edit)?,
         Op::Comment { text, .. } => {
             rec.task.body.push_str("\n\n");
             rec.task.body.push_str(text);
@@ -143,7 +143,20 @@ fn apply(feed: &mut Feed, op: &Op, force: bool) -> Applied {
     Ok(Some(id))
 }
 
+/// The engine's word on a size it is asked to set: one of the scale.
+fn off_scale(size: Option<&str>) -> Result<(), Fail> {
+    match size {
+        Some(size) if !TASK_SIZES.contains(&size) => Err(refuse(
+            format!("size {size:?} is not one of xs, s, m, l, xl"),
+            Vec::new(),
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn new(feed: &mut Feed, task: &NewTask) -> Applied {
+    off_scale(task.size.as_deref())?;
+    let tags = normalize_tags(task.tags.clone()).map_err(|reason| refuse(reason, Vec::new()))?;
     if !matches!(task.status, Status::Idea | Status::Backlog | Status::Ready) {
         return Err(refuse(
             "a new task starts in Idea, Backlog or Ready",
@@ -174,6 +187,8 @@ fn new(feed: &mut Feed, task: &NewTask) -> Applied {
             priority: task.priority,
             kind: task.kind.clone(),
             size: task.size.clone(),
+            difficulty: task.difficulty,
+            tags,
             profile: task.profile.clone(),
             base: task.base.clone(),
             parent: task.parent.clone(),
@@ -193,7 +208,20 @@ fn new(feed: &mut Feed, task: &NewTask) -> Applied {
     Ok(Some(id))
 }
 
-fn edit(feed: &mut Feed, mut rec: TaskDetail, edit: &TaskEdit) {
+/// Applies an edit as the engine does: a size is checked against the scale only when it
+/// changes, so an older task keeps its own.
+fn edit(feed: &mut Feed, mut rec: TaskDetail, edit: &TaskEdit) -> Result<(), Fail> {
+    if let Some(size) = &edit.size
+        && *size != rec.task.size
+    {
+        off_scale(size.as_deref())?;
+    }
+    let tags = edit
+        .tags
+        .clone()
+        .map(normalize_tags)
+        .transpose()
+        .map_err(|reason| refuse(reason, Vec::new()))?;
     let task = &mut rec.task;
     let mut fields = Vec::new();
     if let Some(title) = &edit.title {
@@ -211,6 +239,14 @@ fn edit(feed: &mut Feed, mut rec: TaskDetail, edit: &TaskEdit) {
     if let Some(depends_on) = &edit.depends_on {
         task.depends_on = depends_on.clone();
         fields.push("depends_on");
+    }
+    if let Some(difficulty) = edit.difficulty {
+        task.difficulty = difficulty;
+        fields.push("difficulty");
+    }
+    if let Some(tags) = tags {
+        task.tags = tags;
+        fields.push("tags");
     }
     for (name, field, value) in [
         ("project", &mut task.project, &edit.project),
@@ -233,6 +269,7 @@ fn edit(feed: &mut Feed, mut rec: TaskDetail, edit: &TaskEdit) {
         None,
         json!({"fields": fields}),
     );
+    Ok(())
 }
 
 fn r#move(feed: &mut Feed, mut rec: TaskDetail, status: Status, force: bool) -> Result<(), Fail> {

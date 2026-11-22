@@ -4,7 +4,7 @@
 use corral_protocol::detail::TaskDetail;
 use corral_types::{
     Actor, Artifact, Blocked, Check, CheckKind, CheckResult, Next, Op, Outcome, Priority, Role,
-    Run, SessionRef, Status, Task,
+    Run, SessionRef, Status, Task, TaskDifficulty,
 };
 use std::path::PathBuf;
 
@@ -284,7 +284,29 @@ const PLAN_BODY: &str = concat!(
     "The plan is done when every member is done and the owner marks T-1 done.",
 );
 
+/// The size, difficulty and tags of the sample tasks that have them; T-8 keeps a size from
+/// before the scale, and T-11 a custom tag with a blank.
+fn planning(
+    id: &str,
+) -> (
+    Option<&'static str>,
+    Option<TaskDifficulty>,
+    &'static [&'static str],
+) {
+    use TaskDifficulty::{Hard, Routine, Standard};
+    match id {
+        "T-8" => (Some("medium"), None, &[]),
+        "T-9" => (Some("s"), Some(Hard), &["bug"]),
+        "T-10" => (Some("m"), Some(Standard), &["documentation", "testing"]),
+        "T-11" => (Some("xs"), Some(Routine), &["accessibility", "ui polish"]),
+        "T-12" => (Some("s"), Some(Routine), &["performance"]),
+        "T-13" => (Some("m"), Some(Hard), &["testing"]),
+        _ => (None, None, &[]),
+    }
+}
+
 fn record(feed: &Feed, seed: &Seed) -> TaskDetail {
+    let (size, difficulty, tags) = planning(seed.id);
     let body = if seed.id == "T-1" {
         PLAN_BODY.to_owned()
     } else {
@@ -302,7 +324,9 @@ fn record(feed: &Feed, seed: &Seed) -> TaskDetail {
             project: seed.project.map(str::to_owned),
             priority: seed.priority,
             kind: (seed.id == "T-1").then(|| "plan".into()),
-            size: None,
+            size: size.map(str::to_owned),
+            difficulty,
+            tags: tags.iter().map(|tag| (*tag).to_owned()).collect(),
             profile: None,
             base: None,
             parent: seed.parent.map(str::to_owned),

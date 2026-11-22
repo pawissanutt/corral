@@ -6,6 +6,7 @@ import type { MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { Component, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 import type { BoardTaskStatus, ExitChoice, ExitOption, ExitPhase, ExitRecord, ExitState, LandCandidate, LandProgress } from "../../build/types.ts";
+import { taskMetadataLabel } from "./task-metadata.ts";
 import { onSurface } from "../frame.ts";
 import { plainLabel, PANEL_BG, PANEL_BUBBLE, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT } from "../panels-view.ts";
 import type { BuildCardSource } from "./contract.ts";
@@ -28,7 +29,7 @@ export type ExitEntryDetails = { readonly choice: ExitChoice; readonly label: st
   /** The candidate the host prepared for this Land, as it stood when Land ended. */
   readonly candidate?: LandCandidate }
   & Pick<ExitRecord, "landed" | "baseBranch" | "gateAttempt" | "overrideReason">;
-export interface BoardEntryDetails { readonly filed: readonly { readonly id: string; readonly title: string; readonly depends: readonly string[] }[]; readonly started: boolean }
+export interface BoardEntryDetails { readonly filed: readonly Pick<BoardTaskStatus, "id" | "title" | "depends" | "size" | "difficulty" | "tags">[]; readonly started: boolean }
 export interface FinishEntryDetails { readonly id: string }
 
 /**
@@ -120,8 +121,12 @@ export function exitEntry(option: ExitOption, state: ExitState): BuildEntry<Exit
 }
 
 export function boardEntry(filed: readonly BoardTaskStatus[], started: boolean): BuildEntry<BoardEntryDetails> {
-  const tasks = filed.map(task => ({ id: plainLabel(task.id), title: plainLabel(task.title), depends: task.depends.map(plainLabel) }));
-  const list = tasks.map(task => `${task.id} ${task.title}` + (task.depends.length ? ` (after ${task.depends.join(", ")})` : "")).join("; ");
+  const tasks = filed.map(({ id, title, depends, size, difficulty, tags }) =>
+    ({ id: plainLabel(id), title: plainLabel(title), depends: depends.map(plainLabel), size, difficulty, tags }));
+  const list = tasks.map(task => {
+    const metadata = plainLabel(taskMetadataLabel(task));
+    return `${task.id} ${task.title}` + (task.depends.length ? ` (after ${task.depends.join(", ")})` : "") + (metadata ? ` · ${metadata}` : "");
+  }).join("; ");
   const count = `${tasks.length} board ${tasks.length === 1 ? "task" : "tasks"}`;
   return {
     customType: BUILD_BOARD_ENTRY, display: true, details: { filed: tasks, started },

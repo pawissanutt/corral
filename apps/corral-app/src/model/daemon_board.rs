@@ -280,6 +280,8 @@ pub fn bare_task(id: &str, title: &str, status: Status, at: jiff::Timestamp) -> 
         priority: corral_types::Priority::P2,
         kind: None,
         size: None,
+        difficulty: None,
+        tags: Vec::new(),
         profile: None,
         base: None,
         parent: None,

@@ -13,7 +13,7 @@ use crate::model::list::Section;
 use crate::model::projects::Scope;
 use crate::model::status::folds;
 
-use super::matches;
+use super::Filter;
 
 /// The fold's section key (`section-closed`).
 pub const KEY: &str = "closed";
@@ -96,7 +96,7 @@ pub fn find<'a>(feed: &'a Feed, id: &str) -> Option<&'a corral_types::Task> {
 pub fn section(
     feed: &Feed,
     scope: &Scope,
-    words: &[String],
+    filter: &Filter,
     closed: &Closed,
     open: bool,
 ) -> Option<Section> {
@@ -109,7 +109,7 @@ pub fn section(
         .map(|task| task.task());
     for task in board.chain(served(feed, closed)) {
         let id = Id::from(task.id.as_str());
-        if scope.matches(task.project.as_deref()) && matches(task, words) && !rows.contains(&id) {
+        if scope.matches(task.project.as_deref()) && filter.matches(task) && !rows.contains(&id) {
             rows.push(id);
         }
     }
@@ -117,7 +117,7 @@ pub fn section(
         .and_then(|page| page.total)
         .and_then(|total| usize::try_from(total).ok());
     let count = match total {
-        Some(total) if matches!(scope, Scope::All) && words.is_empty() => total.max(rows.len()),
+        Some(total) if matches!(scope, Scope::All) && filter.is_empty() => total.max(rows.len()),
         _ => rows.len(),
     };
     let shown = rows.len();
@@ -236,7 +236,8 @@ mod tests {
         serve(&mut feed, None, &["T-9", "T-8"], Some("a1"));
         serve(&mut feed, Some("a1"), &["T-7"], None);
         let mut closed = Closed::default();
-        let all = |closed: &Closed, open| section(&feed, &Scope::All, &[], closed, open);
+        let all =
+            |closed: &Closed, open| section(&feed, &Scope::All, &Filter::default(), closed, open);
         let folded = all(&closed, false).expect("a fold with a count");
         assert_eq!((folded.count, folded.rows.len()), (40, 0));
         assert_eq!(all(&closed, true).map(|s| s.rows.len()), Some(2));
@@ -249,8 +250,11 @@ mod tests {
         // Under one project, or with filter words, the total says nothing about what matches:
         // the rows that match are counted.
         let other = Scope::Project("docs".into());
-        assert_eq!(section(&feed, &other, &[], &closed, true), None);
-        let words = ["t-7".to_owned()];
+        assert_eq!(
+            section(&feed, &other, &Filter::default(), &closed, true),
+            None
+        );
+        let words = Filter::parse("t-7");
         let found = section(&feed, &Scope::All, &words, &closed, true);
         assert_eq!(found.map(|s| s.count), Some(1));
     }
@@ -264,7 +268,7 @@ mod tests {
         serve(&mut feed, None, &["T-9", "T-8"], Some("a1"));
         serve(&mut feed, Some("a1"), &["T-7"], None);
         let mut closed = Closed::default();
-        let words = ["t-7".to_owned()];
+        let words = Filter::parse("t-7");
         let first = section(&feed, &Scope::All, &words, &closed, true);
         assert_eq!(first.map(|s| s.rows.len()), Some(0));
         assert!(foot(&feed, &closed, true).is_some_and(|foot| foot.older));

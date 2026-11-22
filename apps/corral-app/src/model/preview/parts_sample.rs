@@ -7,7 +7,7 @@
 //! labelled sample content where it could pass for a model's.
 
 use corral_protocol::detail::*;
-use corral_types::Origin;
+use corral_types::{Origin, TaskDifficulty};
 
 use super::parts::{Parts, WINDOW};
 use super::parts_story::{sample, text, tool};
@@ -279,7 +279,9 @@ pub(super) fn proposal(project: Option<String>) -> BoardPlan {
                 key: "publish".into(),
                 title: "Publish the updated guide".into(),
                 kind: Some("task".into()),
-                size: Some("small".into()),
+                size: Some("s".into()),
+                difficulty: Some(TaskDifficulty::Standard),
+                tags: vec!["documentation".into()],
                 profile: Some("parity".into()),
                 depends: Vec::new(),
                 body: body.into(),
@@ -290,6 +292,8 @@ pub(super) fn proposal(project: Option<String>) -> BoardPlan {
                 title: "Audit legacy links".into(),
                 kind: None,
                 size: None,
+                difficulty: None,
+                tags: Vec::new(),
                 profile: None,
                 depends: vec!["publish".into()],
                 body: "Audit links to the guide.".into(),

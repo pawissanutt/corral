@@ -1,7 +1,7 @@
 import { join } from "node:path";
+import { StringEnum } from "@earendil-works/pi-ai";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { validatePlan } from "./board.ts";
 import { reviewBrief } from "./review-brief.ts";
 import { checked, type Run } from "./corral-cli.ts";
 import type { BuildExitControl } from "./exit.ts";
@@ -9,7 +9,7 @@ import type { BuildJournal } from "./record.ts";
 import type { BuildGateResult, RecordReview } from "./record-types.ts";
 import { buildProject, checkGateSource, gateInputFingerprint, verifyBuild } from "./gate.ts";
 import type { FleetRuntime } from "../extensions/fleet/runtime.ts";
-import type { BoardPlan, BuildContext, PreparedLanding as Candidate } from "./types.ts";
+import { TASK_DIFFICULTIES, TASK_SIZES, type BoardPlan, type BuildContext, type PreparedLanding as Candidate } from "./types.ts";
 type FinishReadiness = { candidate?: Candidate | null; nextAction?: string };
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const failure = (error: unknown) => ({ content: [{ type: "text" as const, text: message(error) }], details: {}, isError: true });
@@ -306,7 +306,10 @@ export function boardPlanTool(propose: (plan: BoardPlan) => void, available: () 
       title: Type.String({ minLength: 1 }), project: Type.Optional(Type.String()), why: Type.String(),
       tasks: Type.Array(Type.Object({
         key: Type.String({ minLength: 1 }), title: Type.String({ minLength: 1 }),
-        kind: Type.Optional(Type.String()), size: Type.Optional(Type.String()), profile: Type.Optional(Type.String()),
+        kind: Type.Optional(Type.String()), profile: Type.Optional(Type.String()),
+        size: Type.Optional(StringEnum(TASK_SIZES, { description: "Estimate work scope, from xs (smallest) to xl (largest). Omit if unknown." })),
+        difficulty: Type.Optional(StringEnum(TASK_DIFFICULTIES, { description: "Estimate uncertainty or technical complexity, independently of scope and priority. Omit if unknown." })),
+        tags: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { description: "Relevant built-in or existing custom labels. Exact, case-sensitive, no surrounding whitespace or control characters." })),
         depends: Type.Array(Type.String()), body: Type.String(),
       }, { additionalProperties: false }), { minItems: 1, maxItems: 20 }),
     }, { additionalProperties: false }),
@@ -314,7 +317,6 @@ export function boardPlanTool(propose: (plan: BoardPlan) => void, available: () 
       const unavailable = available();
       if (unavailable) return { content: [{ type: "text", text: unavailable }], details: {}, isError: true };
       try {
-        validatePlan(plan);
         propose(plan);
         return { content: [{ type: "text", text: "The owner will confirm this board plan before any task is filed or queued." }], details: {} };
       } catch (error) {

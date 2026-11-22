@@ -5,6 +5,7 @@ import type { BoardPlan, BoardPreview, BuildPanelState, ChildSnapshot, ExitOptio
 import { plainLabel, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT } from "../panels-view.ts";
 import type { ChoiceDialog } from "./choice-dock.ts";
 import { candidateLines, fastForward } from "./land-steps.ts";
+import { taskMetadataLabel } from "./task-metadata.ts";
 
 export type PreviewState = { readonly state: "loading" } | { readonly state: "ready"; readonly value: BoardPreview }
   | { readonly state: "failed"; readonly error: string };
@@ -99,7 +100,7 @@ export function planDialog(plan: BoardPlan, preview: PreviewState, episode: numb
   const meta = [plan.project, `${count} ${count === 1 ? "task" : "tasks"}`, `${edges} dependency ${edges === 1 ? "edge" : "edges"}`, "preview only"];
   const table = (width: number, rows: number) => preview.state === "ready" ? previewLines(plan, preview.value, width, rows)
     : preview.state === "failed" ? wrapped(preview.error, PANEL_ERROR, width, rows)
-    : wrapped("Reading the preview from corral import --dry-run…", PANEL_MUTED, width, rows);
+    : wrapped("Preparing the board preview…", PANEL_MUTED, width, rows);
   return {
     key: `plan:${episode}`,
     title: "File this plan on the board?",
@@ -132,8 +133,12 @@ function cell(text: string, width: number): string {
  */
 export function previewLines(plan: BoardPlan, preview: BoardPreview, width: number, rows: number): string[] {
   if (rows < 1 || width < 1) return [];
-  const ids = new Map(preview.tasks.map(task => [task.key, task.id]));
-  const id = (key: string) => plainLabel(ids.get(key) ?? key);
+  const tasks = new Map(preview.tasks.map(task => [task.key, task]));
+  const id = (key: string) => plainLabel(tasks.get(key)?.id ?? key);
+  const label = (task: BoardPlan["tasks"][number]) => {
+    const metadata = taskMetadataLabel(tasks.get(task.key) ?? task);
+    return plainLabel(metadata ? `${task.title} · ${metadata}` : task.title);
+  };
   if (rows === 1) {
     const list = plan.tasks.map(task => id(task.key)).join(", ");
     return [PANEL_TEXT + truncateToWidth(`${plan.tasks.length} ${plan.tasks.length === 1 ? "task" : "tasks"}: ${list}`, width, "…")];
@@ -141,21 +146,21 @@ export function previewLines(plan: BoardPlan, preview: BoardPreview, width: numb
   const tier = width >= PREVIEW_FULL ? "full" : width >= PREVIEW_MED ? "med" : "min";
   const gap = "  ", task = 6;
   const starts = (depends: readonly string[]) => depends.length ? `after ${depends.map(id).join(", ")}` : "no dependencies";
-  const kind = (value: BoardPlan["tasks"][number]) => [value.kind, value.size].filter(Boolean).map(text => plainLabel(text!)).join(" ");
+  const kind = (value: BoardPlan["tasks"][number]) => plainLabel(value.kind ?? "");
   const taskId = (value: BoardPlan["tasks"][number]) => PANEL_TEXT + BOLD + cell(id(value.key), task) + NORMAL;
   let layout: (value: BoardPlan["tasks"][number]) => string;
   let header: string | undefined;
   if (tier === "full") {
-    const title = Math.min(46, Math.max(5, ...plan.tasks.map(value => visibleWidth(plainLabel(value.title)))));
+    const title = Math.min(width - task - 12 - 10 - gap.length * 4 - 17, Math.max(5, ...plan.tasks.map(value => visibleWidth(label(value)))));
     const rest = Math.max(0, width - task - title - 12 - 10 - gap.length * 4);
-    layout = value => taskId(value) + gap + cell(plainLabel(value.title), title) + gap + PANEL_MUTED
+    layout = value => taskId(value) + gap + cell(label(value), title) + gap + PANEL_MUTED
       + cell(kind(value), 12) + gap + cell(plainLabel(value.profile ?? "default"), 10) + gap + cell(starts(value.depends), rest);
     header = PANEL_MUTED + cell("task", task) + gap + cell("title", title) + gap + cell("kind", 12) + gap + cell("profile", 10) + gap + cell("starts", rest);
   } else if (tier === "med") {
     const title = Math.max(0, width - task - 22 - gap.length * 2);
-    layout = value => taskId(value) + gap + cell(plainLabel(value.title), title) + gap + PANEL_MUTED + cell(starts(value.depends), 22);
+    layout = value => taskId(value) + gap + cell(label(value), title) + gap + PANEL_MUTED + cell(starts(value.depends), 22);
   } else {
-    layout = value => taskId(value) + gap + cell(plainLabel(value.title), Math.max(0, width - task - gap.length));
+    layout = value => taskId(value) + gap + cell(label(value), Math.max(0, width - task - gap.length));
   }
   const fits = (header ? 1 : 0) + plan.tasks.length <= rows;
   if (header && !fits && rows - 2 < 1) header = undefined;

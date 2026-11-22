@@ -7,7 +7,8 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use corral_engine::{
-    Actor, Config, EventKind, Priority, Status, Store, Task, events::NewEvent, refuse,
+    Actor, Config, EventKind, Priority, Status, Store, Task, TaskDifficulty, events::NewEvent,
+    refuse,
 };
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,7 @@ struct LegacyTask {
     priority: Priority,
     kind: Option<String>,
     size: Option<String>,
+    difficulty: Option<TaskDifficulty>,
     parent: Option<String>,
     plan: Option<String>,
     #[serde(default)]
@@ -455,6 +457,7 @@ fn parse(text: &str, id: &str) -> Result<ParsedTask> {
             priority: task.priority,
             kind: task.kind,
             size: task.size,
+            difficulty: task.difficulty,
             parent: task.parent,
             depends_on: task.depends_on,
             created: task.created,

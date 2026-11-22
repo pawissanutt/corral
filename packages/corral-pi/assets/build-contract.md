@@ -154,9 +154,17 @@ is no branch and only Keep and Iterate are available.
 No exit files or hands anything to the board. The branch and worktree remain available.
 
 <!-- corral-only -->
-Use board_plan only for follow-on work, with concrete outcomes, constraints, dependencies
-and acceptance checks. After owner confirmation, the host creates a parent task and
-its children through the engine. A proposal grants no authority to file work; do not
-file implemented work for another worker to redo.
+Use `board_plan` only for follow-on work, with concrete outcomes, constraints, dependencies
+and acceptance checks. Normally estimate each proposed task's `size` (`xs`, `s`, `m`, `l`, `xl`)
+by scope and `difficulty` (`routine`, `standard`, `hard`) by technical complexity or uncertainty,
+independently of size and priority. Pick relevant `tags`: prefer applicable built-ins
+(`accessibility`, `bug`, `dependencies`, `documentation`, `performance`, `testing`) or exact
+existing custom labels from the board. Honor the owner's explicit fields, including blank
+ones. Omit what you cannot estimate or label confidently and note the omission in `why`;
+don't invent filler. Never rewrite existing task metadata unless asked.
+
+After owner confirmation, the host creates a parent tracker and its children through the
+engine. A proposal grants no authority to file work; do not file implemented work for
+another worker to redo.
 <!-- /corral-only -->
 
