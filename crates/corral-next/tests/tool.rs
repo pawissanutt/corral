@@ -155,8 +155,9 @@ fn tool_receives_submitted_head_after_worktree_moves() {
         "-qm",
         "later",
     ]);
-    assert_ne!(git(&["rev-parse", "HEAD"]), submitted);
-    let call = || {
+    let next_submission = git(&["rev-parse", "HEAD"]);
+    assert_ne!(next_submission, submitted);
+    let call = |run: &str, expected: &str| {
         let output = Command::new(env!("CARGO_BIN_EXE_corral-next"))
             .arg("--root")
             .arg(root.path())
@@ -164,7 +165,7 @@ fn tool_receives_submitted_head_after_worktree_moves() {
             .current_dir(root.path())
             .env("CORRAL_NEXT_ROOT", root.path())
             .env("CORRAL_TASK", &task.id)
-            .env("CORRAL_RUN", "R2")
+            .env("CORRAL_RUN", run)
             .env("CORRAL_ACTOR", "reviewer")
             .env_remove("CORRAL_PROJECT")
             .output()
@@ -177,11 +178,27 @@ fn tool_receives_submitted_head_after_worktree_moves() {
         let request: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(request["v"], 1);
         assert_eq!(request["base"], base);
-        assert_eq!(request["head"], submitted);
+        assert_eq!(request["head"], expected);
     };
-    call();
+    call("R1", &submitted);
+    call("R2", &submitted);
     // Reused reviewers retain the previous verdict's head as a diff baseline.
-    reviewer.head_sha = Some(base.clone());
+    reviewer.head_sha = Some(submitted.clone());
     engine.store.update_run(&reviewer).unwrap();
-    call();
+    let mut worker = engine.store.get_run(&task.id, "R1").unwrap().unwrap();
+    worker.id = "R3".into();
+    worker.head_sha = Some(next_submission.clone());
+    engine.store.insert_run(&worker).unwrap();
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "after rereview submission",
+    ]);
+    assert_ne!(git(&["rev-parse", "HEAD"]), next_submission);
+    call("R2", &next_submission);
 }
