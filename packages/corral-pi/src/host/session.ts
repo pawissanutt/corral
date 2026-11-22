@@ -1766,12 +1766,13 @@ export class HostSession {
         return { disposition: "handled" };
       }, error => ({ disposition: "rejected", reason: utf8Prefix(error instanceof Error ? error.message : String(error), 256) }));
     }
-    if (input.origin === "owner") this.planMode?.ownerSpoke();
+    // The review is withdrawn before the turn starts, so that turn is told; a message Pi refuses puts it back.
+    const restoreReview = input.origin === "owner" ? this.planMode?.ownerSpoke() : undefined;
     const tag = this.queue.bridgeInput(input, { ...source, socketId, transcriptId });
     return this.promptInput(input, tag, images).then(result => {
-      if (input.origin === "owner" && (result.disposition === "started" || result.disposition === "queued")) {
-        this.buildControls?.noteOwnerInput(source?.text ?? input.text);
-      }
+      const taken = result.disposition === "started" || result.disposition === "queued";
+      if (!taken) restoreReview?.();
+      if (input.origin === "owner" && taken) this.buildControls?.noteOwnerInput(source?.text ?? input.text);
       return result;
     });
   }

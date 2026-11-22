@@ -112,7 +112,9 @@ export type PlanContext = "keep" | "compact" | "clean";
 export interface PlanPrompts {
   /** The planning contract; `existing` says the plan file is already there. */
   contract(input: { path: string; existing: boolean; askUser: boolean }): string;
-  /** The message that starts execution of an approved plan. */
+  /** The summary that replaces the conversation for a clean-context execution; it carries the plan. */
+  reset(input: { path: string; title: string; revision: number; plan: string }): string;
+  /** The message that starts execution of an approved plan; it carries the plan unless the context was reset to it. */
   approved(input: {
     path: string; title: string; revision: number; plan: string; context: PlanContext; note?: string; todo: boolean;
   }): string;

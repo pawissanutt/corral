@@ -8,13 +8,15 @@ export const PLAN_APPROVED_ASSET = "assets/plan-approved.md";
 const CONTEXT: Readonly<Record<PlanContext, string>> = {
   keep: "The planning conversation above is still in context.",
   compact: "The planning conversation was summarised.",
-  clean: "The planning conversation was cleared at the owner's request; this message and the plan are your whole brief.",
+  clean: "The planning conversation was cleared at the owner's request; the summary above holds the approved plan and is your whole brief.",
 };
 
 /** Replace each `{{key}}` once, without reinterpreting text a value brings in. */
 function fill(template: string, values: Readonly<Record<string, string>>): string {
   return template.replace(/\{\{([a-z]+)\}\}/g, (match, key: string) => values[key] ?? match);
 }
+
+const block = (path: string, plan: string): string => `<plan path="${path}">\n${plan.trimEnd()}\n</plan>`;
 
 export function planPrompts(root: string): PlanPrompts {
   return {
@@ -26,8 +28,14 @@ export function planPrompts(root: string): PlanPrompts {
         ? "ask the owner with `ask_user`, giving two to four distinct options with your recommendation first. An unanswered question is not approval: use your recommended default and record it under Assumptions."
         : "there is no question dialog in this session; choose a recommended default, record it under Assumptions and continue.",
     }).trimEnd(),
+    reset: ({ path, title, revision, plan }) => "The earlier conversation was a planning discussion. The owner approved the plan "
+      + `"${title}" (revision ${revision}) and asked for a clean context, so that discussion was cleared. The approved plan below `
+      + `is the whole brief; a durable copy is at \`${path}\`.\n\n${block(path, plan)}`,
+    // A clean context already holds the plan in its summary; sending it again would only double it.
     approved: ({ path, title, revision, plan, context, note, todo }) => fill(readAsset(root, PLAN_APPROVED_ASSET), {
-      path, title, revision: String(revision), plan: plan.trimEnd(), context: CONTEXT[context],
+      path, title, revision: String(revision), context: CONTEXT[context],
+      where: context === "clean" ? "in the summary above" : "below",
+      block: context === "clean" ? "" : `\n\n${block(path, plan)}`,
       note: note?.trim() ? `\nOwner's note: ${note.trim()}` : "",
       todo: todo ? "Start by opening a `corral_todo` plan with one step per plan step, and keep it current." : "",
     }).trimEnd(),

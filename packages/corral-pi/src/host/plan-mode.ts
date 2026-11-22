@@ -1,7 +1,7 @@
 // Plan mode (docs/plans/pi-plan-mode.md). The agent plans read-only with the owner, submits one plan
 // document, and the owner's review choice starts execution. The phase lives in the transcript, so a
 // restart restores it and a rewind undoes it. Nothing here changes the system prompt or the tool list.
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -24,7 +24,9 @@ const TITLE_BYTES = 160;
 const Approved = z.object({ title: z.string(), revision: z.number(), digest: z.string(), path: z.string(),
   context: z.enum(["keep", "compact", "clean"]), model: z.string().optional() });
 const Saved = z.object({ version: z.literal(1), phase: z.enum(["off", "planning", "review"]),
-  revision: z.number().int().nonnegative(), at: z.number(), title: z.string().optional(), digest: z.string().optional(),
+  revision: z.number().int().nonnegative(), at: z.number(), title: z.string().optional(),
+  // A submission: its own id, the digest of its text and the write-once copy that review and execution read.
+  id: z.string().optional(), digest: z.string().optional(), path: z.string().optional(),
   // The owner left without approving, or answered a review with an ordinary message.
   left: z.boolean().optional(), replied: z.boolean().optional(), approved: Approved.optional() });
 export type PlanRecord = z.infer<typeof Saved>;
@@ -35,7 +37,7 @@ type NoteKind = "contract" | "left" | "replied" | "pointer";
 export interface PlanEntry { readonly type: string; readonly customType?: string; readonly data?: unknown; readonly details?: unknown }
 
 export interface PlanHost {
-  /** The session's state directory: the plan document and its approved copies live here. */
+  /** The session's state directory: the plan document and the copies of its submissions live here. */
   readonly dir: string;
   /** The directory the file tools resolve relative paths in. */
   readonly cwd: string;
@@ -75,13 +77,13 @@ const COMPACT_INSTRUCTIONS = "The owner approved a plan and execution starts nex
   + "Keep the reasons behind the plan's choices, alternatives the owner rejected, constraints and preferences the owner stated, "
   + "and the files, symbols and code paths that were discovered. Drop tool output already reflected in the plan, superseded "
   + "drafts and anything the plan itself states. Do not restate the plan; it is delivered in full after this summary.";
-const RESET_SUMMARY = "The earlier conversation was a planning discussion. It was cleared at the owner's request when they "
-  + "approved the plan. The approved plan follows in the next message and is the whole brief.";
+const CHANGED = "the submitted plan's copy is missing or was changed; choose Keep planning and have it submitted again";
 
 const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
 const heading = (text: string): string | undefined => /^[ \t]*#[ \t]+(.+?)[ \t]*$/m.exec(text)?.[1]?.trim() || undefined;
 const slug = (title: string): string => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "plan";
-const cardId = (record: PlanRecord): string => `plan-${record.revision}-${record.digest?.slice(0, 12) ?? ""}`;
+// A rewind rolls the revision back, so the submission's own id is what makes a card and its copy unique.
+const cardId = (record: PlanRecord): string => `plan-${record.revision}-${record.id ?? ""}`;
 
 interface Scan { record: PlanRecord; due?: NoteKind }
 
@@ -97,10 +99,10 @@ function scan(entries: readonly PlanEntry[]): Scan {
       if (next.phase === "off") {
         due = next.left && told ? "left" : undefined;
         announced = told = false;
-      } else if (next.replied) due = "replied";
+      } else due = next.replied ? "replied" : undefined;
       record = next;
     } else if (entry.type === "compaction") {
-      // A summary is not the contract, and it can lose an approved plan's text.
+      // A summary is not the contract, and a later one can lose an approved plan's text.
       announced = false;
       if (record.phase === "off" && record.approved) due = "pointer";
     } else if (entry.type === "custom_message" && entry.customType === PLAN_NOTE) {
@@ -117,7 +119,7 @@ export class PlanMode {
   /** The one plan document of the session. */
   readonly path: string;
   private cache: { leaf: string | null; scan: Scan } | undefined;
-  private submitted: { digest: string; body: string } | undefined;
+  private submitted: { card: string; body: string } | undefined;
   private starting = false;
   private readonly listeners = new Set<() => void>();
 
@@ -142,8 +144,8 @@ export class PlanMode {
     return () => { this.listeners.delete(listener); };
   }
 
-  private write(record: Omit<PlanRecord, "version" | "at">): void {
-    this.host.append({ ...record, version: 1, at: (this.host.now ?? Date.now)() });
+  private write(record: Omit<PlanRecord, "version" | "at">, at = (this.host.now ?? Date.now)()): void {
+    this.host.append({ ...record, version: 1, at });
     this.cache = undefined;
     this.announce();
   }
@@ -254,28 +256,35 @@ export class PlanMode {
     return body;
   }
 
-  /** The agent's `plan_submit`: record the submission and open the review. */
+  /**
+   * The agent's `plan_submit`: copy the plan as this submission and open its review. The review and the
+   * execution read that copy, never the working file, so the owner approves exactly the text they were shown.
+   */
   submit(title?: string): string {
     const { phase, revision } = this.record;
     if (phase === "review") throw new Error("A plan is already awaiting the owner's review; nothing was submitted.");
     if (phase !== "planning") throw new Error("Plan mode is not active; nothing was submitted.");
     const body = this.readPlan();
-    const digest = sha(body);
-    this.submitted = { digest, body };
-    this.write({ phase: "review", revision: revision + 1, digest,
-      title: clipText((title?.trim() || heading(body) || "Plan").replace(/\s+/g, " "), TITLE_BYTES) });
+    const named = clipText((title?.trim() || heading(body) || "Plan").replace(/\s+/g, " "), TITLE_BYTES);
+    const id = randomBytes(4).toString("hex"), next = revision + 1;
+    const copy = join(this.host.dir, "plans", `${next}-${slug(named)}-${id}.md`);
+    mkdirSync(join(this.host.dir, "plans"), { recursive: true });
+    writeFileSync(copy, body, { flag: "wx", mode: 0o600 });
+    this.write({ phase: "review", revision: next, title: named, id, digest: sha(body), path: copy });
     return "Submitted for the owner's review. End your turn now and do not implement; the owner's choice arrives as a later message.";
   }
 
-  /** The submitted text, or undefined when the file no longer matches what was submitted. */
+  /** The text of the submission under review, or undefined when its copy is missing or no longer matches. */
   reviewText(): string | undefined {
-    const digest = this.record.digest;
-    if (digest === undefined) return undefined;
-    if (this.submitted?.digest !== digest) {
+    const record = this.record;
+    if (record.phase !== "review" || !record.path || !record.digest) return undefined;
+    const card = cardId(record);
+    if (this.submitted?.card !== card) {
+      this.submitted = undefined;
       try {
-        const body = this.readPlan();
-        this.submitted = sha(body) === digest ? { digest, body } : undefined;
-      } catch { this.submitted = undefined; }
+        const body = readFileSync(record.path, "utf8");
+        if (sha(body) === record.digest) this.submitted = { card, body };
+      } catch { /* A missing copy reads as a changed one. */ }
     }
     return this.submitted?.body;
   }
@@ -314,10 +323,20 @@ export class PlanMode {
     return "started";
   }
 
-  /** An ordinary owner message during review is feedback: the review is withdrawn and planning resumes. */
-  ownerSpoke(): void {
-    const { phase, revision, title } = this.record;
-    if (phase === "review" && !this.starting) this.write({ phase: "planning", revision, title, replied: true });
+  /**
+   * An ordinary owner message during review is feedback: the review is withdrawn and planning resumes. The
+   * returned function puts the same review back, for a message the session then refused.
+   */
+  ownerSpoke(): (() => void) | undefined {
+    const review = this.record;
+    if (review.phase !== "review" || this.starting) return undefined;
+    this.write({ phase: "planning", revision: review.revision, title: review.title, replied: true });
+    return () => {
+      const { phase, revision, replied } = this.record;
+      if (phase !== "planning" || !replied || revision !== review.revision) return;
+      const { version: _version, at, ...same } = review;
+      this.write(same, at);
+    };
   }
 
   private async revise(feedback?: string): Promise<void> {
@@ -336,25 +355,20 @@ export class PlanMode {
   private async execute(context: PlanContext, note?: string): Promise<void> {
     this.starting = true;
     try {
-      const record = this.record;
-      if (record.phase !== "review" || !record.digest) return;
-      const plan = this.readPlan();
-      if (sha(plan) !== record.digest) {
-        throw new Error("the plan file changed after it was submitted; choose Keep planning and have it submitted again");
-      }
+      const record = this.record, plan = this.reviewText();
+      if (record.phase !== "review") return;
+      if (plan === undefined || !record.path || !record.digest) throw new Error(CHANGED);
       await this.host.stopTurn();
-      const title = record.title ?? "Plan", { revision, digest } = record;
-      const copy = join(this.host.dir, "plans", `${revision}-${slug(title)}.md`);
-      mkdirSync(join(this.host.dir, "plans"), { recursive: true });
-      writeFileSync(copy, plan, { mode: 0o600 });
+      const title = record.title ?? "Plan", { revision, digest, path } = record;
       if (context === "compact") await this.host.compact(COMPACT_INSTRUCTIONS);
-      else if (context === "clean") await this.host.reset(RESET_SUMMARY);
+      // The reset summary carries the plan itself, so the cleared context holds it whatever happens next.
+      else if (context === "clean") await this.host.reset(this.host.prompts.reset({ path, title, revision, plan }));
       const model = this.host.model();
-      this.write({ phase: "off", revision, approved: { title, revision, digest, path: copy, context, ...(model ? { model } : {}) } });
+      this.write({ phase: "off", revision, approved: { title, revision, digest, path, context, ...(model ? { model } : {}) } });
       this.host.approved?.(`Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})`);
-      const kickoff = this.host.prompts.approved({ path: copy, title, revision, plan, context, note, todo: this.host.todo });
+      const kickoff = this.host.prompts.approved({ path, title, revision, plan, context, note, todo: this.host.todo });
       if (!await this.host.submit(kickoff, "auto")) {
-        this.host.note(`The approved plan was not delivered to the agent. Ask it to execute ${copy}.`, "error");
+        this.host.note(`The approved plan was not delivered to the agent. Ask it to execute ${path}.`, "error");
       }
     } catch (error) {
       this.host.note(`The plan was not started: ${error instanceof Error ? error.message : String(error)}. The review is still open.`, "error");
@@ -364,22 +378,20 @@ export class PlanMode {
     }
   }
 
-  /** One byte-range page of the plan document, in any phase. */
-  doc(after?: string) {
-    let text: string;
-    try { text = this.readPlan(); }
-    catch {
-      if (after !== undefined) throw new BridgeRefusal("stale_page", "the plan document changed; read it again from the first page");
-      throw new BridgeRefusal("plan_mode_doc_missing", "this session has no plan document");
+  /** One byte-range page of the submission `card` reviews: the text an execute answer to that card runs. */
+  doc(card: string, after?: string) {
+    const record = this.record, text = card === this.review ? this.reviewText() : undefined;
+    if (text === undefined) {
+      if (after !== undefined) throw new BridgeRefusal("stale_page", "the plan under review changed; read it again from the first page");
+      throw new BridgeRefusal("plan_mode_doc_missing", "no plan is under review with this card");
     }
-    const record = this.record;
-    const token = fingerprintPart(["plan_mode_doc", sha(text)]);
+    const token = fingerprintPart(["plan_mode_doc", card, record.digest]);
     const full = Buffer.from(text, "utf8"), bytes = full.length;
     const offset = after === undefined ? 0 : cursorOffset(after, token);
     if (offset > bytes || ((full[offset] ?? 0) & 0xc0) === 0x80) {
       throw new BridgeRefusal("bad_input", "plan document cursor is not on a UTF-8 character boundary");
     }
-    const head = { title: record.title ?? heading(text) ?? "Plan", revision: record.revision, bytes, offset };
+    const head = { title: record.title ?? "Plan", revision: record.revision, bytes, offset };
     let end = Math.min(bytes, offset + DOC_PAGE_BYTES);
     while (((full[end] ?? 0) & 0xc0) === 0x80) end--;
     const budget = SESSION_PART_MAX - jsonBytes({ ...head, body: "", next: partCursor(token, bytes) });

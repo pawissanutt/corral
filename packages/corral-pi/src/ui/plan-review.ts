@@ -56,7 +56,7 @@ export class PlanReviewUi {
     const { title, revision } = this.plan.record;
     const text = this.plan.reviewText();
     const lines: (string | PagerLine)[] = text === undefined
-      ? ["The plan file changed after it was submitted. Choose keep planning and have it submitted again."]
+      ? ["The submitted plan's copy is missing or was changed. Choose keep planning and have it submitted again."]
       : text.split("\n").map(line => /^#{1,6}\s/.test(line) ? { text: line, heading: true } : line);
     const control = this.shown = new AbortController();
     let key: string | undefined;
