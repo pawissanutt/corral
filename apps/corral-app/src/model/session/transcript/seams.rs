@@ -10,7 +10,7 @@ use crate::model::daemon::{DetailCache, Feed};
 use super::{
     page,
     pairs::{self, Pair},
-    replay::recorded_anchors,
+    replay::recorded_layout,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
@@ -274,7 +274,7 @@ pub(crate) fn preserve_anchors(
     if old.id != new.id {
         return true;
     }
-    let anchors = recorded_anchors(held, feed);
+    let held_layout = recorded_layout(held, feed, |_, _| true);
     if covers_records(&old.messages, &new.messages)
         && unambiguous(&old.messages)
         && unambiguous(&new.messages)
@@ -339,19 +339,13 @@ pub(crate) fn preserve_anchors(
                     ))
                 })
                 .collect();
-            let shown: BTreeSet<_> = anchors.iter().map(String::as_str).collect();
             let current_cuts: BTreeSet<_> = physical_starts(replacement).collect();
-            let oldest = new.messages.first().map(|m| m.id.as_str());
-            let joins = current_cuts
-                .iter()
-                .copied()
-                .filter(|id| Some(*id) != oldest && before.contains_key(id) && !shown.contains(id))
-                .map(str::to_owned)
-                .collect();
             let tool_anchors: BTreeSet<_> =
                 tools.values().map(|tool| tool.anchor.as_str()).collect();
-            let starts = shown
-                .into_iter()
+            let starts = held_layout
+                .starts
+                .iter()
+                .map(String::as_str)
                 .filter(|id| {
                     !current_cuts.contains(id)
                         && (new_ids.contains(id) || tool_anchors.contains(id))
@@ -360,11 +354,35 @@ pub(crate) fn preserve_anchors(
                 .collect();
             replacement.transcript_seams = TranscriptSeams {
                 starts,
-                joins,
+                joins: BTreeSet::new(),
                 tools,
             };
+            let interior: BTreeSet<_> = held_layout
+                .ends
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .filter(|id| !held_layout.starts.contains(*id))
+                .collect();
+            let oldest = page(Some(replacement))
+                .and_then(|page| page.messages.first())
+                .map(|m| m.id.as_str());
+            let mut joins = BTreeSet::new();
+            let layout = recorded_layout(replacement, feed, |cut, displayed| {
+                if Some(cut) != oldest
+                    && !replacement.transcript_seams.starts.contains(cut)
+                    && interior.contains(displayed)
+                {
+                    joins.insert(cut.to_owned());
+                    false
+                } else {
+                    true
+                }
+            });
+            replacement.transcript_seams.joins = joins;
+            return held_layout.starts.is_subset(&layout.starts);
         }
     }
-    let new: BTreeSet<_> = recorded_anchors(replacement, feed).into_iter().collect();
-    anchors.iter().all(|id| new.contains(id))
+    held_layout
+        .starts
+        .is_subset(&recorded_layout(replacement, feed, |_, _| true).starts)
 }

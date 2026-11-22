@@ -273,6 +273,87 @@ fn a_result_keeps_its_position_when_the_older_call_is_in_a_split_record() {
     }
 }
 
+#[test]
+fn a_new_cut_at_a_split_tool_result_keeps_following_prose_in_its_original_bubble() {
+    let target = DetailRef::Session { id: ID.into() };
+    let cache = |older: Vec<SessionMessage>, newer: Vec<SessionMessage>| {
+        let mut rows = older.clone();
+        rows.extend(newer.clone());
+        let mut feed = feed_with(rows);
+        let cache = feed.details.get_mut(&daemon::detail_key(&target)).unwrap();
+        let Some(DetailBody::Session(page)) = &cache.merged else {
+            panic!("a served session page");
+        };
+        cache.pages = vec![
+            reply(&SessionPage {
+                messages: newer,
+                older: Some("older".into()),
+                ..page.clone()
+            }),
+            reply(&SessionPage {
+                messages: older,
+                ..page.clone()
+            }),
+        ];
+        cache.clone()
+    };
+    let output = "first output";
+    let call = read("first", None);
+    let result = read("first", Some(output));
+    let mut paired = call.clone();
+    if let SessionItem::ToolCall {
+        paired: settled,
+        state,
+        output: text,
+        result: payload,
+        ..
+    } = &mut paired
+    {
+        *settled = true;
+        *state = SessionToolState::Done;
+        *text = Some(output.into());
+        *payload = Some(serde_json::json!({"role": "toolResult", "text": output}).to_string());
+    }
+    let prose = |id: &str, text: &str| {
+        record(
+            id,
+            "assistant",
+            vec![SessionItem::Text { text: text.into() }],
+        )
+    };
+    let earlier = prose("earlier", "An earlier reply.");
+    let words = prose("words", "The read is done.");
+    let held = cache(
+        vec![earlier.clone()],
+        vec![record("call", "assistant", vec![paired]), words.clone()],
+    );
+    let mut replacement = cache(
+        vec![earlier, record("call", "assistant", vec![call])],
+        vec![record("result", "toolResult", vec![result]), words],
+    );
+    let feed = Feed::default();
+    let show = |cache| super::transcript(&Id::from(ID), &Ui::EMPTY, Some(cache), &feed);
+    let before = show(&held);
+    assert_eq!(before.messages[1].anchor, "call");
+    assert!(matches!(
+        before.messages[1].items.as_slice(),
+        [MessageItem::Tool(_), MessageItem::Prose(_)]
+    ));
+    assert!(super::preserve_anchors(&feed, &held, &mut replacement));
+    let after = show(&replacement);
+    let [_, bubble] = after.messages.as_slice() else {
+        panic!("the empty result record must not forward the new cut to the prose");
+    };
+    assert_eq!(bubble.anchor, "call");
+    assert_eq!(bubble.keys, ["call|1", "words|1"]);
+    assert!(matches!(
+        bubble.items.as_slice(),
+        [MessageItem::Tool(tool), MessageItem::Prose(prose)]
+            if tool.fold.key == "call:first" && tool.state == ToolState::Ok
+                && prose.markdown == "The read is done."
+    ));
+}
+
 /// The `task` call of the parity walk, with the arguments the host's schema takes.
 fn two_children(arguments: &str) -> SessionItem {
     SessionItem::ToolCall {
