@@ -37,6 +37,7 @@ mod echo;
 mod events;
 mod exit;
 mod files;
+pub(crate) mod files_large;
 mod fleet;
 mod header;
 mod keys;
@@ -112,7 +113,9 @@ pub use dock::{
 pub use echo::{Echo, EchoState, Sent};
 pub use events::{EventsAction, EventsUi, HostEvents, host_events};
 pub use exit::{ExitOutcome, ExitProgress, ExitStep, ExitSummary, StepState, progress};
-pub use files::{FilesAction, FilesContent, FilesView};
+pub use files::{
+    Crumb, FileEditor, FileIcon, FilesAction, FilesContent, FilesView, TreeItem, TreeRow,
+};
 pub use fleet::{
     AgentDetail, AgentRowView, AgentsTab, Asking, Clipped, ConfirmView, Conversation, EditLine,
     EditList, EndLine, FleetAction, FleetButton, FleetRequest, FleetUi, JobDetail, JobList,

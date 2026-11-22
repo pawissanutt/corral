@@ -11,6 +11,7 @@ mod controls;
 mod details;
 mod effects;
 mod engine;
+mod explorer;
 mod fleet;
 mod parts;
 mod parts_ops;
@@ -128,6 +129,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         AGENTS_V1,
         SESSION_V1,
         SESSION_FLEET_V1,
+        SESSION_FILES_V1,
         SESSION_STATE_V1,
         BUILD_V1,
         REVIEW_V1,

@@ -122,6 +122,10 @@ fn ended_log(feed: &Feed, run: &Run) -> TerminalSnapshot {
 
 pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, String> {
     Ok(match target {
+        DetailRef::SessionFiles { path, filter, .. } => {
+            super::explorer::listing(path, filter.as_deref().unwrap_or_default())?
+        }
+        DetailRef::SessionFile { path, .. } => super::explorer::file(path)?,
         DetailRef::Plan { id } => {
             let parent = record(feed, id).ok_or_else(|| format!("not_found: task {id}"))?;
             let all = records(feed);

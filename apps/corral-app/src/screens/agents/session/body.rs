@@ -158,7 +158,8 @@ pub(super) fn main(app: AppState, page: Memo<SessionPage>) -> AnyElement {
                     Shown::Usage => usage::tab(app, page),
                     Shown::Agents => agents_tab::tab(app, page),
                     Shown::Changes => changes::tab(app, page),
-                    Shown::Files => files::tab(app, page),
+                    // Give the explorer and its editor the whole available workspace.
+                    Shown::Files => return files::tab(app, page),
                     Shown::Board => board::tab(app, page),
                     Shown::Task => task::tab(app, page),
                     Shown::Proof => proof::tab(app, page),

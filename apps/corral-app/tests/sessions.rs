@@ -101,6 +101,33 @@ fn open_section(app: &mut Headless, section: &str) {
     app.press(&format!("id:btn-details-{section}")).unwrap();
 }
 
+/// Opening a nested file must not replace the tree with the preview or stack it below the tree.
+#[test]
+fn explorer_keeps_one_tree_to_the_left_of_an_open_file() {
+    let mut app = sessions(desktop());
+    open(&mut app, "B-k3x9");
+    app.press("id:btn-view-files").unwrap();
+    wait_in_tree(&mut app, "file-entry-reports");
+    app.press("id:file-entry-reports").unwrap();
+    wait_in_tree(&mut app, "file-entry-reports/index.html");
+    app.press("id:file-entry-reports/index.html").unwrap();
+    wait_in_tree(&mut app, "session-file-source");
+    let nodes = app.screen().layout_nodes();
+    let mut trees = nodes
+        .iter()
+        .filter(|n| !n.hidden && n.test_id.as_deref() == Some("files-tree"));
+    let tree = trees.next().unwrap().bounds;
+    assert!(trees.next().is_none());
+    let preview = nodes
+        .iter()
+        .find(|n| !n.hidden && n.test_id.as_deref() == Some("session-file-source"))
+        .unwrap()
+        .bounds;
+    assert!(tree.size.width.0 > 0.0 && preview.size.width.0 > 0.0);
+    assert!(tree.origin.x.0 + tree.size.width.0 <= preview.origin.x.0);
+    assert!(in_tree(&app, "file-entry-reports/index.html"));
+}
+
 /// A stopped host listed among the live ones buried what waits on the owner: Blocked leads,
 /// Gone stays folded until its header opens it, and a row selects into the inspector before a
 /// second press opens its page.
