@@ -12,6 +12,8 @@ pub mod error;
 pub mod events;
 mod land;
 pub mod model;
+#[cfg(unix)]
+pub mod pi_startup;
 mod pipeline;
 mod prompt;
 mod review;

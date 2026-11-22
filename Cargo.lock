@@ -503,7 +503,6 @@ dependencies = [
  "snow",
  "tempfile",
  "toml",
- "toml_edit",
  "tungstenite",
  "web-push",
 ]
@@ -516,17 +515,20 @@ dependencies = [
  "corral-git",
  "corral-herdr",
  "corral-types",
+ "getrandom 0.4.3",
  "glob",
  "jiff",
  "libc",
  "regex",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "serde_path_to_error",
  "sha2",
  "tempfile",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]

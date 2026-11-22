@@ -3,6 +3,8 @@ mod editor;
 mod hook;
 mod import;
 mod output;
+#[cfg(unix)]
+mod pi_startup_cmd;
 
 use std::{
     env,
@@ -60,6 +62,11 @@ fn main() -> ExitCode {
 }
 
 fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
+    #[cfg(unix)]
+    if let Command::PiStartup(command) = command {
+        pi_startup_cmd::run(command, out)?;
+        return Ok(0);
+    }
     let cwd = env::current_dir().context("read current directory")?;
     if let Command::Init { first_id } = command {
         let root = if out.root.is_some() || env::var_os("CORRAL_NEXT_ROOT").is_some() {
@@ -307,6 +314,8 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
             )?;
         }
         Command::Pipeline { task } => engine.advance(&task)?,
+        #[cfg(unix)]
+        Command::PiStartup(_) => unreachable!("handled before opening the engine"),
         Command::Init { .. } | Command::Config(_) | Command::Import { .. } => {
             unreachable!("handled before opening the engine")
         }
