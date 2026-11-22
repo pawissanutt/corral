@@ -6,9 +6,11 @@
 //! an execute option. Keep planning asks for that feedback first; choosing it again, or Enter in
 //! the field, sends it, words or none.
 //!
-//! The document is read whole from the host (`SessionPlanModeDoc`, paged, joined in offset
-//! order) and read again when the host's cards change. A host that does not serve it, or a read
-//! that fails, leaves the card's own body, which holds the plan's first 8 KiB, with why.
+//! The document is read whole from the host (`SessionPlanModeDoc` of the review's card, paged,
+//! joined in offset order) and read again when the host's cards change. Only the read made for
+//! the card under review is drawn: a newer submission has a new card, so its view never shows
+//! an earlier one's text. A host that does not serve it, or a read that fails, leaves the card's
+//! own body, which holds the plan's first 8 KiB, with why.
 
 use corral_protocol::detail::{CardKind, DetailBody, DetailRef, PlanModeDocPage};
 use corral_protocol::session_host::CardAnswer;
@@ -31,15 +33,18 @@ const CAPABILITY: &str = "plan_mode_doc";
 /// The option that returns to planning: its text is the owner's feedback.
 const REVISE: &str = "revise";
 
-pub fn target(session: &str) -> DetailRef {
+/// The document of one submission: the host serves, under the review card's id, exactly the
+/// text an execute answer to that card runs, so another submission's read never answers it.
+pub fn target(session: &str, card: &str) -> DetailRef {
     DetailRef::SessionPlanModeDoc {
         id: session.to_owned(),
+        card: card.to_owned(),
     }
 }
 
-/// The plan document, once every byte of it has been read.
-fn whole<'f>(feed: &'f Feed, session: &str) -> Option<&'f PlanModeDocPage> {
-    match feed.detail(&target(session))?.body()? {
+/// The plan document submitted with `card`, once every byte of it has been read.
+fn whole<'f>(feed: &'f Feed, session: &str, card: &str) -> Option<&'f PlanModeDocPage> {
+    match feed.detail(&target(session, card))?.body()? {
         DetailBody::SessionPlanModeDoc(page)
             if page.offset == 0 && page.body.len() as u64 == page.bytes =>
         {
@@ -80,8 +85,8 @@ fn not_now(cx: &Cx<'_>, brief: &CardBrief) -> Action {
 }
 
 /// Why the whole document is not shown, with Retry after a failed read.
-fn standing(cx: &Cx<'_>, clipped: bool) -> (Option<(Hue, String)>, Option<Action>) {
-    let target = target(cx.id.as_str());
+fn standing(cx: &Cx<'_>, card: &str, clipped: bool) -> (Option<(Hue, String)>, Option<Action>) {
+    let target = target(cx.id.as_str(), card);
     let rest = if clipped {
         "this is its start, and the rest is in the session's terminal"
     } else {
@@ -123,7 +128,7 @@ fn standing(cx: &Cx<'_>, clipped: bool) -> (Option<(Hue, String)>, Option<Action
 pub(super) fn doc(cx: &Cx<'_>) -> Option<PlanDoc> {
     let brief = opened(cx)?;
     let card = dock::card(cx.feed, cx.id.as_str(), &brief.id);
-    let page = whole(cx.feed, cx.id.as_str());
+    let page = whole(cx.feed, cx.id.as_str(), &brief.id);
     let revision = cx
         .state
         .and_then(|state| state.plan_mode.as_ref())
@@ -137,7 +142,7 @@ pub(super) fn doc(cx: &Cx<'_>) -> Option<PlanDoc> {
         Some(page) => (Some(page.body.clone()), (None, None)),
         None => (
             card.and_then(|card| card.body.clone()),
-            standing(cx, card.is_some_and(|card| card.body_more)),
+            standing(cx, &brief.id, card.is_some_and(|card| card.body_more)),
         ),
     };
     Some(PlanDoc {
@@ -152,8 +157,8 @@ pub(super) fn doc(cx: &Cx<'_>) -> Option<PlanDoc> {
 
 /// The read of the whole document while its review is open: once, while the host serves it.
 pub(super) fn fetches(cx: &Cx<'_>) -> Option<Action> {
-    opened(cx)?;
-    load(cx, Ok(target(cx.id.as_str())), Some(CAPABILITY))
+    let brief = opened(cx)?;
+    load(cx, Ok(target(cx.id.as_str(), &brief.id)), Some(CAPABILITY))
 }
 
 /// The opened review's choices in the dock.

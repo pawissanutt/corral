@@ -14,7 +14,7 @@ fn part_of(target: &DetailRef, scope: &str, parts: &BTreeSet<String>) -> bool {
     let named = |part: &str| parts.contains(part);
     match target {
         // The plan document changes with its review card.
-        DetailRef::SessionCards { id } | DetailRef::SessionPlanModeDoc { id } => {
+        DetailRef::SessionCards { id } | DetailRef::SessionPlanModeDoc { id, .. } => {
             id == scope && named("cards")
         }
         DetailRef::SessionModels { id } => id == scope && named("models"),

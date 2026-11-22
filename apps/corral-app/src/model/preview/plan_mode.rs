@@ -137,11 +137,22 @@ pub(super) fn seed(host: &mut Host, model: Option<&str>, at: String) {
     host.pending.push(card(DOC, model, at));
 }
 
-/// The plan document of `host`, in the host's pages: each with the token of the next.
-pub(super) fn serve(feed: &mut Feed, target: &DetailRef, id: &str) -> Result<(), String> {
+/// The plan document of `host`, in the host's pages: each with the token of the next. It is
+/// served only under the id of the review card waiting on it, as the host refuses any other.
+pub(super) fn serve(
+    feed: &mut Feed,
+    target: &DetailRef,
+    id: &str,
+    card: &str,
+) -> Result<(), String> {
     let (doc, brief) = feed
         .hosts
         .get(id)
+        .filter(|host| {
+            host.pending
+                .iter()
+                .any(|pending| pending.kind == CardKind::PlanReview && pending.id == card)
+        })
         .and_then(|host| host.parts.as_deref())
         .filter(|parts| !parts.plan_doc.is_empty())
         .map(|parts| (parts.plan_doc.clone(), parts.plan_mode.clone()))

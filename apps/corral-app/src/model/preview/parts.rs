@@ -280,7 +280,7 @@ fn scope_of(target: &DetailRef) -> Option<&str> {
         | DetailRef::SessionUsage { id }
         | DetailRef::SessionContext { id }
         | DetailRef::SessionPlan { id }
-        | DetailRef::SessionPlanModeDoc { id }
+        | DetailRef::SessionPlanModeDoc { id, .. }
         | DetailRef::SessionEvents { id }
         | DetailRef::SessionCommands { id }
         | DetailRef::BuildBoard { id }
@@ -320,8 +320,8 @@ fn serve_part(
             cards: host.pending.clone(),
         }),
         DetailRef::SessionEvents { .. } => DetailBody::SessionEvents(events(host)),
-        DetailRef::SessionPlanModeDoc { .. } => {
-            return super::plan_mode::serve(feed, target, id.as_str());
+        DetailRef::SessionPlanModeDoc { card, .. } => {
+            return super::plan_mode::serve(feed, target, id.as_str(), card);
         }
         DetailRef::SessionJobOutput { job, .. } => {
             let pages = output(host, job, page)?;
