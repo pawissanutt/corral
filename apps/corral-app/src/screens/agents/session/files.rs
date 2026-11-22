@@ -17,7 +17,6 @@ use crate::model::{
     Form,
     session::{
         Action, Body, FileEditor, FilesContent, FilesView, SessionPage, Tab,
-        files_large::HtmlProgress,
     },
 };
 use crate::screens::markdown::{markdown_without_images, provide_styles};
@@ -57,7 +56,7 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             )
         })
     });
-    let html = files_open::progress();
+    let html = files_open::progress(shown);
     let width = signal(None::<f32>);
     let beside = computed(move || {
         let width = width.get();
@@ -138,7 +137,7 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
 fn editor(
     app: AppState,
     shown: Memo<Option<FilesView>>,
-    html: Signal<HtmlProgress>,
+    html: files_open::Html,
     alone: bool,
 ) -> AnyElement {
     let opened = computed(move || {
