@@ -64,6 +64,18 @@ fn a_relaunched_parent_still_lists_its_retained_child_and_reopens_its_conversati
             "profile":"default", "model":MODEL, "state":"done", "created_at":1, "usage":{"input":1,"output":2,"turns":1},
             "report":"Harness completion report", "report_more":false, "history":"d", "transcript":true}
     }).to_string()).unwrap();
+    // After the bounded roster overflows, a child no longer has a row but its
+    // per-ID archive is still authoritative. Exercise the exact-ID path as well.
+    let archived = "runtime/auxiliary/2f46a430-4d61-48ed-93f1-9fc09f47cfc1.jsonl";
+    fs::write(dir.join(archived), &transcript).unwrap();
+    fs::write(
+        dir.join("child-records/earlier.json"),
+        json!({
+            "session_file": archived, "detail": {"id":"earlier"}
+        })
+        .to_string(),
+    )
+    .unwrap();
     fs::write(dir.join("child-records/fleet"), json!({
         "children":[{"id":"slice", "kind":"slice", "title":"Inspect", "state":"done", "model":MODEL, "tokens":3},
             {"id":"overlap", "kind":"slice", "title":"Saved row", "state":"running", "model":MODEL,
@@ -93,6 +105,9 @@ fn a_relaunched_parent_still_lists_its_retained_child_and_reopens_its_conversati
     );
     owner.ok::<()>(wire::SUB_CLOSE, &watch);
 
+    let archived_id = format!("{parent}/child/earlier");
+    let stopped_messages = page(&mut owner, &archived_id).messages;
+    assert!(!stopped_messages.is_empty());
     let resumed: SessionRelaunched = owner.ok(SESSION_RELAUNCH, json!({"id":parent}));
     assert_eq!(&resumed.id, parent);
     owner.ok::<()>(wire::SUB_OPEN, &watch);
@@ -118,6 +133,8 @@ fn a_relaunched_parent_still_lists_its_retained_child_and_reopens_its_conversati
     else {
         panic!("expected a live roster replacement");
     };
+    assert!(fleet.children.iter().all(|row| row.id != "earlier"));
+    assert_eq!(page(&mut owner, &archived_id).messages, stopped_messages);
     // Reopen the read-only conversation using the ID discovered after relaunch.
     let reopened = fleet
         .children
