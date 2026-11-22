@@ -46,7 +46,7 @@ function modelRequest(models: Model<Api>[], extra: Partial<ModelSelectorRequest>
   };
 }
 
-test("the model picker opens on the current model and commits once through Pi's select: Enter for the session, Pi's save key as default", () =>
+test("the model picker opens on the current model and can switch the session without writing a default", () =>
   withPiKeys(() => {
     const models = [model("openai", "gpt-5"), model("anthropic", "claude-sonnet-4"), model("google", "gemini-3")];
     const once = modelRequest(models);
@@ -56,12 +56,14 @@ test("the model picker opens on the current model and commits once through Pi's 
     expect(once.selected).toEqual([["claude-sonnet-4", false]]);
     expect(once.signal()?.aborted).toBeTrue();
 
-    // Pi's order: current, then by provider. The save key commits with persist; nothing after it reaches Pi.
-    const saved = modelRequest(models);
-    const other = modelPicker(saved.request, host(24));
-    other.handleInput(DOWN); other.handleInput(CTRL_S); other.handleInput(ENTER); other.handleInput(ESC);
-    expect(saved.selected).toEqual([["gemini-3", true]]);
-    expect(saved.cancels()).toBe(0);
+    // The old save key does not leave the picker or change a setting.
+    const session = modelRequest(models);
+    const other = modelPicker(session.request, host(24));
+    other.handleInput(DOWN); other.handleInput(CTRL_S);
+    expect(session.selected).toEqual([]);
+    other.handleInput(ENTER); other.handleInput(ESC);
+    expect(session.selected).toEqual([["gemini-3", false]]);
+    expect(session.cancels()).toBe(0);
   }));
 
 test("a refresh keeps the selection on its model; a closed picker's refresh is aborted and changes nothing", () =>

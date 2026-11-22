@@ -35,6 +35,8 @@ import { commandsPart, registerCommands, typedSessionAction } from "./remote/com
 import { jobsPart, registerJobs } from "./remote/jobs.ts";
 import { ModelCatalogStatus, modelsPart, registerModels } from "./remote/models.ts";
 import { WorkspaceModelFavorites } from "./model-favorites.ts";
+import { readPersonalPreferences } from "./preferences.ts";
+import { terminalSettings } from "./terminal-settings.ts";
 import { usagePart, usageTotal, type ParentUsage } from "./remote/usage.ts";
 import { contextPart, planHistory, registerWorkspace, WorkspaceGit, type WorkspaceInputs } from "./remote/workspace.ts";
 import { RemoteBuild } from "./remote/build.ts";
@@ -487,6 +489,8 @@ export class HostSession {
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       ...ownerDialogs,
       modelFavorites: this.modelFavorites,
+      personal: readPersonalPreferences(),
+      settings: terminalSettings(options.identity.role, options.client.workspaceRoot, options.client.executable),
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
       sidebarKey: sidebarToggleKey(process.env),
       marks: this.marks,

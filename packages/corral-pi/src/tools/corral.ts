@@ -56,6 +56,7 @@ export class CorralClient {
   }
 
   get workspaceRoot(): string { return this.options.root; }
+  get executable(): string { return this.options.corral; }
   get configured(): boolean { return this.options.corral !== ""; }
 
   private async execute(argv: readonly string[], json: boolean, cwd = this.options.cwd): Promise<string> {

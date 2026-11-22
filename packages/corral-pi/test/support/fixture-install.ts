@@ -70,8 +70,8 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
   if (options.isolatePiState) {
     const main = join(dir, "src/host/main.ts");
     const source = readFileSync(main, "utf8");
-    const restrict = "  restrictEnvironment(process.env, provider);";
-    if (source.split(restrict).length !== 2) throw new Error("fixture host environment hook not found");
+    const workspace = "  process.env.CORRAL_NEXT_ROOT = config.root;";
+    if (source.split(workspace).length !== 2) throw new Error("fixture host environment hook not found");
     let setup: string;
     if (options.retainPiState) {
       const state = join(dir, "pi-state");
@@ -82,7 +82,7 @@ export function buildFixtureInstall(options: FixtureOptions = {}): FixtureInstal
       // fixture removes any residue after SIGKILL, which cannot run the exit handler.
       setup = `const fs = await import("node:fs");\n  const state = fs.mkdtempSync(${JSON.stringify(join(dir, "pi-state-"))});\n  process.env.PI_CODING_AGENT_DIR = state;\n  process.once("exit", () => fs.rmSync(state, { recursive: true, force: true }));`;
     }
-    writeFileSync(main, source.replace(restrict, `${restrict}\n  ${setup}`));
+    writeFileSync(main, source.replace(workspace, `${workspace}\n  ${setup}`));
   }
   symlinkSync(join(PACKAGE_ROOT, "node_modules"), join(dir, "node_modules"), "dir");
   if (options.overlays ?? true) {

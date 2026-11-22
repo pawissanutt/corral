@@ -144,7 +144,8 @@ web_origin = [${JSON.stringify(settings.origin)}]
     // allocate its own ID independently of the daemon's build.start implementation.
     const seedSocket = join(sockets, "seed.sock");
     seed = start(launcher, ["build", "--headless", "--project", "demo", "--name", "parity-ready", "--corral", settings.engine,
-      "--data-dir", buildData, "--socket", seedSocket, ...(settings.script ? ["--id", "B-parity"] : [])], repo, env);
+      "--model", "openai-codex/gpt-6.1-sol", "--data-dir", buildData, "--socket", seedSocket,
+      ...(settings.script ? ["--id", "B-parity"] : [])], repo, env);
     const hello = await beforeExit(seed, untilReady(() => withHost(seedSocket, async client => {
       const reply = await within(client.request({ version: BRIDGE_VERSION, id: "stage-hello", command: "hello", args: {} }), 2_000, "seed hello");
       if (reply.ok) return reply.result;

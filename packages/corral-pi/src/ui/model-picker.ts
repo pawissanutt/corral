@@ -138,7 +138,7 @@ const modelKey = (model: { readonly provider: string; readonly id: string }) => 
 /**
  * Pi's model selector: the workspace's favorites first, then the rest, each the current model first, then the default,
  * then by provider (Pi's order); Tab switches between all models and the session's scoped models when it has some;
- * Enter uses the selected model for this session and Pi's save key also makes it the default; Alt+S marks or unmarks
+ * Enter uses the selected model for this session; the durable default is edited in /settings. Alt+S marks or unmarks
  * the selected model as a favorite and keeps the card open. Pi's catalog refresh runs while the card is open, gives up
  * after 15 s, and is aborted when the picker commits, cancels or closes; the selection stays on its model when the
  * rows change.
@@ -231,7 +231,6 @@ export function modelPicker(request: ModelSelectorRequest, host: OwnerDialogHost
       // Pi selects the current model, or the best match of its initial search.
       initial: rows => request.initialSearch ? 0 : Math.max(0, rows.findIndex(row => row.value === current)),
       hints: selected => [
-        ...(find(selected) ? bindingHint("app.models.save", "make default") : []),
         ...(favorites && find(selected) ? favoriteHint(favorite(find(selected)!)) : []),
         ...(scoped.length ? bindingHint("tui.input.tab", scope === "all" ? "scoped models" : "all models") : []),
       ],
@@ -252,9 +251,7 @@ export function modelPicker(request: ModelSelectorRequest, host: OwnerDialogHost
         if (scoped.length) scope = scope === "all" ? "scoped" : "all";
         return true;
       }
-      if (!piPressed(data, "app.models.save")) return false;
-      const model = find(selected);
-      return model ? () => request.select(model, true) : true;
+      return piPressed(data, "app.models.save");
     },
     choose: key => {
       const model = find(key);

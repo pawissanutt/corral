@@ -34,19 +34,27 @@ launches are headless by default. For build defaults and cleanup, see
 
 ### Default model for terminal launches
 
-Set the default for `corral-pi chat` and new `corral-pi build` sessions in the
-workspace's `.corral-next/pi.toml`:
+In the Corral Pi terminal, open `/settings` and choose **Startup model**. This
+saves a default for new `corral-pi chat` and `corral-pi build` sessions in the
+workspace, without changing the current conversation. The setting is stored in
+`.corral-next/pi.toml`:
 
 ```toml
 [startup]
 model = "openai-codex/gpt-6.2-sol"
 ```
 
-An explicit model or provider (including one from a Build `--profile`) takes
-precedence over this setting. Existing conversations can restore their saved
-model; use `corral-pi chat --new` to start fresh. This setting does not change
-models for daemon-managed chat, task runs, or Build children. If unset, the
-built-in default remains `openai-codex/gpt-6.1-sol`.
+An explicit model (including one from a Build `--profile`) takes precedence.
+A provider alone limits the startup picker to that provider. Resumes keep the
+conversation's recorded model; use `corral-pi chat --new` to start fresh. This
+setting does not change models for daemon-managed chat, task runs, or Build
+children.
+
+**Ask at launch** clears the default. If a default is missing or unavailable,
+new terminal launches ask you to use a model once or save it for future launches.
+There is no built-in choice. In headless mode, pass `--model <provider>/<id>` or
+use a Build profile with a model when there is no usable default. Bare Builds
+outside a Corral workspace have a separate personal startup default.
 
 In the Corral app, open **Settings → Configuration → Harnesses → Pi** to edit
 this same setting on the connected workspace. Use **Save startup model** to
@@ -59,7 +67,7 @@ queue follow-ups, stop a turn, answer questions and dialogs, inspect its work,
 and choose a model. Build sessions can also be started, resumed, finished and
 removed there. Ask opens the conversation in a drawer.
 
-The Pi `/settings` card and audible bell are terminal-only. Sign in to a
+The Pi `/settings` page and audible bell are terminal-only. Sign in to a
 provider in a terminal with `corral-pi login --provider <id>`; the owner shell
 `!command` also remains terminal-only.
 

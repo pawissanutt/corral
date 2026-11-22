@@ -25,10 +25,14 @@ otherwise Pi detects the project from the checkout when possible. `--profile <na
 chooses a build profile. `--model [<provider>/]<id>`, `--provider <id>`,
 `--effort <level>`, `--aws-profile <name>`, `--aws-region <region>` and repeated
 `--fallback <provider>/<model>` select the model route; see [corral-pi](corral-pi.md).
-The default model is `openai-codex/gpt-6.1-sol` unless a profile supplies one.
+If you don't choose a model or profile, Build uses the startup model saved in
+Corral Pi's `/settings`. If that model is missing or unavailable, an interactive
+launch asks before creating a session or worktree. Resuming keeps the recorded
+model.
 
 `--headless` runs without the terminal interface; non-interactive launches are
-headless by default. `--id <id>` sets the new session ID; it cannot be combined
+headless by default. A new headless Build needs a usable saved default, a profile
+with a model, or `--model`. `--id <id>` sets the new session ID; it cannot be combined
 with `--resume`. `--socket <path>` chooses the host socket and `--corral <path>`
 chooses the Corral executable. `--data-dir <path>` selects the record store;
 by default it is `$XDG_DATA_HOME/corral/corral-pi`, or
