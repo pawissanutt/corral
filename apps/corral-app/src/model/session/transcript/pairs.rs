@@ -1,44 +1,90 @@
-//! A transcript page may record the call and its result in different messages. Their call id
-//! is the identity: keep the call's position and arguments, but settle it from the result.
+//! Settle tools by call id. Normally the call owns the row, but a standalone result on a
+//! newer page keeps its position (and thus its scroll anchor) when the call is prepended.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 
-use corral_protocol::detail::{SessionItem, SessionMessage, SessionToolState};
+use corral_protocol::detail::{DetailBody, SessionItem, SessionMessage, SessionToolState};
 
-use crate::model::daemon::Feed;
+use crate::model::daemon::{DetailCache, Feed};
 
-use super::replay::{Rest, resolve};
+use super::replay::{Rest, resolve_at};
 
 pub(super) struct Pair<'a> {
-    pub first: &'a SessionItem,
+    pub position: &'a SessionItem,
     pub item: Cow<'a, SessionItem>,
     pub rest: Rest<'a>,
+    page: usize,
+}
+
+/// Cache pages are newest first. A joined record can straddle a seam, but joining records
+/// preserves the order and number of raw items, including continuations.
+fn page_starts(cache: Option<&DetailCache>) -> Vec<usize> {
+    let lengths: Vec<_> = cache
+        .into_iter()
+        .flat_map(DetailCache::bodies)
+        .filter_map(|body| match body {
+            DetailBody::Session(page) => {
+                Some(page.messages.iter().map(|row| row.items.len()).sum())
+            }
+            _ => None,
+        })
+        .collect();
+    lengths
+        .into_iter()
+        .rev()
+        .scan(0, |start, len: usize| {
+            let next = *start + len;
+            Some(std::mem::replace(start, next))
+        })
+        .collect()
 }
 
 pub(super) fn collect<'a>(
     messages: &'a [SessionMessage],
+    cache: Option<&DetailCache>,
     feed: &'a Feed,
 ) -> BTreeMap<&'a str, Pair<'a>> {
+    let starts = page_starts(cache);
+    let mut base = 0;
     let mut pairs: BTreeMap<&str, Pair<'_>> = BTreeMap::new();
     for message in messages {
-        for (item, rest) in resolve(&message.items, feed) {
-            let SessionItem::ToolCall { call_id, .. } = item else {
+        for (at, item, rest) in resolve_at(&message.items, feed) {
+            let SessionItem::ToolCall {
+                call_id,
+                paired,
+                result,
+                ..
+            } = item
+            else {
                 continue;
             };
             if call_id.is_empty() {
                 continue;
             }
+            let page = starts.partition_point(|&start| start <= base + at);
             match pairs.entry(call_id.as_str()) {
                 std::collections::btree_map::Entry::Vacant(slot) => {
                     slot.insert(Pair {
-                        first: item,
+                        position: item,
                         item: Cow::Borrowed(item),
                         rest,
+                        page,
                     });
                 }
                 std::collections::btree_map::Entry::Occupied(mut slot) => {
                     let pair = slot.get_mut();
+                    if pair.page < page
+                        && !paired
+                        && result.is_some()
+                        && matches!(
+                            pair.item.as_ref(),
+                            SessionItem::ToolCall { result: None, .. }
+                        )
+                    {
+                        pair.position = item;
+                        pair.page = page;
+                    }
                     merge(pair.item.to_mut(), item);
                     if !matches!(rest, Rest::Whole) {
                         pair.rest = rest;
@@ -46,6 +92,7 @@ pub(super) fn collect<'a>(
                 }
             }
         }
+        base += message.items.len();
     }
     pairs
 }

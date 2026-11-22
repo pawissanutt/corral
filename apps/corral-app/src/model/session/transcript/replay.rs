@@ -123,20 +123,26 @@ pub(super) fn resolve<'a>(
     feed: &'a daemon::Feed,
 ) -> Vec<(&'a SessionItem, Rest<'a>)> {
     let mut out = Vec::with_capacity(items.len());
-    let mut at = 0;
-    while let Some(item) = items.get(at) {
-        at += 1;
-        if matches!(item, SessionItem::Continuation { .. }) {
-            // A continuation belongs to the item before it; one without is nothing to draw.
-            continue;
-        }
-        let Some(SessionItem::Continuation { token, bytes }) = items.get(at) else {
-            out.push((item, Rest::Whole));
-            continue;
+    out.extend(resolve_at(items, feed).map(|(_, item, rest)| (item, rest)));
+    out
+}
+
+/// Also retain the raw index for locating an item on its original page, including when a
+/// record was split across pages or a continuation has already been fetched.
+pub(super) fn resolve_at<'a>(
+    items: &'a [SessionItem],
+    feed: &'a daemon::Feed,
+) -> impl Iterator<Item = (usize, &'a SessionItem, Rest<'a>)> {
+    let mut items = items.iter().enumerate().peekable();
+    std::iter::from_fn(move || {
+        let (at, item) =
+            items.find(|(_, item)| !matches!(item, SessionItem::Continuation { .. }))?;
+        let Some((_, SessionItem::Continuation { token, bytes })) = items.peek().copied() else {
+            return Some((at, item, Rest::Whole));
         };
-        at += 1;
+        items.next();
         let bytes = *bytes;
-        out.push(match feed.items.get(token) {
+        let (item, rest) = match feed.items.get(token) {
             Some(ItemFetch::Ready(full)) => (full, Rest::Whole),
             Some(ItemFetch::Loading) => (item, Rest::Loading { bytes }),
             Some(ItemFetch::Failed(reason)) => (
@@ -148,9 +154,9 @@ pub(super) fn resolve<'a>(
                 },
             ),
             None => (item, Rest::Missing { token, bytes }),
-        });
-    }
-    out
+        };
+        Some((at, item, rest))
+    })
 }
 
 /// A byte count in words: `820 B`, `1.2 KB`, `34 KB`, `1.2 MB`.
@@ -399,7 +405,7 @@ fn message(
             ))),
             SessionItem::ToolCall { call_id, .. } => {
                 if let Some(pair) = pairs.get(call_id.as_str()) {
-                    if std::ptr::eq(item, pair.first) {
+                    if std::ptr::eq(item, pair.position) {
                         items.extend(tool::call(&pair.item, &key, pair.rest, cx));
                     }
                 } else {
@@ -732,7 +738,7 @@ pub fn transcript(
             })
         }
     });
-    let pairs = super::pairs::collect(recorded, feed);
+    let pairs = super::pairs::collect(recorded, cache, feed);
     let first_user = recorded
         .iter()
         .position(|message| avatar(&message.author).0 == "Y");
