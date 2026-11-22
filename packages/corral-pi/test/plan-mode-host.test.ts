@@ -81,7 +81,7 @@ for (const variant of VARIANTS) {
         return typeof content === "string" ? content : content.map(part => part.type === "text" ? part.text : "").join("");
       });
       const entries = () => live.session.sessionManager.getEntries() as
-        { type: string; customType?: string; summary?: string; details?: { kind?: string } }[];
+        { type: string; customType?: string; summary?: string; details?: { kinds?: string[] } }[];
       const outside = join(cwd, "a.txt");
 
       // Given an agent that tries to implement before it plans:
@@ -91,8 +91,8 @@ for (const variant of VARIANTS) {
       // Then only the plan document was written, and the submission is the one open card.
       expect(existsSync(outside)).toBeFalse();
       expect(texts().some(text => text.includes("Plan mode: the working tree is read-only"))).toBeTrue();
-      expect(entries().filter(entry => entry.type === "custom_message" && entry.customType === PLAN_NOTE).map(entry => entry.details?.kind))
-        .toEqual(["contract"]);
+      expect(entries().filter(entry => entry.type === "custom_message" && entry.customType === PLAN_NOTE).map(entry => entry.details?.kinds))
+        .toEqual([["contract"]]);
       expect(plan.brief()).toEqual({ phase: "review", title: "Add the flag", revision: 1 });
 
       // Given the working file changes after the submission, as a shell command could change it:
@@ -126,7 +126,7 @@ for (const variant of VARIANTS) {
     }), 120_000);
 }
 
-test("an owner message the session refuses leaves the plan review open", () => planning(undefined, async (live, plan) => {
+test("an owner message withdraws the plan review only when the session takes it", () => planning(undefined, async (live, plan) => {
   // Given a submitted plan and an automated turn that is still running:
   writeFileSync(plan.path, PLAN);
   fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
@@ -144,7 +144,15 @@ test("an owner message the session refuses leaves the plan review open", () => p
   // Then the same review is still open.
   expect(refused.disposition).toBe("rejected");
   expect(plan.review).toBe(review);
+  // And typed in the terminal, where Pi refuses only after the input hook has run:
+  await expect(live.session.prompt("Change step 1", { source: "interactive" })).rejects.toThrow("already processing");
+  expect(plan.review).toBe(review);
   fixtureTransport().release();
   await until(() => !live.session.isStreaming, "the held turn to end");
   await live.drained();
+  // And once the session takes the terminal message, it is the owner's feedback.
+  fixtureTransport().script([{ text: "Revising." }]);
+  await live.session.prompt("Change step 1", { source: "interactive" });
+  await live.drained();
+  expect(plan.phase).toBe("planning");
 }), 120_000);

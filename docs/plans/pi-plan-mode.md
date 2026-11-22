@@ -89,8 +89,9 @@ listed as an alias of `/todo`; `/todo` is unchanged.
 The mode reaches the model only as conversation messages (custom type `corral_plan_note`,
 not displayed), returned from the `before_agent_start` hook when a turn starts. The system
 prompt and the tool list never change with the mode, so entering and leaving do not
-invalidate the prompt cache. The transcript records each message, and the scan of the branch
-decides which one, if any, the next turn still needs:
+invalidate the prompt cache. The transcript records what each message covered, and the scan
+of the branch decides what the next turn still needs. Everything due goes in one message, so
+a reply after a compaction is told together with the contract:
 
 | Kind | When | Text |
 |---|---|---|
@@ -149,8 +150,9 @@ terminal and the app answer the same submission; the first answer wins.
 Any answer may carry text. With an execute option it is passed to the executor as the
 owner's note. Text with no option is `revise`. Dismissing puts the card aside and stays in
 `review`. An ordinary owner message during `review` is feedback: the phase returns to
-`planning` and the message is delivered normally. If the session refuses that message, the
-same review is put back.
+`planning` and the message is delivered normally. The review is withdrawn only for a message
+the session takes: one typed in the terminal withdraws it when its run starts, and one sent
+through the socket puts the same review back if it is refused.
 
 **Different model.** The review shows the session's current model with a change control that
 opens the existing model picker. The session is idle during review, so the existing
@@ -172,9 +174,8 @@ body carries the first 8 KiB for older apps.
 
 On an execute answer the host, in order:
 
-1. Checks the phase is `review` and reads the submission's copy, which must still match its
-   digest.
-2. Cancels the turn if one is still open.
+1. Checks the phase is `review` and cancels the turn if one is still open.
+2. Reads the submission's copy from disk again; it must still match its digest.
 3. Applies the context option:
    - `execute`: nothing.
    - `execute_compact`: `session.compact(<instructions>)`, where the instructions keep

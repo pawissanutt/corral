@@ -363,6 +363,8 @@ export class HostSession {
   private planReview: PlanReviewUi | undefined;
   /** The summary a clean-context reset writes in place of a model-made one. */
   private planReset: string | undefined;
+  /** Terminal input that will withdraw a pending plan review if its run starts. */
+  private planReply: string | undefined;
   private readonly remotePrompts: RemotePrompts;
   private readonly local: LocalControlPlane;
   private questionUi: OwnerQuestionUi | undefined;
@@ -1063,7 +1065,10 @@ export class HostSession {
     const plan = this.planMode;
     if (plan) {
       // The mode reaches the model as a conversation message, so the system prompt never changes with it.
-      pi.on("before_agent_start", () => {
+      pi.on("before_agent_start", event => {
+        // Feedback typed in the terminal withdraws a pending review only here, once its run really starts.
+        if (this.planReply !== undefined && event.messageType === "user" && event.prompt === this.planReply) plan.ownerSpoke();
+        this.planReply = undefined;
         const message = plan.turnMessage();
         return message ? { message } : undefined;
       });
@@ -1273,7 +1278,10 @@ export class HostSession {
       // A build session's record keeps what the owner asked for, verbatim.
       if (event.source === "interactive" && !event.text.startsWith("/")) {
         if (await this.options.paneInput?.(event.text, event.images)) return { action: "handled" as const };
-        this.planMode?.ownerSpoke();
+        // Pi checks the model and its login after this hook. A message queued into the running turn is
+        // already taken; one that starts a run is the owner's reply only when that run begins.
+        if (event.streamingBehavior !== undefined) this.planMode?.ownerSpoke();
+        else this.planReply = event.text;
         this.buildControls?.noteOwnerInput(event.text);
       }
       return { action: "continue" as const };

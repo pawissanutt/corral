@@ -85,9 +85,9 @@ const slug = (title: string): string => title.toLowerCase().replace(/[^a-z0-9]+/
 // A rewind rolls the revision back, so the submission's own id is what makes a card and its copy unique.
 const cardId = (record: PlanRecord): string => `plan-${record.revision}-${record.id ?? ""}`;
 
-interface Scan { record: PlanRecord; due?: NoteKind }
+interface Scan { record: PlanRecord; due: readonly NoteKind[] }
 
-/** The phase and the one message the model has not yet been given about it, read from the branch alone. */
+/** The phase and what the model has not yet been told about it, read from the branch alone. */
 function scan(entries: readonly PlanEntry[]): Scan {
   let record = OFF, announced = false, told = false;
   let due: Exclude<NoteKind, "contract"> | undefined;
@@ -106,13 +106,17 @@ function scan(entries: readonly PlanEntry[]): Scan {
       announced = false;
       if (record.phase === "off" && record.approved) due = "pointer";
     } else if (entry.type === "custom_message" && entry.customType === PLAN_NOTE) {
-      const kind = (entry.details as { kind?: unknown } | undefined)?.kind;
-      if (kind === "contract") announced = told = true;
-      else if (kind === due) due = undefined;
+      const kinds = (entry.details as { kinds?: unknown } | undefined)?.kinds;
+      for (const kind of Array.isArray(kinds) ? kinds : []) {
+        if (kind === "contract") announced = told = true;
+        else if (kind === due) due = undefined;
+      }
     }
   }
-  if (record.phase === "planning" && !announced) return { record, due: "contract" };
-  return record.phase === "review" || due === undefined ? { record } : { record, due };
+  // A review has nothing to say until the owner answers it. A reply after a compaction needs the contract as
+  // well, in the same turn: told later, the reply notice would describe some other message.
+  if (record.phase === "review") return { record, due: [] };
+  return { record, due: [...(record.phase === "planning" && !announced ? ["contract" as const] : []), ...(due ? [due] : [])] };
 }
 
 export class PlanMode {
@@ -192,20 +196,20 @@ export class PlanMode {
     return undefined;
   }
 
-  /** The one message the starting turn needs to know the mode; the transcript records that it was given. */
-  turnMessage(): { customType: string; content: string; display: boolean; details: { kind: NoteKind } } | undefined {
+  /** What the starting turn needs to know about the mode, as one message; the transcript records what it covered. */
+  turnMessage(): { customType: string; content: string; display: boolean; details: { kinds: readonly NoteKind[] } } | undefined {
     const { record, due } = this.read();
-    if (!due) return undefined;
-    const content = due === "contract"
+    if (!due.length) return undefined;
+    const content = due.map(kind => kind === "contract"
       ? this.host.prompts.contract({ path: this.path, existing: this.exists(), askUser: this.host.askUser })
-      : due === "left" ? "[corral plan mode]\nPlan mode is off: the owner left it without approving a plan. Normal tool access is "
+      : kind === "left" ? "[corral plan mode]\nPlan mode is off: the owner left it without approving a plan. Normal tool access is "
         + `restored. The draft at \`${this.path}\` is not approved; do not implement it unless the owner asks.`
-      : due === "replied" ? "[corral plan review]\nThe owner replied instead of approving the submitted plan. Treat their "
+      : kind === "replied" ? "[corral plan review]\nThe owner replied instead of approving the submitted plan. Treat their "
         + "message as feedback: revise the plan, then call `plan_submit` again."
       : `[corral plan reference]\nThe approved plan for this work, "${record.approved?.title ?? "Plan"}", is at `
         + `\`${record.approved?.path ?? this.path}\`. If you are still executing it and its details are no longer in context, `
-        + "read it. Ignore this if that work is finished or unrelated.";
-    return { customType: PLAN_NOTE, content, display: false, details: { kind: due } };
+        + "read it. Ignore this if that work is finished or unrelated.").join("\n\n");
+    return { customType: PLAN_NOTE, content, display: false, details: { kinds: due } };
   }
 
   private exists(): boolean { return lstatSync(this.path, { throwIfNoEntry: false })?.isFile() === true; }
@@ -274,17 +278,23 @@ export class PlanMode {
     return "Submitted for the owner's review. End your turn now and do not implement; the owner's choice arrives as a later message.";
   }
 
-  /** The text of the submission under review, or undefined when its copy is missing or no longer matches. */
-  reviewText(): string | undefined {
-    const record = this.record;
+  /** A submission's copy as it is on disk now, or undefined when it is missing or no longer matches its digest. */
+  private copy(record: PlanRecord): string | undefined {
     if (record.phase !== "review" || !record.path || !record.digest) return undefined;
-    const card = cardId(record);
+    try {
+      const body = readFileSync(record.path, "utf8");
+      return sha(body) === record.digest ? body : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** The text of the submission under review, for showing; execution reads the copy again. */
+  reviewText(): string | undefined {
+    const record = this.record, card = cardId(record);
     if (this.submitted?.card !== card) {
-      this.submitted = undefined;
-      try {
-        const body = readFileSync(record.path, "utf8");
-        if (sha(body) === record.digest) this.submitted = { card, body };
-      } catch { /* A missing copy reads as a changed one. */ }
+      const body = this.copy(record);
+      this.submitted = body === undefined ? undefined : { card, body };
     }
     return this.submitted?.body;
   }
@@ -355,10 +365,15 @@ export class PlanMode {
   private async execute(context: PlanContext, note?: string): Promise<void> {
     this.starting = true;
     try {
-      const record = this.record, plan = this.reviewText();
+      const record = this.record;
       if (record.phase !== "review") return;
-      if (plan === undefined || !record.path || !record.digest) throw new Error(CHANGED);
       await this.host.stopTurn();
+      // Read after the planning turn can no longer touch it: what runs must be what the digest names, now.
+      const plan = this.copy(record);
+      if (plan === undefined || !record.path || !record.digest) {
+        this.submitted = undefined;
+        throw new Error(CHANGED);
+      }
       const title = record.title ?? "Plan", { revision, digest, path } = record;
       if (context === "compact") await this.host.compact(COMPACT_INSTRUCTIONS);
       // The reset summary carries the plan itself, so the cleared context holds it whatever happens next.
