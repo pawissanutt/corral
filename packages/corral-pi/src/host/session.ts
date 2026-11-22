@@ -369,6 +369,8 @@ export class HostSession {
   private planReset: string | undefined;
   /** Callers of submitOpened waiting for the turn they started to open. */
   private readonly openWaiters: (() => void)[] = [];
+  /** Inputs handed to Pi whose admission is not answered yet, by queue tag, with how to refuse each. */
+  private readonly admissions = new Map<unknown, (reason: string) => void>();
   private readonly remotePrompts: RemotePrompts;
   private readonly local: LocalControlPlane;
   private questionUi: OwnerQuestionUi | undefined;
@@ -1395,6 +1397,7 @@ export class HostSession {
         else if (event.event === "rejected" && this.startedInputFacts === facts) {
           this.startedInputFacts = undefined;
         }
+        if (event.event === "rejected") this.admissions.get(event.tag)?.(event.reason ?? "rejected");
       },
       queue: change => {
         this.queue.observer.queue(change);
@@ -1808,21 +1811,29 @@ export class HostSession {
   private promptInput(input: SessionInput,
     queueTag: unknown, images?: ImageContent[]): Promise<SubmitResult> {
     const { promise, resolve } = Promise.withResolvers<SubmitResult>();
+    const settle = (result: SubmitResult) => {
+      this.admissions.delete(queueTag);
+      resolve(result);
+    };
+    const refuse = (message: string) => settle({ disposition: "rejected",
+      reason: /already processing/i.test(message) ? "busy" : message.slice(0, 256) });
+    // Pi defers a prompt made while it settles a turn: that call returns at once, and a refusal of the deferred
+    // prompt is reported only through the queue's lifecycle. Without this the admission would never be answered.
+    this.admissions.set(queueTag, refuse);
     this.session.prompt(input.text, {
       source: "rpc", queueTag, ...(images ? { images } : {}),
       ...(input.busyPolicy === "steer" ? { streamingBehavior: "steer" as const } : {}),
       ...(input.busyPolicy === "follow_up" ? { streamingBehavior: "followUp" as const } : {}),
       preflightResult: (disposition) => {
         if (disposition !== "started") {
-          resolve({ disposition });
+          settle({ disposition });
           return;
         }
         this.nextTurnOrigin = { kind: "bridge" };
-        resolve({ disposition, turn: this.turn + 1 });
+        settle({ disposition, turn: this.turn + 1 });
       },
     }).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      resolve({ disposition: "rejected", reason: /already processing/i.test(message) ? "busy" : message.slice(0, 256) });
+      refuse(error instanceof Error ? error.message : String(error));
     }).finally(() => { this.turnOpened(); });
     return promise;
   }

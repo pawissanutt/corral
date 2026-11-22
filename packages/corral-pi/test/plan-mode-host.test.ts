@@ -206,6 +206,34 @@ test("a pause that follows an approval cancels the plan's turn instead of missin
   expect(plan.phase).toBe("off");
 }), 120_000);
 
+test("a kickoff Pi refuses after deferring it leaves the review and the session usable", () => planning(undefined, async (live, plan, _cwd, owner) => {
+  writeFileSync(plan.path, PLAN);
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+  await live.session.prompt("Plan a --version flag", { source: "extension" });
+  await live.drained();
+  const review = plan.review;
+  // Given Pi defers the kickoff, as it does while it settles a turn, and then refuses it through the queue's
+  // lifecycle alone: the prompt call itself has already returned.
+  const prompt = live.session.prompt;
+  const observer = (live.session as unknown as {
+    _queueObserver: { lifecycle(event: { tag: unknown; event: "rejected"; reason: string }): void };
+  })._queueObserver;
+  live.session.prompt = async (_text, options) => {
+    queueMicrotask(() => observer.lifecycle({ tag: options?.queueTag, event: "rejected", reason: "compaction is in progress" }));
+  };
+  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  // Then the admission order is released and the same review is open,
+  expect(await within(owner.pause(), 5_000, "a pause after the refused kickoff")).toMatchObject({ paused: true });
+  await owner.resume();
+  expect(plan.review).toBe(review);
+  // and it can be approved once Pi takes the kickoff.
+  live.session.prompt = prompt;
+  fixtureTransport().script([{ text: "Executing." }]);
+  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  await until(() => plan.phase === "off" && !live.session.isStreaming, "the approved plan to run");
+  await live.drained();
+}), 120_000);
+
 test("a compaction inside a planning run is followed by the contract before the run goes on",
   () => planning({ settings: { compaction: { keep_recent_tokens: 1 } }, projectText: false }, async (live, plan) => {
     // Given a planning turn whose first response reports a context past the model's window:
