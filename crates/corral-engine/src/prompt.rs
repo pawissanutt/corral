@@ -90,7 +90,7 @@ fn write_tools(
             } else {
                 let project_flag = project
                     .map(|project| {
-                        shell_quote(project).map(|quoted| format!(" --project {quoted}"))
+                        shell_quote(project).map(|quoted| format!(" --project={quoted}"))
                     })
                     .transpose()?
                     .unwrap_or_default();
@@ -275,12 +275,12 @@ mod tests {
             assert_eq!(prompt.matches("## Tools").count(), 1);
             assert!(
                 prompt.contains(
-                    "'/path to/corral' tool --project 'app' -- 'check'\"'\"'s' [args...]"
+                    "'/path to/corral' tool --project='app' -- 'check'\"'\"'s' [args...]"
                 )
             );
             assert!(prompt.contains("Check the work"));
             assert!(
-                prompt.contains("'/path to/corral' tool --project 'app' -- 'inspect' [args...]")
+                prompt.contains("'/path to/corral' tool --project='app' -- 'inspect' [args...]")
             );
             assert!(!prompt.contains("disabled"));
             assert!(!prompt.contains("touch "));
@@ -307,7 +307,7 @@ mod tests {
         .unwrap();
         let prompt = fs::read_to_string(&file).unwrap();
         assert!(prompt.contains("Tool \"inspect\" is ambiguous"));
-        assert!(!prompt.contains("tool --project 'app' -- 'inspect' [args...]"));
+        assert!(!prompt.contains("tool --project='app' -- 'inspect' [args...]"));
         config.extensions.remove("duplicate");
         config.extensions.remove("available");
         write_prompt(

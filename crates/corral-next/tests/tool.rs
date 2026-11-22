@@ -41,4 +41,22 @@ context = { run = "sh fixture.sh", about = "Find context" }
     let request: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(request["v"], 1);
     assert_eq!(request["args"], serde_json::json!(["--example", "value"]));
+
+    // A session targeting another workspace must not import its run identity.
+    let other = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_corral-next"))
+        .arg("--root")
+        .arg(root.path())
+        .args(["tool", "context"])
+        .current_dir(root.path())
+        .env("CORRAL_NEXT_ROOT", other.path())
+        .env("CORRAL_TASK", "T-999")
+        .env("CORRAL_RUN", "R1")
+        .env("CORRAL_PROJECT", "other")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let request: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(request["task"].is_null());
+    assert!(request["run"].is_null());
 }

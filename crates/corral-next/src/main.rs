@@ -376,7 +376,15 @@ fn tool(
     invocation: &[String],
     out: &mut Output<'_>,
 ) -> Result<()> {
-    let task_id = tool_env("CORRAL_TASK");
+    // Run context belongs only to the workspace that launched the session.
+    let same_root = env::var_os("CORRAL_NEXT_ROOT").is_none_or(|value| {
+        let inherited = Path::new(&value);
+        inherited
+            .canonicalize()
+            .unwrap_or_else(|_| inherited.to_path_buf())
+            == root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
+    });
+    let task_id = same_root.then(|| tool_env("CORRAL_TASK")).flatten();
     let engine = task_id.as_ref().map(|_| Engine::open(root)).transpose()?;
     let owner_config;
     let (config, task) = if let Some((engine, id)) = engine.as_ref().zip(task_id.as_deref()) {
@@ -385,7 +393,7 @@ fn tool(
         owner_config = Config::load(&root.join(".corral-next/corral.toml"))?;
         (&owner_config, None)
     };
-    let project = tool_project(config, root, cwd, project_flag, task.as_ref())?;
+    let project = tool_project(config, root, cwd, project_flag, task.as_ref(), same_root)?;
     let mut tools = Vec::new();
     for (name, extension) in &config.extensions {
         if extension.enabled
@@ -437,7 +445,9 @@ fn tool(
         anyhow::bail!("ambiguous tool {name:?}; provided by extensions {names}");
     }
 
-    let run = tool_env("CORRAL_RUN")
+    let run = same_root
+        .then(|| tool_env("CORRAL_RUN"))
+        .flatten()
         .map(|id| {
             let (engine, task) = engine
                 .as_ref()
@@ -519,11 +529,18 @@ fn tool_project<'a>(
     cwd: &Path,
     explicit: Option<&str>,
     task: Option<&Task>,
+    same_root: bool,
 ) -> Result<Option<&'a str>> {
+    if let (Some(task), Some(project)) = (task, explicit) {
+        anyhow::ensure!(
+            task.project.as_deref() == Some(project),
+            "project {project:?} does not match the task's project"
+        );
+    }
     let requested = explicit
         .map(str::to_owned)
         .or_else(|| task.and_then(|task| task.project.clone()))
-        .or_else(|| tool_env("CORRAL_PROJECT"));
+        .or_else(|| same_root.then(|| tool_env("CORRAL_PROJECT")).flatten());
     if let Some(name) = requested {
         return config
             .projects

@@ -79,6 +79,19 @@ pub(super) fn validate(config: &Config, problems: &mut Vec<ConfigProblem>) {
         }
     }
     for project in config.projects.keys() {
+        let mut tools: BTreeMap<&str, &str> = BTreeMap::new();
+        for (name, extension) in &config.extensions {
+            if extension.enabled && extension.includes_project(project) {
+                for tool in extension.tools.keys() {
+                    if let Some(previous) = tools.insert(tool, name) {
+                        problems.push(problem(
+                            "extensions",
+                            format!("duplicate tool {tool:?} for project {project:?}: {previous:?}, {name:?}"),
+                        ));
+                    }
+                }
+            }
+        }
         let providers: Vec<_> = config
             .extensions
             .iter()
