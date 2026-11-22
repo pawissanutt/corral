@@ -72,6 +72,7 @@ pub(super) struct Place {
     /// The first row shown as last seen, with its scope: when it changes in the same scope,
     /// rows arrived above the reader.
     pub first: Option<(Id, String)>,
+    /// Last source message and the number of rows after it, even in a shared bubble.
     pub tail: Option<(String, usize)>,
     /// The scroll offset as last seen: a scroll that changes it is the reader's own.
     pub offset: Option<f32>,
@@ -111,12 +112,18 @@ impl Place {
             return Shown::End;
         }
         let mut left = *self.left_at.get_or_insert(rows);
-        // What arrived above is not new: the reader read past it on their way up.
+        // Move the baseline by the change before the old tail, not the net row change:
+        // the merged view can fold earlier rows together and add new rows below in one update.
         if above {
-            let added_below = previous_tail
-                .and_then(|(key, old)| below(&key).map(|now| now.saturating_sub(old)))
-                .unwrap_or_default();
-            left += rows.saturating_sub(before).saturating_sub(added_below);
+            if let Some((old, now)) =
+                previous_tail.and_then(|(key, old)| below(&key).map(|now| (old, now)))
+            {
+                let previous_prefix = before - old;
+                let current_prefix = rows - now;
+                left = (left + current_prefix).saturating_sub(previous_prefix);
+            } else {
+                left += rows.saturating_sub(before);
+            }
             self.left_at = Some(left);
         }
         let held = above

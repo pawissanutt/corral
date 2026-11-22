@@ -36,6 +36,8 @@ pub struct Group {
     pub row: Tool,
     pub rows: Vec<Tool>,
     pub open: bool,
+    /// Number of input rows represented by the group, even while it is closed.
+    pub(super) count: usize,
 }
 
 /// How a tool's rows fold and are summarised.
@@ -121,6 +123,7 @@ fn settle(run: &mut Vec<Tool>, out: &mut Vec<MessageItem>, cx: Cx<'_>) {
     let row = summarised(&rows, key, cx);
     out.push(MessageItem::Group(Group {
         row,
+        count: rows.len(),
         rows: if open { rows } else { Vec::new() },
         open,
     }));

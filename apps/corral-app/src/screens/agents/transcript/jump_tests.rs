@@ -1,12 +1,18 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use corral_protocol::detail::{
+    DetailBody, DetailRef, DetailReply, HostPresence, SessionItem, SessionMessage, SessionPage,
+    SessionToolState,
+};
 use nsh_core::element::{Runtime, create_root};
 
 use super::anchors::Mark;
 use super::jump::{Place, Shown, kept};
 use crate::model::Id;
-use crate::model::session::transcript::Reading;
+use crate::model::daemon::{DetailCache, Feed};
+use crate::model::session::Ui;
+use crate::model::session::transcript::{MessageItem, Reading, Transcript, transcript};
 
 /// Where the reader was used to live in `stored` values and a signal of the transcript view's
 /// owner, read by that owner's cleanup. NSH frees what an owner made before it runs the owner's
@@ -100,5 +106,134 @@ fn a_split_record_growing_above_the_reader_holds_their_row_and_is_not_new() {
         mark.offset(top, height + 200.0),
         top + 500.0,
         "the reader stays on the item they read"
+    );
+}
+
+#[test]
+fn a_combined_publish_counts_new_rows_inside_the_same_assistant_tail() {
+    let scope = Id::from("B-test");
+    let text = |text: &str| SessionItem::Text { text: text.into() };
+    let read = |id: &str| SessionItem::ToolCall {
+        call_id: id.into(),
+        name: "read".into(),
+        arguments: r#"{"path":"src/lib.rs"}"#.into(),
+        summary: String::new(),
+        state: SessionToolState::Done,
+        paired: true,
+        call: None,
+        output: Some("fn main() {}".into()),
+        result: None,
+        elapsed_ms: None,
+        diff: None,
+        content: None,
+    };
+    let record = |id: &str, author: &str, items| SessionMessage {
+        id: format!("{scope}/entry/{id}"),
+        author: author.into(),
+        at: None,
+        items,
+        model: None,
+        stop_reason: None,
+        usage: None,
+        input: None,
+        attachments: Vec::new(),
+    };
+    let publish = |older: Vec<SessionMessage>, latest: Vec<SessionMessage>| {
+        let page = |messages, older| SessionPage {
+            id: scope.to_string(),
+            role: "worker".into(),
+            task: None,
+            run: None,
+            machine: None,
+            messages,
+            older,
+            replyable: true,
+            reply_refusal: None,
+            host: HostPresence::NotRunning,
+        };
+        let reply = |body| DetailReply {
+            etag: "snapshot".into(),
+            as_of: String::new(),
+            seq: 0,
+            next: None,
+            body: Some(DetailBody::Session(body)),
+        };
+        let has_older = !older.is_empty();
+        let mut pages = vec![reply(page(latest.clone(), Some("previous".into())))];
+        let mut all = older;
+        if has_older {
+            pages.push(reply(page(all.clone(), None)));
+        }
+        all.extend(latest);
+        let cache = DetailCache {
+            target: DetailRef::Session {
+                id: scope.to_string(),
+            },
+            pages,
+            loading: false,
+            stale: false,
+            error: None,
+            merged: Some(DetailBody::Session(page(
+                all,
+                (!has_older).then(|| "previous".into()),
+            ))),
+        };
+        transcript(&scope, &Ui::default(), Some(&cache), &Feed::default())
+    };
+    let reader = record("reader", "owner", vec![text("Reader's row")]);
+    let mut latest = vec![
+        reader.clone(),
+        record("tail-head", "assistant", vec![read("c1")]),
+        record("tail-end", "assistant", vec![read("c2")]),
+    ];
+    let before = publish(Vec::new(), latest.clone());
+    assert_eq!(before.rows(), 2);
+    assert!(matches!(
+        before.messages.last().unwrap().items.as_slice(),
+        [MessageItem::Group(_)]
+    ));
+
+    let mut place = Place {
+        scope: Some(scope.clone()),
+        top: Some((reader.id.clone(), 12.0)),
+        ..Place::default()
+    };
+    let show = |place: &mut Place, transcript: &Transcript| {
+        let following = transcript.following();
+        place.shown(
+            following.rows,
+            transcript.first.clone().map(|key| (scope.clone(), key)),
+            following.tail,
+            |key| transcript.rows_below(key),
+        )
+    };
+    show(&mut place, &before);
+
+    latest.push(record(
+        "fresh",
+        "assistant",
+        vec![read("c3"), text("New reply"), text("Second paragraph")],
+    ));
+    let after = publish(
+        vec![record("older", "owner", vec![text("Earlier history")])],
+        latest,
+    );
+    let tail = after.messages.last().unwrap();
+    assert_eq!(tail.anchor, before.messages.last().unwrap().anchor);
+    assert!(matches!(
+        tail.items.as_slice(),
+        [
+            MessageItem::Group(_),
+            MessageItem::Prose(_),
+            MessageItem::Prose(_)
+        ]
+    ));
+    assert_eq!(
+        show(&mut place, &after),
+        Shown::Up {
+            held: Some((scope, reader.id, 12.0)),
+            arrived: 2,
+        },
+        "the older row is held above, the existing group remains one row, and both fresh rows count"
     );
 }

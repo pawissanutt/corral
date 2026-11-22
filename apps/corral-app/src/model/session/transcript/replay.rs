@@ -607,14 +607,40 @@ fn message(
     }
 }
 
-/// Consecutive messages of one agent as one message, so its words and calls read as one reply
-/// and a run of calls can fold; the merged message keeps the first's head and the latest foot.
-/// Consecutive quiet rows stand together under one blank row.
-fn merged(messages: Vec<(bool, Message)>) -> Vec<Message> {
-    let mut out: Vec<Message> = Vec::with_capacity(messages.len());
+/// The end of one source message within its bubble, before tool groups are folded.
+struct MessageEnd {
+    anchor: String,
+    bubble: usize,
+    items: usize,
+    footer: bool,
+}
+
+impl MessageEnd {
+    fn at(anchor: String, bubble: usize, message: &Message) -> Self {
+        Self {
+            anchor,
+            bubble,
+            items: message.items.len(),
+            footer: message.footer.is_some(),
+        }
+    }
+}
+
+/// Consecutive messages of one agent read as one reply and a run of calls can fold; the
+/// merged message keeps the first's head and the latest foot. Consecutive quiet rows stand
+/// together under one blank row. Keep each source message's end so a later publish can find
+/// the old tail, even when the last bubble absorbed a new message.
+fn merged(
+    messages: impl Iterator<Item = (bool, Message)>,
+    cx: Cx<'_>,
+) -> (Vec<Message>, Vec<(String, usize)>) {
+    let count = messages.size_hint().0;
+    let mut bubbles = Vec::<Message>::with_capacity(count);
+    let mut ends = Vec::with_capacity(count);
     for (boundary, message) in messages {
+        let next = bubbles.len();
         if !boundary
-            && let Some(last) = out.last_mut()
+            && let Some(last) = bubbles.last_mut()
             && last.kind == message.kind
             && match message.kind {
                 MessageKind::Agent => last.author == message.author,
@@ -626,11 +652,36 @@ fn merged(messages: Vec<(bool, Message)>) -> Vec<Message> {
             if message.footer.is_some() {
                 last.footer = message.footer;
             }
-            continue;
+            ends.push(MessageEnd::at(message.anchor, next - 1, last));
+        } else {
+            ends.push(MessageEnd::at(message.anchor.clone(), next, &message));
+            bubbles.push(message);
         }
-        out.push(message);
     }
-    out
+    let mut rows = 0;
+    let mut message_ends = Vec::with_capacity(ends.len());
+    let mut ends = ends.into_iter().peekable();
+    for (bubble, message) in bubbles.iter_mut().enumerate() {
+        message.items = group::fold(std::mem::take(&mut message.items), cx);
+        let mut items = message.items.iter();
+        let mut consumed = 0;
+        let mut drawn = 0;
+        while let Some(end) = ends.next_if(|end| end.bubble == bubble) {
+            while consumed < end.items
+                && let Some(item) = items.next()
+            {
+                // A group crossing an end already occupies a row on its earlier side.
+                consumed += match item {
+                    MessageItem::Group(group) => group.count,
+                    _ => 1,
+                };
+                drawn += 1;
+            }
+            message_ends.push((end.anchor, rows + drawn + usize::from(end.footer)));
+        }
+        rows += super::message_rows(message);
+    }
+    (bubbles, message_ends)
 }
 
 /// The time a recorded message was written, in epoch milliseconds.
@@ -789,18 +840,10 @@ pub fn transcript(
         });
         timed.insert(place.unwrap_or(timed.len()), (at, false, bubble));
     }
-    let messages: Vec<Message> = merged(
-        timed
-            .into_iter()
-            .map(|(_, seam, message)| (seam, message))
-            .collect(),
-    )
-    .into_iter()
-    .map(|mut message| {
-        message.items = group::fold(std::mem::take(&mut message.items), cx);
-        message
-    })
-    .collect();
+    let (messages, message_ends) = merged(
+        timed.into_iter().map(|(_, seam, message)| (seam, message)),
+        cx,
+    );
     // Older pages prepend; the live turn always follows the newest recorded messages.
     let (live, after) = match feed.live.get(id.as_str()) {
         Some(turn) if body.is_some() => overlay::overlay(turn, recorded, cx),
@@ -815,6 +858,7 @@ pub fn transcript(
     Transcript {
         echoes: echo::shown(id, ui, body, feed),
         messages,
+        message_ends,
         first,
         older: older_cursor.as_ref().map(|_| Action::Older(id.clone())),
         older_cursor,

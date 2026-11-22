@@ -240,6 +240,9 @@ pub struct TagFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transcript {
     pub messages: Vec<Message>,
+    /// Source message anchors in display order, with the number of rows through each one.
+    /// Several can share a bubble (and even a folded tool row).
+    message_ends: Vec<(String, usize)>,
     /// The first recorded row: it changes whenever rows arrive above the shown ones, also when
     /// they are a record's earlier items read from the page before (a record split across
     /// pages keeps its message and anchor).
@@ -302,7 +305,7 @@ pub struct Following {
     pub scope: Id,
     pub rows: usize,
     pub resume: Resume,
-    /// Last recorded bubble and the rows following it (echoes and the open turn).
+    /// The last source message's anchor and how many rows follow it.
     pub tail: Option<(String, usize)>,
 }
 
@@ -326,13 +329,14 @@ impl Transcript {
             }
             _ => Resume::End,
         };
+        let rows = self.rows();
         Following {
             scope: self.scope.clone(),
-            rows: self.rows(),
+            rows,
             tail: self
-                .messages
+                .message_ends
                 .last()
-                .map(|last| (last.anchor.clone(), self.trailing_rows())),
+                .map(|(anchor, through)| (anchor.clone(), rows - through)),
             resume,
         }
     }
@@ -341,17 +345,15 @@ impl Transcript {
         self.echoes.len() + self.after.len() + self.live.iter().map(message_rows).sum::<usize>()
     }
 
-    /// Rows strictly below a previous recorded tail. Used only on a prepend, so new
-    /// replies arriving in the same update are not counted as historical rows.
+    /// Rows from messages after `anchor`, including when they share its displayed bubble.
+    /// Used on a prepend so replies arriving in the same update still count as new.
     pub fn rows_below(&self, anchor: &str) -> Option<usize> {
-        let mut rows = self.trailing_rows();
-        for message in self.messages.iter().rev() {
-            if message.anchor == anchor {
-                return Some(rows);
-            }
-            rows += message_rows(message);
-        }
-        None
+        let (_, through) = self
+            .message_ends
+            .iter()
+            .rev()
+            .find(|(key, _)| key == anchor)?;
+        Some(self.rows() - through)
     }
 
     /// How many rows the transcript shows: the jump control counts what arrives while the
