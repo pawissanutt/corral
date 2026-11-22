@@ -6,7 +6,8 @@
 //! conversation (`conversation`) or a job's output (`job`) takes the list's place. A cancel or
 //! stop asks once in a card above what shows; an agent's model choices open there too. What the
 //! host did not report reads `–`. While the host is unreachable or stopped the rows are its last
-//! fleet, said so above them. Desktop and phone set the lines in points (the phone in two
+//! fleet, said so above them. Under the rows a field opens an agent by its id (`agents_lookup`),
+//! also one the list does not hold. Desktop and phone set the lines in points (the phone in two
 //! lines), a terminal in Cells.
 //!
 //! Nothing pressable is built again because the clock moved or an agent's words changed: every
@@ -36,6 +37,8 @@ use super::hue_words;
 
 #[path = "agents_detail.rs"]
 mod agents_detail;
+#[path = "agents_lookup.rs"]
+mod agents_lookup;
 #[path = "conversation.rs"]
 mod conversation;
 #[path = "job.rs"]
@@ -157,6 +160,7 @@ fn list(app: AppState, tab: Tab) -> AnyElement {
         .child(empty_state)
         .child(rows)
         .child(job::list(app, tab))
+        .child(agents_lookup::lookup(app, tab))
         .child(selected(app, tab))
         .child(agents_detail::timeline(app, tab))
         .child(messages(app, tab));

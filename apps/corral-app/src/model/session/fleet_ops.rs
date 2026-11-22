@@ -1,8 +1,8 @@
 //! What the owner does on the Agents tab and how it goes out: select a job, open or leave an
 //! agent's conversation (the agent that takes a message becomes the composer's receiver while it
-//! shows), steer an agent (the receiver and the composer's focus), cancel an agent or stop a job
+//! shows; one the list does not hold opens by a checked id), steer an agent (the receiver and the composer's focus), cancel an agent or stop a job
 //! after one confirmation, send a job to the background, change an agent's model, open a long
-//! text in full, and page a job's output. Every host operation goes out as `session.child` or
+//! text in full, page a job's output, and bring the keys to the field that opens an agent by id. Every host operation goes out as `session.child` or
 //! `session.job` under a key whose reply is read back and said as a notice; nothing is simulated.
 //! Also the tab's rows in the session's action catalog and its keys.
 
@@ -23,6 +23,10 @@ use super::{FleetButton, asks, card_of, child, fleet, jobs, ordered, selected_ch
 
 /// The composer's field, which a steer gives the keys to.
 const COMPOSER_FIELD: &str = "field-message";
+/// The field that opens an agent by its id.
+pub(super) const LOOKUP_FIELD: &str = "field-agent-id";
+/// The key that brings the keys to it.
+const LOOKUP_KEY: (&str, &str, &str) = ("i", "i", "open an agent by id");
 
 /// A cancel or stop waiting for its one confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,6 +101,8 @@ pub enum FleetAction {
     },
     /// Back to the list; the opened agent gives the receiver back to the session's own agent.
     Leave(Id),
+    /// Back to the list with the keys in the field that opens an agent by its id.
+    Lookup(Id),
     /// Make the agent the receiver and give the composer the keys.
     Steer {
         session: Id,
@@ -147,6 +153,47 @@ pub enum FleetAction {
         session: Id,
         job: String,
     },
+}
+
+/// The longest agent id corrald reads a record under.
+const CHILD_ID_MAX: usize = 128;
+
+/// The conversation of `session`'s agent that `typed` names: an id, or the agent's whole scope
+/// `<session>/child/<id>`. It is checked as corrald checks a child scope; whether an agent was
+/// ever recorded under it is what the opened conversation reads, so nothing here claims one was.
+pub(super) fn lookup(session: &Id, typed: &str) -> Result<Action, Option<String>> {
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return Err(None);
+    }
+    let child = match typed.split_once("/child/") {
+        Some((parent, child)) if parent == session.as_str() => child,
+        Some(_) => {
+            return Err(Some(
+                "That scope names an agent of another session; open it from that session".into(),
+            ));
+        }
+        None => typed,
+    };
+    if child.len() > CHILD_ID_MAX {
+        return Err(Some(format!(
+            "An agent id is at most {CHILD_ID_MAX} characters"
+        )));
+    }
+    let well_formed = !child.is_empty()
+        && !matches!(child, "." | "..")
+        && child
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte));
+    if !well_formed {
+        return Err(Some(
+            "An agent id is letters, digits and . _ : - only".into(),
+        ));
+    }
+    Ok(Action::Fleet(FleetAction::Open {
+        session: session.clone(),
+        child: child.to_owned(),
+    }))
 }
 
 /// Whether a request about `subject` (an agent or a job) is on its way.
@@ -271,6 +318,14 @@ pub(in crate::model::session) fn act(
                 return state.act(Action::Receiver { session, to: None }, feed);
             }
             Vec::new()
+        }
+        FleetAction::Lookup(session) => {
+            let mut effects = act(state, FleetAction::Leave(session.clone()), feed);
+            let ui = state.ui_mut(&session);
+            ui.tab = Tab::Agents;
+            ui.focus = Focus::Main;
+            effects.push(Effect::Focus(LOOKUP_FIELD));
+            effects
         }
         FleetAction::Steer { session, child } => {
             let mut effects = state.act(
@@ -481,6 +536,14 @@ pub(in crate::model::session) fn actions(cx: &Cx<'_>) -> Option<ActionGroup> {
             unavailable: button.unavailable,
             action: button.action,
         }));
+        rows.push(ActionRow {
+            id: "act-agent-lookup".into(),
+            label: "Open an agent by id…".into(),
+            command: None,
+            key: Some(LOOKUP_KEY.1),
+            unavailable: None,
+            action: Action::Fleet(FleetAction::Lookup(cx.id.clone())),
+        });
     }
     (!rows.is_empty()).then_some(ActionGroup {
         title: "Agents",
@@ -512,6 +575,7 @@ pub(in crate::model::session) fn keys() -> Vec<KeyBinding> {
         .map(|&(key, cap, label, _)| bind(key, cap, label, KeyAction::Part))
         .chain(
             KEYS.iter()
+                .chain([&LOOKUP_KEY])
                 .map(|&(key, cap, label)| bind(key, cap, label, KeyAction::Part)),
         )
         .collect()
@@ -565,6 +629,9 @@ pub(in crate::model::session) fn press(key: &str, cx: &Cx<'_>) -> Option<Action>
     }
     if let Some(&(.., delta)) = WALK.iter().find(|(stroke, ..)| *stroke == key) {
         return walk(cx, delta);
+    }
+    if key == LOOKUP_KEY.0 {
+        return Some(Action::Fleet(FleetAction::Lookup(cx.id.clone())));
     }
     let cap = KEYS.iter().find(|(stroke, ..)| *stroke == key)?.1;
     controls(cx)

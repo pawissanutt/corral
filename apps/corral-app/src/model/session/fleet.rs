@@ -1,7 +1,8 @@
 //! The Agents tab: the session's child agents (fleet order, then helper calls newest first) and
 //! its running commands and latest exit as their own group; the selected agent's or job's detail with what can be
 //! done to it; the timeline of when each agent ran and the messages between them. Opening an
-//! agent shows its conversation (`conversation`), opening a job follows its output (`jobs`).
+//! agent shows its conversation (`conversation`), opening a job follows its output (`jobs`);
+//! an agent the list does not hold opens by its id (`AgentLookup`).
 //! The rows are read from the fleet corrald last sent with the session's live pages; an agent's
 //! brief, edits, steers and report from its `SessionChild` part; the jobs from `SessionJobs`. A
 //! cost, a context share or a time the host did not report stays unknown, never zero. What the
@@ -47,7 +48,6 @@ pub(super) use jobs::{short_id, visible_commands};
 pub use ops::{Asking, ConfirmView, FleetAction, FleetRequest};
 pub(super) use ops::{act, actions, keys, press, settle};
 
-/// The host capability that serves the children's detail and transcripts.
 /// The host capability that steers, cancels and re-models children.
 const CHILD_CONTROL: &str = "child_control";
 
@@ -104,8 +104,42 @@ pub struct AgentsTab {
     pub messages: Option<MessageList>,
     /// What an empty tab says.
     pub empty: Option<String>,
+    /// The field that opens an agent by its id, listed or not.
+    pub lookup: AgentLookup,
     /// What the clock moves; everything else is equal across a tick.
     pub clock: AgentsClock,
+}
+
+/// The field that opens an agent of the session by its id: one the live list leaves out (it
+/// holds only the newest) or one of a host that stopped is read from what corrald recorded. The
+/// owner finds the id in the parent's transcript, where the parent started the agent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AgentLookup {
+    pub session: Id,
+    /// The field's test id, which `FleetAction::Lookup` gives the keys to.
+    pub field: &'static str,
+    pub label: &'static str,
+    pub placeholder: &'static str,
+    pub note: &'static str,
+}
+
+impl AgentLookup {
+    fn of(session: &Id) -> Self {
+        Self {
+            session: session.clone(),
+            field: ops::LOOKUP_FIELD,
+            label: "Open an agent by id",
+            placeholder: "Agent id, as the parent's transcript names it",
+            note: "Opens what corrald recorded for an agent of this session, also one the list \
+                   no longer shows.",
+        }
+    }
+
+    /// The conversation `typed` opens; `Err` says why it opens none, or nothing while nothing
+    /// is typed.
+    pub fn check(&self, typed: &str) -> Result<Action, Option<String>> {
+        ops::lookup(&self.session, typed)
+    }
 }
 
 /// What replaces the list.
@@ -644,6 +678,7 @@ pub fn agents_tab(cx: &Cx<'_>, state: &State) -> AgentsTab {
         timeline: fleet.and_then(|fleet| timeline(cx.id, fleet)),
         messages: fleet.and_then(|fleet| messages(cx.id, fleet, cx.feed)),
         empty,
+        lookup: AgentLookup::of(cx.id),
         clock: clock::clock(cx),
     }
 }

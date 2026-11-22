@@ -3,13 +3,16 @@
 //! the one session transcript model under the scope `<session>/child/<child>` (its brief, replies
 //! and tool rows, with the owner's steers and the messages between agents placed by time), how
 //! it stands at the end (not started, asking, cancelled, failed), and its controls. What the
-//! composer sends goes to the agent while it is the receiver.
+//! composer sends goes to the agent while it is the receiver. An agent the fleet does not list
+//! (opened by its id) is read-only and says what corrald recorded for it, or that it recorded
+//! nothing under that id.
 
 use corral_protocol::detail::DetailRef;
 use corral_protocol::subscription::SessionChild;
 
 use crate::model::Id;
 use crate::model::board::Mark;
+use crate::model::daemon::{ClientError, DetailCache};
 use crate::model::hue::Hue;
 
 use super::super::composer::ModelPill;
@@ -17,8 +20,9 @@ use super::super::status::cost_text;
 use super::super::transcript::{self, Transcript};
 use super::super::{Action, Cx, DockAction, SubView, Tab, Ui};
 use super::{
-    CHILD_CONTROL, FleetAction, FleetButton, asks, card_of, child, child_detail, control, ctx,
-    fleet, helper, live, ops, profile_model, scope, shown_id, shown_state,
+    CHILD_CONTROL, FleetAction, FleetButton, asks, card_of, child, child_detail, child_state,
+    child_target, control, ctx, fleet, helper, live, ops, profile_model, scope, shown_id,
+    shown_state,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -77,10 +81,8 @@ fn end(cx: &Cx<'_>, child: &SessionChild) -> Option<EndLine> {
             }),
         );
     }
-    if let Some(error) = &child.error {
-        return line(Hue::Fail, format!("✗ {error}"), None);
-    }
     match child.state.as_str() {
+        _ if child.error.is_some() => ended(&child.state, child.error.as_deref()),
         "queued" if child.after.is_empty() => line(
             Hue::Neutral,
             "Not started: it waits for a free slot.".into(),
@@ -91,19 +93,118 @@ fn end(cx: &Cx<'_>, child: &SessionChild) -> Option<EndLine> {
             format!("Not started: it waits for {}.", child.after.join(", ")),
             None,
         ),
+        state => ended(state, None),
+    }
+}
+
+/// How an agent that finished stands: its error, or the end its state says.
+fn ended(state: &str, error: Option<&str>) -> Option<EndLine> {
+    let line = |hue, words: String| {
+        Some(EndLine {
+            hue,
+            words,
+            action: None,
+        })
+    };
+    if let Some(error) = error {
+        return line(Hue::Fail, format!("✗ {error}"));
+    }
+    match state {
         "cancelled" => line(
             Hue::Neutral,
             "✗ Cancelled. Its edits so far stay in the worktree.".into(),
-            None,
         ),
-        "failed" => line(
-            Hue::Fail,
-            "✗ It failed without a reason recorded.".into(),
-            None,
-        ),
-        "done" => line(Hue::Ok, "✓ Done.".into(), None),
+        "failed" => line(Hue::Fail, "✗ It failed without a reason recorded.".into()),
+        "done" => line(Hue::Ok, "✓ Done.".into()),
         _ => None,
     }
+}
+
+/// The head of an agent the live fleet does not list: what corrald recorded for it, or that it
+/// holds nothing under this id. An id typed by the owner names no agent until corrald serves
+/// one, and none of it is live: no controls, no receiver.
+fn unlisted(cx: &Cx<'_>, id: &str, transcript: Option<&DetailCache>) -> Unlisted {
+    let detail = cx.feed.detail(&child_target(cx.id, id));
+    if let Some(served) = child_detail(cx.feed, cx.id, id) {
+        let (mark, hue, state) = child_state(&served.state);
+        let lead = [served.profile.as_str(), served.model.as_str()]
+            .into_iter()
+            .filter(|fact| !fact.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        let said = "as recorded · not in the host's live list";
+        return Unlisted {
+            mark,
+            hue,
+            state,
+            title: if served.title.is_empty() {
+                id.to_owned()
+            } else {
+                served.title.clone()
+            },
+            facts: if lead.is_empty() {
+                said.to_owned()
+            } else {
+                format!("{lead} · {said}")
+            },
+            end: ended(&served.state, served.error.as_deref()),
+        };
+    }
+    let plain = |mark, hue, state, facts: String| Unlisted {
+        mark,
+        hue,
+        state,
+        title: id.to_owned(),
+        facts,
+        end: None,
+    };
+    if transcript.is_some_and(|cache| cache.body().is_some()) {
+        return plain(
+            Mark::Na,
+            Hue::Neutral,
+            "recorded",
+            "Not in the host's live list · this is its recorded transcript".into(),
+        );
+    }
+    let errors: Vec<&ClientError> = [detail, transcript]
+        .into_iter()
+        .flatten()
+        .filter_map(|cache| cache.error.as_ref())
+        .collect();
+    if errors.iter().any(|error| error.code == "not_found") {
+        return plain(
+            Mark::Na,
+            Hue::Neutral,
+            "not recorded",
+            format!(
+                "corrald holds no agent {id} for this session. Check the id in the parent's transcript."
+            ),
+        );
+    }
+    if let Some(error) = errors.first() {
+        return plain(
+            Mark::Fail,
+            Hue::Fail,
+            "unreadable",
+            format!("Its record could not be read: {}", error.message),
+        );
+    }
+    plain(
+        Mark::Next,
+        Hue::Neutral,
+        "reading",
+        "Reading what corrald recorded under this id…".into(),
+    )
+}
+
+/// What `unlisted` says of an agent the fleet does not list.
+struct Unlisted {
+    mark: Mark,
+    hue: Hue,
+    state: &'static str,
+    title: String,
+    facts: String,
+    end: Option<EndLine>,
 }
 
 /// What the bottom of the page reports while an agent's conversation is open, in place of the
@@ -169,7 +270,7 @@ pub(in crate::model::session) fn opened_agent(cx: &Cx<'_>) -> Option<OpenedAgent
     })
 }
 
-/// The conversation of agent `id`; `row` is its fleet row (none once the fleet no longer lists
+/// The conversation of agent `id`; `row` is its fleet row (none when the fleet does not list
 /// it), `ui` the conversation scope's own UI state (what its rows have open).
 pub(super) fn conversation(
     cx: &Cx<'_>,
@@ -184,21 +285,18 @@ pub(super) fn conversation(
     let transcript = transcript::transcript(&scope, ui, cache, cx.feed);
     let back = Action::Fleet(FleetAction::Leave(cx.id.clone()));
     let Some(row) = row else {
+        let said = unlisted(cx, id, cache);
         return Conversation {
             child: id.to_owned(),
             scope,
             back,
-            mark: Mark::Na,
-            hue: Hue::Neutral,
-            state: "no longer listed",
-            title: id.to_owned(),
-            facts: (
-                "The host's fleet no longer lists this agent; its transcript is what was recorded."
-                    .into(),
-                String::new(),
-            ),
+            mark: said.mark,
+            hue: said.hue,
+            state: said.state,
+            title: said.title,
+            facts: (said.facts, String::new()),
             transcript,
-            end: None,
+            end: said.end,
             receiver: None,
             buttons: Vec::new(),
         };

@@ -108,6 +108,98 @@ fn selecting_a_stopped_parents_child_requests_its_saved_detail() {
 }
 
 #[test]
+fn a_typed_agent_id_opens_only_what_corrald_would_read_under_this_session() {
+    let lookup = shown(None).lookup;
+    let opens = |child: &str| {
+        Ok(Action::Fleet(super::FleetAction::Open {
+            session: Id::from(ID),
+            child: child.into(),
+        }))
+    };
+    assert_eq!(lookup.check(" a2 "), opens("a2"));
+    assert_eq!(lookup.check("B-k3x9/child/rev:1.b-c"), opens("rev:1.b-c"));
+    assert_eq!(lookup.check(&"a".repeat(128)), opens(&"a".repeat(128)));
+    assert_eq!(lookup.check("  "), Err(None));
+    for malformed in [
+        "..",
+        ".",
+        "a/b",
+        "../a",
+        "B-k3x9/child/",
+        "B-k3x9/child/a/child/b",
+        "a b",
+        "ä",
+        &"a".repeat(129),
+        "B-other/child/a2",
+    ] {
+        assert!(
+            matches!(lookup.check(malformed), Err(Some(_))),
+            "{malformed:?}"
+        );
+    }
+}
+
+#[test]
+fn an_agent_opened_by_id_outside_the_fleet_is_read_only_and_claims_no_record_corrald_lacks() {
+    use crate::model::daemon::{self, ClientError, DetailCache};
+    use crate::model::session::Opened;
+
+    let mut feed = feed(None, None);
+    let mut state = State::default();
+    let open = shown(None)
+        .lookup
+        .check("a9")
+        .expect("a well-formed id opens");
+    let effects = state.act(open, &feed);
+    assert!(effects.is_empty(), "{effects:?}");
+    let ui = state.ui(ID).clone();
+    assert_eq!(ui.to, None, "an unlisted agent never becomes the receiver");
+    let conversation = |feed: &Feed| {
+        let tab = with(feed, &ui, |cx| agents_tab(cx, &state));
+        assert!(tab.rows.is_empty());
+        match tab.opened {
+            Some(Opened::Conversation(conversation)) => *conversation,
+            other => panic!("the conversation opens without a row: {other:?}"),
+        }
+    };
+    let reading = conversation(&feed);
+    assert!(reading.buttons.is_empty() && reading.receiver.is_none());
+    let wanted = with(&feed, &ui, |cx| super::fetches(cx, &state));
+    assert!(wanted.contains(&Action::Refresh(super::child_target(&Id::from(ID), "a9"))));
+
+    let target = super::child_target(&Id::from(ID), "a9");
+    feed.details.insert(
+        daemon::detail_key(&target),
+        DetailCache {
+            transcript_seams: Default::default(),
+            target,
+            pages: Vec::new(),
+            loading: false,
+            stale: false,
+            error: Some(ClientError {
+                code: "not_found".into(),
+                message: "child session not found".into(),
+            }),
+            merged: None,
+        },
+    );
+    let missing = conversation(&feed);
+    assert_ne!(missing.state, reading.state);
+    assert_ne!(missing.state, "done");
+    assert!(missing.buttons.is_empty() && missing.end.is_none());
+
+    let key = with(&feed, &ui, |cx| super::press("i", cx)).expect("i opens the id field");
+    let effects = state.act(key, &feed);
+    assert!(state.ui(ID).sub.is_none(), "the field is on the list");
+    assert!(
+        effects.contains(&crate::model::effect::Effect::Focus(
+            shown(None).lookup.field
+        )),
+        "{effects:?}"
+    );
+}
+
+#[test]
 fn truncated_messages_say_the_total_corrald_holds() {
     let tab = shown(Some(SessionFleet {
         children: vec![],
