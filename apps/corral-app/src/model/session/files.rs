@@ -36,6 +36,8 @@ pub struct FilesUi {
     pub filter_in: String,
     /// Where tree and preview cannot stand side by side, the tree shows in the preview's place.
     pub browsing: bool,
+    /// The requested path exceeds the number of folders the tree can unfold.
+    pub tree_limit: bool,
 }
 
 impl FilesUi {
@@ -47,6 +49,7 @@ impl FilesUi {
         filter: String::new(),
         filter_in: String::new(),
         browsing: true,
+        tree_limit: false,
     };
 
     fn listing(&self, session: &Id, folder: &str) -> DetailRef {
@@ -80,25 +83,45 @@ impl FilesUi {
             .collect()
     }
 
-    fn unfold(&mut self, folder: &str) {
+    /// Unfold only a connected folder. If its ancestors alone fill the budget, leave the
+    /// existing tree untouched rather than evicting and re-reading the same ancestors.
+    fn unfold(&mut self, folder: &str) -> bool {
         if folder.is_empty() || self.expanded.contains(folder) {
-            return;
+            return true;
+        }
+        if !self.shows(parent(folder)) {
+            return false;
         }
         if self.expanded.len() >= MAX_OPEN {
+            let ancestors = self
+                .expanded
+                .iter()
+                .filter(|kept| folder.starts_with(&format!("{kept}/")))
+                .count();
+            if ancestors >= MAX_OPEN {
+                return false;
+            }
             self.expanded
                 .retain(|kept| folder.starts_with(&format!("{kept}/")));
         }
         self.expanded.insert(folder.to_owned());
+        true
     }
 
     /// Selects `path`, unfolding the folders above it (and a folder itself); a file opens in
-    /// the preview.
+    /// the preview even if its path is deeper than the tree can display.
     fn reveal(&mut self, path: &str, directory: bool) {
+        self.tree_limit = false;
         for (at, _) in path.match_indices('/') {
-            self.unfold(&path[..at]);
+            if !self.unfold(&path[..at]) {
+                self.tree_limit = true;
+                break;
+            }
         }
         if directory {
-            self.unfold(path);
+            if !self.tree_limit && !self.unfold(path) {
+                self.tree_limit = true;
+            }
         } else {
             self.open = Some(path.to_owned());
         }
@@ -159,8 +182,10 @@ pub(super) fn act(state: &mut State, action: FilesAction, feed: &Feed) -> Vec<Ef
         } => {
             let files = &mut state.ui_mut(&session).files;
             files.reveal(&path, directory);
-            let reads = if directory {
+            let reads = if directory && files.shows(&path) {
                 vec![files.listing(&session, &path)]
+            } else if directory {
+                Vec::new()
             } else {
                 files.file(&session).into_iter().collect()
             };
@@ -169,12 +194,18 @@ pub(super) fn act(state: &mut State, action: FilesAction, feed: &Feed) -> Vec<Ef
         FilesAction::Toggle { session, path } => {
             let files = &mut state.ui_mut(&session).files;
             let unfolding = !files.expanded.remove(&path);
+            files.tree_limit = false;
             if unfolding {
-                files.unfold(&path);
+                files.tree_limit = !files.unfold(&path);
+            } else {
+                // Hidden descendants must not consume the budget or return as stale reads.
+                files
+                    .expanded
+                    .retain(|kept| !kept.starts_with(&format!("{path}/")));
             }
             files.path = path.clone();
             files.directory = true;
-            let reads = if unfolding {
+            let reads = if unfolding && !files.tree_limit {
                 vec![files.listing(&session, &path)]
             } else {
                 Vec::new()
@@ -191,7 +222,11 @@ pub(super) fn act(state: &mut State, action: FilesAction, feed: &Feed) -> Vec<Ef
             files.filter_in = files.focused_folder().to_owned();
             let folder = files.filter_in.clone();
             files.reveal(&folder, true);
-            let reads = vec![files.listing(&session, &folder)];
+            let reads = if files.shows(&folder) {
+                vec![files.listing(&session, &folder)]
+            } else {
+                Vec::new()
+            };
             (session, reads)
         }
         FilesAction::Reread { session } => {
@@ -359,6 +394,13 @@ pub(super) fn view(cx: &Cx<'_>) -> FilesView {
     }
     let mut items = Vec::new();
     walk(cx, "", 0, &mut items);
+    if state.tree_limit {
+        items.push(TreeItem::Note {
+            depth: 0,
+            words: "Folder depth limit reached. The tree cannot show the full path.".into(),
+            retry: None,
+        });
+    }
     FilesView {
         session: cx.id.clone(),
         tree,
@@ -637,5 +679,41 @@ mod tests {
         files.reveal("d3/inner", true);
         assert!(files.expanded.len() <= MAX_OPEN);
         assert!(files.shows("d3/inner"));
+    }
+    #[test]
+    fn deep_links_and_toggles_keep_a_bounded_connected_tree_without_churn() {
+        let session = Id::from("t-1_r-1");
+        let mut files = FilesUi::EMPTY;
+        let folders = (0..MAX_OPEN + 3)
+            .map(|n| format!("d{n}"))
+            .collect::<Vec<_>>()
+            .join("/");
+        let file = format!("{folders}/file.rs");
+        files.reveal(&file, false);
+        assert!(files.tree_limit);
+        assert_eq!(files.open.as_deref(), Some(file.as_str()));
+        assert_eq!(files.expanded.len(), MAX_OPEN);
+        assert!(files.expanded.iter().all(|path| files.shows(path)));
+        let targets = files.targets(&session);
+        assert_eq!(targets.len(), MAX_OPEN + 2); // root, folders, preview
+        assert!(targets.iter().any(|target| matches!(target,
+            DetailRef::SessionFile { path, .. } if path == &file)));
+
+        // Repeated direct links and a manual attempt at the next folder do not evict
+        // already displayed ancestors, or change the reads they need.
+        files.reveal(&file, false);
+        assert_eq!(files.targets(&session), targets);
+        let next = folders
+            .split('/')
+            .take(MAX_OPEN + 1)
+            .collect::<Vec<_>>()
+            .join("/");
+        assert!(!files.unfold(&next));
+        assert_eq!(files.targets(&session), targets);
+
+        // A different branch can still be opened, keeping only a connected tree.
+        assert!(files.unfold("other"));
+        assert_eq!(files.expanded.len(), 1);
+        assert!(files.shows("other"));
     }
 }
