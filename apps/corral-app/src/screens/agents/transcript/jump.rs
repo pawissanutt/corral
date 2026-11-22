@@ -252,6 +252,32 @@ pub fn follow(
             }
         });
     }
+    // Tell the local client as soon as the reader leaves the tail, even before they
+    // reach the threshold for fetching an older page. Only transitions send an intent.
+    let driver = untracked(|| app.scope());
+    let held_scope = Rc::new(RefCell::new(None::<Id>));
+    {
+        let held_scope = held_scope.clone();
+        effect(move || {
+            let reading = scope_of.get().filter(|_| !at_end.get());
+            if *held_scope.borrow() == reading {
+                return;
+            }
+            if let Some(id) = held_scope.take() {
+                driver.transcript_reading(&id, false);
+            }
+            if let Some(id) = reading
+                && driver.transcript_reading(&id, true)
+            {
+                held_scope.replace(Some(id));
+            }
+        });
+    }
+    cleanup(move || {
+        if let Some(id) = held_scope.take() {
+            driver.transcript_reading(&id, false);
+        }
+    });
     kept(place.clone(), move |scope, reading| {
         save(app, scope, reading)
     });

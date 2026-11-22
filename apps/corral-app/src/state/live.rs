@@ -187,6 +187,11 @@ impl AppState {
         _ = requests::send(requests::ClientRequest::DetailWatch { target, open });
     }
 
+    /// Keeps the mounted reader's current page from rolling past their reading position.
+    pub fn transcript_reading(&self, scope: &Id, active: bool) -> bool {
+        !self.fixture() && requests::transcript_reading(scope.to_string(), active)
+    }
+
     /// Requests a detail page without discarding its cursor or conditional etag.
     pub fn detail(&self, get: DetailGet) {
         self.run(vec![Effect::Detail(get)]);
