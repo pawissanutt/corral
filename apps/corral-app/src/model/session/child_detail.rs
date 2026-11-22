@@ -425,18 +425,10 @@ pub(super) fn detail(cx: &Cx<'_>, child: &SessionChild) -> AgentDetail {
     let card = card_of(cx, &child.id);
     let unread = match &read {
         ReadState::Failed(_) | ReadState::Stale { .. } => Some((read.hue(), read.words())),
-        ReadState::NotRead | ReadState::Reading if served.is_none() => {
-            Some(match control(cx, super::CHILDREN) {
-                Some(why) => (
-                    Hue::Held,
-                    format!("Its brief, edits and report are not read: {why}"),
-                ),
-                None => (
-                    Hue::Neutral,
-                    "Reading its brief, edits and report…".to_owned(),
-                ),
-            })
-        }
+        ReadState::NotRead | ReadState::Reading if served.is_none() => Some((
+            Hue::Neutral,
+            "Reading its brief, edits and report…".to_owned(),
+        )),
         _ => None,
     };
     AgentDetail {

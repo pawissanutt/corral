@@ -89,6 +89,25 @@ fn a_watched_session_without_a_fleet_lists_no_agents_and_says_so() {
 }
 
 #[test]
+fn selecting_a_stopped_parents_child_requests_its_saved_detail() {
+    let feed = feed(None, None);
+    let ui = Ui {
+        agent: Some("a".into()),
+        ..Ui::default()
+    };
+    with(&feed, &ui, |cx| {
+        let cx = Cx {
+            host: super::Host::NotRunning,
+            ..*cx
+        };
+        assert!(
+            super::fetches(&cx, &State::default())
+                .contains(&Action::Refresh(super::child_target(cx.id, "a")))
+        );
+    });
+}
+
+#[test]
 fn truncated_messages_say_the_total_corrald_holds() {
     let tab = shown(Some(SessionFleet {
         children: vec![],

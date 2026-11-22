@@ -48,7 +48,6 @@ pub use ops::{Asking, ConfirmView, FleetAction, FleetRequest};
 pub(super) use ops::{act, actions, keys, press, settle};
 
 /// The host capability that serves the children's detail and transcripts.
-const CHILDREN: &str = "children";
 /// The host capability that steers, cancels and re-models children.
 const CHILD_CONTROL: &str = "child_control";
 
@@ -669,7 +668,8 @@ pub fn fetches(cx: &Cx<'_>, state: &State) -> Vec<Action> {
     details.sort_unstable();
     details.dedup();
     for child in details {
-        wanted.extend(load(cx, Ok(child_target(cx.id, child)), Some(CHILDREN)));
+        // Child details, like transcripts, can be served from the stopped host's archive.
+        wanted.extend(load(cx, Ok(child_target(cx.id, child)), None));
     }
     if let Some(child) = opened {
         let scope = scope(cx.id, child);
