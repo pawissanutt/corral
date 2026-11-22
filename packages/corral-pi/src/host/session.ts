@@ -335,6 +335,8 @@ export class HostSession {
   private readonly queuedInputFacts = new WeakMap<object, InputFacts>();
   /** Inputs Pi reported started whose prompt message is not recorded yet, oldest first. */
   private readonly startedInputs: InputFacts[] = [];
+  /** The open turn's own prompt message has been recorded. */
+  private promptRecorded = false;
   private unobserveTranscript: (() => void) | undefined;
   private remoteUsage: { leaf: string | null; model: AgentSession["model"]; usage: ParentUsage } | undefined;
   private remoteFleetDirty = true;
@@ -1446,8 +1448,13 @@ export class HostSession {
         if (event.message.role === "user") {
           // Pi persists this exact message immediately after notifying its listeners.
           const queued = this.queuedInputFacts.get(event.message);
-          // An unqueued message is the prompt of the run that was taken: the oldest input still reported started.
-          const tagged = queued ?? this.startedInputs.shift();
+          const content = event.message.content;
+          const text = typeof content === "string" ? content : content.map(p => p.type === "text" ? p.text : "").join("");
+          // An unqueued message is the prompt of the run that was taken. Its input is the one reported started
+          // with this text, or failing that (Pi expanded it) the oldest; anything older never got a message.
+          const mine = this.startedInputs.findIndex(input => input.text === text);
+          const tagged = queued ?? this.startedInputs.splice(0, Math.max(mine, 0) + 1).pop();
+          if (!queued) this.promptRecorded = true;
           Object.assign(event.message, { corralInput: tagged?.facts ?? { origin: "auto" },
             ...(tagged?.transcriptId === undefined ? {} : { corralRequestId: tagged.transcriptId }),
             // Only the message the host itself admitted as an approved plan's kickoff carries this; its text proves nothing.
@@ -1459,9 +1466,7 @@ export class HostSession {
           }
           // This very input reached the model. From the owner, it answers a pending plan review as feedback.
           if (tagged?.origin === "owner" || tagged?.origin === "pane") this.planMode?.ownerSpoke();
-          const content = event.message.content;
-          this.ownerQuestions?.observeUser(typeof content === "string" ? content
-            : content.map(p => p.type === "text" ? p.text : "").join(""));
+          this.ownerQuestions?.observeUser(text);
         }
       }
       if (event.type === "agent_start") {
@@ -1474,9 +1479,10 @@ export class HostSession {
       } else if (event.type === "tool_execution_start") {
         this.turnFacts.toolStarted(this.turn, event.toolCallId);
       } else if (event.type === "agent_settled") {
+        // Only the settle of the turn whose prompt was recorded ends the inputs started before it. Pi also
+        // settles for a prompt that lost the run to another, while the winner's message is still to come.
+        if (this.open && this.promptRecorded) this.startedInputs.length = 0;
         this.turnEnded(event.aborted);
-        // A started input whose prompt was never recorded is dead with its turn.
-        this.startedInputs.length = 0;
         this.planMode?.turnEnded();
         for (const closed of this.closeWaiters.splice(0)) closed();
         this.remoteBuild.refreshExit();
@@ -1503,6 +1509,7 @@ export class HostSession {
     this.turn++;
     this.session.sessionManager.appendCustomEntry("corral_turn", this.turn, { immediate: true });
     this.open = true;
+    this.promptRecorded = false;
     this.turnError = null;
     this.stopCause = undefined;
     if (this.recordsTurnMarks) this.turnFacts.start(this.turn, Date.now(), this.session.getSessionStats().cost);
@@ -1876,6 +1883,8 @@ export class HostSession {
         this.deliveries.delete(queueTag);
         delivery(false);
       }
+      const started = this.queue.inputFacts(queueTag), stale = started ? this.startedInputs.indexOf(started) : -1;
+      if (stale >= 0) this.startedInputs.splice(stale, 1);
     });
     return promise;
   }

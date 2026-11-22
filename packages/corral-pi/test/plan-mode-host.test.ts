@@ -358,42 +358,42 @@ test("a kickoff that loses the run to another prompt neither marks that prompt n
   expect(plan.approved).toBeUndefined();
 }), 120_000);
 
-test("a kickoff that wins the run keeps its approval when an overlapping prompt loses", () => planning(undefined, async (live, plan) => {
+test("a kickoff keeps its approval when Pi itself lets an overlapping prompt lose the run", () => planning(undefined, async (live, plan) => {
   writeFileSync(plan.path, PLAN);
   fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
   await live.session.prompt("Plan a --version flag", { source: "extension" });
   await live.drained();
-  // Given the kickoff has won Pi's run but its message is not recorded yet,
-  const recorded = Promise.withResolvers<void>(), running = Promise.withResolvers<void>();
-  const internals = live.session as unknown as {
-    _extensionRunner: { emit(event: { type: string }): Promise<unknown> };
-    _queueObserver: {
-      input(input: { text: string; source: string; mode: string }): unknown;
-      lifecycle(event: { tag: unknown; event: "started" | "rejected"; reason?: string }): void;
-    };
+  // Given both prompts are held in Pi's own preflight, after its busy check, so that both go on to start a run:
+  const checked = Promise.withResolvers<void>();
+  let waiting = 0;
+  const reached = [Promise.withResolvers<void>(), Promise.withResolvers<void>()];
+  const runtime = (live.session as unknown as {
+    _modelRuntime: { hasConfiguredAuth(provider: string): boolean; checkAuth(provider: string): Promise<unknown> };
+  })._modelRuntime;
+  const { hasConfiguredAuth, checkAuth } = runtime;
+  runtime.hasConfiguredAuth = () => false;
+  runtime.checkAuth = async provider => {
+    reached[waiting++]?.resolve();
+    await checked.promise;
+    return checkAuth.call(runtime, provider);
   };
-  const emit = internals._extensionRunner.emit.bind(internals._extensionRunner);
-  let hold = true;
-  internals._extensionRunner.emit = async event => {
-    if (event.type === "agent_start" && hold) {
-      hold = false;
-      running.resolve();
-      await recorded.promise;
-    }
-    return emit(event);
-  };
-  fixtureTransport().script([{ text: "Executing." }]);
-  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
-  await running.promise;
-  // when an overlapping prompt reports its start and is then refused, as Pi's losing side does:
-  const loser = internals._queueObserver.input({ text: "an overlapping input", source: "extension", mode: "prompt" });
-  internals._queueObserver.lifecycle({ tag: loser, event: "started" });
-  internals._queueObserver.lifecycle({ tag: loser, event: "rejected", reason: "Agent is already processing a prompt." });
-  recorded.resolve();
-  // Then the kickoff's own message still carries the approval.
-  await until(() => plan.phase === "off" && !live.session.isStreaming, "the approved plan to run");
-  await live.drained();
-  expect(plan.approved?.title).toBe("Add the flag");
+  try {
+    fixtureTransport().script([{ text: "Executing." }]);
+    expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+    await reached[0]!.promise;
+    const loser = live.session.prompt("an overlapping input", { source: "extension" });
+    await reached[1]!.promise;
+    // When both are let through, the kickoff first:
+    checked.resolve();
+    await expect(loser).rejects.toThrow();
+    // Then Pi's settle for the losing prompt does not cost the kickoff its approval.
+    await until(() => plan.phase === "off" && !live.session.isStreaming, "the approved plan to run");
+    await live.drained();
+    expect(plan.approved?.title).toBe("Add the flag");
+  } finally {
+    runtime.hasConfiguredAuth = hasConfiguredAuth;
+    runtime.checkAuth = checkAuth;
+  }
 }), 120_000);
 
 test("a compaction inside a planning run is followed by the contract before the run goes on",
