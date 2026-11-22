@@ -369,6 +369,8 @@ export class HostSession {
   private planReset: string | undefined;
   /** Callers of submitOpened waiting for the turn they started to open. */
   private readonly openWaiters: (() => void)[] = [];
+  /** Callers waiting for the open turn to have settled for everyone. */
+  private readonly closeWaiters: (() => void)[] = [];
   /** Inputs handed to Pi whose admission is not answered yet, by queue tag, with how to refuse each. */
   private readonly admissions = new Map<unknown, (reason: string) => void>();
   private readonly remotePrompts: RemotePrompts;
@@ -465,7 +467,7 @@ export class HostSession {
       blocked: () => this.session.isCompacting ? "Wait for the running compaction to finish, then choose again"
         : options.paused?.() ? "The session is paused and would hold the plan instead of starting it. Resume it, then choose again"
         : undefined,
-      stopTurn: async () => { if (this.open) await this.cancelRun(undefined, "owner"); },
+      stopTurn: () => this.planStopTurn(),
       compact: instructions => this.planCompact(instructions),
       reset: summary => this.planResetContext(summary),
       submit: async (text, origin, kickoff) => {
@@ -1467,6 +1469,7 @@ export class HostSession {
       } else if (event.type === "agent_settled") {
         this.turnEnded(event.aborted);
         this.planMode?.turnEnded();
+        for (const closed of this.closeWaiters.splice(0)) closed();
         this.remoteBuild.refreshExit();
       } else if (event.type === "session_info_changed") {
         // InteractiveMode /name emits this after appending session_info. It is not a prompt.
@@ -1743,6 +1746,27 @@ export class HostSession {
       this.addMark({ kind: "note", tone: "text", at: Date.now(), text: await plan.enter() });
     } else if (plan?.review !== undefined) {
       this.addMark({ kind: "note", tone: "text", at: Date.now(), text: `"${plan.record.title ?? "Plan"}" is awaiting your review: /plan` });
+    }
+  }
+
+  /**
+   * Stop the open turn and wait until it has settled for everyone. Pi is idle before it has run its settle hooks
+   * and announced the settle, and a prompt made in between is deferred behind whatever else was deferred there;
+   * the kickoff of an approved plan must not join that list.
+   */
+  private async planStopTurn(): Promise<void> {
+    if (!this.open) return;
+    // A turn Pi has already finished is not cancelled, only waited for.
+    if (this.session.isStreaming) await this.cancelRun(undefined, "owner");
+    if (!this.open) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        new Promise<void>(resolve => { this.closeWaiters.push(resolve); }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("the running turn did not settle")), 30_000); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
     }
   }
 

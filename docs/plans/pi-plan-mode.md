@@ -192,7 +192,10 @@ body carries the first 8 KiB for older apps.
 
 On an execute answer the host, in order:
 
-1. Checks the phase is `review` and cancels the turn if one is still open.
+1. Checks the phase is `review`, cancels the turn if one is still running, and waits until
+   that turn has settled for everyone. Pi is idle before it has run its settle hooks, and a
+   prompt made in that window is deferred behind whatever else was deferred there; the
+   kickoff must not join that list.
 2. Reads the submission's copy from disk again; it must still match its digest.
 3. Applies the context option:
    - `execute`: nothing.

@@ -156,7 +156,7 @@ export class PlanMode {
   /** The approval's own compaction or reset is running. */
   private preparing = false;
   /** The kickoff on its way into the transcript: its card, its text, its plan, and what the Build record will say of it. */
-  private kickoff: { readonly card: string; readonly text: string; readonly path: string; readonly journal: string } | undefined;
+  private kickoff: { readonly card: string; readonly text: string; readonly path: string; readonly journal: string; admitted: boolean } | undefined;
   /** The phase the views were last told; unknown until the first change, as after a restart. */
   private seen: PlanPhase | undefined;
   private readonly listeners = new Set<() => void>();
@@ -209,9 +209,12 @@ export class PlanMode {
     if (this.phase !== this.seen) this.announce();
   }
 
-  /** The turn ended. A kickoff that was taken but never reached the transcript no longer holds the review. */
+  /**
+   * A turn ended. If it is the kickoff's own, a kickoff that never reached the transcript no longer holds the
+   * review. A turn that settles before the kickoff was admitted is an earlier one and changes nothing.
+   */
   turnEnded(): void {
-    this.kickoff = undefined;
+    if (this.kickoff?.admitted) this.kickoff = undefined;
   }
 
   brief(): { phase: "planning" | "review"; title?: string; revision?: number } | undefined {
@@ -447,8 +450,11 @@ export class PlanMode {
       const blocked = this.host.blocked();
       if (blocked) throw new Error(blocked);
       const text = `${kickoffLine(card)}\n${this.host.prompts.approved({ path, title, revision, plan, context, note, todo: this.host.todo })}`;
-      this.kickoff = { card, text, path, journal: `Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})` };
+      this.kickoff = { card, text, path, admitted: false,
+        journal: `Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})` };
+      const kickoff = this.kickoff;
       if (!await this.host.submit(text, "auto", card)) throw new Error("the session did not take it");
+      kickoff.admitted = true;
     } catch (error) {
       this.kickoff = undefined;
       this.host.note(`The plan was not started: ${error instanceof Error ? error.message : String(error)}. The review is still open.`, "error");

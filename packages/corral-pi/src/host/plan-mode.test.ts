@@ -12,7 +12,7 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 0));
  * A plan mode over an in-memory branch, already planning with a plan file written. `kickoff` says what the session
  * does with an approved plan's kickoff: it reaches the transcript unless it is only `taken`, `refused` or `throws`.
  */
-async function planning(session: { blocked?: string; kickoff?: "taken" | "refused" | "throws" } = {}) {
+async function planning(session: { blocked?: string; kickoff?: "taken" | "refused" | "throws" | "after-a-settle" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "plan-mode-unit-"));
   dirs.push(dir);
   const entries: PlanEntry[] = [], notes: string[] = [], journal: string[] = [];
@@ -34,6 +34,8 @@ async function planning(session: { blocked?: string; kickoff?: "taken" | "refuse
       if (session.kickoff === "throws") throw new Error("the held queue could not be saved");
       if (session.kickoff === "refused") return false;
       sent.push({ text, kickoff });
+      // An earlier turn can settle while the kickoff is still being admitted.
+      if (session.kickoff === "after-a-settle") running.turnEnded();
       if (session.kickoff !== "taken") user(text, kickoff);
       return true;
     },
@@ -128,6 +130,15 @@ test("an approval is durable only with its kickoff, and holds the mode until the
   user(kickoff.text, kickoff.kickoff);
   expect(plan.phase).toBe("off");
   expect(plan.approved?.path).toBe(copy);
+  expect(journal).toEqual(["Approved plan: Same plan (revision 1, context kept)"]);
+});
+
+test("an earlier turn settling during the kickoff's admission does not lose the approval's record", async () => {
+  const { plan, journal } = await planning({ kickoff: "after-a-settle" });
+  plan.submit();
+  expect(plan.choose("execute")).toBe("started");
+  await settle();
+  expect(plan.phase).toBe("off");
   expect(journal).toEqual(["Approved plan: Same plan (revision 1, context kept)"]);
 });
 

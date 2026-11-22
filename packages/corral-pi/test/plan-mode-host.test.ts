@@ -234,6 +234,44 @@ test("a kickoff Pi refuses after deferring it leaves the review and the session 
   await live.drained();
 }), 120_000);
 
+test("an approval made while the previous turn settles starts after it has settled", () => planning(undefined, async (live, plan) => {
+  writeFileSync(plan.path, PLAN);
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+  await live.session.prompt("Plan a --version flag", { source: "extension" });
+  await live.drained();
+  // Given an automated turn that Pi has finished but whose settle hooks are still running: a prompt made now
+  // would be deferred behind whatever else is deferred there.
+  const order: string[] = [];
+  const hooks = Promise.withResolvers<void>(), settling = Promise.withResolvers<void>();
+  const runner = (live.session as unknown as { _extensionRunner: { emit(event: { type: string }): Promise<unknown> } })._extensionRunner;
+  const emit = runner.emit.bind(runner);
+  runner.emit = async event => {
+    if (event.type === "agent_settled") {
+      settling.resolve();
+      await hooks.promise;
+      order.push("settled");
+    }
+    return emit(event);
+  };
+  const prompt = live.session.prompt.bind(live.session);
+  live.session.prompt = (text, options) => {
+    if (text.startsWith("[corral plan approved ")) order.push("kickoff");
+    return prompt(text, options);
+  };
+  fixtureTransport().script([{ text: "Noted." }, { text: "Executing." }]);
+  void live.submitLocal({ text: "an automated note", origin: "auto", busyPolicy: "steer" });
+  await settling.promise;
+  // When the owner approves in that window:
+  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  expect(order).toEqual([]);
+  hooks.resolve();
+  // Then the kickoff is prompted only once that turn has settled, and the plan runs.
+  await until(() => plan.phase === "off" && !live.session.isStreaming, "the approved plan to run");
+  await live.drained();
+  expect(order.slice(0, 2)).toEqual(["settled", "kickoff"]);
+}), 120_000);
+
 test("a compaction inside a planning run is followed by the contract before the run goes on",
   () => planning({ settings: { compaction: { keep_recent_tokens: 1 } }, projectText: false }, async (live, plan) => {
     // Given a planning turn whose first response reports a context past the model's window:
