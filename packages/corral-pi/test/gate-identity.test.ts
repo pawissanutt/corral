@@ -143,6 +143,25 @@ for (const flag of ["assume-unchanged", "skip-worktree"]) test(`a dirty source h
   } finally { await f.close(); }
 });
 
+test("an initialized, locally inactive submodule cannot hide gate inputs from the receipt", async () => {
+  const f = fixture();
+  try {
+    const cwd = f.context.session.worktree, dep = join(f.root, "dependency");
+    execFileSync("git", ["clone", "--quiet", "--local", cwd, dep]);
+    f.git("-c", "protocol.file.allow=always", "submodule", "add", "--quiet", dep, "dependency");
+    f.git("commit", "-qm", "Pin dependency");
+    f.git("config", "submodule.dependency.active", "false");
+    f.git("config", "submodule.dependency.ignore", "all");
+    await checkIndexVisibility(f.run, cwd);
+    f.git("-C", "dependency", "update-index", "--assume-unchanged", "source.txt");
+    writeFileSync(join(cwd, "dependency/source.txt"), "hidden\n");
+    f.setGate(["grep -qx hidden dependency/source.txt"]);
+    expect(f.git("status", "--porcelain", "--ignore-submodules=none")).toBe("");
+    await expect(verifyBuild(f.context, f.run, f.journal)).rejects.toThrow("assume-unchanged or skip-worktree entries");
+    expect(f.journal.latestGate()).toBeUndefined();
+  } finally { await f.close(); }
+});
+
 test("a pass is not reused if a tracked edit is hidden after preparation", async () => {
   let onEvidenceChange: (() => void) | undefined;
   const f = fixture(undefined, () => {
@@ -191,7 +210,7 @@ test("legacy gates and passes for a different configured env cannot authorize or
     f.setGate(commands);
     const at = new Date().toISOString();
     f.journal.gate({ attempt: "G1", head: f.head, commands, started: at, ended: at, result: "pass" });
-    const oldFingerprint = createHash("sha256").update(JSON.stringify(["corral-project-gate-v1", commands, [["MODE", "configured-first"]]])).digest("hex");
+    const oldFingerprint = createHash("sha256").update(JSON.stringify(["corral-project-gate-v2", commands, [["MODE", "configured-first"]]])).digest("hex");
     f.journal.gate({ attempt: "G2", head: f.head, input_fingerprint: oldFingerprint, commands, started: at, ended: at, result: "pass" });
     const initial = await f.evidence.finish("finish");
     const authorization = f.exit.options().find(option => option.choice === "land")?.authorization;
