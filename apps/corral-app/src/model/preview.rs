@@ -25,6 +25,7 @@ mod rollup;
 mod sample;
 mod session_ops;
 mod sessions;
+mod system;
 mod workspace;
 
 use crate::model::daemon::*;
@@ -134,6 +135,7 @@ fn base(now: u64, date: String, clock: String, time_zone: Option<jiff::tz::TimeZ
         BUILD_V1,
         REVIEW_V1,
         TIMELINE_V1,
+        corral_protocol::app::SYSTEM_V1,
         USAGE_V1,
         SETTINGS_V1,
         ASSISTANT_V1,

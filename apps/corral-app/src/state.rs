@@ -17,6 +17,7 @@ mod selection;
 mod sidebar;
 mod source;
 mod switcher;
+mod system_page;
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -30,7 +31,7 @@ use crate::model::commands::Action;
 use crate::model::{
     Act, Conn, DataState, Destination, Effect, Env, Form, Id, NavState, Overlay, SettingsSection,
     SidebarPref, Snapshot, ThemeChoice, agents, artifacts, assistant, daemon, review, session,
-    settings, timeline, usage, work,
+    settings, system, timeline, usage, work,
 };
 
 const DESTINATION_KEY: &str = "corral.destination";
@@ -69,6 +70,8 @@ pub struct AppState {
     pub timeline: Signal<timeline::State>,
     pub usage: Signal<usage::State>,
     pub artifacts: Signal<artifacts::State>,
+    /// Activity › System: the level, pick, overlay and filter.
+    pub system: Signal<system::State>,
     pub agents: source::StateSource<agents::State>,
     /// Every session page's UI state (tab, draft, this device's sends), kept for the app's life.
     pub session: source::StateSource<session::State>,
@@ -210,6 +213,7 @@ impl AppState {
             timeline: signal(timeline::State::default()),
             usage: signal(usage::State::default()),
             artifacts: signal(artifacts::State::default()),
+            system: signal(system::State::default()),
             agents: source::StateSource::new(
                 data,
                 agents::State {

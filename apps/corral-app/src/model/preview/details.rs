@@ -180,6 +180,9 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
             })
         }
         DetailRef::Burnup { scope } => DetailBody::Burnup(burnup(feed, scope)?),
+        DetailRef::SystemMap { project, at } => {
+            DetailBody::SystemMap(super::system::detail(project, at.as_ref())?)
+        }
         DetailRef::UsageSeries {
             from,
             to,

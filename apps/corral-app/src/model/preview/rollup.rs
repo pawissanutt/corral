@@ -40,6 +40,7 @@ pub(super) fn rebuild(feed: &mut Feed) {
     }
     // Rows read each project's effective round limit.
     feed.projects = projects(feed, &records);
+    feed.systems = super::system::rows(feed.projects.keys().cloned());
     let rows = records
         .iter()
         .filter(|record| !closed(record.task.status))
