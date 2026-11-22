@@ -123,6 +123,22 @@ impl AppState {
         self.retained.touch(Key::Detail(key), size);
     }
 
+    /// A staged continuation has not changed the held snapshot or operation reply. Add its
+    /// bytes without serializing the entire displayed history on every continuation.
+    pub(super) fn touch_detail_continuation(
+        &mut self,
+        feed: Signal<Feed>,
+        target: &DetailRef,
+        added: usize,
+    ) {
+        let key = Key::Detail(detail_key(target));
+        if let Some(&(_, size)) = self.retained.entries.get(&key) {
+            self.retained.touch(key, size.saturating_add(added));
+        } else {
+            self.touch_detail(feed, target);
+        }
+    }
+
     pub(super) fn touch_session(&mut self, feed: Signal<Feed>, scope: &str) {
         let size = feed.with_untracked(|feed| {
             scope.len()
@@ -251,6 +267,8 @@ impl AppState {
                 self.detail_pages.remove(key);
                 self.detail_bytes.remove(key);
                 self.detail_reread.remove(key);
+                self.detail_latest.remove(key);
+                self.transcript_deferred.remove(key);
                 self.detail_inflight.remove(key);
                 feed.update(|feed| {
                     feed.details.remove(key);

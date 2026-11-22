@@ -55,6 +55,10 @@ pub enum ClientRequest {
     },
     OpenHtml(super::html::OpenHtml),
     CancelHtml(String),
+    /// Explicitly return to the newest transcript after its older snapshot cannot be reconciled.
+    LatestTranscript {
+        session: String,
+    },
     SessionItem {
         session: String,
         token: String,
@@ -250,6 +254,10 @@ pub fn submit(request_id: String, request: OpSubmit) -> bool {
         request,
     })
 }
+pub fn latest_transcript(session: String) -> bool {
+    send(ClientRequest::LatestTranscript { session })
+}
+
 pub fn session_item(session: String, token: String) -> bool {
     send(ClientRequest::SessionItem { session, token })
 }

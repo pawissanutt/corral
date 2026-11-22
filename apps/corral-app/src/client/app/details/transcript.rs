@@ -4,9 +4,8 @@
 use super::*;
 use corral_protocol::rpc::ErrorCode;
 
-/// Older cursors are scoped to a daemon snapshot. Bound automatic recovery after the snapshot
-/// changes; the owner can still walk as far back as desired, one request per page.
-const REFRESH_PAGES: usize = 8;
+/// The replacement could not cover the displayed depth within the per-operation limits. The
+/// old snapshot remains available until the reader explicitly returns to the newest page.
 pub(super) const HISTORY_CHANGED: &str = "history_changed";
 
 fn session(page: &DetailReply) -> Option<&SessionPage> {
@@ -41,15 +40,18 @@ fn history_missing(cache: &DetailCache, pages: &[DetailReply], current: &Session
     // A new tail can push the prior oldest record, or part of it, out of the same page depth.
     pages.len() < cache.pages.len()
         || held.messages.first().is_some_and(|oldest| {
-            !oldest.id.is_empty()
-                && pages
-                    .iter()
-                    .filter_map(session)
-                    .flat_map(|page| &page.messages)
-                    .filter(|message| message.id == oldest.id)
-                    .map(|message| message.items.len())
-                    .sum::<usize>()
+            if oldest.id.is_empty() {
+                return false;
+            }
+            let mut fragments = pages
+                .iter()
+                .filter_map(session)
+                .flat_map(|page| &page.messages)
+                .filter(|message| message.id == oldest.id);
+            fragments.next().is_none_or(|first| {
+                first.items.len() + fragments.map(|part| part.items.len()).sum::<usize>()
                     < oldest.items.len()
+            })
         })
 }
 
@@ -67,8 +69,8 @@ impl AppState {
                 Ok(page) => page,
                 Err(message) => return self.invalid_transcript(feed, key, &id, message),
             },
-            Err((ErrorCode::Conflict, message)) if request.page.is_some() => {
-                return self.restart_detail(feed, key, id, request.target, message);
+            Err((ErrorCode::Conflict, _)) if request.page.is_some() => {
+                return self.transcript_conflict(feed, key, id, request.target);
             }
             // The alias with no current quick chat offers the composer for a new one.
             Err((ErrorCode::NotFound, _))
@@ -96,6 +98,15 @@ impl AppState {
                 return vec![];
             }
         };
+        let latest_only = self.detail_latest.contains(key);
+        if latest_only && page.body.is_none() {
+            return self.invalid_transcript(
+                feed,
+                key,
+                &id,
+                "Expected the latest transcript page.".into(),
+            );
+        }
         if page.body.is_none() && request.page.is_none() {
             return match self.detail_unchanged(feed, key, &id, &request.target, page) {
                 Ok(()) => vec![],
@@ -122,7 +133,7 @@ impl AppState {
             })
         };
         if changed {
-            return self.restart_detail(feed, key, id, request.target, CHANGED.into());
+            return self.transcript_conflict(feed, key, id, request.target);
         }
         if next.is_some() && next == request.page {
             return self.invalid_transcript(
@@ -132,14 +143,42 @@ impl AppState {
                 "Transcript cursor did not advance.".into(),
             );
         }
+        let depth = if walking || latest_only {
+            0
+        } else {
+            feed.with_untracked(|feed| {
+                feed.details
+                    .get(key)
+                    .filter(|cache| matches!(cache.body(), Some(DetailBody::Session(held)) if held.id == current.id))
+                    .map_or(0, |cache| cache.pages.len())
+            })
+        };
+        // A full replacement cannot fit if we already walk farther than the budget. An
+        // exhausted new chain, however, is a complete snapshot (the branch may have shrunk).
+        if next.is_some() && depth > MAX_PAGES {
+            return self.transcript_too_deep(feed, key, &id);
+        }
         let held = chain.len();
-        if self.over_budget(feed, key, &id, &page, held) {
+        let prior_bytes = self.detail_bytes.get(key).copied().unwrap_or(0);
+        if !self.count_detail_page(key, &page, held) {
+            if held > 0 {
+                return self.transcript_too_deep(feed, key, &id);
+            }
+            self.detail_failed(
+                feed,
+                key,
+                &id,
+                ClientError {
+                    code: "too_large".into(),
+                    message: "Transcript page exceeds this device's bounded cache (8 MiB).".into(),
+                },
+            );
             return vec![];
         }
         let mut pages = self.detail_pages.remove(key).unwrap_or_default();
         pages.push(page);
-        let missing = !walking
-            && next.is_some()
+        if depth > 0
+            && let Some(next) = next
             && feed.with_untracked(|feed| {
                 feed.details.get(key).is_some_and(|cache| {
                     pages
@@ -147,13 +186,14 @@ impl AppState {
                         .and_then(session)
                         .is_some_and(|current| history_missing(cache, &pages, current))
                 })
-            });
-        if missing
-            && pages.len() < REFRESH_PAGES
-            && let Some(next) = next
+            })
         {
+            if pages.len() == MAX_PAGES {
+                return self.transcript_too_deep(feed, key, &id);
+            }
             self.detail_pages.insert(key.into(), pages);
-            self.touch_detail(feed, &request.target);
+            let added = self.detail_bytes[key].saturating_sub(prior_bytes);
+            self.touch_detail_continuation(feed, &request.target, added);
             self.trim_retained(feed);
             if self.detail_inflight.get(key) != Some(&id) {
                 return vec![];
@@ -168,7 +208,40 @@ impl AppState {
                 Some(id),
             )];
         }
-        self.publish_transcript(feed, key, &id, &request.target, pages, walking, missing);
+        self.publish_transcript(feed, key, &id, &request.target, pages, walking);
+        vec![]
+    }
+
+    fn transcript_conflict(
+        &mut self,
+        feed: Signal<Feed>,
+        key: &str,
+        id: String,
+        target: DetailRef,
+    ) -> Vec<Outgoing> {
+        if self.detail_pages.get(key).is_some_and(Vec::is_empty) {
+            // An explicit Older read found a stale cursor. Give it one newest-first
+            // reconciliation, but do not restart if that staged reconstruction is raced too.
+            if let DetailRef::Session { id: scope } = &target
+                && let Some(reread) = feed
+                    .with_untracked(|feed| feed.live.get(scope.as_str()).map(|live| live.reread))
+            {
+                self.detail_reread.insert(key.into(), reread);
+            }
+            return self.restart_detail(feed, key, id, target, CHANGED.into());
+        }
+        self.detail_failed(feed, key, &id, ClientError {
+            code: "conflict".into(),
+            message: "The transcript changed again while checking earlier messages. Use Load latest messages to rejoin the current transcript.".into(),
+        });
+        vec![]
+    }
+
+    fn transcript_too_deep(&mut self, feed: Signal<Feed>, key: &str, id: &str) -> Vec<Outgoing> {
+        self.detail_failed(feed, key, id, ClientError {
+            code: HISTORY_CHANGED.into(),
+            message: "Still showing the previous transcript: too much history to refresh in one read. Use Load latest messages to rejoin the current transcript.".into(),
+        });
         vec![]
     }
 
@@ -191,7 +264,6 @@ impl AppState {
         vec![]
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn publish_transcript(
         &mut self,
         feed: Signal<Feed>,
@@ -200,16 +272,36 @@ impl AppState {
         target: &DetailRef,
         pages: Vec<DetailReply>,
         walking: bool,
-        missing: bool,
     ) {
         let Some(mut newest) = pages.first().and_then(session).cloned() else {
             self.invalid_transcript(feed, key, id, "Missing transcript page.".into());
             return;
         };
-        for older in pages.iter().skip(1).filter_map(session) {
-            prepend(&mut newest, older.clone());
+        if pages.len() > 1 {
+            // Assemble oldest first, appending at each seam instead of re-copying the growing
+            // transcript for every page. Keep the newest page's session metadata.
+            newest.messages.clear();
+            for part in pages.iter().rev().filter_map(session) {
+                let mut messages = part.messages.iter();
+                if let Some(first) = messages.next() {
+                    if let Some(last) = newest.messages.last_mut()
+                        && !first.id.is_empty()
+                        && last.id == first.id
+                    {
+                        last.items.extend(first.items.iter().cloned());
+                    } else {
+                        newest.messages.push(first.clone());
+                    }
+                }
+                newest.messages.extend(messages.cloned());
+            }
+            newest.older = pages
+                .last()
+                .and_then(session)
+                .and_then(|part| part.older.clone());
         }
         self.detail_inflight.remove(key);
+        self.detail_latest.remove(key);
         self.detail_restarts.remove(key);
         self.detail_bytes.remove(key);
         let reread = self.detail_reread.remove(key);
@@ -228,12 +320,7 @@ impl AppState {
                 }
                 cache.loading = false;
                 cache.stale = false;
-                cache.error = missing.then(|| ClientError {
-                    code: HISTORY_CHANGED.into(),
-                    message:
-                        "The transcript changed. Use Show earlier messages to reload more history."
-                            .into(),
-                });
+                cache.error = None;
             }
             if let Some(operation) = feed.operations.get_mut(id) {
                 operation.loading = false;

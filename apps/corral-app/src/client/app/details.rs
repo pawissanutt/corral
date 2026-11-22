@@ -22,6 +22,33 @@ impl AppState {
         id: String,
         request: DetailGet,
     ) -> Vec<Outgoing> {
+        self.request_detail(feed, id, request, false)
+    }
+
+    pub(super) fn latest_transcript(
+        &mut self,
+        feed: Signal<Feed>,
+        session: String,
+    ) -> Vec<Outgoing> {
+        self.request_detail(
+            feed,
+            requests::new_id(),
+            DetailGet {
+                target: DetailRef::Session { id: session },
+                etag: None,
+                page: None,
+            },
+            true,
+        )
+    }
+
+    fn request_detail(
+        &mut self,
+        feed: Signal<Feed>,
+        id: String,
+        request: DetailGet,
+        latest_only: bool,
+    ) -> Vec<Outgoing> {
         let mut request = match request {
             DetailGet {
                 target: DetailRef::SessionFileChunk { .. },
@@ -40,10 +67,18 @@ impl AppState {
         // to those before, rather than all of them being fetched and merged up front.
         let walked = walked(&request.target);
         let session = matches!(request.target, DetailRef::Session { .. });
+        if session
+            && (self.detail_latest.contains(&key)
+                || (!latest_only && self.detail_inflight.contains_key(&key)))
+        {
+            // Background rereads must not race each other or the owner's explicit return.
+            return vec![];
+        }
         if session && let Some(cursor) = request.page.as_deref() {
             let current = feed.with_untracked(|feed| {
                 feed.details.get(&key).is_some_and(|cache| {
                     !cache.loading
+                        && !cache.error.as_ref().is_some_and(|error| error.code == transcript::HISTORY_CHANGED)
                         && matches!(cache.body(), Some(DetailBody::Session(page)) if page.older.as_deref() == Some(cursor))
                 })
             });
@@ -51,12 +86,12 @@ impl AppState {
                 return vec![];
             }
         }
-        if (walked || session) && request.page.is_none() && request.etag.is_none() {
+        if !latest_only && (walked || session) && request.page.is_none() && request.etag.is_none() {
             // Validate the newest held page, not the cursor of a previously read page.
             request.etag = feed.with_untracked(|feed| {
                 feed.details
                     .get(&key)
-                    .filter(|cache| cache.merged.is_some() && cache.error.is_none())
+                    .filter(|cache| cache.merged.is_some() && (session || cache.error.is_none()))
                     .and_then(|cache| cache.pages.first())
                     .map(|page| page.etag.clone())
             });
@@ -110,14 +145,12 @@ impl AppState {
                 });
             cache.loading = self.ready;
             cache.stale = true;
-            if !self.ready {
-                cache.error = Some(offline());
-            } else if !cache
-                .error
-                .as_ref()
-                .is_some_and(|error| error.code == transcript::HISTORY_CHANGED)
-            {
-                cache.error = None;
+            let keep_recovery = cache.error.as_ref().is_some_and(|error| {
+                error.code == transcript::HISTORY_CHANGED
+                    || (latest_only && error.code == "conflict")
+            });
+            if !keep_recovery {
+                cache.error = (!self.ready).then(offline);
             }
         });
         // Refresh from the newest page, not from the page the owner last walked to.
@@ -152,6 +185,9 @@ impl AppState {
                     });
                 }
             });
+        }
+        if latest_only {
+            self.detail_latest.insert(key.clone());
         }
         self.detail_pages.insert(key.clone(), vec![]);
         self.detail_restarts.remove(&key);
@@ -188,7 +224,12 @@ impl AppState {
             return Ok(vec![]);
         }
         if matches!(request.target, DetailRef::Session { .. }) {
-            return Ok(self.transcript_reply(feed, &key, id, request, outcome));
+            let target = request.target.clone();
+            let mut outgoing = self.transcript_reply(feed, &key, id, request, outcome);
+            if !self.detail_inflight.contains_key(&key) && self.transcript_deferred.remove(&key) {
+                outgoing.extend(self.refresh_transcript_part(feed, target));
+            }
+            return Ok(outgoing);
         }
         let page: DetailReply = match outcome {
             Ok(value) => decode(value)?,
@@ -291,13 +332,7 @@ impl AppState {
             if let Some(cache) = feed.details.get_mut(key) {
                 cache.loading = false;
                 cache.stale = false;
-                if !cache
-                    .error
-                    .as_ref()
-                    .is_some_and(|error| error.code == transcript::HISTORY_CHANGED)
-                {
-                    cache.error = None;
-                }
+                cache.error = None;
                 if let Some(first) = cache.pages.first_mut() {
                     first.as_of = page.as_of.clone();
                     first.seq = page.seq;
@@ -312,6 +347,7 @@ impl AppState {
         self.detail_pages.remove(key);
         self.detail_restarts.remove(key);
         self.detail_inflight.remove(key);
+        self.detail_latest.remove(key);
         self.detail_bytes.remove(key);
         self.touch_detail(feed, target);
         self.trim_retained(feed);
@@ -361,9 +397,7 @@ impl AppState {
         page: &DetailReply,
         held: usize,
     ) -> bool {
-        let bytes = self.detail_bytes.entry(key.to_owned()).or_default();
-        *bytes = bytes.saturating_add(cache::bytes(page));
-        if held < MAX_PAGES && *bytes <= MAX_DETAIL_BYTES {
+        if self.count_detail_page(key, page, held) {
             return false;
         }
         self.detail_failed(
@@ -376,6 +410,13 @@ impl AppState {
             },
         );
         true
+    }
+
+    /// Accounts for one page of an operation, not the manually walked pages already held.
+    fn count_detail_page(&mut self, key: &str, page: &DetailReply, held: usize) -> bool {
+        let bytes = self.detail_bytes.entry(key.to_owned()).or_default();
+        *bytes = bytes.saturating_add(cache::bytes(page));
+        held < MAX_PAGES && *bytes <= MAX_DETAIL_BYTES
     }
 
     /// Publishes the request's pages, merged, as the detail's current snapshot.
@@ -440,11 +481,19 @@ impl AppState {
         self.detail_inflight.remove(key);
         self.detail_bytes.remove(key);
         self.detail_reread.remove(key);
+        let latest_failed = self.detail_latest.remove(key);
         feed.update(|feed| {
             if let Some(cache) = feed.details.get_mut(key) {
                 cache.loading = false;
                 cache.stale = true;
-                cache.error = Some(error.clone());
+                let recovery = cache.error.as_ref().filter(|prior| {
+                    latest_failed && matches!(prior.code.as_str(), transcript::HISTORY_CHANGED | "conflict")
+                });
+                // A failed explicit return is retryable without losing the kept transcript.
+                cache.error = Some(recovery.map_or_else(|| error.clone(), |prior| ClientError {
+                    code: prior.code.clone(),
+                    message: format!("Could not load latest messages: {}. Still showing the previous transcript.", error.message),
+                }));
             }
             if let Some(operation) = feed.operations.get_mut(id) {
                 operation.loading = false;

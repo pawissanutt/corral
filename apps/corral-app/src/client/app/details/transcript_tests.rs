@@ -203,3 +203,187 @@ fn changed_transcript_refresh_revalidates_loaded_history_without_splicing_branch
         ]
     );
 }
+
+fn numbered_page(etag: &str, row: usize, has_older: bool) -> Value {
+    let cursor = has_older.then(|| format!("{etag}:{}", row.saturating_sub(1)));
+    page(
+        etag,
+        &[(&row.to_string(), &["recorded"])],
+        cursor.as_deref(),
+    )
+}
+
+#[test]
+fn appending_to_a_deep_transcript_keeps_the_old_snapshot_until_its_depth_is_restored() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    for row in (1..=10).rev() {
+        let cursor = (row < 10).then(|| format!("v1:{row}"));
+        let get = read(&mut app, feed, cursor.as_deref());
+        assert!(
+            reply(
+                &mut app,
+                feed,
+                get,
+                cursor.as_deref(),
+                numbered_page("v1", row, true),
+            )
+            .is_empty()
+        );
+    }
+    let before = shown(feed);
+    assert_eq!(before.first().unwrap().0, "1");
+    let mut get = read(&mut app, feed, None);
+    for row in (1..=11).rev() {
+        let cursor = (row < 11).then(|| format!("v2:{row}"));
+        get = reply(
+            &mut app,
+            feed,
+            get,
+            cursor.as_deref(),
+            numbered_page("v2", row, true),
+        );
+        if row != 1 {
+            assert_eq!(
+                shown(feed),
+                before,
+                "must not publish a partial new snapshot"
+            );
+        }
+    }
+    assert!(get.is_empty());
+    assert_eq!(&shown(feed)[..10], before);
+    assert_eq!(shown(feed).last().unwrap().0, "11");
+    feed.with_untracked(|feed| {
+        let cache = feed.detail(&target()).unwrap();
+        assert!(cache.error.is_none());
+        assert!(cache.pages.iter().all(|page| page.etag == "v2"));
+    });
+}
+
+#[test]
+fn an_unreconciled_snapshot_survives_the_page_cap_until_explicit_latest() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    let get = read(&mut app, feed, None);
+    assert!(
+        reply(
+            &mut app,
+            feed,
+            get,
+            None,
+            page(
+                "v1",
+                &[("old branch", &["kept for reading"])],
+                Some("old cursor")
+            ),
+        )
+        .is_empty()
+    );
+    let before = shown(feed);
+    let mut get = read(&mut app, feed, None);
+    for row in (1..=MAX_PAGES).rev() {
+        let cursor = (row < MAX_PAGES).then(|| format!("v2:{row}"));
+        get = reply(
+            &mut app,
+            feed,
+            get,
+            cursor.as_deref(),
+            numbered_page("v2", row, true),
+        );
+    }
+    assert!(
+        get.is_empty(),
+        "no continuation once the bounded rebuild fails"
+    );
+    assert_eq!(shown(feed), before);
+    let error_code = || {
+        feed.with_untracked(|feed| {
+            feed.detail(&target())
+                .unwrap()
+                .error
+                .as_ref()
+                .map(|error| error.code.clone())
+        })
+    };
+    assert_eq!(error_code().as_deref(), Some(HISTORY_CHANGED));
+    assert!(read(&mut app, feed, Some("old cursor")).is_empty());
+
+    let get = app.latest_transcript(feed, "B-1".into());
+    let [(_, params, tag)]: [Outgoing; 1] = get.try_into().unwrap();
+    assert!(params.get("etag").is_none_or(Value::is_null));
+    assert!(app.latest_transcript(feed, "B-1".into()).is_empty());
+    assert!(
+        app.detail_reply(
+            feed,
+            tag,
+            params,
+            Err((ErrorCode::Conflict, "raced".into()))
+        )
+        .unwrap()
+        .is_empty()
+    );
+    assert_eq!(
+        error_code().as_deref(),
+        Some(HISTORY_CHANGED),
+        "explicit latest remains retryable"
+    );
+    assert_eq!(shown(feed), before);
+
+    let get = app.latest_transcript(feed, "B-1".into());
+    assert!(reply(&mut app, feed, get, None, numbered_page("v3", 3, true)).is_empty());
+    assert_eq!(shown(feed)[0].0, "3");
+    assert_eq!(shown(feed).len(), 1);
+    assert_eq!(error_code(), None);
+}
+
+#[test]
+fn a_raced_reconciliation_does_not_restart_or_mix_snapshots() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    let get = read(&mut app, feed, None);
+    assert!(reply(&mut app, feed, get, None, numbered_page("v1", 1, true)).is_empty());
+    let before = shown(feed);
+
+    let get = read(&mut app, feed, Some("v1:0"));
+    let [(_, params, tag)]: [Outgoing; 1] = get.try_into().unwrap();
+    let get = app
+        .detail_reply(
+            feed,
+            tag,
+            params,
+            Err((ErrorCode::Conflict, "raced".into())),
+        )
+        .unwrap();
+    let get = reply(&mut app, feed, get, None, numbered_page("v2", 2, true));
+    assert!(
+        read(&mut app, feed, None).is_empty(),
+        "do not supersede the staged read"
+    );
+    assert!(
+        reply(
+            &mut app,
+            feed,
+            get,
+            Some("v2:1"),
+            numbered_page("v3", 1, true)
+        )
+        .is_empty()
+    );
+    assert_eq!(shown(feed), before);
+    feed.with_untracked(|feed| {
+        let cache = feed.detail(&target()).unwrap();
+        assert_eq!(cache.error.as_ref().unwrap().code, "conflict");
+        assert!(!cache.loading);
+        assert!(cache.pages.iter().all(|page| page.etag == "v1"));
+    });
+}

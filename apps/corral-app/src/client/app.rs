@@ -114,6 +114,10 @@ pub(super) struct AppState {
     detail_pages: BTreeMap<String, Vec<DetailReply>>,
     detail_bytes: BTreeMap<String, usize>,
     detail_reread: BTreeMap<String, u64>,
+    /// Explicit newest-only transcript reads, distinct from depth-preserving refreshes.
+    detail_latest: BTreeSet<String>,
+    /// A child transcript changed during a read and needs one follow-up when it settles.
+    transcript_deferred: BTreeSet<String>,
     /// How many times in a row each detail's read started again from its first page because it
     /// changed between two of its pages.
     detail_restarts: BTreeMap<String, u8>,
@@ -138,6 +142,8 @@ impl AppState {
             detail_pages: BTreeMap::new(),
             detail_bytes: BTreeMap::new(),
             detail_reread: BTreeMap::new(),
+            detail_latest: BTreeSet::new(),
+            transcript_deferred: BTreeSet::new(),
             detail_restarts: BTreeMap::new(),
             item_fetches: BTreeMap::new(),
             changes_inflight: false,
@@ -165,6 +171,8 @@ impl AppState {
         self.detail_pages.clear();
         self.detail_bytes.clear();
         self.detail_reread.clear();
+        self.detail_latest.clear();
+        self.transcript_deferred.clear();
         self.detail_restarts.clear();
         for upload in self.uploads.values_mut() {
             upload.disconnected();
