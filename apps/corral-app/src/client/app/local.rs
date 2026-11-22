@@ -5,6 +5,8 @@ impl AppState {
         self.interrupt_html();
         self.outbox = None;
         self.namespace = None;
+        self.transcript_readers.clear();
+        self.transcript_auto_depth.clear();
         self.offline = super::super::offline::Cache::default();
         feed.update(|feed| {
             feed.mark_stale();

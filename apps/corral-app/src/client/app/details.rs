@@ -25,6 +25,42 @@ impl AppState {
         self.request_detail(feed, id, request, false)
     }
 
+    pub(super) fn transcript_reading(&mut self, feed: Signal<Feed>, scope: String, active: bool) {
+        if active {
+            let count = self.transcript_readers.entry(scope).or_default();
+            *count = count.saturating_add(1);
+        } else if let Some(count) = self.transcript_readers.get_mut(&scope) {
+            *count -= 1;
+            if *count == 0 {
+                self.transcript_readers.remove(&scope);
+                self.trim_retained(feed);
+            }
+        }
+    }
+
+    pub(super) fn transcript_tail(&mut self, feed: Signal<Feed>, scope: String) -> Vec<Outgoing> {
+        if !self.ready || self.transcript_readers.contains_key(&scope) {
+            return vec![];
+        }
+        let target = DetailRef::Session { id: scope };
+        let key = detail_key(&target);
+        let blocked = feed.with_untracked(|feed| {
+            feed.details.get(&key).is_some_and(|cache| {
+                (cache.pages.len() == 1 || self.transcript_auto_depth.contains(&key))
+                    && cache
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.code == transcript::HISTORY_CHANGED)
+            })
+        });
+        if !blocked {
+            return vec![];
+        }
+        // Use the normal refresh path, not the explicit latest override: a view could
+        // start reading again between now and its reply.
+        self.detail_request(feed, requests::new_id(), self.retained.selected(target))
+    }
+
     pub(super) fn latest_transcript(
         &mut self,
         feed: Signal<Feed>,
@@ -488,9 +524,11 @@ impl AppState {
                 cache.loading = false;
                 cache.stale = true;
                 let recovery = cache.error.as_ref().filter(|prior| {
-                    latest_failed && matches!(prior.code.as_str(), transcript::HISTORY_CHANGED | "conflict")
+                    error.code != transcript::HISTORY_CHANGED
+                        && (prior.code == transcript::HISTORY_CHANGED
+                            || (latest_failed && prior.code == "conflict"))
                 });
-                // A failed explicit return is retryable without losing the kept transcript.
+                // A failed tail rejoin or explicit return must leave recovery available.
                 cache.error = Some(recovery.map_or_else(|| error.clone(), |prior| ClientError {
                     code: prior.code.clone(),
                     message: format!("Could not load latest messages: {}. Still showing the previous transcript.", error.message),

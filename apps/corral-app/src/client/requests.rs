@@ -55,6 +55,15 @@ pub enum ClientRequest {
     },
     OpenHtml(super::html::OpenHtml),
     CancelHtml(String),
+    /// Local, paired registration of a mounted view away from the transcript's end.
+    TranscriptReading {
+        scope: String,
+        active: bool,
+    },
+    /// A mounted view returned to the end; try to rejoin a blocked automatic read.
+    TranscriptTail {
+        scope: String,
+    },
     /// Explicitly return to the newest transcript after its older snapshot cannot be reconciled.
     LatestTranscript {
         session: String,
@@ -254,6 +263,16 @@ pub fn submit(request_id: String, request: OpSubmit) -> bool {
         request,
     })
 }
+/// Call once when a view starts reading away from the end, and release that registration
+/// with `false` on return, scope change or disposal if the acquire was sent successfully.
+pub fn transcript_reading(scope: String, active: bool) -> bool {
+    send(ClientRequest::TranscriptReading { scope, active })
+}
+
+pub fn transcript_tail(scope: String) -> bool {
+    send(ClientRequest::TranscriptTail { scope })
+}
+
 pub fn latest_transcript(session: String) -> bool {
     send(ClientRequest::LatestTranscript { session })
 }

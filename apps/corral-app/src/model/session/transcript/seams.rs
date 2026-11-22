@@ -256,18 +256,13 @@ fn covers_tool(old: &Pair<'_>, new: &Pair<'_>) -> bool {
 
 /// Keep the visible recorded anchors or retain the old snapshot. No carried seam is used to
 /// pass the guard unless the replacement has the old records in order with compatible items.
-/// An ordinary in-place update that never needed a remapped seam can still publish as before.
+/// A reader on its first page must get the same protection as a paged view.
+/// Ordinary in-place updates of a deeper snapshot can still publish if they keep its cuts.
 pub(crate) fn preserve_anchors(
     feed: &Feed,
     held: &DetailCache,
     replacement: &mut DetailCache,
 ) -> bool {
-    if held.pages.len() < 2
-        && replacement.pages.len() < 2
-        && held.transcript_seams == TranscriptSeams::default()
-    {
-        return true;
-    }
     let (Some(old), Some(new)) = (page(Some(held)), page(Some(replacement))) else {
         return true;
     };
@@ -382,7 +377,10 @@ pub(crate) fn preserve_anchors(
             return held_layout.starts.is_subset(&layout.starts);
         }
     }
-    held_layout
-        .starts
-        .is_subset(&recorded_layout(replacement, feed, |_, _| true).starts)
+    // Do not accept an equal anchor ID after losing the items at a rolling first-page cut.
+    // Larger windows retain the existing fallback for compatible in-place rewrites.
+    held.pages.len() > 1
+        && held_layout
+            .starts
+            .is_subset(&recorded_layout(replacement, feed, |_, _| true).starts)
 }

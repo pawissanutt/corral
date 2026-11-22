@@ -84,6 +84,11 @@ fn history_missing(cache: &DetailCache, pages: &[DetailReply], current: &Session
     !results.is_empty()
 }
 
+enum Publication {
+    Prepend,
+    Replace { preserve: bool, auto_depth: bool },
+}
+
 impl AppState {
     pub(super) fn transcript_reply(
         &mut self,
@@ -182,10 +187,35 @@ impl AppState {
                     .map_or(0, |cache| cache.pages.len())
             })
         };
+        let active = matches!(&request.target, DetailRef::Session { id } if self.transcript_readers.contains_key(id));
+        let restarted = self.detail_restarts.contains_key(key);
+        let auto_depth = self.transcript_auto_depth.contains(key);
+        // Explicit scrollback stays loaded. An active view also protects its first page,
+        // even if it hasn't scrolled far enough to request an older cursor. A window grown
+        // only to protect such a reader may roll forward when nobody is reading back.
+        let reading_history = depth > 0 && (active || restarted || (depth > 1 && !auto_depth));
         // A full replacement cannot fit if we already walk farther than the budget. An
         // exhausted new chain can still replace it if it covers all the anchors.
-        if next.is_some() && depth > MAX_PAGES {
+        if reading_history && next.is_some() && depth > MAX_PAGES {
             return self.transcript_history_changed(feed, key, &id);
+        }
+        if !walking && !reading_history && !chain.is_empty() {
+            // The last reader released while rebuilding an automatic window. The newest
+            // staged page is still good; there is no need to fit more history in the cache.
+            let mut pages = self.detail_pages.remove(key).unwrap_or_default();
+            pages.truncate(1);
+            self.publish_transcript(
+                feed,
+                key,
+                &id,
+                &request.target,
+                pages,
+                Publication::Replace {
+                    preserve: false,
+                    auto_depth: false,
+                },
+            );
+            return vec![];
         }
         let held = chain.len();
         let prior_bytes = self.detail_bytes.get(key).copied().unwrap_or(0);
@@ -206,9 +236,6 @@ impl AppState {
         }
         let mut pages = self.detail_pages.remove(key).unwrap_or_default();
         pages.push(page);
-        // Until the reader explicitly walks back, the view follows a single rolling
-        // newest page. Never reconstruct displaced history just to refresh that tail.
-        let reading_history = depth > 1 || (depth == 1 && self.detail_restarts.contains_key(key));
         if reading_history
             && let Some(next) = next
             && feed.with_untracked(|feed| {
@@ -240,7 +267,15 @@ impl AppState {
                 Some(id),
             )];
         }
-        self.publish_transcript(feed, key, &id, &request.target, pages, walking);
+        let publication = if walking {
+            Publication::Prepend
+        } else {
+            Publication::Replace {
+                preserve: reading_history,
+                auto_depth: pages.len() > 1 && !restarted && (auto_depth || depth == 1),
+            }
+        };
+        self.publish_transcript(feed, key, &id, &request.target, pages, publication);
         vec![]
     }
 
@@ -308,7 +343,7 @@ impl AppState {
         id: &str,
         target: &DetailRef,
         pages: Vec<DetailReply>,
-        walking: bool,
+        publication: Publication,
     ) {
         let Some(mut newest) = pages.first().and_then(session).cloned() else {
             self.invalid_transcript(feed, key, id, "Missing transcript page.".into());
@@ -346,8 +381,7 @@ impl AppState {
             stale: false,
             error: None,
         };
-        if !walking
-            && !self.detail_latest.contains(key)
+        if matches!(publication, Publication::Replace { preserve: true, .. })
             && feed.with_untracked(|feed| {
                 feed.details
                     .get(key)
@@ -356,6 +390,17 @@ impl AppState {
         {
             self.transcript_history_changed(feed, key, id);
             return;
+        }
+        if matches!(
+            publication,
+            Publication::Replace {
+                auto_depth: true,
+                ..
+            }
+        ) {
+            self.transcript_auto_depth.insert(key.into());
+        } else {
+            self.transcript_auto_depth.remove(key);
         }
         self.detail_inflight.remove(key);
         self.detail_latest.remove(key);
@@ -366,7 +411,7 @@ impl AppState {
             feed.settle_session(target, reread);
             let response = replacement.pages.last().map(value);
             if let Some(cache) = feed.details.get_mut(key) {
-                if walking {
+                if matches!(publication, Publication::Prepend) {
                     if let (Some(DetailBody::Session(held)), Some(DetailBody::Session(older))) =
                         (&mut cache.merged, replacement.merged)
                     {

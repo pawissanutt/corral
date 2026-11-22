@@ -163,6 +163,140 @@ fn latest_page_refresh_does_not_chase_a_displaced_record() {
 }
 
 #[test]
+fn mounted_readers_protect_a_rolling_first_page_until_the_last_release() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    let reading = |app: &mut AppState, scope: &str, active| {
+        assert!(
+            app.request(
+                feed,
+                ClientRequest::TranscriptReading {
+                    scope: scope.into(),
+                    active,
+                }
+            )
+            .is_empty(),
+            "reading is a local intent"
+        );
+    };
+    reading(&mut app, "B-1", true);
+    let get = read(&mut app, feed, None);
+    assert!(
+        reply(&mut app, feed, get, None, numbered_page("v1", 2, true)).is_empty(),
+        "even a resumed reader paints after one page"
+    );
+    let before = shown(feed);
+
+    reading(&mut app, "B-1", true);
+    reading(&mut app, "B-1", false);
+    reading(&mut app, "B-1/child/a2", true);
+    let get = read(&mut app, feed, None);
+    let older = reply(&mut app, feed, get, None, numbered_page("v2", 3, true));
+    assert_eq!(
+        shown(feed),
+        before,
+        "one view is still reading the first page"
+    );
+    assert!(
+        reply(
+            &mut app,
+            feed,
+            older,
+            Some("v2:2"),
+            numbered_page("v2", 2, true)
+        )
+        .is_empty()
+    );
+    assert_eq!(shown(feed).first(), before.first());
+    assert_eq!(anchors(feed), ["2", "3"]);
+
+    reading(&mut app, "B-1", false);
+    assert!(!app.transcript_readers.contains_key("B-1"));
+    let get = read(&mut app, feed, None);
+    assert!(reply(&mut app, feed, get, None, numbered_page("v3", 4, true)).is_empty());
+    assert_eq!(
+        shown(feed),
+        [("4".into(), vec!["recorded".into()])],
+        "auto-reconstructed depth does not pin a follower; a child is a different scope"
+    );
+    reading(&mut app, "B-1/child/a2", false);
+    assert!(app.transcript_readers.is_empty());
+}
+
+#[test]
+fn an_uncovered_cut_on_the_first_page_can_rejoin_at_the_tail() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    let get = read(&mut app, feed, None);
+    reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        page(
+            "v1",
+            &[("two", &["first item", "second item"])],
+            Some("earlier"),
+        ),
+    );
+    let before = shown(feed);
+
+    let reading = |app: &mut AppState, active| app.transcript_reading(feed, "B-1".into(), active);
+    reading(&mut app, true);
+    let get = read(&mut app, feed, None);
+    let latest = || page("v2", &[("two", &["second item"])], None);
+    assert!(reply(&mut app, feed, get, None, latest()).is_empty());
+    assert_eq!(
+        shown(feed),
+        before,
+        "the same ID does not cover a missing item"
+    );
+    let error_code = || {
+        feed.with_untracked(|feed| {
+            feed.detail(&target())
+                .unwrap()
+                .error
+                .as_ref()
+                .map(|error| error.code.clone())
+        })
+    };
+    assert_eq!(error_code().as_deref(), Some(HISTORY_CHANGED));
+    assert!(
+        app.transcript_tail(feed, "B-1".into()).is_empty(),
+        "a second view at the tail cannot displace the active reader"
+    );
+
+    reading(&mut app, false);
+    let tail = |app: &mut AppState| {
+        app.request(
+            feed,
+            ClientRequest::TranscriptTail {
+                scope: "B-1".into(),
+            },
+        )
+    };
+    let [(_, params, tag)]: [Outgoing; 1] = tail(&mut app).try_into().unwrap();
+    app.detail_reply(
+        feed,
+        tag,
+        params,
+        Err((ErrorCode::Conflict, "raced".into())),
+    )
+    .unwrap();
+    assert_eq!(error_code().as_deref(), Some(HISTORY_CHANGED));
+    let get = tail(&mut app);
+    assert!(reply(&mut app, feed, get, None, latest()).is_empty());
+    assert_eq!(shown(feed), [("two".into(), vec!["second item".into()])]);
+    assert!(feed.with_untracked(|feed| feed.detail(&target()).unwrap().error.is_none()));
+}
+
+#[test]
 fn changed_transcript_refresh_revalidates_loaded_history_before_publishing() {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();

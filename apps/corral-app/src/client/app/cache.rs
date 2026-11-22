@@ -196,6 +196,7 @@ impl AppState {
     /// corrald has not answered.
     fn session_pinned(&self, session: &str) -> bool {
         self.session_scopes.contains_key(session)
+            || self.transcript_readers.contains_key(session)
             || self.terminal_scopes.contains_key(session)
             || self
                 .retained
@@ -271,6 +272,7 @@ impl AppState {
                 self.detail_bytes.remove(key);
                 self.detail_reread.remove(key);
                 self.detail_latest.remove(key);
+                self.transcript_auto_depth.remove(key);
                 self.transcript_deferred.remove(key);
                 self.detail_inflight.remove(key);
                 feed.update(|feed| {

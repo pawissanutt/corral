@@ -137,6 +137,11 @@ impl AppState {
                 self.cancel_html(&id);
                 vec![]
             }
+            ClientRequest::TranscriptReading { scope, active } => {
+                self.transcript_reading(feed, scope, active);
+                vec![]
+            }
+            ClientRequest::TranscriptTail { scope } => self.transcript_tail(feed, scope),
             ClientRequest::LatestTranscript { session } => self.latest_transcript(feed, session),
             ClientRequest::SessionItem { session, token } => {
                 self.session_item(feed, session, token)

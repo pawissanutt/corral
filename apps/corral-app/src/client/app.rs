@@ -116,6 +116,10 @@ pub(super) struct AppState {
     detail_reread: BTreeMap<String, u64>,
     /// Explicit newest-only transcript reads, distinct from depth-preserving refreshes.
     detail_latest: BTreeSet<String>,
+    /// Mounted transcript views that are away from the end, by exact session scope.
+    transcript_readers: BTreeMap<String, usize>,
+    /// Depth added by live reconciliation, rather than by an explicit older-page request.
+    transcript_auto_depth: BTreeSet<String>,
     /// A child transcript changed during a read and needs one follow-up when it settles.
     transcript_deferred: BTreeSet<String>,
     /// How many times in a row each detail's read started again from its first page because it
@@ -143,6 +147,8 @@ impl AppState {
             detail_bytes: BTreeMap::new(),
             detail_reread: BTreeMap::new(),
             detail_latest: BTreeSet::new(),
+            transcript_readers: BTreeMap::new(),
+            transcript_auto_depth: BTreeSet::new(),
             transcript_deferred: BTreeSet::new(),
             detail_restarts: BTreeMap::new(),
             item_fetches: BTreeMap::new(),
@@ -200,6 +206,8 @@ impl AppState {
             self.interrupt_html();
             self.session_scopes.clear();
             self.terminal_scopes.clear();
+            self.transcript_readers.clear();
+            self.transcript_auto_depth.clear();
             self.uploads.clear();
             self.item_fetches.clear();
             self.retained = cache::RetainedCache::default();
