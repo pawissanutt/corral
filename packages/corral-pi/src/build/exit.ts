@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { checked, type Run } from "./corral-cli.ts";
+import { fastForward, PartialFastForward } from "./fast-forward.ts";
 import { LandTracker, TAIL_FAILED } from "./land-progress.ts";
 import { summarize } from "./git.ts";
 import { ancestor, baseMoved, CandidateMoved, checkDestination, checkSource, checkTargetConfig, commit, landingDisabled, landingTarget, message, PreparationError,
@@ -60,7 +61,8 @@ export function createExit(options: {
   const saved = session.exit as ExitProgressRecord | undefined;
   let state: ExitState = saved ? { record: saved, phase: saved.progress?.phase ?? (saved.landed ? "landed" : saved.choice === "keep" ? "kept" : "none"), detail: saved.progress?.detail } : { phase: "none" };
   if (["rebasing", "verifying", "repairing", "landing"].includes(state.phase)) {
-    state = { ...state, phase: "failed", detail: `The previous exit stopped during ${state.phase}. Inspect the worktree. ${PREPARATION_NEEDED}` };
+    const inspection = state.phase === "landing" ? "Inspect the base branch, its checkout and index for a partial fast-forward before retrying." : "Inspect the worktree.";
+    state = { ...state, phase: "failed", detail: `The previous exit stopped during ${state.phase}. ${inspection} ${PREPARATION_NEEDED}` };
   }
   let summary: BuildSummary | undefined;
   let summaryEpoch = 0;
@@ -361,23 +363,24 @@ export function createExit(options: {
         update("landing", `Fast-forwarding ${target.name} to ${short(candidate.head)}.`, record, true);
         // After publishing progress, validate again, then perform only the fast-forward to the offered SHA.
         const checkout = await checkPin(pin);
-        if (checkout) {
-          if (await sourceBranch(git, checkout) !== target.ref) throw new Error(`The checkout of ${target.name} switched branches. ${PREPARATION_NEEDED}`);
-          const actual = await commit(git, "HEAD", checkout);
-          if (actual !== candidate.base) throw baseMoved(target, candidate.base, actual);
-        } else if (await checkDestination(git, context, target, candidate.base, candidate.head)) {
-          throw new Error(`The base ${target.name} is now checked out. ${PREPARATION_NEEDED}`);
-        }
-        checkAvailable();
-        checkTargetConfig(context, target);
-        const receipt = authorize();
+        let receipt: ReturnType<typeof authorize>;
         try {
-          if (checkout) await checked(git, ["merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", candidate.head], checkout);
-          else await checked(git, ["update-ref", target.ref, candidate.head, candidate.base], cwd);
+          await fastForward(git, { source: cwd, checkout, ref: target.ref, ...candidate, async beforeWrite() {
+            if (!checkout && await checkDestination(git, context, target, candidate.base, candidate.head)) {
+              throw new Error(`The base ${target.name} is now checked out. ${PREPARATION_NEEDED}`);
+            }
+            if (checkout && session.bare && (await checked(git, ["status", "--porcelain", "--untracked-files=no", "--ignore-submodules=none"], checkout)).trim()) {
+              throw new Error("The repository's primary checkout has tracked changes; commit or stash them before landing.");
+            }
+            checkAvailable();
+            checkTargetConfig(context, target);
+            receipt = authorize();
+          } });
         } catch (error) {
-          // In particular, distinguish a CAS refusal caused by a new tip from a Git write error.
+          // Do not hide partial-checkout diagnostics or automatically reprepare over one.
+          if (error instanceof PartialFastForward) throw error;
           const actual = await commit(git, target.ref, cwd).catch(() => undefined);
-          if (actual && actual !== candidate.base && actual !== candidate.head) throw baseMoved(target, candidate.base, actual);
+          if (actual && actual !== candidate.base) throw baseMoved(target, candidate.base, actual);
           throw error;
         }
         progress.done("land");

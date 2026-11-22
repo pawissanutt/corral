@@ -41,8 +41,8 @@ function fixture(settings: { policy?: ExitPolicy; conflict?: boolean; dirtyBase?
   const start = context(settings.policy);
   const ctx = { ...start, dir, session: { ...start.session, workspaceRoot: dir, worktree: dir } };
   mkdirSync(join(dir, ".corral-next"));
-  const setGate = (command: string) => writeFileSync(join(dir, ".corral-next", "corral.toml"),
-    '[projects.app]\nbase="main"\ngate=[' + JSON.stringify(command) + ']\n');
+  const setGate = (command: string, env = "") => writeFileSync(join(dir, ".corral-next", "corral.toml"),
+    '[projects.app]\nbase="main"\ngate=[' + JSON.stringify(command) + ']\n' + env);
   setGate("true");
   const repo = { candidate: head, tip: base, dirty: false, ancestor: !settings.conflict };
   const calls: string[][] = [];
@@ -63,9 +63,12 @@ function fixture(settings: { policy?: ExitPolicy; conflict?: boolean; dirtyBase?
     }
     if (argv.includes("--diff-filter=U")) return ok("src/parser.ts\n");
     if (argv.includes("--name-only") && settings.dirtyBase) return ok("src/parser.ts\n");
-    if (argv[0] === "worktree") return ok("worktree /primary\0HEAD " + repo.tip + "\0branch refs/heads/main\0\0");
+    if (argv[0] === "worktree") return ok("worktree /primary\0HEAD " + repo.tip + (settings.dirtyBase ? "\0branch refs/heads/main\0\0" : "\0branch refs/heads/other\0\0"));
     if (argv[0] === "status" && options.cwd !== "/primary") return ok(repo.dirty ? " M src/parser.ts\n" : "");
-    if (argv[0] === "merge") repo.tip = repo.candidate;
+    if (argv[0] === "update-ref") {
+      if (argv.at(-1) !== repo.tip) return { code: 1, stdout: "", stderr: "old tip changed" };
+      repo.tip = argv.at(-2)!;
+    }
     return underlying(argv, options);
   };
   const journal = createJournal({ context: ctx, git: run, fleet: () => fleet });
@@ -145,7 +148,7 @@ describe("build exits", () => {
     } finally { f.close(); }
   });
 
-  for (const change of ["candidate", "base", "dirty", "commands", "old offer"]) test(`stale ${change} cannot fast-forward or run a new gate`, async () => {
+  for (const change of ["candidate", "base", "dirty", "commands", "env", "old offer"]) test(`stale ${change} cannot fast-forward or run a new gate`, async () => {
     const f = fixture();
     try {
       const authorization = await f.offer();
@@ -154,6 +157,7 @@ describe("build exits", () => {
       if (change === "base") f.repo.tip = "c".repeat(40);
       if (change === "dirty") f.repo.dirty = true;
       if (change === "commands") f.setGate("false");
+      if (change === "env") f.setGate("true", 'env = { BUILD_FLAG = "changed" }');
       if (change === "old offer") {
         await f.control.choose("iterate");
         await f.offer();
@@ -241,7 +245,7 @@ describe("build exits", () => {
       expect(authorization).toBeDefined();
       const previous = f.journal.latestGate()!;
       f.journal.gate({ ...previous, attempt: "G2", result: "fail", failed_command: "true" });
-      expect(f.journal.passedGate(head, ["true"])).toBeUndefined();
+      expect(f.journal.passedGate(head, previous.input_fingerprint!)).toBeUndefined();
       expect((await f.control.choose("land", { authorization })).phase).not.toBe("landed");
       expect(f.repo.tip).toBe(base);
     } finally { f.close(); }
@@ -291,46 +295,62 @@ describe("build exits", () => {
 });
 
 test("bare preparation respects the primary checkout; Land never rebases or runs a gate", async () => {
-  for (const [primaryBranch, tracked, succeeds] of [["main", "", true], ["other", "", false], ["main", " M tracked\n", false]] as const) {
+  for (const variant of ["ready", "switched", "dirty", "ignored obstruction", "sparse"] as const) {
     const dir = mkdtempSync(join(tmpdir(), "bare-exit-"));
-    const original = context("review");
-    const ctx: BuildContext = { ...original, dir, session: { ...original.session,
-      workspaceRoot: undefined, project: undefined, bare: true, repository: true, baseBranch: "main" } };
-    const writes: { argv: string[]; cwd: string }[] = [], phases: string[] = [];
-    const fallback = git();
-    const gitRun: Run = async (argv, options) => {
-      if (argv[0] === "worktree") return { code: 0, stdout: "worktree /primary\0HEAD ignored\0branch refs/heads/main\0\0", stderr: "" };
-      if (argv.includes("--absolute-git-dir") || argv.includes("--git-common-dir")) return { code: 0, stdout: dir, stderr: "" };
-      if (argv.includes("--show-prefix")) return { code: 0, stdout: "", stderr: "" };
-      if (argv[0] === "rev-parse" && argv.at(-1) === "HEAD" && !argv.includes("--abbrev-ref")) return { code: 0, stdout: options.cwd === "/primary" ? base : head, stderr: "" };
-      if (argv[0] === "symbolic-ref") return { code: 0, stdout: "refs/heads/" + (options.cwd === "/primary" ? primaryBranch : "build/parser"), stderr: "" };
-      if (argv[0] === "status" && options.cwd === "/primary") return { code: 0, stdout: tracked, stderr: "" };
-      if (["rebase", "merge"].includes(argv[0]!)) writes.push({ argv: [...argv], cwd: options.cwd });
-      return fallback(argv, options);
-    };
-    const journal = createJournal({ context: ctx, git: gitRun, fleet: () => fleet });
-    const exit = createExit({ context: ctx, git: gitRun, journal, fleet: () => fleet,
-      save() {}, changed() { phases.push(exit.state().phase); } });
+    const repo = join(dir, "primary"), worktree = join(dir, "build");
+    mkdirSync(repo);
+    const run = gitRun();
+    const git = (cwd: string, ...args: string[]) => checked(run, args, cwd);
+    const writes: string[][] = [], phases: string[] = [];
     try {
-      await exit.summary();
-      expect(exit.options().find(option => option.choice === "land")?.needsReason).toBeUndefined();
-      if (!succeeds) {
-        expect(await exit.prepare()).toBeUndefined();
-        expect(exit.preparationDetail()).toMatch(primaryBranch === "other" ? /main/ : /changes/);
+      await git(repo, "init", "-b", "main");
+      await git(repo, "config", "user.name", "Build Fixture");
+      await git(repo, "config", "user.email", "build@example.test");
+      writeFileSync(join(repo, "tracked"), "base");
+      writeFileSync(join(repo, ".gitignore"), "ignored\n");
+      await git(repo, "add", "tracked", ".gitignore");
+      await git(repo, "commit", "-m", "base");
+      const base = (await git(repo, "rev-parse", "HEAD")).trim();
+      await git(repo, "worktree", "add", "-b", "build/parser", worktree);
+      writeFileSync(join(worktree, "ignored"), "candidate");
+      await git(worktree, "add", "-f", "ignored");
+      await git(worktree, "commit", "-m", "candidate");
+      const head = (await git(worktree, "rev-parse", "HEAD")).trim();
+      if (variant === "switched") await git(repo, "switch", "-c", "other");
+      if (variant === "dirty") writeFileSync(join(repo, "tracked"), "local work");
+      if (variant === "ignored obstruction") writeFileSync(join(repo, "ignored"), "local ignored work");
+      if (variant === "sparse") await git(repo, "sparse-checkout", "init", "--cone");
+      const original = context("review");
+      const ctx: BuildContext = { ...original, dir: join(dir, "session"), session: { ...original.session,
+        repoRoot: repo, worktree, base, workspaceRoot: undefined, project: undefined, bare: true, repository: true, baseBranch: "main" } };
+      const gitRun: Run = (argv, options) => {
+        if (["rebase", "merge"].includes(argv[0]!)) writes.push([...argv]);
+        return run(argv, options);
+      };
+      const journal = createJournal({ context: ctx, git: gitRun, fleet: () => fleet });
+      const exit = createExit({ context: ctx, git: gitRun, journal, fleet: () => fleet,
+        save() {}, changed() { phases.push(exit.state().phase); } });
+      try {
+        const candidate = await exit.prepare();
+        if (variant !== "ready") {
+          expect(candidate).toBeUndefined();
+          expect(exit.preparationDetail()).toMatch({ switched: /main/, dirty: /changes/,
+            "ignored obstruction": /untracked or ignored obstruction/, sparse: /sparse checkout/ }[variant]);
+          if (variant === "ignored obstruction") expect(readFileSync(join(repo, "ignored"), "utf8")).toBe("local ignored work");
+          expect((await git(repo, "rev-parse", "refs/heads/main")).trim()).toBe(base);
+        } else {
+          exit.open(candidate!);
+          const authorization = exit.options().find(option => option.choice === "land")?.authorization;
+          const result = await exit.choose("land", { authorization });
+          expect(result.phase).toBe("landed");
+          expect((await git(repo, "rev-parse", "refs/heads/main")).trim()).toBe(head);
+          expect(result.record).toMatchObject({ landed: head, baseBranch: "main" });
+          expect(result.record?.gateAttempt).toBeUndefined();
+        }
+        expect(phases).not.toContain("verifying");
         expect(writes).toEqual([]);
-        continue;
-      }
-      const candidate = await exit.prepare();
-      exit.open(candidate!);
-      const authorization = exit.options().find(option => option.choice === "land")?.authorization;
-      const at = writes.length;
-      const result = await exit.choose("land", { authorization });
-      expect(result.phase).toBe("landed");
-      expect(writes.slice(at)).toEqual([{ argv: ["merge", "--ff-only", "--no-autostash", "--no-overwrite-ignore", head], cwd: "/primary" }]);
-      expect(phases).not.toContain("verifying");
-      expect(result.record).toMatchObject({ landed: head, baseBranch: "main" });
-      expect(result.record?.gateAttempt).toBeUndefined();
-    } finally { exit.close(); rmSync(dir, { recursive: true, force: true }); }
+      } finally { exit.close(); }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   }
 });
 

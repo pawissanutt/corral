@@ -2,6 +2,7 @@
 import { lstatSync } from "node:fs";
 import { join } from "node:path";
 import { checked, type Run } from "./corral-cli.ts";
+import { checkCheckoutSupport, checkLandingEnvironment } from "./fast-forward.ts";
 import { buildProject, gateInputFingerprint } from "./gate.ts";
 import { landingBaseFromRef, landingBaseLookups } from "./git.ts";
 import type { BuildContext, LandCandidate } from "./types.ts";
@@ -131,6 +132,7 @@ export function baseMoved(target: LandingTarget, tip: string, actual: string): C
 /** Return the integration checkout, if any. Bare build sessions only land into a clean primary checkout. */
 export async function checkDestination(git: Run, context: BuildContext, target: LandingTarget, base: string, head?: string): Promise<string | undefined> {
   const { session } = context;
+  checkLandingEnvironment();
   const output = await checked(git, ["worktree", "list", "--porcelain", "-z"], session.worktree);
   const entries = output.split("\0\0").filter(Boolean).map(entry => entry.split("\0"));
   if (!entries.length || entries.some(entry => !entry[0]?.startsWith("worktree "))) throw new Error("Cannot locate the repository's worktrees.");
@@ -162,10 +164,45 @@ export async function checkDestination(git: Run, context: BuildContext, target: 
   }
   const actual = await commit(git, "HEAD", checkout);
   if (actual !== base) throw baseMoved(target, base, actual);
+  await checkCheckoutSupport(git, checkout);
+  if (head) await checkUntracked(git, checkout, base, head);
   return checkout;
 }
 
 const paths = (text: string) => text.split("\0").filter(Boolean);
+
+async function checkUntracked(git: Run, cwd: string, base: string, head: string): Promise<void> {
+  const incoming = new Set(paths(await checked(git, ["diff", "--name-only", "-z", "--no-renames", "--diff-filter=AMT", `${base}..${head}`, "--"], cwd)));
+  if (!incoming.size) return;
+  // Deliberately omit --exclude-standard (ignored files are still user data).
+  // Collapse untracked directories so e.g. a large node_modules stays bounded.
+  const others = paths(await checked(git, ["ls-files", "--others", "--directory", "--no-empty-directory", "-z"], cwd));
+  const files = new Set(others.filter(path => !path.endsWith("/")));
+  const dirs = new Set(others.filter(path => path.endsWith("/")).map(path => path.slice(0, -1)));
+  const obstruction = (path: string) => { throw new Error(`The landing checkout at ${cwd} has an untracked or ignored obstruction at ${JSON.stringify(path)}. Move it before landing.`); };
+  for (const path of incoming) {
+    const parts = path.split("/");
+    if (parts.some(part => !part || part === "." || part === ".." || part.includes("\uFFFD"))) throw new Error("Cannot safely check an incoming Git path for untracked obstructions.");
+    let prefix = "", collapsed = false;
+    for (const part of parts) {
+      prefix += (prefix ? "/" : "") + part;
+      if (files.has(prefix) || prefix === path && dirs.has(prefix)) obstruction(prefix);
+      // Git reports only the containing directory when it collapses an untracked
+      // subtree. An unrelated file under it is fine; an existing incoming file
+      // (or non-directory ancestor) would be overwritten.
+      if (collapsed) {
+        try {
+          if (!lstatSync(join(cwd, prefix)).isDirectory() || prefix === path) obstruction(prefix);
+        } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") break; throw error; }
+      }
+      collapsed ||= dirs.has(prefix);
+    }
+  }
+  // Also reject replacing a directory which contains untracked files or directories.
+  for (const path of others) for (let end = path.indexOf("/"); end !== -1; end = path.indexOf("/", end + 1)) {
+    if (incoming.has(path.slice(0, end))) obstruction(path);
+  }
+}
 
 /** Rebase only onto the captured tip, and abort only a rebase started by this invocation. */
 export async function rebaseCandidate(git: Run, cwd: string, base: string, source: string): Promise<void> {
