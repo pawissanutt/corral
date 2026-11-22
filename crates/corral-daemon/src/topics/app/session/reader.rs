@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, Weak},
     time::{Duration, Instant},
@@ -21,7 +21,11 @@ use super::{
     buffer::{Buffer, Entry, Watches},
     lock,
 };
-use crate::{sessions::forward::connect, state::Shared, views::json_len as json_bytes};
+use crate::{
+    sessions::{children, forward::connect},
+    state::Shared,
+    views::json_len as json_bytes,
+};
 
 const LIVE_IO_TIMEOUT: Duration = Duration::from_millis(250);
 const LIVE_HOST_EVENTS: usize = 512;
@@ -141,7 +145,7 @@ impl LiveReader {
                         || !matches!(resolved.session, Some(SessionRef::Pi { .. }))
                         || live.as_ref().is_err_and(crate::builds::disconnected)) =>
             {
-                let Some(fleet) = crate::sessions::children::fleet(&resolved) else {
+                let Some(fleet) = children::fleet(&resolved) else {
                     return live;
                 };
                 self.replay = true;
@@ -177,7 +181,9 @@ impl LiveReader {
         };
         let lifecycle = request(socket, "events_since", requested.lifecycle)?;
         let live = request(socket, "live_since", requested.live)?;
-        let page = self.advance(requested, lifecycle, live, rebound)?;
+        let page = self.advance(requested, lifecycle, live, rebound, || {
+            children::fleet(resolved)
+        })?;
         self.socket = Some(socket.clone());
         Ok(page)
     }
@@ -188,6 +194,7 @@ impl LiveReader {
         lifecycle: RingPage,
         live: HostPage,
         rebound: bool,
+        retained_fleet: impl FnOnce() -> Option<SessionFleet>,
     ) -> Result<LivePage> {
         let restarted = rebound
             || lifecycle.last < self.cursors.lifecycle
@@ -210,7 +217,7 @@ impl LiveReader {
                 next: 0,
                 more: live.ring.last != 0,
                 gap: None,
-                fleet: None,
+                fleet: retained_fleet().map(bound_fleet).transpose()?,
                 state: None,
             });
         }
@@ -245,8 +252,18 @@ impl LiveReader {
             prior == live.ring.next && live.more == (prior < live.ring.last),
             "invalid Pi live page end"
         );
-        let fleet = live.fleet.map(bound_fleet).transpose()?;
         let state = live.state.map(bound_state).transpose()?;
+        // Only load the bounded index on initial/replayed pages and fleet replacements,
+        // including an explicit empty replacement. Idle polls leave the buffer alone.
+        let retained = if self.socket.is_none() || self.replay || restarted || live.fleet.is_some()
+        {
+            retained_fleet()
+        } else {
+            None
+        };
+        let fleet = merge_fleet(live.fleet, retained)
+            .map(bound_fleet)
+            .transpose()?;
         let gap = live.ring.gap.or_else(|| {
             // A lifecycle-ring gap invalidates the overlay too, but its missing
             // count and resume point have no meaning in the live sequence space.
@@ -321,6 +338,27 @@ pub(super) fn event_bytes(event: &SessionLiveEvent) -> Result<usize> {
     let bytes = json_bytes(event)?;
     ensure!(bytes <= LIVE_EVENT_BYTES, "live event exceeds byte bound");
     Ok(bytes)
+}
+
+fn merge_fleet(live: Option<SessionFleet>, retained: Option<SessionFleet>) -> Option<SessionFleet> {
+    let Some(mut live) = live else {
+        return retained;
+    };
+    if let Some(mut retained) = retained {
+        let live_ids: HashSet<_> = live
+            .children
+            .iter()
+            .map(|child| child.id.as_str())
+            .collect();
+        retained
+            .children
+            .retain(|child| !live_ids.contains(child.id.as_str()));
+        // The byte limiter drops older rows from the front. Don't evict a live row
+        // to show a retained one; live mail and parallelism remain authoritative.
+        retained.children.append(&mut live.children);
+        live.children = retained.children;
+    }
+    Some(live)
 }
 
 pub(super) fn nonempty_fleet(fleet: &SessionFleet) -> bool {

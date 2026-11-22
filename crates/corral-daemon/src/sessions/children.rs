@@ -8,7 +8,7 @@ use anyhow::{Result, ensure};
 use corral_protocol::{
     app::SESSION_PART_MAX,
     detail::SessionChildDetail,
-    subscription::{LIVE_FLEET_BYTES, SessionFleet},
+    subscription::{LIVE_FLEET_BYTES, SessionChild, SessionFleet},
 };
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::json;
@@ -115,15 +115,25 @@ pub(crate) fn detail(parent: &Session, child: &str) -> Result<SessionChildDetail
 }
 
 pub(crate) fn fleet(parent: &Session) -> Option<SessionFleet> {
+    #[derive(Deserialize)]
+    struct Roster {
+        children: Vec<SessionChild>,
+    }
     let dir = parent.dir.as_ref()?.canonicalize().ok()?;
-    let mut fleet: SessionFleet = read(&dir, &dir.join(DIRECTORY).join("fleet"), LIVE_FLEET_BYTES)?;
-    fleet.children.retain(|child| valid_child_id(&child.id));
-    for child in &mut fleet.children {
+    let Roster { mut children } = read(&dir, &dir.join(DIRECTORY).join("fleet"), LIVE_FLEET_BYTES)?;
+    children.retain(|child| valid_child_id(&child.id));
+    for child in &mut children {
         settle(&mut child.state, &mut child.error);
         child.steerable = false;
         child.activity = None;
         child.pending_model = None;
         child.question = None;
     }
-    (!fleet.children.is_empty()).then_some(fleet)
+    // Retained rows are for readback only; mail and concurrency settings come from the host.
+    (!children.is_empty()).then_some(SessionFleet {
+        children,
+        messages: Vec::new(),
+        messages_total: 0,
+        max_parallel: 0,
+    })
 }

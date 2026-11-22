@@ -513,6 +513,7 @@ fn ring_gaps_reconcile_in_live_sequence_space() {
             lifecycle(4, 4, None),
             host(1, 1, &[1], None),
             false,
+            || None,
         )
         .unwrap();
     lock(&entry).publish(page);
@@ -528,6 +529,7 @@ fn ring_gaps_reconcile_in_live_sequence_space() {
             lifecycle(9, 9, Some(gap(4, 9))),
             host(1, 1, &[], None),
             false,
+            || None,
         )
         .unwrap();
     lock(&entry).publish(page);
@@ -546,6 +548,7 @@ fn ring_gaps_reconcile_in_live_sequence_space() {
             lifecycle(9, 9, None),
             host(5, 5, &[5], Some(gap(1, 5))),
             false,
+            || None,
         )
         .unwrap();
     lock(&entry).publish(page);
@@ -569,6 +572,7 @@ fn regression_in_either_host_ring_resets_both_cursors() {
                 lifecycle(3, 3, None),
                 host(2, 2, &[1, 2], None),
                 false,
+                || None,
             )
             .unwrap();
         assert_eq!(first.generation, Some(1));
@@ -579,6 +583,7 @@ fn regression_in_either_host_ring_resets_both_cursors() {
                 lifecycle(if lifecycle_regressed { 1 } else { 3 }, 3, None),
                 host(if lifecycle_regressed { 2 } else { 1 }, 2, &[], None),
                 false,
+                || None,
             )
             .unwrap();
         assert_eq!(page.generation, Some(2));
@@ -591,6 +596,7 @@ fn regression_in_either_host_ring_resets_both_cursors() {
                 lifecycle(3, 3, None),
                 host(2, 2, &[1, 2], None),
                 false,
+                || None,
             )
             .unwrap();
         assert_eq!(replayed.events[0].0.generation, 2);
@@ -621,7 +627,13 @@ fn state_is_sent_once_per_change_and_again_after_a_gap() {
         ..SessionState::default()
     });
     let initial = LiveReader::default()
-        .advance(Cursors::default(), lifecycle(0, 0, None), first, false)
+        .advance(
+            Cursors::default(),
+            lifecycle(0, 0, None),
+            first,
+            false,
+            || None,
+        )
         .unwrap();
     let first = initial.state.as_ref().unwrap().0.clone();
     lock(&entry).publish(initial);

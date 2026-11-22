@@ -58,7 +58,13 @@ fn argument<'a>(args: &[&'a OsStr], flag: &str) -> Option<&'a OsStr> {
 }
 
 fn launch_fixture() -> (Fixture, Placement) {
-    let placement = Placement::new(|command, dir| {
+    launch_fixture_with_resume(|script| script)
+}
+
+fn launch_fixture_with_resume(
+    on_resume: impl Fn(Script) -> Script + Send + Sync + 'static,
+) -> (Fixture, Placement) {
+    let placement = Placement::new(move |command, dir| {
         let args: Vec<_> = command.get_args().collect();
         assert_eq!(command.get_program(), "corral-pi");
         assert_eq!(args[0], "build");
@@ -78,7 +84,8 @@ fn launch_fixture() -> (Fixture, Placement) {
         assert_eq!(argument(&args, "--data-dir"), Some(data_root.as_os_str()));
         assert!(Path::new(argument(&args, "--corral").unwrap()).is_absolute());
         let id = dir.file_name().unwrap();
-        if dir.join("session.json").is_file() {
+        let resuming = dir.join("session.json").is_file();
+        if resuming {
             assert_eq!(argument(&args, "--resume"), Some(id));
             assert!(argument(&args, "--id").is_none());
         } else {
@@ -104,7 +111,7 @@ fn launch_fixture() -> (Fixture, Placement) {
             id.to_str().unwrap().into(),
             "build",
             dir,
-            script,
+            if resuming { on_resume(script) } else { script },
         ))
     });
     let runner = placement.clone();
