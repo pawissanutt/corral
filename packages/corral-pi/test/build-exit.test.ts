@@ -89,7 +89,7 @@ function child(id = "parser", kind: ChildSnapshot["kind"] = "slice"): ChildSnaps
 }
 
 describe("build exits", () => {
-  test("preparation rebases first; only the owner advances the base to the exact gated commit", async () => {
+  for (const lateMove of [false, true]) test(lateMove ? "a source commit during destination lock setup invalidates Land before any checkout update" : "preparation rebases first; only the owner advances the base to the exact gated commit", async () => {
     const dir = mkdtempSync(join(tmpdir(), "build-local-land-"));
     const repo = join(dir, "repo");
     const run = gitRun();
@@ -114,7 +114,15 @@ describe("build exits", () => {
       writeFileSync(join(dir, ".corral-next", "corral.toml"), `[projects.app]\npath = "repo"\nbase = "release"\ngate = ${JSON.stringify(commands)}\nenv = { BUILD_WORKTREE = ${JSON.stringify(checkout.worktree)} }\n`);
       const journal = createJournal({ context: ctx, git: run, fleet: () => fleet });
       const records: ExitProgressRecord[] = [];
-      const control = createExit({ context: ctx, git: run, journal, fleet: () => fleet,
+      let moved = false;
+      const landingGit: Run = async (args, options) => {
+        if (lateMove && !moved && options.cwd === repo && args.includes("--show-object-format")) {
+          moved = true;
+          await git(checkout.worktree, "commit", "--allow-empty", "-m", "changed after approval");
+        }
+        return run(args, options);
+      };
+      const control = createExit({ context: ctx, git: landingGit, journal, fleet: () => fleet,
         save: record => records.push(record), changed() {} });
       const prepared = await control.prepare();
       expect(prepared?.base).toBe(baseTip);
@@ -125,6 +133,13 @@ describe("build exits", () => {
       control.open(prepared!);
       const option = control.options().find(option => option.choice === "land")!;
       const result = await control.choose("land", { authorization: option.authorization });
+      if (lateMove) {
+        expect(moved).toBeTrue();
+        expect(result.phase).toBe("failed");
+        expect((await git(repo, "rev-parse", "release")).trim()).toBe(baseTip);
+        expect(existsSync(join(repo, "code.txt"))).toBeFalse();
+        return;
+      }
       expect(result.phase).toBe("landed");
       const landed = (await git(repo, "rev-parse", "release")).trim();
       expect(landed).not.toBe(before);

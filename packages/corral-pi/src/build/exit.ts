@@ -366,6 +366,10 @@ export function createExit(options: {
         let receipt: ReturnType<typeof authorize>;
         try {
           await fastForward(git, { source: cwd, checkout, ref: target.ref, ...candidate, async beforeWrite() {
+            // Destination locks and index staging can take time. Recheck the source
+            // against the offer here without reacquiring any destination locks.
+            await checkSource(git, context);
+            await checkIdentity(pin);
             if (!checkout && await checkDestination(git, context, target, candidate.base, candidate.head)) {
               throw new Error(`The base ${target.name} is now checked out. ${PREPARATION_NEEDED}`);
             }
