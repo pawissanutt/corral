@@ -133,6 +133,24 @@ test("an approval is durable only with its kickoff, and holds the mode until the
   expect(journal).toEqual(["Approved plan: Same plan (revision 1, context kept)"]);
 });
 
+test("feedback the session does not take leaves the review open for it", async () => {
+  const refusing = await planning({ kickoff: "refused" });
+  refusing.plan.submit();
+  const review = refusing.plan.review;
+  // The answer is refused, so whoever holds the owner's text keeps it.
+  await expect(Promise.resolve(refusing.plan.choose("revise", "Use a flag parser"))).rejects.toThrow("did not take the feedback");
+  expect(refusing.plan.review).toBe(review);
+
+  // Feedback the session takes withdraws the review when it reaches the model, like any owner message.
+  const taking = await planning();
+  taking.plan.submit();
+  expect(await taking.plan.choose("revise", "Use a flag parser")).toBe("delivered");
+  expect(taking.sent[0]?.text).toContain("Use a flag parser");
+  expect(taking.plan.phase).toBe("review");
+  taking.plan.ownerSpoke();
+  expect(taking.plan.phase).toBe("planning");
+});
+
 test("an earlier turn settling during the kickoff's admission does not lose the approval's record", async () => {
   const { plan, journal } = await planning({ kickoff: "after-a-settle" });
   plan.submit();

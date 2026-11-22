@@ -34,6 +34,7 @@ export function corralPromptRow(text: string): NoticeRow | undefined {
   const review = REVIEWER.exec(text);
   if (review) return { state: "event", words: `corral · ${review[2]} run ${review[3]} review · ${FOLLOWS(review[1]!)}` };
   const plan = PLAN_APPROVED.exec(text);
-  if (plan) return { state: "ok", words: `corral · plan approved · ${plan[1]} · revision ${plan[2]} · the agent executes it` };
+  // The row names the message, not the session's state: only the host's own tagged kickoff approves a plan.
+  if (plan) return { state: "event", words: `corral · plan kickoff · ${plan[1]} · revision ${plan[2]}` };
   return undefined;
 }

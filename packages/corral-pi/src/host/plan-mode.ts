@@ -376,7 +376,7 @@ export class PlanMode {
     };
   }
 
-  private answer({ options, text }: CardAnswer): AnswerStatus {
+  private answer({ options, text }: CardAnswer): AnswerStatus | Promise<AnswerStatus> {
     const choice = options[0];
     // Feedback typed without picking an option can only mean the plan is not approved yet.
     if (choice === undefined && text?.trim()) return this.choose("revise", text);
@@ -385,16 +385,13 @@ export class PlanMode {
   }
 
   /** The owner's review choice, from the terminal or a card answer. Refused while it could not be carried out. */
-  choose(choice: PlanChoice, text?: string): AnswerStatus {
+  choose(choice: PlanChoice, text?: string): AnswerStatus | Promise<AnswerStatus> {
     if (this.phase !== "review") return "missing";
     if (this.pending) return "started";
     // Neither the plan nor the feedback could start a turn now, and the review would be gone.
     const blocked = this.host.blocked();
     if (blocked) throw new BridgeRefusal("plan_mode_unavailable", blocked);
-    if (choice === "revise") {
-      void this.revise(text);
-      return "delivered";
-    }
+    if (choice === "revise") return this.revise(text);
     void this.execute(EXECUTE[choice]!, text);
     return "started";
   }
@@ -408,17 +405,23 @@ export class PlanMode {
     if (phase === "review" && !this.pending) this.write({ phase: "planning", revision, title });
   }
 
-  private async revise(feedback?: string): Promise<void> {
-    const { revision, title } = this.record;
-    this.write({ phase: "planning", revision, title });
+  /**
+   * Keep planning. Feedback is the owner's message: like any owner message it withdraws the review when it
+   * reaches the model, so feedback the session does not take leaves the review, and the owner's text, as they were.
+   */
+  private revise(feedback?: string): AnswerStatus | Promise<AnswerStatus> {
     const text = feedback?.trim();
     if (!text) {
+      const { revision, title } = this.record;
+      this.write({ phase: "planning", revision, title });
       this.host.note("Back to planning. Tell the agent what to change.");
-      return;
+      return "delivered";
     }
-    const sent = await this.host.submit("[corral plan review]\nThe owner reviewed the plan and wants changes before approving:\n"
-      + `${text}\n\nRevise \`${this.path}\`, then call plan_submit again.`, "owner");
-    if (!sent) this.host.note("The plan feedback was not delivered; send it again.", "error");
+    return this.host.submit("[corral plan review]\nThe owner reviewed the plan and wants changes before approving:\n"
+      + `${text}\n\nRevise \`${this.path}\`, then call plan_submit again.`, "owner").then(taken => {
+      if (!taken) throw new BridgeRefusal("plan_mode_unavailable", "The session did not take the feedback; the review is still open");
+      return "delivered";
+    });
   }
 
   /**

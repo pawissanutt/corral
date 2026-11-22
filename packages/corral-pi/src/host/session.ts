@@ -1112,7 +1112,7 @@ export class HostSession {
               const review = plan.review;
               const picked = await ctx.ui.select(result.text, PLAN_OPTIONS.map(option => option.label));
               const option = PLAN_OPTIONS.find(candidate => candidate.label === picked);
-              if (option && plan.review === review) plan.choose(option.id);
+              if (option && plan.review === review) await plan.choose(option.id);
             }
           } catch (error) {
             this.notice(error instanceof Error ? error.message : String(error), "error", ctx.ui);
