@@ -63,6 +63,22 @@ Three overlays re-colour the same geometry:
 
 Activity is language-independent, so it is complete even for a project in a language no provider reads.
 
+**Phone and terminal form (decided for T-2022, before building it).** Desktop and web draw the map on a
+canvas, as Timeline does. The phone and the terminal get a **tree of the same nodes with their edges
+listed**, not a smaller drawing:
+
+- the level's nodes as rows, in the map's order (graph nodes by layer, then the "no reference found"
+  band), each row with its name, kind and the overlay's figure in words and a bar of Cells or points;
+- under the selected row, its edges as lines (`→ corral-types  declared · 41 refs`, `← corral  not
+  declared · 3 refs`, `→ git  spawns · 4 sites`), each pressable to select the other end;
+- the same breadcrumb, Escape, overlay switch, filter, inspector and provenance line as the canvas.
+
+Why: a terminal draws in Cells, where diagonal edges between thirty boxes cannot be followed and box
+widths would truncate most names; a phone is about 390 pt wide, where the layered drawing either
+shrinks text below legibility or scrolls in two directions. The edge kinds, counts and drill-down are
+the information, and a list keeps every name whole and every edge readable on both forms, with one row
+model shared by both.
+
 ### 3.2 Activity › System › Lenses
 
 A lens is a saved, project-specific diagram of behaviour that structure cannot show: a status lifecycle, a
