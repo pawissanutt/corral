@@ -115,10 +115,11 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
     let initial = next_system(&mut topic, |row| {
         row.status == SystemStatus::Ready
             && row.head.as_deref() == Some(submitted.base_sha.as_str())
-            && row.provided == ["files"]
+            && row.snapshot_provided.as_deref() == Some(&[])
     });
     assert_eq!(initial.extension.as_deref(), Some(EXTENSION));
     assert_eq!(initial.last_extension_error, None);
+    assert_eq!(initial.review_provided, None);
     let root = client.ok::<DetailReply>(DETAIL_GET, &map);
     let Some(DetailBody::SystemMap(root)) = root.body else {
         panic!("expected a system map: {root:?}");
@@ -211,6 +212,8 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
         }
         false
     });
+    assert_eq!(enriched.snapshot_provided, Some(vec![]));
+    assert_eq!(enriched.review_provided, Some(vec!["changes".into()]));
     let (etag, after) = after.unwrap();
     assert_ne!(etag, before.etag);
     assert_eq!(after.task, task);
@@ -264,7 +267,8 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
             && row.last_extension_error.is_some()
     });
     assert!(landed.revision > enriched.revision);
-    assert!(landed.provided.is_empty());
+    assert_eq!(landed.snapshot_provided, None);
+    assert_eq!(landed.review_provided, Some(vec!["changes".into()]));
     let current = client.ok::<DetailReply>(DETAIL_GET, map);
     let Some(DetailBody::SystemMap(current)) = current.body else {
         panic!("expected built-in map after provider failure: {current:?}");
@@ -404,7 +408,7 @@ ROWS
         if [ -f ../overflow-facts ]; then
             cat ../overflow-facts
         else
-            printf '%s\n' '{"type":"done","provided":["files"],"skipped":{},"omitted":{}}'
+            printf '%s\n' '{"type":"done","provided":[],"skipped":{},"omitted":{}}'
         fi
         ;;
 esac

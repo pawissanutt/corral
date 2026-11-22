@@ -17,6 +17,7 @@ mod syntax;
 
 pub use cache::FactsCache;
 pub use model::*;
+pub use structure::is_manifest;
 
 use std::path::Path;
 

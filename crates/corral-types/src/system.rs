@@ -12,8 +12,12 @@ pub struct SystemRow {
     pub status: SystemStatus,
     /// Name of the configured extension, if any.
     pub extension: Option<String>,
-    /// Snapshot categories the extension answered, including empty results.
-    pub provided: Vec<String>,
+    /// Categories supplied by the current head's `facts` snapshot answer.
+    /// `None` means no successful answer; `Some([])` is an empty answer.
+    pub snapshot_provided: Option<Vec<String>>,
+    /// Categories supplied by the project's latest `facts` review answer.
+    /// `None` means no successful answer; `Some([])` is an empty answer.
+    pub review_provided: Option<Vec<String>>,
     pub last_extension_error: Option<String>,
     pub error: Option<String>,
     /// Changes when a detail for this project changes; use conditional detail reads to refresh.
@@ -190,6 +194,10 @@ pub enum SystemReviewRow {
         added: u64,
         removed: u64,
         binary: bool,
+    },
+    /// A changed package or workspace manifest, independent of dependency deltas.
+    Manifest {
+        path: String,
     },
     Dependency {
         before: Option<DependencyFact>,

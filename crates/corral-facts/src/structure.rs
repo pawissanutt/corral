@@ -238,7 +238,8 @@ fn module(path: &str, container: &str) -> ModuleId {
     }
 }
 
-fn is_manifest(path: &str) -> bool {
+/// Whether this repository-relative path names a manifest the built-in provider recognizes.
+pub fn is_manifest(path: &str) -> bool {
     matches!(
         path.rsplit('/').next(),
         Some("Cargo.toml" | "package.json" | "pyproject.toml")

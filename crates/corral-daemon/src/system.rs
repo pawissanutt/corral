@@ -85,6 +85,15 @@ struct Cache {
     reload_required: bool,
     maps: BTreeMap<String, MapEntry>,
     reviews: BTreeMap<String, ReviewEntry>,
+    // Keep the latest answer even if a review was the project's first request
+    // or that particular review was later evicted from the detail cache.
+    extension_answers: BTreeMap<String, ExtensionAnswers>,
+}
+
+#[derive(Default)]
+struct ExtensionAnswers {
+    review_provided: Option<Vec<String>>,
+    last_error: Option<String>,
 }
 
 struct Configuration {
@@ -104,7 +113,6 @@ struct MapEntry {
     /// Set when Git has resolved the base (including an inferred branch).
     branch: Option<String>,
     row_revision: u64,
-    last_extension_error: Option<String>,
 }
 
 struct ReviewEntry {
@@ -275,27 +283,26 @@ impl System {
         Ok(cache
             .maps
             .iter()
-            .map(|(project, entry)| SystemRow {
-                project: project.clone(),
-                head: entry.snapshot.head.clone(),
-                status: if entry.snapshot.building {
-                    SystemStatus::Building
-                } else {
-                    SystemStatus::Ready
-                },
-                extension: config
-                    .source
-                    .extension_for_slot(project, Slot::Facts)
-                    .map(|(name, _)| name.to_owned()),
-                provided: entry
-                    .snapshot
-                    .provider
-                    .as_ref()
-                    .map(|report| report.coverage.provided.clone())
-                    .unwrap_or_default(),
-                last_extension_error: entry.last_extension_error.clone(),
-                error: entry.snapshot.error.clone(),
-                revision: entry.row_revision,
+            .map(|(project, entry)| {
+                let answers = cache.extension_answers.get(project);
+                SystemRow {
+                    project: project.clone(),
+                    head: entry.snapshot.head.clone(),
+                    status: if entry.snapshot.building {
+                        SystemStatus::Building
+                    } else {
+                        SystemStatus::Ready
+                    },
+                    extension: config
+                        .source
+                        .extension_for_slot(project, Slot::Facts)
+                        .map(|(name, _)| name.to_owned()),
+                    snapshot_provided: entry.snapshot.provider.as_deref().and_then(provided),
+                    review_provided: answers.and_then(|answer| answer.review_provided.clone()),
+                    last_extension_error: answers.and_then(|answer| answer.last_error.clone()),
+                    error: entry.snapshot.error.clone(),
+                    revision: entry.row_revision,
+                }
             })
             .collect())
     }
@@ -413,6 +420,7 @@ impl Cache {
             }
         }
         self.configuration = Some(Arc::new(config));
+        self.extension_answers.clear();
         self.reload_required = false;
         (maps, reviews)
     }
@@ -430,7 +438,6 @@ impl Cache {
                 pending: Some(Stage::Builtin),
                 branch: None,
                 row_revision: revision,
-                last_extension_error: None,
             },
         );
         true
@@ -450,9 +457,14 @@ impl Cache {
     fn review_row(&mut self, project: &str, revision: u64, provider: Option<&FactsReport>) {
         if let Some(entry) = self.maps.get_mut(project) {
             entry.row_revision = revision;
-            if let Some(provider) = provider {
-                entry.last_extension_error.clone_from(&provider.error);
-            }
+        }
+        if let Some(provider) = provider {
+            let answers = self
+                .extension_answers
+                .entry(project.to_owned())
+                .or_default();
+            answers.review_provided = provided(provider);
+            answers.last_error.clone_from(&provider.error);
         }
     }
 }
@@ -495,6 +507,13 @@ fn submitted(root: &Path, task: &str) -> Result<Submission> {
             legacy,
         })
     })
+}
+
+fn provided(report: &FactsReport) -> Option<Vec<String>> {
+    report
+        .error
+        .is_none()
+        .then(|| report.coverage.provided.clone())
 }
 
 fn bounded_error(mut text: String) -> String {

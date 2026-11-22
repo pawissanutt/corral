@@ -404,6 +404,22 @@ fn review_uses_head_ownership_base_for_deletes_and_builtin_edge_changes() {
 }
 
 #[test]
+fn review_reports_a_manifest_edit_with_no_dependency_or_edge_delta() {
+    let code = module("app", "");
+    let before = tree(vec![file("app/Cargo.toml", &code, 4)], &["app"]);
+    let delta = delta(vec![change("app/Cargo.toml", 1, 1)]);
+    // The manifest's package version changed, not its dependency declarations.
+    let (categories, rows) = review(&delta, &before, &before, None);
+    assert_eq!(
+        summary(&categories, Category::PackageDependencies),
+        (true, 1)
+    );
+    assert!(rows.contains(&Review::Manifest {
+        path: "app/Cargo.toml".into()
+    }));
+}
+
+#[test]
 fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
     let a = module("a", "code");
     let b = module("b", "code");

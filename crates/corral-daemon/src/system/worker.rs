@@ -225,8 +225,13 @@ impl Worker {
             entry.snapshot.revision = revision;
             entry.snapshot.facts = Some(Arc::clone(&enriched));
             entry.snapshot.provider = Some(Arc::clone(&report));
-            entry.last_extension_error.clone_from(&report.error);
             entry.row_revision = revision;
+            cache
+                .extension_answers
+                .entry(project.to_owned())
+                .or_default()
+                .last_error
+                .clone_from(&report.error);
             if report.error.is_none() {
                 for review in cache.reviews.values_mut().filter(|review| {
                     review.submission.project == project

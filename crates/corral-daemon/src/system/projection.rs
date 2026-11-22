@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use corral_facts::{
     Activity, ActivityCommit, FileFact, ModuleId, ProjectDelta, ProjectFacts, ReadStatus,
-    TreeFacts,
+    TreeFacts, is_manifest,
     provider::{ChangeKind, ChangedFact},
 };
 use corral_types::{
@@ -340,6 +340,15 @@ pub(crate) fn review(
     }
     let mut review = ReviewRows::new(footprint.into_rows());
 
+    review.rows.extend(
+        delta
+            .files
+            .iter()
+            .filter(|file| is_manifest(&file.path))
+            .map(|file| Row::Manifest {
+                path: file.path.clone(),
+            }),
+    );
     review
         .rows
         .extend(delta.dependencies.iter().map(|dep| Row::Dependency {
