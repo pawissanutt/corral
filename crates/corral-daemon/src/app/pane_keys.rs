@@ -29,7 +29,10 @@ mod tests {
 
     #[test]
     fn text_only_does_not_submit_and_explicit_keys_follow_text() {
-        let root = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let root = tempfile::Builder::new()
+            .prefix(".corral-test-")
+            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+            .unwrap();
         let bin = root.path().join("herdr");
         fs::write(
             &bin,

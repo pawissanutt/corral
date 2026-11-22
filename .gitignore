@@ -5,3 +5,5 @@ __pycache__/
 /.evidence/
 /.senpi/
 /.worktrees/
+# Disposable crate-local Rust test fixtures.
+/crates/*/.corral-test-*/

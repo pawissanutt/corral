@@ -13,7 +13,10 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
-        let temp = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+        let temp = tempfile::Builder::new()
+            .prefix(".corral-test-")
+            .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+            .unwrap();
         Engine::init(temp.path(), None).unwrap();
         let runner = FakeRunner::new();
         let shared = Shared::new(

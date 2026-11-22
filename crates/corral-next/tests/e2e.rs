@@ -21,7 +21,7 @@ struct Workspace {
 impl Workspace {
     fn new() -> Self {
         let fixture = tempfile::Builder::new()
-            .prefix("corral cli ")
+            .prefix(".corral-test-cli ")
             .tempdir_in(env!("CARGO_MANIFEST_DIR"))
             .unwrap();
         let caller = fixture.path().to_owned();

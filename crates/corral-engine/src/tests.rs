@@ -1,5 +1,8 @@
 pub(crate) fn tempdir() -> tempfile::TempDir {
-    tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap()
+    tempfile::Builder::new()
+        .prefix(".corral-test-")
+        .tempdir_in(env!("CARGO_MANIFEST_DIR"))
+        .unwrap()
 }
 
 use std::path::PathBuf;
