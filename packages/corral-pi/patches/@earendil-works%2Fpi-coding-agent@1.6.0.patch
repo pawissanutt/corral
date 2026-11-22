@@ -123,7 +123,17 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              // Normalize queued images at delivery, before events and persistence see the message,
              // so they get the same resize as idle prompts with the current model's limits (#11738).
              if (this._queuedMessagesWithImages.has(event.message)) {
-@@ -1511,7 +1517,6 @@ export class AgentSession {
+@@ -1494,6 +1500,9 @@ export class AgentSession {
+      * @param onStarted Called once the run's messages are prepared, before the first request.
+      */
+     async _startRun(trigger, onStarted) {
++        // Two prompts whose preflights overlapped both arrive here. Only one may own the run and its settle.
++        if (this._isAgentRunActive)
++            throw new Error("Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.");
+         this._isAgentRunActive = true;
+         this._agentRunAbortRequested = false;
+         let messages;
+@@ -1511,7 +1520,6 @@ export class AgentSession {
          // have while idle. No run exists yet, so they cannot split a tool call from its result.
          this._flushPendingBashMessages();
          this._flushPendingCustomMessages();
@@ -131,7 +141,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          // Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
          this._failedResponse = undefined;
          this._recordSelection();
-@@ -1519,6 +1524,7 @@ export class AgentSession {
+@@ -1519,6 +1527,7 @@ export class AgentSession {
          // are dropped, so a tool that never registers does not stay pending.
          this._pendingToolNames.clear();
          try {
@@ -139,7 +149,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              await this.agent.prompt(messages);
              while (!this._agentRunAbortRequested) {
                  if (await this._handlePostAgentRun()) {
-@@ -1702,8 +1708,28 @@ export class AgentSession {
+@@ -1702,8 +1711,28 @@ export class AgentSession {
       * @throws Error if no model selected or no API key available (when not streaming)
       */
      async prompt(text, options) {
@@ -169,7 +179,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              return;
          }
          const expandPromptTemplates = options?.expandPromptTemplates ?? true;
-@@ -1760,10 +1786,10 @@ export class AgentSession {
+@@ -1760,10 +1789,10 @@ export class AgentSession {
                  throw new Error("Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.");
              }
              if (options.streamingBehavior === "followUp") {
@@ -182,7 +192,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              }
              preflightResult?.("queued");
              return undefined;
-@@ -1842,7 +1868,18 @@ export class AgentSession {
+@@ -1842,7 +1871,18 @@ export class AgentSession {
              return text; // Return original on error
          }
      }
@@ -202,7 +212,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          if (text.startsWith("/")) {
              this._throwIfExtensionCommand(text);
          }
-@@ -1852,10 +1889,10 @@ export class AgentSession {
+@@ -1852,10 +1892,10 @@ export class AgentSession {
          let expandedText = this._expandSkillCommand(processedInput.text);
          expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
          if (behavior === "steer") {
@@ -215,7 +225,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          }
          return "queued";
      }
-@@ -1869,7 +1906,7 @@ export class AgentSession {
+@@ -1869,7 +1909,7 @@ export class AgentSession {
       * @throws Error if text is an extension command
       */
      async steer(text, images, options) {
@@ -224,7 +234,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
      }
      /**
       * Queue a follow-up message to be processed after the agent finishes.
-@@ -1880,14 +1917,12 @@ export class AgentSession {
+@@ -1880,14 +1920,12 @@ export class AgentSession {
       * @throws Error if text is an extension command
       */
      async followUp(text, images, options) {
@@ -241,7 +251,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          const content = [{ type: "text", text }];
          if (images) {
              content.push(...images);
-@@ -1895,14 +1930,13 @@ export class AgentSession {
+@@ -1895,14 +1933,13 @@ export class AgentSession {
          const message = { role: "user", content, timestamp: Date.now() };
          if (images?.length)
              this._queuedMessagesWithImages.add(message);
@@ -258,7 +268,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          const content = [{ type: "text", text }];
          if (images) {
              content.push(...images);
-@@ -1910,6 +1944,7 @@ export class AgentSession {
+@@ -1910,6 +1947,7 @@ export class AgentSession {
          const message = { role: "user", content, timestamp: Date.now() };
          if (images?.length)
              this._queuedMessagesWithImages.add(message);
@@ -266,7 +276,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          this.agent.followUp(message);
      }
      /** Replace a queued user message's images in place with normalized ones, appending hints to its text. */
-@@ -2052,13 +2087,16 @@ export class AgentSession {
+@@ -2052,13 +2090,16 @@ export class AgentSession {
       * Useful for restoring to editor when user aborts.
       * @returns Object with steering and followUp arrays
       */
