@@ -7,6 +7,7 @@ use nsh_core::prelude::*;
 
 use super::super::parts::{cell, space};
 use super::group;
+use crate::model::settings::document::Path;
 use crate::model::settings::editor::Part;
 use crate::model::settings::extensions::{self, Row};
 use crate::model::settings::form::{Entries, Group, Live};
@@ -55,6 +56,32 @@ pub fn part(app: AppState, listed: &Entries, groups: Vec<Group>, live: Memo<Live
     if let Some(chosen) = &listed.chosen {
         parts.push(space(app, 12.0));
         parts.push(h3(app, chosen.clone(), None));
+        // A refusal about the block itself, which no field of it holds.
+        let anchor = Path::of(&["extensions", chosen]);
+        let reasons = computed(move || {
+            app.settings.with(|state| {
+                state
+                    .config
+                    .reasons_at(&anchor)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+        });
+        parts.push(
+            dynamic(move || {
+                let reasons = reasons.get();
+                untracked(move || {
+                    view()
+                        .children(
+                            reasons
+                                .into_iter()
+                                .map(|reason| cell(app, reason, Token::Fail, false).into_element()),
+                        )
+                        .into_element()
+                })
+            })
+            .into_element(),
+        );
         for shape in groups {
             parts.push(space(app, 10.0));
             parts.push(group(app, shape, live));

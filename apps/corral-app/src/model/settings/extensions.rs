@@ -116,8 +116,9 @@ pub fn rows(draft: &str, feed: &Feed) -> Vec<Row> {
             }
             if document::get(&doc, &path(&name, "run")).is_some() {
                 shapes.push(match words(&doc, &path(&name, "on")) {
-                    Some(kinds) if !kinds.is_empty() => format!("on {}", kinds.join(", ")),
-                    _ => "on every event".to_owned(),
+                    None => "on every event".to_owned(),
+                    Some(kinds) if kinds.is_empty() => "on no event".to_owned(),
+                    Some(kinds) => format!("on {}", kinds.join(", ")),
                 });
             }
             let shapes = if shapes.is_empty() {
