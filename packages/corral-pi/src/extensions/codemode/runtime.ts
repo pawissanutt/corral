@@ -4,6 +4,7 @@ import type { AgentToolCallOutcome } from "@earendil-works/pi-agent-core";
 import type { JsonValue } from "@earendil-works/pi-ai";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 
+import { helperConversationId } from "../subagent/conversation.ts";
 import { type CodeChild, childKey, runChild } from "./child.ts";
 import { type CellResult, CodeKernel, type CodeKernelOptions, KernelError, type KernelEvent, type ToolRequest } from "./kernel.ts";
 import { clipUtf8 } from "./kernel-protocol.ts";
@@ -170,8 +171,10 @@ export class CodeRuntime {
       if (existing?.ok !== undefined || (!existing && (!Number.isInteger(ordinal)
         || ordinal <= CHILDREN_LIMIT || ordinal > report.calls.total))) continue;
       reconciled.add(key);
+      const conversationId = helperConversationId(entry.tool, entry.conversation_id);
       const child: ChildOutcome = { ...existing, tool: entry.tool, call: entry.parent.call, key,
         startedAt: existing?.startedAt ?? report.startedAt, durationMs: entry.duration_ms, late: true, ok: entry.ok,
+        ...(conversationId === undefined ? {} : { conversationId }),
         ...(entry.effect === "not_started" || entry.effect === "unknown" ? { effect: entry.effect } : {}),
         ...(typeof entry.code === "string" ? { code: entry.code } : {}),
         ...(typeof entry.message === "string" ? { message: entry.message } : {}),
@@ -430,6 +433,7 @@ export class CodeRuntime {
     const recordCall = (phase: "started" | "settled") => {
       const settled = phase === "settled" ? { ok: outcome.ok === true, effect: outcome.effect ?? null,
         duration_ms: outcome.durationMs, ...(outcome.ok ? {} : { code: outcome.code, message: clipUtf8(outcome.message ?? "", 300) }),
+        ...(outcome.conversationId === undefined ? {} : { conversation_id: outcome.conversationId }),
         ...(outcome.resultLines === undefined ? {} : { result_lines: outcome.resultLines, result_bytes: outcome.resultBytes }),
         ...(outcome.structured === undefined ? {} : { structured: outcome.structured }) } : {};
       this.host.journal({ phase, tool: request.tool, parent, ...settled });
@@ -469,6 +473,9 @@ export class CodeRuntime {
       throw new CodeCallError("tool_error", outcome.message ?? "");
     }
     outcome.id = result.toolCall.id;
+    const details: unknown = result.result.details;
+    const conversationId = record(details) ? helperConversationId(request.tool, details.conversationId) : undefined;
+    if (conversationId !== undefined) outcome.conversationId = conversationId;
     const resultText = contentText(result.result.content);
     const structured = result.result.structuredContent;
     if (result.result.content.some(part => part.type === "text")) {

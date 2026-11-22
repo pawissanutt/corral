@@ -7,6 +7,7 @@
 import type { AgentToolResult, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth, type Component, type SelectionRow } from "@earendil-works/pi-tui";
 import type { CellReport, ChildOutcome } from "../extensions/codemode/report.ts";
+import { helperConversationId } from "../extensions/subagent/conversation.ts";
 import type { Ticker } from "./activity.ts";
 import { spinner } from "./frame.ts";
 import { PANEL_ERROR, PANEL_MUTED, PANEL_SUCCESS, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
@@ -473,7 +474,13 @@ function bodyLines(view: View, deps: CodeCellDeps, width: number, blocks: Select
   if (!cell) return lines;
   const running = cellRunning(view, cell), orphan = !running && !view.live;
   const single = cell.recorded && cell.children.length === 1 && omittedTotal(cell) === 0;
-  if (!single) {
+  const showConversation = (child: ChildOutcome, indent: string) => {
+    const id = expanded ? helperConversationId(child.tool, child.conversationId) : undefined;
+    if (id) lines.push(...wrapTextWithAnsi(`Conversation ID: ${id}`, Math.max(1, width - indent.length))
+      .map(line => muted(line, width, indent)));
+  };
+  if (single) showConversation(cell.children[0]!, INDENT);
+  else {
     const entries: readonly FoldEntry[] = expanded ? cell.children.map(child => ({ child })) : foldChildren(cell.children);
     for (const entry of entries) {
       if (!("child" in entry)) {
@@ -482,6 +489,7 @@ function bodyLines(view: View, deps: CodeCellDeps, width: number, blocks: Select
       }
       const model = childModel(entry.child, deps, context, orphan);
       lines.push(INDENT + rowLine(model, inner, now));
+      showConversation(entry.child, INDENT + INDENT);
       for (const body of expanded ? model.body ?? [] : entry.child.ok === false ? (model.body ?? []).slice(0, 1) : []) {
         lines.push(INDENT + INDENT + color(bodyTone(body.tone)) + truncateToWidth(clean(body.text), Math.max(1, inner - INDENT.length), "…") + RESET);
       }

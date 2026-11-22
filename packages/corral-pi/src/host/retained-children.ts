@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import type { ChildSnapshot } from "../build/types.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
 import { childDetail, helperDetail } from "./remote/children.ts";
@@ -24,20 +24,21 @@ export class RetainedChildren {
 
   has(id: string): boolean { return existsSync(join(this.dir, `${parseChildId(id)}.json`)); }
 
-  child(child: ChildSnapshot): void {
-    if (!child.sessionFile) return;
-    this.save(child.sessionFile, childRow(child), childDetail(child, false));
+  child(child: ChildSnapshot): boolean {
+    return !!child.sessionFile && this.save(child.sessionFile, childRow(child), childDetail(child, false));
   }
 
-  helper(helper: HelperInspection, file: string, result?: string): void {
-    if (helper.kind === "web_search") return; // Not a native, owner-readable transcript.
-    this.save(file, helperRow(helper), helperDetail(helper, false, result));
+  helper(helper: HelperInspection, file: string, result?: string): boolean {
+    if (helper.kind === "web_search") return false; // Not a native, owner-readable transcript.
+    return this.save(file, helperRow(helper), helperDetail(helper, false, result));
   }
 
-  private save(file: string, row: SessionFleet["children"][number], detail: ReturnType<typeof childDetail> | ReturnType<typeof helperDetail>): void {
+  /** True only when exact-ID readback has both the index record and a native file. */
+  private save(file: string, row: SessionFleet["children"][number], detail: ReturnType<typeof childDetail> | ReturnType<typeof helperDetail>): boolean {
+    let indexed = false;
+    const path = relative(this.root, file);
+    if (!isAbsolute(file) || !/^(?:children|(?:runtime\/)?auxiliary)\/[^/]+\.jsonl$/.test(path)) return false;
     try {
-      const path = relative(this.root, file);
-      if (!isAbsolute(file) || !/^(?:children|(?:runtime\/)?auxiliary)\/[^/]+\.jsonl$/.test(path)) return;
       const id = parseChildId(row.id);
       const existing = this.fleet.children.findIndex(prior => prior.id === id);
       const atomic = (name: string, value: unknown) => {
@@ -49,11 +50,17 @@ export class RetainedChildren {
         } finally { rmSync(temporary, { force: true }); }
       };
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
-      if (!lstatSync(this.dir).isDirectory()) return;
+      if (!lstatSync(this.dir).isDirectory()) return false;
       atomic(`${id}.json`, { session_file: path, detail });
+      indexed = true;
       if (existing < 0) this.fleet.children.push(row); else this.fleet.children[existing] = row;
       this.fleet.children = boundFleet(this.fleet).children;
       atomic("fleet", this.fleet);
     } catch { /* Readback is advisory: it never changes execution, the transcript or accounting. */ }
+    if (!indexed) return false;
+    try {
+      return (!path.startsWith("runtime/") || lstatSync(join(this.root, "runtime")).isDirectory())
+        && lstatSync(dirname(file)).isDirectory() && lstatSync(file).isFile();
+    } catch { return false; }
   }
 }

@@ -9,8 +9,11 @@ import { createModelCatalog } from "../src/host/catalog.ts";
 import { authContext, restrictProvider } from "../src/host/session.ts";
 import { guardedFetch } from "../src/host/restrict.ts";
 import { runAuxiliarySession } from "../src/extensions/subagent/session.ts";
-import { AuxiliaryRuntime } from "../src/extensions/subagent/runtime.ts";
+import { AuxiliaryRuntime, type AuxiliaryResponse } from "../src/extensions/subagent/runtime.ts";
+import { exploreTool } from "../src/extensions/subagent/index.ts";
+import { oracleTool } from "../src/extensions/oracle/index.ts";
 import { FleetRuntime } from "../src/extensions/fleet/runtime.ts";
+import { RetainedChildren } from "../src/host/retained-children.ts";
 
 test("real SDK explore reads but cannot write or recurse; oracle has no tools and persists cancellation", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "corral-auxiliary-"));
@@ -26,17 +29,23 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
       oracle: { model: "openai-codex/gpt-6.1-sol", timeout_secs: 30 },
       expert: { model: "openai-codex/gpt-6.1-sol", max_turns: 3, timeout_secs: 600, max_parallel: 1 } };
     const refs: Record<string, unknown>[] = [];
+    const retained = new RetainedChildren(cwd);
+    const path = (id: string) => join(cwd, "runtime", "auxiliary", `${id}.jsonl`);
+    const record = async (payload: Record<string, unknown>) => {
+      refs.push(payload);
+      return { session_id: payload.request, session_file: path(String(payload.request)) };
+    };
+    const readRetained = (id: string | undefined) => JSON.parse(readFileSync(join(cwd, "child-records", `${id}.json`), "utf8"));
     const runtime = new AuxiliaryRuntime({ settings, provider: "openai-codex", model: "gpt-6.1-sol",
-      sessionId: () => "parent",
-      async record(payload) { refs.push(payload); return { session_id: payload.request, session_file: join(cwd, `${payload.request}.jsonl`) }; },
+      sessionId: () => "parent", record,
+      retain: (helper, file, report) => retained.helper(helper, file, report),
       execute: (invocation, signal) => runAuxiliarySession({ sdk, models, provider: "openai-codex", cwd,
         agentDir: join(cwd, "agent"), parentLoadout: ["read", "write", "bash", "explore", "oracle"], localTools: [] }, invocation, signal),
     });
     const fleet = new FleetRuntime({ sdk, models, approved: ["openai-codex"], parent: { provider: "openai-codex", model: "gpt-6.1-sol" },
       context: { dir: cwd, session: { worktree: cwd, name: "parent" }, settings: { maxParallel: 3, profiles: [] } },
       agentDir: join(cwd, "agent"), localTools: [], parentLoadout: ["read", "write", "bash", "explore", "oracle"],
-      allowedKinds: ["explore"], research: { settings: settings.explore },
-      async record(payload) { refs.push(payload); return { session_id: payload.request, session_file: join(cwd, `${payload.request}.jsonl`) }; },
+      allowedKinds: ["explore"], research: { settings: settings.explore }, record, retained,
       changed() {}, deliverToParent() { throw new Error("Blocking research must not be redelivered"); },
     });
     transport.script([
@@ -47,7 +56,7 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     ]);
     const result = await fleet.explore("research", "read source");
     expect(result.text).toBe("research finished");
-    const child = readFileSync(join(cwd, `${result.request}.jsonl`), "utf8").split("\n").filter(Boolean).map((s) => JSON.parse(s));
+    const child = readFileSync(path(result.request), "utf8").split("\n").filter(Boolean).map((s) => JSON.parse(s));
     const toolResults = child.filter((e) => e.message?.role === "toolResult").map((e) => e.message);
     expect(toolResults.map((r) => [r.toolName, r.isError])).toEqual([["read", false], ["write", true], ["explore", true]]);
     expect(existsSync(join(cwd, "bad.txt"))).toBeFalse();
@@ -62,7 +71,7 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     ]);
     const bounded = await fleet.explore("bounded", "Find the source and report evidence");
     expect(transport.requests - beforeResearch).toBe(2);
-    const boundedChild = readFileSync(join(cwd, `${bounded.request}.jsonl`), "utf8").split("\n").filter(Boolean).map(s => JSON.parse(s));
+    const boundedChild = readFileSync(path(bounded.request), "utf8").split("\n").filter(Boolean).map(s => JSON.parse(s));
     expect(boundedChild.flatMap(entry => entry.message?.toolsRemoved ?? []).map(tool => tool.name)).toContain("read");
     expect(bounded.text).toContain("source.txt:1");
     expect(bounded.report).toMatchObject({ status: "partial", stopReason: "turn_limit" });
@@ -96,21 +105,30 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     transport.holdNext();
     const researchHeld = transport.whenHeld();
     const beforeCancel = transport.requests;
-    const interrupted = fleet.explore("cancelled", "Research source", stopResearch.signal);
+    const interrupted = exploreTool(fleet).execute("cancelled", { prompt: "Research source" }, stopResearch.signal, undefined, undefined as never);
     await researchHeld;
     stopResearch.abort();
-    expect((await interrupted).report).toMatchObject({ status: "failed", stopReason: "cancelled" });
+    const researchReply = await interrupted;
+    const research = researchReply.details as AuxiliaryResponse;
+    expect(researchReply.isError).toBe(true);
+    expect(research.report).toMatchObject({ status: "failed", stopReason: "cancelled" });
+    expect(research.conversationId).not.toBe(research.request);
+    expect(readRetained(research.conversationId)).toMatchObject({ session_file: `runtime/auxiliary/${research.request}.jsonl`,
+      detail: { id: research.conversationId, kind: "explore", state: "cancelled" } });
     expect(transport.requests - beforeCancel).toBe(1);
     const cancel = new AbortController();
     transport.script([{ text: "oracle partial response" }]);
     transport.holdNext();
     const held = transport.whenHeld();
-    const request = runtime.run("oracle", "consult", "review this approach", cancel.signal);
+    const request = oracleTool(runtime).execute("consult", { prompt: "review this approach" }, cancel.signal, undefined, undefined as never);
     await held;
     cancel.abort();
-    const oracle = await request;
+    const oracle = (await request).details as AuxiliaryResponse;
     expect(oracle.outcome).toBe("uncertain");
-    const transcript = readFileSync(join(cwd, `${oracle.request}.jsonl`), "utf8").split("\n").filter(Boolean).map((s) => JSON.parse(s));
+    expect(oracle.conversationId).toBe(oracle.request);
+    expect(readRetained(oracle.conversationId)).toMatchObject({ session_file: `runtime/auxiliary/${oracle.request}.jsonl`,
+      detail: { id: oracle.conversationId, kind: "helper:oracle", state: "failed" } });
+    const transcript = readFileSync(path(oracle.request), "utf8").split("\n").filter(Boolean).map((s) => JSON.parse(s));
     const declarations = transcript.flatMap((e) => e.message?.toolsAdded ?? []);
     expect(declarations).toHaveLength(0);
     expect(refs.filter((r) => r.request === oracle.request && r.action === "finish")).toHaveLength(1);
@@ -132,7 +150,7 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     ]);
     const expert = await runtime.run("expert", "consult", "Investigate source.txt");
     expect(expert).toMatchObject({ model: "openai-codex/gpt-6.1-sol", turns: 2, outcome: "completed" });
-    const expertTranscript = readFileSync(join(cwd, `${expert.request}.jsonl`), "utf8").split("\n").filter(Boolean).map(s => JSON.parse(s));
+    const expertTranscript = readFileSync(path(expert.request), "utf8").split("\n").filter(Boolean).map(s => JSON.parse(s));
     expect(expertTranscript.flatMap(entry => entry.message?.toolsAdded ?? []).map(tool => tool.name).sort()).toEqual(["find", "grep", "ls", "read"]);
     expect(expertTranscript.filter(entry => entry.message?.role === "toolResult").map(entry => [entry.message.toolName, entry.message.isError]))
       .toEqual([["read", false], ["write", true], ["bash", true], ["corral_expert", true]]);

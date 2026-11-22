@@ -7,6 +7,7 @@ import { AGENT_JOURNAL_MAX, AGENT_MESSAGE_MAX, AGENT_SEND_BUDGET, MAX_CHILDREN_P
   type FleetControl, type FleetSnapshot, type MessageOutcome, type RosterEntry } from "../../build/types.ts";
 import { AuxiliaryHistory } from "../subagent/inspection.ts";
 import type { AuxiliaryResponse, Outcome } from "../subagent/runtime.ts";
+import { RetainedConversationError } from "../subagent/conversation.ts";
 import type { ExploreSettings } from "../subagent/settings.ts";
 import { researchBudget, type ResearchOptions, type ResearchReport } from "../subagent/research.ts";
 import type { HelperInspection } from "../subagent/inspection.ts";
@@ -44,7 +45,7 @@ export interface FleetOptions {
   readonly timeoutSecs?: number;
   readonly research?: { readonly settings: ExploreSettings };
   readonly record?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
-  readonly retained?: { has(id: string): boolean; child(child: ChildSnapshot): void };
+  readonly retained?: { has(id: string): boolean; child(child: ChildSnapshot): boolean };
 }
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 interface Entry {
@@ -61,6 +62,7 @@ interface Entry {
   pulseBucket: number;
   historyBucket: number;
   complete: boolean;
+  retained?: boolean;
   collected: boolean;
   collectors: number;
   delivered: boolean;
@@ -197,8 +199,11 @@ export class FleetRuntime implements FleetControl {
     try {
       if (signal?.aborted) cancel();
       await entry.settled.promise;
-      if (entry.value.state === "failed" && !entry.researchReport) throw new Error(`Research failed; request ${request}. ${entry.value.error ?? ""}`);
-      return { request, sessionFile: entry.value.sessionFile,
+      if (entry.value.state === "failed" && !entry.researchReport) {
+        const error = new Error(`Research failed; request ${request}. ${entry.value.error ?? ""}`);
+        throw entry.retained ? new RetainedConversationError(child, error) : error;
+      }
+      return { request, sessionFile: entry.value.sessionFile, ...(entry.retained ? { conversationId: child } : {}),
         outcome: entry.value.state === "done" ? "completed" : "uncertain",
         text: entry.value.report ?? "No findings were produced. Inspect the child transcript before retrying.",
         truncated: entry.truncated ?? false, turns: entry.value.usage.turns,
@@ -399,7 +404,7 @@ export class FleetRuntime implements FleetControl {
   private settle(entry: Entry): void {
     if (entry.complete) return;
     entry.complete = true;
-    this.retain(entry);
+    entry.retained = this.retain(entry);
     clearTimeout(entry.timer);
     entry.settled.resolve();
     for (const wait of [...this.replies]) {
@@ -407,9 +412,9 @@ export class FleetRuntime implements FleetControl {
     }
     this.deliverReport(entry);
   }
-  private retain(entry: Entry): void {
-    try { this.options.retained?.child(this.copy(entry)); }
-    catch { /* A readback failure cannot change child execution or settlement. */ }
+  private retain(entry: Entry): boolean {
+    try { return this.options.retained?.child(this.copy(entry)) ?? false; }
+    catch { return false; /* A readback failure cannot change child execution or settlement. */ }
   }
   private async recordFinish(entry: Entry): Promise<void> {
     if (!entry.prepared || !this.options.record) return;

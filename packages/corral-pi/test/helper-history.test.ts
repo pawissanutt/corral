@@ -1,9 +1,15 @@
 import { expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { expertTool } from "../src/extensions/subagent/index.ts";
+import { oracleTool } from "../src/extensions/oracle/index.ts";
+import { RetainedChildren } from "../src/host/retained-children.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AuxiliaryHistory, HELPER_HISTORY_LIMIT, HELPER_TEXT_LIMIT } from "../src/extensions/subagent/inspection.ts";
 import { observeHelperEvent } from "../src/extensions/subagent/session.ts";
 import { AuxiliaryRuntime } from "../src/extensions/subagent/runtime.ts";
-import type * as Sdk from "@earendil-works/pi-coding-agent";
+import * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { FleetRuntime } from "../src/extensions/fleet/runtime.ts";
 import type { ChildHooks } from "../src/extensions/fleet/child.ts";
@@ -126,6 +132,7 @@ test("live runtime inspection retains prompt, partials and result; queued cancel
     cancel.abort();
     const result = await queued;
     expect(result.report?.stopReason).toBe("cancelled");
+    expect(result.conversationId).toBeUndefined();
     expect(runtime.snapshot().children.find(value => value.brief === "Second prompt")?.state).toBe("cancelled");
     expect(records.filter(value => value.request === result.request && value.action === "finish").map(value => value.outcome)).toEqual(["not_started"]);
     expect(executions).toBe(1);
@@ -136,6 +143,53 @@ test("live runtime inspection retains prompt, partials and result; queued cancel
     expect(runtime.explore("one", "First prompt")).toBe(first);
     expect(runtime.snapshot().children).toHaveLength(2);
   } finally { release.resolve(); await runtime.close(); }
+});
+
+test("the ID returned by expert opens its retained transcript after the roster drops it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "expert-readback-"));
+  const kept = new RetainedChildren(dir);
+  const records: Record<string, unknown>[] = [];
+  const runtime = new AuxiliaryRuntime({ settings: { expert: { model: "model", max_parallel: 1, max_turns: 24, timeout_secs: 30 },
+    oracle: { model: "model", timeout_secs: 30 } }, provider: "fixture", model: "parent", sessionId: () => "parent",
+    retain: (helper, file, report) => kept.helper(helper, file, report),
+    async record(value) { records.push(value); return { session_id: value.request, session_file: join(dir, `runtime/auxiliary/${value.request}.jsonl`) }; },
+    async execute({ kind, sessionId, sessionFile }) {
+      mkdirSync(dirname(sessionFile), { recursive: true });
+      writeFileSync(sessionFile, JSON.stringify({ type: "session", version: Sdk.CURRENT_SESSION_VERSION,
+        id: sessionId, timestamp: new Date().toISOString(), cwd: dir }) + "\n");
+      if (kind === "oracle") throw new Error("Unrelated test helper failed. ".repeat(10));
+      Sdk.SessionManager.open(sessionFile).appendMessage(assistant);
+      return { text: "Visible answer", outcome: "completed", turns: 2 };
+    },
+  });
+  try {
+    const result = await expertTool(runtime).execute("parent-call", { question: "What did you find?" }, undefined, undefined, undefined as never);
+    const id = (result.details as { conversationId: string }).conversationId;
+    expect(id).toBe(records[0]?.request as string);
+    expect(id).not.toBe("parent-call");
+    expect(records.slice(0, 3).map(record => [record.action, record.outcome])).toEqual([
+      ["prepare", undefined], ["started", undefined], ["finish", "completed"],
+    ]);
+    const oracle = oracleTool(runtime);
+    // Exercise both bounds: live auxiliary observations keep 100, and the file roster is byte-bounded.
+    for (let index = 0; index < 100; index++) {
+      const reply = await oracle.execute(`evict-${index}`, { prompt: "New call" }, undefined, undefined, undefined as never);
+      if (index === 0) {
+        expect(reply.isError).toBe(true);
+        expect(reply.details).toMatchObject({ conversationId: records[3]?.request });
+        expect(records[5]?.outcome).toBe("uncertain");
+      }
+    }
+    expect(runtime.inspections().some(helper => helper.request === id)).toBe(false);
+    expect(runtime.inspection().some(helper => helper.request === id)).toBe(false);
+    const read = (file: string) => JSON.parse(readFileSync(join(dir, file), "utf8"));
+    expect(read("child-records/fleet").children.some((child: { id: string }) => child.id === id)).toBe(false);
+    const retained = read(`child-records/${id}.json`);
+    expect(retained.detail).toMatchObject({ id, kind: "helper:expert", state: "done", report: "Visible answer" });
+    const transcript = Sdk.SessionManager.open(join(dir, retained.session_file));
+    expect(transcript.getSessionId()).toBe(id);
+    expect(transcript.getBranch()).toMatchObject([{ type: "message", message: assistant }]);
+  } finally { await runtime.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a failed terminal record remains uncertain, not a successful helper or task", async () => {

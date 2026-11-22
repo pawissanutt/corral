@@ -12,13 +12,14 @@ const ARGS = { path: "src/a.ts", line: 3, column: 5, url: "https://example.dev/d
   questions: [{ header: "Delivery check", question: "Send it now?", options: ["yes", "no"] }], question: "Ship it?", prompt: "Trace the slot store",
   server: "github", uri: "repo://x", tools: ["create_issue"], document: "plan", offset: 0, title: "x" };
 
-function row(name: string, args: Record<string, unknown>, result?: { result: AgentToolResult<unknown>; isError?: boolean; partial?: boolean }, label?: string) {
+function row(name: string, args: Record<string, unknown>, result?: { result: AgentToolResult<unknown>; isError?: boolean; partial?: boolean; expanded?: boolean }, label?: string) {
+  const expanded = result?.expanded ?? false;
   const ctx = { args, toolCallId: `${name}-1`, invalidate() {}, lastComponent: undefined, state: {}, cwd: "/work", executionStarted: true,
-    argsComplete: true, isPartial: result === undefined || result.partial === true, expanded: false, showImages: false,
+    argsComplete: true, isPartial: result === undefined || result.partial === true, expanded, showImages: false,
     isError: result?.isError ?? false, durationMs: undefined, outputPad: 1 } as Ctx;
   const renderers = rowRenderers(presenterFor(name, deps, label), deps, name);
   const component = renderers.renderCall!(args, undefined as never, ctx);
-  if (result) renderers.renderResult!(result.result, { expanded: false, isPartial: result.partial ?? false }, undefined as never, ctx);
+  if (result) renderers.renderResult!(result.result, { expanded, isPartial: result.partial ?? false }, undefined as never, ctx);
   return component.render(100).map(line => stripTerminalSequences(line));
 }
 const reply = (text: string, details?: unknown): AgentToolResult<unknown> => ({ content: [{ type: "text", text }], details });
@@ -75,4 +76,9 @@ test("research shows its progress while running and states why partial research 
   expect(partial[0]).toContain("!");
   expect(partial[0]).toContain("turn limit");
   expect(partial.join("\n")).not.toContain("Request: abc");
+  const id = "3ac14dd6-8070-4270-a3a0-d00710ffd4f6";
+  const expert = row("corral_expert", { question: "Where are slots loaded?" }, { expanded: true, isError: true,
+    result: reply("Provider disconnected", { conversationId: id, error: "Provider disconnected" }) });
+  expect(expert[0]).toContain("✗");
+  expect(expert.join("\n")).toContain(`Conversation ID: ${id}`);
 });

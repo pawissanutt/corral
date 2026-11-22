@@ -203,7 +203,7 @@ test("children that finish after their settled cell update retained and resumed 
   } };
   let resumed: CodeRuntime | undefined;
   try {
-    await fx.runtime.run("parent", "await Promise.all([1,2,3].map(n => tools.read({n})));", executor, undefined, 0);
+    await fx.runtime.run("parent", 'await Promise.all([tools.read({n:1}), tools.read({n:2}), tools.corral_expert({question:"Where?"})]);', executor, undefined, 0);
     await started.promise;
     gates[0]!.resolve(outcome(1, true));
     await fx.event("code_cell", data => data.phase === "settled");
@@ -214,8 +214,11 @@ test("children that finish after their settled cell update retained and resumed 
     const second = outcome(2);
     const detail = { state: "file", range: { start: 1, end: 3 } };
     gates[1]!.resolve({ ...second, result: { ...second.result, structuredContent: detail } });
-    gates[2]!.resolve(outcome(3));
-    await fx.event("code_call", data => data.phase === "settled" && data.call === "cell-1.3");
+    const third = outcome(3);
+    const conversationId = "c01275e4-6e53-4ec2-99cd-483d8fb9b5b3";
+    gates[2]!.resolve({ ...third, toolCall: { ...third.toolCall, name: "corral_expert" }, result: { ...third.result, details: { conversationId } } });
+    expect(await fx.event("code_call", data => data.phase === "settled" && data.call === "cell-1.3"))
+      .toMatchObject({ conversation_id: conversationId });
     expect(fx.runtime.snapshot("parent")?.calls).toMatchObject({ total: 3, ok: 2, failed: 1, running: 0 });
     expect(fx.runtime.snapshot("parent")?.children.slice(1).every(child => child.ok && child.late && child.durationMs === 30)).toBe(true);
     expect(report.calls.running).toBe(0);
@@ -225,6 +228,7 @@ test("children that finish after their settled cell update retained and resumed 
     expect(resumed.snapshot("parent")?.children.slice(1).every(child => child.ok && child.late && child.durationMs === 30)).toBe(true);
     expect(resumed.snapshot("parent")?.children[1]).toMatchObject({ resultLines: 1, resultBytes: 11, structured: detail });
     expect(resumed.snapshot("parent")?.children[1]?.effect).toBeUndefined();
+    expect(resumed.snapshot("parent")?.children[2]).toMatchObject({ conversationId });
   } finally {
     gates.forEach((gate, n) => gate.resolve(outcome(n + 1)));
     await fx.runtime.close();

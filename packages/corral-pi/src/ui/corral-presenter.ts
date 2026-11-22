@@ -6,6 +6,7 @@
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 
+import { helperConversationId } from "../extensions/subagent/conversation.ts";
 import type { CorralToolSpec } from "../roles/types.ts";
 import type { PanelView } from "./panels.ts";
 import { resultText, type BodyLine, type CallInput, type Presenter, type RowModel, type RowState, type Tone } from "./tool-row.ts";
@@ -149,19 +150,21 @@ function failureOf(settled: Settled): Failure | undefined {
 // Expanded content.
 
 interface ExpandedParts {
+  readonly reference?: string;
   readonly reason?: string;
   readonly prose?: string;
   readonly answer?: string;
   readonly next?: readonly string[];
 }
 
-function expandedView({ reason, prose, answer, next }: ExpandedParts): () => Component {
+function expandedView({ reference, reason, prose, answer, next }: ExpandedParts): () => Component {
   return () => {
     const parts = new Container();
     const add = (component: Component) => {
       if (parts.children.length) parts.addChild(new Spacer(1));
       parts.addChild(component);
     };
+    if (reference) add(new Text(reference, 0, 0));
     if (reason) add(new Text(reason, 0, 0));
     if (prose) add(new Markdown(prose, 0, 0, getMarkdownTheme()));
     if (answer) add(new Markdown(answer, 0, 0, getMarkdownTheme()));
@@ -352,12 +355,16 @@ const expertPresenter: Presenter = call => {
     };
   }
   const answer = resultText(call.result).trim();
+  const id = helperConversationId(call.name, fields(call.result?.details).conversationId);
+  const reference = id ? `Conversation ID: ${id}` : undefined;
   if (call.isError) {
-    return { state: "failed", verb: "Expert consultation", ...(target ? { target } : {}), outcome: "failed", outcomeTone: "error", body: reasonBody(answer) };
+    return { state: "failed", verb: "Expert consultation", ...(target ? { target } : {}), outcome: "failed", outcomeTone: "error", body: reasonBody(answer),
+      ...(reference ? { expanded: expandedView({ reference, reason: answer }) } : {}) };
   }
   return {
     state: "ok", verb: "Expert answered", ...(target ? { target } : {}),
-    ...(answer ? { body: proseBody(answer, false), expanded: expandedView({ ...(question ? { prose: `**Question**\n\n${question}` } : {}), answer }) } : {}),
+    ...(answer ? { body: proseBody(answer, false) } : {}),
+    ...(answer || reference ? { expanded: expandedView({ reference, ...(question ? { prose: `**Question**\n\n${question}` } : {}), answer }) } : {}),
   };
 };
 

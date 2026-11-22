@@ -5,6 +5,7 @@ import type { AuxiliaryKind, AuxiliaryRuntime } from "./runtime.ts";
 import type { FleetRuntime } from "../fleet/runtime.ts";
 import type { ResearchOptions } from "./research.ts";
 import type { HelperInspection } from "./inspection.ts";
+import { RetainedConversationError, retainedToolFailure } from "./conversation.ts";
 
 function childProgress<K extends AuxiliaryKind>(runtime: { watch(kind: K, id: string, changed: (inspection: HelperInspection) => void): () => void }, kind: K, id: string, signal?: AbortSignal, onUpdate?: AgentToolUpdateCallback<unknown>): () => void {
   if (!onUpdate || signal?.aborted) return () => {};
@@ -79,14 +80,18 @@ export function exploreTool(runtime: Pick<FleetRuntime, "explore" | "watch">): T
       const size = [prompt, research.scope, research.starting_points, research.constraints].reduce((n, text) => n + (text?.length ?? 0), 0);
       if (size > 32768) throw new Error("Research question and context must total at most 32,768 characters");
       const stop = childProgress(runtime, "explore", id, signal, onUpdate);
-      const result = await runtime.explore(id, prompt, signal, research).finally(stop);
-      const status = result.report?.status ?? (result.outcome === "completed" ? "completed" : "partial");
-      const header = [`Research ${status}; stop: ${result.report?.stopReason ?? result.outcome}.`,
-        `Request: ${result.request}.`,
-        ...(result.sessionFile ? [`Transcript: ${result.sessionFile}`] : []),
-        ...(result.truncated ? ["Findings truncated to 32,768 characters; inspect the transcript for the full answer."] : []),
-      ].join("\n");
-      return { content: [{ type: "text", text: `${header}\n\n${result.text}` }], details: result, isError: status === "failed" };
+      try {
+        const result = await runtime.explore(id, prompt, signal, research);
+        const status = result.report?.status ?? (result.outcome === "completed" ? "completed" : "partial");
+        const header = [`Research ${status}; stop: ${result.report?.stopReason ?? result.outcome}.`,
+          ...(result.conversationId ? [`Conversation ID: ${result.conversationId}`] : []),
+          `Request: ${result.request}.`,
+          ...(result.sessionFile ? [`Transcript: ${result.sessionFile}`] : []),
+          ...(result.truncated ? ["Findings truncated to 32,768 characters; inspect the transcript for the full answer."] : []),
+        ].join("\n");
+        return { content: [{ type: "text", text: `${header}\n\n${result.text}` }], details: result, isError: status === "failed" };
+      } catch (error) { return retainedToolFailure(error); }
+      finally { stop(); }
     },
   };
 }
@@ -115,11 +120,18 @@ export function expertTool(runtime: AuxiliaryRuntime): ToolDefinition {
         + JSON.stringify({ question: params.question, ...(params.context === undefined ? {} : { context: params.context }),
           ...(params.paths === undefined ? {} : { paths: params.paths }) });
       const stop = childProgress(runtime, "expert", id, signal, onUpdate);
-      const result = await runtime.run("expert", id, prompt, signal).finally(stop);
-      if (!result.model || result.turns === undefined) throw new Error("Expert session did not report its model and turn count");
-      return { content: [{ type: "text", text: result.text }],
-        details: { model: result.model, turns: result.turns, truncated: result.truncated },
-        isError: result.outcome !== "completed" };
+      try {
+        const result = await runtime.run("expert", id, prompt, signal);
+        if (!result.model || result.turns === undefined) {
+          const error = new Error("Expert session did not report its model and turn count");
+          throw result.conversationId ? new RetainedConversationError(result.conversationId, error) : error;
+        }
+        return { content: [{ type: "text", text: result.text }],
+          details: { model: result.model, turns: result.turns, truncated: result.truncated,
+            ...(result.conversationId ? { conversationId: result.conversationId } : {}) },
+          isError: result.outcome !== "completed" };
+      } catch (error) { return retainedToolFailure(error); }
+      finally { stop(); }
     },
   };
 }

@@ -18,6 +18,8 @@ export interface ChildOutcome {
   readonly call: string;
   readonly key: string;
   id?: string;
+  /** Exact retained conversation key, when this nested call created a readable helper. */
+  conversationId?: string;
   /** JSON input, bounded to 2 KiB per child and 32 KiB per cell. */
   args?: string;
   argsBytes?: number;

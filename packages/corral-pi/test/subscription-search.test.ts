@@ -104,6 +104,9 @@ test("Codex forces hosted search through OAuth, returns deduplicated sources and
     return codexReply();
   });
   const result = await fx.run("one");
+  expect(result.conversationId).toBeUndefined();
+  expect(result.sessionFile).toBeUndefined();
+  expect(fx.runtime.inspection()[0]?.sessionFile).toBeUndefined();
   expect(JSON.parse(result.text)).toMatchObject({ configured: true, provider: "openai-codex", answer: "A sourced answer",
     results: [{ title: "Guide", url: "https://docs.example.org/guide" }], truncated: true });
   expect((await fx.run("one")).request).toBe(result.request);

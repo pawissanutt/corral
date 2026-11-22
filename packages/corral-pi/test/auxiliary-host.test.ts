@@ -47,7 +47,7 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
       client, events, network, capabilities: { catalog: 7, digest: "a".repeat(64), preset: "full", enabled: ["subagents", "oracle"] },
       guidance: { projectText: false, settings: { subagents: { max_parallel: 3, model: "gpt-6-luna", service_tier: "priority", max_turns: 12, timeout_secs: 30 },
         oracle: { model: "gpt-6.1-sol", timeout_secs: 30 } } },
-      sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")),
+      sessionDir: join(cwd, "agent"), sessionManager: sdk.SessionManager.create(cwd, join(cwd, "sessions")),
     });
     await host.session.bindExtensions({});
     await host.startLocal();
@@ -99,6 +99,11 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
       const transcript = join(cwd, "agent", "auxiliary", `${exploreReference}.jsonl`);
       expect(explore?.sessionFile).toBe(transcript);
       expect(existsSync(transcript)).toBeTrue();
+      const file = host.session.sessionFile;
+      if (!file) throw new Error("Parent Pi transcript missing");
+      const recorded = sdk.SessionManager.open(file).getBranch().flatMap(entry => entry.type === "message"
+        && entry.message.role === "toolResult" && entry.message.toolCallId.startsWith(`${stage}-`) ? [entry.message.details] : []);
+      expect(recorded).toMatchObject([{ conversationId: explore?.id }, { conversationId: reference }]);
       expect(explore?.messages.some(message => message.text.includes("child findings"))).toBeTrue();
       expect(explore?.messages.some(message => message.tool === "write" && message.text.includes("Tool write not found"))).toBeTrue();
       expect(requestCount).toBe(beforeInspection); // Inspecting never invokes a model or resumes a child.

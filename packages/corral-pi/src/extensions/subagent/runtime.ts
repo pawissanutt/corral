@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { AuxiliarySettings } from "./settings.ts";
 import { AuxiliaryHistory, type HelperEvent, type HelperInspection } from "./inspection.ts";
 import { researchBudget, type ResearchOptions, type ResearchReport } from "./research.ts";
+import { RetainedConversationError } from "./conversation.ts";
 
 export type AuxiliaryKind = "explore" | "oracle" | "web_search" | "expert";
 export type Outcome = "completed" | "uncertain" | "not_started";
@@ -29,6 +30,8 @@ export interface AuxiliaryResult {
 }
 export interface AuxiliaryResponse extends AuxiliaryResult {
   readonly request: string;
+  /** Exact parent-local child lookup key, not necessarily the accounting request. */
+  readonly conversationId?: string;
   readonly truncated: boolean;
   readonly sessionFile?: string;
   readonly model?: string;
@@ -43,7 +46,7 @@ export interface AuxiliaryOptions {
   record(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
   execute(invocation: Invocation, signal: AbortSignal): Promise<AuxiliaryResult>;
   changed?(): void;
-  retain?(helper: HelperInspection, file: string, report?: string): void;
+  retain?(helper: HelperInspection, file: string, report?: string): boolean;
 }
 
 // Abortable FIFO semaphore. Taking a released slot happens before waking a waiter, so a new
@@ -113,7 +116,10 @@ export class AuxiliaryRuntime {
     const request = randomUUID();
     const { promise, resolve, reject } = Promise.withResolvers<AuxiliaryResponse>();
     this.requests.set(key, { id: request, done: promise });
-    void this.perform(kind, request, prompt, signal).then(resolve, reject);
+    let retained = false;
+    void this.perform(kind, request, prompt, () => { retained = true; }, signal).then(result => {
+      resolve(retained ? { ...result, conversationId: request } : result);
+    }, error => reject(retained ? new RetainedConversationError(request, error) : error));
     return promise;
   }
   private slots(kind: AuxiliaryKind): Slots {
@@ -124,7 +130,7 @@ export class AuxiliaryRuntime {
       case "expert": return this.expert;
     }
   }
-  private async perform(kind: AuxiliaryKind, request: string, prompt: string, outer?: AbortSignal): Promise<AuxiliaryResponse> {
+  private async perform(kind: AuxiliaryKind, request: string, prompt: string, saved: () => void, outer?: AbortSignal): Promise<AuxiliaryResponse> {
     const { options } = this;
     const settings = options.settings[kind];
     if (!settings) throw new Error(`${kind} is disabled`);
@@ -156,11 +162,11 @@ export class AuxiliaryRuntime {
     let outcome: Outcome = "not_started";
     let result: AuxiliaryResult | undefined;
     const retain = () => {
-      if (!observation.sessionFile || !options.retain) return;
+      if (!observation.sessionFile || !options.retain) return false;
       try {
         const helper = this.history.snapshot().find(entry => entry.request === request);
-        if (helper) options.retain(helper, observation.sessionFile, result?.text);
-      } catch { /* Readback does not change auxiliary execution or accounting. */ }
+        return !!helper && options.retain(helper, observation.sessionFile, result?.text);
+      } catch { return false; /* Readback does not change auxiliary execution or accounting. */ }
     };
     try {
       signal.throwIfAborted();
@@ -208,7 +214,10 @@ export class AuxiliaryRuntime {
       } finally {
         const settled: Outcome = started ? recorded ? outcome : "uncertain" : "not_started";
         observation.state = settled;
-        try { this.history.finish(request, settled, result?.text); retain(); }
+        try {
+          this.history.finish(request, settled, result?.text);
+          if (retain()) saved();
+        }
         finally { try { release?.(); } finally { this.controllers.delete(controller); } }
       }
     }

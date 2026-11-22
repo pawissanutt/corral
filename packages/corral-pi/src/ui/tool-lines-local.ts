@@ -2,6 +2,7 @@
 // queries, web and browser tools, owner questions, research helpers, tool search and MCP. Each reads as its verb, the
 // one argument that says what it does, and the result as facts; one-line JSON results are parsed here, never shown.
 // Only types come from `tool-rendering.ts`, which imports this module's presenters: no load-order cycle.
+import { helperConversationId } from "../extensions/subagent/conversation.ts";
 import {
   baseState, firstLine, formatElapsed, lineCount, numberArg, outputBytes, outputLines, recordOf, resultText, shortPath, stringArg, textLines,
 } from "./tool-row.ts";
@@ -309,17 +310,24 @@ function helperPresenter(kind: "explore" | "oracle", deps: ToolRenderDeps): Pres
       return { ...base, state, ...(counts ? { right: counts } : {}), ...(latest ? { body: [{ text: latest }] } : {}) };
     }
     const output = resultText(call.result);
-    if (state === "failed" && !details) return { ...base, state: "failed", outcome: reasonOf(output) || "failed" };
+    const conversation = helperConversationId(call.name, details?.["conversationId"]);
+    const reference = conversation ? [{ text: `Conversation ID: ${conversation}` }] : [];
+    const request = text(details, "request"), transcript = text(details, "sessionFile");
+    const open = deps.openView, agent = request ?? conversation;
+    const view = open && agent ? { view: { label: "Agents", open: () => open("agents", `helper:${agent}`) } } : {};
+    if (state === "failed" && (!details || text(details, "error") !== undefined)) {
+      return { ...base, ...view, state, outcome: reasonOf(output) || "failed",
+        ...(reference.length || output ? { expanded: () => [...reference, ...textLines(output, "text")] } : {}) };
+    }
     const report = recordOf(details?.["report"]), findings = findingsOf(details, output);
     const status = text(report, "status") ?? (text(details, "outcome") === "completed" ? "completed" : "partial");
     const stop = text(report, "stopReason") ?? text(details, "outcome") ?? "";
-    const request = text(details, "request"), transcript = text(details, "sessionFile");
     // The headline is Markdown; its emphasis, heading and code marks read as noise on one row.
     const lines = call.totals ? call.totals.lines : lineCount(findings);
     const headline = firstLine(findings).replace(/^#+\s*/, "").replace(/\*\*|__|`/g, "");
-    const open = deps.openView, view = open && request ? { view: { label: "Agents", open: () => open("agents", `helper:${request}`) } } : {};
     const expanded = (): readonly BodyLine[] => [
-      ...(request ? [{ text: `Request ${request}` }] : []),
+      ...reference,
+      ...(request && request !== conversation ? [{ text: `Request ${request}` }] : []),
       ...(transcript ? [{ text: `Transcript ${transcript}` }] : []),
       ...(details?.["truncated"] === true ? [{ text: "Findings truncated; the transcript has the full answer.", tone: "warning" as const }] : []),
       { text: "" }, ...textLines(findings, "text"),
