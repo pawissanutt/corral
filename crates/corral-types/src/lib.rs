@@ -98,6 +98,7 @@ pub enum Actor {
     Reviewer,
     Assistant,
     Auto,
+    Extension,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]

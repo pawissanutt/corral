@@ -307,6 +307,7 @@ const fn actor_word(actor: corral_types::Actor) -> &'static str {
         corral_types::Actor::Reviewer => "reviewer",
         corral_types::Actor::Assistant => "assistant",
         corral_types::Actor::Auto => "auto",
+        corral_types::Actor::Extension => "extension",
     }
 }
 

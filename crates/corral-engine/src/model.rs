@@ -7,6 +7,7 @@ pub fn actor_from_env() -> Actor {
         Ok("reviewer") => Actor::Reviewer,
         Ok("assistant") => Actor::Assistant,
         Ok("auto") => Actor::Auto,
+        Ok("extension") => Actor::Extension,
         _ => Actor::Owner,
     }
 }

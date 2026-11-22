@@ -182,6 +182,7 @@ pub(crate) const fn actor(actor: Actor) -> &'static str {
         Actor::Reviewer => "the reviewer",
         Actor::Assistant => "the assistant",
         Actor::Auto => "corrald",
+        Actor::Extension => "an extension",
     }
 }
 

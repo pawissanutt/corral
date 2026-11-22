@@ -41,7 +41,7 @@ pub(super) fn failed(event: &Event) -> bool {
     }
 }
 
-/// `owner`, `agent`, `reviewer`, `assistant`, `auto`.
+/// `owner`, `agent`, `reviewer`, `assistant`, `auto`, `extension`.
 pub(crate) const fn actor_word(actor: Actor) -> &'static str {
     match actor {
         Actor::Owner => "owner",
@@ -49,6 +49,7 @@ pub(crate) const fn actor_word(actor: Actor) -> &'static str {
         Actor::Reviewer => "reviewer",
         Actor::Assistant => "assistant",
         Actor::Auto => "auto",
+        Actor::Extension => "extension",
     }
 }
 

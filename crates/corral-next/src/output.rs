@@ -265,6 +265,7 @@ fn actor(actor: Actor) -> &'static str {
         Actor::Reviewer => "reviewer",
         Actor::Assistant => "assistant",
         Actor::Auto => "auto",
+        Actor::Extension => "extension",
     }
 }
 
