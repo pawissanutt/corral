@@ -84,6 +84,17 @@ fn tool_receives_submitted_head_after_worktree_moves() {
         "commit",
         "--allow-empty",
         "-qm",
+        "base",
+    ]);
+    let base = git(&["rev-parse", "HEAD"]);
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "--allow-empty",
+        "-qm",
         "submitted",
     ]);
     let submitted = git(&["rev-parse", "HEAD"]);
@@ -119,7 +130,7 @@ fn tool_receives_submitted_head_after_worktree_moves() {
             worktree: root.path().into(),
             branch: "task".into(),
             base: "main".into(),
-            base_sha: submitted.clone(),
+            base_sha: base.clone(),
             session: None,
             started: jiff::Timestamp::now(),
             ended: None,
@@ -129,6 +140,11 @@ fn tool_receives_submitted_head_after_worktree_moves() {
             quiet_since: None,
         })
         .unwrap();
+    let mut reviewer = engine.store.get_run(&task.id, "R1").unwrap().unwrap();
+    reviewer.id = "R2".into();
+    reviewer.role = Role::Reviewer;
+    reviewer.head_sha = None;
+    engine.store.insert_run(&reviewer).unwrap();
     git(&[
         "-c",
         "user.name=Test",
@@ -140,23 +156,32 @@ fn tool_receives_submitted_head_after_worktree_moves() {
         "later",
     ]);
     assert_ne!(git(&["rev-parse", "HEAD"]), submitted);
-    let output = Command::new(env!("CARGO_BIN_EXE_corral-next"))
-        .arg("--root")
-        .arg(root.path())
-        .args(["tool", "echo"])
-        .current_dir(root.path())
-        .env("CORRAL_NEXT_ROOT", root.path())
-        .env("CORRAL_TASK", &task.id)
-        .env("CORRAL_RUN", "R1")
-        .env_remove("CORRAL_PROJECT")
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let request: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(request["v"], 1);
-    assert_eq!(request["head"], submitted);
+    let call = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_corral-next"))
+            .arg("--root")
+            .arg(root.path())
+            .args(["tool", "echo"])
+            .current_dir(root.path())
+            .env("CORRAL_NEXT_ROOT", root.path())
+            .env("CORRAL_TASK", &task.id)
+            .env("CORRAL_RUN", "R2")
+            .env("CORRAL_ACTOR", "reviewer")
+            .env_remove("CORRAL_PROJECT")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let request: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(request["v"], 1);
+        assert_eq!(request["base"], base);
+        assert_eq!(request["head"], submitted);
+    };
+    call();
+    // Reused reviewers retain the previous verdict's head as a diff baseline.
+    reviewer.head_sha = Some(base.clone());
+    engine.store.update_run(&reviewer).unwrap();
+    call();
 }

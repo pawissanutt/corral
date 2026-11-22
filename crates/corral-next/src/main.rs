@@ -20,7 +20,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, error::ErrorKind};
 use corral_engine::{
-    Config, Engine, NewTask, Op, Status, Task, Usage, UsageToken, config::ExtensionTool,
+    Config, Engine, NewTask, Op, Role, Status, Task, Usage, UsageToken, config::ExtensionTool,
     events::EventFilter, extension, refuse, store::TaskFilter,
 };
 use jiff::Timestamp;
@@ -469,6 +469,15 @@ fn tool(
                 .with_context(|| format!("unknown run {id:?} for task {}", task.id))
         })
         .transpose()?;
+    // Reviewer head_sha is the previous verdict's diff baseline, not the current submission.
+    let head = match (run.as_ref(), engine.as_ref()) {
+        (Some(run), Some(engine)) if run.role == Role::Reviewer => engine
+            .store
+            .latest_run(&run.task, Role::Worker)?
+            .and_then(|worker| worker.head_sha),
+        (Some(run), _) => run.head_sha.clone(),
+        _ => None,
+    };
     let empty_env = BTreeMap::new();
     let settings = project.and_then(|p| config.projects.get(p));
     let project_env = settings.map_or(&empty_env, |settings| &settings.env);
@@ -491,10 +500,7 @@ fn tool(
             json!(repo.to_str().context("tool repository path is not UTF-8")?),
         ),
         ("base".into(), json!(run.as_ref().map(|run| &run.base_sha))),
-        (
-            "head".into(),
-            json!(run.as_ref().and_then(|run| run.head_sha.as_ref())),
-        ),
+        ("head".into(), json!(head)),
         (
             "task".into(),
             json!(task.as_ref().map(|task| json!({

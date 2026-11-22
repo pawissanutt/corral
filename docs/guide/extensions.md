@@ -58,8 +58,8 @@ A normal request looks like:
 {"v":1,"args":["extra"],"role":"worker","repo":"/absolute/worktree","base":"commit","head":"submitted-commit","task":{"id":"T-1","title":"Fix login","body":"Details","parent":null,"depends_on":[]},"run":"R1"}
 ```
 
-`task`, `run`, and `base` can be null outside a run. `head` is the run's submitted
-commit, or null when there is none. When present, a tool must use `head`, not the
+`task`, `run`, and `base` can be null outside a run. `head` is the worker's submitted
+commit (also for a reviewer run), or null when there is none. When present, a tool must use `head`, not the
 worktree's mutable `HEAD`, to inspect the submitted change. `role` reflects the caller;
 `repo` is the run worktree or project repository. The answer is arbitrary stdout, not JSON.
 
