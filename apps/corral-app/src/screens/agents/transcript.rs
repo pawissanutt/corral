@@ -180,7 +180,7 @@ fn anchored(transcript: &Transcript, anchor: &str, block: AnyElement) -> AnyElem
     view()
         .min_w(px(0.0))
         .on_layout(move |frame: &Bounds<Points>| {
-            anchors::placed(&scope, &key, token, frame.origin.y.0);
+            anchors::placed(&scope, &key, token, frame.origin.y.0, frame.size.height.0);
         })
         .child(block)
         .into_element()

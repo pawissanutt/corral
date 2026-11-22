@@ -3,7 +3,8 @@ use std::rc::Rc;
 
 use nsh_core::element::{Runtime, create_root};
 
-use super::jump::{Place, kept};
+use super::anchors::Mark;
+use super::jump::{Place, Shown, kept};
 use crate::model::Id;
 use crate::model::session::transcript::Reading;
 
@@ -48,5 +49,45 @@ fn leaving_a_transcript_saves_where_the_reader_was() {
             },
         )],
         "the view going saves the row the reader was at"
+    );
+}
+
+/// A record split across pages gains its earlier items at the front of the message the reader
+/// is in. Rows above were told only by a new first message, so these were counted as new
+/// replies and the reader's place, kept from the message's top, slid down by what arrived.
+#[test]
+fn a_split_record_growing_above_the_reader_holds_their_row_and_is_not_new() {
+    let scope = Id::from("B-test");
+    let record = "B-test/entry/e3";
+    let mut place = Place {
+        scope: Some(scope.clone()),
+        at_end: false,
+        top: Some((record.to_owned(), 300.0)),
+        ..Place::default()
+    };
+    place.shown(4, Some((scope.clone(), format!("{record}|2"))));
+    assert_eq!(
+        place.shown(7, Some((scope.clone(), format!("{record}|5")))),
+        Shown::Up {
+            held: Some((scope.clone(), record.to_owned(), 300.0)),
+            arrived: 0,
+        },
+        "the record's earlier items are held above the reader, not counted"
+    );
+    assert_eq!(
+        place.shown(8, Some((scope, format!("{record}|5")))),
+        Shown::Up {
+            held: None,
+            arrived: 1,
+        },
+        "a reply below still counts"
+    );
+    // The message was 500 high with the reader 300 into it; its earlier items add 200 above.
+    let (top, height) = (40.0, 500.0);
+    let mark = Mark::Bottom(height - 300.0);
+    assert_eq!(
+        mark.offset(top, height + 200.0),
+        top + 500.0,
+        "the reader stays on the item they read"
     );
 }

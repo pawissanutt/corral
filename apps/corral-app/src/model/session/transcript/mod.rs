@@ -240,6 +240,10 @@ pub struct TagFacts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transcript {
     pub messages: Vec<Message>,
+    /// The first recorded row: it changes whenever rows arrive above the shown ones, also when
+    /// they are a record's earlier items read from the page before (a record split across
+    /// pages keeps its message and anchor).
+    pub first: Option<String>,
     /// Drawn after the last served message, each until a served message carries its id.
     pub echoes: Vec<Echo>,
     /// Show the messages before these.

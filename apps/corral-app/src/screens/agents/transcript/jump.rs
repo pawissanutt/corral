@@ -6,7 +6,10 @@
 //! the reader is (the end, or a row and how far into it) is kept per session scope when the
 //! view closes, and every view of that scope opens there again. Scrolling up near the first
 //! row asks for the page before it (`older`); rows that arrive above the reader keep the row
-//! they read where it was and are not counted as new.
+//! they read where it was and are not counted as new, also when they are the earlier items of
+//! the record the reader is in. Past the history cap the loaded pages no longer join the newest
+//! one: the control then stays at the end too, reads `↓ Load latest messages`, and it and every
+//! jump to the end read the latest messages again.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -22,13 +25,17 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 use super::super::run;
 use super::anchors;
 use super::older::{Earlier, Reach};
+use super::watch;
 
 /// How close to the end still counts as at the end.
 const END_SLACK: f32 = 24.0;
 
-/// What the control says, by how many rows arrived since the reader left the end.
-fn words(form: Form, arrived: usize) -> String {
+/// What the control says, by how many rows arrived since the reader left the end; past the
+/// history cap the loaded pages no longer join the newest, and it reads the latest instead.
+fn words(form: Form, arrived: usize, latest: bool) -> String {
     match (form, arrived) {
+        (Form::Phone, _) if latest => "↓ Load latest".to_owned(),
+        _ if latest => "↓ Load latest messages".to_owned(),
         (_, 0) => "↓ Jump to latest".to_owned(),
         (Form::Phone, n) => format!("↓ {n} new · Latest"),
         (_, 1) => "↓ 1 new row · End".to_owned(),
@@ -62,12 +69,55 @@ pub(super) struct Place {
     pub top: Option<(String, f32)>,
     /// The transcript's row count as last seen.
     pub rows: usize,
-    /// The first message shown as last seen, with its scope: when it changes in the same
-    /// scope, rows arrived above the reader.
+    /// The first row shown as last seen, with its scope: when it changes in the same scope,
+    /// rows arrived above the reader.
     pub first: Option<(Id, String)>,
+    /// The scroll offset as last seen: a scroll that changes it is the reader's own.
+    pub offset: Option<f32>,
+}
+
+/// What rows arriving mean for the reader.
+#[derive(Debug, PartialEq)]
+pub(super) enum Shown {
+    /// The reader is at the end, which follows them.
+    End,
+    /// The reader is scrolled up: their row (scope, anchor, offset into it) stays where it is
+    /// on screen when rows arrived above, and the control counts what arrived below.
+    Up {
+        held: Option<(Id, String, f32)>,
+        arrived: usize,
+    },
 }
 
 impl Place {
+    /// The transcript now shows `rows` rows, `first` (with its scope) the first.
+    pub fn shown(&mut self, rows: usize, first: Option<(Id, String)>) -> Shown {
+        let before = std::mem::replace(&mut self.rows, rows);
+        let above = matches!(
+            (&self.first, &first),
+            (Some((was, old)), Some((scope, new))) if was == scope && old != new
+        );
+        self.first = first;
+        if self.at_end {
+            self.left_at = None;
+            return Shown::End;
+        }
+        let mut left = *self.left_at.get_or_insert(rows);
+        // What arrived above is not new: the reader read past it on their way up.
+        if above {
+            left += rows.saturating_sub(before);
+            self.left_at = Some(left);
+        }
+        let held = above
+            .then(|| self.scope.clone().zip(self.top.clone()))
+            .flatten()
+            .map(|(scope, (key, offset))| (scope, key, offset));
+        Shown::Up {
+            held,
+            arrived: rows.saturating_sub(left),
+        }
+    }
+
     pub fn reading(&self) -> Reading {
         match (&self.top, self.at_end) {
             (Some((key, offset)), false) => Reading::At {
@@ -128,6 +178,19 @@ pub fn follow(
     let count = computed(move || shown.with(|now| now.as_ref().map_or(0, |now| now.rows)));
     let scope_of = computed(move || shown.with(|now| now.as_ref().map(|now| now.scope.clone())));
     let first = computed(move || earlier.with(|now| now.as_ref()?.first.clone()));
+    let latest = computed(move || {
+        scope_of
+            .get()
+            .is_some_and(|id| watch::needs_latest(app, &id))
+    });
+    // Back to the end; past the history cap that reads the latest messages first.
+    let to_latest = move || {
+        if latest.get_untracked()
+            && let Some(id) = scope_of.get_untracked()
+        {
+            untracked(|| watch::latest(app, &id));
+        }
+    };
     {
         let place = place.clone();
         let reach = reach.clone();
@@ -148,6 +211,7 @@ pub fn follow(
             let mut known = place.borrow_mut();
             known.scope = Some(id.clone());
             known.top = None;
+            known.offset = None;
             match resume {
                 Some(Resume::Row { key, offset, rows }) => {
                     known.at_end = false;
@@ -176,35 +240,17 @@ pub fn follow(
         let place = place.clone();
         effect(move || {
             let now = count.get();
-            let scope = scope_of.get();
-            let top = first.get();
-            let mut known = place.borrow_mut();
-            let before = std::mem::replace(&mut known.rows, now);
-            let shown = scope.zip(top);
-            // The same scope's first message changed: a page arrived above the shown rows.
-            let above = matches!(
-                (&known.first, &shown),
-                (Some((was, old)), Some((scope, new))) if was == scope && old != new
-            );
-            known.first = shown;
-            if known.at_end {
-                known.left_at = None;
-                drop(known);
-                after_answer(move || scroller.scroll_to_end(false));
-                return;
+            let top = scope_of.get().zip(first.get());
+            let shown = place.borrow_mut().shown(now, top);
+            match shown {
+                Shown::End => after_answer(move || scroller.scroll_to_end(false)),
+                Shown::Up { held, arrived: n } => {
+                    if let Some((scope, key, offset)) = held {
+                        anchors::hold(scope.as_str(), key, offset, scroller);
+                    }
+                    arrived.set(n);
+                }
             }
-            let mut left = *known.left_at.get_or_insert(now);
-            // What arrived above is not new, and the reader's row stays where it is on screen.
-            let held = above.then(|| known.scope.clone().zip(known.top.clone()));
-            if above {
-                left += now.saturating_sub(before);
-                known.left_at = Some(left);
-            }
-            drop(known);
-            if let Some((scope, (key, offset))) = held.flatten() {
-                anchors::hold(scope.as_str(), key, offset, scroller);
-            }
-            arrived.set(now.saturating_sub(left));
         });
     }
     {
@@ -227,6 +273,7 @@ pub fn follow(
         effect(move || {
             let now = asked.get();
             if answered.replace(now) != now {
+                to_latest();
                 {
                     let mut known = place.borrow_mut();
                     known.at_end = true;
@@ -244,8 +291,12 @@ pub fn follow(
             let offset = event.offset.y.0;
             let below = event.content_size.height.0 - offset - event.size.height.0;
             let end = below <= END_SLACK;
-            let (flipped, scope) = {
+            let (flipped, scope, moved) = {
                 let mut known = scrolled.borrow_mut();
+                let moved = known
+                    .offset
+                    .replace(offset)
+                    .is_some_and(|was| (was - offset).abs() > 0.5);
                 if let Some(at) = known
                     .scope
                     .as_ref()
@@ -260,8 +311,11 @@ pub fn follow(
                     }
                     known.at_end = end;
                 }
-                (flipped, known.scope.clone())
+                (flipped, known.scope.clone(), moved)
             };
+            if moved && let Some(scope) = &scope {
+                anchors::moved(scope.as_str());
+            }
             if flipped {
                 if end && let Some(scope) = scope {
                     anchors::cancel(scope.as_str());
@@ -279,10 +333,11 @@ pub fn follow(
             }
         });
     let control = dynamic(move || {
-        if at_end.get() {
+        let capped = latest.get();
+        if at_end.get() && !capped {
             return None;
         }
-        let label = words(form, arrived.get());
+        let label = words(form, arrived.get(), capped);
         let words = text(label.clone()).text_color(color(Token::Ink));
         let words = if form == Form::Terminal {
             words.font_weight(FontWeight::BOLD)
@@ -296,6 +351,7 @@ pub fn follow(
             .label(label)
             .cursor_pointer()
             .on_press(move || {
+                to_latest();
                 {
                     let mut known = pressed.borrow_mut();
                     known.at_end = true;

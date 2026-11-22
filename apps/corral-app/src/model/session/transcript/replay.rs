@@ -762,6 +762,7 @@ pub fn transcript(
                 millis(m.at.as_deref()),
                 std::mem::take(&mut boundary),
                 message,
+                m.items.len(),
             ))
         })
         .collect();
@@ -775,14 +776,19 @@ pub fn transcript(
         let place = at.and_then(|at| {
             timed
                 .iter()
-                .position(|(when, _, _)| when.is_some_and(|when| when > at))
+                .position(|(when, _, _, _)| when.is_some_and(|when| when > at))
         });
-        timed.insert(place.unwrap_or(timed.len()), (at, false, bubble));
+        timed.insert(place.unwrap_or(timed.len()), (at, false, bubble, 0));
     }
+    // A record split across pages keeps its anchor when its earlier items arrive, but not its
+    // item count; recorded records never grow at their end.
+    let first = timed
+        .first()
+        .map(|(_, _, message, count)| item_key(&message.anchor, *count));
     let messages: Vec<Message> = merged(
         timed
             .into_iter()
-            .map(|(_, seam, message)| (seam, message))
+            .map(|(_, seam, message, _)| (seam, message))
             .collect(),
     )
     .into_iter()
@@ -796,10 +802,16 @@ pub fn transcript(
         Some(turn) if body.is_some() => overlay::overlay(turn, recorded, cx),
         _ => (Vec::new(), Vec::new()),
     };
-    let older_cursor = cache.and_then(older_token);
+    // Past the history cap the loaded pages no longer join the newest one: only the latest
+    // messages can be read, never the page before these.
+    let capped = cache
+        .and_then(|cache| cache.error.as_ref())
+        .is_some_and(|error| error.code == "history_changed");
+    let older_cursor = cache.and_then(older_token).filter(|_| !capped);
     Transcript {
         echoes: echo::shown(id, ui, body, feed),
         messages,
+        first,
         older: older_cursor.as_ref().map(|_| Action::Older(id.clone())),
         older_cursor,
         newer: None,

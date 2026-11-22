@@ -19,7 +19,8 @@ pub struct Earlier {
     pub cursor: Option<String>,
     /// A read of the transcript is on its way: nothing more is asked until it lands.
     pub paging: bool,
-    /// The anchor of the first message shown: it changes when rows arrive above.
+    /// The first row shown (`Transcript::first`): it changes when rows arrive above, also
+    /// inside a record split across pages.
     pub first: Option<String>,
 }
 
@@ -29,10 +30,7 @@ impl Earlier {
             older: transcript.older.clone(),
             cursor: transcript.older_cursor.clone(),
             paging: transcript.paging,
-            first: transcript
-                .messages
-                .first()
-                .map(|message| message.anchor.clone()),
+            first: transcript.first.clone(),
         }
     }
 }

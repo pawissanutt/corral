@@ -334,6 +334,43 @@ fn arrive(feed: &mut daemon::Feed, author: &str, at: &str, text: &str) {
     });
 }
 
+/// A record split across pages keeps its message and anchor when its earlier items arrive from
+/// the page before, so a view watching the first message's anchor neither held the reader's row
+/// nor told those items from new replies. A reply merged into the same message below must not
+/// look like rows above.
+#[test]
+fn a_split_record_gaining_its_earlier_items_changes_the_first_row() {
+    let target = DetailRef::Session { id: ID.into() };
+    let text = |words: &str| SessionItem::Text { text: words.into() };
+    let mut feed = feed(vec![text("The record's end.")]);
+    let before = shown(&feed);
+    arrive(
+        &mut feed,
+        "assistant",
+        "2026-11-15T10:00:09Z",
+        "A later reply.",
+    );
+    let below = shown(&feed);
+    assert_eq!(below.messages.len(), 1, "the reply joins the same message");
+    assert_eq!(below.first, before.first, "rows below are not rows above");
+    let Some(DetailBody::Session(page)) = feed
+        .details
+        .get_mut(&daemon::detail_key(&target))
+        .and_then(|cache| cache.merged.as_mut())
+    else {
+        panic!("a served session page");
+    };
+    page.messages[0]
+        .items
+        .insert(0, text("The record's start, from the page before."));
+    let above = shown(&feed);
+    assert_eq!(above.messages[0].anchor, before.messages[0].anchor);
+    assert_ne!(
+        above.first, below.first,
+        "the record's earlier items arrived above the shown rows"
+    );
+}
+
 #[test]
 fn a_reader_who_scrolled_up_finds_the_same_row_after_leaving_and_reopening_the_session() {
     let target = DetailRef::Session { id: ID.into() };
