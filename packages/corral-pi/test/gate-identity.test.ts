@@ -150,6 +150,11 @@ test("an initialized, locally inactive submodule cannot hide gate inputs from th
     execFileSync("git", ["clone", "--quiet", "--local", cwd, dep]);
     f.git("-c", "protocol.file.allow=always", "submodule", "add", "--quiet", dep, "dependency");
     f.git("commit", "-qm", "Pin dependency");
+    f.git("submodule", "deinit", "-f", "--", "dependency");
+    f.setGate(["test ! -e dependency/source.txt"]);
+    await expect(verifyBuild(f.context, f.run, f.journal)).rejects.toThrow("initialize the submodule");
+    expect(f.journal.latestGate()).toBeUndefined();
+    f.git("-c", "protocol.file.allow=always", "submodule", "update", "--init", "--", "dependency");
     f.git("config", "submodule.dependency.active", "false");
     f.git("config", "submodule.dependency.ignore", "all");
     await checkIndexVisibility(f.run, cwd);
@@ -210,7 +215,7 @@ test("legacy gates and passes for a different configured env cannot authorize or
     f.setGate(commands);
     const at = new Date().toISOString();
     f.journal.gate({ attempt: "G1", head: f.head, commands, started: at, ended: at, result: "pass" });
-    const oldFingerprint = createHash("sha256").update(JSON.stringify(["corral-project-gate-v2", commands, [["MODE", "configured-first"]]])).digest("hex");
+    const oldFingerprint = createHash("sha256").update(JSON.stringify(["corral-project-gate-v3", commands, [["MODE", "configured-first"]]])).digest("hex");
     f.journal.gate({ attempt: "G2", head: f.head, input_fingerprint: oldFingerprint, commands, started: at, ended: at, result: "pass" });
     const initial = await f.evidence.finish("finish");
     const authorization = f.exit.options().find(option => option.choice === "land")?.authorization;

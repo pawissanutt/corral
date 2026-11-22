@@ -1,4 +1,4 @@
-import { lstat, opendir, realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import type { Run } from "./corral-cli.ts";
 
@@ -43,15 +43,11 @@ export async function checkIndexVisibility(run: Run, cwd: string): Promise<void>
     for (const link of links) {
       const child = join(root, link.path);
       const stat = await lstat(child).catch(e => { if (!missing(e)) throw unverified(); });
-      if (!stat) continue; // Not initialized: no files at this gitlink.
-      if (!stat.isDirectory() || await realpath(child) !== child) throw unverified();
+      // The same commit must always attest to the same set of checked-out dependencies.
+      // Never earn or reuse a receipt for a partially initialized tree.
+      if (!stat?.isDirectory() || await realpath(child) !== child) throw unverified();
       const metadata = await lstat(join(child, ".git")).catch(e => { if (!missing(e)) throw unverified(); });
-      if (!metadata) {
-        const entries = await opendir(child);
-        try { if (await entries.read()) throw unverified(); } finally { await entries.close(); }
-        continue;
-      }
-      if (!metadata.isFile() && !metadata.isDirectory()) throw unverified();
+      if (!metadata || (!metadata.isFile() && !metadata.isDirectory())) throw unverified();
       const inspect = async (args: string[]) => {
         const reply = await run(["--no-optional-locks", ...args], { cwd: child });
         if (reply.code !== 0) throw unverified();

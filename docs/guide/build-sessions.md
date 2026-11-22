@@ -113,6 +113,9 @@ may supply a reason to override missing approval, never to bypass a failed gate.
 prepare the new candidate rather than reusing an old choice. A stale card cannot land
 a different commit. Keep and Iterate do not require passing evidence.
 
+All pinned submodules must be initialized recursively, clean and at their recorded commits
+before verification. A gate run on a partial checkout cannot authorize a full checkout.
+
 Land requires a clean candidate, no live children, a suitable base branch and a base
 checkout that can safely fast-forward without overwriting staged, unstaged, untracked,
 or ignored work. A checked-out target needs a supported full checkout; Corral will not

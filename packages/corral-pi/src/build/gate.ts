@@ -33,8 +33,8 @@ export function gateInputFingerprint({ gate = [], env = {} }: GateConfig): strin
   if (!env || typeof env !== "object" || Array.isArray(env)) throw new Error("The project env must be a table of strings.");
   const entries = Object.entries(env).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
   if (entries.some(([, value]) => typeof value !== "string")) throw new Error("The project env must be a table of strings.");
-  // Earlier receipts did not audit index visibility throughout initialized submodules.
-  return createHash("sha256").update(JSON.stringify(["corral-project-gate-v3", gate, entries])).digest("hex");
+  // Earlier receipts could represent a partially initialized submodule checkout.
+  return createHash("sha256").update(JSON.stringify(["corral-project-gate-v4", gate, entries])).digest("hex");
 }
 
 /** What a caller follows while the gate runs. */
