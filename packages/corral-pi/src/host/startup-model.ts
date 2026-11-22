@@ -4,8 +4,7 @@ import { homedir } from "node:os";
 import type { AwsBinding } from "../auth/aws.ts";
 import type { LlamaCppSettings } from "../auth/local.ts";
 import { listModels, type ListedModel } from "../auth/models.ts";
-import { join } from "node:path";
-import { authDir, corralPiRoot } from "../auth/paths.ts";
+import { authDir } from "../auth/paths.ts";
 import { HOST_PROVIDER_IDS, PROVIDERS, isApiProvider, type ProviderId } from "../auth/providers.ts";
 import { FileCredentialStore } from "../auth/store.ts";
 import { checkLaunchFallback, qualifiedModel, type ModelChoice } from "./config.ts";
@@ -13,7 +12,7 @@ import { checkLaunchFallback, qualifiedModel, type ModelChoice } from "./config.
 export interface StartupModel extends ListedModel {
   /** Provider display name, including the billing route. */
   readonly label: string;
-  /** Usable as a durable default by both Chat and Build, without per-launch bindings. */
+  /** Can be saved as a default in this launch context without per-launch bindings. */
   readonly savable: boolean;
 }
 
@@ -33,7 +32,7 @@ async function hasBedrockProfile(aws: AwsBinding): Promise<boolean> {
   } catch { return false; }
 }
 
-/** No options lists only the shared Chat/Build choices, for Settings. */
+/** Without a launch role, list only savable choices, in the same catalog used by the launcher. */
 export async function listStartupModels(options: ListOptions = {}): Promise<StartupModel[]> {
   const providers: ProviderId[] = [];
   for (const provider of HOST_PROVIDER_IDS) {
@@ -48,15 +47,11 @@ export async function listStartupModels(options: ListOptions = {}): Promise<Star
   if (!providers.length) return [];
   const modelsPath = providers.every(isApiProvider) ? null : options.modelsPath;
   const models = await listModels(providers, { modelsPath });
-  const common = providers.filter(id => id !== "amazon-bedrock" && id !== "llama.cpp");
-  const compareShared = common.some(id => !isApiProvider(id)) && modelsPath && modelsPath !== join(corralPiRoot(), "models.json");
-  const shared = compareShared ? new Set((await listModels(common).catch(() => [])).map(model => model.selector)) : undefined;
   const seen = new Set<string>();
   return models.flatMap(model => {
     if (!qualifiedModel(model.selector) || seen.has(model.selector)) return [];
     seen.add(model.selector);
-    const savable = model.provider !== "amazon-bedrock" && model.provider !== "llama.cpp" && Buffer.byteLength(model.selector) <= 256 &&
-      (!shared || isApiProvider(model.provider) || shared.has(model.selector));
+    const savable = model.provider !== "amazon-bedrock" && model.provider !== "llama.cpp" && Buffer.byteLength(model.selector) <= 256;
     return options.role || savable ? [{ ...model, label: PROVIDERS[model.provider].label, savable }] : [];
   });
 }

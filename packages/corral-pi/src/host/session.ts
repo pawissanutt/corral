@@ -336,6 +336,7 @@ export class HostSession {
   private readonly remoteDefaultModel: string;
   private readonly remoteCatalog = new ModelCatalogStatus();
   private readonly modelFavorites: WorkspaceModelFavorites;
+  private readonly buildModelsPath: string | undefined;
   private remoteJobSample: ReturnType<typeof setTimeout> | undefined;
   readonly dialogs: RemoteDialogs;
   readonly panels: NativePanels | undefined;
@@ -486,11 +487,14 @@ export class HostSession {
       error: text => this.addMark({ kind: "note", tone: "error", at: Date.now(), text }),
     });
     const ownerDialogs = { dialogs: this.dialogs };
+    this.buildModelsPath = options.build?.session.bare ? join(options.build.dir, "..", "..", "models.json") : undefined;
+    const startupRoot = options.build ? options.build.session.workspaceRoot
+      : options.client.configured ? options.client.workspaceRoot : undefined;
     this.panels = options.ui === "plain" ? undefined : new NativePanels({
       ...ownerDialogs,
       modelFavorites: this.modelFavorites,
       personal: readPersonalPreferences(),
-      settings: terminalSettings(options.identity.role, options.client.workspaceRoot, options.client.executable),
+      settings: terminalSettings(options.identity.role, startupRoot, options.client.executable, { modelsPath: this.buildModelsPath }),
       identity: options.identity, cwd: options.cwd, snapshot: () => this.panelSnapshot(),
       sidebarKey: sidebarToggleKey(process.env),
       marks: this.marks,
@@ -826,7 +830,7 @@ export class HostSession {
     const { providers, credentials } = options.routes ?? await sessionRoutes(options.modules.auth, route.id, options.identity.role, extra);
     const models = await createModelCatalog(credentials, { providers,
       ...(providers.every(isApiProvider) ? { modelsPath: null }
-        : options.build?.session.bare ? { modelsPath: join(options.build.dir, "..", "..", "models.json") } : {}),
+        : host.buildModelsPath !== undefined ? { modelsPath: host.buildModelsPath } : {}),
     });
     const modelId = options.model.startsWith(`${route.id}/`) ? options.model.slice(route.id.length + 1) : options.model;
     const report = (usage: ModelUsage) => host.reportUsage(usage);
