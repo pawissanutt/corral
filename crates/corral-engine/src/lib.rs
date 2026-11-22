@@ -18,6 +18,7 @@ pub mod model;
 pub mod pi_startup;
 mod pipeline;
 mod prompt;
+pub mod react;
 mod review;
 pub mod runner;
 pub mod store;

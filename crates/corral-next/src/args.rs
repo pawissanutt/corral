@@ -326,6 +326,8 @@ pub(crate) enum ExtCommand {
         #[arg(long)]
         project: Option<String>,
     },
+    /// Run one delivery pass of events to every enabled extension with `run`.
+    Deliver,
 }
 
 fn from_name<T: DeserializeOwned>(name: &str) -> Result<T, serde::de::value::Error> {

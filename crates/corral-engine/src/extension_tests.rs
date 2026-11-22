@@ -23,6 +23,7 @@ fn context<'a>(cwd: &'a Path, env: &'a BTreeMap<String, String>) -> CommandConte
         project: None,
         extension: "fixture",
         env,
+        hold: None,
     }
 }
 

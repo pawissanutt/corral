@@ -2,8 +2,9 @@ use std::{collections::BTreeMap, env, io::Write, path::Path, time::Duration};
 
 use anyhow::{Context, Result, ensure};
 use corral_engine::{
-    Config,
+    Config, Store,
     extension::{CommandContext, run},
+    react,
 };
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -25,6 +26,48 @@ struct LineCheck {
 enum CheckResult {
     Stdout(String),
     Error(String),
+}
+
+/// One pass without a daemon, for CLI or cron setups. Retries a failed event at once.
+pub(crate) fn deliver(root: &Path, config: &Config, out: &mut Output<'_>) -> Result<u8> {
+    let state_dir = root.join(".corral-next");
+    let store = Store::open(&state_dir.join("corral.db"))?;
+    let reports = react::deliver(&react::Pass {
+        root,
+        state_dir: &state_dir,
+        config,
+        store: &store,
+        retry_after: Duration::ZERO,
+        stop: &|| false,
+    });
+    out.value(reports.as_slice(), |out, reports| {
+        for report in reports {
+            let name = &report.extension;
+            if let Some(error) = &report.error {
+                writeln!(out, "{name}: {error}")?;
+            } else if report.busy {
+                writeln!(out, "{name}: another process is delivering")?;
+            } else {
+                write!(
+                    out,
+                    "{name}: delivered {}, skipped {}",
+                    report.delivered, report.skipped
+                )?;
+                if report.failed {
+                    let cursor = react::status(&state_dir, name).ok().flatten();
+                    let error = cursor.and_then(|cursor| cursor.last_error);
+                    write!(out, "; failed: {}", error.unwrap_or_default())?;
+                }
+                writeln!(out)?;
+            }
+        }
+        Ok(())
+    })?;
+    Ok(u8::from(
+        reports
+            .iter()
+            .any(|report| report.failed || report.error.is_some()),
+    ))
 }
 
 pub(crate) fn check(
@@ -72,6 +115,7 @@ pub(crate) fn check(
         project: project.as_deref(),
         extension: name,
         env,
+        hold: None,
     };
     let mut checks = Vec::new();
     let mut check = |label: String, line, mut request: Map<String, Value>| {

@@ -3667,6 +3667,43 @@
         ],
         "type": "string"
       },
+      "ExtensionHealth": {
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "last_error": {
+            "description": "The most recent failure; a later successful event delivery clears it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "shapes": {
+            "description": "`tool`, `ask` and/or `react`, for the lines the extension configures.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "skipped": {
+            "default": 0,
+            "description": "Events given up on after repeated delivery failures.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "shapes",
+          "enabled"
+        ],
+        "type": "object"
+      },
       "Frame": {
         "properties": {
           "kind": {
@@ -8653,6 +8690,13 @@
           "devices": {
             "items": {
               "$ref": "#/components/schemas/DeviceInfo"
+            },
+            "type": "array"
+          },
+          "extensions": {
+            "description": "Each configured extension in name order; empty on a parse error.",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionHealth"
             },
             "type": "array"
           },

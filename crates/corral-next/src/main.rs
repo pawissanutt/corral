@@ -33,6 +33,13 @@ use args::{
 use output::{Output, TaskView};
 
 fn main() -> ExitCode {
+    let args: Vec<_> = env::args_os().collect();
+    if args
+        .get(1)
+        .is_some_and(|arg| arg == corral_engine::extension::ATTEMPT_ARG)
+    {
+        return ExitCode::from(corral_engine::extension::attempt_main(&args[2..]));
+    }
     let program = env::args_os()
         .next()
         .filter(|arg| !arg.is_empty())
@@ -102,6 +109,9 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
     {
         tool(&root, &cwd, project.as_deref(), &invocation, out)?;
         return Ok(0);
+    }
+    if let Command::Ext(ExtCommand::Deliver) = command {
+        return ext::deliver(&root, &checked_config(&root)?, out);
     }
     if let Command::Import {
         dir,
@@ -499,6 +509,7 @@ fn tool(
         project,
         extension: entry.extension,
         env: project_env,
+        hold: None,
     };
     let bytes = extension::run(
         &entry.definition.run,

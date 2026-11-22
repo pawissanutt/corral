@@ -1,6 +1,6 @@
 //! Bounded subprocess exchange for owner-trusted extension lines. This is not a sandbox.
 
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{collections::BTreeMap, fs::File, path::Path, time::Duration};
 
 use anyhow::Result;
 use serde_json::{Map, Value};
@@ -11,6 +11,32 @@ pub struct CommandContext<'a> {
     pub project: Option<&'a str>,
     pub extension: &'a str,
     pub env: &'a BTreeMap<String, String>,
+    /// A file the caller has locked. The command then runs under an attempt supervisor
+    /// that alone inherits it, so the lock stays held until the command's process group
+    /// has been killed and its shell reaped, even if the caller dies first. The supervisor
+    /// does that when the shell exits, at the deadline, or when the caller dies.
+    pub hold: Option<&'a File>,
+}
+
+/// First argument of the hidden mode in which a Corral executable supervises one attempt.
+/// Every executable that delivers to extensions must pass such a call to [`attempt_main`]
+/// before anything else.
+pub const ATTEMPT_ARG: &str = "__corral-extension-attempt";
+
+/// Runs the attempt supervisor with the arguments after [`ATTEMPT_ARG`]; returns its exit
+/// status: the shell's, or 128 plus the signal that ended it.
+#[cfg(unix)]
+pub fn attempt_main(args: &[std::ffi::OsString]) -> u8 {
+    unix::attempt(args).unwrap_or_else(|error| {
+        eprintln!("corral extension attempt: {error:#}");
+        125
+    })
+}
+
+#[cfg(not(unix))]
+pub fn attempt_main(_args: &[std::ffi::OsString]) -> u8 {
+    eprintln!("extension commands are supported only on Unix");
+    125
 }
 
 /// Run an owner-configured `sh -c` line with a versioned JSON request on stdin.
@@ -42,8 +68,13 @@ pub fn run(
 #[cfg(unix)]
 mod unix {
     use std::{
+        ffi::OsString,
         io::{self, Read, Write},
-        os::{fd::AsRawFd, unix::process::CommandExt},
+        os::{
+            fd::AsRawFd,
+            unix::process::{CommandExt, ExitStatusExt},
+        },
+        path::{Path, PathBuf},
         process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio},
         time::Instant,
     };
@@ -78,12 +109,43 @@ mod unix {
                     .canonicalize()
                     .unwrap_or_else(|_| context.root.to_path_buf())
         });
-        let mut command = Command::new("sh");
+        // Closing the write end, or dying, tells the supervisor to stop the attempt.
+        let mut control = None;
+        let mut command = match context.hold {
+            Some(lock) => {
+                let (reader, writer) = io::pipe().context("create extension attempt control")?;
+                let (ready, started) = io::pipe().context("create extension attempt signal")?;
+                let mut command = Command::new(supervisor()?);
+                let inherit = [reader.as_raw_fd(), started.as_raw_fd(), lock.as_raw_fd()];
+                command
+                    .arg(super::ATTEMPT_ARG)
+                    .arg(timeout.as_millis().to_string())
+                    .args(inherit.map(|fd| fd.to_string()))
+                    .arg(line);
+                // SAFETY: runs in the forked child before exec and calls only fcntl, which
+                // is async-signal-safe. It changes only the child's descriptor table.
+                unsafe {
+                    command.pre_exec(move || {
+                        for fd in inherit {
+                            set_cloexec(fd, false)?;
+                        }
+                        Ok(())
+                    });
+                }
+                // The child's ends stay open in this process until the spawn below returns.
+                control = Some((reader, writer, ready, started));
+                command
+            }
+            None => {
+                let mut command = Command::new("sh");
+                command.args(["-c", line]);
+                command
+            }
+        };
         if foreign_root {
             command.env_remove("CORRAL_TASK").env_remove("CORRAL_RUN");
         }
         let mut child = command
-            .args(["-c", line])
             .current_dir(context.cwd)
             .envs(context.env)
             .env("CORRAL_NEXT_ROOT", context.root)
@@ -96,6 +158,9 @@ mod unix {
             .stderr(Stdio::piped())
             .spawn()
             .context("start extension command")?;
+        let (control, ready) = control
+            .map(|(_reader, writer, ready, _started)| (writer, ready))
+            .unzip();
         // A Unix Child id originates as a positive pid_t from spawn.
         let pid = child.id() as libc::pid_t;
         let mut pipes = Pipes {
@@ -109,15 +174,37 @@ mod unix {
         let result = setup
             .and_then(|()| pipes.exchange(pid, &input, started, timeout, max_stdout, &mut capture));
         let Err(error) = result else {
-            // exchange observed a successful exit without reaping it.
+            // exchange observed a successful exit without reaping it. A supervisor exits
+            // only after killing the line's group.
             child.wait().context("reap extension shell")?;
+            if let Some(mut ready) = ready {
+                // An executable that ignores the attempt mode would exit 0 without a line.
+                let mut byte = [0];
+                ensure!(
+                    matches!(ready.read(&mut byte), Ok(1)),
+                    "the extension attempt supervisor never started the line; \
+                     does this executable handle {}?",
+                    super::ATTEMPT_ARG
+                );
+            }
             return Ok(capture.stdout);
         };
 
-        // Never reap before killing the group: the unreaped shell pins the
-        // numeric group ID even if the shell exited ahead of its descendants.
         drop(pipes.stdin.take());
-        let cleanup = stop(&mut child, pid);
+        let cleanup = match control {
+            // Only the supervisor can name the line's group. Killing it would release the
+            // lock with the line still running, so let it stop the line, and wait.
+            Some(control) => {
+                drop(control);
+                child
+                    .wait()
+                    .map(drop)
+                    .context("wait for the extension attempt supervisor")
+            }
+            // Never reap before killing the group: the unreaped shell pins the
+            // numeric group ID even if the shell exited ahead of its descendants.
+            None => stop(&mut child, pid),
+        };
         let tail = &mut capture.stderr_tail;
         if can_drain && let Some(stderr) = &mut pipes.stderr {
             drain_queued_stderr(stderr, tail);
@@ -373,6 +460,129 @@ mod unix {
             }
         }
         Ok(())
+    }
+
+    /// The executable now running this code. `/proc/self/exe` still execs it after an
+    /// upgrade replaced its file.
+    fn supervisor() -> Result<PathBuf> {
+        let current = Path::new("/proc/self/exe");
+        if current.exists() {
+            return Ok(current.to_path_buf());
+        }
+        std::env::current_exe().context("locate the extension attempt supervisor")
+    }
+
+    /// Async-signal-safe: only fcntl.
+    fn set_cloexec(fd: libc::c_int, on: bool) -> io::Result<()> {
+        // SAFETY: fcntl on a descriptor number with flag arguments only; no pointers.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        let flags = if on {
+            flags | libc::FD_CLOEXEC
+        } else {
+            flags & !libc::FD_CLOEXEC
+        };
+        if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// The supervisor: `<deadline ms> <control fd> <signal fd> <lock fd> <line>`. It is the parent of
+    /// the line's shell and keeps it unreaped until the shell's group has been killed, so
+    /// that group ID cannot name anyone else. The lock it inherited is released only when
+    /// it exits, after that.
+    pub(super) fn attempt(args: &[OsString]) -> Result<u8> {
+        let [deadline, control, ready, lock, line] = args else {
+            bail!("expected a deadline, three descriptors and a line");
+        };
+        let number = |arg: &OsString, name: &str| -> Result<u64> {
+            arg.to_str()
+                .and_then(|arg| arg.parse().ok())
+                .with_context(|| format!("invalid attempt {name} {arg:?}"))
+        };
+        let fd = |arg, name| {
+            libc::c_int::try_from(number(arg, name)?)
+                .with_context(|| format!("attempt {name} descriptor out of range"))
+        };
+        let deadline = Duration::from_millis(number(deadline, "deadline")?);
+        let control = fd(control, "control")?;
+        let ready = fd(ready, "signal")?;
+        let lock = fd(lock, "lock")?;
+        // The line must hold none: they belong to the attempt, not to its processes.
+        for fd in [control, ready, lock] {
+            set_cloexec(fd, true).context("keep attempt descriptors from the line")?;
+        }
+        let started = Instant::now();
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(line).process_group(0);
+        #[cfg(target_os = "linux")]
+        {
+            // If this supervisor is killed, its shell dies too; descendants outlive it.
+            let parent = std::process::id() as libc::pid_t;
+            // SAFETY: runs in the forked child before exec and calls only prctl and
+            // getppid, which are async-signal-safe.
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) == -1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    if libc::getppid() != parent {
+                        return Err(io::Error::from_raw_os_error(libc::ESRCH));
+                    }
+                    Ok(())
+                });
+            }
+        }
+        let mut child = command.spawn().context("start extension command")?;
+        // SAFETY: the signal descriptor was inherited for this process alone to own.
+        let mut ready = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(ready) };
+        let signaled = ready.write_all(&[1]).context("report the started line");
+        drop(ready);
+        let pid = child.id() as libc::pid_t;
+        let watched = watch(pid, control, started, deadline);
+        // The unreaped shell pins its group ID, so this reaches only the attempt's group.
+        let killed = kill(-pid).context("kill extension process group");
+        let status = child.wait().context("reap extension shell")?;
+        watched?;
+        killed?;
+        signaled?;
+        Ok(match (status.code(), status.signal()) {
+            (Some(code), _) => code as u8,
+            (None, signal) => 128_u8.saturating_add(signal.unwrap_or(0) as u8),
+        })
+    }
+
+    /// Returns when the shell exits, the deadline passes, or the control pipe closes.
+    fn watch(
+        pid: libc::pid_t,
+        control: libc::c_int,
+        started: Instant,
+        deadline: Duration,
+    ) -> Result<()> {
+        loop {
+            match peek_exit(pid) {
+                // SAFETY: si_pid is valid for a P_PID/WEXITED waitid result.
+                Ok(info) if unsafe { info.si_pid() } != 0 => return Ok(()),
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error).context("inspect extension shell status"),
+            }
+            let remaining = deadline.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Ok(());
+            }
+            let mut fds = [libc::pollfd {
+                fd: control,
+                events: libc::POLLIN,
+                revents: 0,
+            }];
+            let millis = remaining.min(STATUS_INTERVAL).as_millis() as libc::c_int + 1;
+            // SAFETY: fds is a live one-element array; poll does not retain it.
+            let ready = unsafe { libc::poll(fds.as_mut_ptr(), 1, millis) };
+            if ready > 0 && fds[0].revents != 0 {
+                return Ok(());
+            }
+        }
     }
 
     fn keep_tail(tail: &mut Vec<u8>, bytes: &[u8]) {

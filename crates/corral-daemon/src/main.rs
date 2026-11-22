@@ -273,6 +273,14 @@ mod unix {
 
 #[cfg(unix)]
 fn main() -> anyhow::Result<()> {
+    // The daemon runs each extension line under a copy of itself in this mode.
+    let args: Vec<_> = std::env::args_os().collect();
+    if args
+        .get(1)
+        .is_some_and(|arg| arg == corral_engine::extension::ATTEMPT_ARG)
+    {
+        std::process::exit(corral_engine::extension::attempt_main(&args[2..]).into());
+    }
     unix::run()
 }
 

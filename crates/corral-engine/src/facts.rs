@@ -144,6 +144,7 @@ impl<'a> FactsReader<'a> {
                     project: Some(self.project),
                     extension: name,
                     env: &self.settings.env,
+                    hold: None,
                 };
                 let output =
                     extension::run(line, request, &context, self.timeout, self.max_stdout)?;

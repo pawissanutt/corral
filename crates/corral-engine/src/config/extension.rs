@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use corral_types::ConfigProblem;
+use corral_types::{ConfigProblem, EventKind};
 use serde::{Deserialize, Serialize};
 
 use super::{Config, problem};
@@ -110,6 +110,14 @@ pub(super) fn validate(config: &Config, problems: &mut Vec<ConfigProblem>) {
             check_line(line, format!("{key}.run"), problems);
         } else if extension.on.is_some() {
             problems.push(problem(format!("{key}.on"), "requires run"));
+        }
+        for kind in extension.on.iter().flatten() {
+            if serde_json::from_value::<EventKind>(kind.as_str().into()).is_err() {
+                problems.push(problem(
+                    format!("{key}.on"),
+                    format!("unknown event kind {kind:?}"),
+                ));
+            }
         }
         for (tool_name, tool) in &extension.tools {
             if tool_name.trim().is_empty() {

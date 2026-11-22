@@ -223,9 +223,9 @@ fn read(shared: &Shared, topic: Topic, builds: bool) -> Result<Rows> {
 
 fn settings(shared: &Shared) -> Result<Rows> {
     let document = crate::config::get(shared)?;
-    let (config, problem) = match Config::parse(&document.toml) {
-        Ok(parsed) => (object(&parsed)?, None),
-        Err(problem) => (Default::default(), Some(problem)),
+    let (config, problem, extensions) = match Config::parse(&document.toml) {
+        Ok(parsed) => (object(&parsed)?, None, extensions(shared, &parsed)),
+        Err(problem) => (Default::default(), Some(problem), Vec::new()),
     };
     let built_in = Config::default();
     let (harness_facts, pi_config) = shared.harness_inventory.facts(document.revision.as_deref());
@@ -240,6 +240,7 @@ fn settings(shared: &Shared) -> Result<Rows> {
         problem,
         harness_facts,
         pi_config,
+        extensions,
     };
     // These optional facts must not make an otherwise serveable settings row too large.
     if (row.harness_facts.is_some() || row.pi_config.is_some())
@@ -249,6 +250,38 @@ fn settings(shared: &Shared) -> Result<Rows> {
         row.pi_config = None;
     }
     Ok(Rows::Settings(vec![row]))
+}
+
+fn extensions(shared: &Shared, config: &Config) -> Vec<ExtensionHealth> {
+    let state_dir = shared.root().join(crate::STATE_DIR);
+    config
+        .extensions
+        .iter()
+        .map(|(name, extension)| {
+            let shapes = [
+                (!extension.tools.is_empty(), "tool"),
+                (extension.facts.is_some(), "ask"),
+                (extension.run.is_some(), "react"),
+            ];
+            let (last_error, skipped) = match corral_engine::react::status(&state_dir, name) {
+                Ok(cursor) => {
+                    cursor.map_or((None, 0), |cursor| (cursor.last_error, cursor.skipped))
+                }
+                Err(error) => (Some(format!("{error:#}")), 0),
+            };
+            ExtensionHealth {
+                name: name.clone(),
+                shapes: shapes
+                    .into_iter()
+                    .filter(|(present, _)| *present)
+                    .map(|(_, shape)| shape.to_owned())
+                    .collect(),
+                enabled: extension.enabled,
+                last_error,
+                skipped,
+            }
+        })
+        .collect()
 }
 
 fn object(value: &impl Serialize) -> Result<serde_json::Map<String, serde_json::Value>> {

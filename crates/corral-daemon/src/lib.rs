@@ -12,6 +12,7 @@ mod health;
 mod identity;
 mod ops;
 mod pairing;
+mod react;
 mod server;
 mod sessions;
 mod state;
@@ -140,6 +141,7 @@ fn run_with_runner(root: &Path, options: RunOptions, runner: Option<RunnerFactor
     let result = match started {
         Ok(sync) => {
             harnesses::start_sampler(&shared);
+            react::start(&shared);
             poll_loop(&shared, &store, seq, version);
             shared.stop();
             sync.join()

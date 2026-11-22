@@ -222,6 +222,23 @@ pub struct SettingsSnapshot {
     /// Only the workspace Pi file location and its configured child profile selections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi_config: Option<PiConfigFacts>,
+    /// Each configured extension in name order; empty on a parse error.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<ExtensionHealth>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ExtensionHealth {
+    pub name: String,
+    /// `tool`, `ask` and/or `react`, for the lines the extension configures.
+    pub shapes: Vec<String>,
+    pub enabled: bool,
+    /// The most recent failure; a later successful event delivery clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Events given up on after repeated delivery failures.
+    #[serde(default)]
+    pub skipped: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -18,8 +18,8 @@ context = { run = "python3 '/absolute/path/to/corral/examples/extensions/context
 `projects` restricts eligibility; `enabled = false` disables normal use. Tool names and
 the `facts` slot must not have overlapping enabled providers for a project. Tool `about`
 and `record` are optional; `record` defaults to false. `corral-next config check` validates
-configuration without executing it. React's `on` and `run` fields are accepted for
-configuration and sample checking, but **event delivery is not yet available**.
+configuration without executing it. React's `on` and `run` fields deliver events
+(see React below).
 
 ## Rules for every line
 
@@ -118,3 +118,39 @@ python3 examples/extensions/test_examples.py
 
 This exercises both scripts with actual JSON requests and checks their output. You can also
 configure them as above and use `corral-next ext check examples` to exercise the runner.
+
+## React: events (`on` and `run`)
+
+The daemon runs an enabled extension's `run` line once per event whose kind is in `on` (every
+kind when `on` is omitted) and whose task's project is in `projects` (with `projects` omitted,
+events without a project match too). Each event is one JSON object on stdin: `v`, `seq`, `ts`,
+`task`, `project`, `run`, `kind`, `actor`, `detail`. Events go in sequence order, one at a
+time per extension, with a 60-second deadline. No engine operation waits for a delivery.
+
+Each extension has a cursor, `.corral-next/extensions/<name>.json`, holding the last
+sequence it finished. A newly configured extension starts at the newest event when a pass
+first reads the configuration containing it, before that pass runs any line, and does not
+replay history. A disabled or removed extension keeps its cursor and resumes from it when
+enabled or added again under the same name.
+
+Delivery is at least once: if the daemon stops during a delivery, or before saving the
+cursor after one, that event is delivered again, so a line should tolerate a repeat.
+Attempts never overlap. Each line runs under a small supervisor, a copy of
+the daemon or CLI executable, that holds the extension's delivery lock. When the line's
+shell exits, when the 60-second deadline passes, or when the daemon or CLI that started it
+dies, the supervisor kills the line's process group, including anything the line left
+running there, and only then releases the lock. After a crash the event is therefore
+delivered again only once the interrupted attempt has stopped. A process that leaves the
+line's group (for example with `setsid`) is not killed and does not hold up delivery.
+If the supervisor itself is killed, the lock is released at once; on Linux its shell dies
+with it, but processes the shell started may keep running.
+
+A failing event blocks later events for that extension and is retried on a later pass (the
+daemon waits 30 seconds); after three failures it is skipped and counted. The `settings`
+topic lists each extension with its shapes, whether it is enabled, its last error and its
+skipped count.
+
+Without a daemon nothing is delivered. `corral-next ext deliver` runs one pass, for CLI or
+cron setups; it retries a failed event at once and exits nonzero while an event is failing.
+A per-extension lock keeps it and the daemon from delivering the same extension at once;
+the one that finds it held reports the extension as busy.
