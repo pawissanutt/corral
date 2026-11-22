@@ -180,6 +180,14 @@ impl State {
         match action {
             Action::Tab { session, tab } => {
                 self.panel.give_way(tab != Tab::Chat);
+                // The explorer is a tree beside its preview: Details would be a third column
+                // listing files again. It closes on entry only, so the owner can reopen it.
+                if tab == Tab::Files
+                    && self.ui(session.as_str()).tab != Tab::Files
+                    && self.panel.shown()
+                {
+                    self.panel.open = Some(false);
+                }
                 let rows = tabs::rows(feed, session.as_str());
                 let ui = self.ui_mut(&session);
                 let refresh_files = tab == Tab::Files && ui.tab != tab;
@@ -197,7 +205,11 @@ impl State {
                     Focus::Main
                 };
                 if refresh_files {
-                    vec![reread(feed, ui.files.target(&session))]
+                    ui.files
+                        .targets(&session)
+                        .into_iter()
+                        .map(|target| reread(feed, target))
+                        .collect()
                 } else {
                     Vec::new()
                 }
@@ -328,41 +340,7 @@ impl State {
             Action::Dock(action) => dock::act(self, action, feed),
             Action::Sidebar(action) => sidebar::act(self, action, feed),
             Action::Changes(action) => changes::act(self, action, feed),
-            Action::Files(super::FilesAction::Open {
-                session,
-                path,
-                directory,
-            }) => {
-                let ui = self.ui_mut(&session);
-                ui.files = super::files::FilesUi {
-                    path,
-                    directory,
-                    filter: String::new(),
-                };
-                if ui.tab == Tab::Files {
-                    vec![reread(feed, ui.files.target(&session))]
-                } else {
-                    self.act(
-                        Action::Tab {
-                            session,
-                            tab: Tab::Files,
-                        },
-                        feed,
-                    )
-                }
-            }
-            Action::Files(super::FilesAction::Filter { session, text }) => {
-                let ui = self.ui_mut(&session);
-                if !ui.files.directory {
-                    return Vec::new();
-                }
-                let text = text.trim();
-                ui.files.filter = text[..text.floor_char_boundary(text.len().min(128))]
-                    .chars()
-                    .filter(|c| !c.is_control())
-                    .collect();
-                vec![reread(feed, ui.files.target(&session))]
-            }
+            Action::Files(action) => super::files::act(self, action, feed),
             Action::Board(action) => board::act(self, action, feed),
             Action::Usage(action) => usage::act(self, action, feed),
             Action::Task(action) => task::act(self, action, feed),
