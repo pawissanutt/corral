@@ -1,5 +1,6 @@
 // Git preconditions shared by explicit preparation and the read-only checks before landing.
-import { lstatSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { checked, type Run } from "./corral-cli.ts";
 import { checkCheckoutSupport, checkLandingEnvironment } from "./fast-forward.ts";
@@ -206,21 +207,56 @@ async function checkUntracked(git: Run, cwd: string, base: string, head: string)
   }
 }
 
-/** Rebase only onto the captured tip, and abort only a rebase started by this invocation. */
+const rebaseDirectories = (dir: string) => [join(dir, "rebase-merge"), join(dir, "rebase-apply")].filter(present);
+
+function rebaseDirectoryIdentity(path: string): string | undefined {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    if (stat.isDirectory()) return `${stat.dev}:${stat.ino}:${stat.ctimeNs}`;
+  } catch { /* Missing or unreadable state cannot prove ownership. */ }
+  return undefined;
+}
+
+function rebaseState(dir: string, key: string): string | undefined {
+  try {
+    const path = join(dir, key);
+    const stat = lstatSync(path);
+    if (stat.isFile() && stat.size <= 4096) return readFileSync(path, "utf8").trimEnd();
+  } catch { /* Unreadable state cannot prove ownership. */ }
+  return undefined;
+}
+
+/** Rebase onto the captured tip; require ownership evidence before aborting a conflict. */
 export async function rebaseCandidate(git: Run, cwd: string, base: string, source: string): Promise<void> {
   const dir = await gitDir(git, cwd);
-  const result = await git(["-c", "rerere.enabled=false", "rebase", "--no-autostash", "--no-update-refs", "--no-fork-point", base], { cwd });
+  const action = `corral-prepare-${randomUUID()}`;
+  const result = await git(["-c", "rerere.enabled=false", "rebase", "--no-autostash", "--no-update-refs", "--no-fork-point", base],
+    { cwd, env: { GIT_REFLOG_ACTION: action } });
   if (result.code === 0) return;
-  const unmerged = await git(["diff", "--name-only", "-z", "--diff-filter=U"], { cwd });
-  const conflicts = unmerged.code === 0 ? paths(unmerged.stdout) : [];
+  const unmerged = await git(["diff", "--name-only", "-z", "--diff-filter=U"], { cwd, env: { GIT_OPTIONAL_LOCKS: "0" } }).catch(() => undefined);
+  const conflicts = unmerged?.code === 0 ? paths(unmerged.stdout) : [];
   let recovery = "Inspect this checkout before trying again.";
   let restored = false;
-  if (present(join(dir, "rebase-merge")) || present(join(dir, "rebase-apply"))) {
-    const abort = await git(["rebase", "--abort"], { cwd });
-    if (abort.code) recovery = `Rebase abort failed: ${abort.stderr.trim() || abort.stdout.trim()}. Inspect and recover the worktree manually.`;
-    else if (await commit(git, "HEAD", cwd).catch(() => undefined) === source) {
-      restored = true;
-      recovery = "The rebase was aborted; the branch is unchanged.";
+  const states = rebaseDirectories(dir);
+  if (states.length) {
+    recovery = "Corral did not abort the in-progress rebase. Inspect git status, then finish or abort the rebase yourself before trying again.";
+    const state = conflicts.length && states.length === 1 ? states[0] : undefined;
+    const identity = state ? rebaseDirectoryIdentity(state) : undefined;
+    // A rebase that refuses to start (e.g. another process got here first) does
+    // not write our unique action. Check the newest HEAD entry, not any past
+    // entry: Git tags both its detach and subsequent clean picks.
+    const reflog = identity ? await git(["reflog", "show", "--max-count=1", "--format=%gs", "HEAD"], { cwd }).catch(() => undefined) : undefined;
+    const branch = state && reflog?.code === 0 && reflog.stdout.startsWith(`${action} (`) ? rebaseState(state, "head-name") : undefined;
+    if (state && branch?.startsWith("refs/heads/") && rebaseState(state, "orig-head") === source && rebaseState(state, "onto") === base &&
+        rebaseDirectories(dir).length === 1 && rebaseDirectoryIdentity(state) === identity) {
+      // Git has no ownership-conditional abort; recheck state immediately before invoking it.
+      const abort = await git(["rebase", "--abort"], { cwd }).catch(error => ({ code: 1, stderr: message(error), stdout: "" }));
+      if (abort.code) recovery = `Rebase abort failed: ${abort.stderr.trim() || abort.stdout.trim()}. Inspect and recover the worktree manually.`;
+      else if (await sourceBranch(git, cwd).catch(() => undefined) === branch &&
+          await commit(git, "HEAD", cwd).catch(() => undefined) === source && !rebaseDirectories(dir).length) {
+        restored = true;
+        recovery = "The rebase was aborted; the branch is unchanged.";
+      } else recovery = "Git reported a successful abort, but Corral could not verify that the source branch was restored. Inspect this checkout before trying again.";
     }
   }
   throw new PreparationError(conflicts.length
