@@ -146,6 +146,48 @@ fn page(client: &mut Client, id: &str) -> SessionPage {
 }
 
 #[test]
+fn a_plan_mode_document_of_two_pages_joins_through_next() {
+    const STAMP: &str = "aaaaaaaaaaaaaaaaaaaaaa";
+    let fixture = Fixture::new();
+    let id = "B-planmode";
+    let front = "界".repeat(12_000);
+    let back = "先".repeat(12_000);
+    let whole = format!("{front}{back}");
+    let split = front.len();
+    let cursor = format!("{STAMP}.{split}");
+    let script = Script::default().reply_result("plan_mode_doc", move |_, request, _| {
+        let mut page = match request["args"]["after"].as_str() {
+            None => json!({"body": front, "offset": 0, "next": cursor}),
+            Some(after) if after == cursor => json!({"body": back, "offset": split}),
+            Some(_) => return Err(("stale_page", "plan changed")),
+        };
+        page["title"] = json!("T");
+        page["revision"] = json!(2);
+        page["bytes"] = json!(split + back.len());
+        Ok(page)
+    });
+    let _host = terminal(&fixture, id, script);
+    let mut owner = Client::connect_with(&fixture.unix_server(), vec![wire::BUILD_V1.into()]);
+    let mut query = json!({"kind": "session_plan_mode_doc", "id": id});
+    let first: DetailReply = owner.ok(wire::app::DETAIL_GET, &query);
+    query["page"] = json!(first.next.as_deref().expect("expected a continuation"));
+    let second: DetailReply = owner.ok(wire::app::DETAIL_GET, &query);
+    assert_eq!(first.etag, second.etag);
+    assert!(second.next.is_none());
+    let (
+        Some(DetailBody::SessionPlanModeDoc(first_page)),
+        Some(DetailBody::SessionPlanModeDoc(second_page)),
+    ) = (first.body, second.body)
+    else {
+        panic!("expected two plan document pages");
+    };
+    assert_eq!((first_page.title.as_str(), first_page.revision), ("T", 2));
+    assert_eq!(second_page.offset, split as u64);
+    assert_eq!(second_page.bytes, whole.len() as u64);
+    assert_eq!(first_page.body + &second_page.body, whole);
+}
+
+#[test]
 fn a_brief_of_two_pages_is_served_with_one_etag_and_joins_to_the_whole_text() {
     const BEFORE: &str = "aaaaaaaaaaaaaaaaaaaaaa";
     const AFTER: &str = "bbbbbbbbbbbbbbbbbbbbbb";

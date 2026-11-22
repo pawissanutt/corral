@@ -128,6 +128,9 @@ enum ActArgs<'a> {
         model: String,
         favorite: bool,
     },
+    PlanMode {
+        enabled: bool,
+    },
 }
 
 pub(crate) fn queue_withdraw(shared: &Shared, request: SessionQueueKey) -> Result<QueueWithdrawn> {
@@ -238,6 +241,7 @@ pub(crate) fn action(shared: &Shared, request: SessionActionRequest) -> Result<S
             "model_favorite",
             Some(ActArgs::ModelFavorite { model, favorite }),
         ),
+        SessionAction::PlanMode { enabled } => ("plan_mode", Some(ActArgs::PlanMode { enabled })),
         SessionAction::Other => anyhow::bail!("invalid: unknown session action"),
     };
     match args {
@@ -250,11 +254,11 @@ fn host_error(command: &str, error: anyhow::Error) -> anyhow::Error {
     match error.downcast::<PiRefusal>() {
         Ok(error) if error.code == "unknown_command" => refuse(OLDER_HOST_HINT, vec![]),
         Ok(error)
-            if command == "board_plan_task"
-                && matches!(
-                    error.code.as_str(),
-                    "stale_page" | "board_plan_task_missing"
-                ) =>
+            if matches!(
+                (command, error.code.as_str()),
+                ("board_plan_task", "stale_page" | "board_plan_task_missing")
+                    | ("plan_mode_doc", "stale_page" | "plan_mode_doc_missing")
+            ) =>
         {
             error.into()
         }

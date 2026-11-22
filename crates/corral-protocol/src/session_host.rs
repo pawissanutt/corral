@@ -208,6 +208,9 @@ pub enum SessionAction {
         model: String,
         favorite: bool,
     },
+    PlanMode {
+        enabled: bool,
+    },
     #[serde(other)]
     Other,
 }
@@ -222,6 +225,7 @@ pub struct SessionActionDone {
 mod tests {
     use super::*;
     use crate::detail::{CardKind, DetailBody};
+    use crate::session_state::{PlanModeBrief, PlanModePhase, SessionState};
     use serde_json::{Value, json};
 
     fn round_trip<T>(wire: Value) -> T
@@ -263,5 +267,36 @@ mod tests {
             "id": "B-one", "job": "job-1", "action": "future_action"
         }));
         assert_eq!(job.action, JobAction::Other);
+    }
+
+    #[test]
+    fn plan_mode_state_card_and_action_are_typed() {
+        let state: SessionState = round_trip(json!({
+            "mode": "interactive", "turn": 1, "open": false, "paused": false,
+            "usage": {
+                "tokens": 0, "cost_partial": false, "context_tokens": 0, "context_window": 0
+            },
+            "queue_total": 0,
+            "children": {"live": 0, "waiting": 0, "total": 0},
+            "jobs": {"live": 0, "waiting": 0, "total": 0},
+            "cards": [{
+                "id": "card-1", "kind": "plan_review", "title": "T",
+                "opened_at": "2026-11-19T12:00:00Z"
+            }],
+            "plan_mode": {"phase": "review", "title": "T", "revision": 2}
+        }));
+        assert_eq!(state.cards[0].kind, CardKind::PlanReview);
+        assert_eq!(
+            state.plan_mode,
+            Some(PlanModeBrief {
+                phase: PlanModePhase::Review,
+                title: Some("T".into()),
+                revision: Some(2),
+            })
+        );
+        let action: SessionActionRequest = round_trip(json!({
+            "id": "B-one", "action": "plan_mode", "enabled": true
+        }));
+        assert_eq!(action.action, SessionAction::PlanMode { enabled: true });
     }
 }

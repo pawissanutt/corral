@@ -43,6 +43,9 @@ pub struct SessionState {
     pub board: Option<BoardBrief>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<PlanBrief>,
+    /// Absent while plan mode is off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_mode: Option<PlanModeBrief>,
     /// At most four notices.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notices: Vec<HostNotice>,
@@ -324,6 +327,24 @@ pub struct PlanBrief {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current: Option<String>,
     pub stale: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanModeBrief {
+    pub phase: PlanModePhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanModePhase {
+    Planning,
+    Review,
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

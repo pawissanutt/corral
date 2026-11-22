@@ -20,6 +20,19 @@ pub struct BuildPlanTaskPage {
     pub offset: u64,
 }
 
+/// A byte range of the plan-mode document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PlanModeDocPage {
+    pub title: String,
+    pub revision: u32,
+    /// Whole UTF-8 characters, at most 40 KiB.
+    pub body: String,
+    /// Total UTF-8 bytes in the document.
+    pub bytes: u64,
+    /// Byte offset of this slice.
+    pub offset: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionCards {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -60,6 +73,7 @@ pub enum CardKind {
     Exit,
     ChildQuestion,
     BoardPlan,
+    PlanReview,
     #[serde(other)]
     Other,
 }

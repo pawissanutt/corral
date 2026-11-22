@@ -399,7 +399,7 @@ impl From<anyhow::Error> for Failure {
         if let Some(refused) = error.downcast_ref::<corral_engine::runner::pi::PiRefusal>() {
             return match refused.code.as_str() {
                 "stale_page" => Self::new(ErrorCode::Conflict, refused.reason.as_str()),
-                "board_plan_task_missing" => {
+                "board_plan_task_missing" | "plan_mode_doc_missing" => {
                     Self::new(ErrorCode::NotFound, refused.reason.as_str())
                 }
                 _ => Self::from(refuse(refused.to_string(), Vec::new())),

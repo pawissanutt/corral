@@ -184,6 +184,18 @@ pub(super) fn read(
             )
             .map(Some);
         }
+        DetailRef::SessionPlanModeDoc { id } => {
+            check_after()?;
+            let (page, next, etag) = plan_mode_doc(shared, &query.target, id, after)?;
+            return details::reply(
+                query,
+                engine.store.latest_seq()?,
+                etag,
+                DetailBody::SessionPlanModeDoc(page),
+                next,
+            )
+            .map(Some);
+        }
         DetailRef::BuildRecord { id } => {
             unpaged!(id, "record", Map::new(), DetailBody::BuildRecord)
         }
@@ -221,38 +233,71 @@ fn board_plan_task(
         Task { key, after },
         HostCall::Read,
     )?;
-    ensure!(body.body.len() <= BRIEF_PAGE_BYTES, PartTooLarge);
-    let end = body.offset.checked_add(body.body.len() as u64);
-    ensure!(
-        body.key == key
-            && body.offset == previous.map_or(0, |(_, offset)| offset)
-            && end.is_some_and(|end| end <= body.bytes)
-            && (body.offset < body.bytes || body.bytes == 0),
-        "invalid Pi board task brief range"
-    );
-    let following = next
-        .as_deref()
-        .map(|token| brief_cursor(token).context("invalid Pi board task brief continuation"))
-        .transpose()?;
-    if let Some((stamp, offset)) = following {
-        ensure!(
-            Some(offset) == end
-                && offset > body.offset
-                && offset < body.bytes
-                && previous.is_none_or(|(prior, _)| prior == stamp),
-            "invalid Pi board task brief continuation"
-        );
-    } else {
-        ensure!(end == Some(body.bytes), "incomplete Pi board task brief");
-    }
+    ensure!(body.key == key, "invalid Pi board task brief range");
+    let range = (body.body.len(), body.bytes, body.offset);
     // A cursor binds to the host's fingerprint of the whole brief. Only a complete
     // one-page brief has no cursor on either side, and can be fingerprinted directly.
-    let etag = if let Some((stamp, _)) = previous.or(following) {
-        fingerprint(&(target, body.bytes, stamp))?
-    } else {
-        fingerprint(&(target, &body.body))?
+    let etag = match brief_range("board task brief", range, previous, next.as_deref())? {
+        Some(stamp) => fingerprint(&(target, body.bytes, stamp))?,
+        None => fingerprint(&(target, &body.body))?,
     };
     Ok((body, next, etag))
+}
+
+fn plan_mode_doc(
+    shared: &Shared,
+    target: &DetailRef,
+    id: &str,
+    after: Option<&str>,
+) -> Result<(PlanModeDocPage, Option<String>, String)> {
+    let previous = after
+        .map(|token| brief_cursor(token).context("invalid: malformed plan document cursor"))
+        .transpose()?;
+    let args = Args {
+        after,
+        ..Args::default()
+    };
+    let Page { body, next }: Page<PlanModeDocPage> =
+        host_call(shared, id, "plan_mode_doc", args, HostCall::Read)?;
+    let range = (body.body.len(), body.bytes, body.offset);
+    let head = (target, &body.title, body.revision);
+    let etag = match brief_range("plan document", range, previous, next.as_deref())? {
+        Some(stamp) => fingerprint(&(head, body.bytes, stamp))?,
+        None => fingerprint(&(head, &body.body))?,
+    };
+    Ok((body, next, etag))
+}
+
+/// Checks one `(len, bytes, offset)` page against its cursors, returning their shared stamp.
+fn brief_range<'a>(
+    what: &str,
+    (len, bytes, offset): (usize, u64, u64),
+    previous: Option<(&'a str, u64)>,
+    next: Option<&'a str>,
+) -> Result<Option<&'a str>> {
+    ensure!(len <= BRIEF_PAGE_BYTES, PartTooLarge);
+    let end = offset.checked_add(len as u64);
+    ensure!(
+        offset == previous.map_or(0, |(_, offset)| offset)
+            && end.is_some_and(|end| end <= bytes)
+            && (offset < bytes || bytes == 0),
+        "invalid Pi {what} range"
+    );
+    let following = next
+        .map(|token| brief_cursor(token).with_context(|| format!("invalid Pi {what} continuation")))
+        .transpose()?;
+    if let Some((stamp, start)) = following {
+        ensure!(
+            Some(start) == end
+                && start > offset
+                && start < bytes
+                && previous.is_none_or(|(prior, _)| prior == stamp),
+            "invalid Pi {what} continuation"
+        );
+    } else {
+        ensure!(end == Some(bytes), "incomplete Pi {what}");
+    }
+    Ok(previous.or(following).map(|(stamp, _)| stamp))
 }
 
 fn brief_cursor(token: &str) -> Option<(&str, u64)> {

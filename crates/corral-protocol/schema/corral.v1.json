@@ -1476,6 +1476,7 @@
           "exit",
           "child_question",
           "board_plan",
+          "plan_review",
           "other"
         ],
         "type": "string"
@@ -2415,6 +2416,22 @@
           {
             "properties": {
               "body": {
+                "$ref": "#/components/schemas/PlanModeDocPage"
+              },
+              "kind": {
+                "const": "session_plan_mode_doc",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
                 "$ref": "#/components/schemas/SessionEventsPage"
               },
               "kind": {
@@ -3046,6 +3063,22 @@
               },
               "kind": {
                 "const": "session_plan",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_plan_mode_doc",
                 "type": "string"
               }
             },
@@ -5084,6 +5117,76 @@
         ],
         "type": "object"
       },
+      "PlanModeBrief": {
+        "properties": {
+          "phase": {
+            "$ref": "#/components/schemas/PlanModePhase"
+          },
+          "revision": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "type": "object"
+      },
+      "PlanModeDocPage": {
+        "description": "A byte range of the plan-mode document.",
+        "properties": {
+          "body": {
+            "description": "Whole UTF-8 characters, at most 40 KiB.",
+            "type": "string"
+          },
+          "bytes": {
+            "description": "Total UTF-8 bytes in the document.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "offset": {
+            "description": "Byte offset of this slice.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "revision",
+          "body",
+          "bytes",
+          "offset"
+        ],
+        "type": "object"
+      },
+      "PlanModePhase": {
+        "enum": [
+          "planning",
+          "review",
+          "other"
+        ],
+        "type": "string"
+      },
       "PlanRow": {
         "properties": {
           "child_counts": {
@@ -6077,6 +6180,22 @@
               "action",
               "model",
               "favorite"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "action": {
+                "const": "plan_mode",
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "action",
+              "enabled"
             ],
             "type": "object"
           },
@@ -8655,6 +8774,17 @@
                 "type": "null"
               }
             ]
+          },
+          "plan_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanModeBrief"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Absent while plan mode is off."
           },
           "queue": {
             "description": "First 12 in host order. `queue_total` includes omitted items.",
@@ -11726,7 +11856,7 @@
             ]
           },
           "x-required-in": [
-            27
+            28
           ]
         },
         {
@@ -11757,7 +11887,7 @@
             "type": "string"
           },
           "x-required-in": [
-            32
+            33
           ]
         },
         {
@@ -11797,8 +11927,8 @@
             ]
           },
           "x-required-in": [
-            27,
-            29
+            28,
+            30
           ]
         },
         {
@@ -11831,7 +11961,8 @@
             24,
             25,
             26,
-            32
+            27,
+            33
           ]
         },
         {
@@ -11851,7 +11982,7 @@
             "type": "string"
           },
           "x-required-in": [
-            24
+            25
           ]
         },
         {
@@ -11941,6 +12072,10 @@
               },
               {
                 "const": "session_plan",
+                "type": "string"
+              },
+              {
+                "const": "session_plan_mode_doc",
                 "type": "string"
               },
               {
@@ -12060,7 +12195,7 @@
             "type": "string"
           },
           "x-required-in": [
-            30
+            31
           ]
         },
         {
@@ -12091,7 +12226,7 @@
             ]
           },
           "x-required-in": [
-            28
+            29
           ]
         },
         {
@@ -12132,8 +12267,8 @@
             ]
           },
           "x-required-in": [
-            27,
-            29
+            28,
+            30
           ]
         },
         {
@@ -12157,7 +12292,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            29
+            30
           ]
         }
       ],
@@ -13546,6 +13681,10 @@
                 "type": "string"
               },
               {
+                "const": "plan_mode",
+                "type": "string"
+              },
+              {
                 "const": "other",
                 "type": "string"
               }
@@ -13560,6 +13699,16 @@
           },
           "x-required-in": [
             4
+          ]
+        },
+        {
+          "name": "enabled",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          },
+          "x-required-in": [
+            6
           ]
         },
         {

@@ -126,6 +126,9 @@ pub enum DetailRef {
     SessionPlan {
         id: String,
     },
+    SessionPlanModeDoc {
+        id: String,
+    },
     SessionEvents {
         id: String,
     },
@@ -233,6 +236,7 @@ pub enum DetailBody {
     SessionUsage(SessionUsage),
     SessionContext(SessionContext),
     SessionPlan(SessionPlan),
+    SessionPlanModeDoc(PlanModeDocPage),
     SessionEvents(SessionEventsPage),
     SessionCommands(SessionCommands),
     BuildBoard(BuildBoard),
