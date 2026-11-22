@@ -557,10 +557,13 @@ impl<'a> PiRunner<'a> {
         }
         session_socket(&runtime_dir(), dir)
     }
-}
 
-impl Runner for PiRunner<'_> {
-    fn start(&self, spec: &LaunchSpec) -> Result<SessionRef> {
+    /// Transform the final shell command, after Pi's host arguments are in place.
+    pub(crate) fn start_with(
+        &self,
+        spec: &LaunchSpec,
+        prepare: impl FnOnce(&mut LaunchSpec) -> Result<()>,
+    ) -> Result<SessionRef> {
         let reviewer = spec
             .env
             .iter()
@@ -598,6 +601,7 @@ impl Runner for PiRunner<'_> {
         launch.command.push_str(&quoted_path(&dir)?);
         launch.command.push_str(" --socket ");
         launch.command.push_str(&quoted_path(&socket)?);
+        prepare(&mut launch)?;
         let inner = self.inner.start(&launch)?;
         if let Err(error) = self.wait_for_hello(&client, &inner) {
             return match self.inner.stop(&inner) {
@@ -612,6 +616,12 @@ impl Runner for PiRunner<'_> {
             inner: Box::new(inner),
             dir,
         })
+    }
+}
+
+impl Runner for PiRunner<'_> {
+    fn start(&self, spec: &LaunchSpec) -> Result<SessionRef> {
+        self.start_with(spec, |_| Ok(()))
     }
 
     fn status(&self, session: &SessionRef) -> Result<SessionStatus> {

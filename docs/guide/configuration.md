@@ -75,6 +75,62 @@ Sections: [limits](#limits) · [resources](#resources) · [dispatch](#dispatch) 
 [profiles](#profiles) · [routing](#routing) · [automation](#automation) · [review](#review) · [sync](#sync) · [ui](#ui) · [board.card](#boardcard) · [viewers](#viewers) ·
 [artifacts](#artifacts) · [storage](#storage) · [load_sandbox](#load_sandbox) · [search](#search) · [pm](#pm) · [build](#build) · [herdr](#herdr) · [agents (legacy)](#agents-legacy)
 
+## Session wrappers (`corral-next`)
+
+Set `wrap` in `[runner]` in `.corral-next/corral.toml` to run task sessions in another
+local environment. A `[projects.<key>].wrap` replaces the workspace template for that
+project. Omitting both leaves the launch command unchanged. The wrapper applies to worker
+and reviewer launch commands in `process` and `herdr` mode, not to gate commands or
+standalone Build sessions.
+
+`{command}` is required (`corral-next config check` rejects a template without it). It
+expands to the entire rendered harness line as one shell argument; use `sh -c {command}`
+to run it inside the chosen environment. `{root}` is the workspace root, `{worktree}` is
+the session's working directory, and `{dir}` is the run directory containing `prompt.md`.
+Paths are absolute and shell-escaped, so no surrounding quotes are needed. Placeholders are
+for ordinary shell arguments (or parts of arguments, such as `--volume {root}:{root}`),
+not nested shell source inside command substitutions or here-documents. To try wrapping
+without a container, use `wrap = "env FOO=1 sh -c {command}"`.
+
+For example, with a local `corral-dev` image containing the selected harness, `sh` and Git,
+and with Corral installed on the host at `/opt/corral/corral-next`:
+
+```toml
+[runner]
+mode = "process"
+wrap = """exec podman run --rm --init --userns=keep-id \\
+  --volume {root}:{root} --volume {worktree}:{worktree} --workdir {worktree} \\
+  --volume /opt/corral:/opt/corral:ro \\
+  --env CORRAL_NEXT_ROOT --env CORRAL_TASK --env CORRAL_RUN --env CORRAL_ACTOR \\
+  corral-dev sh -c {command}"""
+```
+
+Keep paths identical inside and outside the container: linked Git worktrees reference the
+host checkout, and the generated prompt invokes `corral-next` by absolute path. Adjust the
+binary mount to your installation and use an image that can run that binary. The root mount
+makes the workspace state and run files available to `corral-next done`. Mount the source
+checkout if it lives outside these mounts, and make a Git author identity available in the
+container so `done` can commit changes. Podman doesn't forward project environment variables
+automatically; add `--env NAME` for any the harness needs.
+
+Run session management commands such as `corral-next stop` on the host. Keep the wrapper in
+the foreground and ensure it forwards termination to the payload; `--rm` removes the container
+when it exits, not on its own if the payload refuses to exit. In `herdr` mode, add `-it` for a
+harness that needs a terminal and omit `exec` to keep the pane's shell after exit.
+
+The example covers session placement and submission. The `done` CLI starts its detached
+pipeline in the environment that invoked it, so automatic gates or reviewer placement from
+inside a container need their usual tools and access there. If container exit interrupts that
+helper, host `corral-next sync` can advance a submission still pending in Review.
+
+The built-in `pi` harness can be wrapped: Corral adds its `--dir` and `--socket` arguments
+before wrapping, and still uses the Unix socket for readiness and session control. For Podman,
+install `corral-pi` in the image and add `--env CORRAL_FRESH`. Also bind-mount the host socket
+directory at the same absolute path with the same user access (typically
+`$XDG_RUNTIME_DIR/corral-next`, or `/tmp/corral-next-<uid>` if unset). Mount the directory,
+not an individual socket file: Pi creates the socket at startup. Without that shared directory
+Corral cannot connect to the wrapped host.
+
 ## build
 
 For app and terminal Build sessions, set child concurrency, child profiles and delegation

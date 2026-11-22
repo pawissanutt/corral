@@ -8,7 +8,7 @@ use crate::{
     Actor, Blocked, Engine, LaunchSpec, Next, Op, Origin, Outcome, Role, Run, Runner, SessionRef,
     Status, Store, Task, TaskEdit, as_refusal,
     checkout::Checkout,
-    config::{CommandContext, EffectiveProject, render_command, valid_env_key},
+    config::{CommandContext, EffectiveProject, render_command, render_wrap, valid_env_key},
     events::EventKind,
     prompt::write_prompt,
     refuse,
@@ -592,7 +592,7 @@ impl Engine {
             env.push(("CORRAL_FRESH".into(), if fresh { "1" } else { "0" }.into()));
         }
         env.extend(exports.map(|(key, value)| (key.to_owned(), value.to_owned())));
-        let spec = LaunchSpec {
+        let mut spec = LaunchSpec {
             label,
             cwd: run.worktree.clone(),
             command,
@@ -603,9 +603,24 @@ impl Engine {
                 ("run".into(), run.id.clone()),
             ],
         };
+        let wrap = project.map_or(self.config.runner.wrap.as_deref(), |p| p.wrap.as_deref());
+        let prepare = |launch: &mut LaunchSpec| -> Result<()> {
+            if let Some(template) = wrap {
+                launch.command = render_wrap(
+                    template,
+                    &launch.command,
+                    &self.root,
+                    &launch.cwd,
+                    &launch.dir,
+                )
+                .context("render session wrap command")?;
+            }
+            Ok(())
+        };
         let session = if pi {
-            self.session_runner().start(&spec)
+            self.session_runner().start_with(&spec, prepare)
         } else {
+            prepare(&mut spec)?;
             self.runner.start(&spec)
         }
         .context("start agent session")?;

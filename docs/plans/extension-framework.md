@@ -148,8 +148,9 @@ Corral renders the harness line as now, then substitutes it, shell-quoted, for `
 the worktree, the workspace root (the agent runs `corral-next done` against `.corral-next/corral.db`) and the
 Corral binary. This is a template, not an extension call: no JSON, no extra process beyond the one named.
 
-Not yet determined: whether the built-in `pi` harness, which starts its host with a prepared command and a
-socket in the run directory, can be wrapped the same way.
+The built-in `pi` harness is wrapped after Corral adds the host arguments. A container must also share
+the host's Pi socket directory. See the [configuration guide](../guide/configuration.md#session-wrappers-corral-next)
+for the complete Podman example.
 
 ### 6.2 No local process stands for the session: a runner command
 

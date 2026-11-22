@@ -123,13 +123,23 @@ impl Fixture {
     }
 
     fn host(&self, launch: &LaunchSpec, dir: &Path, handlers: Vec<Handler>) -> Host {
+        self.host_with_command(launch, dir, handlers, |command| command)
+    }
+
+    fn host_with_command(
+        &self,
+        launch: &LaunchSpec,
+        dir: &Path,
+        handlers: Vec<Handler>,
+        transform: impl FnOnce(String) -> String,
+    ) -> Host {
         let socket = self.socket(dir);
-        let command = format!(
+        let command = transform(format!(
             "{} --dir {} --socket {}",
             launch.command,
             quoted_path(dir).unwrap(),
             quoted_path(&socket).unwrap()
-        );
+        ));
         let run_dir = launch.dir.clone();
         let handlers = Arc::new(Mutex::new(Some(handlers)));
         let host = Host::default();
@@ -160,7 +170,7 @@ fn pi_worker_lifecycle_and_controls_use_the_socket() {
     let launch = fixture.launch("R7 ' worker", "agent");
     let runner = fixture.runner();
     let placement = fixture.placement.clone();
-    let host = fixture.host(
+    let host = fixture.host_with_command(
         &launch,
         &launch.dir,
         vec![
@@ -180,8 +190,25 @@ fn pi_worker_lifecycle_and_controls_use_the_socket() {
                 json!({"stopping": true})
             }),
         ],
+        |command| {
+            format!(
+                "env FOO=1 sh -c {}",
+                crate::config::shell_quote(&command).unwrap()
+            )
+        },
     );
-    let session = runner.start(&launch).unwrap();
+    let session = runner
+        .start_with(&launch, |spec| {
+            spec.command = crate::config::render_wrap(
+                "env FOO=1 sh -c {command}",
+                &spec.command,
+                fixture.temp.path(),
+                &spec.cwd,
+                &spec.dir,
+            )?;
+            Ok(())
+        })
+        .unwrap();
     let SessionRef::Pi { socket, inner, dir } = &session else {
         panic!("expected Pi session")
     };

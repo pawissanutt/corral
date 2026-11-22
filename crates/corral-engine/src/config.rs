@@ -18,6 +18,9 @@ use crate::model::Task;
 mod profile;
 pub use profile::{ModelSelector, Profile};
 
+mod wrap;
+pub(crate) use wrap::render_wrap;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -107,6 +110,7 @@ impl Default for Defaults {
 pub struct RunnerConfig {
     pub mode: String,
     pub herdr_session: Option<String>,
+    pub wrap: Option<String>,
 }
 
 impl Default for RunnerConfig {
@@ -114,6 +118,7 @@ impl Default for RunnerConfig {
         Self {
             mode: "herdr".into(),
             herdr_session: None,
+            wrap: None,
         }
     }
 }
@@ -167,6 +172,7 @@ pub struct Project {
     pub gate: Vec<String>,
     pub reviewer: Option<String>,
     pub profile: Option<String>,
+    pub wrap: Option<String>,
     pub running: Option<usize>,
     pub env: BTreeMap<String, String>,
     pub auto_dispatch: Option<bool>,
@@ -194,6 +200,8 @@ pub struct EffectiveProject {
     pub gate: Vec<String>,
     pub reviewer: Option<String>,
     pub profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wrap: Option<String>,
     pub running: Option<usize>,
     pub env: BTreeMap<String, String>,
     pub auto_dispatch: bool,
@@ -258,6 +266,11 @@ impl Config {
         if !matches!(self.runner.mode.as_str(), "process" | "herdr") {
             problems.push(problem("runner.mode", "must be process or herdr"));
         }
+        wrap::check(
+            self.runner.wrap.as_deref(),
+            || "runner.wrap".into(),
+            &mut problems,
+        );
         if self
             .defaults
             .base
@@ -311,6 +324,11 @@ impl Config {
             profile.validate(name, self.harnesses.get(&profile.harness), &mut problems);
         }
         for (name, project) in &self.projects {
+            wrap::check(
+                project.wrap.as_deref(),
+                || format!("projects.{name}.wrap"),
+                &mut problems,
+            );
             if name.trim().is_empty() {
                 problems.push(problem("projects", "names must not be empty"));
             }
@@ -433,6 +451,7 @@ impl Config {
                 .profile
                 .clone()
                 .or_else(|| self.defaults.profile.clone()),
+            wrap: project.wrap.clone().or_else(|| self.runner.wrap.clone()),
             running: project.running,
             env: project.env.clone(),
             auto_dispatch: project.auto_dispatch.unwrap_or(self.defaults.auto_dispatch),
@@ -730,24 +749,7 @@ pub fn render_command(
             remaining = &remaining[token.len() + 2..];
             continue;
         }
-        let Some(ch) = remaining.chars().next() else {
-            break;
-        };
-        output.push(ch);
-        remaining = &remaining[ch.len_utf8()..];
-        if ch == '\\' && quote != Quote::Single {
-            if let Some(escaped) = remaining.chars().next() {
-                output.push(escaped);
-                remaining = &remaining[escaped.len_utf8()..];
-            }
-        } else {
-            quote = match (quote, ch) {
-                (Quote::None, '\'') => Quote::Single,
-                (Quote::None, '"') => Quote::Double,
-                (Quote::Single, '\'') | (Quote::Double, '"') => Quote::None,
-                _ => quote,
-            };
-        }
+        append_shell_char(&mut output, &mut remaining, &mut quote);
     }
     // Pi launch flags apply even when an overridden template omits {model_args}.
     for argument in profile.fallback_args() {
@@ -755,6 +757,28 @@ pub fn render_command(
         append_quoted(&mut output, argument, Quote::None)?;
     }
     Ok(output)
+}
+
+// Copy literal shell syntax and update the template's quoting context.
+fn append_shell_char(output: &mut String, remaining: &mut &str, quote: &mut Quote) {
+    let Some(ch) = remaining.chars().next() else {
+        return;
+    };
+    output.push(ch);
+    *remaining = &remaining[ch.len_utf8()..];
+    if ch == '\\' && *quote != Quote::Single {
+        if let Some(escaped) = remaining.chars().next() {
+            output.push(escaped);
+            *remaining = &remaining[escaped.len_utf8()..];
+        }
+    } else {
+        *quote = match (*quote, ch) {
+            (Quote::None, '\'') => Quote::Single,
+            (Quote::None, '"') => Quote::Double,
+            (Quote::Single, '\'') | (Quote::Double, '"') => Quote::None,
+            _ => *quote,
+        };
+    }
 }
 
 fn absolute_text(path: &Path) -> Result<String> {

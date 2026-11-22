@@ -65,6 +65,55 @@ aliases = ["openai/custom-id"]
 }
 
 #[test]
+fn session_wrap_config_validates_both_levels_and_inherits() {
+    let config = r#"
+[runner]
+wrap = "env GLOBAL=1 sh -c {command}"
+[projects.app]
+path = "."
+wrap = "env PROJECT=1 sh -c {command}"
+[projects.other]
+path = "."
+"#;
+    let checked = Config::check(Path::new("."), config).unwrap();
+    assert_eq!(
+        checked.effective_project("app").unwrap().wrap.as_deref(),
+        Some("env PROJECT=1 sh -c {command}")
+    );
+    assert_eq!(
+        checked.effective_project("other").unwrap().wrap,
+        checked.runner.wrap
+    );
+    let errors = Config::check(Path::new("."), &config.replace("{command}", "{dir}")).unwrap_err();
+    assert_eq!(errors.len(), 2);
+    for (error, key) in errors.iter().zip(["runner.wrap", "projects.app.wrap"]) {
+        assert_eq!(error.key.as_deref(), Some(key));
+        assert!(error.message.contains("{command}"));
+    }
+}
+
+#[test]
+fn session_wrap_preserves_shell_arguments_and_does_not_expand_substitutions_twice() {
+    let output = render_wrap(
+        r#"sh -c "{command}" wrap {root}:{root} '{worktree}' {dir}"#,
+        r#"printf '%s\n' "{dir}" "$@""#,
+        Path::new("/root ' $"),
+        Path::new("/worktree ' {root}"),
+        Path::new("/run dir"),
+    )
+    .unwrap();
+    let result = std::process::Command::new("sh")
+        .args(["-c", &output])
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert_eq!(
+        result.stdout,
+        b"{dir}\n/root ' $:/root ' $\n/worktree ' {root}\n/run dir\n"
+    );
+}
+
+#[test]
 fn parses_complete_contract_and_preserves_builtins() {
     let root = crate::tests::tempdir();
     std::fs::create_dir(root.path().join("app")).unwrap();
