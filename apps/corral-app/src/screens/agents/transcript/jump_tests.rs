@@ -65,22 +65,33 @@ fn a_split_record_growing_above_the_reader_holds_their_row_and_is_not_new() {
         top: Some((record.to_owned(), 300.0)),
         ..Place::default()
     };
-    place.shown(4, Some((scope.clone(), format!("{record}|2"))));
-    assert_eq!(
-        place.shown(7, Some((scope.clone(), format!("{record}|5")))),
-        Shown::Up {
-            held: Some((scope.clone(), record.to_owned(), 300.0)),
-            arrived: 0,
-        },
-        "the record's earlier items are held above the reader, not counted"
+    let tail = || Some((record.to_owned(), 0));
+    place.shown(
+        4,
+        Some((scope.clone(), format!("{record}|2"))),
+        tail(),
+        |_| None,
     );
     assert_eq!(
-        place.shown(8, Some((scope, format!("{record}|5")))),
+        place.shown(
+            8,
+            Some((scope.clone(), format!("{record}|5"))),
+            Some(("reply".into(), 0)),
+            |_| Some(1)
+        ),
         Shown::Up {
-            held: None,
+            held: Some((scope.clone(), record.to_owned(), 300.0)),
             arrived: 1,
         },
-        "a reply below still counts"
+        "three earlier rows are held above the reader; the simultaneous reply counts"
+    );
+    assert_eq!(
+        place.shown(9, Some((scope, format!("{record}|5"))), tail(), |_| None),
+        Shown::Up {
+            held: None,
+            arrived: 2,
+        },
+        "another reply below still counts"
     );
     // The message was 500 high with the reader 300 into it; its earlier items add 200 above.
     let (top, height) = (40.0, 500.0);

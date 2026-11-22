@@ -302,6 +302,8 @@ pub struct Following {
     pub scope: Id,
     pub rows: usize,
     pub resume: Resume,
+    /// Last recorded bubble and the rows following it (echoes and the open turn).
+    pub tail: Option<(String, usize)>,
 }
 
 impl Transcript {
@@ -327,21 +329,40 @@ impl Transcript {
         Following {
             scope: self.scope.clone(),
             rows: self.rows(),
+            tail: self
+                .messages
+                .last()
+                .map(|last| (last.anchor.clone(), self.trailing_rows())),
             resume,
         }
+    }
+
+    fn trailing_rows(&self) -> usize {
+        self.echoes.len() + self.after.len() + self.live.iter().map(message_rows).sum::<usize>()
+    }
+
+    /// Rows strictly below a previous recorded tail. Used only on a prepend, so new
+    /// replies arriving in the same update are not counted as historical rows.
+    pub fn rows_below(&self, anchor: &str) -> Option<usize> {
+        let mut rows = self.trailing_rows();
+        for message in self.messages.iter().rev() {
+            if message.anchor == anchor {
+                return Some(rows);
+            }
+            rows += message_rows(message);
+        }
+        None
     }
 
     /// How many rows the transcript shows: the jump control counts what arrives while the
     /// reader is scrolled up by this.
     pub fn rows(&self) -> usize {
-        let items = |messages: &[Message]| {
-            messages
-                .iter()
-                .map(|message| message.items.len() + usize::from(message.footer.is_some()))
-                .sum::<usize>()
-        };
-        items(&self.messages) + self.echoes.len() + items(&self.live) + self.after.len()
+        self.messages.iter().map(message_rows).sum::<usize>() + self.trailing_rows()
     }
+}
+
+fn message_rows(message: &Message) -> usize {
+    message.items.len() + usize::from(message.footer.is_some())
 }
 
 /// The served page in a session detail cache.

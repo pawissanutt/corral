@@ -158,6 +158,7 @@ pub(super) fn page(app: AppState, tab: Tab, jump: impl Fn() -> u32 + 'static) ->
                     .map(|(t, _)| transcript::Earlier::of(t))
             })
         },
+        move |key| said.with(|said| said.as_ref()?.as_ref()?.0.rows_below(key)),
         jump,
     );
     view()

@@ -201,6 +201,7 @@ pub(super) fn chat(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             .child(content),
         move || chat.with(|c| c.as_ref().map(|c| c.transcript.following())),
         move || chat.with(|c| c.as_ref().map(|c| transcript::Earlier::of(&c.transcript))),
+        move |key| chat.with(|chat| chat.as_ref()?.transcript.rows_below(key)),
         move || page.with(|p| p.jump),
     )
 }

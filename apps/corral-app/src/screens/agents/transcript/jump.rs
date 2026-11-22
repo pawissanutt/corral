@@ -72,6 +72,7 @@ pub(super) struct Place {
     /// The first row shown as last seen, with its scope: when it changes in the same scope,
     /// rows arrived above the reader.
     pub first: Option<(Id, String)>,
+    pub tail: Option<(String, usize)>,
     /// The scroll offset as last seen: a scroll that changes it is the reader's own.
     pub offset: Option<f32>,
 }
@@ -91,7 +92,14 @@ pub(super) enum Shown {
 
 impl Place {
     /// The transcript now shows `rows` rows, `first` (with its scope) the first.
-    pub fn shown(&mut self, rows: usize, first: Option<(Id, String)>) -> Shown {
+    pub fn shown(
+        &mut self,
+        rows: usize,
+        first: Option<(Id, String)>,
+        tail: Option<(String, usize)>,
+        below: impl FnOnce(&str) -> Option<usize>,
+    ) -> Shown {
+        let previous_tail = std::mem::replace(&mut self.tail, tail);
         let before = std::mem::replace(&mut self.rows, rows);
         let above = matches!(
             (&self.first, &first),
@@ -105,7 +113,10 @@ impl Place {
         let mut left = *self.left_at.get_or_insert(rows);
         // What arrived above is not new: the reader read past it on their way up.
         if above {
-            left += rows.saturating_sub(before);
+            let added_below = previous_tail
+                .and_then(|(key, old)| below(&key).map(|now| now.saturating_sub(old)))
+                .unwrap_or_default();
+            left += rows.saturating_sub(before).saturating_sub(added_below);
             self.left_at = Some(left);
         }
         let held = above
@@ -160,6 +171,7 @@ pub fn follow(
     surface: Scroll,
     following: impl Fn() -> Option<Following> + 'static,
     earlier: impl Fn() -> Option<Earlier> + 'static,
+    below: impl Fn(&str) -> Option<usize> + 'static,
     jump: impl Fn() -> u32 + 'static,
 ) -> AnyElement {
     let form = app.form;
@@ -241,7 +253,10 @@ pub fn follow(
         effect(move || {
             let now = count.get();
             let top = scope_of.get().zip(first.get());
-            let shown = place.borrow_mut().shown(now, top);
+            let tail = shown.with(|view| view.as_ref().and_then(|view| view.tail.clone()));
+            let shown = place
+                .borrow_mut()
+                .shown(now, top, tail, |key| untracked(|| below(key)));
             match shown {
                 Shown::End => after_answer(move || scroller.scroll_to_end(false)),
                 Shown::Up { held, arrived: n } => {
