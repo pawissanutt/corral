@@ -17,8 +17,8 @@ package's locked dependencies (`bun install --frozen-lockfile`).
 
 ```text
 corral-pi run --dir <run-dir> [--socket <path>] [--prompt-file <path>] [--corral <path>] [model flags]
-corral-pi chat [--new | --dir <chat-dir>] [--socket <path>] [--corral <path>] [model flags]
-corral-pi build [--project <name>] [--data-dir <path>] [--id <id>] [--name <name>] [--profile <name>] [--here] [--socket <path>] [--corral <path>] [--headless] [model flags]
+corral-pi chat [--new | --dir <chat-dir>] [--plan] [--socket <path>] [--corral <path>] [model flags]
+corral-pi build [--project <name>] [--data-dir <path>] [--id <id>] [--name <name>] [--profile <name>] [--here] [--plan] [--socket <path>] [--corral <path>] [--headless] [model flags]
 corral-pi build --resume <id> [--data-dir <path>] [--socket <path>] [--corral <path>] [--headless]
 corral-pi build --prune [--session <id> [--json]] [--dry-run] [--data-dir <path>]
 corral-pi login [--provider <id>] [--auth-dir <path>] [--key-file <path>]
@@ -29,7 +29,8 @@ Model flags are `--model [<provider>/]<id>`, `--provider <id>`,
 `--effort <level>`, `--aws-profile <name>`, `--aws-region <region>` and
 repeatable `--fallback <provider>/<model>`. Supply both AWS flags together.
 Sessions also accept `--project <name>` and `--headless`; non-interactive
-launches are headless by default. For build defaults and cleanup, see
+launches are headless by default. `--plan` starts chat or Build in
+[plan mode](plan-mode.md). For build defaults and cleanup, see
 [Build sessions](build-sessions.md).
 
 ### Default model for terminal launches

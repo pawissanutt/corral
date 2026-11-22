@@ -336,6 +336,7 @@ Cards unify everything docked that waits for the owner. Answer semantics by kind
 | `exit` | `ExitControl` while `phase == pending` | `keep`, `land`, `iterate` with `unavailable` and `needs_text` (Land's required reason); `destructive` on `land` | one option; `text` is the reason. The method checks availability and the reason, starts `choose`, returns `started`; progress follows on `SessionState.exit` | as `iterate` |
 | `child_question` | a child in state `needs` | the child's options | an option label or text → `fleet.answer`, journal decision, mark | stays pending |
 | `board_plan` | `BoardControl.proposed()` | `file_start`, `file`, `dismiss` | one option → `file(plan, start)` or `dismiss` | as `dismiss` |
+| `plan_review` (added by [plan mode](pi-plan-mode.md)) | `PlanMode` while a submitted plan awaits the owner | `execute`, `execute_clean`, `execute_compact`, `revise` | one option with optional `text` (feedback or the owner's note); text alone is `revise`. Execute returns `started`, revise `delivered` | stays pending |
 
 ### 2.7 Details (`proto/detail.rs`, `proto/detail/session.rs`, `proto/detail/session_parts.rs`)
 

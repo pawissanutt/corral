@@ -1,6 +1,7 @@
 # Plan mode for corral-pi
 
-Status: design, awaiting owner approval. Nothing here is implemented yet.
+Status: approved by the owner and implemented. The user guide is
+[docs/guide/plan-mode.md](../guide/plan-mode.md); this document records the design.
 
 ## Context
 
@@ -20,13 +21,13 @@ task-level Plan runs (`dispatch --plan`), the `corral_todo` request plan, and `b
 | Clean context | Reset in place: same session and transcript, context replaced by the approved plan, no model call |
 | Surfaces | Build and assistant chat; terminal, plus a typed card and a dedicated plan view in the Corral app |
 | Entry | `/plan` toggle with an app action, and a `--plan` launch flag on `build` and `chat` |
-| Read-only enforcement | Deferred to this document; see the next section |
+| Read-only enforcement | The host blocks `edit`/`write` outside the plan file and writer children; shell stays prompt-only |
 
 Task workers and reviewers are excluded: workers keep task-level Plan runs.
 
 ## Read-only enforcement: what other harnesses do
 
-Checked in local sources, not from memory:
+Checked in local sources:
 
 - **Claude Code** enforces it in the harness. The Agent SDK's `plan` permission mode is
   documented as "Planning mode, no execution of tools" (`sdk.d.ts`).
@@ -37,12 +38,10 @@ Checked in local sources, not from memory:
 
 None of them rely on the prompt alone for file edits; they differ on shell.
 
-**Decision: omp's level.** The host refuses `edit` and `write` outside the plan file, and
-refuses writer children. Shell stays prompt-only, with today's fixed refusals and
-`bash_rules` unchanged. Reasons: the file guard is a few lines at a hook that already exists
-and stops the common failure (the agent starts implementing); a shell allowlist is a parser
-that either blocks legitimate read-only commands or gives false assurance, and corral
-already says shell rules are not a sandbox.
+**Decision: omp's level.** The file guard is a few lines at a hook that already exists and
+stops the common failure (the agent starts implementing). A shell allowlist is a parser that
+either blocks legitimate read-only commands or gives false assurance, and corral already
+says shell rules are not a sandbox.
 
 ## How it works
 
@@ -50,10 +49,11 @@ already says shell rules are not a sandbox.
 
 `off → planning → review → off`. From `review`, "Keep planning" returns to `planning`.
 
-The phase is saved as a transcript custom entry `corral_plan_mode`
-`{version: 1, phase, title?, revision?, digest?, approved?}` at every transition and restored
-from the last such entry on the current branch at host start and after a rewind. Rewinding to
-a turn before plan mode was entered therefore also leaves plan mode.
+The phase is a transcript custom entry `corral_plan_mode`
+`{version: 1, phase, revision, at, title?, digest?, left?, replied?, approved?}` appended at
+every transition. `PlanMode` (`src/host/plan-mode.ts`) keeps no phase of its own: it reads the
+current branch, cached by leaf id. A restart therefore restores the phase, and rewinding to a
+turn before plan mode was entered leaves it.
 
 ### Files
 
@@ -62,7 +62,8 @@ a turn before plan mode was entered therefore also leaves plan mode.
 
 - `<state dir>/plan.md`: the one plan document of the session. The agent creates and revises
   it with the ordinary `write` and `edit` tools.
-- `<state dir>/plans/<revision>-<slug>.md`: a copy made at each approval.
+- `<state dir>/plans/<revision>-<slug>.md`: the copy made at each approval. The executor is
+  given this path.
 
 The plan is session state, not part of the candidate: it is never written into the worktree.
 
@@ -75,66 +76,66 @@ The plan is session state, not part of the candidate: it is never written into t
 | `/plan` | planning | Leave plan mode; the draft stays on disk |
 | `/plan` | review | Open the review |
 | `/plan off` | any | Leave plan mode and withdraw a pending review |
-| `corral-pi build --plan`, `corral-pi chat --plan` | new session, or `off` on reopen | Start in planning |
-| App action "Plan mode" | off / planning | Same as `/plan` |
+| `corral-pi build --plan`, `corral-pi chat --plan` | off | Start in planning |
+| App action "Plan mode" | off / planning / review | Enter or leave |
 
-Entering or leaving is refused while a turn is open or compacting: stop the turn first.
-`/plan` stops being an alias of `/todo` in the app's command list; `/todo` is unchanged.
+Entering or leaving is refused while a turn is open or compacting. `/plan` is no longer
+listed as an alias of `/todo`; `/todo` is unchanged.
 
 ### What the agent is told
 
-The planning contract is a new asset, `assets/plan-mode.md`, delivered as a conversation
-message (custom type `corral_plan_mode`) from the existing `before_agent_start` hook when a
-planning turn starts and the contract is not yet in context. It is re-sent after a compaction
-while planning. Leaving without approval sends a one-line "plan mode ended" message the same
-way. The system prompt and the tool list never change with the mode, so entering and leaving
-do not invalidate the prompt cache.
+The mode reaches the model only as conversation messages (custom type `corral_plan_note`,
+not displayed), returned from the `before_agent_start` hook when a turn starts. The system
+prompt and the tool list never change with the mode, so entering and leaving do not
+invalidate the prompt cache. The transcript records each message, and the scan of the branch
+decides which one, if any, the next turn still needs:
 
-The contract, adapted from omp's:
+| Kind | When | Text |
+|---|---|---|
+| `contract` | Planning, and the contract is not in context (first turn, or after a compaction) | `assets/plan-mode.md` |
+| `left` | The owner left without approving, after the contract had been given | Plan mode is off; the draft is not approved |
+| `replied` | The owner answered a review with an ordinary message | Treat it as feedback, revise, submit again |
+| `pointer` | A compaction happened after an approval | Where the approved plan's copy is |
 
-- Do not change the working tree or run state-changing commands. Only `<plan path>` is
-  writable.
-- Resolve facts by reading code; ask the owner only about intent, UX, scope and tradeoffs,
-  through `ask_user`, with a recommended option. Every question must change the plan.
-- Write findings into the plan file as they are learned.
-- The plan is an execution spec: another agent with no memory of this conversation must be
-  able to execute it with no design decisions left. Sections: Context, Approach (ordered
-  steps with exact targets, signatures and literals), Critical files, Verification,
-  Assumptions and contingencies. No Non-Goals, Alternatives or Risks sections.
-- Finish only by calling `plan_submit`, then end the turn. Never ask for approval in prose or
-  with `ask_user`.
+The contract, adapted from omp's: change nothing and run only read-only commands; only the
+plan file is writable; resolve facts by reading and ask the owner only about intent, with a
+recommended option; record findings in the plan as they are learned; the plan is an
+execution spec another agent can follow with no design decisions left (Context, Approach,
+Critical files, Verification, Assumptions and contingencies); finish only with `plan_submit`.
 
 ### Host enforcement while planning or in review
 
 In `installToolControls` (`src/host/tool-controls.ts`), before the write-scope branch:
 
-- `edit` or `write` whose canonical destination is `plan.md`: allowed in `planning`, with no
+- `edit` or `write` whose destination is `plan.md`: allowed in `planning`, with no
   write-scope classification and no approval prompt. Refused in `review` with
-  `A plan is awaiting the owner's review; nothing was written.`
+  `A plan is awaiting the owner's review; nothing was written.` A symbolic link at the plan's
+  own name never counts as the plan.
 - Any other `edit` or `write`: refused with
   `Plan mode: the working tree is read-only. Write the plan to <path>; nothing was written.`
-- `task` with any agent whose effective kind is not `explore` or `review`: refused with
-  `Plan mode: only explore and review children can start; nothing was started.`
+- `task` with any agent whose kind is not `explore` or `review` (an omitted kind included):
+  refused with `Plan mode: only children with kind explore or review can start; nothing was
+  started.`
 
 Nested Code Mode calls pass through the same `tool_call` hook and get the same answers.
 
 ### `plan_submit`
 
-A host-local tool in the Build and assistant loadouts in every phase.
+A host tool in the Build and assistant loadouts in every phase. It is registered beside the
+role's local tools rather than among them, so children never inherit it.
 
 - Parameters: `{ title?: string }`. The title defaults to the first `# ` heading, then `Plan`.
 - Outside `planning` it fails with `Plan mode is not active; nothing was submitted.`
 - It fails if `plan.md` is missing, empty or over 256 KiB, naming the path.
 - On success it moves to `review`, increments `revision`, records the SHA-256 digest, and
-  returns `Submitted for the owner's review. End your turn now and do not implement.`
+  returns `Submitted for the owner's review. End your turn now and do not implement; the
+  owner's choice arrives as a later message.`
 
 ### Review
 
-One durable card of the new kind `plan_review`, with no expiry. It survives a host restart.
-Its id is `plan-<revision>-<digest prefix>`, so an answer to an older submission is
-`missing`. The terminal and the app answer the same card; the first answer wins.
-
-Options:
+One durable card of kind `plan_review`, with no expiry. Its id is
+`plan-<revision>-<digest prefix>`, so an answer to an older submission is `missing`. The
+terminal and the app answer the same submission; the first answer wins.
 
 | Id | Label | Effect |
 |---|---|---|
@@ -144,124 +145,95 @@ Options:
 | `revise` | Keep planning | Back to `planning`; the answer's text is the feedback |
 
 Any answer may carry text. With an execute option it is passed to the executor as the
-owner's note. Dismissing puts the card aside and stays in `review`. An ordinary owner message
-sent during `review` is treated as feedback: the phase returns to `planning` and the message
-is delivered normally.
+owner's note. Text with no option is `revise`. Dismissing puts the card aside and stays in
+`review`. An ordinary owner message during `review` is feedback: the phase returns to
+`planning` and the message is delivered normally.
 
 **Different model.** The review shows the session's current model with a change control that
-opens the existing model picker (Ctrl+L in the terminal, the model picker in the app). The
-session is idle during review, so the existing `set_model` path applies unchanged. Whichever
-execute option is chosen next runs on the selected model, which gives "different model" in
-combination with all three. No new wire is needed for it.
+opens the existing model picker. The session is idle during review, so the existing
+`set_model` path applies unchanged, and whichever execute option is chosen next runs on the
+selected model. No new wire is needed for it.
 
-**Terminal.** The existing pager (`ui/pager.ts`) shows the plan with action keys `e` execute,
-`c` clean, `s` compacted, `m` model, `k` keep planning (then a feedback input), and Esc for
-not now. `m` closes the pager, runs the native model selector, and reopens the review when
-the selection settles. The header shows `PLAN` while planning and `PLAN · review` in review.
+**Terminal.** `src/ui/plan-review.ts` shows the plan in the existing pager with action keys
+`e` execute, `c` clean, `s` compacted, `m` model, `k` keep planning (then a feedback input),
+and Esc for not now. It opens once per submission when the agent's turn ends and again from
+`/plan`. The composer title shows `PLAN`, or `PLAN · review`. A host without panels offers
+the four choices as a plain selection from `/plan`.
 
 **App.** A dedicated plan view renders the whole document as Markdown with the four actions,
 the model control and a feedback composer. The document is read in 40 KiB pages; the card
-body carries the first 8 KiB for older apps. A `PLAN` indicator sits in the session status.
+body carries the first 8 KiB for older apps.
 
 ### Executing an approved plan
 
 On an execute answer the host, in order:
 
-1. Checks the card is current, the phase is `review` and `plan.md` still matches the digest.
+1. Checks the phase is `review` and `plan.md` still matches the submitted digest.
 2. Cancels the turn if one is still open.
-3. Copies the plan to `plans/<revision>-<slug>.md`.
+3. Writes the plan to `plans/<revision>-<slug>.md`.
 4. Applies the context option:
    - `execute`: nothing.
    - `execute_compact`: `session.compact(<instructions>)`, where the instructions keep
      rationale, rejected alternatives, owner preferences and discovered files, drop tool
-     noise and superseded drafts, and do not restate the plan. "Nothing to compact" and
-     "Already compacted" are not failures; execution continues with the context as it is.
+     noise and superseded drafts, and do not restate the plan. The SDK's "Nothing to compact"
+     and "Already compacted" are not failures; execution continues with the context as it is.
    - `execute_clean`: `session.compact()` with a pending reset. The single
-     `session_before_compact` handler checks the reset before the quick-summary logic and
-     returns a host-written summary that keeps no earlier entry: "The earlier conversation
-     was a planning discussion, cleared at the owner's request. The approved plan follows."
-5. Records `phase: off` with `approved: {title, revision, digest, context, model}`.
-6. Submits the kickoff message (asset `assets/plan-approved.md`) as host input: the plan
-   inline, its durable path, the owner's note, and instructions to initialise `corral_todo`
+     `session_before_compact` handler returns a host-written summary with a null first-kept
+     entry, the session manager's own "nothing kept". Where the SDK refuses to compact (a
+     session smaller than `keepRecentTokens`), the host appends the same compaction entry
+     directly and calls `session.refreshContext()`, as rewind does.
+5. Records `phase: off` with `approved: {title, revision, digest, path, context, model}`.
+6. Submits the kickoff message (`assets/plan-approved.md`) as automated input: the plan
+   inline, the copy's path, the owner's note, and instructions to open a `corral_todo` plan
    from the plan's steps and verify each step. The Build record notes
    `Approved plan: <title> (revision N, <context option>)` rather than the plan text.
 
 Any failure in steps 1 to 4 leaves the phase at `review` with the card still open, and posts
 the reason as a transcript note.
 
-After an approval, the first turn following any later compaction gets a short pointer message
-naming the approved plan's path, so automatic compaction cannot lose the plan.
-
 ## Wire contract
 
-Host registry methods (`packages/corral-pi/src/host/remote/plan.ts`, new):
+Host registry methods (`packages/corral-pi/src/host/remote/plan.ts`):
 
 | Method | Arguments | Result | Refusals |
 |---|---|---|---|
-| `plan_mode` | `{enabled: boolean}` | `{text}` | `plan_mode_unavailable` while a turn is open, compacting or not ready |
-| `plan_doc` | `{after?: string}` | `{title, revision, body, bytes, offset, next?}` | `plan_doc_missing`; `stale_page` when the document changed between pages |
+| `plan_mode` | `{enabled: boolean}`, or `{command: string}` for a typed `/plan` | `{text}` | `plan_mode_unavailable` while a turn is open, compacting or not ready |
+| `plan_mode_doc` | `{after?: string}` | `{title, revision, body, bytes, offset, next?}` | `plan_mode_doc_missing`; `stale_page` when the document changed between pages |
 
-`plan_doc` serves `plan.md` in any phase, with the same cursor helpers as `board_plan_task`.
+`plan_mode_doc` serves `plan.md` in any phase, with the same cursor format as
+`board_plan_task`.
 
-State: `SessionState.plan?: {phase: "planning" | "review", title?: string, revision?: number}`,
-absent when off. Capability ids: `plan_mode` (unavailable while a turn is open) and `plan_doc`.
+State: `SessionState.plan_mode?: {phase: "planning" | "review", title?: string, revision?: number}`,
+absent when off. `SessionState.plan` remains the todo ledger. Capability ids: `plan_mode`
+(unavailable while a turn is open) and `plan_mode_doc`.
 
 Rust (`crates/corral-protocol`, schema regenerated):
 
 - `CardKind::PlanReview`, serialised `plan_review`, before `Other`.
-- `SessionState.plan: Option<PlanBrief>` with `#[serde(default, skip_serializing_if)]`;
-  `PlanBrief {phase: PlanPhase, title: Option<String>, revision: Option<u32>}`;
-  `PlanPhase {Planning, Review, #[serde(other)] Other}`.
+- `SessionState.plan_mode: Option<PlanModeBrief>`;
+  `PlanModeBrief {phase: PlanModePhase, title: Option<String>, revision: Option<u32>}`;
+  `PlanModePhase {Planning, Review, #[serde(other)] Other}`.
 - `SessionAction::PlanMode {enabled: bool}`, forwarded to `plan_mode`.
-- `DetailRef::SessionPlanDoc {id}` and `DetailBody::SessionPlanDoc(PlanDocPage {title,
-  revision, body, bytes, offset})`, read by the daemon like `board_plan_task`.
+- `DetailRef::SessionPlanModeDoc {id}` and `DetailBody::SessionPlanModeDoc(PlanModeDocPage
+  {title, revision, body, bytes, offset})`. The daemon reads it like `board_plan_task`;
+  `plan_mode_doc_missing` becomes `NotFound` and `stale_page` becomes `Conflict`.
 
 Version skew: an old daemon rewrites the kind to `other` and drops the new state field, so
 the app's dedicated view needs the new daemon. The card stays answerable in the terminal.
 
-## Implementation slices
-
-| Slice | Paths | Depends on |
-|---|---|---|
-| A. Protocol and daemon | `crates/corral-protocol`, `crates/corral-daemon` | none |
-| B. Host and terminal | `packages/corral-pi` | none (uses the contract above) |
-| C. App | `apps/corral-app` | A |
-| D. Guide | `docs/guide/plan-mode.md`, links from `corral-pi.md` and `build-sessions.md`, the card table in `docs/plans/app-agent-parity.md`, `apps/corral-app/AGENTS.md` | B, C |
-
-Critical anchors:
-
-- `packages/corral-pi/src/host/session.ts`: `extension()` (the `before_agent_start` and
-  `session_before_compact` handlers, command registration), the local tool list, the
-  `RemoteDialogs` existing-card source, `remoteState()`.
-- `packages/corral-pi/src/host/tool-controls.ts`: the `edit`/`write` branch.
-- `packages/corral-pi/src/host/remote/commands.ts`: `HOST_COMMANDS` and the `/plan` entry.
-- `crates/corral-daemon/src/views/session_parts.rs` (`board_plan_task()` as the template) and
-  `src/sessions/forward.rs` (`action()`).
-- `apps/corral-app/src/model/session/dock.rs` and `dock/fold.rs` (card classification),
-  `board.rs` and `plan_brief.rs` (the template for a paged Markdown view).
-
 ## Verification
 
-- Host, `bun test` and `bun run typecheck` in `packages/corral-pi`:
-  - guard: in planning, `write` to a worktree file is refused, `write` to `plan.md` succeeds,
-    `task` with a `slice` child is refused;
-  - restore: a transcript whose last `corral_plan_mode` entry is `review` reopens the card,
-    and a branch cut before the entry is `off`;
-  - clean reset against the real SDK session manager at a small size: after
-    `execute_clean`, the model context is the reset summary followed by the kickoff message
-    and no planning message;
-  - a card answer naming an older revision returns `missing`.
-- Protocol: `checked_in_schema_is_current` after regenerating with `CORRAL_UPDATE_SCHEMA=1`.
-- Daemon: one read test for `SessionPlanDoc` beside `src/tests/pi_build.rs`.
-- App: one model test for the `plan_review` classification and view model; `cargo test` in
-  `apps/corral-app`.
-- By hand in an isolated build: `/plan add a --version flag`, answer a question, see the
-  review, choose "Execute with clean context", and confirm the next request's context holds
-  only the plan.
+- Host: `test/plan-mode-host.test.ts` runs the production `HostSession` with a scripted
+  provider through both reset paths (a session the SDK refuses to compact, and one it
+  compacts). It checks that a worktree write is refused while planning and only the plan
+  file is written, that the submission is the open `plan_review` card, and that after
+  "Execute with clean context" the model's context holds the reset summary and the plan,
+  none of the planning conversation, and writes work again.
+- Protocol: `plan_mode_state_card_and_action_are_typed`, and `checked_in_schema_is_current`.
+- Daemon: `a_plan_mode_document_of_two_pages_joins_through_next`.
+- App: the model test for the `plan_review` view.
 
-## Assumptions and contingencies
-
-These are the choices the owner can still override:
+## Assumptions the owner can still override
 
 - **Shell is prompt-only while planning.** To tighten later, route non-read-only commands
   through the existing approval prompt.
@@ -269,19 +241,7 @@ These are the choices the owner can still override:
 - **No automatic nudge** when a planning turn ends in prose instead of `plan_submit`. If
   models stall in practice, add one reminder per owner input, as omp does.
 - **No "start in plan mode" setting and no agent-proposed entry**; neither was selected.
-- **The app's New build dialog gets no plan-mode checkbox** in this change; start the build,
-  then use the Plan mode action before the first message.
+- **The app's New build dialog has no plan-mode checkbox**; start the build, then use the
+  Plan mode action before the first message.
 - **Model changes apply when picked**, not atomically with the execute choice. Choosing
   "Keep planning" after changing the model continues planning on the new model.
-
-Unverified until implementation, each with its fallback:
-
-- Whether the SDK accepts an extension compaction that keeps no entry. The SDK's own
-  `appendCompaction` defaults `firstKeptEntryId` to the compaction's own id, which keeps
-  nothing; the reset uses that. If the SDK refuses, the reset keeps the SDK's default tail
-  and the review says so.
-- `session.compact()` refuses a session smaller than `keepRecentTokens`. For
-  `execute_clean` the fallback is `sessionManager.appendCompaction(...)` followed by
-  `session.refreshContext()`, the call rewind already uses. If that does not produce a clean
-  context on the Claude SDK lane, execution keeps the context and posts a note.
-- Whether the app needs a sidebar or tab entry for the plan view, or opens it from the dock.

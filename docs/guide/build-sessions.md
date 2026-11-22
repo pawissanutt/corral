@@ -38,6 +38,9 @@ chooses the Corral executable. `--data-dir <path>` selects the record store;
 by default it is `$XDG_DATA_HOME/corral/corral-pi`, or
 `~/.local/share/corral/corral-pi` when that variable is not an absolute path.
 
+`--plan` starts the build in [plan mode](plan-mode.md): the agent plans with you and
+changes nothing until you approve the plan. `/plan` does the same in a running session.
+
 ## Work together
 
 Send a message to start a turn. While the agent works, send a steer to change its
