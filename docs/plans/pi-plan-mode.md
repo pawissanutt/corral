@@ -50,7 +50,7 @@ says shell rules are not a sandbox.
 `off → planning → review → off`. From `review`, "Keep planning" returns to `planning`.
 
 The phase is a transcript custom entry `corral_plan_mode`
-`{version: 1, phase, revision, at, title?, id?, digest?, path?, left?, replied?, approved?}` appended at
+`{version: 1, phase, revision, at, title?, id?, digest?, path?, left?, approved?}` appended at
 every transition. `PlanMode` (`src/host/plan-mode.ts`) keeps no phase of its own: it reads the
 current branch, cached by leaf id. A restart therefore restores the phase, and rewinding to a
 turn before plan mode was entered leaves it.
@@ -90,15 +90,18 @@ The mode reaches the model only as conversation messages (custom type `corral_pl
 not displayed), returned from the `before_agent_start` hook when a turn starts. The system
 prompt and the tool list never change with the mode, so entering and leaving do not
 invalidate the prompt cache. The transcript records what each message covered, and the scan
-of the branch decides what the next turn still needs. Everything due goes in one message, so
-a reply after a compaction is told together with the contract:
+of the branch decides what the next turn still needs:
 
 | Kind | When | Text |
 |---|---|---|
-| `contract` | Planning, and the contract is not in context (first turn, or after a compaction) | `assets/plan-mode.md` |
+| `contract` | Planning or in review, and the contract is not in context (first turn, or after a compaction) | `assets/plan-mode.md` |
 | `left` | The owner left without approving, after the contract had been given | Plan mode is off; the draft is not approved |
-| `replied` | The owner answered a review with an ordinary message | Treat it as feedback, revise, submit again |
 | `pointer` | A compaction happened after an approval | Where the approved plan's copy is |
+
+There is no notice for the owner's feedback on a submitted plan. The contract and the
+`plan_submit` result both say that approval arrives only as a message beginning with
+`[corral plan approved]` and that any other owner message is feedback, so the agent needs no
+host message tied to one particular input.
 
 The contract, adapted from omp's: change nothing and run only read-only commands; only the
 plan file is writable; resolve facts by reading and ask the owner only about intent, with a
@@ -150,11 +153,11 @@ terminal and the app answer the same submission; the first answer wins.
 Any answer may carry text. With an execute option it is passed to the executor as the
 owner's note. Text with no option is `revise`. Dismissing puts the card aside and stays in
 `review`. An ordinary owner message during `review` is feedback: the phase returns to
-`planning` and the message is delivered normally. The review is withdrawn only for a message
-the session takes. One that starts a run withdraws it as that run starts, and the run is told
-it is the owner's reply. One queued into a running turn withdraws it once it is queued and
-needs no notice, because it reaches the model inside that turn. A refused message leaves the
-review open.
+`planning` and the message is delivered normally. The review is withdrawn at the moment that
+message enters the transcript, and only if the host's queue tagged that very message as the
+owner's (typed in the terminal or sent by the owner over the socket). A refused message never
+gets there, and the same words from an extension or automated input are not the owner's, so
+both leave the review open.
 
 **Different model.** The review shows the session's current model with a change control that
 opens the existing model picker. The session is idle during review, so the existing
@@ -194,14 +197,16 @@ On an execute answer the host, in order:
 4. Records `phase: off` with `approved: {title, revision, digest, path, context, model}`.
 5. Submits the kickoff message (`assets/plan-approved.md`) as automated input: the copy's
    path, the owner's note, instructions to open a `corral_todo` plan from the plan's steps
-   and verify each step, and the plan inline unless the context was just reset to it. The
-   Build record notes `Approved plan: <title> (revision N, <context option>)` rather than
-   the plan text.
+   and verify each step, and the plan inline unless the context was just reset to it. It goes
+   straight to Pi, not through the held queue of a paused session, so "taken" means started
+   or queued into a running turn and never parked. The Build record notes
+   `Approved plan: <title> (revision N, <context option>)` rather than the plan text.
 
 Any failure in steps 1 to 3 leaves the phase at `review` with the card still open, and posts
-the reason as a transcript note. A choice is refused while a compaction is running, when the
-session could start nothing. If the session does not take the kickoff, the same submission is
-put back under the same card, so an approved plan either starts or stays reviewable.
+the reason as a transcript note. A choice is refused while the session could start nothing:
+during a compaction, or while the owner has paused it. If the kickoff is refused or fails,
+the same submission is put back under the same card, so an approved plan either starts or
+stays reviewable.
 
 ## Wire contract
 

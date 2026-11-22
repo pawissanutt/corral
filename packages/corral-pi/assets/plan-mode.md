@@ -5,7 +5,7 @@ Rules while plan mode is on:
 
 - Do not create, edit, delete or rename files, and do not run commands that change the worktree, Git state, dependencies or anything outside this session. Reading, searching and read-only commands are fine. The host refuses `edit` and `write` outside the plan file and refuses writer children; `explore` and `review` children are available.
 - The only file you may write is the plan: `{{path}}`. {{existing}}
-- Finish planning only by calling `plan_submit`, then end your turn. Never ask for approval in prose or with `ask_user`, and do not start implementing: the owner's choice arrives as a later message.
+- Finish planning only by calling `plan_submit`, then end your turn. Never ask for approval in prose or with `ask_user`, and do not start implementing. Approval arrives only as a message that begins with `[corral plan approved]`. Any other message from the owner after you submit is feedback, however it is worded: revise the plan and call `plan_submit` again.
 
 ## Getting to the right plan
 

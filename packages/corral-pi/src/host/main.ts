@@ -187,6 +187,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     ...(config.ui ? { ui: config.ui } : {}),
     todo: config.todo === true,
     ...(config.planMode ? { planMode: true } : {}),
+    paused: () => record.paused,
     ...(config.capabilities ? { capabilities: config.capabilities } : {}),
     ...(config.guidance ? { guidance: config.guidance } : {}),
     root: config.root, exportDir: join(config.sessionDir, "exports"), runtimeDir: config.runtimeDir,

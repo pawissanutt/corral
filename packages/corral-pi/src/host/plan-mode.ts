@@ -27,12 +27,12 @@ const Saved = z.object({ version: z.literal(1), phase: z.enum(["off", "planning"
   revision: z.number().int().nonnegative(), at: z.number(), title: z.string().optional(),
   // A submission: its own id, the digest of its text and the write-once copy that review and execution read.
   id: z.string().optional(), digest: z.string().optional(), path: z.string().optional(),
-  // The owner left without approving, or answered a review with an ordinary message.
-  left: z.boolean().optional(), replied: z.boolean().optional(), approved: Approved.optional() });
+  // The owner left without approving.
+  left: z.boolean().optional(), approved: Approved.optional() });
 export type PlanRecord = z.infer<typeof Saved>;
 export type PlanPhase = PlanRecord["phase"];
 export type PlanChoice = "execute" | "execute_clean" | "execute_compact" | "revise";
-type NoteKind = "contract" | "left" | "replied" | "pointer";
+type NoteKind = "contract" | "left" | "pointer";
 
 export interface PlanEntry { readonly type: string; readonly customType?: string; readonly data?: unknown; readonly details?: unknown }
 
@@ -50,8 +50,8 @@ export interface PlanHost {
   append(record: PlanRecord): void;
   /** Why the mode cannot change now; undefined when the session is bound and idle. */
   busy(): string | undefined;
-  /** A compaction is running, during which the session takes no new turn. */
-  compacting(): boolean;
+  /** Why the session could not start a turn for a review choice now: a compaction is running, or it is paused. */
+  blocked(): string | undefined;
   stopTurn(): Promise<void>;
   compact(instructions: string): Promise<void>;
   /** Replace the model's context with `summary`, keeping no earlier entry. */
@@ -98,10 +98,8 @@ function scan(entries: readonly PlanEntry[]): Scan {
       const parsed = Saved.safeParse(entry.data);
       if (!parsed.success) continue;
       const next = parsed.data;
-      if (next.phase === "off") {
-        due = next.left && told ? "left" : undefined;
-        announced = told = false;
-      } else due = next.replied ? "replied" : undefined;
+      due = next.phase === "off" && next.left && told ? "left" : undefined;
+      if (next.phase === "off") announced = told = false;
       record = next;
     } else if (entry.type === "compaction") {
       // A summary is not the contract, and a later one can lose an approved plan's text.
@@ -115,10 +113,9 @@ function scan(entries: readonly PlanEntry[]): Scan {
       }
     }
   }
-  // A review has nothing to say until the owner answers it. A reply after a compaction needs the contract as
-  // well, in the same turn: told later, the reply notice would describe some other message.
-  if (record.phase === "review") return { record, due: [] };
-  return { record, due: [...(record.phase === "planning" && !announced ? ["contract" as const] : []), ...(due ? [due] : [])] };
+  // The read-only rules hold in review too, so a turn there needs the contract as much as a planning one.
+  if (record.phase !== "off") return { record, due: announced ? [] : ["contract"] };
+  return { record, due: due ? [due] : [] };
 }
 
 export class PlanMode {
@@ -206,8 +203,6 @@ export class PlanMode {
       ? this.host.prompts.contract({ path: this.path, existing: this.exists(), askUser: this.host.askUser })
       : kind === "left" ? "[corral plan mode]\nPlan mode is off: the owner left it without approving a plan. Normal tool access is "
         + `restored. The draft at \`${this.path}\` is not approved; do not implement it unless the owner asks.`
-      : kind === "replied" ? "[corral plan review]\nThe owner replied instead of approving the submitted plan. Treat their "
-        + "message as feedback: revise the plan, then call `plan_submit` again."
       : `[corral plan reference]\nThe approved plan for this work, "${record.approved?.title ?? "Plan"}", is at `
         + `\`${record.approved?.path ?? this.path}\`. If you are still executing it and its details are no longer in context, `
         + "read it. Ignore this if that work is finished or unrelated.").join("\n\n");
@@ -277,7 +272,9 @@ export class PlanMode {
     mkdirSync(join(this.host.dir, "plans"), { recursive: true });
     writeFileSync(copy, body, { flag: "wx", mode: 0o600 });
     this.write({ phase: "review", revision: next, title: named, id, digest: sha(body), path: copy });
-    return "Submitted for the owner's review. End your turn now and do not implement; the owner's choice arrives as a later message.";
+    return "Submitted for the owner's review. End your turn now and do not implement. Approval arrives only as a message "
+      + "that begins with [corral plan approved]; any other message from the owner is feedback, so revise the plan and "
+      + "call plan_submit again.";
   }
 
   /** A submission's copy as it is on disk now, or undefined when it is missing or no longer matches its digest. */
@@ -328,9 +325,8 @@ export class PlanMode {
     if (this.phase !== "review") return "missing";
     if (this.starting) return "started";
     // Neither the plan nor the feedback could start a turn now, and the review would be gone.
-    if (this.host.compacting()) {
-      throw new BridgeRefusal("plan_mode_unavailable", "Wait for the running compaction to finish, then choose again");
-    }
+    const blocked = this.host.blocked();
+    if (blocked) throw new BridgeRefusal("plan_mode_unavailable", blocked);
     if (choice === "revise") {
       void this.revise(text);
       return "delivered";
@@ -340,13 +336,12 @@ export class PlanMode {
   }
 
   /**
-   * An ordinary owner message the session took during review is feedback: the review is withdrawn and planning
-   * resumes. `told` is for a message that starts a run, which is given the reply notice; one queued into the
-   * running turn reaches the model there and leaves nothing to tell a later turn.
+   * An ordinary owner message that reached the model during review is feedback: the review is withdrawn and
+   * planning resumes. The agent knows what it is without being told again: only a kickoff is an approval.
    */
-  ownerSpoke(told = true): void {
+  ownerSpoke(): void {
     const { phase, revision, title } = this.record;
-    if (phase === "review" && !this.starting) this.write({ phase: "planning", revision, title, ...(told ? { replied: true } : {}) });
+    if (phase === "review" && !this.starting) this.write({ phase: "planning", revision, title });
   }
 
   private async revise(feedback?: string): Promise<void> {
@@ -382,11 +377,17 @@ export class PlanMode {
       this.write({ phase: "off", revision, approved: { title, revision, digest, path, context, ...(model ? { model } : {}) } });
       this.host.approved?.(`Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})`);
       const kickoff = this.host.prompts.approved({ path, title, revision, plan, context, note, todo: this.host.todo });
-      if (!await this.host.submit(kickoff, "auto")) {
+      let refusal: string | undefined;
+      try {
+        if (!await this.host.submit(kickoff, "auto")) refusal = "the session did not take it";
+      } catch (error) {
+        refusal = error instanceof Error ? error.message : String(error);
+      }
+      if (refusal !== undefined) {
         // A plan that did not start stays reviewable: the same submission is put back under the same card.
         const { version: _version, at, ...same } = record;
         this.write(same, at);
-        this.host.note("The session did not take the approved plan, so it was not started. The review is open again.", "error");
+        this.host.note(`The approved plan was not started: ${refusal}. The review is open again.`, "error");
       }
     } catch (error) {
       this.host.note(`The plan was not started: ${error instanceof Error ? error.message : String(error)}. The review is still open.`, "error");

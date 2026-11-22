@@ -8,7 +8,7 @@ const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 /** A plan mode over an in-memory branch, already planning with a plan file written. */
-async function planning(session: { compacting?: boolean; takes?: boolean } = {}) {
+async function planning(session: { blocked?: string; kickoff?: "refused" | "throws" } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "plan-mode-unit-"));
   dirs.push(dir);
   const entries: PlanEntry[] = [], notes: string[] = [];
@@ -17,9 +17,12 @@ async function planning(session: { compacting?: boolean; takes?: boolean } = {})
   const plan = new PlanMode({
     dir, cwd: dir, prompts: { contract: () => "CONTRACT", reset: () => "", approved: () => "" }, askUser: false, todo: false,
     entries: () => entries, leaf: () => String(leaf), append: record => { add({ type: "custom", customType: PLAN_ENTRY, data: record }); },
-    busy: () => undefined, compacting: () => session.compacting === true, stopTurn: async () => {}, compact: async () => {},
-    reset: async () => {}, submit: async () => session.takes !== false, model: () => undefined, changed: () => {},
-    note: text => { notes.push(text); },
+    busy: () => undefined, blocked: () => session.blocked, stopTurn: async () => {}, compact: async () => {}, reset: async () => {},
+    submit: async () => {
+      if (session.kickoff === "throws") throw new Error("the held queue could not be saved");
+      return session.kickoff !== "refused";
+    },
+    model: () => undefined, changed: () => {}, note: text => { notes.push(text); },
   });
   await plan.enter();
   writeFileSync(plan.path, "# Same plan\n");
@@ -54,36 +57,36 @@ test("a submission whose copy changed after it was shown is not executed", async
 });
 
 test("an approval the session cannot start leaves the same review open", async () => {
-  // During a compaction the session takes no turn, so the choice is refused before anything changes.
-  const compacting = await planning({ compacting: true });
-  compacting.plan.submit();
-  expect(() => compacting.plan.choose("execute")).toThrow("Wait for the running compaction to finish");
-  expect(compacting.plan.phase).toBe("review");
+  // While the session could start nothing, the choice is refused before anything changes.
+  const blocked = await planning({ blocked: "The session is paused" });
+  blocked.plan.submit();
+  expect(() => blocked.plan.choose("execute")).toThrow("The session is paused");
+  expect(blocked.plan.phase).toBe("review");
 
-  // A kickoff the session does not take puts the submission back under the same card.
-  const refusing = await planning({ takes: false });
-  refusing.plan.submit();
-  const review = refusing.plan.review;
-  expect(refusing.plan.choose("execute")).toBe("started");
-  await new Promise(resolve => setTimeout(resolve, 0));
-  expect(refusing.plan.review).toBe(review);
-  expect(refusing.notes.join("\n")).toContain("The review is open again");
+  // A kickoff the session does not take, or fails to take, puts the submission back under the same card.
+  for (const kickoff of ["refused", "throws"] as const) {
+    const { plan, notes } = await planning({ kickoff });
+    plan.submit();
+    const review = plan.review;
+    expect(plan.choose("execute")).toBe("started");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(plan.review).toBe(review);
+    expect(notes.join("\n")).toContain("The review is open again");
+  }
 });
 
-test("a reply to a review after a compaction is told with the contract, in one turn", async () => {
+test("a turn during a review that follows a compaction is given the contract again", async () => {
   const { plan, add } = await planning();
   const told = () => {
     const message = plan.turnMessage();
     if (message) add({ type: "custom_message", customType: PLAN_NOTE, details: message.details });
-    return message;
+    return message?.details.kinds;
   };
-  expect(told()?.details.kinds).toEqual(["contract"]);
+  expect(told()).toEqual(["contract"]);
   plan.submit();
+  expect(told()).toBeUndefined();
+  // The read-only rules still hold, and the summary is not the contract.
   add({ type: "compaction" });
-  plan.ownerSpoke();
-  const message = told();
-  expect(message?.details.kinds).toEqual(["contract", "replied"]);
-  expect(message?.content).toContain("The owner replied instead of approving");
-  // The next turn has nothing left to be told.
-  expect(plan.turnMessage()).toBeUndefined();
+  expect(told()).toEqual(["contract"]);
+  expect(told()).toBeUndefined();
 });

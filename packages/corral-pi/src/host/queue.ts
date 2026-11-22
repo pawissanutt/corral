@@ -21,6 +21,8 @@ interface Input {
   readonly facts: TranscriptInput;
   readonly transcriptId?: string;
 }
+/** What the transcript records of an input, and who it came from: `owner` and `pane` are the owner's own words. */
+export type InputFacts = Pick<Input, "facts" | "transcriptId" | "origin">;
 interface Queued extends Input { mode: "steer" | "follow_up"; message: AgentMessage }
 export type Withdrawal = { outcome: "withdrawn" | "already_started" | "unknown_item"; item?: string; turn?: number; text?: string };
 export interface QueuedInput {
@@ -113,7 +115,7 @@ export class HostQueue {
       facts: transcriptInput(input, !pane && socketId === undefined ? "auto" : origin) } satisfies Input;
   }
 
-  inputFacts(tag: unknown): Pick<Input, "facts" | "transcriptId"> | undefined {
+  inputFacts(tag: unknown): InputFacts | undefined {
     return this.tag(tag);
   }
 

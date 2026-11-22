@@ -115,7 +115,7 @@ import { LocalControlPlane } from "./local.ts";
 import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
 import { assertApiEffort, installApiProvider } from "./api-providers.ts";
 import { withSubscriptionFallback } from "./continuation.ts";
-import { HostQueue } from "./queue.ts";
+import { HostQueue, type InputFacts } from "./queue.ts";
 import { MARK_ENTRY, observeTranscriptEntries, recordTranscriptMark, type MarkSink, type ModelMark, type TranscriptMark,
   type TurnStopCause, type TurnWait } from "./transcript-marks.ts";
 import { TurnFacts, turnWaits } from "./turn-facts.ts";
@@ -148,6 +148,8 @@ export interface HostSessionOptions {
   readonly todo?: boolean;
   /** `--plan`: a session that is not already planning starts in plan mode. */
   readonly planMode?: boolean;
+  /** Whether the owner paused the session, which holds automated input instead of starting it. */
+  readonly paused?: () => boolean;
   /** The session's recorded snapshot; when present it decides todo. */
   readonly capabilities?: HostCapabilities;
   /** The snapshot's settings and project-text trust; absent loads no optional guidance. */
@@ -328,8 +330,8 @@ export class HostSession {
   runtime!: AgentSessionRuntime;
   /** Interactive host API only; deliberately absent from extension/model registries. */
   readonly queue: HostQueue;
-  private readonly queuedInputFacts = new WeakMap<object, { facts: TranscriptInput; transcriptId?: string }>();
-  private startedInputFacts: { facts: TranscriptInput; transcriptId?: string } | undefined;
+  private readonly queuedInputFacts = new WeakMap<object, InputFacts>();
+  private startedInputFacts: InputFacts | undefined;
   private unobserveTranscript: (() => void) | undefined;
   private remoteUsage: { leaf: string | null; model: AgentSession["model"]; usage: ParentUsage } | undefined;
   private remoteFleetDirty = true;
@@ -363,10 +365,6 @@ export class HostSession {
   private planReview: PlanReviewUi | undefined;
   /** The summary a clean-context reset writes in place of a model-made one. */
   private planReset: string | undefined;
-  /** Owner input that withdraws a pending plan review when its run starts, where that run is told. */
-  private planReply: string | undefined;
-  /** Terminal input that withdraws a pending plan review once it is in the queue of the running turn. */
-  private planQueuedReply: string | undefined;
   private readonly remotePrompts: RemotePrompts;
   private readonly local: LocalControlPlane;
   private questionUi: OwnerQuestionUi | undefined;
@@ -458,12 +456,16 @@ export class HostSession {
       append: record => { this.session.sessionManager.appendCustomEntry(PLAN_ENTRY, record, { immediate: true }); },
       busy: () => !this.remoteActionsReady ? "Session is not accepting plan actions"
         : this.open || this.session.isStreaming || this.session.isCompacting ? "Stop the current turn or wait for it to finish" : undefined,
-      compacting: () => this.session.isCompacting,
+      blocked: () => this.session.isCompacting ? "Wait for the running compaction to finish, then choose again"
+        : options.paused?.() ? "The session is paused and would hold the plan instead of starting it. Resume it, then choose again"
+        : undefined,
       stopTurn: async () => { if (this.open) await this.cancelRun(undefined, "owner"); },
       compact: instructions => this.planCompact(instructions),
       reset: summary => this.planResetContext(summary),
+      // Straight to Pi, never through the held queue of a paused session: there "queued" would mean parked,
+      // while here it only ever means queued into the running turn.
       submit: async (text, origin) => {
-        const result = await (origin === "auto" ? this.submitAutomated(text) : this.submitLocal({ text, origin, busyPolicy: "steer" }));
+        const result = await this.submitLocal({ text, origin, busyPolicy: "steer" });
         return result.disposition === "started" || result.disposition === "queued";
       },
       model: () => this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : undefined,
@@ -1068,10 +1070,7 @@ export class HostSession {
     const plan = this.planMode;
     if (plan) {
       // The mode reaches the model as a conversation message, so the system prompt never changes with it.
-      pi.on("before_agent_start", event => {
-        // The owner's reply withdraws a pending review only here, once its run really starts.
-        if (this.planReply !== undefined && event.messageType === "user" && event.prompt === this.planReply) plan.ownerSpoke();
-        this.planReply = undefined;
+      pi.on("before_agent_start", () => {
         const message = plan.turnMessage();
         return message ? { message } : undefined;
       });
@@ -1281,10 +1280,6 @@ export class HostSession {
       // A build session's record keeps what the owner asked for, verbatim.
       if (event.source === "interactive" && !event.text.startsWith("/")) {
         if (await this.options.paneInput?.(event.text, event.images)) return { action: "handled" as const };
-        // Pi checks the model and its login, and queues, after this hook: the message is the owner's reply
-        // to a pending plan review only once its run begins or it is in the queue.
-        if (event.streamingBehavior !== undefined) this.planQueuedReply = event.text;
-        else this.planReply = event.text;
         this.buildControls?.noteOwnerInput(event.text);
       }
       return { action: "continue" as const };
@@ -1430,6 +1425,8 @@ export class HostSession {
           if (!queued) this.startedInputFacts = undefined;
           Object.assign(event.message, { corralInput: tagged?.facts ?? { origin: "auto" },
             ...(tagged?.transcriptId === undefined ? {} : { corralRequestId: tagged.transcriptId }) });
+          // This very input reached the model. From the owner, it answers a pending plan review as feedback.
+          if (tagged?.origin === "owner" || tagged?.origin === "pane") this.planMode?.ownerSpoke();
           const content = event.message.content;
           this.ownerQuestions?.observeUser(typeof content === "string" ? content
             : content.map(p => p.type === "text" ? p.text : "").join(""));
@@ -1452,11 +1449,6 @@ export class HostSession {
         this.syncBuildTitle(session);
       } else if (event.type === "queue_update") {
         this.options.events.emit("queue", { steering: event.steering.length, follow_up: event.followUp.length });
-        const reply = this.planQueuedReply;
-        if (reply !== undefined && (event.steering.includes(reply) || event.followUp.includes(reply))) {
-          this.planQueuedReply = undefined;
-          this.planMode?.ownerSpoke(false);
-        }
       } else if (event.type === "message_end" && event.message.role === "assistant" && event.message.stopReason === "error") {
         const message = event.message.errorMessage ?? "";
         const provider = isProviderId(event.message.provider) ? event.message.provider : this.provider;
@@ -1782,16 +1774,8 @@ export class HostSession {
         return { disposition: "handled" };
       }, error => ({ disposition: "rejected", reason: utf8Prefix(error instanceof Error ? error.message : String(error), 256) }));
     }
-    // An owner message answers a pending plan review only if the session takes it: a run it starts withdraws
-    // the review in before_agent_start, and one queued into the running turn withdraws it here.
-    const reply = input.origin === "owner" && this.planMode?.review !== undefined;
-    if (reply) this.planReply = input.text;
     const tag = this.queue.bridgeInput(input, { ...source, socketId, transcriptId });
     return this.promptInput(input, tag, images).then(result => {
-      if (reply && result.disposition !== "started") {
-        if (this.planReply === input.text) this.planReply = undefined;
-        if (result.disposition === "queued") this.planMode?.ownerSpoke(false);
-      }
       if (input.origin === "owner" && (result.disposition === "started" || result.disposition === "queued")) {
         this.buildControls?.noteOwnerInput(source?.text ?? input.text);
       }

@@ -22,9 +22,9 @@ async function until(done: () => boolean, what: string): Promise<void> {
   await within((async () => { while (!done()) await new Promise(resolve => setTimeout(resolve, 5)); })(), 30_000, what);
 }
 
-/** An assistant host in a temporary workspace, already in plan mode. */
+/** An assistant host in a temporary workspace, already in plan mode; `pause` stands in for the owner's pause. */
 async function planning(guidance: CapabilityGuidance | undefined,
-  run: (host: HostSession, plan: PlanMode, cwd: string) => Promise<void>): Promise<void> {
+  run: (host: HostSession, plan: PlanMode, cwd: string, pause: (paused: boolean) => void) => Promise<void>): Promise<void> {
   const assets = buildFixtureInstall();
   const work = mkdtempSync(join(tmpdir(), "plan-mode-"));
   const cwd = join(work, "ws");
@@ -32,6 +32,7 @@ async function planning(guidance: CapabilityGuidance | undefined,
   const originalFetch = globalThis.fetch;
   const originalEnv = { ...process.env };
   let host: HostSession | undefined;
+  let paused = false;
   try {
     restrictEnvironment(process.env);
     const sdk = await import("@earendil-works/pi-coding-agent");
@@ -43,7 +44,7 @@ async function planning(guidance: CapabilityGuidance | undefined,
     const identity: HostIdentity = { store: "st-demo", project: "", role: "assistant", assistant: "A-1" };
     host = await HostSession.create({ sdk, identity, cwd, agentDir: join(work, "agent"), model: "gpt-6.1-sol",
       capabilities: { catalog: 8, digest: "b".repeat(64), preset: "standard", enabled: ["ask_user", "compaction"] },
-      ...(guidance ? { guidance } : {}),
+      ...(guidance ? { guidance } : {}), paused: () => paused,
       ui: "plain", runtimeDir: work, client: new CorralClient({ corral: "", root: work, cwd, identity }), events: new EventLog(), network,
       modules: { ...modules, role: assistantRole(PACKAGE_ROOT) },
       sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")) });
@@ -51,7 +52,7 @@ async function planning(guidance: CapabilityGuidance | undefined,
     await host.startLocal();
     if (!host.planMode) throw new Error("the assistant role has no plan mode");
     await host.planMode.enter();
-    await run(host, host.planMode, cwd);
+    await run(host, host.planMode, cwd, value => { paused = value; });
   } finally {
     await host?.close();
     globalThis.fetch = originalFetch;
@@ -65,6 +66,11 @@ async function planning(guidance: CapabilityGuidance | undefined,
 const PLAN = "# Add the flag\n\n1. Parse --version.\n";
 const SUBMIT = { toolCalls: [{ callId: "submit", name: "plan_submit", arguments: {} }] };
 const write = (callId: string, path: string, content: string) => ({ toolCalls: [{ callId, name: "write", arguments: { path, content } }] });
+const answerCard = (host: HostSession) => {
+  const card = host.dialogs.entries().find(entry => entry.card.kind === "plan_review");
+  if (!card) throw new Error("no plan review card");
+  return card;
+};
 
 const VARIANTS: readonly { name: string; compacts: boolean; guidance?: CapabilityGuidance }[] = [
   // The SDK refuses to compact a small session, so the reset entry is appended directly.
@@ -98,8 +104,7 @@ for (const variant of VARIANTS) {
       // Given the working file changes after the submission, as a shell command could change it:
       writeFileSync(plan.path, "tampered\n");
       // Then the review still shows the submitted text, and no other card can read it.
-      const card = live.dialogs.entries().find(entry => entry.card.kind === "plan_review");
-      if (!card) throw new Error("no plan review card");
+      const card = answerCard(live);
       expect(card.card).toMatchObject({ id: plan.review, title: "Add the flag", body: PLAN });
       expect(plan.doc(card.card.id)).toMatchObject({ body: PLAN, revision: 1 });
       expect(() => plan.doc("plan-1-other")).toThrow("no plan is under review with this card");
@@ -126,48 +131,44 @@ for (const variant of VARIANTS) {
     }), 120_000);
 }
 
-test("an owner message withdraws the plan review only when the session takes it", () => planning(undefined, async (live, plan) => {
-  // Given a submitted plan and an automated turn that is still running:
+test("a plan review is withdrawn only by an owner message the session takes", () => planning(undefined, async (live, plan, _cwd, pause) => {
+  // Given a submitted plan:
   writeFileSync(plan.path, PLAN);
   fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
   await live.session.prompt("Plan a --version flag", { source: "extension" });
   await live.drained();
   const review = plan.review;
   expect(review).toBeDefined();
-  const notes = () => (live.session.sessionManager.getEntries() as { type: string; customType?: string; details?: { kinds?: string[] } }[])
-    .filter(entry => entry.type === "custom_message" && entry.customType === PLAN_NOTE).map(entry => entry.details?.kinds);
-  fixtureTransport().script([{ text: "Noted." }, { text: "Revising." }]);
+
+  // A paused session would hold the plan instead of starting it, so the choice is refused.
+  pause(true);
+  expect(() => answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toThrow("The session is paused");
+  expect(plan.review).toBe(review);
+  pause(false);
+
+  // Given an automated turn that is still running:
+  fixtureTransport().script([{ text: "Noted." }]);
   fixtureTransport().holdNext();
   const held = fixtureTransport().whenHeld();
   void live.submitLocal({ text: "an automated note", origin: "auto", busyPolicy: "steer" });
   await held;
-  // When the owner's reply cannot be taken:
+  // When the owner's reply cannot be taken, from the app or typed in the terminal:
   const refused = await live.submitLocal({ text: "Change step 1", origin: "owner", busyPolicy: "prompt" });
-  // Then the same review is still open.
   expect(refused.disposition).toBe("rejected");
-  expect(plan.review).toBe(review);
-  // And typed in the terminal, where Pi refuses only after the input hook has run:
   await expect(live.session.prompt("Change step 1", { source: "interactive" })).rejects.toThrow("already processing");
-  expect(plan.review).toBe(review);
-
-  // When the terminal reply is queued into the running turn, it reaches the model there:
-  await live.session.prompt("Change step 1", { source: "interactive", streamingBehavior: "steer" });
-  expect(plan.phase).toBe("planning");
   fixtureTransport().release();
   await until(() => !live.session.isStreaming, "the held turn to end");
   await live.drained();
-  // Then no reply notice is left over for some later turn.
-  expect(plan.turnMessage()).toBeUndefined();
-  expect(notes()).toEqual([["contract"]]);
+  // Then the same review is still open, and the same words from anything but the owner leave it open too.
+  expect(plan.review).toBe(review);
+  fixtureTransport().script([{ text: "Automated." }]);
+  await live.session.prompt("Change step 1", { source: "extension" });
+  await live.drained();
+  expect(plan.review).toBe(review);
 
-  // Given the plan is submitted again, when a terminal message starts a run:
-  fixtureTransport().script([SUBMIT, { text: "Submitted." }, { text: "Revising again." }]);
-  await live.session.prompt("Submit it again", { source: "extension" });
+  // When the session takes the owner's message, it is the feedback:
+  fixtureTransport().script([{ text: "Revising." }]);
+  await live.session.prompt("Change step 1", { source: "interactive" });
   await live.drained();
-  expect(plan.phase).toBe("review");
-  await live.session.prompt("Change step 2", { source: "interactive" });
-  await live.drained();
-  // Then that run is the one told it is the owner's reply.
   expect(plan.phase).toBe("planning");
-  expect(notes()).toEqual([["contract"], ["replied"]]);
 }), 120_000);
