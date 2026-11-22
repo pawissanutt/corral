@@ -63,6 +63,7 @@ mod linux {
             unix::fs::FileExt,
         },
         path::{Component, Path, PathBuf},
+        time::{Duration, Instant},
     };
 
     use anyhow::{Context, bail};
@@ -371,6 +372,67 @@ mod linux {
         Ok((file, u64::try_from(stat.st_size).unwrap_or(0)))
     }
 
+    const HTML_READ_BUDGET: Duration = Duration::from_secs(5);
+
+    fn valid_revision(value: &str) -> bool {
+        fn sha256_hex(s: &str) -> bool {
+            s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        }
+        value
+            .split_once('.')
+            .is_some_and(|(stamp, digest)| sha256_hex(stamp) && sha256_hex(digest))
+    }
+
+    fn check_html_deadline(deadline: Instant) -> Result<()> {
+        ensure!(
+            Instant::now() < deadline,
+            "worktree HTML read exceeded its time budget"
+        );
+        Ok(())
+    }
+
+    fn read_html_bytes(
+        file: &File,
+        mut data: &mut [u8],
+        mut offset: u64,
+        deadline: Instant,
+    ) -> Result<()> {
+        while !data.is_empty() {
+            // A regular-file syscall can itself block; do not start or retry one after the
+            // deadline, and discard a result that arrives too late.
+            check_html_deadline(deadline)?;
+            match file.read_at(data, offset) {
+                Ok(0) => bail!(StaleWorktreeFile),
+                Ok(n) => {
+                    offset += n as u64;
+                    data = &mut data[n..];
+                }
+                Err(err) if err.kind() == ErrorKind::Interrupted => continue,
+                Err(err) => return Err(err).context("read worktree HTML chunk"),
+            }
+        }
+        check_html_deadline(deadline)
+    }
+
+    fn html_digest(file: &File, size: u64, first: &[u8], deadline: Instant) -> Result<String> {
+        // Hash the exact first chunk we will return, then stream the remainder once. This
+        // binds the completed download to the byte stream observed in this pass, even if a
+        // later write escapes the metadata stamp (e.g. through an already dirty mapping).
+        // It does not prove the pass itself was an atomic snapshot while the file was edited.
+        let mut hash = Sha256::new();
+        hash.update(first);
+        let mut offset = first.len() as u64;
+        let mut scratch = [0; SESSION_HTML_CHUNK_BYTES];
+        while offset < size {
+            let len = (size - offset).min(scratch.len() as u64) as usize;
+            read_html_bytes(file, &mut scratch[..len], offset, deadline)?;
+            hash.update(&scratch[..len]);
+            offset += len as u64;
+        }
+        check_html_deadline(deadline)?;
+        Ok(format!("{:x}", hash.finalize()))
+    }
+
     struct ChunkRequest<'a> {
         id: &'a str,
         path: &'a str,
@@ -400,9 +462,7 @@ mod linux {
                 "invalid: missing worktree HTML revision"
             );
             ensure!(
-                revision.is_none_or(
-                    |value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
-                ),
+                revision.is_none_or(valid_revision),
                 "invalid: malformed worktree HTML revision"
             );
             Ok(Self {
@@ -444,12 +504,14 @@ mod linux {
         }
 
         fn read(&self, root: &OwnedFd) -> Result<SessionFileChunk> {
+            let deadline = Instant::now() + HTML_READ_BUDGET;
             let (file, _) = self.stale_if_missing(regular(root, self.path))?;
             let before = fstat(&file)?;
-            let revision = self.stamp(&before);
+            let stamp = self.stamp(&before);
             ensure!(before.st_nlink == 1, StaleWorktreeFile);
+            // Revisions have a fixed-width, validated stamp prefix. No content scan on resume.
             ensure!(
-                self.revision.is_none_or(|value| value == revision),
+                self.revision.is_none_or(|value| value.starts_with(&stamp)),
                 StaleWorktreeFile
             );
             let size =
@@ -464,25 +526,25 @@ mod linux {
             );
             let len = (size - self.offset).min(SESSION_HTML_CHUNK_BYTES as u64) as usize;
             let mut data = vec![0; len];
-            if let Err(err) = file.read_exact_at(&mut data, self.offset) {
-                if err.kind() == ErrorKind::UnexpectedEof {
-                    bail!(StaleWorktreeFile);
-                }
-                return Err(err).context("read worktree HTML chunk");
-            }
-            // Check both the read descriptor and a fresh, confined lookup. The latter catches
-            // a renamed parent or replaced path even if the original inode is still linked.
-            ensure!(self.stamp(&fstat(&file)?) == revision, StaleWorktreeFile);
+            read_html_bytes(&file, &mut data, self.offset, deadline)?;
+            ensure!(
+                !data.contains(&0),
+                "invalid: worktree HTML contains binary data"
+            );
+            let revision = match self.revision {
+                Some(value) => value.to_owned(),
+                None => format!("{stamp}.{}", html_digest(&file, size, &data, deadline)?),
+            };
+            // Check both the read descriptor and a fresh, confined lookup after all reads.
+            // The latter catches a renamed parent or replaced path even if the inode is linked.
+            ensure!(self.stamp(&fstat(&file)?) == stamp, StaleWorktreeFile);
             let path_stat = match pin_regular(root, self.path) {
                 Ok((_, stat)) => stat,
                 Err(err) if err.is::<NotFound>() => bail!(StaleWorktreeFile),
                 Err(err) => return Err(err),
             };
-            ensure!(self.stamp(&path_stat) == revision, StaleWorktreeFile);
-            ensure!(
-                !data.contains(&0),
-                "invalid: worktree HTML contains binary data"
-            );
+            ensure!(self.stamp(&path_stat) == stamp, StaleWorktreeFile);
+            check_html_deadline(deadline)?;
             Ok(SessionFileChunk {
                 size,
                 offset: self.offset,

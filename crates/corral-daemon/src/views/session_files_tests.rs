@@ -173,6 +173,12 @@ fn sparse_sixty_four_mib_html_stays_within_control_frames() {
     };
     assert_eq!(first.offset, 0);
     assert_eq!(first.size, SESSION_HTML_MAX_BYTES);
+    assert!(valid_revision(&first.revision));
+    // SHA256 over the full file, including the sparse hole and the last chunk.
+    assert_eq!(
+        first.revision.split_once('.').unwrap().1,
+        "8b467b99d955c47a4abe66eccb626ef34826c4ef8a0a8669f3e4900e2747d1cb"
+    );
     assert_eq!(
         STANDARD.decode(first.data).unwrap(),
         vec![b'a'; SESSION_HTML_CHUNK_BYTES]
@@ -275,6 +281,36 @@ fn chunk_revisions_reject_same_length_replacement_and_wrong_selector() {
     assert!(read("B-1", path).unwrap_err().is::<StaleWorktreeFile>());
     fs::remove_file(tmp.path().join(path)).unwrap();
     assert!(read("B-1", path).unwrap_err().is::<StaleWorktreeFile>());
+}
+
+#[test]
+fn empty_html_has_a_digest_and_revisions_require_both_parts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fd = root(tmp.path()).unwrap();
+    let path = "empty.html";
+    let file = File::create(tmp.path().join(path)).unwrap();
+    let first = ChunkRequest::new("B-1", path, 0, None)
+        .unwrap()
+        .read(&fd)
+        .unwrap();
+    assert_eq!(first.size, 0);
+    assert_eq!(first.offset, 0);
+    assert!(first.data.is_empty());
+    let (stamp, digest) = first.revision.split_once('.').unwrap();
+    assert_eq!(
+        digest,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    for bad in [
+        stamp.to_owned(),
+        format!("{stamp}."),
+        format!("{stamp}.{}", digest.to_uppercase()),
+        format!("{stamp}.{digest}.extra"),
+    ] {
+        assert!(ChunkRequest::new("B-1", path, 0, Some(&bad)).is_err());
+    }
+    // Even an empty digest pass cannot report success after its deadline.
+    assert!(html_digest(&file, 0, &[], Instant::now()).is_err());
 }
 
 #[test]
