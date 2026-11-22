@@ -192,6 +192,12 @@ impl AppState {
         !self.fixture() && requests::transcript_reading(scope.to_string(), active)
     }
 
+    pub fn transcript_tail(&self, scope: &Id) {
+        if !self.fixture() {
+            _ = requests::transcript_tail(scope.to_string());
+        }
+    }
+
     /// Requests a detail page without discarding its cursor or conditional etag.
     pub fn detail(&self, get: DetailGet) {
         self.run(vec![Effect::Detail(get)]);

@@ -259,12 +259,16 @@ pub fn follow(
     {
         let held_scope = held_scope.clone();
         effect(move || {
-            let reading = scope_of.get().filter(|_| !at_end.get());
+            let scope = scope_of.get();
+            let reading = scope.clone().filter(|_| !at_end.get());
             if *held_scope.borrow() == reading {
                 return;
             }
             if let Some(id) = held_scope.take() {
                 driver.transcript_reading(&id, false);
+                if scope.as_ref() == Some(&id) && at_end.get_untracked() {
+                    driver.transcript_tail(&id);
+                }
             }
             if let Some(id) = reading
                 && driver.transcript_reading(&id, true)
