@@ -314,6 +314,50 @@ test("a kickoff whose admission comes up while another turn settles is refused, 
   expect(await within(owner.pause(), 5_000, "a pause after the refused kickoff")).toMatchObject({ paused: true });
 }), 120_000);
 
+test("a kickoff that loses the run to another prompt neither marks that prompt nor counts as started", () => planning(undefined, async (live, plan) => {
+  writeFileSync(plan.path, PLAN);
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+  await live.session.prompt("Plan a --version flag", { source: "extension" });
+  await live.drained();
+  const review = plan.review;
+  // Given another prompt has won Pi's run but its message is not recorded yet,
+  const recorded = Promise.withResolvers<void>(), running = Promise.withResolvers<void>();
+  const internals = live.session as unknown as {
+    _extensionRunner: { emit(event: { type: string }): Promise<unknown> };
+    _queueObserver: { lifecycle(event: { tag: unknown; event: "started" }): void };
+  };
+  const emit = internals._extensionRunner.emit.bind(internals._extensionRunner);
+  let hold = true;
+  internals._extensionRunner.emit = async event => {
+    if (event.type === "agent_start" && hold) {
+      hold = false;
+      running.resolve();
+      await recorded.promise;
+    }
+    return emit(event);
+  };
+  const prompt = live.session.prompt.bind(live.session);
+  // and the kickoff's overlapping preflight ends as Pi's losing side does: a reported start, then a refused run.
+  live.session.prompt = async (text, options) => {
+    if (!text.startsWith("[corral plan approved ")) return prompt(text, options);
+    internals._queueObserver.lifecycle({ tag: options?.queueTag, event: "started" });
+    options?.preflightResult?.("started");
+    throw new Error("Agent is already processing a prompt.");
+  };
+  fixtureTransport().script([{ text: "Independent." }]);
+  const winner = prompt("an independent input", { source: "extension" });
+  await running.promise;
+  // When the owner approves in that overlap, and the winning prompt's message is then recorded:
+  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  recorded.resolve();
+  await winner;
+  await live.drained();
+  // Then that message is not taken for the kickoff: nothing was approved, and the review is still open.
+  expect(plan.review).toBe(review);
+  expect(plan.approved).toBeUndefined();
+}), 120_000);
+
 test("a compaction inside a planning run is followed by the contract before the run goes on",
   () => planning({ settings: { compaction: { keep_recent_tokens: 1 } }, projectText: false }, async (live, plan) => {
     // Given a planning turn whose first response reports a context past the model's window:

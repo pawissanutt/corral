@@ -228,7 +228,7 @@ On an execute answer the host, in order:
    run, which it could outlive to be drained later after the owner had decided otherwise.
 5. The review ends when that kickoff message is in the transcript, and only then does the
    Build record note `Approved plan: <title> (revision N, <context option>)`. From the answer
-   until then the approval is pending: a second answer reports `started`, and entering or
+   until then the approval is pending: any other answer to the review is refused, and entering or
    leaving plan mode is refused. Only the approval's own compaction and the kickoff's own run
    go without the planning contract; any other turn that gets in first is still a turn under
    review and is given it. If the turn ends without the kickoff having reached the

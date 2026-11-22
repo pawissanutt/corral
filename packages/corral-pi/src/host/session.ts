@@ -367,8 +367,8 @@ export class HostSession {
   private planReview: PlanReviewUi | undefined;
   /** The summary a clean-context reset writes in place of a model-made one. */
   private planReset: string | undefined;
-  /** Callers of submitOpened waiting for the turn they started to open. */
-  private readonly openWaiters: (() => void)[] = [];
+  /** Inputs whose callers wait to learn whether that very input reached the transcript, by queue tag. */
+  private readonly deliveries = new Map<unknown, { readonly text: string; settle(delivered: boolean): void }>();
   /** Callers waiting for the open turn to have settled for everyone. */
   private readonly closeWaiters: (() => void)[] = [];
   /** Inputs handed to Pi whose admission is not answered yet, by queue tag, with how to refuse each. */
@@ -1445,15 +1445,23 @@ export class HostSession {
           const queued = this.queuedInputFacts.get(event.message);
           const tagged = queued ?? this.startedInputFacts;
           if (!queued) this.startedInputFacts = undefined;
+          const content = event.message.content;
+          const text = typeof content === "string" ? content : content.map(p => p.type === "text" ? p.text : "").join("");
+          // The facts of a started input wait in one slot for the next message, and two prompts whose preflights
+          // overlapped can leave the loser's there. What plan mode acts on is therefore checked against the text.
+          const delivery = tagged && this.deliveries.get(tagged);
+          const exact = delivery !== undefined && delivery.text === text;
           Object.assign(event.message, { corralInput: tagged?.facts ?? { origin: "auto" },
             ...(tagged?.transcriptId === undefined ? {} : { corralRequestId: tagged.transcriptId }),
             // Only the message the host itself admitted as an approved plan's kickoff carries this; its text proves nothing.
-            ...(tagged?.planKickoff === undefined ? {} : { [PLAN_KICKOFF]: tagged.planKickoff }) });
+            ...(tagged?.planKickoff === undefined || !exact ? {} : { [PLAN_KICKOFF]: tagged.planKickoff }) });
+          if (exact) {
+            this.deliveries.delete(tagged);
+            delivery.settle(true);
+          }
           // This very input reached the model. From the owner, it answers a pending plan review as feedback.
-          if (tagged?.origin === "owner" || tagged?.origin === "pane") this.planMode?.ownerSpoke();
-          const content = event.message.content;
-          this.ownerQuestions?.observeUser(typeof content === "string" ? content
-            : content.map(p => p.type === "text" ? p.text : "").join(""));
+          if ((tagged?.origin === "owner" || tagged?.origin === "pane") && text.startsWith(tagged.text)) this.planMode?.ownerSpoke();
+          this.ownerQuestions?.observeUser(text);
         }
       }
       if (event.type === "agent_start") {
@@ -1493,7 +1501,6 @@ export class HostSession {
     this.turn++;
     this.session.sessionManager.appendCustomEntry("corral_turn", this.turn, { immediate: true });
     this.open = true;
-    this.turnOpened();
     this.turnError = null;
     this.stopCause = undefined;
     if (this.recordsTurnMarks) this.turnFacts.start(this.turn, Date.now(), this.session.getSessionStats().cost);
@@ -1810,6 +1817,8 @@ export class HostSession {
 
   submitLocal(input: SessionInput, images?: ImageContent[], source?: {
     requestId?: string; queueKey?: string; text?: string; pane?: boolean; planKickoff?: string;
+    /** Told once whether this very input reached the transcript. */
+    delivered?: (delivered: boolean) => void;
   }): Promise<SubmitResult> {
     if (!this.bound || this.closing) return Promise.resolve({ disposition: "rejected", reason: "host_not_ready" });
     if (this.rewinding) return Promise.resolve({ disposition: "rejected", reason: "rewind_in_progress" });
@@ -1822,8 +1831,9 @@ export class HostSession {
         return { disposition: "handled" };
       }, error => ({ disposition: "rejected", reason: utf8Prefix(error instanceof Error ? error.message : String(error), 256) }));
     }
-    const tag = this.queue.bridgeInput(input, { ...source, socketId, transcriptId });
-    return this.promptInput(input, tag, images).then(result => {
+    const { delivered, ...tagged } = source ?? {};
+    const tag = this.queue.bridgeInput(input, { ...tagged, socketId, transcriptId });
+    return this.promptInput(input, tag, images, delivered && { text: input.text, settle: delivered }).then(result => {
       if (input.origin === "owner" && (result.disposition === "started" || result.disposition === "queued")) {
         this.buildControls?.noteOwnerInput(source?.text ?? input.text);
       }
@@ -1831,9 +1841,10 @@ export class HostSession {
     });
   }
 
-  private promptInput(input: SessionInput,
-    queueTag: unknown, images?: ImageContent[]): Promise<SubmitResult> {
+  private promptInput(input: SessionInput, queueTag: unknown, images?: ImageContent[],
+    delivery?: { readonly text: string; settle(delivered: boolean): void }): Promise<SubmitResult> {
     const { promise, resolve } = Promise.withResolvers<SubmitResult>();
+    if (delivery) this.deliveries.set(queueTag, delivery);
     const settle = (result: SubmitResult) => {
       this.admissions.delete(queueTag);
       resolve(result);
@@ -1857,28 +1868,31 @@ export class HostSession {
       },
     }).catch((error: unknown) => {
       refuse(error instanceof Error ? error.message : String(error));
-    }).finally(() => { this.turnOpened(); });
+    }).finally(() => {
+      // The run is over, or never was: an input that did not reach the transcript by now never will.
+      if (delivery && this.deliveries.get(queueTag) === delivery) {
+        this.deliveries.delete(queueTag);
+        delivery.settle(false);
+      }
+    });
     return promise;
   }
 
-  private turnOpened(): void {
-    for (const opened of this.openWaiters.splice(0)) opened();
-  }
-
   /**
-   * Start input now or refuse it, and when it starts a run, return only once that run's turn is open (or the
-   * run has ended). Pi reports a start before the turn can be cancelled; a caller ordering admissions against
-   * pause needs no such gap.
+   * Start input now or refuse it, and report a start only once that very input is in the transcript. Pi
+   * reports a start before its core run has taken the prompt, and another prompt can still win that run; the
+   * turn is open by the time the input is recorded, so a caller ordering admissions against pause leaves no
+   * gap in which a started run cannot be cancelled.
    */
   async submitOpened(input: SessionInput, planKickoff?: string): Promise<SubmitResult> {
     // Checked in the same tick as the call into Pi. A turn that is open for the host is running or still
     // settling, and Pi would queue this input or defer it into its settle list, where it can be dropped.
     if (this.open) return { disposition: "rejected", reason: "busy" };
-    const result = await this.submitLocal(input, undefined, planKickoff === undefined ? undefined : { planKickoff });
-    if (result.disposition === "started" && result.turn !== undefined && this.turn < result.turn) {
-      await new Promise<void>(resolve => { this.openWaiters.push(resolve); });
-    }
-    return result;
+    const delivered = Promise.withResolvers<boolean>();
+    const result = await this.submitLocal(input, undefined,
+      { ...(planKickoff === undefined ? {} : { planKickoff }), delivered: delivered.resolve });
+    if (result.disposition !== "started") return result;
+    return await delivered.promise ? result : { disposition: "rejected", reason: "busy" };
   }
   pendingOwnerQuestions() {
     return this.ownerQuestions?.pending().flatMap(record => {
