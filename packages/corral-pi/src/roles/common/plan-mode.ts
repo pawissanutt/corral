@@ -28,9 +28,11 @@ export function planPrompts(root: string): PlanPrompts {
         ? "ask the owner with `ask_user`, giving two to four distinct options with your recommendation first. An unanswered question is not approval: use your recommended default and record it under Assumptions."
         : "there is no question dialog in this session; choose a recommended default, record it under Assumptions and continue.",
     }).trimEnd(),
-    reset: ({ path, title, revision, plan }) => "The earlier conversation was a planning discussion. The owner approved the plan "
-      + `"${title}" (revision ${revision}) and asked for a clean context, so that discussion was cleared. The approved plan below `
-      + `is the whole brief; a durable copy is at \`${path}\`.\n\n${block(path, plan)}`,
+    // Written before the kickoff is admitted, so it claims no approval: only the kickoff that follows does.
+    reset: ({ path, title, revision, plan }) => "The earlier conversation was a planning discussion, cleared at the owner's "
+      + `request. The plan below, "${title}" (revision ${revision}), is the one submitted for the owner's approval; a durable `
+      + `copy is at \`${path}\`. Act on it only once a host message whose first line is \`[corral plan approved <id>]\` follows, `
+      + `and then it is the whole brief.\n\n${block(path, plan)}`,
     // A clean context already holds the plan in its summary; sending it again would only double it.
     approved: ({ path, title, revision, plan, context, note, todo }) => fill(readAsset(root, PLAN_APPROVED_ASSET), {
       path, title, revision: String(revision), context: CONTEXT[context],

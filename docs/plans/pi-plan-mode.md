@@ -51,8 +51,11 @@ says shell rules are not a sandbox.
 
 Entering, submitting, returning to planning and leaving each append a transcript custom
 entry `corral_plan_mode` `{version: 1, phase, revision, at, title?, id?, digest?, path?, left?}`.
-An approval appends none: a review ends as approved exactly when its kickoff message, whose
-first line is `[corral plan approved <card id>]`, is in the transcript. No approval can
+An approval appends none: a review ends as approved exactly when the message the host
+admitted as its kickoff is in the transcript. The host sets `corralPlanKickoff: <card id>` on
+that one message as it is persisted, through the same queue tag that carries an input's
+origin. The kickoff's first line, `[corral plan approved <card id>]`, is for the model and
+proves nothing: the same words from any other input approve nothing. No approval can
 therefore be recorded without its kickoff, lost with it, or outlive a rewind of it.
 
 `PlanMode` (`src/host/plan-mode.ts`) keeps no phase of its own: it reads the current branch,
@@ -199,8 +202,10 @@ On an execute answer the host, in order:
      and "Already compacted" are not failures; execution continues with the context as it is.
    - `execute_clean`: `session.compact()` with a pending reset. The single
      `session_before_compact` handler returns a host-written summary with a null first-kept
-     entry, the session manager's own "nothing kept". The summary is the approved plan with
-     a short header, so the cleared context holds the plan whatever happens afterwards.
+     entry, the session manager's own "nothing kept". The summary is the submitted plan with
+     a short header, so the cleared context holds the plan whatever happens afterwards. The
+     header claims no approval, because it is written before the kickoff is admitted: it
+     says to act on the plan only once the kickoff follows.
      Where the SDK refuses to compact (a session smaller than `keepRecentTokens`), the host
      appends the same compaction entry directly and calls `session.refreshContext()`, as
      rewind does.
@@ -210,13 +215,14 @@ On an execute answer the host, in order:
    unless the context was just reset to it. It is admitted through `RemoteOwner.start`:
    ordered against pause like every admission, refused rather than parked in a paused
    session's held queue, and holding that order until its turn is open, so a pause that
-   follows cancels the turn. The Build record notes
-   `Approved plan: <title> (revision N, <context option>)` rather than the plan text.
-5. The review ends when that kickoff message is in the transcript. From the answer until
-   then the approval is pending: a second answer reports `started`, entering or leaving plan
-   mode is refused, and no planning contract is sent. If the turn ends without the kickoff
-   having reached the transcript, the pending state is dropped and the review is answerable
-   again.
+   follows cancels the turn.
+5. The review ends when that kickoff message is in the transcript, and only then does the
+   Build record note `Approved plan: <title> (revision N, <context option>)`. From the answer
+   until then the approval is pending: a second answer reports `started`, and entering or
+   leaving plan mode is refused. Only the approval's own compaction and the kickoff's own run
+   go without the planning contract; any other turn that gets in first is still a turn under
+   review and is given it. If the turn ends without the kickoff having reached the
+   transcript, the pending state is dropped and the review is answerable again.
 
 Because nothing is recorded before the kickoff itself, any refusal, failure or restart on the
 way leaves the same review open, and the reason is posted as a transcript note. A choice is

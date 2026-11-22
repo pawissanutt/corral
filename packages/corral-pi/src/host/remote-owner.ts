@@ -28,8 +28,9 @@ export class RemoteOwner {
    * session refuses it instead of parking it, and the order is held until its turn is open, so a pause that
    * follows cancels that turn rather than finding nothing to cancel.
    */
-  start(input: SessionInput): Promise<SubmitResult> {
-    return this.order(async () => this.paused ? { disposition: "rejected", reason: "paused" } : this.host.submitOpened(input));
+  start(input: SessionInput, planKickoff?: string): Promise<SubmitResult> {
+    return this.order(async () => this.paused ? { disposition: "rejected", reason: "paused" }
+      : this.host.submitOpened(input, planKickoff));
   }
 
   submit(input: SessionInput, images?: ImageContent[], requestId?: string, pane = false): Promise<SubmitResult> {

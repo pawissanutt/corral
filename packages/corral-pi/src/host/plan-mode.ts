@@ -58,8 +58,11 @@ export interface PlanHost {
   compact(instructions: string): Promise<void>;
   /** Replace the model's context with `summary`, keeping no earlier entry. */
   reset(summary: string): Promise<void>;
-  /** Start or steer a turn; false when the session refused the input. */
-  submit(text: string, origin: "owner" | "auto"): Promise<boolean>;
+  /**
+   * Start or steer a turn; false when the session refused the input. `kickoff` is the card id of the approval
+   * this input starts: the host tags the exact message it admits with it, and only that tag ends the review.
+   */
+  submit(text: string, origin: "owner" | "auto", kickoff?: string): Promise<boolean>;
   model(): string | undefined;
   changed(): void;
   note(text: string, tone?: "text" | "warning" | "error"): void;
@@ -89,24 +92,24 @@ const heading = (text: string): string | undefined => /^[ \t]*#[ \t]+(.+?)[ \t]*
 const slug = (title: string): string => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "plan";
 // A rewind rolls the revision back, so the submission's own id is what makes a card and its copy unique.
 const cardId = (record: PlanRecord): string => `plan-${record.revision}-${record.id ?? ""}`;
-/** The first line of the message that starts an approved plan. It names the submission, and is the approval's only record. */
+/** The first line of the message that starts an approved plan, which tells the model that this is the approval. */
 const kickoffLine = (card: string): string => `[corral plan approved ${card}]`;
+/** The field the host sets on the one user message it admitted as an approval's kickoff; its value is the card id. */
+export const PLAN_KICKOFF = "corralPlanKickoff";
 
-function userText(entry: PlanEntry): string | undefined {
-  const message = entry.type === "message" ? entry.message as { role?: unknown; content?: unknown } | undefined : undefined;
-  if (message?.role !== "user") return undefined;
-  if (typeof message.content === "string") return message.content;
-  return Array.isArray(message.content)
-    ? message.content.map((part: { type?: unknown; text?: unknown }) => part.type === "text" && typeof part.text === "string" ? part.text : "").join("")
-    : undefined;
+/** The card a user message was admitted as the kickoff for. Its text proves nothing: anyone can send the words. */
+function kickoffOf(entry: PlanEntry): string | undefined {
+  const message = entry.type === "message" ? entry.message as { role?: unknown; [PLAN_KICKOFF]?: unknown } | undefined : undefined;
+  const card = message?.role === "user" ? message[PLAN_KICKOFF] : undefined;
+  return typeof card === "string" ? card : undefined;
 }
 
 interface Scan { record: PlanRecord; approved?: ApprovedPlan; due: readonly NoteKind[] }
 
 /**
  * The phase and what the model has not yet been told about it, read from the branch alone. A review ends as
- * approved exactly when its kickoff is in the transcript: no separate record could be written without it, lost
- * with it, or outlive a rewind of it.
+ * approved exactly when the message the host admitted as its kickoff is in the transcript: no separate record
+ * could be written without it, lost with it, or outlive a rewind of it.
  */
 function scan(entries: readonly PlanEntry[]): Scan {
   let record = OFF, announced = false, told = false;
@@ -131,7 +134,7 @@ function scan(entries: readonly PlanEntry[]): Scan {
         if (kind === "contract") announced = told = true;
         else if (kind === due) due = undefined;
       }
-    } else if (record.phase === "review" && record.path && userText(entry)?.split("\n", 1)[0] === kickoffLine(cardId(record))) {
+    } else if (record.phase === "review" && record.path && kickoffOf(entry) === cardId(record)) {
       approved = { title: record.title ?? "Plan", revision: record.revision, path: record.path };
       record = { version: 1, phase: "off", revision: record.revision, at: record.at };
       announced = told = false;
@@ -150,8 +153,10 @@ export class PlanMode {
   private submitted: { card: string; body: string } | undefined;
   /** An approval is being carried out, up to the admission of its kickoff. */
   private starting = false;
-  /** The card whose kickoff the session took but the transcript does not hold yet. */
-  private kickoff: string | undefined;
+  /** The approval's own compaction or reset is running. */
+  private preparing = false;
+  /** The kickoff on its way into the transcript: its card, its text, and what the Build record will say of it. */
+  private kickoff: { readonly card: string; readonly text: string; readonly journal: string } | undefined;
   private seen: PlanPhase = "off";
   private readonly listeners = new Set<() => void>();
 
@@ -173,7 +178,7 @@ export class PlanMode {
     return record.phase === "review" ? cardId(record) : undefined;
   }
   /** An approval is on its way into the transcript: nothing else may decide or change the mode meanwhile. */
-  private get pending(): boolean { return this.starting || (this.kickoff !== undefined && this.kickoff === this.review); }
+  private get pending(): boolean { return this.starting || (this.kickoff !== undefined && this.kickoff.card === this.review); }
 
   onChange(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -192,9 +197,15 @@ export class PlanMode {
     for (const listener of [...this.listeners]) { try { listener(); } catch { /* A view does not own the mode. */ } }
   }
 
-  /** The transcript grew: an approval's kickoff may have arrived in it, which ends the review. */
+  /** The transcript grew: an approval's kickoff may have arrived in it, which ends the review and is the approval. */
   refresh(): void {
-    if (this.phase !== this.seen) this.announce();
+    if (this.phase === this.seen) return;
+    const kickoff = this.kickoff;
+    if (kickoff && this.review === undefined) {
+      this.kickoff = undefined;
+      if (this.approved) this.host.approved?.(kickoff.journal);
+    }
+    this.announce();
   }
 
   /** The turn ended. A kickoff that was taken but never reached the transcript no longer holds the review. */
@@ -239,11 +250,15 @@ export class PlanMode {
     return undefined;
   }
 
-  /** What the starting turn needs to know about the mode, as one message; the transcript records what it covered. */
-  turnMessage(): { customType: string; content: string; display: boolean; details: { kinds: readonly NoteKind[] } } | undefined {
+  /**
+   * What the model needs to be told about the mode now, as one message; the transcript records what it covered.
+   * `prompt` is the text that starts the run, when a run is starting.
+   */
+  turnMessage(prompt?: string): { customType: string; content: string; display: boolean; details: { kinds: readonly NoteKind[] } } | undefined {
     const { approved, due } = this.read();
-    // An approval's own compaction and its kickoff turn must not be answered with the planning contract.
-    if (!due.length || this.pending) return undefined;
+    // Only the approval's own compaction and its own kickoff go without the planning contract: any other turn
+    // that gets in before the kickoff is still a turn under review.
+    if (!due.length || this.preparing || (prompt !== undefined && prompt === this.kickoff?.text)) return undefined;
     const content = due.map(kind => kind === "contract"
       ? this.host.prompts.contract({ path: this.path, existing: this.exists(), askUser: this.host.askUser })
       : kind === "left" ? "[corral plan mode]\nPlan mode is off: the owner left it without approving a plan. Normal tool access is "
@@ -419,16 +434,20 @@ export class PlanMode {
         throw new Error(CHANGED);
       }
       const title = record.title ?? "Plan", { revision, path } = record, card = cardId(record);
-      if (context === "compact") await this.host.compact(COMPACT_INSTRUCTIONS);
-      // The reset summary carries the plan itself, so the cleared context holds it whatever happens next.
-      else if (context === "clean") await this.host.reset(this.host.prompts.reset({ path, title, revision, plan }));
+      this.preparing = true;
+      try {
+        if (context === "compact") await this.host.compact(COMPACT_INSTRUCTIONS);
+        // The reset summary carries the plan itself, so the cleared context holds it whatever happens next.
+        else if (context === "clean") await this.host.reset(this.host.prompts.reset({ path, title, revision, plan }));
+      } finally {
+        this.preparing = false;
+      }
       // The owner may have paused while the context was prepared; the admission order then decides for good.
       const blocked = this.host.blocked();
       if (blocked) throw new Error(blocked);
-      const kickoff = `${kickoffLine(card)}\n${this.host.prompts.approved({ path, title, revision, plan, context, note, todo: this.host.todo })}`;
-      this.kickoff = card;
-      if (!await this.host.submit(kickoff, "auto")) throw new Error("the session did not take it");
-      this.host.approved?.(`Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})`);
+      const text = `${kickoffLine(card)}\n${this.host.prompts.approved({ path, title, revision, plan, context, note, todo: this.host.todo })}`;
+      this.kickoff = { card, text, journal: `Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})` };
+      if (!await this.host.submit(text, "auto", card)) throw new Error("the session did not take it");
     } catch (error) {
       this.kickoff = undefined;
       this.host.note(`The plan was not started: ${error instanceof Error ? error.message : String(error)}. The review is still open.`, "error");

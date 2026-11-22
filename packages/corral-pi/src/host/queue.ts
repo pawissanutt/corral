@@ -20,9 +20,11 @@ interface Input {
   readonly socketId?: string;
   readonly facts: TranscriptInput;
   readonly transcriptId?: string;
+  /** Set only by the host, for the one input it admits as an approved plan's kickoff: the review card's id. */
+  readonly planKickoff?: string;
 }
 /** What the transcript records of an input, and who it came from: `owner` and `pane` are the owner's own words. */
-export type InputFacts = Pick<Input, "facts" | "transcriptId" | "origin">;
+export type InputFacts = Pick<Input, "facts" | "transcriptId" | "origin" | "planKickoff">;
 interface Queued extends Input { mode: "steer" | "follow_up"; message: AgentMessage }
 export type Withdrawal = { outcome: "withdrawn" | "already_started" | "unknown_item"; item?: string; turn?: number; text?: string };
 export interface QueuedInput {
@@ -107,11 +109,14 @@ export class HostQueue {
     return { key: `q-${crypto.randomUUID()}`, text, mode, origin, facts: { origin: origin === "extension" ? "auto" : origin } };
   }
 
-  bridgeInput(input: SessionInput, source: { socketId?: string; transcriptId?: string; text?: string; pane?: boolean; queueKey?: string }): unknown {
+  bridgeInput(input: SessionInput, source: {
+    socketId?: string; transcriptId?: string; text?: string; pane?: boolean; queueKey?: string; planKickoff?: string;
+  }): unknown {
     const { socketId, transcriptId, pane } = source;
     const origin = pane ? "pane" : input.origin;
     return { key: source.queueKey ?? socketId ?? `q-${crypto.randomUUID()}`, text: source.text ?? input.text,
       mode: input.busyPolicy, origin, socketId, transcriptId,
+      ...(source.planKickoff === undefined ? {} : { planKickoff: source.planKickoff }),
       facts: transcriptInput(input, !pane && socketId === undefined ? "auto" : origin) } satisfies Input;
   }
 

@@ -69,7 +69,7 @@ import { TodoLedger, installPlanCommand } from "../ui/todo.ts";
 import type { HostCapabilities, ModelChoice, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { askUserTool, localQuestionAsk } from "./ask-user.ts";
-import { PLAN_ENTRY, PLAN_OPTIONS, PLAN_SUBMIT_TOOL, PlanMode, planSubmitTool } from "./plan-mode.ts";
+import { PLAN_ENTRY, PLAN_KICKOFF, PLAN_OPTIONS, PLAN_SUBMIT_TOOL, PlanMode, planSubmitTool } from "./plan-mode.ts";
 import { registerPlanMode } from "./remote/plan.ts";
 import { PlanReviewUi } from "../ui/plan-review.ts";
 import { isToolApproval, PENDING_MAX, PendingQuestions, QUESTION_ENTRY, validAnswer } from "./pending-questions.ts";
@@ -131,7 +131,7 @@ export interface HostSessionOptions {
   readonly transcriptRewound?: () => void;
   readonly automatedInput?: (input: SessionInput) => Promise<SubmitResult> | undefined;
   /** Automated input that must start now or be refused, ordered against pause; never parked while paused. */
-  readonly startInput?: (input: SessionInput) => Promise<SubmitResult> | undefined;
+  readonly startInput?: (input: SessionInput, planKickoff?: string) => Promise<SubmitResult> | undefined;
   readonly cwd: string;
   readonly agentDir: string;
   readonly model: string;
@@ -468,9 +468,10 @@ export class HostSession {
       reset: summary => this.planResetContext(summary),
       // The kickoff is ordered against pause and never parked in a paused session's held queue, so "queued"
       // only ever means queued into the running turn.
-      submit: async (text, origin) => {
+      submit: async (text, origin, kickoff) => {
         const input: SessionInput = { text, origin, busyPolicy: "steer" };
-        const result = await (origin === "auto" ? options.startInput?.(input) ?? this.submitOpened(input) : this.submitLocal(input));
+        const result = await (origin === "auto" ? options.startInput?.(input, kickoff) ?? this.submitOpened(input, kickoff)
+          : this.submitLocal(input));
         return result.disposition === "started" || result.disposition === "queued";
       },
       model: () => this.session.model ? `${this.session.model.provider}/${this.session.model.id}` : undefined,
@@ -1075,8 +1076,8 @@ export class HostSession {
     const plan = this.planMode;
     if (plan) {
       // The mode reaches the model as a conversation message, so the system prompt never changes with it.
-      pi.on("before_agent_start", () => {
-        const message = plan.turnMessage();
+      pi.on("before_agent_start", event => {
+        const message = plan.turnMessage(event.messageType === "user" ? event.prompt : "");
         return message ? { message } : undefined;
       });
       // Pi can compact inside a run and go on without before_agent_start, and a summary is not the contract.
@@ -1439,7 +1440,9 @@ export class HostSession {
           const tagged = queued ?? this.startedInputFacts;
           if (!queued) this.startedInputFacts = undefined;
           Object.assign(event.message, { corralInput: tagged?.facts ?? { origin: "auto" },
-            ...(tagged?.transcriptId === undefined ? {} : { corralRequestId: tagged.transcriptId }) });
+            ...(tagged?.transcriptId === undefined ? {} : { corralRequestId: tagged.transcriptId }),
+            // Only the message the host itself admitted as an approved plan's kickoff carries this; its text proves nothing.
+            ...(tagged?.planKickoff === undefined ? {} : { [PLAN_KICKOFF]: tagged.planKickoff }) });
           // This very input reached the model. From the owner, it answers a pending plan review as feedback.
           if (tagged?.origin === "owner" || tagged?.origin === "pane") this.planMode?.ownerSpoke();
           const content = event.message.content;
@@ -1778,7 +1781,7 @@ export class HostSession {
   }
 
   submitLocal(input: SessionInput, images?: ImageContent[], source?: {
-    requestId?: string; queueKey?: string; text?: string; pane?: boolean;
+    requestId?: string; queueKey?: string; text?: string; pane?: boolean; planKickoff?: string;
   }): Promise<SubmitResult> {
     if (!this.bound || this.closing) return Promise.resolve({ disposition: "rejected", reason: "host_not_ready" });
     if (this.rewinding) return Promise.resolve({ disposition: "rejected", reason: "rewind_in_progress" });
@@ -1831,8 +1834,8 @@ export class HostSession {
    * Pi reports a start before the turn can be cancelled; a caller ordering admissions against pause needs no
    * such gap.
    */
-  async submitOpened(input: SessionInput): Promise<SubmitResult> {
-    const result = await this.submitLocal(input);
+  async submitOpened(input: SessionInput, planKickoff?: string): Promise<SubmitResult> {
+    const result = await this.submitLocal(input, undefined, planKickoff === undefined ? undefined : { planKickoff });
     if (result.disposition === "started" && result.turn !== undefined && this.turn < result.turn) {
       await new Promise<void>(resolve => { this.openWaiters.push(resolve); });
     }
