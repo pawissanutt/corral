@@ -39,7 +39,9 @@ export class PlanReviewUi {
     pi.on("model_select", () => {
       const id = this.selecting;
       this.selecting = undefined;
-      if (id !== undefined && id === this.plan.review) void this.show();
+      // Pi closes its selector and hands the composer the keys only after this handler has returned. A review
+      // opened here would be drawn without them, so it reopens in a later task.
+      if (id !== undefined) setTimeout(() => { if (id === this.plan.review) void this.show(); }, 0);
     });
     const unsubscribe = this.plan.onChange(() => { if (this.plan.review === undefined) this.shown?.abort(); });
     pi.on("session_shutdown", () => {

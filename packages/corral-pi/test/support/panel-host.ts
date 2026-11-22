@@ -7,10 +7,11 @@ import { loadModules } from "../../src/host/modules.ts";
 import { guardedFetch, restrictEnvironment } from "../../src/host/restrict.ts";
 import { HostSession, authContext } from "../../src/host/session.ts";
 import { CorralClient } from "../../src/tools/corral.ts";
-import type { CapabilitySet } from "../../src/roles/types.ts";
+import { assistantRole } from "../../src/roles/assistant/index.ts";
+import type { CapabilitySet, HostIdentity } from "../../src/roles/types.ts";
 import type { NativePanels } from "../../src/ui/panels.ts";
 import { presentHostNotice } from "../../src/ui/host-notices.ts";
-import { buildFixtureInstall } from "./fixture-install.ts";
+import { buildFixtureInstall, PACKAGE_ROOT } from "./fixture-install.ts";
 import { RecordingTerminal } from "./panel-terminal.ts";
 import { ScreenModel } from "./screen.ts";
 
@@ -35,7 +36,7 @@ export interface PanelHost {
 
 /** Real HostSession + InteractiveMode + editor through PanelTerminal; only provider/control-plane I/O is faked. */
 export async function startPanelHost(extend?: (...args: Parameters<Extend>) => void,
-  options: { readonly capabilities?: CapabilitySet } = {}): Promise<PanelHost> {
+  options: { readonly capabilities?: CapabilitySet; readonly role?: "worker" | "assistant" } = {}): Promise<PanelHost> {
   const work = mkdtempSync(join(tmpdir(), "corral-panel-shell-")), assets = buildFixtureInstall();
   const oldFetch = globalThis.fetch, oldState = process.env.PI_CODING_AGENT_DIR;
   let host: HostSession | undefined;
@@ -48,9 +49,13 @@ export async function startPanelHost(extend?: (...args: Parameters<Extend>) => v
   try {
     restrictEnvironment(process.env); process.env.PI_CODING_AGENT_DIR = join(work, "pi-state");
     const sdk = await import("@earendil-works/pi-coding-agent");
-    const identity = { store: "st-0123456789abcdef", project: "demo", role: "worker" as const, task: "T-001", run: "R1" };
-    const original = await loadModules(assets.dir, "worker");
-    const modules: Modules = { ...original, role: { ...original.role, extend(pi, context) { original.role.extend?.(pi, context); extend?.(pi, context); } } };
+    const role = options.role ?? "worker";
+    const identity: HostIdentity = role === "assistant" ? { store: "st-0123456789abcdef", project: "", role, assistant: "A-1" }
+      : { store: "st-0123456789abcdef", project: "demo", role, task: "T-001", run: "R1" };
+    const original = await loadModules(assets.dir, role);
+    // The fixture install carries the worker's assets; the assistant reads its own from the package.
+    const base = role === "assistant" ? assistantRole(PACKAGE_ROOT) : original.role;
+    const modules: Modules = { ...original, role: { ...base, extend(pi, context) { base.extend?.(pi, context); extend?.(pi, context); } } };
     const send = modules.auth.transport?.(authContext());
     if (!send) throw new Error("fixture transport unavailable");
     const events = new EventLog(), network = guardedFetch(send);
@@ -70,7 +75,7 @@ export async function startPanelHost(extend?: (...args: Parameters<Extend>) => v
       userPresentation: presentHostNotice });
     await mode.init(); host.markAttached("interactive");
     void mode.run().catch(error => { throw error; });
-    await physical.untilVisible("WORKER  │"); // the status bar's role pill and its first separator
+    await physical.untilVisible(`${role.toUpperCase()}  │`); // the status bar's role pill and its first separator
     physical.send("\x1b[20~"); // F9: Chat, where every session starts; the transcript stays in front
     const view: Component | undefined = transcript;
     if (!(view instanceof ScrollView)) throw new Error("transcript is not a ScrollView");
