@@ -2,10 +2,11 @@
 //! snapshot is revalidated from its newest page, never spliced into an old branch.
 
 use super::*;
+use crate::model::session::{Ui, transcript as replay};
 use corral_protocol::rpc::ErrorCode;
 
-/// The replacement could not cover the displayed depth within the per-operation limits. The
-/// old snapshot remains available until the reader explicitly returns to the newest page.
+/// The replacement could not retain the reading surface. The old snapshot remains available
+/// until the reader explicitly returns to the newest page.
 pub(super) const HISTORY_CHANGED: &str = "history_changed";
 
 fn session(page: &DetailReply) -> Option<&SessionPage> {
@@ -53,6 +54,35 @@ fn history_missing(cache: &DetailCache, pages: &[DetailReply], current: &Session
                     < oldest.items.len()
             })
         })
+}
+
+/// Raw records can be covered while a moving seam still removes a message anchor, either
+/// by merging adjacent messages or by moving a standalone result under its call. Compare
+/// the actual blocks used by scroll restoration rather than predicting how replay groups them.
+fn anchor_missing(feed: &Feed, held: &DetailCache, replacement: &DetailCache) -> bool {
+    // A routine single-page refresh does not reconcile a paged reading surface. A change of
+    // backing session (e.g. the quick alias) also intentionally replaces all its anchors.
+    if (held.pages.len() < 2 && replacement.pages.len() < 2)
+        || !matches!(
+            (replay::page(Some(held)), replay::page(Some(replacement))),
+            (Some(held), Some(replacement)) if held.id == replacement.id
+        )
+    {
+        return false;
+    }
+    let DetailRef::Session { id } = &replacement.target else {
+        return false;
+    };
+    let id = Id::from(id.as_str());
+    let anchors: BTreeSet<_> = replay::transcript(&id, &Ui::EMPTY, Some(replacement), feed)
+        .messages
+        .into_iter()
+        .map(|message| message.anchor)
+        .collect();
+    replay::transcript(&id, &Ui::EMPTY, Some(held), feed)
+        .messages
+        .iter()
+        .any(|message| !anchors.contains(&message.anchor))
 }
 
 impl AppState {
@@ -154,15 +184,15 @@ impl AppState {
             })
         };
         // A full replacement cannot fit if we already walk farther than the budget. An
-        // exhausted new chain, however, is a complete snapshot (the branch may have shrunk).
+        // exhausted new chain can still replace it if it covers all the anchors.
         if next.is_some() && depth > MAX_PAGES {
-            return self.transcript_too_deep(feed, key, &id);
+            return self.transcript_history_changed(feed, key, &id);
         }
         let held = chain.len();
         let prior_bytes = self.detail_bytes.get(key).copied().unwrap_or(0);
         if !self.count_detail_page(key, &page, held) {
             if held > 0 {
-                return self.transcript_too_deep(feed, key, &id);
+                return self.transcript_history_changed(feed, key, &id);
             }
             self.detail_failed(
                 feed,
@@ -189,7 +219,7 @@ impl AppState {
             })
         {
             if pages.len() == MAX_PAGES {
-                return self.transcript_too_deep(feed, key, &id);
+                return self.transcript_history_changed(feed, key, &id);
             }
             self.detail_pages.insert(key.into(), pages);
             let added = self.detail_bytes[key].saturating_sub(prior_bytes);
@@ -237,10 +267,15 @@ impl AppState {
         vec![]
     }
 
-    fn transcript_too_deep(&mut self, feed: Signal<Feed>, key: &str, id: &str) -> Vec<Outgoing> {
+    fn transcript_history_changed(
+        &mut self,
+        feed: Signal<Feed>,
+        key: &str,
+        id: &str,
+    ) -> Vec<Outgoing> {
         self.detail_failed(feed, key, id, ClientError {
             code: HISTORY_CHANGED.into(),
-            message: "Still showing the previous transcript: too much history to refresh in one read. Use Load latest messages to rejoin the current transcript.".into(),
+            message: "Still showing the previous transcript so you don't lose your place. Use Load latest messages to rejoin the current transcript.".into(),
         });
         vec![]
     }
@@ -300,6 +335,25 @@ impl AppState {
                 .and_then(session)
                 .and_then(|part| part.older.clone());
         }
+        let replacement = DetailCache {
+            target: target.clone(),
+            pages,
+            merged: Some(DetailBody::Session(newest)),
+            loading: false,
+            stale: false,
+            error: None,
+        };
+        if !walking
+            && !self.detail_latest.contains(key)
+            && feed.with_untracked(|feed| {
+                feed.details
+                    .get(key)
+                    .is_some_and(|held| anchor_missing(feed, held, &replacement))
+            })
+        {
+            self.transcript_history_changed(feed, key, id);
+            return;
+        }
         self.detail_inflight.remove(key);
         self.detail_latest.remove(key);
         self.detail_restarts.remove(key);
@@ -307,20 +361,21 @@ impl AppState {
         let reread = self.detail_reread.remove(key);
         feed.update(|feed| {
             feed.settle_session(target, reread);
-            let response = pages.last().map(value);
+            let response = replacement.pages.last().map(value);
             if let Some(cache) = feed.details.get_mut(key) {
                 if walking {
-                    if let Some(DetailBody::Session(held)) = &mut cache.merged {
-                        prepend(held, newest);
+                    if let (Some(DetailBody::Session(held)), Some(DetailBody::Session(older))) =
+                        (&mut cache.merged, replacement.merged)
+                    {
+                        prepend(held, older);
                     }
-                    cache.pages.extend(pages);
+                    cache.pages.extend(replacement.pages);
+                    cache.loading = false;
+                    cache.stale = false;
+                    cache.error = None;
                 } else {
-                    cache.pages = pages;
-                    cache.merged = Some(DetailBody::Session(newest));
+                    *cache = replacement;
                 }
-                cache.loading = false;
-                cache.stale = false;
-                cache.error = None;
             }
             if let Some(operation) = feed.operations.get_mut(id) {
                 operation.loading = false;

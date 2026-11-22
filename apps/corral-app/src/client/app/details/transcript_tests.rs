@@ -136,7 +136,7 @@ fn transcript_first_paint_waits_for_no_older_page_and_prepend_joins_split_record
 }
 
 #[test]
-fn changed_transcript_refresh_revalidates_loaded_history_without_splicing_branches() {
+fn changed_transcript_refresh_revalidates_loaded_history_before_publishing() {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();
     let feed = signal(Feed::default());
@@ -178,7 +178,7 @@ fn changed_transcript_refresh_revalidates_loaded_history_without_splicing_branch
         feed,
         get,
         None,
-        page("v2", &[("3", &["new leaf"])], Some("new-older")),
+        page("v2", &[("2", &["new leaf"])], Some("new-older")),
     );
     assert_eq!(
         shown(feed),
@@ -199,9 +199,78 @@ fn changed_transcript_refresh_revalidates_loaded_history_without_splicing_branch
         shown(feed),
         [
             ("1".to_owned(), vec!["current prefix".to_owned()]),
-            ("3".to_owned(), vec!["new leaf".to_owned()])
+            ("2".to_owned(), vec!["new leaf".to_owned()])
         ]
     );
+}
+
+#[test]
+fn a_moving_seam_cannot_merge_away_a_previously_shown_anchor() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    let newest = &[("2", &["seam reply"][..]), ("3", &["tail reply"][..])];
+    let older = &[("1", &["earlier reply"][..])];
+    let get = read(&mut app, feed, None);
+    reply(&mut app, feed, get, None, page("v1", newest, Some("older")));
+    let get = read(&mut app, feed, Some("older"));
+    reply(&mut app, feed, get, Some("older"), page("v1", older, None));
+    let anchors = || {
+        use crate::model::session::{Ui, transcript::transcript};
+        feed.with_untracked(|feed| {
+            transcript(&Id::from("B-1"), &Ui::EMPTY, feed.detail(&target()), feed)
+                .messages
+                .into_iter()
+                .map(|message| message.anchor)
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(anchors(), ["1", "2"]);
+    let before = shown(feed);
+
+    // Every old record and item still fits, but the new page starts at 3 instead of 2.
+    // Replaying the new chain would merge the previous anchor 2 into message 1.
+    let get = read(&mut app, feed, None);
+    let get = reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        page("v2", &newest[1..], Some("new-older")),
+    );
+    assert!(
+        reply(
+            &mut app,
+            feed,
+            get,
+            Some("new-older"),
+            page("v2", &[older[0], newest[0]], None),
+        )
+        .is_empty()
+    );
+    assert_eq!(shown(feed), before);
+    assert_eq!(anchors(), ["1", "2"]);
+    feed.with_untracked(|feed| {
+        let cache = feed.detail(&target()).unwrap();
+        assert_eq!(cache.error.as_ref().unwrap().code, HISTORY_CHANGED);
+        assert!(cache.pages.iter().all(|page| page.etag == "v1"));
+    });
+
+    let get = app.latest_transcript(feed, "B-1".into());
+    assert!(
+        reply(
+            &mut app,
+            feed,
+            get,
+            None,
+            page("v2", &newest[1..], Some("new-older")),
+        )
+        .is_empty()
+    );
+    assert_eq!(anchors(), ["3"]);
+    feed.with_untracked(|feed| assert!(feed.detail(&target()).unwrap().error.is_none()));
 }
 
 fn numbered_page(etag: &str, row: usize, has_older: bool) -> Value {
