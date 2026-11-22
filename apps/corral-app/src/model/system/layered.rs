@@ -448,11 +448,24 @@ pub(super) fn layered(
             }
         }
     }
-    let (min_x, max_x) = bounds(&xs);
+    let (min_x, _) = bounds(&xs);
     let min_x = if min_x.is_finite() { min_x } else { 0.0 };
     for x in xs.iter_mut() {
         *x -= min_x;
     }
+    // A row the settling left past the room's right edge slides back left as far as its own
+    // left edge allows; rows never overlap each other, so this cannot make two cards collide.
+    for row in &rows {
+        let right = row.iter().map(|x| xs[*x] + verts[*x].w / 2.0).fold(0.0, f32::max);
+        let left = row.iter().map(|x| xs[*x] - verts[*x].w / 2.0).fold(f32::INFINITY, f32::min);
+        if right > max_row_w && left.is_finite() {
+            let shift = (right - max_row_w).min(left).max(0.0);
+            for &vx in row {
+                xs[vx] -= shift;
+            }
+        }
+    }
+    let (_, max_x) = bounds(&xs);
     // 6. y: rows top to bottom; busier gaps get a little more room.
     let row_h: Vec<f32> = rows
         .iter()
@@ -560,7 +573,7 @@ pub(super) fn layered(
     Layered {
         pos,
         routes,
-        width: if max_x.is_finite() { max_x - min_x } else { 0.0 },
+        width: if max_x.is_finite() { max_x } else { 0.0 },
         height: y,
         bottom_top: first_bottom.filter(|_| has_bottom).map(|r| row_top[r]),
     }

@@ -89,9 +89,15 @@ fn row(app: AppState, index: usize, line: Line) -> AnyElement {
                     node.node.test_id(),
                     move || picked,
                     press,
+                    // The name keeps its whole width; the tag gives way first.
                     vec![
-                        view().flex_1().min_w(px(0.0)).child(name).into_element(),
-                        small(app, tag, Token::Ink3),
+                        view().flex_shrink_0().child(name).into_element(),
+                        view()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .items_end()
+                            .child(small(app, tag, Token::Ink3))
+                            .into_element(),
                         small(app, node.figure, Token::Ink2),
                         small(app, bar_cells(node.share), Token::Ink3),
                         small(app, opens.trim().to_owned(), Token::Ink3),

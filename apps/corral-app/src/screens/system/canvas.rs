@@ -40,8 +40,11 @@ pub fn map(app: AppState, scene: Memo<Option<Scene>>) -> AnyElement {
         let scene = scene.get()?;
         (room > 0.0).then(|| (layout::layout(&scene, room, &measure), scene))
     });
+    // The drawing never sizes its container: the room comes from the page, not the map.
     view()
         .w_full()
+        .min_w(px(0.0))
+        .overflow_hidden()
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
         .child(dynamic(move || {
             let (layout, scene) = placed.get()?;

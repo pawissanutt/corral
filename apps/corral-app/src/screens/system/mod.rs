@@ -88,14 +88,26 @@ fn keep_loaded(app: AppState, data: Memo<Shown>) {
 fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
     let overlays: Vec<(Overlay, &'static str)> = Overlay::ALL.iter().map(|o| (*o, o.label())).collect();
     let windows: Vec<(Window, &'static str)> = Window::ALL.iter().map(|w| (*w, w.label())).collect();
-    let overlay = seg(
-        app,
-        &overlays,
-        move || app.system.with(|s| s.overlay),
-        move |o| app.system_act(Action::Overlay(o)),
-        "seg-overlay",
-    );
-    let activity = computed(move || app.system.with(|s| s.overlay == Overlay::Activity));
+    // Asking for a project, there is no map to re-colour.
+    let drawing = computed(move || data.with(|shown| shown.project.is_some()));
+    let overlay = dynamic(move || {
+        let overlays = overlays.clone();
+        drawing.get().then(|| {
+            untracked(|| {
+                seg(
+                    app,
+                    &overlays,
+                    move || app.system.with(|s| s.overlay),
+                    move |o| app.system_act(Action::Overlay(o)),
+                    "seg-overlay",
+                )
+            })
+        })
+    })
+    .into_element();
+    let activity = computed(move || {
+        drawing.get() && app.system.with(|s| s.overlay == Overlay::Activity)
+    });
     let window = dynamic(move || {
         activity.get().then(|| {
             untracked(|| {
@@ -110,8 +122,7 @@ fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
         })
     })
     .into_element();
-    let sub = untracked(|| data.with(|shown| shown.project.clone()));
-    head(app, TITLE, sub, vec![overlay, window])
+    head(app, TITLE, None, vec![overlay, window])
 }
 
 /// All projects in scope: the page asks for one.
@@ -140,6 +151,7 @@ fn map_page(app: AppState, data: Memo<Shown>) -> AnyElement {
     };
     let main = view()
         .flex_col()
+        .min_w(px(0.0))
         .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
         .when(form != Form::Terminal, |v| v.px(px(16.0)).py(px(12.0)))
         .child(notices(app, data))

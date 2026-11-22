@@ -71,16 +71,20 @@ fn thirty_containers_fit_without_overlap() {
     assert_eq!(scene.graph.len(), 25);
     assert_eq!(scene.band.len(), 5);
     let room = 860.0;
-    let placed = layout(&scene, room, &estimate);
-    assert_eq!(placed.placed.len(), 30);
-    for (i, a) in placed.placed.iter().enumerate() {
-        assert!(a.rect.x >= 0.0 && a.rect.x + a.rect.w <= room + 0.5, "{:?} leaves the room", a.rect);
-        for b in &placed.placed[i + 1..] {
-            assert!(!a.rect.overlaps(&b.rect), "{:?} overlaps {:?}", a.rect, b.rect);
+    // The text engine's fonts run wider than the estimate; both have to fit.
+    let wide = |font: Font, text: &str| font.estimate(text) * 1.25;
+    for measure in [&estimate as &dyn Fn(Font, &str) -> f32, &wide] {
+        let placed = layout(&scene, room, measure);
+        assert_eq!(placed.placed.len(), 30);
+        for (i, a) in placed.placed.iter().enumerate() {
+            assert!(a.rect.x >= 0.0 && a.rect.x + a.rect.w <= room + 0.5, "{:?} leaves the room", a.rect);
+            for b in &placed.placed[i + 1..] {
+                assert!(!a.rect.overlaps(&b.rect), "{:?} overlaps {:?}", a.rect, b.rect);
+            }
         }
+        assert_eq!(placed.routes.len(), scene.edges.len());
+        assert!(placed.routes.iter().all(|r| r.points.len() >= 2));
     }
-    assert_eq!(placed.routes.len(), scene.edges.len());
-    assert!(placed.routes.iter().all(|r| r.points.len() >= 2));
 }
 
 /// A name the card cut would break the "no clipped names" promise on the map.
