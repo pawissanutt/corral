@@ -1,3 +1,5 @@
+> This document describes the old engine's protocol and is not used by the new engine.
+
 # Corral extension protocol v1 (draft)
 
 Status: **draft**. Protocol v1 freezes only after the Mitigraph `task.context` provider passes

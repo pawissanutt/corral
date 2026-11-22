@@ -1,88 +1,120 @@
-# Extensions
+# Extensions (corral-next)
 
-## Configured commands (`corral-next`)
-
-In `.corral-next/corral.toml`, name an extension and give it one or more shell commands:
+An extension is an owner-trusted set of shell command lines in
+`.corral-next/corral.toml`. There is no registration or sandbox: commands have the
+owner's permissions. Use only commands you trust. For example, with this repository as
+the project (replace the absolute paths with paths in your checkout):
 
 ```toml
-[extensions.example]
-projects = ["site"]  # omit for every project
-facts = "my-indexer facts"
-on = ["landed"]
-run = "my-notifier"
+[extensions.examples]
+projects = ["corral"] # omit for all projects; [] selects none
+# enabled = true        # default
+facts = "python3 '/absolute/path/to/corral/examples/extensions/facts.py' tags"
 
-[extensions.example.tools]
-context = { run = "my-indexer context", about = "Find starting points" }
+[extensions.examples.tools]
+context = { run = "python3 '/absolute/path/to/corral/examples/extensions/context.py'",  about = "Find task starting points", record = true }
 ```
 
-`enabled` defaults to `true`. `corral-next config check` validates the block without
-running anything and rejects overlapping enabled `facts` providers for a project.
+`projects` restricts eligibility; `enabled = false` disables normal use. Tool names and
+the `facts` slot must not have overlapping enabled providers for a project. Tool `about`
+and `record` are optional; `record` defaults to false. `corral-next config check` validates
+configuration without executing it. React's `on` and `run` fields are accepted for
+configuration and sample checking, but **event delivery is not yet available**.
 
-`corral-next ext check example [--project site]` runs each line once, even for a disabled
-extension. **This runs real commands and can have side effects.** The project comes from
-`--project`, then `CORRAL_PROJECT`, then the first eligible project by name. If no project
-is eligible (for example, `projects = []`), omit `--project` to run from the workspace root;
-any inherited `CORRAL_PROJECT` is ignored. Each line gets one JSON object with `v: 1` and
-`sample: true` on stdin and runs with a 10-second deadline and a 1 MiB stdout limit. The
-check prints each line's stdout or error and exits nonzero if any line fails. Configuring
-an extension does not run it during normal task operations.
+## Rules for every line
 
-## PATH commands (`corral`)
+The runner is Unix-only. Each configured command string must be nonblank and contain no
+NUL. Corral runs each line using `sh -c`, sends one JSON object on stdin followed by EOF,
+and reads stdout. Requests include `"v": 1`; ignore unknown fields. Success requires
+exit status zero; failures report the stderr tail (up to 4 KiB). Each invocation has a
+deadline and stdout limit; a timed-out process group is killed. Commands receive the
+project environment plus `CORRAL_NEXT_ROOT`, `CORRAL_PROJECT` when applicable,
+`CORRAL_EXTENSION` and `CORRAL_ACTOR=extension`. An extension can write back using the
+public `corral-next` CLI. Commands may have side effects.
 
-The older `corral` CLI can run external commands named `corral-ext-<name>` that you install on `PATH`.
-This is the first stage of the extension framework in the approved T-381 plan: command
-discovery only. Corral does not register, configure, sandbox or talk a protocol to these
-commands; it starts them exactly as a shell would start any other program.
+`corral-next ext check examples [--project corral]` actually runs each configured line,
+even when disabled, with `sample: true`; it uses a 10-second deadline and 1 MiB stdout
+limit per line. It reports outputs or errors, not protocol conformance. It selects the
+explicit `--project`, otherwise an inherited `CORRAL_PROJECT`, otherwise the first eligible
+project by name, and runs from that project's repository. The selected project must be
+eligible; an inherited out-of-scope project therefore fails the check. Without an explicit
+project and with no eligible project, it ignores the inherited selector and runs from the
+workspace root. Sample tool requests contain only `v`, `sample`, and an empty `args`
+array; sample facts requests use `query: snapshot` and `rev: HEAD`.
+
+## Tool
+
+`corral-next tool` lists eligible tools. Run one with
+`corral-next tool --project=corral -- context [args...]` (omit `--project` when context
+selects the project). The line runs in the caller's working directory, with a 60-second
+deadline and 1 MiB stdout limit. Its stdout is passed through unchanged, including under
+`--json`. When `record = true` and a task and run are present, the first successful
+output per tool and run is recorded as an artifact. Configured tools are listed in agent
+run prompts; dispatch does not run them.
+
+A normal request looks like:
+
+```json
+{"v":1,"args":["extra"],"role":"worker","repo":"/absolute/worktree","base":"commit","task":{"id":"T-1","title":"Fix login","body":"Details","parent":null,"depends_on":[]},"run":"R1"}
+```
+
+`task`, `run`, and `base` can be null outside a run. `role` reflects the caller; `repo`
+is the run worktree or project repository. The answer is arbitrary stdout, not JSON.
+
+The included `context.py` searches tracked worktree files for literal words from the task
+title using `git grep`, returning at most 100 lines. Without a task title it reports that
+there is nothing to search. It needs Python 3 and Git, not an index service.
+
+## Ask: facts
+
+`facts` is an optional slot for enriching built-in system facts. The facts reader supports
+provider calls, but normal daemon/CLI system-map integration is not yet wired here. It
+keeps built-in facts when the provider fails. A call runs from the project repository and
+has a 10-minute deadline and 64 MiB stdout limit. Requests are:
+
+```json
+{"v":1,"query":"snapshot","repo":"/absolute/repo","rev":"commit","want":["files","definitions","references"]}
+{"v":1,"query":"delta","repo":"/absolute/repo","base":"commit","head":"commit","want":["changes","dependents","tests"]}
+```
+
+Answers are UTF-8 JSON Lines: one object per line, ending in exactly one `done` row.
+All rows must be valid, even for unrequested categories; malformed output, a missing
+`done` or command failure discards the answer. Only requested categories listed in
+`done.provided` contribute; an absent category means unavailable, not empty.
+
+| `type` | Fields |
+|---|---|
+| `file` | `path`, `read` (`complete`, `unsupported`, `failed`) |
+| `definition` | `path`, `name`, `line`, `end_line`, `kind` |
+| `reference` | `from`, `to`, `kind` (`import`, `use`, `call`), `count` |
+| `change` | `change` (`added`, `removed`, `changed`), `fact` (`definition` or `reference`), `path`, `name`, `line`; reference changes also need `to_path`, `to_name` |
+| `dependent` | `path`, `name`, `line`, `of` |
+| `test` | `path`, `name` |
+| `done` | `provided` (array), `skipped` and `omitted` (reason-to-count objects) |
+
+Lines are one-based, end lines cannot precede start lines, and reference counts are
+positive. Paths (including reference `from` and `to`) are exact repository-relative file
+paths in the snapshot, or the base for removed delta changes and the head otherwise;
+unknown paths are dropped. A dependent's `of` is the full name of the changed definition.
+Providing references replaces built-in syntactic references, even when the provider returns
+none. Results are cached by tree and provider configuration; inputs should correspond to the
+requested revision.
+
+`examples/extensions/facts.py` reads a tracked ctags-format file at the requested Git
+revision, not the mutable worktree. It supports numeric line addresses (other addresses
+and unsafe paths are counted as skipped), reports only `definitions`, and leaves delta
+categories unavailable.
+Pass a repository-relative tags path as its first argument; the default is `tags`. Keep the
+tags file updated and committed with the code it describes. For a sample check it emits an
+empty definitions answer without reading the file.
+
+### Try the examples without configuring Corral
+
+Run these from this repository; the facts fixture uses an isolated temporary Git repository:
 
 ```sh
-corral ext list
-corral ext list --json
-corral ext run <name> [args...]
-corral <name> [args...]
+python3 examples/extensions/test_examples.py
 ```
 
-## Forwarding
-
-`corral <name> args...` runs `corral-ext-<name>` when `<name>` is not a built-in command or
-a reserved name. Corral replaces itself with the extension (`execvp`-style), so:
-
-- the arguments after `<name>` reach the extension exactly as given, with no shell
-  interpretation;
-- the extension inherits the terminal: stdin, stdout and stderr are corral's own;
-- the extension's exit status is corral's exit status.
-
-A leading global `--root <ROOT>` is consumed by corral and not forwarded. If no
-`corral-ext-<name>` is on `PATH`, you get clap's ordinary unknown-subcommand error (exit 2),
-the same as before extensions existed.
-
-Extension names contain only ASCII letters, digits, `-` and `_` and start with a letter or
-digit. Only absolute `PATH` directories are searched, in order; empty and relative entries
-(which would mean the current directory) are skipped. The first executable regular file
-wins.
-
-## Built-in and reserved names
-
-A built-in command always wins: `corral list` runs the built-in list even when
-`corral-ext-list` is on `PATH`. Reserved names never fall through to an extension either.
-They are every built-in subcommand (including `ext` and `help`) plus names proposed or
-announced for future built-ins: `accept`, `migrate`, `read` and `report`. One table in
-`crates/corral/src/ext_cmd.rs` lists them, and a test fails if a new built-in is missing
-from it.
-
-`corral ext run <name> args...` is the collision-proof form. It runs `corral-ext-<name>`
-from `PATH` whatever the name, so `corral ext run list --json` runs `corral-ext-list --json`.
-`<name>` is the forwarding boundary: every argument after it reaches the extension
-unchanged, including flags corral itself recognizes, so `corral ext run list --help` passes
-`--help` to the extension. Corral's own options (`--root`, `--help`) go before `<name>`.
-When nothing matches it exits 1 with an error naming the missing executable.
-
-## Listing
-
-`corral ext list` prints every executable `corral-ext-*` on `PATH` with its full path, in
-`PATH` order. It reads only directory listings and file metadata and never executes a
-candidate. A candidate with a reserved name is marked as reachable only through
-`corral ext run`. A later candidate with the same name is marked as shadowed by the earlier
-`PATH` entry. `--json` prints an array of `{name, path, reserved, shadowed}` objects.
-
-Registrations (`corral-extension.toml` manifests recorded by an explicit owner command) are
-a later stage of the plan; until then the list shows `PATH` candidates only.
+This exercises both scripts with actual JSON requests and checks their output. You can also
+configure them as above and use `corral-next ext check examples` to exercise the runner.
