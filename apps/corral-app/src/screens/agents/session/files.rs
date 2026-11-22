@@ -152,26 +152,23 @@ fn editor(
                 let head = crumbs(app, &editor, alone);
                 let part = tabs::part(app, &editor.part, "files");
                 let open = {
-                    let (source, html_file) = match &editor.content {
+                    let source = match &editor.content {
                         Some(FilesContent::Source {
                             text,
                             html: true,
                             can_open,
-                        }) => (can_open.then_some(text.as_str()), true),
-                        _ => (None, false),
+                        }) => can_open.then_some(text.as_str()),
+                        _ => None,
                     };
-                    (html_file || editor.can_fetch)
-                        .then(|| {
-                            files_open::browser_button(
-                                app,
-                                html,
-                                &session,
-                                &editor.path,
-                                source,
-                                editor.can_fetch,
-                            )
-                        })
-                        .flatten()
+                    // Rereading can disable a new open, but must not hide an active Cancel.
+                    files_open::browser_button(
+                        app,
+                        html,
+                        &session,
+                        &editor.path,
+                        source,
+                        editor.can_fetch,
+                    )
                 };
                 let content = editor.content.as_ref().map(|content| drawn(app, content));
                 let body = view()
