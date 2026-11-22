@@ -10,7 +10,7 @@ use corral_protocol::detail::{
     SessionToolState,
 };
 use corral_protocol::session_state::InputOrigin;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::Id;
 use crate::model::agents::clock;
@@ -353,9 +353,49 @@ fn anchor(message: &SessionMessage) -> String {
     }
 }
 
+fn row_key(key: &str, row: usize) -> String {
+    if row == 0 {
+        key.into()
+    } else {
+        format!("{key}/{row}")
+    }
+}
+
 fn item_key(anchor: &str, from_end: usize) -> String {
     // A prepend can add items at the front of a split record without changing these keys.
     format!("{anchor}|{from_end}")
+}
+
+fn quiet_message(
+    id: &str,
+    author: &str,
+    anchor: String,
+    at: Option<String>,
+    mut items: Vec<MessageItem>,
+    keys: Vec<String>,
+) -> Message {
+    for item in &mut items {
+        if let MessageItem::Marker(row) = item {
+            row.time = at.clone();
+        }
+    }
+    let (avatar, hue) = avatar(author);
+    Message {
+        id: id.into(),
+        anchor,
+        kind: MessageKind::Quiet,
+        avatar,
+        hue,
+        head: Vec::new(),
+        author: author.into(),
+        detail: at.unwrap_or_default(),
+        tag: None,
+        tag_facts: None,
+        items,
+        keys,
+        footer: None,
+        live: false,
+    }
 }
 
 fn message(
@@ -363,10 +403,16 @@ fn message(
     cx: Cx<'_>,
     pairs: &std::collections::BTreeMap<&str, super::pairs::Pair<'_>>,
     first_user: bool,
+    placed: &[&super::pairs::Pair<'_>],
+    moved: &BTreeSet<&str>,
 ) -> Message {
     let at = clock(message.at.as_deref(), cx.feed);
     let anchor = anchor(message);
-    let resolved = resolve(&message.items, cx.feed);
+    let resolved: Vec<_> = placed
+        .iter()
+        .map(|pair| (pair.item.as_ref(), pair.rest))
+        .chain(resolve_at(&message.items, cx.feed).map(|(_, item, rest)| (item, rest)))
+        .collect();
     let turn = Turn {
         partial: resolved
             .iter()
@@ -406,7 +452,13 @@ fn message(
             ))),
             SessionItem::ToolCall { call_id, .. } => {
                 if let Some(pair) = pairs.get(call_id.as_str()) {
-                    if std::ptr::eq(item, pair.position) {
+                    let draw_here = if moved.contains(call_id.as_str()) {
+                        std::ptr::eq(item, pair.item.as_ref())
+                            && placed.iter().any(|placed| std::ptr::eq(*placed, pair))
+                    } else {
+                        std::ptr::eq(item, pair.position)
+                    };
+                    if draw_here {
                         items.extend(tool::call(&pair.item, &key, pair.rest, cx));
                     }
                 } else {
@@ -470,36 +522,13 @@ fn message(
         // Rows a recorded item made are keyed by it, the second and later ones by their place.
         let made = items.len() - keys.len();
         let key = item_key(&anchor, count - n);
-        keys.extend((0..made).map(|k| match k {
-            0 => key.clone(),
-            k => format!("{key}/{k}"),
-        }));
+        keys.extend((0..made).map(|k| row_key(&key, k)));
     }
     let owner = avatar(&message.author).0 == "Y" && !notice;
     let quiet = notice || host_made(&message.author);
     let (letter, hue) = avatar(&message.author);
     if quiet {
-        for item in &mut items {
-            if let MessageItem::Marker(row) = item {
-                row.time = at.clone();
-            }
-        }
-        return Message {
-            id: message.id.clone(),
-            anchor,
-            kind: MessageKind::Quiet,
-            avatar: letter,
-            hue,
-            head: Vec::new(),
-            author: message.author.clone(),
-            detail: at.unwrap_or_default(),
-            tag: None,
-            tag_facts: None,
-            items,
-            keys,
-            footer: None,
-            live: false,
-        };
+        return quiet_message(&message.id, &message.author, anchor, at, items, keys);
     }
     // What the host delivered for a child (its report, a message it sent the parent) is that
     // child's, not the owner's; owner-typed text is never read as one.
@@ -766,6 +795,102 @@ pub fn fetches(feed: &daemon::Feed, id: &Id, ui: &Ui) -> Vec<String> {
     fetches
 }
 
+fn projected_result(anchor: &str, pairs: &[&super::pairs::Pair<'_>], cx: Cx<'_>) -> Message {
+    let mut items = Vec::new();
+    let mut keys = Vec::new();
+    for (n, pair) in pairs.iter().enumerate() {
+        let key = item_key(anchor, pairs.len() - n);
+        items.extend(tool::call(&pair.item, &key, pair.rest, cx));
+        keys.extend((0..items.len() - keys.len()).map(|k| row_key(&key, k)));
+    }
+    quiet_message(anchor, "toolResult", anchor.into(), None, items, keys)
+}
+
+type RecordedView = (Vec<Message>, Vec<(String, usize)>, Option<String>);
+
+/// Recorded surface only; anchor reconciliation need not render the live turn and echoes.
+fn recorded_view(
+    recorded: &[SessionMessage],
+    cache: Option<&DetailCache>,
+    cx: Cx<'_>,
+) -> RecordedView {
+    let pairs = super::pairs::collect(recorded, cache, cx.feed);
+    let first_user = recorded.iter().position(|m| avatar(&m.author).0 == "Y");
+    // Physical starts protect a prepend; retained displayed starts protect a moving seam.
+    let boundaries = super::seams::boundaries(cache);
+    let projection = super::seams::Projection::of(recorded, cache, &pairs);
+    let mut boundary = false;
+    // A split record keeps its anchor but gains items at its front. Track the first recorded
+    // row before adding child steers or mail, which can stay ahead of it across pages.
+    let mut first = None;
+    let mut timed = Vec::new();
+    let mut push = |id: &str, at: Option<u64>, shown: Message, slots: usize| {
+        boundary |= boundaries.contains(id);
+        if shown.items.is_empty() && shown.footer.is_none() {
+            return;
+        }
+        first.get_or_insert_with(|| item_key(&shown.anchor, slots));
+        timed.push((at, std::mem::take(&mut boundary), shown));
+    };
+    for (n, m) in recorded.iter().enumerate() {
+        let at = millis(m.at.as_deref());
+        let placed = projection.placed(m.id.as_str());
+        let shown = message(
+            m,
+            cx,
+            &pairs,
+            Some(n) == first_user,
+            placed,
+            &projection.moved,
+        );
+        push(&m.id, at, shown, m.items.len() + placed.len());
+        for &(_, anchor) in projection.after(m.id.as_str()) {
+            // Its old result record no longer exists. Draw the replacement's result rows
+            // at the retained anchor without constructing another protocol message.
+            let pairs = projection.placed(anchor);
+            push(anchor, at, projected_result(anchor, pairs, cx), pairs.len());
+        }
+    }
+    // A child conversation's steers and agent messages stand before the first message that
+    // started after them; those without a time go last.
+    let at_clock = |ms: u64| {
+        let at = jiff::Timestamp::from_millisecond(i64::try_from(ms).ok()?).ok()?;
+        clock(Some(&at.to_string()), cx.feed)
+    };
+    for (at, bubble) in bubbles::child_bubbles(cx.id, cx.feed, at_clock) {
+        let place = at.and_then(|at| {
+            timed
+                .iter()
+                .position(|(when, _, _)| when.is_some_and(|when| when > at))
+        });
+        timed.insert(place.unwrap_or(timed.len()), (at, false, bubble));
+    }
+    let (messages, message_ends) = merged(
+        timed.into_iter().map(|(_, seam, message)| (seam, message)),
+        cx,
+    );
+    (messages, message_ends, first)
+}
+
+pub(super) fn recorded_anchors(cache: &DetailCache, feed: &daemon::Feed) -> Vec<String> {
+    let (Some(body), DetailRef::Session { id }) = (page(Some(cache)), &cache.target) else {
+        return Vec::new();
+    };
+    let id = Id::from(id.as_str());
+    let journal = Journal::of(&id, &body.messages, feed);
+    let cx = Cx {
+        id: &id,
+        ui: &Ui::EMPTY,
+        feed,
+        journal: &journal,
+    };
+    recorded_view(&body.messages, Some(cache), cx)
+        .0
+        .into_iter()
+        .map(|m| m.anchor)
+        .collect()
+}
+
 /// The transcript of session `id` (the scope its page reads, `quick` included) as `ui` shows it.
 pub fn transcript(
     id: &Id,
@@ -820,61 +945,7 @@ pub fn transcript(
             })
         }
     });
-    let pairs = super::pairs::collect(recorded, cache, feed);
-    let first_user = recorded
-        .iter()
-        .position(|message| avatar(&message.author).0 == "Y");
-    // Keep page seams so adjacent assistant replies do not swallow the previous first
-    // message's scroll anchor when the reader adds a page above it.
-    let boundaries: BTreeSet<_> = cache
-        .into_iter()
-        .flat_map(DetailCache::bodies)
-        .filter_map(|body| match body {
-            DetailBody::Session(page) => page.messages.first(),
-            _ => None,
-        })
-        .map(|row| row.id.as_str())
-        .filter(|id| !id.is_empty())
-        .collect();
-    let mut boundary = false;
-    // A split record keeps its anchor but gains items at its front. Track the first recorded
-    // row before adding child steers or mail, which can stay ahead of it across pages.
-    let mut first = None;
-    let mut timed: Vec<_> = recorded
-        .iter()
-        .enumerate()
-        .filter_map(|(n, m)| {
-            boundary |= boundaries.contains(m.id.as_str());
-            let message = message(m, cx, &pairs, Some(n) == first_user);
-            if message.items.is_empty() && message.footer.is_none() {
-                return None;
-            }
-            first.get_or_insert_with(|| item_key(&message.anchor, m.items.len()));
-            Some((
-                millis(m.at.as_deref()),
-                std::mem::take(&mut boundary),
-                message,
-            ))
-        })
-        .collect();
-    // A child conversation's steers and agent messages stand before the first message that
-    // started after them; those without a time go last.
-    let at_clock = |ms: u64| {
-        let at = jiff::Timestamp::from_millisecond(i64::try_from(ms).ok()?).ok()?;
-        clock(Some(&at.to_string()), feed)
-    };
-    for (at, bubble) in bubbles::child_bubbles(id, feed, at_clock) {
-        let place = at.and_then(|at| {
-            timed
-                .iter()
-                .position(|(when, _, _)| when.is_some_and(|when| when > at))
-        });
-        timed.insert(place.unwrap_or(timed.len()), (at, false, bubble));
-    }
-    let (messages, message_ends) = merged(
-        timed.into_iter().map(|(_, seam, message)| (seam, message)),
-        cx,
-    );
+    let (messages, message_ends, first) = recorded_view(recorded, cache, cx);
     // Older pages prepend; the live turn always follows the newest recorded messages.
     let (live, after) = match feed.live.get(id.as_str()) {
         Some(turn) if body.is_some() => overlay::overlay(turn, recorded, cx),

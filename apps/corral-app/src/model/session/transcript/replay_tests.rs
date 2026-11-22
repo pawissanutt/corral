@@ -27,6 +27,7 @@ fn feed_for(id: &str, items: Vec<SessionItem>) -> daemon::Feed {
         DetailCache {
             target,
             pages: Vec::new(),
+            transcript_seams: Default::default(),
             loading: false,
             stale: false,
             error: None,

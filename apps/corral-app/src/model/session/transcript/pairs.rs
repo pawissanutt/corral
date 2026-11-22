@@ -14,6 +14,8 @@ pub(super) struct Pair<'a> {
     pub position: &'a SessionItem,
     pub item: Cow<'a, SessionItem>,
     pub rest: Rest<'a>,
+    pub anchor: &'a str,
+    pub result_position: bool,
     page: usize,
 }
 
@@ -42,7 +44,7 @@ fn page_starts(cache: Option<&DetailCache>) -> Vec<usize> {
 
 pub(super) fn collect<'a>(
     messages: &'a [SessionMessage],
-    cache: Option<&DetailCache>,
+    cache: Option<&'a DetailCache>,
     feed: &'a Feed,
 ) -> BTreeMap<&'a str, Pair<'a>> {
     let starts = page_starts(cache);
@@ -63,26 +65,34 @@ pub(super) fn collect<'a>(
                 continue;
             }
             let page = starts.partition_point(|&start| start <= base + at);
+            let pin = cache.and_then(|cache| cache.transcript_seams.tools.get(call_id));
+            let at_pin = pin.is_some_and(|pin| pin.anchor == message.id);
             match pairs.entry(call_id.as_str()) {
                 std::collections::btree_map::Entry::Vacant(slot) => {
                     slot.insert(Pair {
                         position: item,
                         item: Cow::Borrowed(item),
                         rest,
+                        anchor: &message.id,
+                        result_position: !paired && result.is_some(),
                         page,
                     });
                 }
                 std::collections::btree_map::Entry::Occupied(mut slot) => {
                     let pair = slot.get_mut();
-                    if pair.page < page
-                        && !paired
-                        && result.is_some()
-                        && matches!(
-                            pair.item.as_ref(),
-                            SessionItem::ToolCall { result: None, .. }
-                        )
+                    if !pin.is_some_and(|pin| pin.anchor == pair.anchor)
+                        && (at_pin
+                            || (pair.page < page
+                                && !paired
+                                && result.is_some()
+                                && matches!(
+                                    pair.item.as_ref(),
+                                    SessionItem::ToolCall { result: None, .. }
+                                )))
                     {
                         pair.position = item;
+                        pair.anchor = &message.id;
+                        pair.result_position = !paired && result.is_some();
                         pair.page = page;
                     }
                     merge(pair.item.to_mut(), item);

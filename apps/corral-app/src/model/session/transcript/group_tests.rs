@@ -19,6 +19,7 @@ pub(super) fn feed_with(messages: Vec<SessionMessage>) -> daemon::Feed {
         DetailCache {
             target,
             pages: Vec::new(),
+            transcript_seams: Default::default(),
             loading: false,
             stale: false,
             error: None,

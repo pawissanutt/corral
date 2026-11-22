@@ -2,7 +2,7 @@
 //! snapshot is revalidated from its newest page, never spliced into an old branch.
 
 use super::*;
-use crate::model::session::{Ui, transcript as replay};
+use crate::model::session::transcript as replay;
 use corral_protocol::rpc::ErrorCode;
 
 /// The replacement could not retain the reading surface. The old snapshot remains available
@@ -54,35 +54,6 @@ fn history_missing(cache: &DetailCache, pages: &[DetailReply], current: &Session
                     < oldest.items.len()
             })
         })
-}
-
-/// Raw records can be covered while a moving seam still removes a message anchor, either
-/// by merging adjacent messages or by moving a standalone result under its call. Compare
-/// the actual blocks used by scroll restoration rather than predicting how replay groups them.
-fn anchor_missing(feed: &Feed, held: &DetailCache, replacement: &DetailCache) -> bool {
-    // A routine single-page refresh does not reconcile a paged reading surface. A change of
-    // backing session (e.g. the quick alias) also intentionally replaces all its anchors.
-    if (held.pages.len() < 2 && replacement.pages.len() < 2)
-        || !matches!(
-            (replay::page(Some(held)), replay::page(Some(replacement))),
-            (Some(held), Some(replacement)) if held.id == replacement.id
-        )
-    {
-        return false;
-    }
-    let DetailRef::Session { id } = &replacement.target else {
-        return false;
-    };
-    let id = Id::from(id.as_str());
-    let anchors: BTreeSet<_> = replay::transcript(&id, &Ui::EMPTY, Some(replacement), feed)
-        .messages
-        .into_iter()
-        .map(|message| message.anchor)
-        .collect();
-    replay::transcript(&id, &Ui::EMPTY, Some(held), feed)
-        .messages
-        .iter()
-        .any(|message| !anchors.contains(&message.anchor))
 }
 
 impl AppState {
@@ -338,9 +309,10 @@ impl AppState {
                 .and_then(session)
                 .and_then(|part| part.older.clone());
         }
-        let replacement = DetailCache {
+        let mut replacement = DetailCache {
             target: target.clone(),
             pages,
+            transcript_seams: Default::default(),
             merged: Some(DetailBody::Session(newest)),
             loading: false,
             stale: false,
@@ -351,7 +323,7 @@ impl AppState {
             && feed.with_untracked(|feed| {
                 feed.details
                     .get(key)
-                    .is_some_and(|held| anchor_missing(feed, held, &replacement))
+                    .is_some_and(|held| !replay::preserve_anchors(feed, held, &mut replacement))
             })
         {
             self.transcript_history_changed(feed, key, id);

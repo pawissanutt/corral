@@ -28,6 +28,7 @@ mod marks;
 mod overlay;
 mod pairs;
 mod replay;
+mod seams;
 mod tool;
 mod tool_corral;
 mod tool_files;
@@ -60,6 +61,8 @@ pub use items::{
 };
 pub use live::{ItemFetch, LiveMessage, LiveSession, LiveTool, LiveToolState, TurnEnd};
 pub use replay::{fetches, size, transcript};
+pub use seams::TranscriptSeams;
+pub(crate) use seams::preserve_anchors;
 pub use tool::{ToolState, ToolView};
 
 /// The row key that opens every row and group of the transcript at once (Ctrl+O, the ⋯ menu's

@@ -231,8 +231,19 @@ fn changed_transcript_refresh_revalidates_loaded_history_before_publishing() {
     );
 }
 
+fn anchors(feed: Signal<Feed>) -> Vec<String> {
+    use crate::model::session::{Ui, transcript::transcript};
+    feed.with_untracked(|feed| {
+        transcript(&Id::from("B-1"), &Ui::EMPTY, feed.detail(&target()), feed)
+            .messages
+            .into_iter()
+            .map(|message| message.anchor)
+            .collect()
+    })
+}
+
 #[test]
-fn a_moving_seam_cannot_merge_away_a_previously_shown_anchor() {
+fn append_with_a_moved_seam_keeps_anchors_and_can_read_older() {
     let runtime = nsh_core::element::Runtime::default();
     let _entered = runtime.enter();
     let feed = signal(Feed::default());
@@ -243,19 +254,14 @@ fn a_moving_seam_cannot_merge_away_a_previously_shown_anchor() {
     let get = read(&mut app, feed, None);
     reply(&mut app, feed, get, None, page("v1", newest, Some("older")));
     let get = read(&mut app, feed, Some("older"));
-    reply(&mut app, feed, get, Some("older"), page("v1", older, None));
-    let anchors = || {
-        use crate::model::session::{Ui, transcript::transcript};
-        feed.with_untracked(|feed| {
-            transcript(&Id::from("B-1"), &Ui::EMPTY, feed.detail(&target()), feed)
-                .messages
-                .into_iter()
-                .map(|message| message.anchor)
-                .collect::<Vec<_>>()
-        })
-    };
-    assert_eq!(anchors(), ["1", "2"]);
-    let before = shown(feed);
+    reply(
+        &mut app,
+        feed,
+        get,
+        Some("older"),
+        page("v1", older, Some("earlier")),
+    );
+    assert_eq!(anchors(feed), ["1", "2"]);
 
     // Every old record and item still fits, but the new page starts at 3 instead of 2.
     // Replaying the new chain would merge the previous anchor 2 into message 1.
@@ -265,7 +271,11 @@ fn a_moving_seam_cannot_merge_away_a_previously_shown_anchor() {
         feed,
         get,
         None,
-        page("v2", &newest[1..], Some("new-older")),
+        page(
+            "v2",
+            &[newest[1], ("4", &["live append"])],
+            Some("new-older"),
+        ),
     );
     assert!(
         reply(
@@ -273,31 +283,225 @@ fn a_moving_seam_cannot_merge_away_a_previously_shown_anchor() {
             feed,
             get,
             Some("new-older"),
-            page("v2", &[older[0], newest[0]], None),
+            page("v2", &[older[0], newest[0]], Some("new-earliest")),
         )
         .is_empty()
     );
-    assert_eq!(shown(feed), before);
-    assert_eq!(anchors(), ["1", "2"]);
+    assert_eq!(shown(feed).last().unwrap().0, "4");
+    assert_eq!(anchors(feed), ["1", "2"]);
     feed.with_untracked(|feed| {
+        use crate::model::session::Ui;
         let cache = feed.detail(&target()).unwrap();
-        assert_eq!(cache.error.as_ref().unwrap().code, HISTORY_CHANGED);
-        assert!(cache.pages.iter().all(|page| page.etag == "v1"));
+        assert!(cache.error.is_none());
+        assert!(cache.pages.iter().all(|page| page.etag == "v2"));
+        let view = replay::transcript(&Id::from("B-1"), &Ui::EMPTY, Some(cache), feed);
+        assert!(
+            view.messages[1].keys.iter().any(|key| key == "3|1"),
+            "the moved cut must not split off an old item inside the held bubble"
+        );
     });
-
-    let get = app.latest_transcript(feed, "B-1".into());
+    let get = read(&mut app, feed, Some("new-earliest"));
     assert!(
         reply(
             &mut app,
             feed,
             get,
-            None,
-            page("v2", &newest[1..], Some("new-older")),
+            Some("new-earliest"),
+            page("v2", &[("0", &["older still"])], None)
         )
         .is_empty()
     );
-    assert_eq!(anchors(), ["3"]);
-    feed.with_untracked(|feed| assert!(feed.detail(&target()).unwrap().error.is_none()));
+    assert_eq!(anchors(feed), ["0", "1", "2"]);
+}
+
+#[test]
+fn regrouped_tool_result_keeps_its_anchor_and_can_read_older() {
+    use crate::model::session::{
+        Ui,
+        transcript::{MessageItem, transcript},
+    };
+    use corral_protocol::detail::SessionToolState;
+
+    let with_tool = |mut page: Value, row: usize, part: &str| {
+        let body = &mut page["body"]["body"]["messages"][row];
+        if part == "result" {
+            body["author"] = value("toolResult");
+            body["items"] = Value::Array(vec![]);
+        }
+        body["items"]
+            .as_array_mut()
+            .unwrap()
+            .push(value(SessionItem::ToolCall {
+                call_id: "call-1".into(),
+                name: "bash".into(),
+                arguments: if part == "result" { "" } else { "{}" }.into(),
+                summary: String::new(),
+                state: if part == "call" {
+                    SessionToolState::Running
+                } else {
+                    SessionToolState::Done
+                },
+                paired: part == "paired",
+                call: (part != "result").then(|| "call JSON".into()),
+                result: (part != "call").then(|| "result JSON".into()),
+                output: (part != "call").then(|| "answer".into()),
+                elapsed_ms: None,
+                diff: None,
+                content: None,
+            }));
+        page
+    };
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    let get = read(&mut app, feed, None);
+    reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        with_tool(
+            page(
+                "v1",
+                &[("result", &[]), ("next", &["reply"])],
+                Some("older"),
+            ),
+            0,
+            "result",
+        ),
+    );
+    let get = read(&mut app, feed, Some("older"));
+    reply(
+        &mut app,
+        feed,
+        get,
+        Some("older"),
+        with_tool(
+            page("v1", &[("call", &["start"])], Some("earliest")),
+            0,
+            "call",
+        ),
+    );
+    assert_eq!(anchors(feed), ["call", "result", "next"]);
+
+    let get = read(&mut app, feed, None);
+    let get = reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        page(
+            "v2",
+            &[("next", &["reply"]), ("append", &["append"])],
+            Some("new-older"),
+        ),
+    );
+    assert!(
+        reply(
+            &mut app,
+            feed,
+            get,
+            Some("new-older"),
+            with_tool(
+                page("v2", &[("call", &["start"])], Some("new-earliest")),
+                0,
+                "paired"
+            )
+        )
+        .is_empty()
+    );
+    let verify = || {
+        feed.with_untracked(|feed| {
+            let cache = feed.detail(&target()).unwrap();
+            assert!(cache.error.is_none());
+            assert!(cache.pages.iter().all(|page| page.etag == "v2"));
+            let raw = replay::page(Some(cache)).unwrap();
+            assert!(
+                raw.messages.iter().all(|m| m.id != "result"),
+                "never reconstruct raw history"
+            );
+            let view = transcript(&Id::from("B-1"), &Ui::EMPTY, Some(cache), feed);
+            let tools: Vec<_> = view
+                .messages
+                .iter()
+                .flat_map(|m| {
+                    m.items.iter().filter_map(|item| match item {
+                        MessageItem::Tool(tool) => Some((m.anchor.as_str(), tool.state)),
+                        _ => None,
+                    })
+                })
+                .collect();
+            assert_eq!(tools, [("result", replay::ToolState::Ok)]);
+        })
+    };
+    assert_eq!(anchors(feed), ["call", "result", "next"]);
+    verify();
+    let get = read(&mut app, feed, Some("new-earliest"));
+    assert!(
+        reply(
+            &mut app,
+            feed,
+            get,
+            Some("new-earliest"),
+            page("v2", &[("older", &["earlier still"])], None)
+        )
+        .is_empty()
+    );
+    assert_eq!(anchors(feed), ["older", "call", "result", "next"]);
+    verify();
+}
+
+#[test]
+fn a_rewrite_with_a_lost_seam_keeps_the_previous_snapshot() {
+    let runtime = nsh_core::element::Runtime::default();
+    let _entered = runtime.enter();
+    let feed = signal(Feed::default());
+    let mut app = AppState::new();
+    app.ready = true;
+    let get = read(&mut app, feed, None);
+    reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        page("v1", &[("2", &["seam"]), ("3", &["tail"])], Some("older")),
+    );
+    let get = read(&mut app, feed, Some("older"));
+    reply(
+        &mut app,
+        feed,
+        get,
+        Some("older"),
+        page("v1", &[("1", &["earlier"])], None),
+    );
+    let before = shown(feed);
+    let get = read(&mut app, feed, None);
+    let get = reply(
+        &mut app,
+        feed,
+        get,
+        None,
+        page("v2", &[("3", &["tail"])], Some("new-older")),
+    );
+    assert!(
+        reply(
+            &mut app,
+            feed,
+            get,
+            Some("new-older"),
+            page("v2", &[("1", &["earlier"]), ("2", &["rewritten"])], None)
+        )
+        .is_empty()
+    );
+    assert_eq!(shown(feed), before);
+    assert_eq!(anchors(feed), ["1", "2"]);
+    feed.with_untracked(|feed| {
+        let cache = feed.detail(&target()).unwrap();
+        assert_eq!(cache.error.as_ref().unwrap().code, HISTORY_CHANGED);
+        assert!(cache.pages.iter().all(|page| page.etag == "v1"));
+    });
 }
 
 fn numbered_page(etag: &str, row: usize, has_older: bool) -> Value {
