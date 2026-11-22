@@ -26,6 +26,7 @@ use serde::Serialize;
 
 use crate::state::Shared;
 pub(crate) use rows::{RowCache, Rows};
+pub(crate) use session_files::StaleWorktreeFile;
 pub(crate) use transcript::StaleTranscriptCursor;
 
 // The transport reserves room for the response envelope and bounded request id.

@@ -65,7 +65,8 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::CLOSED_V1
                         | device::DEVICE_V1
                         | device::PUSH_V1
-                ) || cfg!(target_os = "linux") && cap == app::SESSION_FILES_V1
+                ) || cfg!(target_os = "linux")
+                    && matches!(cap.as_str(), app::SESSION_FILES_V1 | app::SESSION_HTML_V1)
                     || chat
                         && matches!(
                             cap.as_str(),
@@ -222,7 +223,9 @@ pub(crate) fn serve(
             let query: DetailGet = decode(params)?;
             if matches!(
                 query.target,
-                DetailRef::SessionFiles { .. } | DetailRef::SessionFile { .. }
+                DetailRef::SessionFiles { .. }
+                    | DetailRef::SessionFile { .. }
+                    | DetailRef::SessionFileChunk { .. }
             ) && matches!(peer, Peer::Tcp(_))
             {
                 device_id()?;
@@ -410,7 +413,9 @@ impl From<anyhow::Error> for Failure {
             ErrorCode::Busy
         } else if error.is::<views::NotFound>() {
             ErrorCode::NotFound
-        } else if error.is::<views::StaleTranscriptCursor>() {
+        } else if error.is::<views::StaleTranscriptCursor>()
+            || error.is::<views::StaleWorktreeFile>()
+        {
             ErrorCode::Conflict
         } else if message.starts_with("invalid:") {
             ErrorCode::InvalidParams

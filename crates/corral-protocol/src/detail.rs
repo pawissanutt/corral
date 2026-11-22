@@ -91,6 +91,17 @@ pub enum DetailRef {
         id: String,
         path: String,
     },
+    /// One bounded chunk of a worktree-relative HTML file (`session.html.v1`).
+    /// Does not accept a page token or conditional etag.
+    SessionFileChunk {
+        id: String,
+        path: String,
+        /// Byte position, a multiple of `SESSION_HTML_CHUNK_BYTES`. Start at zero.
+        offset: u64,
+        /// Omit for the first read. Echo the returned revision for subsequent reads.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision: Option<String>,
+    },
     SessionUsage {
         id: String,
     },
@@ -201,6 +212,7 @@ pub enum DetailBody {
     SessionChangeFile(PatchPage),
     SessionFiles(SessionFiles),
     SessionFile(SessionFile),
+    SessionFileChunk(SessionFileChunk),
     SessionUsage(SessionUsage),
     SessionContext(SessionContext),
     SessionPlan(SessionPlan),

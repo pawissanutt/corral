@@ -2281,6 +2281,22 @@
           {
             "properties": {
               "body": {
+                "$ref": "#/components/schemas/SessionFileChunk"
+              },
+              "kind": {
+                "const": "session_file_chunk",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
                 "$ref": "#/components/schemas/SessionUsage"
               },
               "kind": {
@@ -2828,6 +2844,41 @@
               "kind",
               "id",
               "path"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "One bounded chunk of a worktree-relative HTML file (`session.html.v1`).\nDoes not accept a page token or conditional etag.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "const": "session_file_chunk",
+                "type": "string"
+              },
+              "offset": {
+                "description": "Byte position, a multiple of `SESSION_HTML_CHUNK_BYTES`. Start at zero.",
+                "format": "uint64",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "type": "string"
+              },
+              "revision": {
+                "description": "Omit for the first read. Echo the returned revision for subsequent reads.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "path",
+              "offset"
             ],
             "type": "object"
           },
@@ -6664,6 +6715,36 @@
           "kind",
           "data",
           "bytes"
+        ],
+        "type": "object"
+      },
+      "SessionFileChunk": {
+        "properties": {
+          "data": {
+            "description": "Standard base64 of `min(size - offset, SESSION_HTML_CHUNK_BYTES)` raw bytes.\nEOF is reached when offset plus the decoded length equals size.\nA consumer opening this as HTML should validate the assembled stream as UTF-8.",
+            "type": "string"
+          },
+          "offset": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revision": {
+            "description": "Opaque revision tied to the selected file. Discard the download on a stale revision.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Total file size for this revision (at most 64 MiB).",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "size",
+          "offset",
+          "revision",
+          "data"
         ],
         "type": "object"
       },
@@ -11361,7 +11442,7 @@
             ]
           },
           "x-required-in": [
-            24
+            25
           ]
         },
         {
@@ -11392,7 +11473,7 @@
             "type": "string"
           },
           "x-required-in": [
-            29
+            30
           ]
         },
         {
@@ -11432,8 +11513,8 @@
             ]
           },
           "x-required-in": [
-            24,
-            26
+            25,
+            27
           ]
         },
         {
@@ -11465,7 +11546,8 @@
             21,
             22,
             23,
-            29
+            24,
+            30
           ]
         },
         {
@@ -11485,7 +11567,7 @@
             "type": "string"
           },
           "x-required-in": [
-            21
+            22
           ]
         },
         {
@@ -11551,6 +11633,10 @@
               },
               {
                 "const": "session_file",
+                "type": "string"
+              },
+              {
+                "const": "session_file_chunk",
                 "type": "string"
               },
               {
@@ -11639,6 +11725,19 @@
           }
         },
         {
+          "name": "offset",
+          "required": false,
+          "schema": {
+            "description": "Byte position, a multiple of `SESSION_HTML_CHUNK_BYTES`. Start at zero.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "x-required-in": [
+            15
+          ]
+        },
+        {
           "name": "path",
           "required": false,
           "schema": {
@@ -11648,7 +11747,8 @@
             3,
             12,
             13,
-            14
+            14,
+            15
           ]
         },
         {
@@ -11658,8 +11758,19 @@
             "type": "string"
           },
           "x-required-in": [
-            27
+            28
           ]
+        },
+        {
+          "name": "revision",
+          "required": false,
+          "schema": {
+            "description": "Omit for the first read. Echo the returned revision for subsequent reads.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         {
           "name": "scope",
@@ -11678,7 +11789,7 @@
             ]
           },
           "x-required-in": [
-            25
+            26
           ]
         },
         {
@@ -11718,8 +11829,8 @@
             ]
           },
           "x-required-in": [
-            24,
-            26
+            25,
+            27
           ]
         },
         {
@@ -11743,7 +11854,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            26
+            27
           ]
         }
       ],
