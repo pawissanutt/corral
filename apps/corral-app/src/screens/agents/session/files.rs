@@ -15,9 +15,7 @@ use nsh_core::prelude::*;
 
 use crate::model::{
     Form,
-    session::{
-        Action, Body, FileEditor, FilesContent, FilesView, SessionPage, Tab,
-    },
+    session::{Action, Body, FileEditor, FilesContent, FilesView, SessionPage, Tab},
 };
 use crate::screens::markdown::{markdown_without_images, provide_styles};
 use crate::state::AppState;
@@ -56,7 +54,6 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             )
         })
     });
-    let html = files_open::progress(shown);
     let width = signal(None::<f32>);
     let beside = computed(move || {
         let width = width.get();
@@ -66,6 +63,7 @@ pub(super) fn tab(app: AppState, page: Memo<SessionPage>) -> AnyElement {
             Form::Terminal => width.is_some_and(|width| width >= term::cells(BESIDE_CELLS).0),
         }
     });
+    let html = files_open::progress(shown, beside);
     // The tree's column: a third of the tab between bounds, so a wide tab gives the room to
     // the preview.
     let column = computed(move || {

@@ -39,6 +39,8 @@ pub(super) struct Html {
     /// The Files tab's: an open outlives the redraws of the control that started it.
     owner: Owner,
     run: Signal<Option<Run>>,
+    // The cleanup callback also holds this slot: signals may already be gone at disposal.
+    retiring: Signal<Rc<std::cell::RefCell<Option<Run>>>>,
 }
 
 #[derive(Clone)]
@@ -83,12 +85,14 @@ impl Html {
             status: self.owner.run(|| signal(HtmlProgress::Idle)),
             stop: Stop::default(),
         };
+        self.retiring.get_untracked().replace(Some(run.clone()));
         self.run.set(Some(run.clone()));
         run
     }
 
     fn stop(self) {
         if let Some(run) = self.run.get_untracked() {
+            self.retiring.get_untracked().take();
             self.run.set(None);
             run.abandon();
             // The client drops a transfer whose status no longer reads its id.
@@ -98,10 +102,13 @@ impl Html {
 }
 
 /// The open of the Files tab showing `shown`.
-pub(super) fn progress(shown: Memo<Option<FilesView>>) -> Html {
+pub(super) fn progress(shown: Memo<Option<FilesView>>, beside: Memo<bool>) -> Html {
     bound(move || {
         shown.with(|files| {
             let files = files.as_ref()?;
+            if !beside.get() && files.browsing {
+                return None; // The narrow layout's Back button hid preview and Cancel.
+            }
             let editor = files.editor.as_ref()?;
             Some((files.session.as_str().to_owned(), editor.path.clone()))
         })
@@ -109,9 +116,11 @@ pub(super) fn progress(shown: Memo<Option<FilesView>>) -> Html {
 }
 
 fn bound(open: impl Fn() -> Option<File> + 'static) -> Html {
+    let retiring = Rc::new(std::cell::RefCell::new(None));
     let html = Html {
         owner: Owner::current(),
         run: signal(None),
+        retiring: signal(retiring.clone()),
     };
     let open = computed(open);
     // Another file, Close or another session ends the open before it can launch; a redraw of
@@ -129,7 +138,7 @@ fn bound(open: impl Fn() -> Option<File> + 'static) -> Html {
     });
     // Leaving the Files tab disposes it, and the status the client reads with it.
     cleanup(move || {
-        if let Some(Some(run)) = html.run.try_get() {
+        if let Some(run) = retiring.take() {
             run.abandon();
         }
     });
