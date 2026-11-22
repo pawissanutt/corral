@@ -395,7 +395,12 @@ pub fn plot(page: &TimelinePage, window: &Window, grouping: Grouping, feed: &Fee
         .collect();
     let auto: Vec<Marker> = events
         .iter()
-        .filter(|event| matches!(event.actor, Actor::Auto | Actor::Assistant | Actor::Extension))
+        .filter(|event| {
+            matches!(
+                event.actor,
+                Actor::Auto | Actor::Assistant | Actor::Extension
+            )
+        })
         .filter_map(|event| clock.marker(event))
         .collect();
     let mut lanes: Vec<(i64, String, Lane)> = clock
