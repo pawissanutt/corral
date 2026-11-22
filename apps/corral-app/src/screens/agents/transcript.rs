@@ -36,6 +36,7 @@ mod watch;
 
 use nsh_core::prelude::*;
 
+pub(crate) use anchors::content_origin;
 pub(super) use build_cards::gate_log;
 pub use jump::follow;
 pub use older::Earlier;

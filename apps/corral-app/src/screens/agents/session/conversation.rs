@@ -90,7 +90,9 @@ pub(super) fn page(
     let phone = form == Form::Phone;
     // A parent subscription does not pin a child's transcript pages or item assemblies.
     let source = untracked(|| app.scope());
-    pin_child(scope, move |target, open| source.watch_detail(target, open));
+    pin_child(scope.clone(), move |target, open| {
+        source.watch_detail(target, open)
+    });
     let more = signal(false);
     let shape = tab.part(|t| of(t).map(Head::of));
     let facts = tab.part(|t| of(t).map(|c| c.facts.clone()));
@@ -123,15 +125,17 @@ pub(super) fn page(
         let (transcript, end) = said.get().flatten()?;
         Some(untracked(|| content(app, &transcript, end)))
     });
-    let body = view()
+    // Keep the measured transcript wrapper directly in the scroll-content column:
+    // its layout then includes the top padding and the phone header (including More).
+    let column = match form {
+        Form::Terminal => view().px(term::cells(1.0)),
+        Form::Desktop => view().px(px(18.0)).py(px(10.0)),
+        Form::Phone => view().px(px(12.0)).py(px(8.0)),
+    };
+    let body = column
         .gap(px(if phone { 10.0 } else { 0.0 }))
         .children(phone_head)
-        .child(body);
-    let body = match form {
-        Form::Terminal => view().px(term::cells(1.0)).child(body).into_element(),
-        Form::Desktop => view().px(px(18.0)).py(px(10.0)).child(body).into_element(),
-        Form::Phone => view().px(px(12.0)).py(px(8.0)).child(body).into_element(),
-    };
+        .child(transcript::content_origin(scope, view().child(body)));
     let surface = transcript::follow(
         app,
         scroll()

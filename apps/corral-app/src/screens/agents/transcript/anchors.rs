@@ -93,6 +93,8 @@ impl Item {
 
 #[derive(Default)]
 struct Rows {
+    /// Top of the transcript within the scroll content (a child header can precede it).
+    origin: Option<(u64, f32)>,
     /// Each row's top and height in the transcript, with the token of the render that placed
     /// it.
     tops: BTreeMap<String, (u64, f32, f32)>,
@@ -107,6 +109,10 @@ struct Rows {
 }
 
 impl Rows {
+    fn prefix(&self) -> f32 {
+        self.origin.map_or(0.0, |(_, y)| y)
+    }
+
     /// Where item `key` of row `row` is in the row (top and height), through the parts (and
     /// items) it is drawn in; none while one of them is not placed.
     fn item(&self, row: &str, key: &str) -> Option<(f32, f32)> {
@@ -136,6 +142,32 @@ pub(super) fn token() -> u64 {
         next.set(token);
         token
     })
+}
+
+pub(super) fn set_origin(scope: &str, token: u64, y: f32) {
+    SCOPES.with(|scopes| {
+        scopes.borrow_mut().entry(scope.into()).or_default().origin = Some((token, y))
+    });
+}
+
+fn clear_origin(scope: &str, token: u64) {
+    SCOPES.with(|scopes| {
+        if let Some(rows) = scopes.borrow_mut().get_mut(scope)
+            && rows.origin.is_some_and(|(owner, _)| owner == token)
+        {
+            rows.origin = None;
+        }
+    });
+}
+
+/// Mount this view directly in the scroll content, around the transcript but after
+/// anything that precedes it. Its parent-relative layout gives the conversion in
+/// both directions between transcript-local rows and scroll-content offsets.
+pub(crate) fn content_origin(scope: String, body: View) -> View {
+    let token = token();
+    let mounted = scope.clone();
+    cleanup(move || clear_origin(&mounted, token));
+    body.on_layout(move |frame: &Bounds<Points>| set_origin(&scope, token, frame.origin.y.0))
 }
 
 fn scroll(scroller: ElementRef, at: f32) {
@@ -173,7 +205,7 @@ pub(super) fn offset(scope: &str, anchor: &str, mark: &Mark) -> Option<f32> {
         let scopes = scopes.borrow();
         let rows = scopes.get(scope)?;
         let (_, top, height) = rows.tops.get(anchor)?;
-        Some(mark.offset(*top, *height, |key| rows.item(anchor, key)))
+        Some(rows.prefix() + mark.offset(*top, *height, |key| rows.item(anchor, key)))
     })
 }
 
@@ -255,7 +287,10 @@ pub(super) fn restore(scope: &str, anchor: String, offset: f32, scroller: Elemen
     let top = SCOPES.with(|scopes| {
         let mut scopes = scopes.borrow_mut();
         let rows = scopes.entry(scope.to_owned()).or_default();
-        let top = rows.tops.get(&anchor).map(|(_, top, _)| *top);
+        let top = rows
+            .tops
+            .get(&anchor)
+            .map(|(_, top, _)| rows.prefix() + *top);
         rows.pending = match top {
             Some(_) => None,
             None => Some((anchor, Mark::Top(offset), scroller, false)),
@@ -337,11 +372,9 @@ pub(super) fn moved(scope: &str) {
 pub(super) fn at(scope: &str, offset: f32) -> Option<(String, f32)> {
     SCOPES.with(|scopes| {
         let scopes = scopes.borrow();
-        let tops = scopes
-            .get(scope)?
-            .tops
-            .iter()
-            .map(|(anchor, (_, top, _))| (anchor, *top));
+        let rows = scopes.get(scope)?;
+        let offset = offset - rows.prefix();
+        let tops = rows.tops.iter().map(|(anchor, (_, top, _))| (anchor, *top));
         tops.clone()
             .filter(|(_, top)| *top <= offset + 1.0)
             .max_by(|a, b| a.1.total_cmp(&b.1))

@@ -6,8 +6,11 @@ use super::anchors::{self, Mark};
 /// group and the message's column of items, and the reader stays on the call they read.
 #[test]
 fn calls_joining_an_opened_group_keep_the_reader_on_their_call() {
-    let scope = "B-group";
-    let row = "B-group/entry/e1";
+    let scope = "B-group/child/reader";
+    let row = "B-group/child/reader/entry/e1";
+    // In the phone child scroll, padding + header + gap precede the transcript.
+    let prefix = 8.0 + 102.0 + 10.0;
+    anchors::set_origin(scope, anchors::token(), prefix);
     let key = |from_end: usize| format!("{row}|{from_end}");
     let column = format!("{row}#items");
     // One render: its tokens, so the next render's places outlive this one's teardown.
@@ -51,7 +54,11 @@ fn calls_joining_an_opened_group_keep_the_reader_on_their_call() {
             at(&calls, &block, 18.0, 54.0),
         ],
     );
-    let mark = anchors::mark(scope, row, 120.0);
+    anchors::placed(scope, "next message", anchors::token(), 270.0, 54.0);
+    let viewport = prefix + 100.0 + 120.0;
+    let (visible, into) = anchors::at(scope, viewport).unwrap();
+    assert_eq!((visible.as_str(), into), (row, 120.0));
+    let mark = anchors::mark(scope, &visible, into);
     let Mark::Held { items, .. } = &mark else {
         panic!("the row was placed: {mark:?}");
     };
@@ -91,7 +98,7 @@ fn calls_joining_an_opened_group_keep_the_reader_on_their_call() {
     // Call c is now 18 + 72 + 18 + 54 = 162 into the message, 54 lower than it was.
     assert_eq!(
         anchors::offset(scope, row, &mark),
-        Some(160.0 + 120.0 + 54.0),
+        Some(prefix + 160.0 + 120.0 + 54.0),
         "the reader stays 12 into call c"
     );
 }
