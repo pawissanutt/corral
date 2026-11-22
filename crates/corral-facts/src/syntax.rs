@@ -5,6 +5,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::manifests::EntryPoints;
 use crate::model::{
     ContainerFact, ContainerKind, DependencyFact, FileFact, ReferenceKind, WorkspaceStatus,
 };
@@ -13,6 +14,7 @@ type Aliases<'a> = HashMap<&'a str, HashMap<String, Option<&'a str>>>;
 
 pub(crate) struct Scanner<'a> {
     files: HashMap<&'a str, &'a FileFact>,
+    entries: &'a EntryPoints<'a>,
     cargo: Aliases<'a>,
     npm: Aliases<'a>,
     cargo_self_names: HashMap<&'a str, String>,
@@ -42,12 +44,14 @@ impl<'a> Scanner<'a> {
         files: &'a [FileFact],
         containers: &'a [ContainerFact],
         dependencies: &'a [DependencyFact],
+        entries: &'a EntryPoints<'a>,
     ) -> Self {
         let mut scanner = Self {
             files: files
                 .iter()
                 .map(|file| (file.path.as_str(), file))
                 .collect(),
+            entries,
             cargo: HashMap::new(),
             npm: HashMap::new(),
             cargo_self_names: HashMap::new(),
@@ -177,7 +181,7 @@ impl<'a> Scanner<'a> {
             .and_then(|p| p.strip_prefix('/'));
         let root = if rel.is_some()
             || self
-                .rust_entry(container)
+                .conventional_rust_entry(container)
                 .is_some_and(|p| dirname(p) == src)
         {
             src
@@ -195,6 +199,13 @@ impl<'a> Scanner<'a> {
     }
 
     fn rust_entry(&self, container: &str) -> Option<&'a str> {
+        if let Some(path) = self.entries.get(&(ContainerKind::Cargo, container)) {
+            return self.rust_file(path, container);
+        }
+        self.conventional_rust_entry(container)
+    }
+
+    fn conventional_rust_entry(&self, container: &str) -> Option<&'a str> {
         ["src/lib.rs", "src/main.rs", "lib.rs", "main.rs"]
             .into_iter()
             .find_map(|path| self.rust_file(&join(container, path), container))
@@ -373,6 +384,13 @@ impl<'a> Scanner<'a> {
         // A package name is not a path alias for arbitrary files outside that package.
         if subpath.split('/').any(|part| matches!(part, "." | "..")) {
             return None;
+        }
+        if subpath.is_empty()
+            && let Some(main) = self.entries.get(&(ContainerKind::Npm, target))
+            && let Some(path) = self.js_path(main)
+            && self.files[path].container == target
+        {
+            return Some(path);
         }
         self.js_path(&join(target, subpath))
             .or_else(|| self.js_path(&join(&join(target, "src"), subpath)))

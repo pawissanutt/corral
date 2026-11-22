@@ -17,7 +17,7 @@ pub struct FactsCache {
 impl FactsCache {
     pub fn new(workspace: &Path) -> Self {
         Self {
-            directory: workspace.join(".corral-next/cache/system-map/v1"),
+            directory: workspace.join(".corral-next/cache/system-map/v2"),
         }
     }
 

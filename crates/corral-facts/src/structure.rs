@@ -22,7 +22,12 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
         line_counts.push(file.lines);
         Ok(())
     })?;
-    let (containers, dependencies, parsed) = manifests::extract(&manifest_text, &paths);
+    let manifests::Extraction {
+        containers,
+        dependencies,
+        parsed,
+        entries,
+    } = manifests::extract(&manifest_text, &paths);
     let container_paths: BTreeSet<&str> = containers.iter().map(|c| c.path.as_str()).collect();
     let mut coverage = Coverage {
         skipped_non_utf8_paths,
@@ -62,7 +67,7 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
         .map(|file| (file.path.as_str(), file))
         .collect();
     let modules: BTreeSet<_> = files.iter().map(|file| file.module.clone()).collect();
-    let scanner = Scanner::new(&files, &containers, &dependencies);
+    let scanner = Scanner::new(&files, &containers, &dependencies, &entries);
     let mut refs = BTreeMap::new();
     let mut module_refs = BTreeMap::new();
     let mut spawn_counts = BTreeMap::new();

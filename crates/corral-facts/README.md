@@ -39,9 +39,11 @@ an isolated, temporary bare Git directory with read-only access to the source
 object database. Neither the checkout nor local diff drivers affect the facts.
 
 The scanner is heuristic, not a language resolver. It recognizes common Rust
-`use` paths, JS/TS imports and some literal process constructors. It does not
-execute manifests or build scripts, load editor/compiler configuration, or
-resolve arbitrary aliases, generated code or dynamic process names. Unresolved
+`use` paths, JS/TS imports and some literal process constructors. Local package
+references honor Cargo’s `[lib].path` and npm’s `main` when they point to tracked
+files in the target package. The scanner does not execute manifests or build
+scripts, load editor/compiler configuration, or resolve arbitrary aliases,
+generated code or dynamic process names. Unresolved
 syntax matches and unreadable files are counted separately. In particular an
 external dependency can have a declaration without any local map endpoint.
 Git paths that cannot be represented as UTF-8 are counted as omissions.

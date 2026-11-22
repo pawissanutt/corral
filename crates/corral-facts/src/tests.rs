@@ -109,7 +109,7 @@ fn cargo_workspace_golden() {
     );
     let a = "[package]\nname = \"a\"\nversion = \"0.1.0\"\n[dependencies]\nrenamed = { package = \"b\", path = \"../b\" }\nc = { path = \"../c\" }\nregistry_c = { package = \"c\", version = \"99\" }\n";
     repo.put("crates/a/Cargo.toml", a);
-    for package in ["b", "c", "d"] {
+    for package in ["c", "d"] {
         repo.put(
             &format!("crates/{package}/Cargo.toml"),
             &format!("[package]\nname = \"{package}\"\nversion = \"0.1.0\"\n"),
@@ -119,7 +119,15 @@ fn cargo_workspace_golden() {
             "pub struct Thing;\n",
         );
     }
-    repo.put("crates/b/src/api.rs", "pub struct One;\npub struct Two;\n");
+    repo.put(
+        "crates/b/Cargo.toml",
+        "[package]\nname = \"b\"\nversion = \"0.1.0\"\n[lib]\npath = \"code/entry.rs\"\n",
+    );
+    repo.put(
+        "crates/b/code/entry.rs",
+        "pub mod api;\npub struct Thing;\n",
+    );
+    repo.put("crates/b/code/api.rs", "pub struct One;\npub struct Two;\n");
     repo.put("crates/a/tests/smoke.rs", "use a::util::X;\n");
     repo.put("crates/a/src/util.rs", "pub struct X;");
     repo.put(
@@ -131,7 +139,7 @@ fn cargo_workspace_golden() {
         "crates/a/Cargo.toml",
         &a.replace("path = \"../c\"", "path = \"../c\", features = [\"extra\"]"),
     );
-    repo.put("crates/a/src/lib.rs", "use renamed::api::{One, Two};\nuse crate::util::X;\nuse d::Thing;\nuse std::process::Command;\nfn run() { Command::new(\"git\"); }\n");
+    repo.put("crates/a/src/lib.rs", "use renamed::api::{One, Two};\nuse renamed::Thing;\nuse crate::util::X;\nuse d::Thing;\nuse std::process::Command;\nfn run() { Command::new(\"git\"); }\n");
     let head = repo.commit("2025-01-21T00:00:00Z", "change");
     let replacement = repo.commit("2025-03-01T00:00:00Z", "same tree, new history window");
     assert_eq!(replacement.tree, head.tree);
@@ -210,13 +218,13 @@ fn npm_relative_imports_golden() {
     );
     repo.put(
         "packages/lib/package.json",
-        r#"{"name":"@local/lib","main":"src/index.ts"}"#,
+        r#"{"name":"@local/lib","main":"src/api.js"}"#,
     );
     repo.put("src/util.ts", "export const util = 1;\n");
-    repo.put("src/main.ts", "import { spawn } from 'node:child_process';\nimport { util } from './util';\nimport { lib } from '../packages/lib/src/index.js';\nspawn('git', ['status']);\n");
+    repo.put("src/main.ts", "import { spawn } from 'node:child_process';\nimport { util } from './util.js';\nimport { lib } from '@local/lib';\nspawn('git', ['status']);\n");
     repo.put("src/util.test.ts", "import { util } from './util';\n");
     repo.put(
-        "packages/lib/src/index.ts",
+        "packages/lib/src/api.js",
         "export const lib = () => import('../../../src/util');\n",
     );
     repo.put("notes/readme.md", "No scanner.\n");

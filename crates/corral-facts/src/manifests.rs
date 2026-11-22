@@ -19,6 +19,7 @@ struct Manifest<'a> {
     dir: &'a str,
     kind: ContainerKind,
     name: Option<String>,
+    entry: Option<String>,
     workspace: Option<Workspace>,
     cargo_workspace_path: Option<String>,
     declarations: Vec<Declaration>,
@@ -57,10 +58,16 @@ struct Membership {
 
 type ManifestIndex<'a> = BTreeMap<(ContainerKind, &'a str), usize>;
 
-pub(crate) fn extract(
-    blobs: &BTreeMap<String, String>,
-    paths: &[String],
-) -> (Vec<ContainerFact>, Vec<DependencyFact>, BTreeSet<String>) {
+pub(crate) type EntryPoints<'a> = BTreeMap<(ContainerKind, &'a str), String>;
+
+pub(crate) struct Extraction<'a> {
+    pub containers: Vec<ContainerFact>,
+    pub dependencies: Vec<DependencyFact>,
+    pub parsed: BTreeSet<String>,
+    pub entries: EntryPoints<'a>,
+}
+
+pub(crate) fn extract<'a>(blobs: &'a BTreeMap<String, String>, paths: &[String]) -> Extraction<'a> {
     let manifests: Vec<_> = blobs
         .iter()
         .filter_map(|(file, text)| parse(file, text))
@@ -74,9 +81,13 @@ pub(crate) fn extract(
     let mut by_name = BTreeMap::<_, Vec<_>>::new();
     let membership = memberships(&manifests, &by_dir);
     let mut containers = Vec::new();
+    let mut entries = EntryPoints::new();
     let mut claimed = BTreeSet::new();
     for (id, item) in manifests.iter().enumerate() {
         let Some(name) = &item.name else { continue };
+        if let Some(entry) = &item.entry {
+            entries.insert((item.kind, item.dir), entry.clone());
+        }
         by_name
             .entry((item.kind, name_key(item.kind, name)))
             .or_default()
@@ -156,7 +167,12 @@ pub(crate) fn extract(
     containers.sort();
     dependencies.sort();
     dependencies.dedup();
-    (containers, dependencies, parsed)
+    Extraction {
+        containers,
+        dependencies,
+        parsed,
+        entries,
+    }
 }
 
 fn parent(path: &str) -> &str {
@@ -333,6 +349,7 @@ fn parse<'a>(file: &'a str, text: &str) -> Option<Manifest<'a>> {
         dir: parent(file),
         kind,
         name: None,
+        entry: None,
         workspace: None,
         cargo_workspace_path: None,
         declarations: Vec::new(),
@@ -369,6 +386,9 @@ fn cargo(item: &mut Manifest<'_>, table: &toml::Table) {
             .map(str::to_owned);
         item.cargo_workspace_path = string(package.get("workspace")).map(str::to_owned);
     }
+    item.entry = subtable(table, "lib")
+        .and_then(|lib| string(lib.get("path")))
+        .and_then(|path| local_path(item.dir, path));
     if let Some(workspace) = subtable(table, "workspace") {
         item.workspace = Some(toml_workspace(workspace));
         cargo_declarations(
@@ -441,6 +461,10 @@ fn json_strings(value: Option<&Json>) -> impl Iterator<Item = &str> {
 
 fn npm(item: &mut Manifest<'_>, json: &Json) -> Option<()> {
     let table = json.as_object()?;
+    item.entry = table
+        .get("main")
+        .and_then(Json::as_str)
+        .and_then(|path| local_path(item.dir, path));
     item.name = table
         .get("name")
         .and_then(Json::as_str)
