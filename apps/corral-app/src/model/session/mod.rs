@@ -136,7 +136,7 @@ pub use plan::{
     HistoryLine, Ledger, LedgerStep, PlanAction, PlanTab, PlanUi, StepRow,
     StepState as PlanStepState, ledger, plan_tab,
 };
-pub use plan_review::{PlanDoc, PlanReview};
+pub use plan_review::{PlanDoc, PlanReview, compact};
 pub use proof::{ProofAction, ProofTab, ProofUi, proof_tab};
 pub use questions::{
     AnswerCard, AnswerTab, QuestionDock, QuestionLine, QuestionView, Review, ReviewRow,

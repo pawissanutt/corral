@@ -355,30 +355,11 @@ fn latest(app: AppState, id: Id, page: Memo<SessionPage>) -> AnyElement {
 pub fn ask_view(app: AppState, id: Id) -> Memo<SessionPage> {
     computed(move || {
         let env = app.env();
-        app.feed
-            .with(|feed| app.session.with(|state| ask_page(feed, state, &id, env)))
+        app.feed.with(|feed| {
+            app.session
+                .with(|state| session::compact(feed, state, &id, env))
+        })
     })
-}
-
-/// Session `id`'s page on its chat: its own UI state read as if Chat were shown, the stored tab
-/// and view untouched.
-fn ask_page(
-    feed: &crate::model::daemon::Feed,
-    state: &session::State,
-    id: &Id,
-    env: crate::model::effect::Env,
-) -> SessionPage {
-    let ui = state.ui(id.as_str());
-    if ui.tab == session::Tab::Chat && ui.sub.is_none() {
-        return session::page(feed, state, id, env);
-    }
-    let mut chat = ui.clone();
-    chat.tab = session::Tab::Chat;
-    chat.sub = None;
-    chat.focus = Focus::Composer;
-    let mut shown = session::State::default();
-    shown.sessions.insert(id.clone(), chat);
-    session::page(feed, &shown, id, env)
 }
 
 #[cfg(test)]

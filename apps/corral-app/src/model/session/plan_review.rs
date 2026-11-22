@@ -12,8 +12,10 @@
 //! an earlier one's text. A host that does not serve it, or a read that fails, leaves the card's
 //! own body, which holds the plan's first 8 KiB, with why. An execute option runs the whole
 //! plan, so it cannot be chosen until the whole plan is shown: read whole for this card, or
-//! carried whole by the card (a body the host did not clip). Keep planning and Not now always
-//! can.
+//! carried whole by the card (a body the host did not clip), and only while the session's page
+//! has that document in the conversation's place. Keep planning and Not now always can. Ask, a
+//! Home card and the Sessions inspector draw no document: there a review stays its line, which
+//! opens the session's page with the review open.
 
 use corral_protocol::detail::{CardKind, DetailBody, DetailRef, PlanModeDocPage, SessionCard};
 use corral_protocol::session_host::CardAnswer;
@@ -21,15 +23,15 @@ use corral_protocol::session_state::CardBrief;
 
 use crate::model::Id;
 use crate::model::daemon::Feed;
-use crate::model::effect::Effect;
+use crate::model::effect::{Effect, Env};
 use crate::model::hue::Hue;
 use crate::model::nav::Form;
 
 use super::choice::{self, ChoiceOption};
-use super::dock::{self, CardsRead, DockAction};
+use super::dock::{self, Asked, CardsRead, DockAction};
 use super::questions::TextRow;
 use super::tabs::load;
-use super::{Action, Can, Cx, Focus, Host, PickerAction, PickerKind, State};
+use super::{Action, Can, Cx, Focus, Host, PickerAction, PickerKind, SessionPage, State, Tab, Ui};
 
 /// The host part the whole document is served by.
 const CAPABILITY: &str = "plan_mode_doc";
@@ -72,6 +74,64 @@ fn unread(feed: &Feed, session: &str, card: &SessionCard) -> Option<&'static str
     } else {
         "the whole plan is not read yet"
     })
+}
+
+/// Why an execute option of `card` cannot be chosen where its plan is not drawn: the owner
+/// approves what is shown, and only the session's page shows the opened review's document, in
+/// the conversation's place. None while it does.
+fn hidden(ui: &Ui, card: &str) -> Option<&'static str> {
+    (ui.tab != Tab::Chat || ui.sub.is_some() || !ui.dock.opened.contains(card))
+        .then_some("the plan is not shown; go back to the conversation to read it")
+}
+
+/// Session `id`'s page as its compact forms draw it (Ask, a Home card, the Sessions inspector):
+/// on its chat, its own UI state read as if Chat were shown, the stored tab and view untouched.
+/// None of them draws a plan document, so a plan review opened on the session's page is its
+/// line here, and that line opens the page.
+pub fn compact(feed: &Feed, state: &State, id: &Id, env: Env) -> SessionPage {
+    let ui = state.ui(id.as_str());
+    let reviews = || {
+        dock::briefs(feed, id.as_str())
+            .iter()
+            .filter(|brief| brief.kind == CardKind::PlanReview)
+    };
+    let reviewing = reviews().any(|brief| ui.dock.opened.contains(&brief.id));
+    let mut page = if ui.tab == Tab::Chat && ui.sub.is_none() && !reviewing {
+        super::page(feed, state, id, env)
+    } else {
+        let mut chat = ui.clone();
+        chat.tab = Tab::Chat;
+        chat.sub = None;
+        chat.focus = Focus::Composer;
+        for brief in reviews() {
+            chat.dock.opened.remove(&brief.id);
+        }
+        let mut shown = State::default();
+        shown.sessions.insert(id.clone(), chat);
+        super::page(feed, &shown, id, env)
+    };
+    for brief in reviews() {
+        let open = Action::Dock(DockAction::Answer {
+            session: page.id.clone(),
+            asked: Asked::Card(brief.id.clone()),
+        });
+        let bring = Action::Dock(DockAction::Bring {
+            session: page.id.clone(),
+            card: brief.id.clone(),
+        });
+        if page.dock.oldest.as_ref() == Some(&bring) {
+            page.dock.oldest = Some(open.clone());
+        }
+        let id = format!("dock-{}", brief.id);
+        if let Some(line) = page.dock.waiting.iter_mut().find(|line| line.id == id) {
+            line.text = format!(
+                "▲ Plan to review: {} · open the session to review",
+                brief.title
+            );
+            line.action = open;
+        }
+    }
+    page
 }
 
 /// The plan review the owner opened, as the host's state briefs it.
@@ -232,6 +292,7 @@ pub(super) fn review(cx: &Cx<'_>, inert: Option<String>) -> Option<PlanReview> {
             Some((Hue::Held, _)) => "the whole plan cannot be read here; answer in the terminal",
             _ => why,
         });
+    let unread = hidden(cx.ui, &brief.id).or(unread);
     if let Some(why) = unread {
         for option in options
             .iter_mut()
@@ -336,7 +397,10 @@ pub(super) fn choose(
     };
     // Only Keep planning may answer a plan that is not shown whole, whatever chose the option.
     let unread = (option != REVISE)
-        .then(|| unread(feed, session.as_str(), card))
+        .then(|| {
+            hidden(state.ui(session.as_str()), card_id)
+                .or_else(|| unread(feed, session.as_str(), card))
+        })
         .flatten();
     if let Some(why) = found.unavailable.as_deref().or(unread) {
         state.ui_mut(session).notices.push(

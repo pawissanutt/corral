@@ -3,11 +3,12 @@ use corral_protocol::session_state::SessionState;
 
 use super::plan_review::target;
 use super::questions_tests::{SESSION, answers, card, feed_with, option, question};
-use super::{Action, Body, DockAction, State};
-use crate::model::Id;
+use super::{Action, Body, DockAction, State, Tab};
 use crate::model::daemon::{ClientError, DetailCache, Feed, detail_key};
+use crate::model::effect::Effect;
 use crate::model::health::daemon_env;
 use crate::model::nav::Form;
+use crate::model::{Id, Live};
 
 /// A briefed plan review must open the plan view, never the generic choice card (which would
 /// send Keep planning with no way to say what should change), and Keep planning must carry the
@@ -153,6 +154,85 @@ fn execute_waits_for_the_whole_plan_while_keep_planning_does_not() {
     feed.details.insert(detail_key(&read.target), read);
     assert_eq!(offered(&state, &feed), [false, false]);
     let sent = choose(&mut state, &feed, "execute");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].card, CARD);
+    assert_eq!(sent[0].answers[0].options, ["execute"]);
+}
+
+/// The owner approves the plan they are shown: Ask, a Home card and the inspector draw no plan
+/// document, and neither does another view of the session's page, so none of them may send
+/// Execute; a review reached there (its line, Alt+↓) must put the document on the page first.
+#[test]
+fn execute_goes_out_only_from_the_page_showing_the_plan_document() {
+    const CARD: &str = "plan-4-0c5e88d1";
+    let mut whole = card(
+        CARD,
+        CardKind::PlanReview,
+        vec![question(vec![option("execute"), option("revise")], true)],
+    );
+    whole.body = Some("the whole plan".into());
+    let feed = feed_with(whole, SessionState::default());
+    let session = Id::from(SESSION);
+    let env = daemon_env(&feed, Form::Desktop);
+    let execute = |state: &mut State| {
+        answers(&state.act(
+            Action::Dock(DockAction::Choose {
+                session: Id::from(SESSION),
+                card: CARD.into(),
+                option: "execute".into(),
+            }),
+            &feed,
+        ))
+    };
+    let documented = |state: &State| {
+        matches!(
+            super::page(&feed, state, &session, env).body,
+            Body::PlanReview(_)
+        )
+    };
+
+    // The review is open on the session's page; a compact form of it shows the line only.
+    let mut state = State::default();
+    let bring = Action::Dock(DockAction::Bring {
+        session: session.clone(),
+        card: CARD.into(),
+    });
+    state.act(bring, &feed);
+    let compact = super::compact(&feed, &state, &session, env);
+    assert!(matches!(compact.body, Body::Chat(_)) && compact.dock.plan.is_none());
+    let [line] = compact.dock.waiting.as_slice() else {
+        panic!("the review is one line, not {:?}", compact.dock.waiting);
+    };
+    let mut state = State::default();
+    let effects = state.act(line.action.clone(), &feed);
+    assert!(answers(&effects).is_empty());
+    assert!(effects.contains(&Effect::OpenLive(Live::Session(session.clone()))));
+    assert!(documented(&state));
+
+    // Another view of the page: the dock keeps the card, Execute cannot be chosen.
+    let tab = Action::Tab {
+        session: session.clone(),
+        tab: Tab::Agents,
+    };
+    state.act(tab, &feed);
+    assert!(!documented(&state));
+    let page = super::page(&feed, &state, &session, env);
+    let offered = page.dock.plan.map(|plan| plan.options).unwrap_or_default();
+    assert!(offered[0].unavailable.is_some() && offered[1].unavailable.is_none());
+    assert!(execute(&mut state).is_empty());
+
+    // Alt+↓ from that view, the review folded: the document takes the main view.
+    let mut state = State::default();
+    state.act(
+        Action::Tab {
+            session: session.clone(),
+            tab: Tab::Agents,
+        },
+        &feed,
+    );
+    state.act(Action::Dock(DockAction::Next(session.clone())), &feed);
+    assert!(documented(&state));
+    let sent = execute(&mut state);
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].card, CARD);
     assert_eq!(sent[0].answers[0].options, ["execute"]);

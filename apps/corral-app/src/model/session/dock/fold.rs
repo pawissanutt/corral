@@ -189,12 +189,13 @@ pub(super) fn next(state: &mut State, session: &Id, feed: &Feed) {
     let first = briefs
         .iter()
         .find(|brief| docked(brief.kind))
-        .map(|brief| brief.id.clone());
+        .map(|brief| (brief.id.clone(), brief.kind));
     let ui = state.ui_mut(session);
     ui.focus = focus;
-    match focus {
-        Focus::Queue => ui.dock.queue_open = Some(true),
-        Focus::Dock => ui.dock.opened.extend(first),
+    match (focus, first) {
+        (Focus::Queue, _) => ui.dock.queue_open = Some(true),
+        // Opened as its line opens it: a plan review's document takes the main view.
+        (Focus::Dock, Some((card, kind))) => open(ui, card, kind),
         _ => {}
     }
 }

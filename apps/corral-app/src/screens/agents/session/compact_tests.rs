@@ -1,6 +1,5 @@
 use corral_protocol::detail::{DetailBody, DetailRef, HostPresence, SessionItem, SessionMessage};
 
-use super::ask_page;
 use crate::model::daemon::{DetailCache, Feed, detail_key, empty_quick_page};
 use crate::model::effect::{Conn, Env};
 use crate::model::session::{self, Body, SubView, Tab};
@@ -57,7 +56,7 @@ fn ask_shows_the_chat_when_its_page_was_left_on_another_view() {
         matches!(session::page(&feed, &state, &id, env).body, Body::Usage(_)),
         "the session's own page shows the view it was left on"
     );
-    let Body::Chat(chat) = ask_page(&feed, &state, &id, env).body else {
+    let Body::Chat(chat) = session::compact(&feed, &state, &id, env).body else {
         panic!("Ask draws the chat");
     };
     assert!(!chat.transcript.messages.is_empty());
