@@ -1,17 +1,19 @@
 import { expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitRun, type Run } from "../src/build/corral-cli.ts";
 import { createExit } from "../src/build/exit.ts";
-import { gateInputFingerprint } from "../src/build/gate.ts";
+import { gateInputFingerprint, verifyBuild } from "../src/build/gate.ts";
+import { checkIndexVisibility } from "../src/build/index-visibility.ts";
 import { createJournal } from "../src/build/record.ts";
 import { createBuildEvidence } from "../src/build/tools.ts";
 import type { BuildContext, ChildSnapshot, ChildSpec } from "../src/build/types.ts";
 import { within } from "./support/wait.ts";
 
-function fixture(tap?: (args: readonly string[], result: Awaited<ReturnType<Run>>) => Promise<void>) {
+function fixture(tap?: (args: readonly string[], result: Awaited<ReturnType<Run>>) => Promise<void>, evidenceChanged = () => {}) {
   const root = mkdtempSync(join(tmpdir(), "build-gate-identity-"));
   const repo = join(root, "repo"), source = join(repo, "source.txt");
   mkdirSync(repo);
@@ -62,9 +64,9 @@ function fixture(tap?: (args: readonly string[], result: Awaited<ReturnType<Run>
   };
   const journal = createJournal({ context, git: run, fleet: snapshot });
   const exit = createExit({ context, git: run, journal, fleet: snapshot, save() {}, changed() {} });
-  const evidence = createBuildEvidence({ context, git: run, fleet, journal, exit, changed() {} });
+  const evidence = createBuildEvidence({ context, git: run, fleet, journal, exit, changed: evidenceChanged });
   const tool = (name: string) => evidence.tools.find(candidate => candidate.name === name)!.execute(name, {}, undefined, undefined, {} as never);
-  return { root, source, git, head, base, dir: context.dir, setGate, journal, exit, evidence, tool, started: started.promise, finishReview,
+  return { root, source, git, run, context, head, base, dir: context.dir, setGate, journal, exit, evidence, tool, started: started.promise, finishReview,
     async close() { await evidence.close(); exit.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
@@ -124,6 +126,64 @@ test("a gate leaving only a staged source change cannot record a pass", async ()
   } finally { await f.close(); }
 });
 
+test.each(["assume-unchanged", "skip-worktree"])("a dirty source hidden by %s cannot earn a receipt", async flag => {
+  const f = fixture();
+  try {
+    const ran = join(f.root, "ran");
+    f.setGate([`touch ${quote(ran)}`]);
+    f.git("update-index", `--${flag}`, "source.txt");
+    writeFileSync(f.source, "hidden change\n");
+    expect(f.git("--no-optional-locks", "status", "--porcelain")).toBe("");
+    const index = join(f.context.session.worktree, ".git", "index");
+    const before = readFileSync(index);
+    await expect(verifyBuild(f.context, f.run, f.journal)).rejects.toThrow("assume-unchanged or skip-worktree entries");
+    expect(readFileSync(index)).toEqual(before);
+    expect(existsSync(ran)).toBeFalse();
+    expect(f.journal.latestGate()).toBeUndefined();
+  } finally { await f.close(); }
+});
+
+test("a pass is not reused if a tracked edit is hidden after preparation", async () => {
+  let onEvidenceChange: (() => void) | undefined;
+  const f = fixture(undefined, () => {
+    const run = onEvidenceChange;
+    onEvidenceChange = undefined;
+    run?.();
+  });
+  try {
+    f.setGate(["true"]);
+    expect((await f.tool("build_verify")).isError).not.toBe(true);
+    const pass = f.journal.latestGate();
+    expect(pass).toMatchObject({ attempt: "G1", result: "pass" });
+    // The first evidence notification occurs after prepare's source checks but before receipt reuse.
+    onEvidenceChange = () => {
+      f.git("update-index", "--assume-unchanged", "source.txt");
+      writeFileSync(f.source, "hidden change\n");
+    };
+    const verifying = await f.tool("build_verify");
+    expect(f.git("--no-optional-locks", "status", "--porcelain")).toBe("");
+    expect(verifying.isError).toBeTrue();
+    expect(JSON.stringify(verifying.content)).toContain("assume-unchanged or skip-worktree entries");
+    expect(JSON.stringify(verifying.content)).not.toContain("source.txt");
+    expect(f.journal.latestGate()).toEqual(pass);
+  } finally { await f.close(); }
+});
+
+test("the index audit streams a large NUL-delimited listing without a stdout cap", async () => {
+  const f = fixture();
+  try {
+    const cwd = f.context.session.worktree, blob = f.git("rev-parse", "HEAD:source.txt");
+    const prefix = "a".repeat(240);
+    // A newline followed by a tag-like prefix is part of the tracked filename, not a new record.
+    const input = Array.from({ length: 1100 }, (_, i) => `100644 ${blob}\t${prefix}/${i}\nS file`).join("\0") + "\0";
+    execFileSync("git", ["-C", cwd, "update-index", "-z", "--index-info"], { input });
+    await checkIndexVisibility(f.run, cwd);
+    // source.txt sorts after the generated names, beyond the ordinary runner's 256 KiB cap.
+    f.git("update-index", "--skip-worktree", "source.txt");
+    await expect(checkIndexVisibility(f.run, cwd)).rejects.toThrow("assume-unchanged or skip-worktree entries");
+  } finally { await f.close(); }
+});
+
 test("legacy gates and passes for a different configured env cannot authorize or be reused", async () => {
   const f = fixture();
   try {
@@ -131,19 +191,21 @@ test("legacy gates and passes for a different configured env cannot authorize or
     f.setGate(commands);
     const at = new Date().toISOString();
     f.journal.gate({ attempt: "G1", head: f.head, commands, started: at, ended: at, result: "pass" });
+    const oldFingerprint = createHash("sha256").update(JSON.stringify(["corral-project-gate-v1", commands, [["MODE", "configured-first"]]])).digest("hex");
+    f.journal.gate({ attempt: "G2", head: f.head, input_fingerprint: oldFingerprint, commands, started: at, ended: at, result: "pass" });
     const initial = await f.evidence.finish("finish");
     const authorization = f.exit.options().find(option => option.choice === "land")?.authorization;
     expect(initial.nextAction).toBeUndefined();
     expect(authorization).toBeDefined();
     const fingerprint = gateInputFingerprint({ gate: commands, env: { MODE: "configured-first" } });
-    expect(f.journal.passedGate(f.head, fingerprint)).toMatchObject({ attempt: "G2", input_fingerprint: fingerprint });
+    expect(f.journal.passedGate(f.head, fingerprint)).toMatchObject({ attempt: "G3", input_fingerprint: fingerprint });
     const newMode = "configured-second-private-fixture";
     f.setGate(commands, newMode);
     expect((await f.exit.choose("land", { authorization })).phase).not.toBe("landed");
     expect(f.git("rev-parse", "main")).toBe(f.base);
     expect((await f.tool("build_verify")).isError).toBeTrue();
     const changed = gateInputFingerprint({ gate: commands, env: { MODE: newMode } });
-    expect(f.journal.latestGate()).toMatchObject({ attempt: "G3", input_fingerprint: changed, result: "fail" });
+    expect(f.journal.latestGate()).toMatchObject({ attempt: "G4", input_fingerprint: changed, result: "fail" });
     expect(f.journal.passedGate(f.head, changed)).toBeUndefined();
     expect(readFileSync(join(f.dir, "journal.json"), "utf8")).not.toContain(newMode);
     const reviewing = f.tool("build_review");

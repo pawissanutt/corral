@@ -1,13 +1,25 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 
-export type Run = (argv: readonly string[], options: { cwd: string; timeoutMs?: number; input?: string; stdoutDigest?: "sha256"; stdoutFd?: number }) => Promise<{ code: number; stdout: string; stderr: string }>;
+export type Run = (argv: readonly string[], options: {
+  cwd: string;
+  timeoutMs?: number;
+  input?: string;
+  /** Overrides for this child only; other environment variables are inherited. */
+  env?: Readonly<NodeJS.ProcessEnv>;
+  stdoutDigest?: "sha256";
+  stdoutFd?: number;
+  /** Consume stdout as bytes instead of collecting it; the result's stdout will be empty. */
+  stdoutChunk?: (chunk: Buffer) => void;
+}) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 const OUTPUT_LIMIT = 256 * 1024;
 
 export function engineRun(executable: string): Run {
   return async (argv, options) => {
-    const child = spawn(executable, [...argv], { cwd: options.cwd, shell: false, stdio: ["pipe", options.stdoutFd ?? "pipe", "pipe"] });
+    if (options.stdoutChunk && (options.stdoutDigest || options.stdoutFd !== undefined)) throw new Error("Choose one stdout consumer");
+    const child = spawn(executable, [...argv], { cwd: options.cwd, shell: false,
+      env: options.env && { ...process.env, ...options.env }, stdio: ["pipe", options.stdoutFd ?? "pipe", "pipe"] });
     const { promise, resolve, reject } = Promise.withResolvers<{ code: number; stdout: string; stderr: string }>();
     const stdout: Buffer[] = [], stderr: Buffer[] = [];
     const digest = options.stdoutDigest ? createHash(options.stdoutDigest) : undefined;
@@ -24,7 +36,14 @@ export function engineRun(executable: string): Run {
       if (allowed) chunks.push(chunk.subarray(0, allowed));
       if (bytes > OUTPUT_LIMIT) stop(`${executable} exceeded the 256 KiB output limit`);
     }
-    child.stdout?.on("data", (chunk: Buffer) => { if (digest) digest.update(chunk); else collect(stdout, chunk); });
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (digest) digest.update(chunk);
+      else if (options.stdoutChunk) {
+        if (failure) return;
+        try { options.stdoutChunk(chunk); }
+        catch { stop(`${executable} stdout consumer failed`); }
+      } else collect(stdout, chunk);
+    });
     child.stderr?.on("data", (chunk: Buffer) => collect(stderr, chunk));
     child.on("error", error => reject(new Error(`${executable}: ${error.message}`)));
     child.on("close", (code, signal) => {

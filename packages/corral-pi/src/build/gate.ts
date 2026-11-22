@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { checked, type Run } from "./corral-cli.ts";
+import { checkIndexVisibility } from "./index-visibility.ts";
 import { readWorkspaceToml } from "./profiles.ts";
 import type { BuildJournal } from "./record.ts";
 import type { BuildGateResult } from "./record-types.ts";
@@ -32,7 +33,8 @@ export function gateInputFingerprint({ gate = [], env = {} }: GateConfig): strin
   if (!env || typeof env !== "object" || Array.isArray(env)) throw new Error("The project env must be a table of strings.");
   const entries = Object.entries(env).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
   if (entries.some(([, value]) => typeof value !== "string")) throw new Error("The project env must be a table of strings.");
-  return createHash("sha256").update(JSON.stringify(["corral-project-gate-v1", gate, entries])).digest("hex");
+  // v1 receipts could have been recorded with changes hidden by index flags.
+  return createHash("sha256").update(JSON.stringify(["corral-project-gate-v2", gate, entries])).digest("hex");
 }
 
 /** What a caller follows while the gate runs. */
@@ -104,6 +106,7 @@ export async function checkGateSource(git: Run, worktree: string, head: string):
   if ((await checked(git, ["--no-optional-locks", "status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"], worktree)).trim()) {
     throw new Error("The build worktree or index is dirty. Commit or stash your changes, then run build_verify again.");
   }
+  await checkIndexVisibility(git, worktree);
   if (await readHead(git, worktree) !== head) throw new Error("Build HEAD changed. Run build_verify on the current candidate.");
 }
 
