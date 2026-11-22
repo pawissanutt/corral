@@ -3,6 +3,8 @@
 //! a navigation. Every operation stays pressable; the engine decides and the app shows its
 //! refusal with the typed next steps.
 
+use std::borrow::Cow;
+
 use corral_protocol::detail::{DetailGet, DetailRef};
 use corral_types::Op;
 
@@ -261,10 +263,18 @@ impl State {
             _ => {}
         }
         let task = match focus {
-            Some(id) => feed.board.task(id),
-            None => selected_filtered(selection, feed, filter),
+            Some(id)
+                if matches!(
+                    action,
+                    Action::Expand(_) | Action::Collapse(_) | Action::AskAbout { .. }
+                ) =>
+            {
+                crate::model::tasks::task_at(feed, id.as_str())
+            }
+            Some(id) => feed.board.task(id).map(Cow::Borrowed),
+            None => selected_filtered(selection, feed, filter).map(Cow::Borrowed),
         };
-        let Some(task) = task else {
+        let Some(task) = task.as_deref() else {
             return Vec::new();
         };
         let shown = Shown::of(feed, task);

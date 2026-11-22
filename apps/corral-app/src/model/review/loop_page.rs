@@ -1,5 +1,7 @@
 //! A review candidate's page: the selected candidate's Brief or evidence with the decide bar.
 
+use std::borrow::Cow;
+
 use crate::model::daemon::{Feed, Link};
 use crate::model::effect::{Conn, Env};
 use crate::model::id::Id;
@@ -51,10 +53,10 @@ pub fn loop_page_filtered(
     filter: &ProjectFilter,
 ) -> LoopPage {
     let task = match focus {
-        Some(id) => feed.board.task(id),
-        None => selected_filtered(selection, feed, filter),
+        Some(id) => crate::model::tasks::task_at(feed, id.as_str()),
+        None => selected_filtered(selection, feed, filter).map(Cow::Borrowed),
     };
-    let shown = task.map(|task| Shown::of(feed, task));
+    let shown = task.as_deref().map(|task| Shown::of(feed, task));
     let stale = env.conn.refuses()
         || feed.link != Link::Up
         || shown
@@ -97,7 +99,7 @@ pub fn loop_page_filtered(
         empty: if detail.is_some() {
             None
         } else if let Some(id) = focus {
-            Some(format!("{id} is no longer on the board."))
+            crate::model::work::detail_note(feed, id.as_str()).map(|note| note.text)
         } else if !feed.board.complete {
             Some("Waiting for the board…".into())
         } else {

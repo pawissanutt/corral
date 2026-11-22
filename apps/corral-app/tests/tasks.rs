@@ -97,6 +97,21 @@ fn the_done_and_dropped_fold_lists_the_served_closed_tasks() {
     app.wait_for("text:Device authority editor").unwrap();
 }
 
+#[test]
+fn a_done_task_opened_from_the_closed_list_shows_its_stored_patch() {
+    let mut app = preview("tasks");
+    app.wait_for("id:section-closed").unwrap();
+    app.press("id:section-closed").unwrap();
+    app.wait_for("id:task-T-2").unwrap();
+    app.press("id:task-T-2").unwrap();
+    app.press("id:task-T-2").unwrap();
+    app.wait_for("id:task-page").unwrap();
+    app.press("id:tab-task-1").unwrap();
+    app.press("id:btn-expand-notes-md").unwrap();
+    app.wait_for("text:/submitted locally; no repository was changed/")
+        .unwrap();
+}
+
 /// The redesign dropped Ask about this from every task surface: the task page offers it again,
 /// and Ask opens with the task attached as its context.
 #[test]

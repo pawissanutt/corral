@@ -3,6 +3,7 @@
 //! task's candidate), split side by side only where the page's width allows (about 1100 pt of
 //! content), unified below that, on a phone and in a terminal.
 
+use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
 use crate::model::review::{Body, LoopContent, Tab};
@@ -36,6 +37,7 @@ pub(crate) fn changes(app: AppState, id: Id) -> AnyElement {
         };
         block(app, page::SUMMARY, None, content)
     });
+    keep_closed_diff(app, id.clone());
     let cx = Ctx::showing(app, Some(id), Some(Tab::Diff));
     let page = cx.page;
     let split = cx.split;
@@ -75,4 +77,29 @@ pub(crate) fn changes(app: AppState, id: Id) -> AnyElement {
         Form::Desktop => body.py(px(16.0)).into_element(),
         Form::Phone => body.px(px(14.0)).py(px(14.0)).into_element(),
     }
+}
+
+/// Open tasks already have a candidate keeper. Closed tasks load their saved diff only here.
+fn keep_closed_diff(app: AppState, id: Id) {
+    let targets = computed(move || {
+        if app
+            .feed
+            .with(|feed| !feed.board.complete || feed.board.task(id.as_str()).is_some())
+        {
+            return Vec::new();
+        }
+        let mut targets = vec![DetailRef::Review {
+            task: id.to_string(),
+        }];
+        app.review.with(|state| {
+            targets.extend(state.expanded.iter().filter(|(task, _)| task == &id).map(
+                |(_, path)| DetailRef::ReviewFile {
+                    task: id.to_string(),
+                    path: path.clone(),
+                },
+            ));
+        });
+        targets
+    });
+    super::keep::keep_details(app, targets, None);
 }
