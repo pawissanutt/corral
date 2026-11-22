@@ -358,6 +358,44 @@ test("a kickoff that loses the run to another prompt neither marks that prompt n
   expect(plan.approved).toBeUndefined();
 }), 120_000);
 
+test("a kickoff that wins the run keeps its approval when an overlapping prompt loses", () => planning(undefined, async (live, plan) => {
+  writeFileSync(plan.path, PLAN);
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+  await live.session.prompt("Plan a --version flag", { source: "extension" });
+  await live.drained();
+  // Given the kickoff has won Pi's run but its message is not recorded yet,
+  const recorded = Promise.withResolvers<void>(), running = Promise.withResolvers<void>();
+  const internals = live.session as unknown as {
+    _extensionRunner: { emit(event: { type: string }): Promise<unknown> };
+    _queueObserver: {
+      input(input: { text: string; source: string; mode: string }): unknown;
+      lifecycle(event: { tag: unknown; event: "started" | "rejected"; reason?: string }): void;
+    };
+  };
+  const emit = internals._extensionRunner.emit.bind(internals._extensionRunner);
+  let hold = true;
+  internals._extensionRunner.emit = async event => {
+    if (event.type === "agent_start" && hold) {
+      hold = false;
+      running.resolve();
+      await recorded.promise;
+    }
+    return emit(event);
+  };
+  fixtureTransport().script([{ text: "Executing." }]);
+  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  await running.promise;
+  // when an overlapping prompt reports its start and is then refused, as Pi's losing side does:
+  const loser = internals._queueObserver.input({ text: "an overlapping input", source: "extension", mode: "prompt" });
+  internals._queueObserver.lifecycle({ tag: loser, event: "started" });
+  internals._queueObserver.lifecycle({ tag: loser, event: "rejected", reason: "Agent is already processing a prompt." });
+  recorded.resolve();
+  // Then the kickoff's own message still carries the approval.
+  await until(() => plan.phase === "off" && !live.session.isStreaming, "the approved plan to run");
+  await live.drained();
+  expect(plan.approved?.title).toBe("Add the flag");
+}), 120_000);
+
 test("a compaction inside a planning run is followed by the contract before the run goes on",
   () => planning({ settings: { compaction: { keep_recent_tokens: 1 } }, projectText: false }, async (live, plan) => {
     // Given a planning turn whose first response reports a context past the model's window:

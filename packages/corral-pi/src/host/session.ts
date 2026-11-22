@@ -333,7 +333,8 @@ export class HostSession {
   /** Interactive host API only; deliberately absent from extension/model registries. */
   readonly queue: HostQueue;
   private readonly queuedInputFacts = new WeakMap<object, InputFacts>();
-  private startedInputFacts: InputFacts | undefined;
+  /** Inputs Pi reported started whose prompt message is not recorded yet, oldest first. */
+  private readonly startedInputs: InputFacts[] = [];
   private unobserveTranscript: (() => void) | undefined;
   private remoteUsage: { leaf: string | null; model: AgentSession["model"]; usage: ParentUsage } | undefined;
   private remoteFleetDirty = true;
@@ -368,7 +369,7 @@ export class HostSession {
   /** The summary a clean-context reset writes in place of a model-made one. */
   private planReset: string | undefined;
   /** Inputs whose callers wait to learn whether that very input reached the transcript, by queue tag. */
-  private readonly deliveries = new Map<unknown, { readonly text: string; settle(delivered: boolean): void }>();
+  private readonly deliveries = new Map<unknown, (delivered: boolean) => void>();
   /** Callers waiting for the open turn to have settled for everyone. */
   private readonly closeWaiters: (() => void)[] = [];
   /** Inputs handed to Pi whose admission is not answered yet, by queue tag, with how to refuse each. */
@@ -1385,18 +1386,20 @@ export class HostSession {
       // A user message is in the transcript now; an approved plan's kickoff ends its review there.
       this.planMode?.refresh();
     }, () => this.liveEvents.stateChanged());
-    this.startedInputFacts = undefined;
+    this.startedInputs.length = 0;
     this.remoteUsage = undefined;
     session.setQueueObserver({
       ...this.queue.observer,
       lifecycle: event => {
         this.queue.observer.lifecycle(event);
         const facts = this.queue.inputFacts(event.tag);
-        // Pi reports "started" just before prompting with the prepared user message,
-        // which it emits before draining any queued inputs.
-        if (event.event === "started") this.startedInputFacts = facts;
-        else if (event.event === "rejected" && this.startedInputFacts === facts) {
-          this.startedInputFacts = undefined;
+        // Pi reports "started" just before prompting with the prepared user message, which it emits before
+        // draining any queued inputs. Two prompts whose preflights overlapped can both report it: the first is
+        // the one whose core run is taken, and the other is rejected, before or after that run's message.
+        if (event.event === "started" && facts) this.startedInputs.push(facts);
+        else if (event.event === "rejected" && facts) {
+          const lost = this.startedInputs.indexOf(facts);
+          if (lost >= 0) this.startedInputs.splice(lost, 1);
         }
         if (event.event === "rejected") this.admissions.get(event.tag)?.(event.reason ?? "rejected");
       },
@@ -1443,25 +1446,22 @@ export class HostSession {
         if (event.message.role === "user") {
           // Pi persists this exact message immediately after notifying its listeners.
           const queued = this.queuedInputFacts.get(event.message);
-          const tagged = queued ?? this.startedInputFacts;
-          if (!queued) this.startedInputFacts = undefined;
-          const content = event.message.content;
-          const text = typeof content === "string" ? content : content.map(p => p.type === "text" ? p.text : "").join("");
-          // The facts of a started input wait in one slot for the next message, and two prompts whose preflights
-          // overlapped can leave the loser's there. What plan mode acts on is therefore checked against the text.
-          const delivery = tagged && this.deliveries.get(tagged);
-          const exact = delivery !== undefined && delivery.text === text;
+          // An unqueued message is the prompt of the run that was taken: the oldest input still reported started.
+          const tagged = queued ?? this.startedInputs.shift();
           Object.assign(event.message, { corralInput: tagged?.facts ?? { origin: "auto" },
             ...(tagged?.transcriptId === undefined ? {} : { corralRequestId: tagged.transcriptId }),
             // Only the message the host itself admitted as an approved plan's kickoff carries this; its text proves nothing.
-            ...(tagged?.planKickoff === undefined || !exact ? {} : { [PLAN_KICKOFF]: tagged.planKickoff }) });
-          if (exact) {
+            ...(tagged?.planKickoff === undefined ? {} : { [PLAN_KICKOFF]: tagged.planKickoff }) });
+          const delivery = tagged && this.deliveries.get(tagged);
+          if (delivery) {
             this.deliveries.delete(tagged);
-            delivery.settle(true);
+            delivery(true);
           }
           // This very input reached the model. From the owner, it answers a pending plan review as feedback.
-          if ((tagged?.origin === "owner" || tagged?.origin === "pane") && text.startsWith(tagged.text)) this.planMode?.ownerSpoke();
-          this.ownerQuestions?.observeUser(text);
+          if (tagged?.origin === "owner" || tagged?.origin === "pane") this.planMode?.ownerSpoke();
+          const content = event.message.content;
+          this.ownerQuestions?.observeUser(typeof content === "string" ? content
+            : content.map(p => p.type === "text" ? p.text : "").join(""));
         }
       }
       if (event.type === "agent_start") {
@@ -1475,6 +1475,8 @@ export class HostSession {
         this.turnFacts.toolStarted(this.turn, event.toolCallId);
       } else if (event.type === "agent_settled") {
         this.turnEnded(event.aborted);
+        // A started input whose prompt was never recorded is dead with its turn.
+        this.startedInputs.length = 0;
         this.planMode?.turnEnded();
         for (const closed of this.closeWaiters.splice(0)) closed();
         this.remoteBuild.refreshExit();
@@ -1833,7 +1835,7 @@ export class HostSession {
     }
     const { delivered, ...tagged } = source ?? {};
     const tag = this.queue.bridgeInput(input, { ...tagged, socketId, transcriptId });
-    return this.promptInput(input, tag, images, delivered && { text: input.text, settle: delivered }).then(result => {
+    return this.promptInput(input, tag, images, delivered).then(result => {
       if (input.origin === "owner" && (result.disposition === "started" || result.disposition === "queued")) {
         this.buildControls?.noteOwnerInput(source?.text ?? input.text);
       }
@@ -1842,7 +1844,7 @@ export class HostSession {
   }
 
   private promptInput(input: SessionInput, queueTag: unknown, images?: ImageContent[],
-    delivery?: { readonly text: string; settle(delivered: boolean): void }): Promise<SubmitResult> {
+    delivery?: (delivered: boolean) => void): Promise<SubmitResult> {
     const { promise, resolve } = Promise.withResolvers<SubmitResult>();
     if (delivery) this.deliveries.set(queueTag, delivery);
     const settle = (result: SubmitResult) => {
@@ -1872,7 +1874,7 @@ export class HostSession {
       // The run is over, or never was: an input that did not reach the transcript by now never will.
       if (delivery && this.deliveries.get(queueTag) === delivery) {
         this.deliveries.delete(queueTag);
-        delivery.settle(false);
+        delivery(false);
       }
     });
     return promise;
