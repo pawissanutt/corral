@@ -109,6 +109,15 @@ pub fn read(root: &Path) -> Result<Preference> {
     })
 }
 
+// Explicitly unlock even if a forked child temporarily retains this open file description.
+struct SaveLock<'a>(&'a File);
+
+impl Drop for SaveLock<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 pub fn save(root: &Path, expected: &str, model: Option<String>) -> Result<Preference> {
     let state = open_state(root)?;
     // Lock the stable directory inode, not pi.toml (which we replace). The lock spans
@@ -118,6 +127,7 @@ pub fn save(root: &Path, expected: &str, model: Option<String>) -> Result<Prefer
         Err(TryLockError::WouldBlock) => bail!("Pi settings are being saved; reload and try again"),
         Err(error) => return Err(error).context("lock Pi settings for writing"),
     }
+    let _lock = SaveLock(&state);
     let (text, metadata) = read_file(&state)?;
     let before = revision(&text, metadata.is_some());
     ensure!(expected == before, "{STALE}");
@@ -210,6 +220,59 @@ impl Drop for Candidate<'_> {
 mod tests {
     use super::*;
     use std::{fs, os::unix::fs::symlink};
+
+    #[test]
+    fn inherited_descriptor_does_not_retain_finished_save_lock() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        fs::create_dir(temp.path().join(".corral-next"))?;
+        let state = open_state(temp.path())?;
+        state.try_lock()?;
+        // A forked child retains the same open file description until exec.
+        let inherited = state.try_clone()?;
+        let lock = SaveLock(&state);
+        drop(lock);
+        drop(state);
+        let other = open_state(temp.path())?;
+        assert!(other.try_lock().is_ok(), "finished save retained its lock");
+        drop(inherited);
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_saves_do_not_lose_a_write() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        fs::create_dir(temp.path().join(".corral-next"))?;
+        let revision = read(temp.path())?.revision;
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = ["openai/first", "openai/second"]
+                .into_iter()
+                .map(|model| {
+                    let barrier = &barrier;
+                    let revision = &revision;
+                    let root = temp.path();
+                    scope.spawn(move || {
+                        barrier.wait();
+                        save(root, revision, Some(model.to_owned()))
+                    })
+                })
+                .collect();
+            let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+            assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+            let error = results
+                .iter()
+                .find_map(|r| r.as_ref().err())
+                .unwrap()
+                .to_string();
+            assert!(
+                error.contains("being saved") || error.contains(STALE),
+                "{error}"
+            );
+            let winner = results.into_iter().find_map(Result::ok).unwrap();
+            assert_eq!(read(temp.path()).unwrap(), winner);
+        });
+        Ok(())
+    }
 
     #[test]
     fn startup_edits_only_the_model_and_refuses_stale_or_unsafe_writes() -> Result<()> {
