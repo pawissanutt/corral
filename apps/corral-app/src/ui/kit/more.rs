@@ -519,10 +519,19 @@ fn composer(app: AppState) -> Modal {
                 .all(|(value, required)| !required || !value.trim().is_empty())
         })
     });
+    let tag_index = fields.iter().position(|field| field.tags);
+    let tag_draft = tags::TagDraft::new();
     let send = move || {
-        if ready.get_untracked() {
-            press(app, Press::SubmitVerb(values.get_untracked()));
+        if !ready.get_untracked() {
+            return;
         }
+        let mut submitted = values.get_untracked();
+        if let Some(field) = tag_index.and_then(|index| submitted.get_mut(index))
+            && !tag_draft.finish(field)
+        {
+            return;
+        }
+        press(app, Press::SubmitVerb(submitted));
     };
     let rows: Vec<AnyElement> = fields
         .iter()
@@ -533,7 +542,7 @@ fn composer(app: AppState) -> Modal {
                 return choice_row(app, field, index, values, caption);
             }
             if field.tags {
-                return tags::tag_row(app, field, index, values, send);
+                return tags::tag_row(app, field, index, values, tag_draft, send);
             }
             // A prose field keeps its line breaks: Return breaks the line there, and Tab reaches
             // Send; a one-line field sends on Return.

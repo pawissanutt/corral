@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { BridgeRefusal } from "../../bridge/protocol.ts";
 import type { BuildExitControl } from "../../build/exit.ts";
 import type { BuildRecord } from "../../build/record-types.ts";
@@ -12,6 +13,8 @@ import { BuildController } from "./build-controller.ts";
 import { BUILD_BOARD_ENTRY, BUILD_EXIT_ENTRY, BUILD_FINISH_ENTRY } from "./build-entries.ts";
 import type { TranscriptMark } from "../../host/transcript-marks.ts";
 import type { BuildEntry } from "./build-entries.ts";
+import { choiceRows } from "./choice-dock.ts";
+import { buildToolRenderers } from "./tool-renderers.ts";
 
 const ENTER = "\r", ESC = "\x1b";
 /** Detached host calls, and the registry's answers through the host's cards, settle within a fixed number of microtask turns. */
@@ -352,15 +355,41 @@ test("conflicts read as conflicts, apart from a failed preparation; a host witho
 
 test("filing waits for the preview and runs once even on a double pick; the host posts the filed tasks", async () => {
   const { s, controller, key } = harness({ remote: true });
-  s.proposed = PLAN;
+  const plan: BoardPlan = { ...PLAN, tasks: [
+    { ...PLAN.tasks[0]!, title: "Long task title ".repeat(10), size: "s", difficulty: "hard", tags: ["Needs  Design", "Payments, EU"] },
+    { ...PLAN.tasks[1]!, tags: ['quote" and \\slash', "Payments", "EU", "long tag ".repeat(45) + "end"] },
+  ] };
+  s.proposed = plan;
   controller.sync();
   expect(s.calls).toEqual(["preview"]);
   controller.dock.guard(0);
   key("1");
   await settle();
   expect(s.calls).toEqual(["preview"]);
-  s.preview.resolve({ tracker: "T-0", tasks: [{ key: "manifest", id: "T-1", title: "Slot manifest", depends: [] }, { key: "export", id: "T-2", title: "Slot export", depends: ["T-1"] }] });
+  s.preview.resolve({ tracker: "T-0", tasks: plan.tasks.map((task, i) => ({ ...task, id: `T-${i + 1}` })) });
   await settle();
+
+  controller.dock.setLimit(choiceRows(24, 9), true);
+  const rows = controller.dock.render(80);
+  const shown = plain(rows);
+  expect(shown).toContain("Long task title");
+  expect(shown).toContain('size: s · difficulty: hard · tags: ["Needs  Design","Payments, EU"]');
+  expect(shown).toContain("more rows");
+  expect(shown).toContain("in Chat");
+  expect(rows.every(row => visibleWidth(row) <= 80)).toBeTrue();
+  expect(controller.dialog()!.options[0]!.unavailable).toBeUndefined();
+
+  // The live tool renderer reads the same accepted plan before any option is picked. Continuations keep every character.
+  const renderers = buildToolRenderers("board_plan", () => controller)!;
+  const result = renderers.renderResult!({ content: [], details: {} }, { expanded: false, isPartial: false }, undefined as never,
+    { args: plan, state: {}, toolCallId: "plan", outputPad: 0, invalidate() {} } as never);
+  const transcript = result.render(80);
+  const text = plain(transcript);
+  expect(text).toContain('tags: ["Needs  Design","Payments, EU"]');
+  const exact = transcript.slice(transcript.findIndex(row => plain([row]).includes('tags: ["quote')));
+  expect(exact.map(row => plain([row]).slice(2)).join("")).toBe(`tags: ${JSON.stringify(plan.tasks[1]!.tags)}`);
+  expect(transcript.every(row => visibleWidth(row) <= 80)).toBeTrue();
+
   key("1"); key("1"); key(ENTER);
   await settle();
   controller.sync();

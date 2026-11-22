@@ -35,7 +35,7 @@ pub fn tags_word(tags: &[String]) -> String {
     if tags.is_empty() {
         UNTAGGED.to_owned()
     } else {
-        tags.join(", ")
+        format!("{tags:?}")
     }
 }
 
@@ -68,7 +68,7 @@ pub fn plan_facts(task: &corral_protocol::detail::BoardTaskPlan) -> String {
     facts.push(format!("size {}", size_word(task.size.as_deref())));
     facts.push(format!("difficulty {}", difficulty_word(task.difficulty)));
     if !task.tags.is_empty() {
-        facts.push(format!("tags {}", task.tags.join(", ")));
+        facts.push(format!("tags {}", tags_word(&task.tags)));
     }
     facts.extend(task.profile.iter().cloned());
     facts.join(" · ")

@@ -21,17 +21,58 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 /// Said above the tags a task can take that it does not hold yet.
 const OFFERED: &str = "Add a tag";
 
+/// The input is part of the whole form's draft: Save also adds any label still typed here.
+#[derive(Clone, Copy)]
+pub(super) struct TagDraft {
+    typed: Signal<String>,
+    problem: Signal<Option<String>>,
+}
+
+impl TagDraft {
+    pub(super) fn new() -> Self {
+        Self {
+            typed: signal(String::new()),
+            problem: signal(None),
+        }
+    }
+
+    fn add(self, held: &str, tag: &str) -> Option<String> {
+        match meta::add_tag(held, tag) {
+            Ok(next) => {
+                self.problem.set(None);
+                Some(next)
+            }
+            Err(why) => {
+                self.problem.set(Some(why));
+                None
+            }
+        }
+    }
+
+    pub(super) fn finish(self, held: &mut String) -> bool {
+        let tag = self.typed.get_untracked();
+        if tag.is_empty() {
+            return true;
+        }
+        let Some(next) = self.add(held, &tag) else {
+            return false;
+        };
+        *held = next;
+        true
+    }
+}
+
 /// The field's rows; `values[index]` is its value and `send` sends the form.
-pub fn tag_row(
+pub(super) fn tag_row(
     app: AppState,
     field: &VerbField,
     index: usize,
     values: Signal<Vec<String>>,
+    draft: TagDraft,
     send: impl Fn() + Clone + 'static,
 ) -> AnyElement {
     let form = app.form;
-    let typed = signal(String::new());
-    let problem = signal(None::<String>);
+    let TagDraft { typed, problem } = draft;
     let held = move || values.with(|values| values.get(index).cloned().unwrap_or_default());
     let change = move |next: String| {
         values.update(|values| {
@@ -40,14 +81,11 @@ pub fn tag_row(
             }
         });
     };
-    let add = move |tag: String| match meta::add_tag(&held(), &tag) {
-        Ok(next) => {
+    let add = move |tag: String| {
+        if let Some(next) = draft.add(&held(), &tag) {
             change(next);
-            problem.set(None);
             true
-        }
-        Err(why) => {
-            problem.set(Some(why));
+        } else {
             false
         }
     };
@@ -99,7 +137,10 @@ pub fn tag_row(
         .label(field.label)
         .placeholder(field.placeholder)
         .submit_behavior(SubmitBehavior::BlurAndSubmit)
-        .on_change(move |value: &str| typed.set(value.to_owned()))
+        .on_change(move |value: &str| {
+            typed.set(value.to_owned());
+            problem.set(None);
+        })
         .on_submit({
             let send = send.clone();
             move |_: &str| {

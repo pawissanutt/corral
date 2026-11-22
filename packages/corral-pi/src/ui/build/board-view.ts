@@ -83,7 +83,7 @@ export function boardDetailLines(task: BoardTaskStatus, now: number): string[] {
   const stage = boardStage(task, []);
   const depends = task.depends.length ? "depends on " + task.depends.map(plainLabel).join(", ") : "no dependencies";
   const age = now - task.updatedAt;
-  const metadata = plainLabel(taskMetadataLabel(task));
+  const metadata = taskMetadataLabel(task);
   return [
     // The stage's `now` repeats the detail for blocked and failed tasks, so it is named once.
     `${stage.glyph} ${stage.word}` + (stage.now === plainLabel(task.detail ?? "") ? "" : " · " + stage.now),

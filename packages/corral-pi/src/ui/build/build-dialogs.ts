@@ -5,7 +5,7 @@ import type { BoardPlan, BoardPreview, BuildPanelState, ChildSnapshot, ExitOptio
 import { plainLabel, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT } from "../panels-view.ts";
 import type { ChoiceDialog } from "./choice-dock.ts";
 import { candidateLines, fastForward } from "./land-steps.ts";
-import { taskMetadataLabel } from "./task-metadata.ts";
+import { taskMetadataLabel, wrapMetadata } from "./task-metadata.ts";
 
 export type PreviewState = { readonly state: "loading" } | { readonly state: "ready"; readonly value: BoardPreview }
   | { readonly state: "failed"; readonly error: string };
@@ -127,21 +127,16 @@ function cell(text: string, width: number): string {
 }
 
 /**
- * The preview table: `task · title · kind · profile · starts` from 100 cells, `task · title · starts`
- * from 56, `task · title` below. Ids come from the preview by plan key; a dependency on another plan
- * task reads as its id. More tasks than rows end with `+ k more tasks`; one row gets a summary.
+ * The preview table fits kind/profile/dependencies by width. Metadata has its own rows, not the title's
+ * truncation budget. When rows run out, point to the complete proposal in the Chat tool result.
  */
 export function previewLines(plan: BoardPlan, preview: BoardPreview, width: number, rows: number): string[] {
   if (rows < 1 || width < 1) return [];
   const tasks = new Map(preview.tasks.map(task => [task.key, task]));
   const id = (key: string) => plainLabel(tasks.get(key)?.id ?? key);
-  const label = (task: BoardPlan["tasks"][number]) => {
-    const metadata = taskMetadataLabel(tasks.get(task.key) ?? task);
-    return plainLabel(metadata ? `${task.title} · ${metadata}` : task.title);
-  };
+  const label = (task: BoardPlan["tasks"][number]) => plainLabel(task.title);
   if (rows === 1) {
-    const list = plan.tasks.map(task => id(task.key)).join(", ");
-    return [PANEL_TEXT + truncateToWidth(`${plan.tasks.length} ${plan.tasks.length === 1 ? "task" : "tasks"}: ${list}`, width, "…")];
+    return [PANEL_MUTED + truncateToWidth(`${plan.tasks.length} ${plan.tasks.length === 1 ? "task" : "tasks"} · details in Chat`, width, "…")];
   }
   const tier = width >= PREVIEW_FULL ? "full" : width >= PREVIEW_MED ? "med" : "min";
   const gap = "  ", task = 6;
@@ -162,11 +157,18 @@ export function previewLines(plan: BoardPlan, preview: BoardPreview, width: numb
   } else {
     layout = value => taskId(value) + gap + cell(label(value), Math.max(0, width - task - gap.length));
   }
-  const fits = (header ? 1 : 0) + plan.tasks.length <= rows;
-  if (header && !fits && rows - 2 < 1) header = undefined;
-  const room = rows - (header ? 1 : 0);
-  const shown = plan.tasks.length <= room ? plan.tasks.length : room - 1;
-  const lines = [...(header ? [header] : []), ...plan.tasks.slice(0, shown).map(layout)];
-  if (shown < plan.tasks.length) lines.push(PANEL_MUTED + `+ ${plan.tasks.length - shown} more tasks`);
-  return lines.map(line => truncateToWidth(line, width, ""));
+  const metadata = (value: BoardPlan["tasks"][number]) => taskMetadataLabel(tasks.get(value.key) ?? value);
+  const lines = plan.tasks.flatMap(value => [layout(value), ...wrapMetadata(metadata(value), width - 2).map(line => PANEL_TEXT + "  " + line)]);
+  if (header && lines.length < rows) lines.unshift(header);
+  if (lines.length > rows) {
+    const omitted = lines.length - (rows - 1);
+    lines.length = rows - 1;
+    const first = plan.tasks[0];
+    if (rows === 2 && first && metadata(first) && width > task + gap.length) {
+      // With just one content row before the omission notice, prefer identified metadata to a clipped title.
+      lines[0] = taskId(first) + gap + truncateToWidth(metadata(first), width - task - gap.length, "…");
+    }
+    lines.push(PANEL_MUTED + `… ${omitted} more ${omitted === 1 ? "row" : "rows"} · see plan in Chat`);
+  }
+  return lines.map(line => truncateToWidth(line, width, "…"));
 }

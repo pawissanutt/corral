@@ -124,9 +124,8 @@ fn a_comment_from_history_joins_the_tasks_events() {
     app.wait_for("text:/Presets look right/").unwrap();
 }
 
-/// A new task's tags go out exactly as chosen: a typed label keeps its inner blank, an offered
-/// tag is one press, a label the engine would refuse (a leading blank) is said and never
-/// trimmed into the list, and the Tasks filter then meets the tag exactly.
+/// A new task's tags go out exactly as chosen: the form keeps the pending label on Save,
+/// refuses a leading blank instead of trimming it, and supports exact filtering by that label.
 #[test]
 fn a_new_task_keeps_its_tags_exactly_and_the_filter_finds_it() {
     let mut app = preview("tasks");
@@ -135,14 +134,16 @@ fn a_new_task_keeps_its_tags_exactly_and_the_filter_finds_it() {
     app.wait_for("id:field-verb-0").unwrap();
     app.type_text("id:field-verb-0", "Pin zoom presets")
         .unwrap();
-    app.type_text("id:field-verb-8", "needs design").unwrap();
+    app.type_text("id:field-verb-8", "Release blocker").unwrap();
     app.press("id:btn-tag-add").unwrap();
     app.wait_for("id:btn-tag-remove-0").unwrap();
     app.press("id:seg-tags-testing").unwrap();
     app.wait_for("id:btn-tag-remove-1").unwrap();
     app.type_text("id:field-verb-8", " padded").unwrap();
-    app.press("id:btn-tag-add").unwrap();
+    app.press("id:btn-verb-send").unwrap();
     app.wait_for("id:tag-problem").unwrap();
+    app.clear("id:field-verb-8").unwrap();
+    app.type_text("id:field-verb-8", "needs design").unwrap();
     app.press("id:btn-verb-send").unwrap();
     app.wait_for_gone("id:verb", Duration::from_secs(5))
         .unwrap();

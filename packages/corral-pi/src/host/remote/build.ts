@@ -180,11 +180,14 @@ export class RemoteBuild {
     const pending = this.planEpisode;
     if (this.filing) return;
     const title = plan.title;
-    const tasks = plan.tasks.map(task => {
-      const metadata = taskMetadataLabel(task);
-      return `${task.key}: ${task.title}${task.depends.length ? ` (after ${task.depends.join(", ")})` : ""}${metadata ? ` · ${metadata}` : ""}`;
+    // Keep metadata ahead of potentially long titles in the bounded card body. The board part carries structured tags.
+    const metadata = plan.tasks.flatMap(task => {
+      const label = taskMetadataLabel(task);
+      return label ? [`${JSON.stringify(task.key)}: ${label}`] : [];
     });
-    const body = [pending.error, tasks.join("\n"), plan.why, ...plan.tasks.map(task => task.body && `${task.key}\n${task.body}`)]
+    const tasks = plan.tasks.map(task => `${task.key}: ${task.title}${task.depends.length ? ` (after ${task.depends.join(", ")})` : ""}`);
+    const body = [pending.error, metadata.length && `Task metadata\n${metadata.join("\n")}`, tasks.join("\n"), plan.why,
+      ...plan.tasks.map(task => task.body && `${task.key}\n${task.body}`)]
       .filter(Boolean).join("\n\n");
     const meta = [plan.project, `${plan.tasks.length} tasks`].filter(Boolean).join(" · ");
     return { card: { id: pending.id, opened_at: pending.opened_at, kind: "board_plan", title, meta, body, tool: "board_plan",

@@ -14,8 +14,9 @@ rejected. Exact duplicates are kept once, in first-appearance order. `Payments` 
 are different tags. Tags don't affect dispatch or routing.
 
 In Corral App, use **New task** or **More → Edit**. Pick size and difficulty independently,
-or leave either unset. Add a suggested tag or type a custom label, and remove labels you no
-longer want. The task list and detail show the saved values. In the Tasks filter, use
+or leave either unset. Pick a suggested tag, or type a custom label and press **Add** or save
+the form. Remove labels you no longer want. The task list and detail show the saved values.
+In the Tasks filter, use
 `tag:performance` or `tag:"Payments, EU"` to match an exact label. Multiple terms must all
 match. Use `size:unset` or `difficulty:unset` to find tasks missing an estimate.
 

@@ -14,6 +14,7 @@ import type { BuildContext, ChildSpec, ExitRecord } from "../src/build/types.ts"
 import type { ChildHandle, ChildHooks, ChildRunner } from "../src/extensions/fleet/child.ts";
 import { boardPart } from "../src/host/remote/board.ts";
 import { RemoteBuild } from "../src/host/remote/build.ts";
+import { cardDetail } from "../src/host/remote/cards.ts";
 import { RemoteDialogs } from "../src/host/remote/dialogs.ts";
 import type { BuildEntry } from "../src/ui/build/build-entries.ts";
 import { buildFixtureInstall, PACKAGE_ROOT } from "./support/fixture-install.ts";
@@ -203,7 +204,8 @@ function terminalDecisions(controls: BuildControls) {
 
 test("owner-confirmed board_plan keeps agent metadata from the previews to CLI creation and posts once", async () => {
   const root = mkdtempSync(join(tmpdir(), "terminal-board-"));
-  const metadata = { size: "s", difficulty: "hard", tags: ["bug", "BUG", "--API, old"] };
+  const metadata = { size: "s", difficulty: "hard", tags: ["bug", "BUG", "--API, old", "Needs  Design", "Needs\u00a0Design"] };
+  const label = 'tags: ["bug","BUG","--API, old","Needs  Design","Needs\\u00a0Design"]';
   const { controls, calls } = fixture(root, undefined, true, false, async argv => {
     if (argv[3] !== "new") throw new Error(`unexpected board command: ${argv.join(" ")}`);
     const id = argv.includes("--parent") ? "T-002" : "T-001";
@@ -222,6 +224,9 @@ test("owner-confirmed board_plan keeps agent metadata from the previews to CLI c
     expect((await tool.execute("plan", args, undefined, undefined, {} as never)).isError).not.toBe(true);
     expect(await board.preview(board.proposed()!)).toMatchObject({ tasks: [{ id: "slice", ...metadata }] });
     expect(boardPart(board).proposed?.tasks[0]).toMatchObject(metadata);
+    const card = cardDetail(dialogs.entries().find(entry => entry.card.kind === "board_plan")!.card);
+    expect(card.body).toContain(`"slice": size: s · difficulty: hard · ${label}`);
+    expect(card.body_more).toBeFalse();
     expect(calls).toEqual([]);
 
     const dock = dialogs.watch(card => card.kind === "board_plan", () => {})!;
@@ -231,12 +236,13 @@ test("owner-confirmed board_plan keeps agent metadata from the previews to CLI c
       .rejects.toMatchObject({ code: "invalid_card_answer" });
     expect(calls.map(argv => argv.slice(3))).toEqual([
       ["new", "--project=app", "--", "Plan"],
-      ["new", "--project=app", "--parent", "T-001", "--size=s", "--difficulty=hard", "--tag=bug", "--tag=BUG", "--tag=--API, old", "--", "Slice"],
+      ["new", "--project=app", "--parent", "T-001", "--size=s", "--difficulty=hard", ...metadata.tags.map(tag => `--tag=${tag}`), "--", "Slice"],
     ]);
     expect(boardPart(board).tasks[0]).toMatchObject({ id: "T-002", ...metadata });
     expect(entries).toHaveLength(1);
     expect(entries).toMatchObject([{ customType: "corral_build_board",
       details: { filed: [{ id: "T-002", title: "Slice", depends: [], ...metadata }], started: false } }]);
+    expect(entries[0]!.content).toContain(label);
   } finally { dialogs.close(); await controls.close(); rmSync(root, { recursive: true, force: true }); }
 });
 

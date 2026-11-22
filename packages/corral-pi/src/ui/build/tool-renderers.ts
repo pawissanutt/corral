@@ -1,6 +1,6 @@
 // Transcript renderers for the build tools. `task` draws the live slice card and under it one line per slice that
-// came back; `build_finish` draws the result card with live exit progress; `board_plan` draws one tool line and
-// whether the owner still has to confirm the plan. Live cards redraw through `BuildCardSource.watch` until they settle.
+// came back; `build_finish` draws the result card with live exit progress; `board_plan` draws the proposal while
+// the owner reviews it. Live cards redraw through `BuildCardSource.watch` until they settle.
 // Each tool draws its own frame (`renderShell: "self"`): Pi puts one blank row above it and no box around it, and the
 // card keeps the output padding free on both sides itself, so it starts in the column of the conversation entries.
 import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -12,6 +12,7 @@ import { BuildCard, finishLive, resultCard } from "./build-entries.ts";
 import type { BuildCardSource } from "./contract.ts";
 import { callChildren, cardLine, cardWrap, finishedLines, firstLine, taskCardLines, taskCardRows, taskRowsSettled } from "./task-card.ts";
 import type { TaskCardHit } from "./task-card.ts";
+import { taskMetadataLabel, wrapMetadata } from "./task-metadata.ts";
 
 type Renderers = Pick<ToolDefinition, "renderShell" | "renderCall" | "renderResult">;
 type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
@@ -120,11 +121,22 @@ function planOf(args: unknown): BoardPlan {
   });
   return { title, why: "", tasks };
 }
-/** The proposed plan is this call's when its title and task keys match. */
-function waiting(cards: BuildCardSource | undefined, plan: BoardPlan): boolean {
+/** The proposed plan is this call's when its title and task keys match. Use the accepted values, not raw arguments. */
+function pendingPlan(cards: BuildCardSource | undefined, plan: BoardPlan): BoardPlan | undefined {
   const proposed = cards?.proposed?.();
-  return proposed !== undefined && proposed.title === plan.title && proposed.tasks.length === plan.tasks.length
-    && proposed.tasks.every((task, index) => task.key === plan.tasks[index]?.key);
+  if (proposed?.title === plan.title && proposed.tasks.length === plan.tasks.length
+    && proposed.tasks.every((task, index) => task.key === plan.tasks[index]?.key)) return proposed;
+}
+
+function planTaskLines(task: BoardTaskPlan, width: number): string[] {
+  const name = `${plainLabel(task.key)}: ${plainLabel(task.title)}`;
+  const detail = [task.kind && `kind: ${plainLabel(task.kind)}`, task.profile && `profile: ${plainLabel(task.profile)}`,
+    task.depends.length && `after ${task.depends.map(plainLabel).join(", ")}`].filter(Boolean).join(" · ");
+  return [
+    ...cardWrap(name, PANEL_TEXT, width),
+    ...(detail ? cardWrap(detail, PANEL_MUTED, width, 2) : []),
+    ...wrapMetadata(taskMetadataLabel(task), width - 2).map(line => cardLine(PANEL_TEXT + "  " + line, width)),
+  ];
 }
 
 function planRenderers(source: Source): Renderers {
@@ -144,10 +156,14 @@ function planRenderers(source: Source): Renderers {
     renderResult: (result, _options, _theme, context) => {
       if (context.isError) return errorCard(result, context.outputPad);
       const plan = planOf(context.args), text = firstLine(resultText(result));
-      track(source, context, waiting(source(), plan));
-      return new BuildCard<true>(width => waiting(source(), plan)
-        ? { lines: [cardLine(PANEL_WARNING + "◆ waiting for your confirmation", width)], hits: new Map([[0, true as const]]) }
-        : { lines: text ? cardWrap(text, PANEL_MUTED, width) : [] }, () => source()?.plan(), context.outputPad);
+      track(source, context, pendingPlan(source(), plan) !== undefined);
+      return new BuildCard<true>(width => {
+        const pending = pendingPlan(source(), plan);
+        return pending ? {
+          lines: [cardLine(PANEL_WARNING + "◆ waiting for your confirmation", width), ...pending.tasks.flatMap(task => planTaskLines(task, width))],
+          hits: new Map([[0, true as const]]),
+        } : { lines: text ? cardWrap(text, PANEL_MUTED, width) : [] };
+      }, () => source()?.plan(), context.outputPad);
     },
   };
 }

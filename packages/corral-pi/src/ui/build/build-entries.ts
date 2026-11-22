@@ -124,7 +124,7 @@ export function boardEntry(filed: readonly BoardTaskStatus[], started: boolean):
   const tasks = filed.map(({ id, title, depends, size, difficulty, tags }) =>
     ({ id: plainLabel(id), title: plainLabel(title), depends: depends.map(plainLabel), size, difficulty, tags }));
   const list = tasks.map(task => {
-    const metadata = plainLabel(taskMetadataLabel(task));
+    const metadata = taskMetadataLabel(task);
     return `${task.id} ${task.title}` + (task.depends.length ? ` (after ${task.depends.join(", ")})` : "") + (metadata ? ` · ${metadata}` : "");
   }).join("; ");
   const count = `${tasks.length} board ${tasks.length === 1 ? "task" : "tasks"}`;
