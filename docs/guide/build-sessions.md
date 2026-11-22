@@ -98,22 +98,27 @@ offer the choices, but you decide:
 
 Preparation happens **before** the landing choice. For a workspace build, the host
 captures the integration tip, rebases the committed candidate onto it when necessary,
-and checks the prepared head. Review compares that head to the captured base, not to
-where the build originally started. A clean rebase is not a failure: the resulting
+and checks the prepared head. Finish runs any missing gate and, under review policy,
+requests an independent reviewer when needed. The review compares that head to the
+captured base, not to where the build originally started. A clean rebase is not a failure: the resulting
 commit can still need a gate or review. If Git finds a conflict, the host attempts to
 abort and reports the conflicted paths; resolve them in the build worktree. A failing
 gate reports its command and log. Repair the candidate before offering it for Land.
 
 The final choice covers a specific base and head. A previously passing gate on the
 same head with the same commands and configured gate environment can be reused. A
-receipt from before the host recorded those inputs does not count. Under review policy an owner may supply a reason
-to override missing approval, never to bypass a failed gate. If either branch moves,
+receipt from before the host recorded those inputs does not count. Under review policy an owner
+may supply a reason to override missing approval, never to bypass a failed gate. If either branch moves,
 prepare the new candidate rather than reusing an old choice. A stale card cannot land
 a different commit. Keep and Iterate do not require passing evidence.
 
 Land requires a clean candidate, no live children, a suitable base branch and a base
-checkout that can safely fast-forward. A standalone Git build prepares against its
-starting branch, with no Corral gate; outside Git only Keep and Iterate are available.
+checkout that can safely fast-forward without overwriting staged, unstaged, untracked,
+or ignored work. A checked-out target needs a supported full checkout; Corral will not
+break an existing Git lock. If Git or the filesystem is interrupted after updating files,
+inspect the named checkout before retrying. Corral does not reset user work to recover.
+
+A standalone Git build prepares against its starting branch, with no Corral gate; outside Git only Keep and Iterate are available.
 
 ## Stop, resume and remove
 
