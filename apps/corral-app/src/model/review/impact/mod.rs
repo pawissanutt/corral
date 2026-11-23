@@ -128,6 +128,8 @@ pub const NO_ANCHOR: &str = "No source line for this item.";
 pub const NO_NODE: &str = "No node on the map for this item.";
 pub const READING: &str = "Reading the change's impact…";
 pub const READING_LEVEL: &str = "Reading this level at the task's head…";
+pub const NO_LEVELS: &str =
+    "This corrald serves a task's map at the project level only; update it to open a level.";
 pub const NO_MODULE: &str = "No module changed.";
 pub const STALE: &str = "Shown as last read; corrald has not confirmed it since.";
 /// The map's legend where it is drawn (rings) and where it is listed (figures).
@@ -231,17 +233,40 @@ pub fn shown(feed: &Feed, task: &str, trail: &[SystemAt], more: &BTreeSet<usize>
         let level = request(task, Some(at));
         impact.scene = None;
         match review_of(feed, &level) {
-            Some((level, _)) => impact.scene = Some(build(&head_map(level), Some(at))),
+            // A corrald that does not know `at` answers with the project level.
+            Some((level, _)) if !at_level(level) => impact.map_said = Some(NO_LEVELS.into()),
+            // A level read before a newer submission is not this head's.
+            Some((level, _)) if level.head != review.head => {
+                impact.map_said = Some(READING_LEVEL.into())
+            }
+            Some((level, level_stale)) => {
+                if level_stale && !stale {
+                    impact.notices.insert(0, STALE.into());
+                }
+                impact.scene = Some(build(&head_map(level), Some(at)));
+            }
             None => {
                 impact.map_said = Some(
                     match feed.detail(&level).and_then(|cache| cache.error.as_ref()) {
-                        Some(error) => {
+                        Some(error) if error.code == "not_found" => {
                             format!("This level is not at the task's head: {}", error.message)
                         }
+                        Some(error) => format!("Could not read this level: {}", error.message),
                         None => READING_LEVEL.into(),
                     },
                 )
             }
+        }
+        if let SystemAt::File { path } = at {
+            let containers: Vec<String> = head_map(review)
+                .rows
+                .iter()
+                .filter_map(|row| match row {
+                    SystemMapRow::Container { container, .. } => Some(container.path.clone()),
+                    _ => None,
+                })
+                .collect();
+            impact.marks = marks_of(review, &containers, Some(path));
         }
     }
     impact.crumbs.extend(trail.iter().map(|at| {
@@ -256,6 +281,18 @@ pub fn shown(feed: &Feed, task: &str, trail: &[SystemAt], more: &BTreeSet<usize>
         }
     }));
     Shown::Ready(Box::new(impact))
+}
+
+/// Whether a level's reply holds that level's geometry, not the project's.
+fn at_level(level: &SystemReview) -> bool {
+    !level.rows.iter().any(|row| {
+        matches!(
+            row,
+            Row::Map {
+                row: SystemMapRow::Container { .. } | SystemMapRow::PackageEdge { .. }
+            }
+        )
+    })
 }
 
 /// The served head's geometry at the review's level.
@@ -279,8 +316,9 @@ fn head_map(review: &SystemReview) -> SystemMap {
     }
 }
 
-/// What the change did to every node it names, at every level.
-fn marks_of(review: &SystemReview, containers: &[String]) -> Marks {
+/// What the change did to every node it names, with the definitions of `file`, the file level
+/// shown.
+fn marks_of(review: &SystemReview, containers: &[String], file: Option<&str>) -> Marks {
     let mut marks = Marks::new();
     let mut touch = |node: Node, added: u64, removed: u64| {
         let mark = marks.entry(node).or_default();
@@ -313,6 +351,10 @@ fn marks_of(review: &SystemReview, containers: &[String]) -> Marks {
                 line,
             } if *change != ChangeKind::Removed => {
                 touch(Node::File(path.clone()), 0, 0);
+                // A definition's node names no file: only the file shown gets its marks.
+                if file != Some(path.as_str()) {
+                    continue;
+                }
                 touch(
                     Node::Definition {
                         line: *line,
@@ -337,7 +379,7 @@ fn marks_of(review: &SystemReview, containers: &[String]) -> Marks {
             container.map(Node::Container),
             module.clone().map(Node::Module),
             Some(Node::File(dependent.path.clone())),
-            Some(Node::Definition {
+            (file == Some(dependent.path.as_str())).then(|| Node::Definition {
                 line: dependent.line,
                 name: dependent.name.clone(),
             }),
@@ -374,7 +416,7 @@ pub fn impact(review: &SystemReview, more: &BTreeSet<usize>) -> Impact {
             _ => {}
         }
     }
-    let marks = marks_of(review, &containers);
+    let marks = marks_of(review, &containers, None);
     let cx = Ctx {
         containers,
         files,

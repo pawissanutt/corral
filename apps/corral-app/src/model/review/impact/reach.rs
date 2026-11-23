@@ -5,7 +5,7 @@
 //! otherwise, and says so when the map has none of it.
 
 use corral_protocol::detail::{DetailBody, DetailRef};
-use corral_types::SystemAt;
+use corral_types::{SystemAt, SystemStatus};
 
 use super::OPEN_IN_SYSTEM;
 use super::items::Target;
@@ -58,12 +58,23 @@ pub fn reach(feed: &Feed, project: &str, target: &Target) -> Reach {
         };
         let at = trail[..depth].last();
         let cache = feed.detail(&request(project, at));
-        let map = match cache.and_then(|cache| cache.body()) {
-            Some(DetailBody::SystemMap(map)) => map,
-            // A level System cannot read (not_found at its head) does not hold the node.
-            _ if cache.is_some_and(|cache| cache.error.is_some()) => break,
+        let error = cache.and_then(|cache| cache.error.as_ref());
+        let map = match (cache.and_then(|cache| cache.body()), error) {
+            (Some(DetailBody::SystemMap(map)), _) => map,
+            // A level System cannot find at its head does not hold the node.
+            (_, Some(error)) if error.code == "not_found" => break,
+            (_, Some(error)) => {
+                return Reach::Unavailable(format!(
+                    "Activity › System's map could not be read: {}",
+                    error.message
+                ));
+            }
             _ => return Reach::Checking,
         };
+        // Its facts are still being built: it may yet have the node.
+        if map.status == SystemStatus::Building && map.rows.is_empty() {
+            return Reach::Checking;
+        }
         let scene = build(map, at);
         let Some(card) = scene.card(&node) else {
             break;
