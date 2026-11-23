@@ -186,7 +186,9 @@ and the answer that sent feedback is acknowledged only once Pi has appended the 
 **Different model.** The review shows the session's current model with a change control that
 opens the existing model picker. The session is idle during review, so the existing
 `set_model` path applies unchanged, and whichever execute option is chosen next runs on the
-selected model. No new wire is needed for it.
+selected model. Model selection uses the existing RPC. An app Execute answer carries the model
+shown in its review as `expected_model`; the host refuses an absent or stale expectation and
+rechecks the selected model after the prior turn settles, before preparing context.
 
 **Terminal.** `src/ui/plan-review.ts` shows the plan in the existing pager with action keys
 `e` execute, `c` clean, `s` compacted, `m` model, `k` keep planning (then a feedback input),

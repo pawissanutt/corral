@@ -13,7 +13,7 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 0));
  * A plan mode over an in-memory branch, already planning with a plan file written. `kickoff` says what the session
  * does with an approved plan's kickoff: it reaches the transcript unless it is only `taken`, `refused` or `throws`.
  */
-async function planning(session: { blocked?: string; kickoff?: "taken" | "refused" | "throws" | "after-a-settle";
+async function planning(session: { model?: string; blocked?: string; kickoff?: "taken" | "refused" | "throws" | "after-a-settle";
   stopping?: () => void } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "plan-mode-unit-"));
   dirs.push(dir);
@@ -46,7 +46,7 @@ async function planning(session: { blocked?: string; kickoff?: "taken" | "refuse
       if (session.kickoff !== "taken") user(text, kickoff);
       return true;
     },
-    model: () => undefined, changed: () => {}, note: text => { notes.push(text); }, approved: summary => { journal.push(summary); },
+    model: () => session.model, changed: () => {}, note: text => { notes.push(text); }, approved: summary => { journal.push(summary); },
   };
   const plan = new PlanMode(host);
   // The instance the host is running: a restart replaces it over the same transcript.
@@ -82,6 +82,19 @@ test("an approval whose review a rewind removed while its turn was being stopped
   expect(sent).toEqual([]);
   expect(plan.phase).toBe("planning");
   expect(notes.join("\n")).toContain("no longer open");
+});
+
+test("a fallback model committed during turn settlement leaves approval context untouched", async () => {
+  const session: Parameters<typeof planning>[0] = { model: "p/a" };
+  const { plan, sent } = await planning(session);
+  session.stopping = () => { session.model = "p/b"; };
+  plan.submit();
+  const card = plan.review;
+  plan.choose("execute_compact");
+  await settle();
+  expect(session.blocked).toBeUndefined(); // The fixture sets it on any call to compact.
+  expect(sent).toEqual([]);
+  expect(plan.review).toBe(card);
 });
 
 test("a rewind from one pending review to another tells the views, though the phase is the same", async () => {

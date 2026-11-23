@@ -473,6 +473,8 @@ export class PlanMode {
     this.starting = true;
     try {
       await this.host.stopTurn();
+      // A fallback already authenticating for the stopped turn can finish its switch during settlement.
+      if (this.host.model() !== model) throw new Error("the model changed; review the current model and approve again");
       // A rewind may have taken the branch back past this review while its turn was being stopped.
       if (this.review !== card) throw new Error(WITHDRAWN);
       // Read after the planning turn can no longer touch it: what runs must be what the digest names, now.
