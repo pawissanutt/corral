@@ -31,14 +31,15 @@ const LINES: usize = 3;
 /// decision card takes the keys. The owner's own choice replaces an Answer still waiting.
 pub(super) fn bring(state: &mut State, session: &Id, card: String, feed: &Feed) {
     let kind = kind(feed, session.as_str(), &card);
+    let cards = briefs(feed, session.as_str());
     let ui = state.ui_mut(session);
     ui.dock.wanted = None;
     if let Some(kind) = kind {
-        open(ui, card, kind);
+        open(ui, card, kind, cards, feed.now);
     }
 }
 
-fn open(ui: &mut Ui, card: String, kind: CardKind) {
+fn open(ui: &mut Ui, card: String, kind: CardKind, cards: &[CardBrief], now: u64) {
     match kind {
         CardKind::Question => {
             ui.dock.open = Some(card);
@@ -46,18 +47,47 @@ fn open(ui: &mut Ui, card: String, kind: CardKind) {
         }
         // The plan's document takes the conversation's place.
         CardKind::PlanReview => {
-            ui.dock.opened.insert(card);
+            unfold(ui, card, kind, cards, now);
             ui.tab = Tab::Chat;
             ui.sub = None;
             ui.focus = Focus::Dock;
         }
         kind if docked(kind) => {
-            ui.dock.opened.insert(card);
+            unfold(ui, card, kind, cards, now);
             ui.focus = Focus::Dock;
         }
         kind if decision(kind) => ui.focus = Focus::Dock,
         _ => {}
     }
+}
+
+/// Opens the docked choice `card`. A plan review and another choice are never open together:
+/// each draws its options on the dock's keys, and a digit meant for the card brought forward
+/// must not approve a plan. Opening a plan review folds the others, and opening another choice
+/// folds the plan review, with the reason or answer mode of a card that folds.
+pub(in crate::model::session) fn unfold(
+    ui: &mut Ui,
+    card: String,
+    kind: CardKind,
+    cards: &[CardBrief],
+    now: u64,
+) {
+    let review = |id: &str| {
+        cards
+            .iter()
+            .any(|brief| brief.id == id && brief.kind == CardKind::PlanReview)
+    };
+    let stays = |id: &str| id == card || (kind != CardKind::PlanReview && !review(id));
+    let composing = ui
+        .dock
+        .compose
+        .as_ref()
+        .is_some_and(|mode| ui.dock.opened.contains(mode.card()) && !stays(mode.card()));
+    if composing {
+        leave(ui, now);
+    }
+    ui.dock.opened.retain(|id| stays(id));
+    ui.dock.opened.insert(card);
 }
 
 /// The card `asked` names among the host's briefs: that card by its id, or the oldest owner
@@ -78,10 +108,11 @@ pub(super) fn answer(state: &mut State, session: &Id, asked: Asked, feed: &Feed)
         .get(session.as_str())
         .and_then(|live| live.state.as_ref())
         .map(|host| named(&host.cards, &asked).map(|brief| (brief.id.clone(), brief.kind)));
+    let cards = briefs(feed, session.as_str());
     let ui = state.ui_mut(session);
     ui.dock.wanted = None;
     match briefed {
-        Some(Some((card, kind))) => open(ui, card, kind),
+        Some(Some((card, kind))) => open(ui, card, kind, cards, feed.now),
         // A state that briefs no owner question has none to open. A card the row names may be
         // newer than the state held here, so that one is waited for.
         Some(None) if asked == Asked::Oldest => {}
@@ -195,7 +226,7 @@ pub(super) fn next(state: &mut State, session: &Id, feed: &Feed) {
     match (focus, first) {
         (Focus::Queue, _) => ui.dock.queue_open = Some(true),
         // Opened as its line opens it: a plan review's document takes the main view.
-        (Focus::Dock, Some((card, kind))) => open(ui, card, kind),
+        (Focus::Dock, Some((card, kind))) => open(ui, card, kind, briefs, feed.now),
         _ => {}
     }
 }
@@ -215,13 +246,13 @@ pub(super) fn settle(ui: &mut Ui, state: &SessionState, advertised: Option<&str>
             .iter()
             .find(|brief| brief.kind == CardKind::Exit)
     {
-        ui.dock.opened.insert(exit.id.clone());
+        unfold(ui, exit.id.clone(), exit.kind, &state.cards, now);
         ui.dock.exit_wanted = false;
         ui.focus = Focus::Dock;
     }
     if let Some(asked) = ui.dock.wanted.take() {
         if let Some(brief) = named(&state.cards, &asked) {
-            open(ui, brief.id.clone(), brief.kind);
+            open(ui, brief.id.clone(), brief.kind, &state.cards, now);
         } else if matches!(&asked, Asked::Card(id) if advertised == Some(id.as_str())) {
             ui.dock.wanted = Some(asked);
         } else {

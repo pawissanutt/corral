@@ -359,3 +359,46 @@ fn a_new_submission_never_shows_the_previous_submissions_document() {
         Some(Action::Refresh(target(SESSION, "plan-2-9f3a1c0e")))
     );
 }
+
+/// A plan review left open while another docked choice was brought forward drew both option
+/// lists on the dock's keys, and a digit meant for the other card could approve the plan. Only
+/// the card brought forward last is open.
+#[test]
+fn a_plan_review_and_another_docked_choice_are_never_open_together() {
+    let mut feed = feed_with(
+        card(
+            "plan-2-3fa9",
+            CardKind::PlanReview,
+            vec![question(vec![option("execute"), option("revise")], true)],
+        ),
+        SessionState::default(),
+    );
+    let cards = &mut feed
+        .live
+        .get_mut(SESSION)
+        .and_then(|live| live.state.as_mut())
+        .expect("the session's state")
+        .cards;
+    let mut asks = cards[0].clone();
+    asks.id = "c-1".into();
+    asks.kind = CardKind::ChildQuestion;
+    cards.push(asks);
+    let session = Id::from(SESSION);
+    let mut state = State::default();
+    let mut bring = |card: &str| {
+        state.act(
+            Action::Dock(DockAction::Bring {
+                session: Id::from(SESSION),
+                card: card.into(),
+            }),
+            &feed,
+        );
+        super::page(&feed, &state, &session, daemon_env(&feed, Form::Desktop)).dock
+    };
+
+    bring("plan-2-3fa9");
+    let asked = bring("c-1");
+    assert!(asked.choice.is_some() && asked.plan.is_none());
+    let reviewing = bring("plan-2-3fa9");
+    assert!(reviewing.plan.is_some() && reviewing.choice.is_none());
+}

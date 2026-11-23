@@ -288,14 +288,15 @@ fn land_steps(rows: Vec<land::LandRow>) -> Vec<ExitStep> {
 /// Explicit Finish asks the host to prepare again even if a previous blocked card remains.
 /// Simply displaying a pending card never sends this action.
 pub(super) fn finish(state: &mut State, session: &Id, feed: &Feed) -> Vec<Effect> {
-    let pending = dock::briefs(feed, session.as_str())
+    let cards = dock::briefs(feed, session.as_str());
+    let pending = cards
         .iter()
         .find(|brief| brief.kind == CardKind::Exit)
         .map(|brief| brief.id.clone());
     if let Some(card) = pending {
         let ui = state.ui_mut(session);
         dock::leave(ui, feed.now);
-        ui.dock.opened.insert(card);
+        dock::unfold(ui, card, CardKind::Exit, cards, feed.now);
         ui.focus = Focus::Dock;
     }
     let key = state.ids.next_id();

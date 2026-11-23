@@ -1118,10 +1118,15 @@ export class HostSession {
             const result = await plan.command(args);
             if (!result.review) this.notice(result.text, "text", ctx.ui);
             else if (!await this.planReview?.show()) {
-              // Without the pager the same choices are a plain selection, for the submission that was asked about.
-              const review = plan.review;
-              const picked = await ctx.ui.select(result.text, PLAN_OPTIONS.map(option => option.label));
-              const option = PLAN_OPTIONS.find(candidate => candidate.label === picked);
+              // Without the pager the plan is printed and the same choices are a plain selection, for the
+              // submission that was asked about. An approval is of what was shown: with no copy to show, only
+              // Keep planning is offered.
+              const review = plan.review, text = plan.reviewText();
+              if (text !== undefined) this.notice(`${result.text}\n\n${text}`, "text", ctx.ui);
+              const options = PLAN_OPTIONS.filter(candidate => text !== undefined || candidate.id === "revise");
+              const picked = await ctx.ui.select(text === undefined
+                ? `${result.text} Its submitted copy is missing or was changed.` : result.text, options.map(option => option.label));
+              const option = options.find(candidate => candidate.label === picked);
               if (option && plan.review === review) await plan.choose(option.id);
             }
           } catch (error) {

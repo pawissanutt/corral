@@ -37,7 +37,7 @@ mod fold;
 mod fold_tests;
 mod reads;
 
-pub(super) use fold::escape;
+pub(super) use fold::{escape, unfold};
 pub use fold::{keys, press};
 pub(super) use reads::{card_read, fetch, settle};
 

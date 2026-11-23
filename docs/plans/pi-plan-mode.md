@@ -188,8 +188,9 @@ selected model. No new wire is needed for it.
 **Terminal.** `src/ui/plan-review.ts` shows the plan in the existing pager with action keys
 `e` execute, `c` clean, `s` compacted, `m` model, `k` keep planning (then a feedback input),
 and Esc for not now. It opens once per submission when the agent's turn ends and again from
-`/plan`. The composer title shows `PLAN`, or `PLAN · review`. A host without panels offers
-the four choices as a plain selection from `/plan`.
+`/plan`. The composer title shows `PLAN`, or `PLAN · review`. A host without panels prints
+the submitted copy and then offers the four choices as a plain selection from `/plan`; if
+the copy cannot be shown, it offers Keep planning alone.
 
 **App.** A dedicated plan view renders the whole document as Markdown with the four actions,
 the model control and a feedback composer. The document is read in 40 KiB pages under the
