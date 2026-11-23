@@ -7,7 +7,9 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { parseBuildProfiles } from "../../build/profiles.ts";
 import { createSdkRunner, type ChildHooks, type SdkRunnerOptions } from "./child.ts";
+import { resolveModel } from "./profiles.ts";
 
 type Handler = (event: Record<string, unknown>, context: { abort(): Promise<void> }) => unknown;
 const answer = (text: string): AssistantMessage => ({ role: "assistant", api: "openai-responses", provider: "openai-codex", model: "fixture", timestamp: 1,
@@ -80,6 +82,25 @@ function fixture() {
   };
 }
 
+test("a Build Explore profile sends Codex priority and keeps its configured effort", async () => {
+  const f = fixture();
+  const codex = { provider: "openai-codex" };
+  const profiles = parseBuildProfiles({ luna: { model: "openai-codex/gpt-6-luna", effort: "low", service_tier: "priority" } });
+  const model = resolveModel("luna", profiles, [codex.provider]);
+  try {
+    f.body(async () => {
+      expect(f.level).toBe("low");
+      f.session.agent.streamFunction(codex, {}, {});
+      expect(f.streamTier).toBe("priority");
+      f.session.agent.streamFunction({ provider: "openai" }, {}, {});
+      expect(f.streamTier).toBeUndefined();
+    });
+    const run = createSdkRunner(f.options).run({ id: "explore", title: "Explore", brief: "Read the code", owns: [], kind: "explore" },
+      model, { ...f.hooks, execution: undefined }, new AbortController().signal);
+    expect((await run.done).failed).toBeUndefined();
+  } finally { f.cleanup(); }
+});
+
 test("quick research reserves its fourth turn, uses canonical transcript identity and keeps peer messaging", async () => {
   const f = fixture();
   const started = Promise.withResolvers<void>();
@@ -116,7 +137,7 @@ test("quick research reserves its fourth turn, uses canonical transcript identit
     expect(f.tools).toEqual(["web_search", "agent_message", "agent_roster"]);
     expect([...f.registered.keys()]).toEqual(["web_search", "agent_message", "agent_roster"]);
     expect(f.level).toBe("off");
-    f.session.agent.streamFunction({}, {}, {});
+    f.session.agent.streamFunction({ provider: "openai-codex" }, {}, {});
     expect(f.streamTier).toBe("priority");
     expect(f.prompt).toContain("at most 4 model turns");
     expect(f.opened).toBe(f.hooks.execution!.sessionFile);

@@ -5,6 +5,7 @@ export interface ResolvedModel {
   readonly provider: string;
   readonly model: string;
   readonly effort?: string;
+  readonly serviceTier?: "priority";
 }
 
 export function resolveProfiles(settings: BuildSettings, parent: { provider: string; model: string; effort?: string }): BuildProfile[] {
@@ -27,5 +28,6 @@ export function resolveModel(choice: string | undefined, profiles: readonly Buil
   const id = value.slice(slash + 1);
   // Profile model IDs may already carry the provider prefix.
   const model = profile && id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id;
-  return { profile: profile?.name ?? value, provider, model, effort: profile?.effort };
+  return { profile: profile?.name ?? value, provider, model, effort: profile?.effort,
+    ...(profile?.serviceTier ? { serviceTier: profile.serviceTier } : {}) };
 }

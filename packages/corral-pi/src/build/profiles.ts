@@ -24,7 +24,7 @@ export function parseBuildProfiles(profiles: unknown): BuildProfile[] {
     throw new Error(".corral-next/pi.toml: build.profiles must be a table");
   }
   return Object.entries(profiles).map(([name, value]) => {
-    const profile = value as (Partial<BuildProfile> & { connection?: unknown }) | undefined;
+    const profile = value as (Partial<BuildProfile> & { connection?: unknown; service_tier?: unknown }) | undefined;
     if (profile?.connection !== undefined) {
       const provider = profile.connection === "openai-api" ? "openai" : "anthropic-api";
       throw new RemovedModelOption(`Build child profile ${name}: connection was removed; use model = "${provider}/<model>"`);
@@ -35,7 +35,12 @@ export function parseBuildProfiles(profiles: unknown): BuildProfile[] {
       || (profile?.description !== undefined && typeof profile.description !== "string")) {
       throw new Error(`Invalid Build child profile ${name}: expected a provider/model and optional effort and description`);
     }
-    return { name, model: profile!.model!, effort: profile!.effort, description: profile!.description };
+    const tier = profile?.service_tier;
+    if (tier !== undefined && tier !== "default" && (tier !== "priority" || provider !== "openai-codex")) {
+      throw new Error(`Invalid Build child profile ${name}: service_tier must be default or, for openai-codex, priority`);
+    }
+    return { name, model: profile!.model!, effort: profile!.effort, description: profile!.description,
+      ...(tier === "priority" ? { serviceTier: tier } : {}) };
   });
 }
 

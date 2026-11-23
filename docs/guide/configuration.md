@@ -170,7 +170,13 @@ profile = "default"
 ```
 
 Each child profile names a `provider/id`; `effort` and `description` are optional.
-The provider must be known to Corral and approved for the host. You can configure
+The provider must be known to Corral and approved for the host. For a Build `explore`
+child on `openai-codex`, its profile can also set `service_tier = "priority"` (Fast).
+Omitting the tier or setting it to `"default"` leaves requests on the normal tier.
+The tier doesn't change reasoning effort, doesn't apply to implementation or review
+children, and isn't carried to another provider on fallback. For quick, bounded
+codebase exploration, start with `effort = "low"` and use `"medium"` for harder tracing.
+A named profile with no effort asks Pi for `off`, subject to the model's supported levels. You can configure
 `[build.profiles.default]`; otherwise `default` inherits the parent's launch model and effort.
 It is also used for delegated work that matches no route.
 

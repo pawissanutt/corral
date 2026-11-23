@@ -25,6 +25,7 @@ export interface BuildProfile {
   readonly model: string;
   readonly effort?: string;
   readonly description?: string;
+  readonly serviceTier?: "priority";
 }
 
 export interface BuildDelegationRoute {

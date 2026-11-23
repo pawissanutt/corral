@@ -620,7 +620,7 @@ export class FleetRuntime implements FleetControl {
     if (!entry.handle) return;
     const version = ++entry.modelVersion;
     entry.pending = choice; entry.value.pendingModel = `${choice.provider}/${choice.model}`; this.touch(entry);
-    void entry.handle.setModel(choice.provider, choice.model, choice.effort).then(result => {
+    void entry.handle.setModel(choice.provider, choice.model, choice.effort, choice.serviceTier).then(result => {
       if (!live(entry) || entry.modelVersion !== version) return;
       if (result === "applied") { this.adopt(entry, choice); entry.pending = undefined; entry.value.pendingModel = undefined; }
       this.touch(entry);

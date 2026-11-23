@@ -45,7 +45,7 @@ export interface ChildRunner {
 export interface ChildHandle {
   readonly done: Promise<{ report: string; failed?: string; researchReport?: ResearchReport; turns?: number; truncated?: boolean }>;
   steer(text: string): Promise<void>;
-  setModel(provider: string, model: string, effort?: string): Promise<"applied" | "deferred">;
+  setModel(provider: string, model: string, effort?: string, serviceTier?: "priority"): Promise<"applied" | "deferred">;
   usage(): ChildUsage;
 }
 export interface SdkRunnerOptions {
@@ -272,6 +272,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
       ...(kind === "slice" ? ["ask_owner"] : []), ...communication.map(tool => tool.name)]);
     let session: Sdk.AgentSession | undefined;
     let pending: ResolvedModel | undefined;
+    let profileTier = initialModel.serviceTier;
     let turns = 0;
     let synthesis: "turn_limit" | "time_reserve" | undefined;
     let synthesisUsed: typeof synthesis;
@@ -291,6 +292,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
       if (!model) throw new Error(`model_unavailable: ${choice.provider}/${choice.model}`);
       if (isProviderId(choice.provider) && isApiProvider(choice.provider)) assertApiEffort(model, choice.effort);
       await session!.setModel(model);
+      profileTier = choice.serviceTier;
       session!.setThinkingLevel(budget?.thinkingLevel ?? thinking(choice.effort));
     };
     const { promise: ready, resolve: readyResolve, reject: readyReject } = Promise.withResolvers<void>();
@@ -417,15 +419,18 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         ({ session } = await sdk.createAgentSessionFromServices({ services, sessionManager: sdk.SessionManager.open(file), model,
           tools: [...allowed], thinkingLevel: level, scopedModels: [{ model, thinkingLevel: level }] }));
         const childFallback = childFallbackPolicy(options.fallbackPolicy);
-        if (execution?.serviceTier || childFallback) {
+        if (kind === "explore" || childFallback) {
           const baseStream = session.agent.streamFunction;
-          const initialStream = execution?.serviceTier
-            ? (current: Parameters<typeof baseStream>[0], context: Parameters<typeof baseStream>[1], streamOptions: Parameters<typeof baseStream>[2]) =>
-                baseStream(current, context, { ...streamOptions, serviceTier: execution.serviceTier })
+          const initialStream: typeof baseStream | undefined = kind === "explore"
+            ? (current, context, streamOptions) => {
+                const tier = current.provider === "openai-codex"
+                  ? execution?.serviceTier ?? (options.bound ? undefined : profileTier) : undefined;
+                return baseStream(current, context, tier ? { ...streamOptions, serviceTier: tier } : streamOptions);
+              }
             : undefined;
           installChildFallback({
             session, models, policy: childFallback, baseStream, initialStream,
-            onFallback: (from, to) => hooks.onFallback?.(from, to),
+            onFallback: (from, to) => { profileTier = undefined; hooks.onFallback?.(from, to); },
           });
         }
         // Build children share the helper projection, including bounded tool argument/result streaming.
@@ -456,12 +461,12 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     })();
     return { done, usage,
       async steer(text) { await ready; if (complete) throw new Error("Child is no longer running"); await session!.steer(text); },
-      async setModel(provider, model, effort) {
+      async setModel(provider, model, effort, serviceTier) {
         if (!options.models.getModel(provider, model)) throw new Error(`model_unavailable: ${provider}/${model}`);
         thinking(effort);
         await ready;
         if (complete) throw new Error("Child is no longer running");
-        const choice = { profile: `${provider}/${model}`, provider, model, effort };
+        const choice = { profile: `${provider}/${model}`, provider, model, effort, serviceTier };
         if (session!.isStreaming) { pending = choice; return "deferred"; }
         await apply(choice); return "applied";
       },
