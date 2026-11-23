@@ -87,7 +87,10 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
         page: None,
     };
     let review = DetailGet {
-        target: DetailRef::SystemReview { task: task.clone() },
+        target: DetailRef::SystemReview {
+            task: task.clone(),
+            at: None,
+        },
         etag: None,
         page: None,
     };

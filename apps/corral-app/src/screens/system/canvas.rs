@@ -123,7 +123,8 @@ struct Lit<'a> {
 
 impl Lit<'_> {
     fn marked(&self, node: &Node) -> bool {
-        self.marks.is_none_or(|marks| marks.contains_key(node))
+        self.marks
+            .is_none_or(|marks| marked::of(marks, node).is_some())
     }
 
     fn card(&self, card: &Card) -> bool {
@@ -285,7 +286,7 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
         // A task's pick may be an untouched card; it is shown whole all the same.
         let shown = lit.card(card) || (picked && marks.is_some());
         p = p.global_alpha(if shown { 1.0 } else { DIM });
-        let mark = marks.map(|marks| marks.get(&card.node).copied());
+        let mark = marks.map(|marks| marked::of(marks, &card.node).copied());
         p = paint_card(p, card, placed.rect, &view, scene, picked, mark);
     }
     p.global_alpha(1.0)
@@ -438,18 +439,32 @@ fn paint_card(
         .stroke()
         .line_dash(&[]);
     if let Some(Some(mark)) = mark {
-        let (hue, ring): (Hue, &[Points]) = match mark {
-            Mark::Touched { .. } => (Hue::Worker, &[]),
-            Mark::Dependent { .. } => (Hue::Held, &dash),
-        };
-        p = p
-            .stroke_color(now(hue_ink(hue)))
-            .line_width(2.0)
-            .line_dash(ring)
-            .begin_path()
-            .round_rect(bounds(r), px(radius))
-            .stroke()
-            .line_dash(&[]);
+        // Touched is a solid ring; holding dependents a dashed one, outside it when both.
+        let mut rings: Vec<(Hue, &[Points], f32)> = Vec::new();
+        if mark.touched {
+            rings.push((Hue::Worker, &[], 0.0));
+        }
+        if mark.dependents > 0 {
+            rings.push((Hue::Held, &dash, if mark.touched { 3.0 } else { 0.0 }));
+        }
+        for (hue, ring, out) in rings {
+            p = p
+                .stroke_color(now(hue_ink(hue)))
+                .line_width(2.0)
+                .line_dash(ring)
+                .begin_path()
+                .round_rect(
+                    bounds(Rect {
+                        x: r.x - out,
+                        y: r.y - out,
+                        w: r.w + 2.0 * out,
+                        h: r.h + 2.0 * out,
+                    }),
+                    px(radius + out),
+                )
+                .stroke()
+                .line_dash(&[]);
+        }
     }
     let figure = |card: &Card| match mark {
         Some(mark) => mark.map_or_else(|| marked::UNTOUCHED.to_owned(), Mark::words),

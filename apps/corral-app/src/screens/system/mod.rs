@@ -53,14 +53,13 @@ impl Host {
     fn state(self, app: AppState) -> State {
         match self {
             Host::System => app.system.get(),
-            Host::Impact(_, task) => State {
-                picked: app.impact.with(|state| {
-                    (state.task.as_deref() == Some(task.get().as_str()))
-                        .then(|| state.picked.clone())
-                        .flatten()
-                }),
-                ..State::default()
-            },
+            Host::Impact(_, task) => app.impact.with(|state| {
+                if state.task.as_deref() == Some(task.get().as_str()) {
+                    state.map.clone()
+                } else {
+                    State::default()
+                }
+            }),
         }
     }
 
@@ -77,7 +76,7 @@ impl Host {
             Host::System => app.system_act(Action::Pick(pick)),
             Host::Impact(_, task) => {
                 let task = untracked(|| task.get());
-                app.impact_act(task.as_str(), impact::Action::Pick(pick));
+                app.impact_act(task.as_str(), impact::Action::Map(Action::Pick(pick)));
             }
         }
     }

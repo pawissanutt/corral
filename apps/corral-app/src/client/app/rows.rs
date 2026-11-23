@@ -295,7 +295,7 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
         // A project's row moves its revision whenever any of its map's details changes.
         DetailRef::SystemMap { project, .. } => topic == Topic::System && changed.contains(project),
         // The impact's facts land on the project's row, which this target does not name.
-        DetailRef::SystemReview { task } => {
+        DetailRef::SystemReview { task, .. } => {
             topic == Topic::System || (topic == Topic::Tasks && changed.contains(task))
         }
         _ => false,

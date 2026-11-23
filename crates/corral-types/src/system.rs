@@ -236,6 +236,9 @@ pub enum SystemReviewRow {
     },
     Dependent {
         dependent: DependentFact,
+        /// The module holding the dependent at the head, when the head tree has its file.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        module: Option<ModuleId>,
     },
     TestFile {
         path: String,

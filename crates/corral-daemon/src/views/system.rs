@@ -44,7 +44,7 @@ pub(super) fn read(shared: &Shared, query: &DetailGet) -> Result<Option<DetailRe
             });
             (etag, offset, body)
         }
-        DetailRef::SystemReview { task } => {
+        DetailRef::SystemReview { task, at } => {
             let impact = shared.system.review(shared, task)?;
             let (etag, offset) = selection(shared, query, impact.revision)?;
             let (categories, rows) = match (offset, impact.facts.as_deref()) {
@@ -56,7 +56,8 @@ pub(super) fn read(shared: &Shared, query: &DetailGet) -> Result<Option<DetailRe
                         .head_snapshot
                         .as_ref()
                         .map(|snapshot| &snapshot.structure),
-                ),
+                    at.as_ref(),
+                )?,
                 _ => (
                     SystemImpactCategory::ALL
                         .into_iter()

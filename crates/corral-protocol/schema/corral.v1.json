@@ -2718,6 +2718,17 @@
           {
             "description": "`system.v1`: impact of the latest submitted worker change.",
             "properties": {
+              "at": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SystemAt"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The head's map level to serve with the impact; the project level when absent."
+              },
               "kind": {
                 "const": "system_review",
                 "type": "string"
@@ -11661,10 +11672,25 @@
           "schema": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/SystemAt"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SystemAt"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               {
-                "type": "null"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SystemAt"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The head's map level to serve with the impact; the project level when absent."
               }
             ]
           }

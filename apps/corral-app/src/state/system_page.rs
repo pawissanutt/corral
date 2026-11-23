@@ -1,6 +1,8 @@
 //! Activity › System's state: the owner's actions on the map, and Escape, which clears a
 //! typed filter, then goes up a level, then lets go of the pick.
 
+use corral_types::SystemAt;
+
 use crate::model::projects::Scope;
 use crate::model::system::{Action, Node, Pick};
 use crate::model::{Destination, Id};
@@ -38,14 +40,15 @@ impl AppState {
     }
 
     /// Activity › System scoped to `project` (the one scope every place shares, as the
-    /// System page's own project picker sets it), at its project level with `node` selected.
-    pub fn open_in_system(&self, project: Id, node: Option<Node>) {
+    /// System page's own project picker sets it), at `trail` with `node` selected: a place
+    /// `impact::reach` found on that page's own map.
+    pub fn open_in_system(&self, project: Id, trail: Vec<SystemAt>, node: Node) {
         self.set_scope(Scope::Project(project.clone()));
         self.system.update(|state| {
             state.follow(project.as_str());
-            state.trail.clear();
+            state.trail = trail;
             state.filter.clear();
-            state.picked = node.map(Pick::Node);
+            state.picked = Some(Pick::Node(node));
         });
         self.go(Destination::System);
     }

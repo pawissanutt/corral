@@ -1,19 +1,24 @@
 //! The Changes tab's Impact view: the task's `system_review` as Activity › System's map at the
-//! task's head (`screens::system::Host::Impact`: touched packages ringed with their lines,
-//! packages holding dependents ringed apart, the rest dimmed), then the touched modules and the
-//! Model impact list. Selecting an item shows its source anchor and selects its node; "Open in
-//! System" opens Activity › System with that node selected. Every word is
+//! task's head (`screens::system::Host::Impact`: touched nodes ringed with their lines, nodes
+//! holding dependents ringed apart, the rest dimmed), drilled like Activity › System with a
+//! breadcrumb, then the touched modules and the Model impact list. Selecting an item opens its
+//! node's level, selects the node and shows its source anchor; "Open in System" opens Activity
+//! › System where its own map has the node, or says why it cannot. Every word is
 //! `model::review::impact`'s.
 //!
-//! Test ids: "task-impact", "impact-item-<key>", "btn-open-in-system", "btn-impact-more-<n>".
+//! Test ids: "task-impact", "impact-crumb-<n>", "impact-item-<key>", "btn-open-in-system",
+//! "impact-unreachable", "btn-impact-more-<n>".
 
+use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
 use crate::model::review::impact::{
-    self, Action, HEADING, Item, LEAD, LEGEND_DRAWN, LEGEND_LISTED, NO_ANCHOR, NO_MODULE,
-    OPEN_IN_SYSTEM, READING, Section, Shown, Sign, TOUCHED,
+    self, Action, CHECKING, HEADING, Item, LEAD, LEGEND_DRAWN, LEGEND_LISTED, NO_ANCHOR, NO_MODULE,
+    READING, Reach, Section, Shown, Sign, TOUCHED,
 };
+use crate::model::system::Action as MapAction;
 use crate::model::system::marks::Marks;
+use crate::model::system::scene::Scene;
 use crate::model::{Form, Hue, Id};
 use crate::screens::system::{Host, canvas, tree};
 use crate::state::AppState;
@@ -33,36 +38,48 @@ struct At {
     project: Id,
 }
 
+/// What the list shows: it does not change with the map's level or pick, so selecting keeps
+/// the keyboard's place in it.
+type Listing = Option<(Id, Vec<Item>, Vec<Section>)>;
+
 /// The Impact view of task `id`.
 pub(crate) fn impact(app: AppState, id: Id) -> AnyElement {
-    let target = {
-        let id = id.clone();
-        computed(move || vec![impact::request(id.as_str())])
-    };
-    super::keep::keep_details(app, target, None);
     let task = {
         let id = id.clone();
         computed(move || id.clone())
     };
-    // The pick is read by each row and by the map, so selecting does not rebuild the list
-    // (and lose the keyboard's place in it).
+    // This task's map level; another task's state is let go on its first action here.
+    let trail = computed(move || {
+        app.impact.with(|state| {
+            if state.task.as_deref() == Some(task.get().as_str()) {
+                state.map.trail.clone()
+            } else {
+                Vec::new()
+            }
+        })
+    });
     let shown = computed(move || {
         let more = app.impact.with(|state| state.more.clone());
+        let trail = trail.get();
         app.feed
-            .with(|feed| impact::shown(feed, id.as_str(), &more))
+            .with(|feed| impact::shown(feed, task.get().as_str(), &trail, &more))
     });
+    let ready = move || match shown.get() {
+        Shown::Ready(impact) => Some(impact),
+        _ => None,
+    };
+    let listing: Memo<Listing> = computed(move || {
+        ready().map(|impact| (Id::from(impact.project), impact.touched, impact.sections))
+    });
+    let head = computed(move || ready().map(|impact| (impact.summary, impact.notices)));
+    let level = computed(move || ready().map(|impact| (impact.crumbs, impact.map_said)));
+    let scene: Memo<Option<Scene>> = computed(move || ready().and_then(|impact| impact.scene));
+    let marks = computed(move || ready().map(|impact| impact.marks).unwrap_or_default());
+    keep(app, task, trail, listing);
     let said = computed(move || match shown.get() {
         Shown::Loading => Some(READING.to_owned()),
         Shown::Said(words) => Some(words),
         Shown::Ready(_) => None,
-    });
-    let scene = computed(move || match shown.get() {
-        Shown::Ready(impact) => Some(impact.scene),
-        _ => None,
-    });
-    let marks = computed(move || match shown.get() {
-        Shown::Ready(impact) => impact.marks,
-        _ => Marks::new(),
     });
     let waiting = computed(move || said.get().is_some());
     let body = dynamic(move || {
@@ -71,17 +88,57 @@ pub(crate) fn impact(app: AppState, id: Id) -> AnyElement {
                 dynamic(move || quiet(app, said.get().unwrap_or_default())).into_element()
             });
         }
-        untracked(|| drawn(app, task, shown, scene, marks))
+        untracked(|| drawn(app, task, head, level, scene, marks, listing))
     });
     view().test_id("task-impact").child(body).into_element()
+}
+
+/// Keeps the impact read at the project level and at the level shown, and, for the selected
+/// item, Activity › System's maps along its target, which say whether that page has it.
+fn keep(
+    app: AppState,
+    task: Memo<Id>,
+    trail: Memo<Vec<corral_types::SystemAt>>,
+    listing: Memo<Listing>,
+) {
+    let targets = computed(move || {
+        let task = task.get();
+        let trail = trail.get();
+        let mut targets: Vec<DetailRef> = vec![impact::request(task.as_str(), None)];
+        if let Some(at) = trail.last() {
+            targets.push(impact::request(task.as_str(), Some(at)));
+        }
+        let item = app.impact.with(|state| {
+            (state.task.as_deref() == Some(task.as_str()))
+                .then(|| state.item.clone())
+                .flatten()
+        });
+        listing.with(|listing| {
+            let Some((project, touched, sections)) = listing else {
+                return;
+            };
+            let selected = touched
+                .iter()
+                .chain(sections.iter().flat_map(|s| s.items.iter()))
+                .find(|i| Some(&i.key) == item.as_ref())
+                .and_then(|i| i.target.as_ref());
+            if let Some(target) = selected {
+                targets.extend(impact::wanted(project.as_str(), target));
+            }
+        });
+        targets
+    });
+    super::keep::keep_details(app, targets, None);
 }
 
 fn drawn(
     app: AppState,
     task: Memo<Id>,
-    shown: Memo<Shown>,
-    scene: Memo<Option<crate::model::system::scene::Scene>>,
+    head: Memo<Option<(String, Vec<String>)>>,
+    level: Memo<Option<(Vec<String>, Option<String>)>>,
+    scene: Memo<Option<Scene>>,
     marks: Memo<Marks>,
+    listing: Memo<Listing>,
 ) -> AnyElement {
     let form = app.form;
     let host = Host::Impact(marks, task);
@@ -90,35 +147,57 @@ fn drawn(
         Form::Phone | Form::Terminal => tree::tree(app, scene, host),
     };
     let head = dynamic(move || {
-        let Shown::Ready(impact) = shown.get() else {
-            return None;
-        };
+        let (summary, notices) = head.get()?;
         Some(untracked(|| {
             view()
                 .gap(px(if form == Form::Terminal { 0.0 } else { 6.0 }))
-                .child(plain(app, impact.summary.clone()))
+                .child(plain(app, summary))
                 .children(
-                    impact
-                        .notices
-                        .iter()
-                        .map(|n| hued(app, n.clone(), Hue::Held).into_element()),
+                    notices
+                        .into_iter()
+                        .map(|n| hued(app, n, Hue::Held).into_element()),
                 )
                 .into_element()
         }))
     });
+    let crumbs = dynamic(move || {
+        let (crumbs, said) = level.get()?;
+        Some(untracked(|| {
+            let last = crumbs.len().saturating_sub(1);
+            view()
+                .child(
+                    view()
+                        .flex_row()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(if form == Form::Terminal { 0.0 } else { 4.0 }))
+                        .children(crumbs.into_iter().enumerate().map(|(n, crumb)| {
+                            let kind = if n == last {
+                                ButtonKind::Ghost
+                            } else {
+                                ButtonKind::Quiet
+                            };
+                            button(app, crumb, kind, format!("impact-crumb-{n}"), move || {
+                                let task = untracked(|| task.get());
+                                app.impact_act(task.as_str(), Action::Map(MapAction::To(n)));
+                            })
+                        })),
+                )
+                .children(said.map(|said| quiet(app, said)))
+                .into_element()
+        }))
+    });
     let list = dynamic(move || {
-        let Shown::Ready(impact) = shown.get() else {
-            return None;
-        };
+        let (project, touched, sections) = listing.get()?;
         let at = At {
             task: untracked(|| task.get()),
-            project: Id::from(impact.project.clone()),
+            project,
         };
         Some(untracked(|| {
-            let touched = if impact.touched.is_empty() {
+            let touched = if touched.is_empty() {
                 quiet(app, NO_MODULE)
             } else {
-                items(app, &at, impact.touched.clone())
+                items(app, &at, touched)
             };
             view()
                 .child(block(app, TOUCHED, None, touched))
@@ -129,8 +208,7 @@ fn drawn(
                     view()
                         .child(quiet(app, LEAD))
                         .children(
-                            impact
-                                .sections
+                            sections
                                 .into_iter()
                                 .map(|section| category(app, &at, section)),
                         )
@@ -142,6 +220,7 @@ fn drawn(
     view()
         .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
         .child(head)
+        .child(crumbs)
         .child(map)
         .child(quiet(
             app,
@@ -221,7 +300,8 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
         })
     };
     let label = format!("{} {} {}", item.sign.word(), item.main, item.right);
-    let (key, node) = (item.key.clone(), item.node.clone());
+    let (key, target) = (item.key.clone(), item.target.clone());
+    let press_task = task.clone();
     let line = list_row(
         app,
         label,
@@ -229,10 +309,10 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
         move || selected.get(),
         move || {
             app.impact_act(
-                task.as_str(),
+                press_task.as_str(),
                 Action::Item {
                     key: key.clone(),
-                    node: node.clone(),
+                    target: target.clone(),
                 },
             )
         },
@@ -261,8 +341,8 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
         if !selected.get() {
             return None;
         }
-        let (project, node) = (project.clone(), item.node.clone());
         let (sub, anchor) = (item.sub.clone(), item.anchor.clone());
+        let to_system = to_system(app, project.clone(), item.target.clone());
         Some(untracked(|| {
             view()
                 .when(form == Form::Terminal, |v| v.pl(term::cells(3.0)))
@@ -270,16 +350,60 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
                     v.pl(px(28.0)).py(px(4.0)).gap(px(4.0)).items_start()
                 })
                 .children(sub.map(|sub| quiet(app, sub)))
-                .child(plain(app, anchor.unwrap_or_else(|| NO_ANCHOR.into())))
-                .child(button(
+                .child(plain(
                     app,
-                    OPEN_IN_SYSTEM,
-                    ButtonKind::Ghost,
-                    "btn-open-in-system",
-                    move || app.open_in_system(project.clone(), node.clone()),
+                    anchor.map_or_else(|| NO_ANCHOR.to_owned(), |a| a.words()),
                 ))
+                .child(to_system)
                 .into_element()
         }))
     });
     view().child(line).child(detail).into_element()
+}
+
+/// "Open in System" where Activity › System's own map has the item's node (or the level that
+/// holds it, said so), and why not where it has none of it.
+fn to_system(app: AppState, project: Id, target: Option<impact::Target>) -> AnyElement {
+    let reach = {
+        let project = project.clone();
+        computed(move || {
+            let target = target.as_ref()?;
+            Some(
+                app.feed
+                    .with(|feed| impact::reach(feed, project.as_str(), target)),
+            )
+        })
+    };
+    dynamic(move || {
+        let reach = reach.get();
+        let project = project.clone();
+        untracked(move || match reach {
+            Some(Reach::Open {
+                trail,
+                node,
+                label,
+                note,
+            }) => view()
+                .gap(px(4.0))
+                .children(note.map(|note| quiet(app, note)))
+                .child(button(
+                    app,
+                    label,
+                    ButtonKind::Ghost,
+                    "btn-open-in-system",
+                    move || app.open_in_system(project.clone(), trail.clone(), node.clone()),
+                ))
+                .into_element(),
+            Some(Reach::Checking) => quiet(app, CHECKING),
+            Some(Reach::Unavailable(why)) => view()
+                .test_id("impact-unreachable")
+                .child(quiet(app, why))
+                .into_element(),
+            None => view()
+                .test_id("impact-unreachable")
+                .child(quiet(app, impact::NO_NODE))
+                .into_element(),
+        })
+    })
+    .into_element()
 }

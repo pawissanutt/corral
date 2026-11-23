@@ -286,7 +286,8 @@ pub(crate) fn review(
     before: &TreeFacts,
     after: &TreeFacts,
     enriched_head: Option<&TreeFacts>,
-) -> (Vec<SystemCategorySummary>, Vec<SystemReviewRow>) {
+    at: Option<&SystemAt>,
+) -> anyhow::Result<(Vec<SystemCategorySummary>, Vec<SystemReviewRow>)> {
     use SystemImpactCategory as Category;
     use SystemReviewRow as Row;
 
@@ -388,6 +389,9 @@ pub(crate) fn review(
                 .filter(|dep| !changed.contains(dep.path.as_str()))
                 .map(|dep| Row::Dependent {
                     dependent: dep.clone(),
+                    module: head_files
+                        .get(dep.path.as_str())
+                        .map(|file| file.module.clone()),
                 }),
         );
     }
@@ -406,14 +410,26 @@ pub(crate) fn review(
     review.rows.extend(unread);
     review.finish_category(Category::NotRead, true);
 
-    // The Review map is structural, at the submitted head. History overlays
-    // are not collected for Review and its map rows are not impact categories.
-    review.rows.extend(
-        project_rows(enriched_head.unwrap_or(after), None)
-            .into_iter()
-            .map(|row| Row::Map { row }),
-    );
-    (review.categories, review.rows)
+    // The Review map is structural, at the submitted head and the level asked for. History
+    // overlays are not collected for Review and its map rows are not impact categories.
+    let tree = enriched_head.unwrap_or(after);
+    let map = match at {
+        None => project_rows(tree, None),
+        Some(at) => map_rows(tree, &no_activity(), 0, Some(at))?,
+    };
+    review.rows.extend(map.into_iter().map(|row| Row::Map { row }));
+    Ok((review.categories, review.rows))
+}
+
+/// A review's map carries no history: its activity windows stay empty.
+fn no_activity() -> Activity {
+    Activity {
+        days_7: Vec::new(),
+        days_30: Vec::new(),
+        commits: Vec::new(),
+        shallow: false,
+        skipped_non_utf8_paths: 0,
+    }
 }
 
 struct ReviewRows {

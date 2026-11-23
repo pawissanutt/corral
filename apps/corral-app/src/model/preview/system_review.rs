@@ -3,7 +3,7 @@
 //! changed file touches its package and that package's first module; where the project's
 //! extension answered (`corral`), each changed source file changes a definition and one
 //! definition in the next untouched package depends on it. `site`'s extension failed, so its
-//! extension categories are not provided.
+//! extension categories are not provided. The head's map at a level is the sample's own.
 
 use std::collections::BTreeMap;
 
@@ -22,6 +22,7 @@ pub(super) fn review(
     base: &str,
     head: &str,
     files: &[(String, u64, u64)],
+    at: Option<&SystemAt>,
 ) -> Result<SystemReview, String> {
     let map = detail(project, None)?;
     let containers: Vec<String> = map
@@ -120,6 +121,7 @@ pub(super) fn review(
                             line: 12,
                             of: name,
                         },
+                        module: Some(module_of(other)),
                     },
                 ));
             }
@@ -175,7 +177,11 @@ pub(super) fn review(
         });
         out.extend(listed);
     }
-    out.extend(map.rows.into_iter().map(|row| Row::Map { row }));
+    let level = match at {
+        None => map.rows,
+        Some(_) => detail(project, at)?.rows,
+    };
+    out.extend(level.into_iter().map(|row| Row::Map { row }));
     Ok(SystemReview {
         task: task.into(),
         project: project.into(),

@@ -51,6 +51,10 @@ pub enum DetailRef {
     /// `system.v1`: impact of the latest submitted worker change.
     SystemReview {
         task: String,
+        /// The head's map level to serve with the impact; the project level when absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Option<crate::schema_types::SystemAt>")]
+        at: Option<SystemAt>,
     },
     Session {
         id: String,

@@ -82,9 +82,10 @@ pub fn share(scene: &Scene, card: &Card, overlay: Overlay, window: Window) -> f3
 /// The level's rows. Under `marks` (a task's Impact) each node's figure is what the change did
 /// to it, its bar its share of the most churned, and an unmarked node is dimmed.
 pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
-    let churn = |node: &Node| match marks.and_then(|marks| marks.get(node)) {
-        Some(marks::Mark::Touched { added, removed }) => added + removed,
-        _ => 0,
+    let churn = |node: &Node| {
+        marks
+            .and_then(|marks| marks::of(marks, node))
+            .map_or(0, |mark| mark.churn())
     };
     let most = scene
         .cards
@@ -151,9 +152,8 @@ pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
                 }
                 .clamp(0.0, 1.0),
                 picked: picked_node == Some(&card.node),
-                // The task's map is its head's project level, with no level to open.
-                opens: marks.is_none() && card.node.opens().is_some(),
-                dim: marks.is_some_and(|marks| !marks.contains_key(&card.node)),
+                opens: card.node.opens().is_some(),
+                dim: marks.is_some_and(|marks| marks::of(marks, &card.node).is_none()),
             }));
             if picked {
                 out.extend(edges(scene, &card.node, picked_edge));
