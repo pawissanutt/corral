@@ -3,12 +3,15 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type * as Sdk from "@earendil-works/pi-coding-agent";
 import { engineRun, gitRun, checked, json, type Run } from "../src/build/corral-cli.ts";
 import { createExit, type ExitProgressRecord } from "../src/build/exit.ts";
+import { createBuildControls } from "../src/build/host-controls.ts";
 import { createJournal } from "../src/build/record.ts";
 import { summarize } from "../src/build/git.ts";
 import type { BuildGateResult } from "../src/build/record-types.ts";
 import { verifyBuild } from "../src/build/gate.ts";
+import { saveSession, sessionDir } from "../src/build/session-store.ts";
 import { prepareWorktree } from "../src/build/worktree.ts";
 import { within } from "./support/wait.ts";
 import type { BuildContext, ChildSnapshot, ExitPolicy, ExitRecord, FleetSnapshot } from "../src/build/types.ts";
@@ -227,6 +230,20 @@ describe("build exits", () => {
       expect(f.control.options().find(o => o.choice === "land")?.needsReason).toBeUndefined();
     } finally { f.close(); }
   });
+  test("an approval leaves minor suggestions open without waiving a blocker", async () => {
+    const f = fixture({ policy: "review" });
+    try {
+      f.journal.review({ ...child("review-1", "review"), verdict: {
+        verdict: "approve", summary: "Reviewed", head, at: 1000,
+        findings: [{ severity: "minor", text: "Rename the helper." }, { severity: "blocker", text: "Validate the input." }],
+      } }, head, base);
+      await f.offer();
+      expect(f.control.options().find(option => option.choice === "land")?.needsReason).toBeDefined();
+      f.journal.resolve(1, "F2", { state: "fixed", commit: head });
+      expect(f.control.options().find(option => option.choice === "land")?.needsReason).toBeUndefined();
+      expect(f.journal.latestReview()?.findings[0]?.resolution).toBeUndefined();
+    } finally { f.close(); }
+  });
   test("review override is explicit and recorded for the offered, gated head", async () => {
     const f = fixture({ policy: "review" });
     try {
@@ -312,6 +329,55 @@ describe("build exits", () => {
     expect(summary.slices).toEqual([{ id: "child-1", state: "done", seconds: 3, cost: 0.25 }]);
     expect(summary.outside).toEqual([{ path: "docs/usage.md", by: ["child-1"] }]);
   });
+});
+
+test("the repair limit survives resume and all reviewer launch calls until the owner chooses Iterate", async () => {
+  const f = fixture({ policy: "review" });
+  const context = { ...f.ctx, dir: sessionDir(f.ctx.dir, f.ctx.session.id) };
+  saveSession(f.ctx.dir, context.session);
+  writeFileSync(join(f.ctx.dir, ".corral-next", "corral.toml"), '[projects.app]\nbase = "main"\n');
+  const options = { context, git: f.run, fleet: () => fleet };
+  const journal = createJournal(options);
+  const prior = "c".repeat(40);
+  for (const round of [1, 2, 3]) journal.review({ ...child(`review-${round}`, "review"), verdict: {
+    verdict: "changes", summary: "Input still fails", head: prior, at: 1000,
+    findings: [{ severity: "major", text: "Handle empty input." }],
+  } }, prior, base);
+  const starts: string[] = [];
+  const controls = createBuildControls({
+    context, git: f.run, sdk: {} as typeof Sdk, agentDir: f.ctx.dir, localTools: () => [],
+    models: () => ({ getModels: () => [] }) as unknown as Sdk.ModelRuntime, approved: () => ["approved"],
+    parent: { provider: "approved", model: "parent", effort: "high" }, changed() {}, deliverToParent() {},
+    runner: { run(spec, _model, hooks) {
+      starts.push(spec.id);
+      hooks.reviewVerdict({ verdict: "approve", head, summary: "Ready", findings: [{ severity: "minor", text: "Optional rename." }] });
+      return { done: Promise.resolve({ report: "Ready" }), async steer() {}, async setModel() { return "applied"; },
+        usage: () => ({ input: 0, output: 0, turns: 0 }) };
+    } },
+  });
+  const tool = (name: string, params: unknown = {}) => controls.tools.find(tool => tool.name === name)!
+    .execute(name, params, undefined, undefined, {} as never);
+  try {
+    controls.noteOwnerInput("Please keep working on the parser.");
+    await tool("build_resolve", { round: 3, finding: "F1", state: "fixed", commit: head });
+    for (const response of [await tool("build_review"), await tool("task", { agents: [
+      { id: "another-review", kind: "review", title: "Review", brief: "Review parser", owns: [] },
+    ] })]) {
+      expect(response).toMatchObject({ isError: true });
+      expect(JSON.stringify(response.content)).toContain("Iterate");
+    }
+    const paused = await tool("build_finish", { title: "Parser repair" });
+    expect(JSON.stringify(paused.details)).toContain("Iterate");
+    expect(starts).toEqual([]);
+
+    expect((await controls.exit.choose("iterate")).phase).toBe("none");
+    expect(createJournal(options).reviewPause()).toBeUndefined();
+    expect(await tool("build_review")).toMatchObject({ details: { round: 4, review: { verdict: "approve" } } });
+    const finish = await tool("build_finish", { title: "Parser repair" });
+    expect(finish.details).toMatchObject({ nextAction: undefined });
+    expect(typeof controls.exit.options().find(option => option.choice === "land")?.authorization).toBe("string");
+    expect(starts).toEqual(["review-4"]);
+  } finally { await controls.close(); f.close(); }
 });
 
 test("bare preparation respects the primary checkout; Land never rebases or runs a gate", async () => {

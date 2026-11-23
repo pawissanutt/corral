@@ -115,10 +115,13 @@ Report what changed, what was verified, what was not verified and any remaining 
 After committing, use `build_verify` to run the project's checks. Inspect the failing
 command and its output and fix the cause before offering completion.
 <!-- /corral-only -->
-Use build_review for an independent read-only review in this session. Resolve each finding
+Use build_review for an independent read-only review. On approval, report minor
+suggestions to the owner; do not change the approved candidate merely to clear them.
+Resolve blocking findings
 <!-- corral-only -->
-with build_resolve: fixed may name its commit; declined requires a reason. Commit fixes,
-verify again and request a new review when the candidate changes.
+with build_resolve: fixed may name its commit; declined requires a reason. Commit fixes
+and use build_finish to collect any missing evidence. If repair rounds repeatedly
+return changes, stop and present the unresolved findings for an owner decision.
 <!-- /corral-only -->
 <!-- bare-only -->
 with build_resolve: fixed may name its commit; declined requires a reason. Commit fixes

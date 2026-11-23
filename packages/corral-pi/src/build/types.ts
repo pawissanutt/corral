@@ -405,6 +405,9 @@ export interface LandProgress {
 export interface PreparedLanding {
   readonly head: string;
   readonly base: string;
+  readonly branch: string;
+  /** Identity of the source branch, integration target, and live review/check policy. */
+  readonly reviewScope?: string;
 }
 
 export type LandCandidateState = "preparing" | "ready" | "conflicts" | "needs_review" | "needs_gate" | "gate_failed" | "base_moved" | "failed";

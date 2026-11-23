@@ -1,10 +1,10 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checked, type Run } from "./corral-cli.ts";
 import { summarize } from "./git.ts";
 import type { BuildContext, BuildSessionRecord, ChildSnapshot, FleetSnapshot } from "./types.ts";
-import type { BuildGateResult, BuildRecord, RecordDecision, RecordReview, RecordUsage } from "./record-types.ts";
+import type { BuildGateResult, BuildRecord, RecordDecision, RecordReview, RecordUsage, ReviewEvidence } from "./record-types.ts";
 
 interface JournalData {
   version: 1;
@@ -16,6 +16,8 @@ interface JournalData {
   ownerSteers: Record<string, number>;
   verification: BuildGateResult[];
   reviews: RecordReview[];
+  /** Number of reviews already recorded when the owner last chose Iterate. */
+  reviewCheckpoint?: number;
   decisions: RecordDecision[];
   timeline: BuildRecord["timeline"][number][];
   outcome: BuildRecord["outcome"];
@@ -27,6 +29,7 @@ interface JournalData {
   updated: string;
 }
 interface TranscriptUsage { readonly input?: number; readonly output?: number; readonly cost?: { readonly total?: number } }
+interface ReviewContext { prompts: string[]; slices: string[]; fingerprint: string }
 export interface BuildJournal {
   record(): BuildRecord;
   liveRecord(): Promise<BuildRecord>;
@@ -34,14 +37,16 @@ export interface BuildJournal {
   capture(): void;
   setSessionTitle(name: string | undefined): void;
   noteOwnerInput(text: string): void;
-  prompts(): { at: string; text: string }[];
   finish(title: string, summary?: string): void;
   gate(result: BuildGateResult): void;
   latestGate(): BuildGateResult | undefined;
   /** The latest matching receipt, if it passed on exactly this head and input fingerprint. */
   passedGate(head: string, inputFingerprint: string): BuildGateResult | undefined;
   latestReview(): RecordReview | undefined;
-  review(child: ChildSnapshot, head: string, base?: string): RecordReview;
+  reviewPause(): string | undefined;
+  reviewContext(): ReviewContext;
+  review(child: ChildSnapshot, head: string, base?: string, evidence?: Omit<ReviewEvidence, "replay">): RecordReview;
+  carryReview(review: RecordReview, replay: NonNullable<ReviewEvidence["replay"]>): boolean;
   resolve(round: number, finding: string, resolution: { state: "fixed" | "declined"; commit?: string; reason?: string }): void;
   decision(kind: RecordDecision["kind"], text: string, answer?: string): void;
   outcome(value: BuildRecord["outcome"]): void;
@@ -49,6 +54,7 @@ export interface BuildJournal {
 }
 const iso = (at: number) => new Date(at).toISOString();
 const TITLE_MAX = 120;
+const REVIEW_LIMIT = 3;
 
 /** Single-line display text, bounded by Unicode code points without copying a long name. */
 function displayTitle(value: string | undefined): string | undefined {
@@ -104,7 +110,9 @@ export function createJournal(options: {
     } finally { rmSync(temporary, { force: true }); }
   }
   let savedTitles: string | undefined;
+  let cachedReviewContext: ReviewContext | undefined;
   function persist() {
+    cachedReviewContext = undefined;
     data.updated = iso(now());
     mkdirSync(context.dir, { recursive: true, mode: 0o700 });
     writePrivateJson(path, JSON.stringify(data));
@@ -244,7 +252,6 @@ export function createJournal(options: {
       if (!data.title?.trim() && !session().title?.trim()) data.title = data.intent.map(entry => requestTitle(entry.text)).find(Boolean);
       persist();
     },
-    prompts: () => data.intent.map(prompt => ({ ...prompt })),
     finish(title: string, summary?: string) {
       if (!title.trim() || title.length > 120) throw new Error("A real build title of 1 to 120 characters is required.");
       data.title = title; data.summary = summary; persist();
@@ -257,13 +264,39 @@ export function createJournal(options: {
       return latest?.result === "pass" ? latest : undefined;
     },
     latestReview: () => data.reviews.at(-1),
-    review(child: ChildSnapshot, head: string, base?: string): RecordReview {
+    reviewPause() {
+      const first = data.reviews.length - REVIEW_LIMIT;
+      if (first < (data.reviewCheckpoint ?? 0)) return;
+      for (let i = first; i < data.reviews.length; i++) {
+        const review = data.reviews[i]!;
+        // Dispositions entered by the builder do not change whether the reviewer requested repair.
+        if (review.verdict === "approve" && review.findings.every(finding => finding.severity === "minor")) return;
+      }
+      return `Review is paused after ${REVIEW_LIMIT} consecutive rounds without an approval free of blocking findings. Present the unresolved issues and options to the owner; only their Iterate exit choice renews the review budget. Use build_finish to offer that decision.`;
+    },
+    reviewContext() {
+      if (cachedReviewContext) return cachedReviewContext;
+      const prompts = data.intent.map(prompt => `[${prompt.at}]\n${prompt.text}`);
+      const slices = data.children.filter(child => child.kind !== "review").map(child =>
+        `${child.id}: ${child.title}\nOwned paths: ${child.owns.join(", ") || "none"}\nReport:\n${child.report?.slice(0, 8192) ?? "No report."}`);
+      const fingerprint = createHash("sha256").update(JSON.stringify([prompts, slices])).digest("hex");
+      return cachedReviewContext = { prompts, slices, fingerprint };
+    },
+    review(child, head, base, evidence) {
       if (!child.verdict) throw new Error(`Reviewer ${child.id} ended without a verdict${child.error ? `: ${child.error}` : "."}`);
       const verdict = child.verdict;
       const round: RecordReview = { round: data.reviews.length + 1, reviewer: child.id, model: child.model, head: verdict.head ?? head, ...(base ? { base } : {}),
+        ...(evidence ? { evidence } : {}),
         verdict: verdict.verdict, at: iso(verdict.at), summary: verdict.summary,
         findings: verdict.findings.map((finding, index) => ({ ...finding, id: `F${index + 1}` })) };
       data.reviews.push(round); data.timeline.push({ at: round.at, phase: "review", detail: `${child.id}: ${round.verdict}` }); captureFleet(); persist(); return round;
+    },
+    carryReview(review, replay) {
+      if (data.reviews.at(-1) !== review || review.verdict !== "approve" || !review.evidence) return false;
+      data.reviews[data.reviews.length - 1] = { ...review, evidence: { ...review.evidence, replay } };
+      data.timeline.push({ at: iso(now()), phase: "review", detail: `Carried approval from review round ${review.round} to ${replay.base}..${replay.head}.` });
+      persist();
+      return true;
     },
     resolve(round: number, finding: string, resolution: { state: "fixed" | "declined"; commit?: string; reason?: string }) {
       if (resolution.state === "declined" && !resolution.reason?.trim()) throw new Error("Declining a finding requires a reason.");
@@ -271,7 +304,11 @@ export function createJournal(options: {
       if (!review?.findings.some(value => value.id === finding)) throw new Error(`Unknown finding ${finding} in review round ${round}.`);
       data.reviews = data.reviews.map(value => value !== review ? value : { ...value, findings: value.findings.map(value => value.id === finding ? { ...value, resolution } : value) }); persist();
     },
-    decision(kind: RecordDecision["kind"], text: string, answer?: string) { data.decisions.push({ at: iso(now()), kind, text, ...(answer === undefined ? {} : { answer }) }); persist(); },
+    decision(kind: RecordDecision["kind"], text: string, answer?: string) {
+      data.decisions.push({ at: iso(now()), kind, text, ...(answer === undefined ? {} : { answer }) });
+      if (kind === "exit" && text === "iterate") data.reviewCheckpoint = data.reviews.length;
+      persist();
+    },
     outcome(value: BuildRecord["outcome"]) { data.outcome = value; persist(); },
     timeline(phase: BuildRecord["timeline"][number]["phase"], detail: string) { data.timeline.push({ at: iso(now()), phase, detail }); persist(); },
   };

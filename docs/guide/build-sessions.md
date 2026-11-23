@@ -138,6 +138,27 @@ identify the rebase as its own. Otherwise it leaves the operation in place; insp
 `git status` in the build worktree before continuing. A failing
 gate reports its command and log. Repair the candidate before offering it for Land.
 
+A reviewer who finishes on the captured base and head keeps that verdict in the
+build record even if the integration branch moves during review. Finish can carry
+approval through a clean replay only when the base advanced, the reviewed patch
+is identical, and the source, target, review inputs and gate policy still match.
+By default the old and new base trees must be identical.
+
+An owner can opt specific prose files into this exception in the workspace's
+`.corral-next/pi.toml`. Declare only files that are not requirements, instructions,
+build inputs or otherwise relevant to reviewing changes in this project:
+
+```toml
+[build.review_neutral_docs]
+app = ["docs/release-notes.md"] # app is the project name
+```
+
+Only modifications to existing regular Markdown files at those exact lowercase
+paths under `docs/` are allowed; agent and instruction files cannot be listed.
+Adds, deletes, renames, mode changes and edits to paths in the reviewed
+patch still require fresh review. Carrying approval does not carry a passing gate
+or an earlier Land choice.
+
 The final choice covers a specific base and head. A previously passing gate on the
 same head with the same commands and configured gate environment can be reused. A
 receipt from before the host recorded those inputs does not count. Under review policy an owner

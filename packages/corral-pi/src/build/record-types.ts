@@ -53,6 +53,14 @@ export interface RecordFinding {
   readonly resolution?: { readonly state: "fixed" | "declined" | "open"; readonly commit?: string; readonly reason?: string };
 }
 
+export interface ReviewEvidence {
+  /** Null for an advisory review that did not prepare a landing candidate. */
+  readonly scope: string | null;
+  readonly context: string;
+  /** Host-certified replay of the original pair, not a separate reviewer verdict. */
+  readonly replay?: { readonly base: string; readonly head: string };
+}
+
 export interface RecordReview {
   /** 1-based. */
   readonly round: number;
@@ -63,6 +71,7 @@ export interface RecordReview {
   readonly base?: string;
   /** The commit reviewed. */
   readonly head: string;
+  readonly evidence?: ReviewEvidence;
   readonly verdict: "approve" | "changes";
   readonly at: string;
   readonly summary?: string;

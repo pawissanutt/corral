@@ -494,6 +494,15 @@ The latest result card shows recorded gate attempts and review rounds. For a pre
 
 `build_verify` is a tool row such as `✓ gate full · passed`, with its attempt on the right; failure shows the command and log, and a skipped tier says `skipped · no gate commands`. `build_review` shows the verdict, finding counts and round; expanding it reveals the summary and findings.
 
+An approving review can include minor suggestions. They remain in the record without
+requiring another edit before Land. A verdict names what the reviewer inspected; it is
+not permission to land a different commit. When the integration branch advances, the
+new candidate still needs its own passing gate and its own owner choice.
+
+After three consecutive reviews that require repairs, Finish stops starting reviewers.
+Inspect the outstanding findings. Choose **Iterate** to authorize another repair cycle,
+or **Keep** to retain the work without continuing. Retrying the tool is not an owner decision.
+
 **Changes.** Changes, the sidebar Files tab and the Changes count read the session worktree from the start, with no project choice; `since session` compares against the commit the session started from, so committed and uncommitted work by the parent and its agents both show. Header row 2 names another scope only after `o` chose one. While Changes reads the session worktree, the author chips above the file list read `all n` and each agent with its file count in its colour, the active one bold and underlined; **f** or a click on a chip filters the list. Each file row carries the dots of the agents that edited it. A file edited outside an agent's files reads `!` with a warning row `also edited by <ids>`; a file two agents edited reads `edited by a and b`. The diff header names the agents beside the path. Any other scope has no authors.
 
 **Sidebar and status bar.** Context lists the agents; Enter or a click on an asking agent docks its question. Files shows each file's agent dots and marks files edited outside an agent's files or by two agents with `!`. The status bar starts with `BUILD` and shows no binding, since a build session has no corral binding; its cost adds every agent's known cost to the parent's, with `+` when a cost is unknown.

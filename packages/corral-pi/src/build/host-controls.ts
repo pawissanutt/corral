@@ -12,7 +12,7 @@ import { loadSession, saveSession } from "./session-store.ts";
 import { boardPlanTool, createBuildEvidence, buildFinishTool } from "./tools.ts";
 import { createJournal, type BuildJournal } from "./record.ts";
 import type { BuildRecord } from "./record-types.ts";
-import { LIVE_CHILD_STATES, type BoardControl, type BoardPlan, type BuildContext, type BuildPanelState, type BuildUi, type FleetControl } from "./types.ts";
+import { LIVE_CHILD_STATES, type BoardControl, type BoardPlan, type BuildContext, type BuildPanelState, type BuildUi, type ChildSpec, type FleetControl } from "./types.ts";
 import { buildShellRefusal } from "../roles/build/guard.ts";
 
 export interface BuildControlsOptions extends Omit<FleetOptions, "models" | "approved" | "localTools" | "context"> {
@@ -90,9 +90,11 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
   const start = task.execute;
   const previousIds = new Set(buildJournal.record().slices.map(child => child.id));
   task.execute = async (...args) => {
-    const params = args[1] as { agents: { id: string }[] };
+    const params = args[1] as { agents: ChildSpec[] };
     const reused = params.agents.find(child => previousIds.has(child.id));
     if (reused) return { content: [{ type: "text", text: `Child id ${reused.id} belongs to this session's saved history. Choose a new id.` }], details: {}, isError: true };
+    const pause = params.agents.some(child => child.kind === "review") ? buildJournal.reviewPause() : undefined;
+    if (pause) return { content: [{ type: "text", text: pause }], details: {}, isError: true };
     return start(...args);
   };
   const evidence = createBuildEvidence({ context, git, fleet, journal: buildJournal, exit, changed: options.changed });

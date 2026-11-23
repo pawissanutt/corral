@@ -7,6 +7,7 @@ import { ancestor, baseMoved, CandidateMoved, checkDestination, checkSource, che
   PREPARATION_NEEDED, rebaseCandidate, short, sourceBranch, type LandingTarget } from "./prepare.ts";
 import type { BuildJournal } from "./record.ts";
 import type { BuildGateResult } from "./record-types.ts";
+import { proveReviewReplay, reviewCoversCandidate, reviewPolicy } from "./review-evidence.ts";
 import { LIVE_CHILD_STATES, type BuildContext, type BuildSummary, type ExitChoice, type ExitControl, type ExitOption, type ExitRecord,
   type ExitState, type FleetSnapshot, type LandCandidate, type PreparedLanding } from "./types.ts";
 
@@ -42,7 +43,6 @@ export interface BuildExitControl extends ExitControl {
 interface Pin {
   readonly candidate: PreparedLanding;
   readonly target: LandingTarget;
-  readonly branch: string;
   readonly source: string;
 }
 interface Offer { readonly pin: Pin; readonly authorization: string; shown: boolean }
@@ -115,9 +115,9 @@ export function createExit(options: {
   function reviewReason(pin: Pin): string | undefined {
     if (session.bare || context.settings.exitPolicy !== "review") return;
     const review = journal.latestReview();
-    if (!review || review.verdict !== "approve" || review.head !== pin.candidate.head || review.base !== pin.candidate.base
-        || review.findings.some(finding => !finding.resolution || finding.resolution.state === "open")) {
-      return "No approving review covers the prepared head with every finding resolved. Give a reason to land anyway.";
+    if (!review || review.verdict !== "approve" || !reviewCoversCandidate(review, pin.candidate, journal)
+        || review.findings.some(finding => finding.severity !== "minor" && (!finding.resolution || finding.resolution.state === "open"))) {
+      return "No approving review covers the prepared head with all blocking findings resolved. Give a reason to land anyway.";
     }
   }
   function gateReceipt(pin: Pin) {
@@ -180,9 +180,14 @@ export function createExit(options: {
     if (target.gateInputFingerprint !== current.gateInputFingerprint) throw new PreparationError(`The configured gate inputs changed. ${PREPARATION_NEEDED} Run build_verify for the new commands.`);
     const tip = await commit(git, target.ref, cwd);
     if (tip !== candidate.base) throw baseMoved(target, candidate.base, tip);
-    if (await sourceBranch(git, cwd) !== pin.branch) throw new PreparationError(`The build branch changed since preparation. ${PREPARATION_NEEDED}`);
+    if (await sourceBranch(git, cwd) !== candidate.branch) throw new PreparationError(`The build branch changed since preparation. ${PREPARATION_NEEDED}`);
     if (await commit(git, "HEAD", cwd) !== candidate.head) throw new CandidateMoved(`Build HEAD changed since preparation. ${PREPARATION_NEEDED}`);
     if (pin !== prepared) throw new PreparationError(`The prepared landing candidate is no longer current. ${PREPARATION_NEEDED}`);
+  }
+  function checkReviewPolicy(pin: Pin): void {
+    if (reviewPolicy(context, pin.target, pin.candidate.branch)?.scope !== pin.candidate.reviewScope) {
+      throw new PreparationError(`The configured review inputs changed. ${PREPARATION_NEEDED}`);
+    }
   }
   async function checkPin(pin: Pin): Promise<string | undefined> {
     checkAvailable();
@@ -191,6 +196,7 @@ export function createExit(options: {
     checkTargetConfig(context, target);
     const checkout = await checkDestination(git, context, target, candidate.base, candidate.head);
     await checkIdentity(pin);
+    checkReviewPolicy(pin);
     checkAvailable();
     return checkout;
   }
@@ -211,6 +217,7 @@ export function createExit(options: {
       summary = await readSummary();
       const target = await landingTarget(git, context);
       const branch = await sourceBranch(git, cwd);
+      const policy = reviewPolicy(context, target, branch);
       if (branch === target.ref) throw new Error(session.bare ? "The session is on its starting branch; use a separate branch." : "The session is on the project's base branch; use a separate branch.");
       if (!session.here && session.branch && branch !== `refs/heads/${session.branch}`) throw new Error(`Switch the build worktree back to ${session.branch} before preparing.`);
       if (!summary.base || !summary.commits) throw new Error("There are no commits beyond the session base.");
@@ -252,17 +259,33 @@ export function createExit(options: {
       summary = await readSummary(base);
       if (summary.head !== head) throw new Error("Build HEAD changed while reading the prepared candidate. Try preparing again.");
       const current = prepared;
-      const pin: Pin = current?.candidate.head === head && current.candidate.base === base && current.branch === branch
+      const pin: Pin = current?.candidate.head === head && current.candidate.base === base && current.candidate.branch === branch
+        && current.candidate.reviewScope === policy?.scope
         && current.target.ref === target.ref && current.target.configuredName === target.configuredName && current.target.gateInputFingerprint === target.gateInputFingerprint
-        ? current : { candidate: Object.freeze({ head, base }), target, branch, source };
+        ? current : { candidate: Object.freeze({ head, base, branch, reviewScope: policy?.scope }), target, source };
       if (offered?.pin !== pin) offered = undefined;
       if (tracker) trackedPin = pin;
       else if (trackedPin !== pin) { steps = undefined; trackedPin = undefined; }
       prepared = pin;
+      const review = rebasing && policy ? journal.latestReview() : undefined;
+      let carriedRound: number | undefined;
+      if (review?.evidence && policy && await proveReviewReplay(git, cwd, review, source, pin.candidate, policy.neutralDocs, journal.reviewContext().fingerprint)) {
+        // Certify the replay independently of the live tip, which can already
+        // have advanced again. Preparation still requires a strictly current pin.
+        await checkSource(git, context);
+        if (await sourceBranch(git, cwd) !== branch || await commit(git, "HEAD", cwd) !== head) {
+          throw new CandidateMoved(`The build branch changed during preparation. ${PREPARATION_NEEDED}`);
+        }
+        checkTargetConfig(context, target);
+        checkReviewPolicy(pin);
+        if (review.evidence.context === journal.reviewContext().fingerprint && journal.carryReview(review, { base, head })) {
+          carriedRound = review.round;
+        }
+      }
       await checkPin(pin);
       const detail = head === source
         ? `Prepared ${short(head)} on ${target.name} (${short(base)}).`
-        : `Rebased ${short(source)} to ${short(head)} on ${target.name} (${short(base)}). Evidence for the old head does not cover the new head.`;
+        : `Rebased ${short(source)} to ${short(head)} on ${target.name} (${short(base)}).${carriedRound ? ` Carried approval from review round ${carriedRound}.` : ""}`;
       candidateStatus = { ...pinStatus(pin), detail };
       if (head !== source) journal.timeline("land", detail);
       if (rebasing) update(previousPhase, detail, previousRecord);
@@ -365,7 +388,7 @@ export function createExit(options: {
         const checkout = await checkPin(pin);
         let receipt: ReturnType<typeof authorize>;
         try {
-          await fastForward(git, { source: cwd, checkout, ref: target.ref, ...candidate, async beforeWrite() {
+          await fastForward(git, { source: cwd, checkout, ref: target.ref, base: candidate.base, head: candidate.head, async beforeWrite() {
             // Destination locks and index staging can take time. Recheck the source
             // against the offer here without reacquiring any destination locks.
             await checkSource(git, context);
@@ -378,6 +401,7 @@ export function createExit(options: {
             }
             checkAvailable();
             checkTargetConfig(context, target);
+            checkReviewPolicy(pin);
             receipt = authorize();
           } });
         } catch (error) {

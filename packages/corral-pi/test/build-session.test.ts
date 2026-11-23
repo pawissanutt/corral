@@ -160,6 +160,54 @@ test("Finish prepares against current main, gates and reviews once before offeri
   } finally { await controls.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a completed review survives a neutral base move but the replay needs its own gate and owner choice", async () => {
+  const root = mkdtempSync(join(tmpdir(), "build-review-moved-")), repo = join(root, "repo");
+  mkdirSync(join(repo, "docs"), { recursive: true });
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main"); git("config", "user.name", "Test"); git("config", "user.email", "test@example.org");
+  const notes = "docs/release-notes.md";
+  writeFileSync(join(repo, notes), "Previous release\n");
+  git("add", notes); git("commit", "-qm", "start");
+  const base = git("rev-parse", "main");
+  const checkout = prepareWorktree(repo, "candidate", false);
+  writeFileSync(join(checkout.worktree, "result"), "candidate");
+  git("-C", checkout.worktree, "add", "result"); git("-C", checkout.worktree, "commit", "-qm", "work");
+  const head = git("-C", checkout.worktree, "rev-parse", "HEAD");
+  const { controls, context, runner } = fixture(root, undefined, true, false, undefined, { repo, checkout });
+  writeFileSync(join(root, ".corral-next", "pi.toml"), `[build.review_neutral_docs]\napp = ["${notes}"]\n`);
+  try {
+    const finish = controls.tools.find(tool => tool.name === "build_finish")!;
+    const first = finish.execute("first", { title: "Build result" }, undefined, undefined, {} as never);
+    const id = await within(runner.started.promise, 5000, "reviewer on original pair");
+    writeFileSync(join(repo, notes), "Latest release\n");
+    git("add", notes); git("commit", "-qm", "main advanced");
+    const moved = git("rev-parse", "main");
+    const reviewer = runner.children.get(id)!;
+    reviewer.hooks.reviewVerdict({ verdict: "approve", summary: "Ready", findings: [], head });
+    reviewer.finish();
+    expect((await within(first, 5000, "stale Finish")).details).toMatchObject({ candidate: null });
+    expect(controls.exit.options().find(row => row.choice === "land")?.authorization).toBeUndefined();
+    const saved = JSON.parse(readFileSync(join(context.dir, "journal.json"), "utf8"));
+    expect(saved.reviews).toMatchObject([{ base, head, verdict: "approve" }]);
+    expect(saved.verification).toMatchObject([{ head, result: "pass" }]);
+
+    const second = finish.execute("second", { title: "Build result" }, undefined, undefined, {} as never);
+    expect((await within(second, 5000, "Finish with carried approval")).isError).not.toBe(true);
+    const replayed = git("-C", checkout.worktree, "rev-parse", "HEAD");
+    expect(replayed).not.toBe(head);
+    expect(git("rev-parse", replayed + "^")).toBe(moved);
+    expect([...runner.children.keys()]).toEqual([id]);
+    expect(controls.ui.record().reviews).toMatchObject([{ base, head, evidence: { replay: { base: moved, head: replayed } } }]);
+    expect(controls.ui.record().verification).toMatchObject([{ head, result: "pass" }, { head: replayed, result: "pass" }]);
+    expect(git("rev-parse", "main")).toBe(moved);
+    const land = controls.exit.options().find(row => row.choice === "land")!;
+    expect(land.authorization).toBeDefined();
+    expect(land.needsReason).toBeUndefined();
+    expect((await controls.exit.choose("land", { authorization: land.authorization })).phase).toBe("landed");
+    expect(git("rev-parse", "main")).toBe(replayed);
+  } finally { await controls.close(); rmSync(root, { recursive: true, force: true }); }
+}, 12000);
+
 test.skipIf(process.platform !== "linux")("moving main during preparation stops the gate group and records no receipt", async () => {
   const root = mkdtempSync(join(tmpdir(), "build-prep-moved-")), repo = join(root, "repo");
   mkdirSync(repo);

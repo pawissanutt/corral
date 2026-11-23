@@ -48,10 +48,3 @@ export async function summarize(run: Run, session: BuildSessionRecord, fleet: Fl
     outside: [...outside].map(([path, by]) => ({ path, by: [...by] })),
   };
 }
-
-/** Stream large patches through the runner's digest mode instead of its bounded text buffer. */
-export async function patchDigest(run: Run, base: string, cwd: string): Promise<string> {
-  const result = await run(["diff", "--no-ext-diff", "--no-textconv", "--binary", `${base}..HEAD`, "--"], { cwd, stdoutDigest: "sha256" });
-  if (result.code !== 0) throw new Error(result.stderr.trim() || "Cannot read the candidate patch.");
-  return result.stdout;
-}
