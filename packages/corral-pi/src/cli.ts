@@ -1,3 +1,4 @@
+import { codeWorkerFlag, receiveCodeBootstrap, superviseCode, type CodeBootstrap } from "./host/code-handoff.ts";
 import { fileURLToPath } from "node:url";
 import pkg from "../package.json" with { type: "json" };
 import { checkRuntime } from "./host/runtime.ts";
@@ -23,13 +24,23 @@ Code explicitly trusts the parent agent to work directly in the current director
 
 export async function main(argv = process.argv.slice(2), compiled = fileURLToPath(import.meta.url).startsWith("/$bunfs/")): Promise<void> {
   if (!compiled) checkRuntime();
-  const [command, ...args] = argv;
+  let [command, ...args] = argv;
+  let codeBootstrap: CodeBootstrap | undefined;
+  if (command === codeWorkerFlag) {
+    codeBootstrap = await receiveCodeBootstrap();
+    command = "code";
+  }
   if (command === "--version") {
     process.stdout.write(`corral-pi pi ${pkg.dependencies["@earendil-works/pi-coding-agent"]} bun ${process.versions.bun}\n`);
     return;
   }
   if (!command || command === "--help" || args.includes("--help")) {
     process.stdout.write(usage);
+    return;
+  }
+  if (command === "code" && !codeBootstrap && process.stdin.isTTY && !args.some(arg => /^--headless(?:=|$)/.test(arg))) {
+    const executable = compiled ? [process.execPath] : [process.execPath, fileURLToPath(import.meta.url)];
+    process.exitCode = await superviseCode(executable, { cwd: process.cwd(), args });
     return;
   }
   restrictEnvironment(process.env);
@@ -45,7 +56,7 @@ export async function main(argv = process.argv.slice(2), compiled = fileURLToPat
     }
     case "login": (await import("./auth/login.ts")).runLogin(args); return;
     case "models": (await import("./auth/models.ts")).runModels(args); return;
-    case "code": case "build": await (await import("./host/build.ts")).buildCommand(args, assets, command); return;
+    case "code": case "build": await (await import("./host/build.ts")).buildCommand(args, assets, command, codeBootstrap); return;
     case "run": case "chat": {
       const { parseRunFlags } = await import("./host/config.ts");
       const config = parseRunFlags(command, args, assets);

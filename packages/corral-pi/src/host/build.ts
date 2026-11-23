@@ -8,6 +8,8 @@ import { prepareCodeCheckout, prepareWorktree } from "../build/worktree.ts";
 import type { BuildContext, BuildLaunchOptions, BuildRoute, BuildSessionRecord } from "../build/types.ts";
 import { RemovedModelOption, sessionSocket, workspaceSettings, type HostConfig } from "./config.ts";
 import { runHost } from "./main.ts";
+import { sendCodeLaunch, serializeCodeSeed, type CodeBootstrap, type CodeHandoffRequest, type CodeLaunch } from "./code-handoff.ts";
+import { headlessEnabled } from "./headless.ts";
 import { readSessionRecord } from "./session-record.ts";
 import { resolveStartupModel, StartupModelRequired } from "./startup-model.ts";
 
@@ -144,7 +146,8 @@ function quitLines(dataRoot: string, fallback: BuildSessionRecord): readonly str
   return [];
 }
 
-export async function buildCommand(argv: readonly string[], assets: string, command: BuildCommand = "build"): Promise<void> {
+export async function buildCommand(argv: readonly string[], assets: string, command: BuildCommand = "build",
+  bootstrap?: CodeBootstrap): Promise<void> {
   let resume: string | undefined;
   try {
     const prune = command === "build" ? parsePruneFlags(argv) : undefined;
@@ -235,14 +238,43 @@ export async function buildCommand(argv: readonly string[], assets: string, comm
     const legacyRoute = previousRoute?.provider === "anthropic" && previousRoute.connection === "anthropic-api" ? previousRoute : undefined;
     saveSession(launch.dataRoot, legacyRoute ? { ...record, route: legacyRoute } : record);
     const build: BuildContext = { session: record, settings: launch.settings, dir, corral: launch.corral ?? "" };
+    const prepareHandoff = bootstrap && record.trustedCode && !local.headless && !headlessEnabled(config.capabilities)
+      ? async (request: CodeHandoffRequest, activeModel: string, effort: string): Promise<CodeLaunch> => {
+        const args = ["--data-dir", launch.dataRoot];
+        if (request.kind === "resume") {
+          const target = loadSession(launch.dataRoot, request.id);
+          if (!target.trustedCode || target.cleaned || !target.sessionFile || !existsSync(target.sessionFile)) {
+            throw new Error("Choose a trusted Code session with a recorded conversation.");
+          }
+          if (target.id === record.id || await buildIsRunning(launch.dataRoot, target)) throw new Error("That Code session is already running.");
+          validateBuildResume(target);
+          args.push("--resume", target.id);
+          return { cwd: target.worktree, args };
+        }
+        if (config.corral && config.corral !== "corral-next") args.push("--corral", config.corral);
+        if (config.noFallback) args.push("--no-fallback");
+        args.push("--model", activeModel, "--effort", effort);
+        if (config.identity.project) args.push("--project", config.identity.project);
+        if (config.aws) args.push("--aws-profile", config.aws.profile, "--aws-region", config.aws.region);
+        if (!config.noFallback) for (const fallback of config.fallback ?? []) {
+          const selector = `${fallback.provider}/${fallback.model}`;
+          if (selector !== activeModel) args.push("--fallback", selector);
+        }
+        return { cwd: config.cwd, args, draft: request.draft,
+          seed: request.seed ? serializeCodeSeed(request.seed, request.draft) : undefined };
+      } : undefined;
+    let handingOff = false;
     // Pi ends an ordinary quit with process.exit(0); this prints after the terminal is restored.
     const session = record;
     process.on("exit", code => {
-      if (code !== 0) return;
+      if (code !== 0 || handingOff) return;
       const lines = quitLines(launch.dataRoot, session);
       if (lines.length) writeSync(process.stdout.fd, `${lines.join("\n")}\n`);
     });
-    await runHost(config, { build });
+    await runHost(config, { build, codeBootstrap: bootstrap, prepareHandoff, commitHandoff: async next => {
+      await sendCodeLaunch(next);
+      handingOff = true;
+    } });
   } catch (error) {
     if (error instanceof RemovedModelOption) throw error;
     process.stderr.write(`${refusalLines(error, resume, command).join("\n")}\n`);

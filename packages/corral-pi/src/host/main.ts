@@ -36,7 +36,12 @@ import { childProfileProviders, interactiveModels, providerTransport, sessionRou
 import { readBuildProfiles } from "../build/profiles.ts";
 import { resolveStartupModel } from "./startup-model.ts";
 
+import { writeCodeSeed, type CodeBootstrap, type CodeHandoff, type CodeHandoffRequest, type CodeLaunch } from "./code-handoff.ts";
+
 interface HostOverrides {
+  codeBootstrap?: CodeBootstrap;
+  prepareHandoff?: (request: CodeHandoffRequest, model: string, effort: string) => Promise<CodeLaunch>;
+  commitHandoff?: (next: CodeLaunch) => Promise<void>;
   build?: BuildContext;
 }
 
@@ -92,6 +97,9 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   if (!transcript && config.identity.role === "worker" && !config.freshSession) {
     const sibling = siblingTranscript(config.local.dir);
     if (sibling) transcript = inheritTranscript(sibling, config.sessionDir);
+  }
+  if (!transcript && overrides.codeBootstrap?.seed !== undefined) {
+    transcript = writeCodeSeed(config.sessionDir, config.cwd, sdk.CURRENT_SESSION_VERSION, overrides.codeBootstrap.seed);
   }
   const sessionManager = openSession(sdk, config.cwd, config.sessionDir, transcript);
   const launch = config.model === undefined || launchProvider === undefined ? undefined : {
@@ -190,6 +198,37 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   const client = new CorralClient({ corral: config.corral, root: config.root, cwd: config.cwd, identity: config.identity,
     sessionDir: config.local.dir });
   const pane = config.pane || process.env.HERDR_PANE_ID;
+  let handoffPending = false;
+  let terminalDrain = async () => {};
+  const codeHandoff: CodeHandoff | undefined = overrides.prepareHandoff && overrides.commitHandoff
+    ? async request => {
+      if (handoffPending || !terminal || !host) throw new Error("Code handoff is not available right now.");
+      handoffPending = true;
+      const active = host.session.model;
+      let next: CodeLaunch;
+      try {
+        next = await overrides.prepareHandoff!(request, active ? `${active.provider}/${active.id}` : `${provider}/${model}`,
+          host.session.thinkingLevel);
+      } catch (error) {
+        handoffPending = false;
+        throw error;
+      }
+      try {
+        await terminalDrain();
+        terminal.stop();
+        await bridge.close();
+        await host.session.abort();
+        try { await host.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }); }
+        finally { await close(); }
+        await host.runtime.services.modelRuntime.settleCredentialWrites();
+        await new Promise<void>(resolve => process.stdout.write("", () => resolve()));
+        await overrides.commitHandoff!(next);
+        process.exit(0);
+      } catch (error) {
+        process.stderr.write(`corral-pi Code handoff failed: ${String(error)}\n`);
+        process.exit(2);
+      }
+    } : undefined;
   host = await HostSession.create({
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model, provider, ...(aws ? { aws } : {}),
     ...(workerLaunch ? { workerLaunch } : {}),
@@ -217,6 +256,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     ...(overrides.build ? { build: overrides.build } : {}),
     ...(pane ? herdrLifecycle(process.env, pane, config.identity, events, config.local?.headless || headlessEnabled(config.capabilities)) : {}),
     sessionManager,
+    ...(codeHandoff ? { codeHandoff } : {}),
   });
   const session = host;
   let closing: Promise<void> | undefined;
@@ -231,6 +271,19 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   await session.startLocal();
   // Pi normally does not persist a transcript until the first prompt. Code can resume even before that.
   if (overrides.build?.session.trustedCode && !record.transcript) {
+    // A copied transcript may carry an earlier or foreign selection. Persist the
+    // destination selection so the next explicit resume uses the destination route.
+    if (overrides.codeBootstrap?.seed !== undefined) {
+      const branch = sessionManager.getBranch();
+      const saved = branch.findLast(entry => entry.type === "model_change");
+      const active = session.session.model;
+      if (active && (saved?.provider !== active.provider || saved.modelId !== active.id)) {
+        sessionManager.appendModelChange(active.provider, active.id);
+      }
+      if (branch.findLast(entry => entry.type === "thinking_level_change")?.thinkingLevel !== session.session.thinkingLevel) {
+        sessionManager.appendThinkingLevelChange(session.session.thinkingLevel);
+      }
+    }
     sessionManager.appendCustomEntry("corral-code-start", undefined, { immediate: true });
   }
   if (overrides.build) {
@@ -277,14 +330,19 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   const panels = session.panels;
   const { ProcessTerminal } = await import("@earendil-works/pi-tui");
   const physicalTerminal = new ProcessTerminal();
+  terminalDrain = () => physicalTerminal.drainInput(1000);
   terminal = new sdk.InteractiveMode(session.runtime, {
     // corral resumes sessions with its own commands; Pi's `pi --session …` line would name a command that does not work here.
+    ...(codeHandoff ? { onTerminalCommand: (text: string) => session.handleCodeCommand(text) } : {}),
     verbose: false, resumeHint: false, terminal: panels ? panels.wrap(physicalTerminal) : physicalTerminal,
     ...(panels ? { tuiMode: "fullscreen" as const, readOnlyQueue: true, mainView: (transcript, presentation) => panels.mainView(transcript, presentation),
       errorPresentation: errorPresenter(() => session.latestStopCause()), userPresentation: presentHostNotice, ...panels.presentation() } : {}),
   });
   guardTerminalStop(terminal, process.stdin);
   await terminal.init();
+  if (overrides.codeBootstrap?.draft) {
+    session.session.extensionRunner.getUIContext().setEditorText(overrides.codeBootstrap.draft);
+  }
   session.markAttached("interactive");
   if (handlers) {
     installRemote(session, owner, config.local.dir);
