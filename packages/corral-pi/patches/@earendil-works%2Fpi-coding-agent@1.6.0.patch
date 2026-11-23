@@ -11,13 +11,15 @@ index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d92
  import type { ImageContent, Model, TextContent } from "@earendil-works/pi-ai/compat";
  import { type BashResult } from "./bash-executor.ts";
  import type { CacheWarmer, CacheWarmingStatus } from "./cache-warmer.ts";
-@@ -176,7 +176,16 @@ export interface ExtensionBindings {
+@@ -176,7 +176,18 @@ export interface ExtensionBindings {
  export type QueuedInputDisposition = "handled" | "queued";
  export type PromptDisposition = QueuedInputDisposition | "started";
  /** Options for AgentSession.prompt() */
 +export interface HostQueueObserver {
 +    input(input: { text: string; images?: ImageContent[]; source: InputSource; mode: "prompt" | "steer" | "follow_up" }): unknown;
 +    lifecycle(event: { tag: unknown; event: PromptDisposition | "rejected"; reason?: string }): void;
++    /** Asked once a prompt's preflight is over, in the tick its run starts; a returned reason refuses it. */
++    admit?(tag: unknown): string | undefined;
 +    queue(change: AgentQueueChange & { entries: { message: AgentMessage; tag: unknown }[] }): void;
 +    /** Original pane text when native restoration is allowed; undefined keeps the item queued. */
 +    restoreInput?(tag: unknown): string | undefined;
@@ -28,7 +30,7 @@ index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d92
      /** Whether to dispatch extension commands and expand skill commands and prompt templates (default: true) */
      expandPromptTemplates?: boolean;
      /** Image attachments */
-@@ -221,6 +230,8 @@ export interface SessionStats {
+@@ -221,6 +232,8 @@ export interface SessionStats {
  }
  export declare class AgentSession {
      readonly agent: Agent;
@@ -37,7 +39,7 @@ index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d92
      readonly sessionManager: SessionManager;
      readonly settingsManager: SettingsManager;
      private _scopedModels;
-@@ -598,6 +609,7 @@ export declare class AgentSession {
+@@ -598,6 +611,7 @@ export declare class AgentSession {
       */
      steer(text: string, images?: ImageContent[], options?: {
          source?: InputSource;
@@ -45,7 +47,7 @@ index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d92
      }): Promise<QueuedInputDisposition>;
      /**
       * Queue a follow-up message to be processed after the agent finishes.
-@@ -609,6 +621,7 @@ export declare class AgentSession {
+@@ -609,6 +623,7 @@ export declare class AgentSession {
       */
      followUp(text: string, images?: ImageContent[], options?: {
          source?: InputSource;
@@ -53,7 +55,7 @@ index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d92
      }): Promise<QueuedInputDisposition>;
      /**
       * Internal: Queue a steering message (already expanded, no extension command check).
-@@ -664,7 +677,7 @@ export declare class AgentSession {
+@@ -664,7 +679,7 @@ export declare class AgentSession {
       * Useful for restoring to editor when user aborts.
       * @returns Object with steering and followUp arrays
       */
@@ -179,7 +181,23 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              return;
          }
          const expandPromptTemplates = options?.expandPromptTemplates ?? true;
-@@ -1760,10 +1789,10 @@ export class AgentSession {
+@@ -1731,8 +1760,13 @@ export class AgentSession {
+         finally {
+             this._promptPreflightCount--;
+         }
+-        if (trigger)
+-            await this._startRun(trigger, () => preflightResult?.("started"));
++        if (!trigger)
++            return;
++        // The host's last word after the async preflight: what the input answers may be gone by now.
++        const refused = this._queueObserver?.admit?.(options?.queueTag);
++        if (refused)
++            throw new Error(refused);
++        await this._startRun(trigger, () => preflightResult?.("started"));
+     }
+     /**
+      * Run input hooks, expand templates, queue while streaming, and validate model and auth.
+@@ -1760,10 +1794,10 @@ export class AgentSession {
                  throw new Error("Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.");
              }
              if (options.streamingBehavior === "followUp") {
@@ -192,7 +210,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              }
              preflightResult?.("queued");
              return undefined;
-@@ -1842,7 +1871,18 @@ export class AgentSession {
+@@ -1842,7 +1876,18 @@ export class AgentSession {
              return text; // Return original on error
          }
      }
@@ -212,7 +230,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          if (text.startsWith("/")) {
              this._throwIfExtensionCommand(text);
          }
-@@ -1852,10 +1892,10 @@ export class AgentSession {
+@@ -1852,10 +1897,10 @@ export class AgentSession {
          let expandedText = this._expandSkillCommand(processedInput.text);
          expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
          if (behavior === "steer") {
@@ -225,7 +243,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          }
          return "queued";
      }
-@@ -1869,7 +1909,7 @@ export class AgentSession {
+@@ -1869,7 +1914,7 @@ export class AgentSession {
       * @throws Error if text is an extension command
       */
      async steer(text, images, options) {
@@ -234,7 +252,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
      }
      /**
       * Queue a follow-up message to be processed after the agent finishes.
-@@ -1880,14 +1920,12 @@ export class AgentSession {
+@@ -1880,14 +1925,12 @@ export class AgentSession {
       * @throws Error if text is an extension command
       */
      async followUp(text, images, options) {
@@ -251,7 +269,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          const content = [{ type: "text", text }];
          if (images) {
              content.push(...images);
-@@ -1895,14 +1933,13 @@ export class AgentSession {
+@@ -1895,14 +1938,13 @@ export class AgentSession {
          const message = { role: "user", content, timestamp: Date.now() };
          if (images?.length)
              this._queuedMessagesWithImages.add(message);
@@ -268,7 +286,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          const content = [{ type: "text", text }];
          if (images) {
              content.push(...images);
-@@ -1910,6 +1947,7 @@ export class AgentSession {
+@@ -1910,6 +1952,7 @@ export class AgentSession {
          const message = { role: "user", content, timestamp: Date.now() };
          if (images?.length)
              this._queuedMessagesWithImages.add(message);
@@ -276,7 +294,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          this.agent.followUp(message);
      }
      /** Replace a queued user message's images in place with normalized ones, appending hints to its text. */
-@@ -2052,13 +2090,16 @@ export class AgentSession {
+@@ -2052,13 +2095,16 @@ export class AgentSession {
       * Useful for restoring to editor when user aborts.
       * @returns Object with steering and followUp arrays
       */

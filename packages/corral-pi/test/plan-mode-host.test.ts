@@ -447,6 +447,36 @@ test("a prompt whose preflight ends while an approval compacts the context does 
     });
   }), 120_000);
 
+test("review feedback whose preflight outlasts a resubmission is not delivered to the newer review", () => planning(undefined, async (live, plan) => {
+  writeFileSync(plan.path, PLAN);
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+  await live.session.prompt("Plan a --version flag", { source: "extension" });
+  await live.drained();
+  const first = plan.review;
+  await overlapping(live, async (typed, feedback) => {
+    // Given a message the owner typed and their feedback on the review are both in Pi's preflight,
+    fixtureTransport().script([SUBMIT, { text: "Submitted again." }]);
+    const resubmitted = live.session.prompt("Change step 1", { source: "interactive" });
+    await typed.reached;
+    const answered = Promise.resolve(answerCard(live).answer([{ options: ["revise"], text: "Change step 2" }], false, async () => {}));
+    answered.catch(() => {});
+    await feedback.reached;
+    // and the typed message runs first: it withdraws the review, and the plan is submitted again.
+    typed.pass();
+    await resubmitted;
+    await live.drained();
+    const second = plan.review;
+    expect(second).toBeDefined();
+    expect(second).not.toBe(first);
+    // When the feedback's preflight ends, with no run left to refuse it as busy:
+    feedback.pass();
+    // Then it is refused for the review it answered, and the newer one stays open.
+    await expect(answered).rejects.toThrow("no longer open");
+    await live.drained();
+    expect(plan.review).toBe(second);
+  });
+}), 120_000);
+
 test("an overlapping prompt that loses the run to a kickoff costs it neither its approval nor its turn", () => planning(undefined, async (live, plan, _cwd, owner) => {
   writeFileSync(plan.path, PLAN);
   fixtureTransport().script([SUBMIT, { text: "Submitted." }]);

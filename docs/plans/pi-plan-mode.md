@@ -232,7 +232,11 @@ On an execute answer the host, in order:
    patched Pi lets one prompt own a run from its start through its settle, so a kickoff
    whose preflight overlapped another prompt's, or the settle of another run, is refused
    before it starts instead of sharing that run's turn; it also refuses a prompt whose
-   preflight ends during a manual compaction, such as the approval's own.
+   preflight ends during a manual compaction, such as the approval's own. Pi's preflight is
+   asynchronous, and another run can withdraw a review and submit a newer one while an
+   answer waits in it, so the patched Pi asks the host once more in the tick the run starts
+   (`admit` on the queue observer): an answer to a review that is no longer the open one is
+   refused there, before anything is emitted or recorded.
 5. The review ends when that kickoff message is in the transcript, and only then does the
    Build record note `Approved plan: <title> (revision N, <context option>)`. From the answer
    until then the approval is pending: any other answer to the review is refused, and entering or

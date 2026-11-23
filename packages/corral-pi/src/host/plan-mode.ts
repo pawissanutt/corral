@@ -440,8 +440,9 @@ export class PlanMode {
       return "delivered" as const;
     }).catch(() => {
       if (this.feedback === feedbackSent) this.feedback = undefined;
-      throw new BridgeRefusal("plan_mode_unavailable",
-        "The session did not take the feedback, so the review is still open. Wait for the agent's turn to end, then send it again");
+      throw new BridgeRefusal("plan_mode_unavailable", this.review === card
+        ? "The session did not take the feedback, so the review is still open. Wait for the agent's turn to end, then send it again"
+        : "The session did not take the feedback: the review it answered is no longer open");
     });
   }
 

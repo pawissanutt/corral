@@ -1402,6 +1402,9 @@ export class HostSession {
         }
         if (event.event === "rejected") this.admissions.get(event.tag)?.(event.reason ?? "rejected");
       },
+      // Pi asks in the tick the run starts. The review an input answers was checked before Pi's preflight, and
+      // another run can have withdrawn it and put a newer submission in its place since.
+      admit: tag => this.answeredReviewGone(this.queue.inputFacts(tag)?.planReview),
       queue: change => {
         this.queue.observer.queue(change);
         if (change.action === "enqueue") {
@@ -1815,7 +1818,7 @@ export class HostSession {
   }
 
   submitLocal(input: SessionInput, images?: ImageContent[], source?: {
-    requestId?: string; queueKey?: string; text?: string; pane?: boolean; planKickoff?: string;
+    requestId?: string; queueKey?: string; text?: string; pane?: boolean; planKickoff?: string; planReview?: string;
     /** Told once whether this very input reached the transcript. */
     delivered?: (delivered: boolean) => void;
   }): Promise<SubmitResult> {
@@ -1888,12 +1891,18 @@ export class HostSession {
     // settling, and Pi would queue this input or defer it into its settle list, where it can be dropped.
     if (this.open) return { disposition: "rejected", reason: "busy" };
     // A rewind ordered ahead of this answer may have taken the branch back past the review it answers.
-    if (answers !== undefined && this.planMode?.review !== answers.card) return { disposition: "rejected", reason: "stale" };
+    const gone = this.answeredReviewGone(answers?.card);
+    if (gone) return { disposition: "rejected", reason: gone };
     const delivered = Promise.withResolvers<boolean>();
-    const result = await this.submitLocal(input, undefined,
-      { ...(answers?.kickoff ? { planKickoff: answers.card } : {}), delivered: delivered.resolve });
+    const result = await this.submitLocal(input, undefined, { ...(answers ? { planReview: answers.card } : {}),
+      ...(answers?.kickoff ? { planKickoff: answers.card } : {}), delivered: delivered.resolve });
     if (result.disposition !== "started") return result;
     return await delivered.promise ? result : { disposition: "rejected", reason: "busy" };
+  }
+
+  /** Why an input that answers the review `card` cannot be taken, when that review is no longer the open one. */
+  private answeredReviewGone(card: string | undefined): string | undefined {
+    return card === undefined || this.planMode?.review === card ? undefined : "the plan review this answers is no longer open";
   }
   pendingOwnerQuestions() {
     return this.ownerQuestions?.pending().flatMap(record => {
