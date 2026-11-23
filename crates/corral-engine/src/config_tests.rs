@@ -481,6 +481,42 @@ fallback = ["anthropic-api/claude-sonnet-4-6", "openai/gpt-5.4"]
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn pi_profile_empty_fallback_renders_no_fallback_and_omitted_renders_none() {
+    let config = Config::check(
+        Path::new("."),
+        r#"
+[profiles.pi-opt-out]
+harness = "pi"
+fallback = []
+
+[profiles.pi-inherit]
+harness = "pi"
+"#,
+    )
+    .unwrap();
+    let harness = Harness {
+        command: "printf '%s\\0' run".into(),
+        ..Harness::default()
+    };
+    let context = CommandContext {
+        prompt_file: Path::new("prompt.md"),
+        name: "T-042",
+        task: "T-042",
+        worktree: Path::new("."),
+        corral: Path::new("corral-next"),
+    };
+    assert_eq!(
+        argv(&render_command(&harness, &config.profiles["pi-opt-out"], &context).unwrap()),
+        ["run", "--no-fallback"]
+    );
+    assert_eq!(
+        argv(&render_command(&harness, &config.profiles["pi-inherit"], &context).unwrap()),
+        ["run"]
+    );
+}
+
 #[test]
 fn pi_api_dispatch_uses_the_provider_qualified_model_without_args() {
     let context = CommandContext {

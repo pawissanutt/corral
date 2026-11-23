@@ -41,11 +41,15 @@ impl TryFrom<String> for ModelSelector {
 }
 
 impl Profile {
-    pub(crate) fn fallback_args(&self) -> impl Iterator<Item = &str> {
-        self.fallback
-            .iter()
-            .flatten()
-            .flat_map(|selector| ["--fallback", selector.as_str()])
+    pub(crate) fn fallback_args(&self) -> Vec<&str> {
+        match &self.fallback {
+            Some(list) if list.is_empty() => vec!["--no-fallback"],
+            Some(list) => list
+                .iter()
+                .flat_map(|selector| ["--fallback", selector.as_str()])
+                .collect(),
+            None => Vec::new(),
+        }
     }
 
     pub(super) fn fallback_harness_error(&self) -> Option<&'static str> {

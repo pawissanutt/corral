@@ -9,6 +9,8 @@ export interface FallbackSelector {
   readonly model: string;
 }
 
+export type FallbackCandidates = readonly FallbackSelector[] | ((current: Model<Api>) => readonly FallbackSelector[]);
+
 interface FallbackSelection {
   readonly model: Model<Api>;
   readonly stream: StreamFn;
@@ -24,9 +26,9 @@ type ErrorEvent = Extract<AssistantMessageEvent, { type: "error" }>;
 /** Retry only an output-free subscription quota failure, inside the same Pi request.
  * Select preflights a candidate, returning undefined if unavailable, and commits the
  * model before returning a selection. The selected stream must resolve its own auth. */
-export function withSubscriptionFallback(stream: StreamFn, candidates: readonly FallbackSelector[],
+export function withSubscriptionFallback(stream: StreamFn, candidates: FallbackCandidates,
   select: SelectFallback, notice: (candidate: FallbackSelector, previous: Model<Api>) => void): StreamFn {
-  if (candidates.length === 0) return stream;
+  if (Array.isArray(candidates) && candidates.length === 0) return stream;
   return (model, context, options) => {
     const signal = options?.signal;
     return lazyStream(model, async () => {
@@ -35,7 +37,6 @@ export function withSubscriptionFallback(stream: StreamFn, candidates: readonly 
         result: () => source.result(),
         async *[Symbol.asyncIterator]() {
           let current = model;
-          let cursor = 0;
           let seen: Set<string> | undefined;
           for (;;) {
             let start: StartEvent | undefined;
@@ -59,17 +60,20 @@ export function withSubscriptionFallback(stream: StreamFn, candidates: readonly 
             }
 
             if (!seen) {
-              // A persisted fallback model resumes at its position, not the list head.
-              cursor = candidates.findIndex(candidate => candidate.provider === model.provider && candidate.model === model.id) + 1;
               seen = new Set([`${model.provider}/${model.id}`]);
-              for (let i = 0; i < cursor; i++) {
-                const candidate = candidates[i]!;
-                seen.add(`${candidate.provider}/${candidate.model}`);
+              if (Array.isArray(candidates)) {
+                // A persisted fallback model resumes at its position, not the list head.
+                const resumeAfter = candidates.findIndex(candidate => candidate.provider === model.provider && candidate.model === model.id) + 1;
+                for (let i = 0; i < resumeAfter; i++) {
+                  const candidate = candidates[i]!;
+                  seen.add(`${candidate.provider}/${candidate.model}`);
+                }
               }
             }
+            const list = typeof candidates === "function" ? candidates(current) : candidates;
             let next: FallbackSelection | undefined;
-            while (!signal?.aborted && cursor < candidates.length) {
-              const candidate = candidates[cursor++]!;
+            for (const candidate of list) {
+              if (signal?.aborted) break;
               const key = `${candidate.provider}/${candidate.model}`;
               if (seen.has(key)) continue;
               seen.add(key);

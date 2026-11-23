@@ -48,6 +48,9 @@ export function buildProfileArgs(root: string, name: string): string[] {
   if (profile.fallback !== undefined && (!Array.isArray(profile.fallback) || profile.fallback.some(value => typeof value !== "string"))) {
     throw new Error(`Build profile ${name}: fallback must be a list of <provider>/<model> strings`);
   }
+  const fallbackArgs = profile.fallback === undefined ? []
+    : profile.fallback.length === 0 ? ["--no-fallback"]
+    : profile.fallback.flatMap(value => ["--fallback", value]);
   return [...(profile.model ? ["--model", profile.model] : []), ...(profile.effort ? ["--effort", profile.effort] : []),
-    ...profile.args ?? [], ...profile.fallback?.flatMap(value => ["--fallback", value]) ?? []];
+    ...profile.args ?? [], ...fallbackArgs];
 }

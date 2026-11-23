@@ -151,3 +151,36 @@ test("an empty fallback list keeps the original stream function", () => {
   const stream = () => stub(quota(codex));
   expect(withSubscriptionFallback(stream, [], () => undefined, () => {})).toBe(stream);
 });
+
+test("dynamic fallback resolver tracks the failing model provider, chains providers, and avoids cycles", async () => {
+  const policy: Record<string, readonly FallbackSelector["provider"][]> = {
+    "openai-codex": ["anthropic"],
+    anthropic: ["openai-codex", "openai"],
+  };
+  const selectModel = (provider: FallbackSelector["provider"]) =>
+    provider === "openai-codex" ? codex : provider === "anthropic" ? claude : metered;
+  const steps: string[] = [];
+  const stream = withSubscriptionFallback(
+    () => stub({ type: "start", partial: message(codex) }, quota(codex)),
+    current => (policy[current.provider] ?? []).map(provider => ({ provider, model: selectModel(provider).id })),
+    candidate => {
+      steps.push(`select:${candidate.provider}`);
+      const selected = selectModel(candidate.provider);
+      const next: StreamFn = actual => actual.provider === "openai"
+        ? stub({ type: "start", partial: message(metered) }, { type: "done", reason: "stop", message: message(metered) })
+        : stub({ type: "start", partial: message(actual) }, quota(actual));
+      return { model: selected, stream: next };
+    },
+    (candidate, previous) => steps.push(`notice:${previous.provider}->${candidate.provider}`),
+  );
+
+  const response = await stream(codex, context);
+  const events = await eventsOf(response);
+  expect(events.at(-1)).toMatchObject({ type: "done", reason: "stop" });
+  expect(steps).toEqual([
+    "select:anthropic",
+    "notice:openai-codex->anthropic",
+    "select:openai",
+    "notice:anthropic->openai",
+  ]);
+});

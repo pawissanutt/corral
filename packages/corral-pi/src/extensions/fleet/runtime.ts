@@ -13,6 +13,7 @@ import { researchBudget, type ResearchOptions, type ResearchReport } from "../su
 import type { HelperInspection } from "../subagent/inspection.ts";
 
 import { createSdkRunner, type ChildHandle, type ChildRunner } from "./child.ts";
+import type { FallbackSettings } from "../../host/fallback-settings.ts";
 import { resolveModel, resolveProfiles, type ResolvedModel } from "./profiles.ts";
 import { formatChildReport } from "./tools.ts";
 /** The runtime needs no build exit, board, launcher or Git metadata. */
@@ -43,6 +44,8 @@ export interface FleetOptions {
   readonly buildWorktree?: boolean;
   readonly maxTurns?: number;
   readonly timeoutSecs?: number;
+  readonly fallbackPolicy?: FallbackSettings;
+  readonly onChildFallback?: (event: { readonly child: string; readonly from: string; readonly model: string }) => void;
   readonly research?: { readonly settings: ExploreSettings };
   readonly record?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
   readonly retained?: { has(id: string): boolean; child(child: ChildSnapshot): boolean };
@@ -528,6 +531,14 @@ export class FleetRuntime implements FleetControl {
             if (!live(entry) || entry.value.kind !== "review") throw new Error("Only a live review child can record a verdict");
             entry.value.verdict = structuredClone({ ...verdict, at: this.now() });
             this.touch(entry);
+          },
+          onFallback: (from, to) => {
+            if (!live(entry)) return;
+            const slash = to.indexOf("/");
+            if (slash > 0) entry.model = { ...entry.model, provider: to.slice(0, slash), model: to.slice(slash + 1) };
+            entry.value.model = to;
+            this.touch(entry);
+            this.options.onChildFallback?.({ child: entry.spec.id, from, model: to });
           },
         }, entry.controller.signal);
         // A synchronous observer may have cancelled this child during setup.

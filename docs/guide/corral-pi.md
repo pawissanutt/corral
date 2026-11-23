@@ -26,8 +26,8 @@ corral-pi models [--provider <id>]
 ```
 
 Model flags are `--model [<provider>/]<id>`, `--provider <id>`,
-`--effort <level>`, `--aws-profile <name>`, `--aws-region <region>` and
-repeatable `--fallback <provider>/<model>`. Supply both AWS flags together.
+`--effort <level>`, `--aws-profile <name>`, `--aws-region <region>`,
+repeatable `--fallback <provider>/<model>` and `--no-fallback`. Supply both AWS flags together.
 Sessions also accept `--project <name>` and `--headless`; non-interactive
 launches are headless by default. `--plan` starts chat or Build in
 [plan mode](plan-mode.md). For build defaults and cleanup, see
@@ -112,7 +112,8 @@ assignment and `--corral` for the engine executable. Direct launches can select 
 model with `--model <provider>/<model>` and reasoning effort with `--effort`.
 Use `--headless` for socket input without a terminal.
 
-A task worker stays on its profile's model, but its `task` children can choose the
+A task worker starts on its configured profile's model. Its `task` children default
+to that profile even if the parent falls back and restarts. Children can also choose
 `[build.profiles.<name>]` entries in `.corral-next/pi.toml`, the same profiles Build
 sessions use. The worker loads the logins those profiles name, including metered API
 providers, and its prompt lists them. A profile whose provider you are not logged in to
@@ -195,20 +196,29 @@ available.
 
 ## Quota fallback and API usage
 
-By default, an exhausted subscription quota stops the request. Repeat
-`--fallback <provider>/<model>` on `run`, `chat` or `build` to name alternatives
-in order, or put them in a Pi profile:
+By default, an exhausted subscription quota stops the request. To configure workspace-wide
+provider fallback across `run`, `chat`, `build`, app launches, `--resume`, and `/model`
+switches, add `[fallback.providers]` to `.corral-next/pi.toml`:
 
 ```toml
-[profiles.pi-worker]
-harness = "pi"
-model = "openai-codex/gpt-6.1-sol"
-fallback = ["openai-codex/gpt-6.2-sol", "anthropic-api/claude-opus-5-5"]
+[fallback]
+children = false # set true to also allow task/build children and subagents to spill over
+
+[fallback.providers]
+openai-codex = ["openai"]
+anthropic = ["anthropic-api"]
 ```
 
-If the provider refuses a request for subscription quota before any output, Pi
-skips unavailable entries, announces the switch, and answers the same request
-on the next usable model. The session stays on that model; chat and Build owners
-can switch again with `/model`. Any API model you select or list as a fallback
-incurs metered charges. Corral reports API usage and cost; it does not impose a
-spending cap. Engine Usage totals only requests hosts actually reported.
+When a subscription model hits quota before any output, Pi resolves `<target>/<model>` from
+`[fallback.providers]` in order, skips unavailable entries, announces the switch, and answers
+the same request on the next usable model. Restart restores the parent's selected
+fallback and subsequent model changes on that provider. Worker helpers keep their
+configured defaults; `children = true` lets them fall back on their own quota failures.
+Chat and Build owners can switch providers again with `/model`.
+
+For a per-profile override in `.corral-next/corral.toml` (or per-launch flags on `run`,
+`chat` or `build`), set `fallback = ["<provider>/<model>", ...]` (or repeat `--fallback`) to
+override `[fallback.providers]` with an explicit model list, or set `fallback = []` (or pass
+`--no-fallback`) to keep a profile or launch subscription-only. Any API model you select or
+configure as a fallback incurs metered charges. Corral reports API usage and cost; it does
+not impose a spending cap. Engine Usage totals only requests hosts actually reported.

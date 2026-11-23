@@ -10,8 +10,9 @@ export function interactiveModels(role: string): boolean {
   return role === "assistant" || role === "build";
 }
 
-/** Roles whose children may use every provider the session loaded, not only the launch route.
- * A worker loads extra providers only for its configured child profiles; its own model stays bound. */
+/** Roles whose children may use additional approved providers beyond the launch route.
+ * Interactive roles expose every loaded provider; workers expose only their launch route plus
+ * configured child-profile providers (never fallback-only routes). */
 export function childModels(role: string): boolean {
   return interactiveModels(role) || role === "worker";
 }

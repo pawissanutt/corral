@@ -15,7 +15,8 @@ import { saveSession } from "../build/session-store.ts";
 import { inheritTranscript, openSession, restoreModelChoice, SessionResumeRefused, siblingTranscript } from "./lifecycle.ts";
 import { loadModules } from "./modules.ts";
 import { CredentialsUnavailable } from "../auth/paths.ts";
-import { type DestinationRule, PROVIDERS, hostRules, isApiProvider, isProviderId } from "../auth/providers.ts";
+import { type DestinationRule, PROVIDERS, type ProviderId, hostRules, isApiProvider, isProviderId } from "../auth/providers.ts";
+import { fallbackProvidersFor, restorableFallbacks } from "./fallback-settings.ts";
 import { localInferenceRules } from "../auth/local.ts";
 import { NetworkRefused, guardedFetch, restrictEnvironment } from "./restrict.ts";
 import { compiledBundle } from "./bundle.ts";
@@ -97,28 +98,43 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     provider: launchProvider, model: config.model.startsWith(`${launchProvider}/`)
       ? config.model.slice(launchProvider.length + 1) : config.model,
   };
-  const resumed = record.transcript ? restoreModelChoice(sessionManager, interactiveModels(config.identity.role),
-    config.fallback, record.legacyAnthropicApi) : undefined;
+  const branch = record.transcript ? sessionManager.getBranch() : undefined;
+  const resumed = branch ? restoreModelChoice(sessionManager, interactiveModels(config.identity.role),
+    restorableFallbacks(launch, config.fallback, config.fallbackPolicy, config.noFallback, branch),
+    record.legacyAnthropicApi) : undefined;
   const choice = resumed ?? launch;
   if (record.transcript && (config.terminalChat || overrides.build) && !resumed &&
-      (config.terminalChat || !launch || sessionManager.getBranch().some(entry => entry.type === "model_change"))) {
+      (config.terminalChat || !launch || branch?.some(entry => entry.type === "model_change"))) {
     throw new SessionResumeRefused(record.transcript, "no supported saved model selection; start a new conversation instead");
   }
   if (!choice) throw new Error("missing launch model");
   const { provider, model } = choice;
   if (provider === "llama.cpp" && overrides.build) throw new Error("Local inference (llama.cpp) is unavailable in a build session");
-  const effort = resumed ? sessionManager.getBranch().findLast(entry => entry.type === "thinking_level_change")?.thinkingLevel : config.effort;
+  const effort = resumed ? branch?.findLast(entry => entry.type === "thinking_level_change")?.thinkingLevel : config.effort;
+  const workerLaunch = config.identity.role === "worker" && launch ? { ...launch, effort: config.effort } : undefined;
   const modules = await loadModules(assets, config.identity.role, provider);
   // A worker's child profiles join the session's routes like fallbacks; its own model stays bound.
   const childProfiles = config.identity.role === "worker" && config.capabilities?.enabled.includes("fleet")
     ? readBuildProfiles(config.root) : undefined;
-  const childProviders = childProfileProviders(config.identity.role, provider, childProfiles);
+  const childProviders = childProfileProviders(config.identity.role, workerLaunch?.provider ?? provider, childProfiles);
   const profileChoices = (childProfiles ?? []).flatMap(profile => {
     const slash = profile.model.indexOf("/");
     const id = profile.model.slice(0, slash);
     return isProviderId(id) && childProviders.includes(id) ? [{ provider: id, model: profile.model.slice(slash + 1) }] : [];
   });
-  const requested = [{ provider, model }, ...config.fallback ?? [], ...profileChoices];
+  const activeFallbackPolicy = config.noFallback ? undefined : config.fallbackPolicy;
+  const providerFallbackSeeds: ProviderId[] = [
+    ...(!config.fallback?.length ? [provider] : []),
+    ...(activeFallbackPolicy?.children ? [workerLaunch?.provider ?? provider, ...childProviders] : []),
+  ];
+  const extraFallbackProviders = fallbackProvidersFor(providerFallbackSeeds, activeFallbackPolicy);
+  const requested = [
+    { provider, model },
+    ...(workerLaunch ? [workerLaunch] : []),
+    ...(!config.noFallback ? config.fallback ?? [] : []),
+    ...profileChoices,
+    ...extraFallbackProviders.map(id => ({ provider: id, model })),
+  ];
   const bedrock = requested.filter(choice => choice.provider === "amazon-bedrock");
   const local = config.capabilities?.llama_cpp;
   let aws: AwsRoute | undefined;
@@ -176,7 +192,11 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   const pane = config.pane || process.env.HERDR_PANE_ID;
   host = await HostSession.create({
     sdk, identity: config.identity, cwd: config.cwd, agentDir, model, provider, ...(aws ? { aws } : {}),
-    routes, fallback: config.fallback, apiFetch: rawFetch, sessionDir: config.local.dir,
+    ...(workerLaunch ? { workerLaunch } : {}),
+    routes, fallback: config.fallback,
+    ...(config.noFallback ? { noFallback: true } : {}),
+    ...(config.fallbackPolicy ? { fallbackPolicy: config.fallbackPolicy } : {}),
+    apiFetch: rawFetch, sessionDir: config.local.dir,
     paneInput: async (text, images) => await remote?.paneInput(text, images) ?? false,
     transcriptRewound: () => { if (terminal) repaintTranscript(terminal); },
     automatedInput: input => remote?.submit(input),

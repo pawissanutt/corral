@@ -22,7 +22,10 @@ export function createSession(launch: BuildLaunch, worktree: Pick<BuildSessionRe
   const title = launch.name?.trim();
   return { version: 1, id, name, ...(title ? { title } : {}), created: now.toISOString(), updated: now.toISOString(),
     repoRoot: launch.repoRoot, ...worktree, here: launch.here, ...(launch.bare ? { bare: true } : {}),
-    route: { provider: launch.provider, model: launch.model, effort: launch.effort, aws: launch.aws, fallback: launch.fallback },
+    route: {
+      provider: launch.provider, model: launch.model, effort: launch.effort, aws: launch.aws, fallback: launch.fallback,
+      ...(launch.noFallback ? { noFallback: true } : {}),
+    },
     ...(launch.project ? { project: launch.project } : {}), ...(launch.workspaceRoot ? { workspaceRoot: launch.workspaceRoot } : {}) };
 }
 
@@ -44,6 +47,7 @@ export function loadSession(dataRoot: string, id: string): BuildSessionRecord {
     || (record.title !== undefined && typeof record.title !== "string")) throw new Error(`Invalid build session record: ${id}`);
   if (record.route) {
     if (!isProviderId(record.route.provider) || typeof record.route.model !== "string" ||
+        (record.route.noFallback !== undefined && typeof record.route.noFallback !== "boolean") ||
         (record.route.fallback !== undefined && (!Array.isArray(record.route.fallback) ||
           record.route.fallback.some(choice => !choice || !isProviderId(choice.provider) || typeof choice.model !== "string" ||
             !choice.model || /[\s\0]/.test(choice.model))))) throw new Error(`Invalid Build model route: ${id}`);

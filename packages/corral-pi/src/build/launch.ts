@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { corralPiDirectory } from "../auth/paths.ts";
 import { findWorkspaceRoot, modelFlags, modelSettings, qualifiedModel, rejectRemovedModelOptions, startupModelSetting } from "../host/config.ts";
+import { parseFallbackSettings } from "../host/fallback-settings.ts";
 import type { BuildLaunchOptions, BuildSessionRecord } from "./types.ts";
 import { buildProfileArgs, readWorkspaceToml } from "./profiles.ts";
 import { validateBuildId } from "./session-store.ts";
@@ -73,8 +74,17 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
   rejectRemovedModelOptions(profileArgs);
   const profile = parseArgs({ args: profileArgs, options: modelFlags }).values;
   const raw = resuming ? {} : readWorkspaceToml(workspaceRoot ?? repoRoot, "pi.toml");
+  if (!resuming) parseFallbackSettings(raw.fallback);
   const settings = readBuildSettings({ workspaceRoot, repoRoot }, raw);
-  const flags = { ...profile, ...values };
+  if (values["no-fallback"] && values.fallback?.length) {
+    throw new Error("--no-fallback cannot be combined with --fallback");
+  }
+  const flags = {
+    ...profile,
+    ...values,
+    ...(values["no-fallback"] ? { fallback: undefined } : {}),
+    ...(values.fallback?.length ? { "no-fallback": undefined } : {}),
+  };
   const managed = !resuming && values.headless === true && values.id !== undefined && env.CORRAL_PI_MANAGED_BUILD === "1";
   if (managed && flags.model === undefined && flags.provider === undefined) {
     const saved = (raw.startup as { model?: unknown } | undefined)?.model;
@@ -99,8 +109,14 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
 
 export function bindBuildResume(launch: BuildLaunchOptions, record: BuildSessionRecord): BuildLaunchOptions {
   // A pre-route record must use the transcript selection, never a model from today's flags or workspace.
-  return { ...launch, ...(record.route ?? { provider: undefined, model: undefined }),
+  const noFallback = launch.noFallback === true || record.route?.noFallback === true;
+  const fallback = launch.noFallback === true ? undefined : record.route?.fallback;
+  return {
+    ...launch, ...(record.route ?? { provider: undefined, model: undefined }),
+    ...(noFallback ? { noFallback: true } : {}),
+    fallback,
     repoRoot: record.repoRoot, workspaceRoot: record.workspaceRoot, project: record.project,
     here: record.here, bare: record.bare, corral: record.bare ? undefined : launch.corral ?? "corral-next",
-    settings: readBuildSettings(record) };
+    settings: readBuildSettings(record),
+  };
 }

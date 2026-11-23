@@ -4,6 +4,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { childFallbackPolicy, type FallbackSettings } from "../../host/fallback-settings.ts";
+import { installChildFallback } from "../../host/model-selection.ts";
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
 import { closeResidentSession, residentLifecycle } from "../../claude/resident.ts";
 import { executionRefusal, exploreLoadout } from "../../roles/common/execution.ts";
@@ -134,6 +136,8 @@ export interface AuxiliarySessionOptions {
   readonly agentDir: string;
   readonly parentLoadout: readonly string[];
   readonly localTools: readonly ToolDefinition[];
+  readonly fallbackPolicy?: FallbackSettings;
+  readonly onFallback?: (from: string, to: string) => void;
 }
 
 const EXPERT_FILES = ["read", "grep", "find", "ls"] as const;
@@ -211,13 +215,16 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
   });
   const { session } = await sdk.createAgentSessionFromServices({ services, sessionManager: manager, model,
     tools: loadout, scopedModels: [{ model, thinkingLevel }], thinkingLevel });
-  if (invocation.serviceTier) {
-    // Keep the SDK stream, guarded provider and budget wrapper; scope the option to this child.
-    const stream = session.agent.streamFunction;
-    session.agent.streamFunction = (current, context, streamOptions) => {
-      const requestOptions = { ...streamOptions, serviceTier: invocation.serviceTier };
-      return stream(current, context, requestOptions);
-    };
+  const childFallback = childFallbackPolicy(options.fallbackPolicy);
+  if (invocation.serviceTier || childFallback) {
+    const baseStream = session.agent.streamFunction;
+    const initialStream = invocation.serviceTier
+      ? (current: Parameters<typeof baseStream>[0], context: Parameters<typeof baseStream>[1], streamOptions: Parameters<typeof baseStream>[2]) =>
+          baseStream(current, context, { ...streamOptions, serviceTier: invocation.serviceTier })
+      : undefined;
+    installChildFallback({
+      session, models: options.models, policy: childFallback, baseStream, initialStream, onFallback: options.onFallback,
+    });
   }
   const observe = invocation.observe;
   const unsubscribe = observe ? session.subscribe(event => observeHelperEvent(event, observe)) : () => {};

@@ -114,7 +114,9 @@ import { ManagedEffects } from "./managed-effects.ts";
 import { LocalControlPlane } from "./local.ts";
 import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
 import { assertApiEffort, installApiProvider } from "./api-providers.ts";
-import { withSubscriptionFallback } from "./continuation.ts";
+import { withSubscriptionFallback, type FallbackCandidates } from "./continuation.ts";
+import { childFallbackPolicy, fallbackProvidersFor, hasProviderFallbacks, providerFallbackCandidates,
+  type FallbackSettings } from "./fallback-settings.ts";
 import { HostQueue, type InputFacts } from "./queue.ts";
 import { MARK_ENTRY, observeTranscriptEntries, recordTranscriptMark, type MarkSink, type ModelMark, type TranscriptMark,
   type TurnStopCause, type TurnWait } from "./transcript-marks.ts";
@@ -135,9 +137,13 @@ export interface HostSessionOptions {
   readonly cwd: string;
   readonly agentDir: string;
   readonly model: string;
-  /** The bound profile's provider; absent means OpenAI Codex, the only pre-T-479 route. */
+  /** The parent's active provider on host startup; absent means OpenAI Codex. */
   readonly provider?: ProviderId;
+  /** Worker helpers keep the configured launch model when the parent's saved fallback is restored. */
+  readonly workerLaunch?: ModelChoice & { readonly effort?: string };
   readonly fallback?: readonly ModelChoice[];
+  readonly noFallback?: boolean;
+  readonly fallbackPolicy?: FallbackSettings;
   readonly routes?: SessionRoutes;
   readonly apiFetch?: Fetch;
   readonly sessionDir?: string;
@@ -528,6 +534,8 @@ export class HostSession {
       emit: (kind, data) => options.events.emit(kind, data),
       liveInput: event => this.liveEvents.input(event),
     });
+    const childPolicy = childFallbackPolicy(options.fallbackPolicy, options.noFallback);
+    const helperModel = options.workerLaunch ?? { provider: this.provider, model: options.model, effort: options.effort };
     this.buildControls = options.build ? createBuildControls({
       sdk: options.sdk, context: options.build,
       models: () => {
@@ -544,6 +552,10 @@ export class HostSession {
         if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
       },
       shellRefusal: options.modules.role.shellRefusal, changed: () => this.fleetChanged(), retained,
+      ...(childPolicy ? { fallbackPolicy: childPolicy } : {}),
+      onChildFallback: ({ child, from, model }) => {
+        options.events.emit("model_fallback", { child, from, model, text: `Quota exhausted on ${from}; continuing on ${model}` });
+      },
     }) : undefined;
     this.remoteBuild = new RemoteBuild(this.buildControls, {
       fleet: () => this.buildControls?.ui.fleet ?? this.fleet,
@@ -677,7 +689,8 @@ export class HostSession {
           return host.auxiliaryModels;
         },
         get approved() { return host.buildProviders; },
-        parent: { provider: this.provider, model: options.model.startsWith(`${this.provider}/`) ? options.model.slice(this.provider.length + 1) : options.model, effort: options.effort },
+        parent: { ...helperModel, model: helperModel.model.startsWith(`${helperModel.provider}/`)
+          ? helperModel.model.slice(helperModel.provider.length + 1) : helperModel.model },
         context: { session: { worktree: options.cwd, name: `${options.identity.role} session` },
           dir: options.runtimeDir ?? join(options.agentDir, "runtime"),
           settings: { maxParallel: settings.maxParallel, profiles: options.childProfiles ?? [] } },
@@ -690,6 +703,10 @@ export class HostSession {
         get localTools() { return host.localTools; },
         shellRefusal: options.modules.role.shellRefusal,
         changed: () => this.fleetChanged(), record, retained,
+        ...(childPolicy ? { fallbackPolicy: childPolicy } : {}),
+        onChildFallback: ({ child, from, model }) => {
+          options.events.emit("model_fallback", { child, from, model, text: `Quota exhausted on ${from}; continuing on ${model}` });
+        },
         deliverToParent: async text => {
           const result = await this.submitAutomated(text);
           if (result.disposition === "rejected") throw new Error(`Fleet parent delivery rejected: ${result.reason}`);
@@ -698,7 +715,7 @@ export class HostSession {
     }
     if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search || auxiliary.expert) {
       this.auxiliary = new AuxiliaryRuntime({
-        settings: auxiliary, provider: this.provider, model: options.model,
+        settings: auxiliary, provider: helperModel.provider, model: helperModel.model,
         changed: () => this.fleetChanged(),
         sessionId: () => this.sessionId(),
         searchModel: () => {
@@ -715,9 +732,16 @@ export class HostSession {
               settings: options.capabilities.web }, invocation, signal);
           }
           if (!this.auxiliaryModels) throw new Error("auxiliary model runtime is not ready");
-          return runAuxiliarySession({ sdk: options.sdk, models: this.auxiliaryModels, provider: this.provider,
+          return runAuxiliarySession({ sdk: options.sdk, models: this.auxiliaryModels, provider: helperModel.provider,
             cwd: options.cwd, agentDir: options.agentDir,
-            parentLoadout: this.loadout, localTools: this.localTools }, invocation, signal);
+            parentLoadout: this.loadout, localTools: this.localTools,
+            ...(childPolicy ? { fallbackPolicy: childPolicy } : {}),
+            onFallback: (from, model) => {
+              options.events.emit("model_fallback", {
+                auxiliary: invocation.request, kind: invocation.kind, from, model,
+                text: `Quota exhausted on ${from}; continuing on ${model}`,
+              });
+            } }, invocation, signal);
         },
       });
     }
@@ -895,9 +919,19 @@ export class HostSession {
     if (host.provider === "llama.cpp" && local === undefined) {
       throw new Error("module_invalid: llama.cpp requires its explicit configured capability");
     }
-    const extra = [...(options.fallback ?? []).map(choice => choice.provider),
-      ...childProfileProviders(options.identity.role, route.id, options.childProfiles)]
-      .filter(id => (id !== "amazon-bedrock" || options.aws) && (id !== "llama.cpp" || options.capabilities?.llama_cpp));
+    const activePolicy = options.noFallback ? undefined : options.fallbackPolicy;
+    const childLaunchProvider = options.workerLaunch?.provider ?? route.id;
+    const childProviders = childProfileProviders(options.identity.role, childLaunchProvider, options.childProfiles);
+    const fallbackSeedProviders: ProviderId[] = [
+      ...(!options.fallback?.length ? [route.id] : []),
+      ...(activePolicy?.children ? [childLaunchProvider, ...childProviders] : []),
+    ];
+    const extra = [
+      childLaunchProvider,
+      ...(!options.noFallback ? (options.fallback ?? []).map(choice => choice.provider) : []),
+      ...childProviders,
+      ...fallbackProvidersFor(fallbackSeedProviders, activePolicy),
+    ].filter(id => (id !== "amazon-bedrock" || options.aws) && (id !== "llama.cpp" || options.capabilities?.llama_cpp));
     const { providers, credentials } = options.routes ?? await sessionRoutes(options.modules.auth, route.id, options.identity.role, extra);
     const models = await createModelCatalog(credentials, { providers,
       ...(providers.every(isApiProvider) ? { modelsPath: null }
@@ -941,7 +975,11 @@ export class HostSession {
     host.remoteCatalog.observe(models, () => host.liveEvents.stateChanged());
     host.summaryRequest = await createSummaryRequest(options, report);
     const interactive = interactiveModels(options.identity.role);
-    host.buildProviders = childModels(options.identity.role) ? providers : [route.id];
+    host.buildProviders = interactive
+      ? providers
+      : childModels(options.identity.role)
+        ? providers.filter(id => id === childLaunchProvider || childProviders.includes(id))
+        : [route.id];
     if (options.capabilities?.enabled.includes("web.enabled") && options.capabilities.web?.search_provider === "subscription") {
       // Search follows the parent's own model, so it needs only the providers the parent may select.
       const searchProviders = (interactive ? providers : [route.id]).filter((id): id is ProviderId => id === "openai-codex" || id === "anthropic");
@@ -985,10 +1023,17 @@ export class HostSession {
       });
       const { session } = result;
       const switchForFallback = installModelSelection(session, models, interactive);
-      if (options.fallback?.length) {
+      const parentFallback: FallbackCandidates | undefined = options.noFallback
+        ? undefined
+        : options.fallback?.length
+          ? options.fallback
+          : hasProviderFallbacks(options.fallbackPolicy)
+            ? current => providerFallbackCandidates(current, options.fallbackPolicy)
+            : undefined;
+      if (parentFallback) {
         const agent = session.agent;
         const original = agent.streamFunction;
-        const fallback = withSubscriptionFallback(original, options.fallback, async (candidate, signal) => {
+        const fallback = withSubscriptionFallback(original, parentFallback, async (candidate, signal) => {
           const model = models.getModel(candidate.provider, candidate.model);
           if (!model) return undefined;
           try {

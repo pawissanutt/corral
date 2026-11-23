@@ -14,6 +14,7 @@ import { WebSettingsSchema } from "../extensions/web/settings.ts";
 import { McpSettingsSchema } from "./mcp-settings.ts";
 import { JobSettingsSchema } from "../extensions/jobs/settings.ts";
 import { LlamaCppSettingsSchema, type LlamaCppSettings } from "../auth/local.ts";
+import { parseFallbackSettings, type FallbackSettings } from "./fallback-settings.ts";
 import type { SummaryProfile } from "./summary.ts";
 
 export type UiMode = "rich" | "plain";
@@ -50,6 +51,8 @@ export interface HostConfig {
   /** Used only when starting a new terminal conversation without an explicit model. */
   readonly startupModel?: string | null;
   readonly fallback?: readonly ModelChoice[];
+  readonly noFallback?: boolean;
+  readonly fallbackPolicy?: FallbackSettings;
   /** The non-secret Amazon Bedrock binding corral read at dispatch; absent means none. */
   readonly aws?: AwsBinding;
   readonly effort?: string;
@@ -66,6 +69,7 @@ type Json = Record<string, unknown>;
 export const modelFlags = {
   model: { type: "string" }, provider: { type: "string" }, effort: { type: "string" },
   fallback: { type: "string", multiple: true },
+  "no-fallback": { type: "boolean" },
   "aws-profile": { type: "string" }, "aws-region": { type: "string" },
 } as const;
 
@@ -83,7 +87,7 @@ export function rejectRemovedModelOptions(argv: readonly string[]): void {
 }
 
 type ModelFlags = { model?: string; provider?: string; effort?: string; fallback?: readonly string[];
-  "aws-profile"?: string; "aws-region"?: string };
+  "no-fallback"?: boolean; "aws-profile"?: string; "aws-region"?: string };
 
 export function qualifiedModel(selector: string): ModelChoice | undefined {
   const match = /^([^/]+)\/([^\s\p{Cc}]+)$/u.exec(selector);
@@ -101,9 +105,12 @@ export function checkLaunchFallback(selector: string, fallbacks: readonly ModelC
   }
 }
 
-export function modelSettings(values: ModelFlags): { provider: ProviderId; model: string; effort?: string; aws?: AwsBinding; fallback?: ModelChoice[] };
-export function modelSettings(values: ModelFlags, mode: "startup"): { provider?: ProviderId; model?: string; effort?: string; aws?: AwsBinding; fallback?: ModelChoice[] };
+export function modelSettings(values: ModelFlags): { provider: ProviderId; model: string; effort?: string; aws?: AwsBinding; fallback?: ModelChoice[]; noFallback?: boolean };
+export function modelSettings(values: ModelFlags, mode: "startup"): { provider?: ProviderId; model?: string; effort?: string; aws?: AwsBinding; fallback?: ModelChoice[]; noFallback?: boolean };
 export function modelSettings(values: ModelFlags, mode?: "startup") {
+  if (values["no-fallback"] && values.fallback?.length) {
+    throw new Error("--no-fallback cannot be combined with --fallback");
+  }
   const prefix = values.model?.split("/", 1)[0];
   const qualified = values.model?.includes("/") && isProviderId(prefix) ? prefix : undefined;
   const provider = values.provider ?? qualified ?? (mode === "startup" && values.model === undefined ? undefined : "openai-codex");
@@ -131,7 +138,7 @@ export function modelSettings(values: ModelFlags, mode?: "startup") {
   });
   if (model !== undefined) checkLaunchFallback(qualified ? model : `${provider}/${model}`, fallback);
   return { provider, model, ...(values.effort ? { effort: values.effort } : {}),
-    ...(aws ? { aws } : {}), ...(fallback?.length ? { fallback } : {}) };
+    ...(aws ? { aws } : {}), ...(fallback?.length ? { fallback } : {}), ...(values["no-fallback"] ? { noFallback: true } : {}) };
 }
 
 const COMMON_ABILITIES = ["ask_user", "todo", "queue_control", "context_files", "skills", "compaction", "tool_search"];
@@ -163,6 +170,7 @@ export function workspaceSettings(root: string, role: keyof typeof ABILITIES, ru
   if (mcp) enabled.push("mcp.enabled");
   const local = raw.llama_cpp === undefined ? undefined : LlamaCppSettingsSchema.parse(raw.llama_cpp);
   if (local) enabled.push("llama_cpp.enabled");
+  const fallbackPolicy = parseFallbackSettings(raw.fallback);
   const guidance: CapabilityGuidance = {
     projectText: true,
     settings: {
@@ -179,7 +187,7 @@ export function workspaceSettings(root: string, role: keyof typeof ABILITIES, ru
   const capabilities: HostCapabilities = {
     catalog: 10, enabled, ...(web ? { web } : {}), ...(mcp ? { mcp } : {}), ...(local ? { llama_cpp: local } : {}),
   };
-  return { capabilities, guidance, todo: enabled.includes("todo") };
+  return { capabilities, guidance, todo: enabled.includes("todo"), fallbackPolicy };
 }
 
 export function sessionSocket(dir: string, env: NodeJS.ProcessEnv): string {

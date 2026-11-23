@@ -74,15 +74,19 @@ export function validateBuildResume(record: BuildSessionRecord): void {
 /** Build the same rich-host configuration for a new build and an explicitly resumed one. */
 export function buildHostConfig(launch: BuildLaunchOptions, record: BuildSessionRecord, assets: string, local: LocalBuildOptions): HostConfig {
   const dir = sessionDir(launch.dataRoot, record.id);
+  const route = record.route ?? launch;
+  const noFallback = launch.noFallback === true || record.route?.noFallback === true;
+  const fallback = launch.noFallback === true ? undefined : route.fallback;
   return {
     identity: { store: "build", project: record.project ?? "", role: "build" },
     pane: "", cwd: record.worktree, root: record.workspaceRoot ?? record.repoRoot, corral: launch.corral ?? "", assets,
     sessionDir: join(dir, "sessions"), runtimeDir: join(dir, "runtime"), ui: "rich",
     ...workspaceSettings(record.workspaceRoot ?? record.repoRoot, "build"),
     local: { dir, id: record.id, socket: local.socket ?? sessionSocket(dir, process.env), headless: local.headless },
-    provider: (record.route ?? launch).provider, model: (record.route ?? launch).model,
-    effort: (record.route ?? launch).effort, fallback: (record.route ?? launch).fallback,
-    aws: (record.route ?? launch).aws,
+    provider: route.provider, model: route.model,
+    effort: route.effort, fallback,
+    ...(noFallback ? { noFallback: true } : {}),
+    aws: route.aws,
     ...(local.plan ? { planMode: true } : {}),
   };
 }

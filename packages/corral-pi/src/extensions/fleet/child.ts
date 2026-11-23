@@ -7,6 +7,8 @@ import type { ExtensionAPI, ModelRuntime, ToolDefinition } from "@earendil-works
 import type { ChildQuestion, ChildSpec, ChildUsage, ReviewVerdict } from "../../build/types.ts";
 import { isApiProvider, isProviderId } from "../../auth/providers.ts";
 import { assertApiEffort } from "../../host/api-providers.ts";
+import { childFallbackPolicy, type FallbackSettings } from "../../host/fallback-settings.ts";
+import { installChildFallback } from "../../host/model-selection.ts";
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
 import { closeResidentSession, residentLifecycle } from "../../claude/resident.ts";
 import { classifyBuildWrite } from "../../roles/build/guard.ts";
@@ -35,6 +37,7 @@ export interface ChildHooks extends AgentCommunication {
   ask(question: ChildQuestion): Promise<string>;
   openingPrompt(): string;
   reviewVerdict(verdict: Omit<ReviewVerdict, "at">): void;
+  onFallback?(from: string, to: string): void;
 }
 export interface ChildRunner {
   run(spec: ChildSpec, model: ResolvedModel, hooks: ChildHooks, signal: AbortSignal): ChildHandle;
@@ -58,6 +61,7 @@ export interface SdkRunnerOptions {
   /** Exempt only the host-bound checkout's direct containing .worktrees marker. */
   readonly buildWorktree?: boolean;
   readonly bound?: boolean;
+  readonly fallbackPolicy?: FallbackSettings;
   readonly now?: () => number;
 }
 
@@ -412,9 +416,17 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
               : `${SYSTEM}\nYour kind is ${kind}.${kind === "slice" ? "" : " You are read-only: never edit or write files."}` } });
         ({ session } = await sdk.createAgentSessionFromServices({ services, sessionManager: sdk.SessionManager.open(file), model,
           tools: [...allowed], thinkingLevel: level, scopedModels: [{ model, thinkingLevel: level }] }));
-        if (execution?.serviceTier) {
-          const stream = session.agent.streamFunction;
-          session.agent.streamFunction = (current, context, streamOptions) => stream(current, context, { ...streamOptions, serviceTier: execution.serviceTier });
+        const childFallback = childFallbackPolicy(options.fallbackPolicy);
+        if (execution?.serviceTier || childFallback) {
+          const baseStream = session.agent.streamFunction;
+          const initialStream = execution?.serviceTier
+            ? (current: Parameters<typeof baseStream>[0], context: Parameters<typeof baseStream>[1], streamOptions: Parameters<typeof baseStream>[2]) =>
+                baseStream(current, context, { ...streamOptions, serviceTier: execution.serviceTier })
+            : undefined;
+          installChildFallback({
+            session, models, policy: childFallback, baseStream, initialStream,
+            onFallback: (from, to) => hooks.onFallback?.(from, to),
+          });
         }
         // Build children share the helper projection, including bounded tool argument/result streaming.
         unsubscribe = session.subscribe(event => observeHelperEvent(event, hooks.onEvent, options.now));

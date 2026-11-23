@@ -11,6 +11,7 @@ export interface BuildRoute {
   readonly model: string;
   readonly effort?: string;
   readonly fallback?: readonly ModelChoice[];
+  readonly noFallback?: boolean;
   readonly aws?: AwsBinding;
 }
 
