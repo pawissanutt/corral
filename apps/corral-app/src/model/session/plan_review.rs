@@ -44,6 +44,7 @@ impl SessionPage {
     pub fn plan_option_keys(&self) -> bool {
         self.focus == Focus::Dock
             && self.picker.is_none()
+            && self.dock.confirm.is_none()
             && self.dock.decision.is_none()
             && self.dock.answer.is_none()
     }

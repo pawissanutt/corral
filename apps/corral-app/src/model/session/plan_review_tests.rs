@@ -113,7 +113,12 @@ fn execute_sends_the_model_shown_even_if_the_feed_has_changed() {
 
 #[test]
 fn opening_a_plan_above_a_composer_card_leaves_digits_with_the_composer() {
-    for kind in [CardKind::Select, CardKind::Confirm, CardKind::Question] {
+    for kind in [
+        CardKind::Select,
+        CardKind::Confirm,
+        CardKind::Question,
+        CardKind::Exit,
+    ] {
         let mut review = card(
             "plan-1",
             CardKind::PlanReview,
@@ -142,6 +147,15 @@ fn opening_a_plan_above_a_composer_card_leaves_digits_with_the_composer() {
         cards.push(other);
         let session = Id::from(SESSION);
         let mut state = State::default();
+        if kind == CardKind::Exit {
+            state.ui_mut(&session).dock.confirming = Some(super::dock::Confirming {
+                card: "other".into(),
+                option: "land".into(),
+                label: "Land".into(),
+                detail: None,
+                needs_text: None,
+            });
+        }
         for id in ["other", "plan-1"] {
             state.act(
                 Action::Dock(DockAction::Bring {
