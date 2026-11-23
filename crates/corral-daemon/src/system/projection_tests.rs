@@ -430,7 +430,12 @@ fn review_serves_the_heads_package_level_when_asked() {
     let (_, rows) = review(&delta, &head, &head, None, Some(&at)).unwrap();
     assert!(rows.iter().any(|row| matches!(row,
         Review::Map { row: Map::Module { module, .. } } if *module == code)));
-    assert!(!rows.iter().any(|row| matches!(row, Review::Map { row: Map::Container { .. } })));
+    assert!(!rows.iter().any(|row| matches!(
+        row,
+        Review::Map {
+            row: Map::Container { .. }
+        }
+    )));
 }
 
 #[test]
@@ -529,6 +534,9 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
         path: "a/new.rs".into(),
         line: 2
     }));
-    assert!(rows.iter().any(|row| matches!(row, Review::Dependent { dependent: d, .. } if *d == dependent)));
+    assert!(
+        rows.iter()
+            .any(|row| matches!(row, Review::Dependent { dependent: d, .. } if *d == dependent))
+    );
     assert!(rows.contains(&Review::TestCandidate { candidate }));
 }

@@ -417,7 +417,9 @@ pub(crate) fn review(
         None => project_rows(tree, None),
         Some(at) => map_rows(tree, &no_activity(), 0, Some(at))?,
     };
-    review.rows.extend(map.into_iter().map(|row| Row::Map { row }));
+    review
+        .rows
+        .extend(map.into_iter().map(|row| Row::Map { row }));
     Ok((review.categories, review.rows))
 }
 
