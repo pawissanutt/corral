@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { createCodeCommands } from "../src/host/code-commands.ts";
 import { getCodeCloneSeed, getCodeForkChoices, getCodeForkSeed, readCodeImportSeed } from "../src/host/code-copies.ts";
 
 const user = (content: string) => ({ role: "user" as const, content, timestamp: 0 });
@@ -102,3 +103,77 @@ test("import rejects symlinks to non-regular files and oversized files before pa
     await expect(readCodeImportSeed(file)).rejects.toThrow("32 MiB limit");
   });
 });
+
+const extra = (type: string, fields: object) => ({ type, id: "extra", parentId: "root", timestamp: stamp, ...fields });
+
+test("confirmed malformed import reports an error without handing off the current host", async () => {
+  await withJsonl([header, line("root", null, "root"), extra("message", { message: { ...user(""), content: [null] } })], async file => {
+    const manager = SessionManager.inMemory();
+    const leaf = manager.appendMessage(user("current"));
+    let handoffs = 0;
+    const notice = Promise.withResolvers<{ text: string; level: string | undefined }>();
+    const command = createCodeCommands({
+      dataRoot: tmpdir(), manager: () => manager, busy: () => false,
+      current: { id: "B-current", name: "current", version: 1, created: stamp, updated: stamp,
+        repoRoot: tmpdir(), worktree: tmpdir(), branch: null, base: null, here: true, trustedCode: true },
+      ui: () => ({ select: async () => undefined, confirm: async () => true,
+        notify: (text, level) => notice.resolve({ text, level }) }),
+      handoff: async () => { handoffs++; notice.resolve({ text: "unexpected handoff", level: undefined }); },
+    });
+    expect(command(`/import ${file}`)).toBe(true);
+    const result = await notice.promise;
+    expect(result.level).toBe("error");
+    expect(result.text).toContain("Invalid Pi session JSONL");
+    expect(handoffs).toBe(0);
+    expect(manager.getLeafId()).toBe(leaf);
+  });
+});
+
+test("import preserves valid edits and remaps their target", async () => {
+  const content = [{ type: "text", text: "edited" }, { type: "image", data: "aA==", mimeType: "image/png" }];
+  await withJsonl([header, line("root", null, "root"), extra("context_edit", { targetId: "root", replacement: { content } })], async file => {
+    const seed = await readCodeImportSeed(file);
+    expect(seed[1]).toMatchObject({ targetId: seed[0]?.id, replacement: { content } });
+    expect(SessionManager.inMemory(undefined, undefined, seed).buildSessionContext().messages).toMatchObject([{ role: "user", content }]);
+  });
+});
+
+test("import rejects over-deep JSON before cloning retained opaque data", async () => {
+  let deep: unknown = "leaf";
+  for (let i = 0; i < 65; i++) deep = [deep];
+  await withJsonl([header, { ...line("root", null, "root"), deep }], async file => {
+    await expect(readCodeImportSeed(file)).rejects.toThrow("JSON value limits");
+  });
+});
+
+for (const [name, bad] of [
+  ["null content block", extra("message", { message: { ...user(""), content: [null] } })],
+  ["malformed image", extra("message", { message: { ...user(""), content: [{ type: "image", data: 9 }] } })],
+  ["malformed assistant tool arguments", extra("message", { message: {
+    role: "assistant", timestamp: 0, api: "anthropic-messages", provider: "anthropic", model: "model", stopReason: "toolUse",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    content: [{ type: "toolCall", id: "id", name: "tool", arguments: [] }],
+  } })],
+  ["malformed tool result nested calls", extra("message", { message: {
+    role: "toolResult", timestamp: 0, toolCallId: "id", toolName: "tool", isError: false,
+    content: [], nestedCalls: { complete: true, calls: [null] },
+  } })],
+  ["malformed bash output", extra("message", { message: { role: "bashExecution", output: null } })],
+  ["malformed system tools", extra("message", { message: { role: "system", timestamp: 0, content: "", toolsAdded: [null] } })],
+  ["malformed compaction system prompt", extra("compaction", { summary: "summary", tokensBefore: 1, firstKeptEntryId: "root", systemMessage: null })],
+  ["malformed branch summary", extra("branch_summary", { fromId: "root", summary: null })],
+  ["malformed model selector", extra("model_change", { provider: "anthropic", modelId: {} })],
+  ["malformed thinking level", extra("thinking_level_change", { thinkingLevel: [] })],
+  ["malformed label", extra("label", { targetId: "root", label: {} })],
+  ["malformed context replacement", extra("context_edit", { targetId: "root", replacement: { content: [null] } })],
+  ["role-incompatible context replacement", extra("context_edit", { targetId: "root", replacement: { content: [{ type: "thinking", thinking: "x" }] } })],
+  ["cross-branch context replacement", extra("context_edit", { parentId: null, targetId: "root", replacement: null })],
+] as const) {
+  test(`import rejects ${name} even off the active branch`, async () => {
+    await withJsonl([header, line("root", null, "root"), bad, line("active", "root", "ok")], async (file, original) => {
+      await expect(readCodeImportSeed(file)).rejects.toThrow("Invalid Pi session JSONL");
+      expect(await readFile(file, "utf8")).toBe(original);
+    });
+  });
+}
