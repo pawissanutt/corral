@@ -507,7 +507,10 @@ fn a_card_answer_reaches_the_host_and_its_brief_leaves_the_state() {
             jsonrpc: rpc::JSONRPC.into(),
             id: json!(1),
             method: SESSION_CARD_ANSWER.into(),
-            params: json!({"id": id, "card": "question-2", "answers": answers, "dismiss": false}),
+            params: json!({
+                "id": id, "card": "question-2", "answers": answers, "dismiss": false,
+                "expected_model": "provider/model",
+            }),
         },
         Some(&guard),
         &mut Subscriptions::new(shared),
@@ -532,6 +535,7 @@ fn a_card_answer_reaches_the_host_and_its_brief_leaves_the_state() {
                 "card_answer".to_owned(),
                 json!({
                     "card": "question-2", "answers": answers, "dismiss": false, "device": paired.id,
+                    "expected_model": "provider/model",
                 }),
             ),
         ],

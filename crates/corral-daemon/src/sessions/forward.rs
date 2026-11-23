@@ -103,6 +103,8 @@ enum ActArgs<'a> {
     },
     Card {
         card: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expected_model: Option<String>,
         answers: Vec<CardAnswer>,
         dismiss: bool,
         device: &'a str,
@@ -174,6 +176,7 @@ pub(crate) fn card_answer(
     let SessionCardAnswer {
         id,
         card,
+        expected_model,
         answers,
         dismiss,
     } = request;
@@ -183,6 +186,7 @@ pub(crate) fn card_answer(
         "card_answer",
         ActArgs::Card {
             card,
+            expected_model,
             answers,
             dismiss,
             device,

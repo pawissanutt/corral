@@ -112,6 +112,9 @@ pub struct SessionModelSet {
 pub struct SessionCardAnswer {
     pub id: String,
     pub card: String,
+    /// Full model ID (`<provider>/<model>`) shown for this approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_model: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub answers: Vec<CardAnswer>,
     #[serde(default)]
