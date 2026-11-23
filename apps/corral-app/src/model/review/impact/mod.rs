@@ -554,13 +554,31 @@ pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<us
         {
             notes.extend(provider_omissions(provider));
         }
+        let answered_tests = review
+            .provider
+            .as_ref()
+            .filter(|p| p.error.is_none() && p.coverage.provides("tests"));
+        let candidates = items.iter().any(|i| i.sign == Sign::Neutral);
         if category == Category::Tests
-            && !items.iter().any(|i| i.sign == Sign::Neutral)
-            && !review
-                .provider
-                .as_ref()
-                .is_some_and(|p| p.coverage.provides("tests"))
+            && !candidates
+            && let Some(p) = answered_tests
         {
+            // Changed test files are built in and share the category, so they must not hide an
+            // empty answer; rows left out of the reply or by the extension might be candidates.
+            notes.push(
+                if total > items.len() {
+                    format!("No test candidate among the items listed from {}.", p.extension)
+                } else if p.coverage.omitted.values().any(|n| *n > 0) {
+                    format!(
+                        "No test candidate listed: {} answered with none, but left out what is counted above.",
+                        p.extension
+                    )
+                } else {
+                    format!("No test candidate: {} answered with none for this change.", p.extension)
+                },
+            );
+        }
+        if category == Category::Tests && !candidates && answered_tests.is_none() {
             notes.push(match (&review.provider, extension) {
                 (Some(p), _) if p.error.is_some() => format!(
                     "Test candidates not provided: {} failed on this change.",

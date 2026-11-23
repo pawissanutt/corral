@@ -122,7 +122,8 @@ fn unsupplied_category_is_not_zero_and_dependents_survive_a_touched_package() {
 }
 
 /// Before a configured extension's answer reaches the review, its categories wait for it
-/// rather than reading "not provided"; once it answers, a listed category with no rows is none.
+/// rather than reading "not provided"; once it answers, a listed category with no rows is none,
+/// and an empty candidate answer still shows beside a built-in changed test file.
 #[test]
 fn an_extension_category_waits_for_its_answer_then_reads_none() {
     let categories = |provided| {
@@ -131,7 +132,7 @@ fn an_extension_category_waits_for_its_answer_then_reads_none() {
             .map(|category| SystemCategorySummary {
                 category,
                 provided: provided || !provider_supplied(category) || category == Category::Tests,
-                total: 0,
+                total: usize::from(provided && category == Category::Tests),
             })
             .collect()
     };
@@ -152,7 +153,12 @@ fn an_extension_category_waits_for_its_answer_then_reads_none() {
         supply(&waiting, Category::Dependents),
         Some(Supply::Unanswered)
     );
-    let mut answered = review(categories(true), Vec::new());
+    let mut answered = review(
+        categories(true),
+        vec![Row::TestFile {
+            path: "a/tests/x.rs".into(),
+        }],
+    );
     answered.provider = Some(corral_types::SystemProvider {
         extension: "ext".into(),
         coverage: corral_types::ProviderCoverage {
@@ -167,6 +173,18 @@ fn an_extension_category_waits_for_its_answer_then_reads_none() {
     let answered = impact(&answered, Some("ext"), &BTreeSet::new());
     assert_eq!(supply(&answered, Category::Definitions), Some(Supply::None));
     assert_eq!(supply(&answered, Category::Dependents), Some(Supply::None));
+    let tests = Category::ALL
+        .iter()
+        .position(|c| *c == Category::Tests)
+        .and_then(|index| answered.sections.get(index));
+    assert_eq!(tests.map(|s| s.supply), Some(Supply::Rows(1)));
+    let empty_answer = |section: &Section| {
+        section
+            .notes
+            .iter()
+            .any(|note| note.starts_with("No test candidate:"))
+    };
+    assert!(tests.is_some_and(empty_answer));
 }
 
 /// corrald anchors a call group at the base when every call in it was removed; the anchor
