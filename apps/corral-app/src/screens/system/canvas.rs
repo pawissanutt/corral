@@ -1,7 +1,7 @@
 //! The map on a canvas, for desktop and web: measured to its container and laid out by the
 //! model at that width with the platform's text engine, so it follows the window and no name is
 //! cut. Edges are drawn three ways at the project level (declared and referenced; declared with
-//! no reference, dashed; referenced but not declared, in the held colour), cards re-coloured by
+//! no reference, dashed; no matching dependency, in the held colour), cards re-coloured by
 //! the overlay on the same geometry. A canvas has no parts of its own for the pointer or a
 //! screen reader, so every card and every edge also gets a transparent button over it that
 //! carries its label: a press picks it, a press on the picked card opens its level. A task
@@ -235,11 +235,6 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
         let Some(edge) = scene.edges.get(label.edge) else {
             continue;
         };
-        let hue = if edge.kind == EdgeKind::ReferencedOnly {
-            Hue::Held
-        } else {
-            Hue::Neutral
-        };
         let r = Rect {
             x: label.x - label.w / 2.0,
             y: label.y - 9.0,
@@ -256,19 +251,11 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
             .begin_path()
             .round_rect(bounds(r), px(4.0))
             .fill()
-            .stroke_color(if hue == Hue::Held {
-                now(hue_ink(hue))
-            } else {
-                ink(Token::Rule2)
-            })
+            .stroke_color(ink(Token::Rule2))
             .line_width(1.0)
             .stroke()
             .font(&css(Font::Label))
-            .fill_color(if hue == Hue::Held {
-                now(hue_ink(hue))
-            } else {
-                ink(Token::Ink3)
-            })
+            .fill_color(ink(Token::Ink3))
             .text_align(CanvasTextAlign::Center)
             .fill_text(label.text, label.x, label.y + 4.0);
     }

@@ -86,7 +86,7 @@ pub struct Route {
     pub points: Vec<(f32, f32)>,
 }
 
-/// Words on an edge (`not declared`, `0 refs`), centred at x.
+/// Words on an edge (`0 refs`), centred at x.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeLabel {
     pub edge: usize,
@@ -309,7 +309,6 @@ fn labels(scene: &Scene, routes: &[Route], measure: Measure) -> Vec<EdgeLabel> {
     let mut out: Vec<EdgeLabel> = Vec::new();
     for route in routes {
         let text = match scene.edges.get(route.edge).map(|e| e.kind) {
-            Some(EdgeKind::ReferencedOnly) => "not declared",
             Some(EdgeKind::DeclaredOnly) => "0 refs",
             _ => continue,
         };

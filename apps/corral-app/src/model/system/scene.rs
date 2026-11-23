@@ -131,7 +131,7 @@ pub enum EdgeKind {
     Declared,
     /// Declared in a manifest with no reference found.
     DeclaredOnly,
-    /// Referenced in source without a declaration.
+    /// Referenced in source without a matched declaration.
     ReferencedOnly,
     /// Module to module inside the package shown.
     Module,
@@ -144,7 +144,7 @@ impl EdgeKind {
         match self {
             EdgeKind::Declared => "declared and referenced",
             EdgeKind::DeclaredOnly => "declared, no reference found",
-            EdgeKind::ReferencedOnly => "referenced, not declared",
+            EdgeKind::ReferencedOnly => "used in code · no dependency match",
             EdgeKind::Module => "module reference",
             EdgeKind::Boundary => "references with a neighbouring package",
         }

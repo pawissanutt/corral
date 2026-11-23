@@ -195,7 +195,7 @@ fn edges(scene: &Scene, node: &Node, picked: Option<(&Node, &Node)>) -> Vec<Line
             let words = match e.kind {
                 EdgeKind::Declared => format!("declared · {refs}"),
                 EdgeKind::DeclaredOnly => "declared · 0 refs".into(),
-                EdgeKind::ReferencedOnly => format!("not declared · {refs}"),
+                EdgeKind::ReferencedOnly => format!("{refs} · no dependency match"),
                 EdgeKind::Module | EdgeKind::Boundary => refs,
             };
             Line::Edge(EdgeLine {

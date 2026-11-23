@@ -264,20 +264,31 @@ fn edge_value(edge: &Edge) -> String {
     match edge.kind {
         EdgeKind::Declared => format!("declared · {}", count(edge.count)),
         EdgeKind::DeclaredOnly => "declared · 0".into(),
-        EdgeKind::ReferencedOnly => format!("not declared · {}", count(edge.count)),
+        EdgeKind::ReferencedOnly => format!(
+            "{} · no dependency match",
+            plural(edge.count, "ref", "refs")
+        ),
         EdgeKind::Module | EdgeKind::Boundary => count(edge.count),
     }
 }
 
 fn edge_inspector(scene: &Scene, edge: &Edge) -> Inspector {
-    let what = match edge.kind {
-        EdgeKind::Declared => "Declared in the manifest and referenced in source.",
-        EdgeKind::DeclaredOnly => "Declared in the manifest; no reference found in source.",
-        EdgeKind::ReferencedOnly => "Referenced in source, not declared in the manifest.",
-        EdgeKind::Module => "Source in one module refers to the other.",
-        EdgeKind::Boundary => "Module references across the package's boundary.",
+    let from = scene.name(&edge.from);
+    let to = scene.name(&edge.to);
+    let dependency = match edge.kind {
+        EdgeKind::Declared | EdgeKind::DeclaredOnly => Some("Match found"),
+        EdgeKind::ReferencedOnly => Some("No match found by the map"),
+        EdgeKind::Module | EdgeKind::Boundary => None,
     };
-    let mut facts = vec![Row::fact("References", count(edge.count))];
+    let title = match edge.kind {
+        EdgeKind::Declared | EdgeKind::ReferencedOnly => format!("{from} uses {to}"),
+        EdgeKind::DeclaredOnly => format!("{from} lists {to}"),
+        _ => format!("{from} → {to}"),
+    };
+    let mut facts = vec![Row::fact("Code references", count(edge.count))];
+    if let Some(value) = dependency {
+        facts.push(Row::fact("Dependency list", value.into()));
+    }
     if let Some(basis) = edge.basis {
         facts.push(Row::fact(
             "Basis",
@@ -290,7 +301,11 @@ fn edge_inspector(scene: &Scene, edge: &Edge) -> Inspector {
     let mut sections = vec![Section {
         title: None,
         rows: facts,
-        note: Some(what.into()),
+        note: match edge.kind {
+            EdgeKind::Module => Some("Source in one module refers to the other.".into()),
+            EdgeKind::Boundary => Some("Module references across the package's boundary.".into()),
+            _ => None,
+        },
     }];
     if !edge.pairs.is_empty() {
         let rows = edge
@@ -320,8 +335,12 @@ fn edge_inspector(scene: &Scene, edge: &Edge) -> Inspector {
         .collect();
     sections.push(Section::facts(None, ends));
     Inspector {
-        kind: capital(edge.kind.word()),
-        title: format!("{} → {}", scene.name(&edge.from), scene.name(&edge.to)),
+        kind: if dependency.is_some() {
+            "Package connection".into()
+        } else {
+            capital(edge.kind.word())
+        },
+        title,
         sections,
         open: None,
     }

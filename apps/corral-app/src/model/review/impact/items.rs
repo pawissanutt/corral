@@ -347,7 +347,7 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             let kind = |kind: PackageEdgeKind| match kind {
                 PackageEdgeKind::DeclaredAndReferenced => "declared and referenced",
                 PackageEdgeKind::DeclaredOnly => "declared, no reference",
-                PackageEdgeKind::ReferencedOnly => "referenced, not declared",
+                PackageEdgeKind::ReferencedOnly => "used in code · no dependency match",
             };
             let right = match (before, after) {
                 (Some(b), Some(a)) => format!("{} → {}", kind(b.kind), kind(a.kind)),
