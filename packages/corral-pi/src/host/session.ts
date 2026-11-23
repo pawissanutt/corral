@@ -456,7 +456,13 @@ export class HostSession {
     this.local = new LocalControlPlane(options.build?.dir ?? options.runtimeDir ?? options.agentDir, options.identity);
     const planPrompts = options.modules.role.planMode;
     this.planMode = planPrompts ? new PlanMode({
-      dir: options.build?.dir ?? options.runtimeDir ?? options.agentDir, cwd: options.cwd, prompts: planPrompts,
+      // A Build has a directory of its own. A chat's runtime directory serves every conversation held there, so
+      // its plan is kept under the transcript's id: a resumed chat finds its draft, and a new one starts without.
+      get dir() {
+        return options.build?.dir
+          ?? join(options.runtimeDir ?? options.agentDir, "plan-mode", host.session.sessionManager.getSessionId());
+      },
+      cwd: options.cwd, prompts: planPrompts,
       askUser: options.capabilities?.enabled.includes("ask_user") === true,
       todo: options.capabilities ? options.capabilities.enabled.includes("todo") : options.todo === true,
       entries: () => this.session.sessionManager.getBranch(),
@@ -1094,6 +1100,8 @@ export class HostSession {
         const message = plan.turnMessage();
         if (message) this.session.sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
       });
+      // Pi's own tree navigation can move to another branch without appending an entry or going through rewind.
+      pi.on("session_tree", () => { plan.refresh(); });
       pi.registerTool(planSubmitTool(() => plan));
       if (this.options.ui !== "plain") {
         this.planReview = new PlanReviewUi(plan, {

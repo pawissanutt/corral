@@ -9,7 +9,7 @@ import { EventLog } from "../src/bridge/events.ts";
 import type { SubmitResult } from "../src/bridge/protocol.ts";
 import type { CapabilityGuidance } from "../src/capabilities/guidance.ts";
 import { loadModules } from "../src/host/modules.ts";
-import { PLAN_NOTE, type PlanMode } from "../src/host/plan-mode.ts";
+import { PLAN_ENTRY, PLAN_NOTE, type PlanMode } from "../src/host/plan-mode.ts";
 import { RemoteOwner } from "../src/host/remote-owner.ts";
 import { guardedFetch, restrictEnvironment } from "../src/host/restrict.ts";
 import { SessionRecord } from "../src/host/session-record.ts";
@@ -499,6 +499,26 @@ for (const { turn, source, reason, phase } of [
     expect(plan.review).toBe(phase === "review" ? review : undefined);
     expect(plan.approved).toBeUndefined();
   });
+}), 120_000);
+
+test("a chat's plan belongs to its transcript, not to the runtime directory its other conversations share", () => planning(undefined, async (live, plan) => {
+  expect(plan.path).toContain(join("plan-mode", live.session.sessionManager.getSessionId()));
+}), 120_000);
+
+test("a move to a branch before the submission, with nothing appended, tells the views its review is gone", () => planning(undefined, async (live, plan) => {
+  writeFileSync(plan.path, PLAN);
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+  await live.session.prompt("Plan a --version flag", { source: "extension" });
+  await live.drained();
+  expect(plan.review).toBeDefined();
+  let told = 0;
+  plan.onChange(() => { told++; });
+  // When Pi's own tree navigation goes back to the entry that turned plan mode on, with no summary:
+  const entered = live.session.sessionManager.getBranch().find(entry => entry.type === "custom" && entry.customType === PLAN_ENTRY);
+  await live.session.navigateTree(entered?.id ?? "", { summarize: false });
+  // Then the views hear that the mode is planning again, rather than showing the old card until something else changes.
+  expect(plan.phase).toBe("planning");
+  expect(told).toBe(1);
 }), 120_000);
 
 test("an overlapping prompt that loses the run to a kickoff costs it neither its approval nor its turn", () => planning(undefined, async (live, plan, _cwd, owner) => {

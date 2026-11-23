@@ -39,7 +39,10 @@ export interface PlanEntry {
 }
 
 export interface PlanHost {
-  /** The session's state directory: the plan document and the copies of its submissions live here. */
+  /**
+   * The state directory of this one conversation: the plan document and the copies of its submissions live
+   * here. Read when used, once the transcript is bound.
+   */
   readonly dir: string;
   /** The directory the file tools resolve relative paths in. */
   readonly cwd: string;
@@ -156,7 +159,7 @@ function scan(entries: readonly PlanEntry[]): Scan {
 
 export class PlanMode {
   /** The one plan document of the session. */
-  readonly path: string;
+  get path(): string { return join(this.host.dir, PLAN_FILE); }
   private cache: { leaf: string | null; scan: Scan } | undefined;
   private submitted: { card: string; body: string } | undefined;
   /** An approval is being carried out, up to the admission of its kickoff. */
@@ -171,7 +174,7 @@ export class PlanMode {
   private seen: string | undefined;
   private readonly listeners = new Set<() => void>();
 
-  constructor(private readonly host: PlanHost) { this.path = join(host.dir, PLAN_FILE); }
+  constructor(private readonly host: PlanHost) {}
 
   private read(): Scan {
     const leaf = this.host.leaf();

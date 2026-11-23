@@ -64,8 +64,10 @@ entered leaves it.
 
 ### Files
 
-`<state dir>` is the directory that already holds `todo.json`
-(`options.build?.dir ?? options.runtimeDir ?? options.agentDir`).
+`<state dir>` belongs to one conversation. A Build has a directory of its own
+(`options.build.dir`, which also holds `todo.json`). A chat's runtime directory serves every
+conversation held there, so its state dir is `<runtime dir>/plan-mode/<transcript id>`: a
+resumed chat finds its draft, and `chat --new` starts without one.
 
 - `<state dir>/plan.md`: the one plan document of the session. The agent creates and revises
   it with the ordinary `write` and `edit` tools.
