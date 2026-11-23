@@ -1,4 +1,4 @@
-import { expect, spyOn, test } from "bun:test";
+import { expect, test } from "bun:test";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,16 +88,16 @@ test("header-only sessions are empty; unfinished appends wait and changed reads 
     await expect(readTranscriptPage(file, "existing", { mode: "conversation", cursor: newer })).rejects.toThrow("cursor mode");
     const original = TranscriptBytes.prototype.read;
     let mutated = false;
-    const spy = spyOn(TranscriptBytes.prototype, "read").mockImplementation(async function (this: TranscriptBytes, start, length) {
+    TranscriptBytes.prototype.read = async function (start, length) {
       const data = await original.call(this, start, length);
       if (!mutated) {
         mutated = true;
         appendFileSync(file, "{}\n");
       }
       return data;
-    });
+    };
     try { await expect(read(newer)).rejects.toThrow("Transcript changed"); }
-    finally { spy.mockRestore(); }
+    finally { TranscriptBytes.prototype.read = original; }
     await expect(read(newer)).rejects.toThrow("Transcript changed");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
