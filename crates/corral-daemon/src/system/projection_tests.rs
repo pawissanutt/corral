@@ -379,7 +379,8 @@ fn review_uses_head_ownership_base_for_deletes_and_builtin_edge_changes() {
         module: old,
         added: 0,
         removed: 0,
-        binary: true
+        binary: true,
+        deleted: true
     }));
     assert!(rows.contains(&Review::TestFile {
         path: "old/tests/blob.bin".into()

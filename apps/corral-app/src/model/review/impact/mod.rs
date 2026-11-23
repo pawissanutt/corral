@@ -402,10 +402,20 @@ pub fn impact(review: &SystemReview, more: &BTreeSet<usize>) -> Impact {
         })
         .collect();
     let mut files: BTreeMap<String, ModuleId> = BTreeMap::new();
+    let mut deleted = BTreeSet::new();
     for row in &review.rows {
         match row {
-            Row::File { path, module, .. } => {
-                files.insert(path.clone(), module.clone());
+            Row::File {
+                path,
+                module,
+                deleted: gone,
+                ..
+            } => {
+                if *gone {
+                    deleted.insert(path.clone());
+                } else {
+                    files.insert(path.clone(), module.clone());
+                }
             }
             Row::Dependent {
                 dependent,
@@ -420,6 +430,7 @@ pub fn impact(review: &SystemReview, more: &BTreeSet<usize>) -> Impact {
     let cx = Ctx {
         containers,
         files,
+        deleted,
         head: &review.head,
         base: &review.base,
     };

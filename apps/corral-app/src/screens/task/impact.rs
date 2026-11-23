@@ -341,7 +341,7 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
         if !selected.get() {
             return None;
         }
-        let (sub, anchor) = (item.sub.clone(), item.anchor.clone());
+        let (sub, anchor, note) = (item.sub.clone(), item.anchor.clone(), item.note.clone());
         let to_system = to_system(app, project.clone(), item.target.clone());
         Some(untracked(|| {
             view()
@@ -354,6 +354,7 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
                     app,
                     anchor.map_or_else(|| NO_ANCHOR.to_owned(), |a| a.words()),
                 ))
+                .children(note.map(|note| quiet(app, note)))
                 .child(to_system)
                 .into_element()
         }))

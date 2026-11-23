@@ -194,6 +194,9 @@ pub enum SystemReviewRow {
         added: u64,
         removed: u64,
         binary: bool,
+        /// The change deleted the file: it exists at the base only.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        deleted: bool,
     },
     /// A changed package or workspace manifest, independent of dependency deltas.
     Manifest {

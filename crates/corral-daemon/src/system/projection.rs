@@ -320,7 +320,13 @@ pub(crate) fn review(
         let Some(file) = head.or_else(|| base_files.get(path)) else {
             continue;
         };
-        footprint.add(file, change.added, change.removed, change.binary);
+        footprint.add(
+            file,
+            change.added,
+            change.removed,
+            change.binary,
+            head.is_none(),
+        );
         if file.test {
             test_files.push(Row::TestFile {
                 path: change.path.clone(),
@@ -467,7 +473,7 @@ struct Footprint<'a> {
 }
 
 impl<'a> Footprint<'a> {
-    fn add(&mut self, file: &'a FileFact, added: u64, removed: u64, binary: bool) {
+    fn add(&mut self, file: &'a FileFact, added: u64, removed: u64, binary: bool, deleted: bool) {
         self.containers
             .entry(&file.container)
             .or_default()
@@ -483,6 +489,7 @@ impl<'a> Footprint<'a> {
             added,
             removed,
             binary,
+            deleted,
         });
     }
 

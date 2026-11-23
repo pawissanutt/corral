@@ -1,7 +1,7 @@
 //! The Model impact list's items: one per served impact row, with how it changed, its source
 //! anchor at the commit its line belongs to, and the map level and node it selects.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use corral_types::{
     ChangeKind, ModuleId, PackageEdgeKind, ReadStatus, SystemAt, SystemImpactCategory as Category,
@@ -94,6 +94,8 @@ pub struct Item {
     pub sub: Option<String>,
     pub anchor: Option<Anchor>,
     pub target: Option<Target>,
+    /// Why the map selects something else than the item's own node, or nothing.
+    pub note: Option<String>,
 }
 
 pub(super) fn short(commit: &str) -> &str {
@@ -207,6 +209,8 @@ pub(super) const fn category_of(row: &Row) -> Option<Category> {
 pub(super) struct Ctx<'a> {
     pub containers: Vec<String>,
     pub files: BTreeMap<String, ModuleId>,
+    /// Files the change deleted: they exist at the base only.
+    pub deleted: BTreeSet<String>,
     pub head: &'a str,
     pub base: &'a str,
 }
@@ -269,6 +273,7 @@ pub(super) fn item(key: String, sign: Sign, main: String, right: String) -> Item
         sub: None,
         anchor: None,
         target: None,
+        note: None,
     }
 }
 
@@ -280,7 +285,34 @@ fn grew(before: u64, after: u64) -> Sign {
     }
 }
 
+/// An item; one whose file the change deleted is anchored at the base, and the map selects the
+/// deepest package at the head that held it, or says there is none.
 pub(super) fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
+    let mut item = row_item(cx, n, row)?;
+    let Some(anchor) = item.anchor.as_mut() else {
+        return Some(item);
+    };
+    if !cx.deleted.contains(&anchor.path) {
+        return Some(item);
+    }
+    anchor.base = true;
+    anchor.commit = cx.base.to_owned();
+    let path = anchor.path.clone();
+    item.target = cx.container(&path);
+    item.note = Some(match &item.target {
+        Some(Target {
+            node: Node::Container(owner),
+            ..
+        }) => format!(
+            "Deleted by this change, so not on the head's map; {} that held it is selected.",
+            if owner.is_empty() { "(root)" } else { owner }
+        ),
+        _ => "Deleted by this change, and no package that held it is on the head's map.".into(),
+    });
+    Some(item)
+}
+
+fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
     let key = format!("row-{n}");
     Some(match row {
         Row::Manifest { path } => Item {

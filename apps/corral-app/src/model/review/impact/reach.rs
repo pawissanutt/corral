@@ -1,8 +1,9 @@
-//! Where "Open in System" can take an item. Activity › System draws the project at its current
-//! head, not at the task's submission, so a package or file the change adds is not there until
-//! it lands. Each level along the item's target is looked up in Activity › System's own served
-//! map: the item opens at its node when the map has it, at the deepest level that holds it
-//! otherwise, and says so when the map has none of it.
+//! Where "Open in System" can take an item. Activity › System draws the project at its own
+//! head, not at the task's submission, so it need not have the item's node. Each level along
+//! the item's target is looked up in Activity › System's own served map, confirmed and read at
+//! one head: the item opens at its node when the map has it, at the deepest level that holds it
+//! otherwise, and says so when the map has none of it. Until every level is confirmed it says
+//! it is still checking, and what it could not read.
 
 use corral_protocol::detail::{DetailBody, DetailRef};
 use corral_types::{SystemAt, SystemStatus};
@@ -51,29 +52,40 @@ fn words(node: &Node) -> String {
 pub fn reach(feed: &Feed, project: &str, target: &Target) -> Reach {
     let trail = &target.trail;
     let mut found: Option<(usize, Node, String)> = None;
+    let mut head: Option<Option<String>> = None;
     for depth in 0..=trail.len() {
         let node = match trail.get(depth) {
             Some(at) => Node::of(at),
             None => target.node.clone(),
         };
         let at = trail[..depth].last();
-        let cache = feed.detail(&request(project, at));
-        let error = cache.and_then(|cache| cache.error.as_ref());
-        let map = match (cache.and_then(|cache| cache.body()), error) {
-            (Some(DetailBody::SystemMap(map)), _) => map,
+        let Some(cache) = feed.detail(&request(project, at)) else {
+            return Reach::Checking;
+        };
+        // Only a confirmed level can promise the node: a kept body may be another head's.
+        if cache.loading || cache.stale {
+            return Reach::Checking;
+        }
+        let map = match (cache.body(), &cache.error) {
             // A level System cannot find at its head does not hold the node.
             (_, Some(error)) if error.code == "not_found" => break,
             (_, Some(error)) => {
                 return Reach::Unavailable(format!(
-                    "Activity › System's map could not be read: {}",
+                    "Could not check Activity › System's map: {}",
                     error.message
                 ));
             }
+            (Some(DetailBody::SystemMap(map)), None) => map,
             _ => return Reach::Checking,
         };
         // Its facts are still being built: it may yet have the node.
         if map.status == SystemStatus::Building && map.rows.is_empty() {
             return Reach::Checking;
+        }
+        // Levels read at different heads do not describe one map; the older is read again.
+        match &head {
+            Some(head) if *head != map.head => return Reach::Checking,
+            _ => head = Some(map.head.clone()),
         }
         let scene = build(map, at);
         let Some(card) = scene.card(&node) else {
@@ -84,8 +96,10 @@ pub fn reach(feed: &Feed, project: &str, target: &Target) -> Reach {
     let wanted = words(&target.node);
     match found {
         None => Reach::Unavailable(format!(
-            "Not on Activity › System's map: it draws {project} at its current head, where \
-             {wanted} is not (this change has not landed there)."
+            "Not on Activity › System's map: {wanted} is not in {project}{}.",
+            head.flatten()
+                .map(|head| format!(" at {}", head.get(..10).unwrap_or(&head)))
+                .unwrap_or_default()
         )),
         Some((depth, node, _)) if depth == trail.len() => Reach::Open {
             trail: trail.clone(),
@@ -97,8 +111,8 @@ pub fn reach(feed: &Feed, project: &str, target: &Target) -> Reach {
             trail: trail[..depth].to_vec(),
             label: format!("Open {name} in System"),
             note: Some(format!(
-                "Activity › System's map at the current head does not show {wanted}; {name}, \
-                 which holds it, is there."
+                "Activity › System's map does not show {wanted}; {name}, which holds it, is \
+                 there."
             )),
             node,
         },

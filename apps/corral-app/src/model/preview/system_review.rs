@@ -81,6 +81,7 @@ pub(super) fn review(
             added: *added,
             removed: *removed,
             binary: false,
+            deleted: false,
         });
         let source = path.ends_with(".rs") || path.ends_with(".ts") || path.ends_with(".tsx");
         if path.contains("test") {

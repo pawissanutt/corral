@@ -237,3 +237,99 @@ fn open_in_system_offers_only_what_the_system_map_has() {
 fn request_map(project: &str) -> DetailRef {
     crate::model::system::request(project, None)
 }
+
+/// A file the change deleted exists at the base only: its item is anchored there, and the map
+/// selects the package at the head that held it, never the absent file.
+#[test]
+fn a_deleted_file_is_anchored_at_the_base_and_selects_its_surviving_package() {
+    let rows = vec![
+        container("a"),
+        Row::File {
+            path: "a/tests/gone.rs".into(),
+            container: "a".into(),
+            module: module("a", "tests"),
+            added: 0,
+            removed: 7,
+            binary: false,
+            deleted: true,
+        },
+        Row::TestFile {
+            path: "a/tests/gone.rs".into(),
+        },
+    ];
+    let impact = impact(&review(Vec::new(), rows), &BTreeSet::new());
+    let item = impact
+        .sections
+        .iter()
+        .flat_map(|s| s.items.iter())
+        .find(|item| item.main == "a/tests/gone.rs");
+    assert_eq!(
+        item.map(|i| (
+            i.anchor.as_ref().map(|a| (a.base, a.commit.clone())),
+            i.target.as_ref().map(|t| t.node.clone()),
+            i.note.is_some()
+        )),
+        Some((
+            Some((true, "base-commit".into())),
+            Some(Node::Container("a".into())),
+            true
+        ))
+    );
+}
+
+/// Open in System promises a node only from confirmed levels read at one head: a level being
+/// revalidated, or a package level from another head than the project level, is still checked.
+#[test]
+fn open_in_system_waits_for_confirmed_levels_at_one_head() {
+    let map = |head: &str, rows: Vec<SystemMapRow>| SystemMap {
+        project: "p".into(),
+        head: Some(head.into()),
+        status: SystemStatus::Ready,
+        error: None,
+        provider: None,
+        coverage: None,
+        omitted_rows: 0,
+        rows,
+    };
+    let project = map(
+        "new",
+        vec![SystemMapRow::Container {
+            container: container_fact("a"),
+            stats: SystemNodeStats::default(),
+        }],
+    );
+    let package = |head: &str| {
+        map(
+            head,
+            vec![SystemMapRow::Module {
+                module: module("a", "x"),
+                stats: SystemNodeStats::default(),
+            }],
+        )
+    };
+    let at = SystemAt::Container { path: "a".into() };
+    let target = Target {
+        trail: vec![at.clone()],
+        node: Node::Module(module("a", "x")),
+    };
+    let feed_with = |package: SystemMap, stale: bool| {
+        let mut feed = Feed::default();
+        for (target, body, stale) in [
+            (request_map("p"), project.clone(), false),
+            (crate::model::system::request("p", Some(&at)), package, stale),
+        ] {
+            feed.details.insert(
+                detail_key(&target),
+                cached(target, Some(DetailBody::SystemMap(body)), stale, false),
+            );
+        }
+        feed
+    };
+    let checking = |feed: &Feed| matches!(reach(feed, "p", &target), Reach::Checking);
+    assert!(checking(&feed_with(package("new"), true)));
+    assert!(checking(&feed_with(package("old"), false)));
+    assert!(matches!(
+        reach(&feed_with(package("new"), false), "p", &target),
+        Reach::Open { note: None, .. }
+    ));
+}
