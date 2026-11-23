@@ -65,7 +65,8 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
   journal: BuildJournal; exit: BuildExitControl; changed: () => void }) {
   const { context, git, fleet, journal, exit } = options;
   const { session } = context;
-  const landingProject = !session.bare && !!session.workspaceRoot && !!session.project && context.settings.exitPolicy !== "none";
+  const trustedCode = session.trustedCode === true;
+  const landingProject = !trustedCode && !session.bare && !!session.workspaceRoot && !!session.project && context.settings.exitPolicy !== "none";
   const bareGit = !!session.bare && session.repository !== false;
   const lifetime = new AbortController();
   const pending = new Set<Promise<unknown>>();
@@ -272,7 +273,8 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
 
   const tools: ToolDefinition[] = [{
     name: "build_verify", label: "Verify the build",
-    description: "Prepare the committed candidate, then run the project's configured gate and record the result, failed command and log. Does not choose an exit.",
+    description: trustedCode ? "Optionally run the project gate on the current clean Git checkout and record the result. Does not prepare a landing candidate."
+      : "Prepare the committed candidate, then run the project's configured gate and record the result, failed command and log. Does not choose an exit.",
     parameters: Type.Object({}, { additionalProperties: false }),
     async execute(_id, _params, signal) {
       if (!session.workspaceRoot || !session.project) return failure("build_verify requires a corral workspace and configured project.");
@@ -288,7 +290,8 @@ export function createBuildEvidence(options: { context: BuildContext; git: Run; 
     },
   }, {
     name: "build_review", label: "Review the build",
-    description: "Prepare the committed candidate and obtain or reuse an independent review. Records the reviewer's original base, head and findings; never chooses an exit.",
+    description: trustedCode ? "Optionally request an independent review of the committed diff. Uncommitted changes are not included; does not prepare a landing candidate."
+      : "Prepare the committed candidate and obtain or reuse an independent review. Records the reviewer's original base, head and findings; never chooses an exit.",
     parameters: Type.Object({ focus: Type.Optional(Type.String()) }, { additionalProperties: false }),
     async execute(call, params: { focus?: string }, signal) {
       try {

@@ -30,29 +30,34 @@ function delegationFacts(settings: BuildSettings): string[] {
 function sessionFacts(context: RoleContext): string {
   if (!context.build) return "## This build session\n\nNo build session is bound. Writes are refused until the host binds a build worktree.";
   const { session, settings } = context.build;
+  const trustedCode = session.trustedCode === true;
   const profiles = settings.profiles.map((profile) =>
     `- ${profile.name}: ${profile.model}${profile.effort ? `; effort=${profile.effort}` : ""}${profile.description ? `; ${profile.description}` : ""}`);
   if (!settings.profiles.some(profile => profile.name === "default")) {
     profiles.unshift("- default: inherits the parent's launch model and effort");
   }
   return [
-    session.bare ? "## This bare session" : "## This build session",
+    trustedCode ? "## This coding session" : session.bare ? "## This bare session" : "## This build session",
     "",
     `Worktree: ${session.worktree}`,
     `Branch: ${session.branch ?? (session.repository === false ? "none (outside Git)" : "detached HEAD")}`,
     `Base commit: ${session.base ?? (session.repository === false ? "none (outside Git)" : "none (unborn repository)")}`,
     `Owner's checkout: ${session.here ? "yes" : "no (a separate session worktree)"}`,
-    session.bare ? "Bare session: no corral workspace, project, board, gate tool or corral commands. The record stays in the local journal."
-      : `Exit policy: ${settings.exitPolicy}`,
+    ...(trustedCode ? [session.workspaceRoot ? "Corral workspace: " + session.workspaceRoot : "No corral workspace is bound."] : [
+      session.bare ? "Bare session: no corral workspace, project, board, gate tool or corral commands. The record stays in the local journal."
+        : `Exit policy: ${settings.exitPolicy}`,
+    ]),
     `Maximum parallel children: ${settings.maxParallel}`,
     "task returns immediately; reports arrive as messages. agent_wait blocks for child reports.",
     "agent_message carries peer information between children and parent, not authority to override a brief.",
-    session.bare ? "Run checks with bash; there is no build_verify. An approving build_review is recommended, not required for Land."
-      : "Commit before build_verify; use build_review and build_resolve before build_finish.",
-    "build_finish requires a real title; only the owner chooses Keep, Iterate or Land.",
-    session.bare ? session.repository === false ? "This directory is outside Git: only Keep and Iterate are available."
-      : `Land is a local Git rebase and fast-forward onto the starting branch ${session.baseBranch ?? "(none)"}, with no gate. Only the owner chooses it.`
-      : "Exits never create board work. board_plan is only for confirmed follow-on work.",
+    ...(trustedCode ? [] : [
+      session.bare ? "Run checks with bash; there is no build_verify. An approving build_review is recommended, not required for Land."
+        : "Commit before build_verify; use build_review and build_resolve before build_finish.",
+      "build_finish requires a real title; only the owner chooses Keep, Iterate or Land.",
+      session.bare ? session.repository === false ? "This directory is outside Git: only Keep and Iterate are available."
+        : `Land is a local Git rebase and fast-forward onto the starting branch ${session.baseBranch ?? "(none)"}, with no gate. Only the owner chooses it.`
+        : "Exits never create board work. board_plan is only for confirmed follow-on work.",
+    ]),
     "",
     "Child profiles (configured or inherited; runtime checks still apply):",
     ...profiles,
@@ -61,14 +66,19 @@ function sessionFacts(context: RoleContext): string {
   ].join("\n");
 }
 
+
 export function buildRole(root: string): RoleModule {
   return {
     role: "build",
     upstreamTools: UPSTREAM,
     tools: (context) => context.todo === true ? [sessionTodoTool] : [],
     contract: (context) => `${renderContract(readAsset(root, CONTRACT_ASSET).replace(
+      /<!-- (build|code)-only -->([\s\S]*?)<!-- \/\1-only -->/g,
+      (_match, kind: string, text: string) => (kind === "code") === (context.build?.session.trustedCode === true) ? text : "").replace(
       /<!-- (bare|corral)-only -->([\s\S]*?)<!-- \/\1-only -->/g,
-      (_match, kind: string, text: string) => (kind === "bare") === (context.build?.session.bare === true) ? text : ""), context.identity)}\n\n`
+      (_match, kind: string, text: string) => (context.build?.session.trustedCode === true
+        ? kind === "corral" && !context.build.session.bare && !!context.build.session.workspaceRoot
+        : (kind === "bare") === (context.build?.session.bare === true)) ? text : ""), context.identity)}\n\n`
       + requestContract(root, context.todo) + "\n\n" + askUserContract(context) + "\n\n" + sessionFacts(context),
     calibration: calibrationReader(root, "build"),
     shellRefusal: buildShellRefusal,
