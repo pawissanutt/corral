@@ -202,6 +202,29 @@ pub(super) fn merge_pages(pages: &[DetailReply]) -> Result<Option<DetailBody>, S
         }
         return Ok(Some(DetailBody::SessionPlanModeDoc(plan)));
     }
+    // Only a map's or impact's rows are paged; every page repeats the rest whole, its provider's
+    // category lists and the impact's category summaries included, so the first page holds them.
+    if let Some(DetailBody::SystemMap(first)) = pages.first().and_then(|page| page.body.as_ref()) {
+        let mut map = first.clone();
+        for page in &pages[1..] {
+            let Some(DetailBody::SystemMap(part)) = &page.body else {
+                return Err("System map page kind changed.".into());
+            };
+            map.rows.extend(part.rows.iter().cloned());
+        }
+        return Ok(Some(DetailBody::SystemMap(map)));
+    }
+    if let Some(DetailBody::SystemReview(first)) = pages.first().and_then(|page| page.body.as_ref())
+    {
+        let mut review = first.clone();
+        for page in &pages[1..] {
+            let Some(DetailBody::SystemReview(part)) = &page.body else {
+                return Err("Impact page kind changed.".into());
+            };
+            review.rows.extend(part.rows.iter().cloned());
+        }
+        return Ok(Some(DetailBody::SystemReview(review)));
+    }
     let mut merged: Option<Value> = None;
     for page in pages {
         if let Some(body) = &page.body {
@@ -315,5 +338,44 @@ mod tests {
             panic!("artifact body was not assembled");
         };
         assert_eq!(artifact.content, "AAECAw==");
+    }
+
+    #[test]
+    fn system_map_pages_keep_one_provider_category_list() {
+        let provided = vec!["files".to_owned(), "definitions".to_owned()];
+        let pages = (0..3)
+            .map(|_| DetailReply {
+                etag: "map".into(),
+                as_of: "2026-11-22T00:00:00Z".into(),
+                seq: 1,
+                next: None,
+                body: Some(DetailBody::SystemMap(corral_types::SystemMap {
+                    project: "corral".into(),
+                    head: Some("abc".into()),
+                    status: corral_types::SystemStatus::Ready,
+                    error: None,
+                    provider: Some(corral_types::SystemProvider {
+                        extension: "codeindex".into(),
+                        coverage: corral_types::ProviderCoverage {
+                            provided: provided.clone(),
+                            not_provided: vec!["references".into()],
+                            skipped: BTreeMap::new(),
+                            omitted: BTreeMap::new(),
+                            dropped_unknown_files: 0,
+                        },
+                        error: None,
+                    }),
+                    coverage: None,
+                    omitted_rows: 0,
+                    rows: Vec::new(),
+                })),
+            })
+            .collect::<Vec<_>>();
+        let Some(DetailBody::SystemMap(map)) = merge_pages(&pages).unwrap() else {
+            panic!("map body was not assembled");
+        };
+        let coverage = map.provider.unwrap().coverage;
+        assert_eq!(coverage.provided, provided);
+        assert_eq!(coverage.not_provided, ["references"]);
     }
 }

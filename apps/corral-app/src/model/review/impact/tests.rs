@@ -88,7 +88,7 @@ fn unsupplied_category_is_not_zero_and_dependents_survive_a_touched_package() {
         dependent("a/src/other.rs", Some(module("a", "other"))),
         dependent("a/b/src/x.rs", None),
     ];
-    let impact = impact(&review(categories, rows), &BTreeSet::new());
+    let impact = impact(&review(categories, rows), None, &BTreeSet::new());
     let supply = |category: Category| {
         let index = Category::ALL.iter().position(|c| *c == category);
         impact
@@ -121,6 +121,54 @@ fn unsupplied_category_is_not_zero_and_dependents_survive_a_touched_package() {
     assert_eq!(mark(Node::Container("c".into())), None);
 }
 
+/// Before a configured extension's answer reaches the review, its categories wait for it
+/// rather than reading "not provided"; once it answers, a listed category with no rows is none.
+#[test]
+fn an_extension_category_waits_for_its_answer_then_reads_none() {
+    let categories = |provided| {
+        Category::ALL
+            .into_iter()
+            .map(|category| SystemCategorySummary {
+                category,
+                provided: provided || !provider_supplied(category) || category == Category::Tests,
+                total: 0,
+            })
+            .collect()
+    };
+    let supply = |impact: &Impact, category: Category| {
+        let index = Category::ALL.iter().position(|c| *c == category);
+        impact
+            .sections
+            .iter()
+            .find(|s| Some(s.index) == index)
+            .map(|s| s.supply)
+    };
+    let waiting = impact(
+        &review(categories(false), Vec::new()),
+        Some("ext"),
+        &BTreeSet::new(),
+    );
+    assert_eq!(
+        supply(&waiting, Category::Dependents),
+        Some(Supply::Unanswered)
+    );
+    let mut answered = review(categories(true), Vec::new());
+    answered.provider = Some(corral_types::SystemProvider {
+        extension: "ext".into(),
+        coverage: corral_types::ProviderCoverage {
+            provided: vec!["changes".into(), "dependents".into(), "tests".into()],
+            not_provided: Vec::new(),
+            skipped: BTreeMap::new(),
+            omitted: BTreeMap::new(),
+            dropped_unknown_files: 0,
+        },
+        error: None,
+    });
+    let answered = impact(&answered, Some("ext"), &BTreeSet::new());
+    assert_eq!(supply(&answered, Category::Definitions), Some(Supply::None));
+    assert_eq!(supply(&answered, Category::Dependents), Some(Supply::None));
+}
+
 /// corrald anchors a call group at the base when every call in it was removed; the anchor
 /// must name the base, where that line exists.
 #[test]
@@ -136,6 +184,7 @@ fn a_removal_only_call_group_is_anchored_at_the_base() {
     };
     let impact = impact(
         &review(Vec::new(), vec![call(0, 2), call(1, 1)]),
+        None,
         &BTreeSet::new(),
     );
     let calls = Category::ALL
@@ -258,7 +307,7 @@ fn a_deleted_file_is_anchored_at_the_base_and_selects_its_surviving_package() {
             path: "a/tests/gone.rs".into(),
         },
     ];
-    let impact = impact(&review(Vec::new(), rows), &BTreeSet::new());
+    let impact = impact(&review(Vec::new(), rows), None, &BTreeSet::new());
     let item = impact
         .sections
         .iter()

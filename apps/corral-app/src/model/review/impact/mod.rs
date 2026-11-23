@@ -136,10 +136,12 @@ pub const STALE: &str = "Shown as last read; corrald has not confirmed it since.
 pub const LEGEND_DRAWN: &str = "Ringed: touched, with lines added and removed. Dashed ring: holds dependents. Dimmed: untouched. Select a node again to open it.";
 pub const LEGEND_LISTED: &str = "Each node shows its lines added and removed, the dependents it holds, or untouched (dimmed). Select a node again to open it.";
 
-/// What a category's answer is: nothing supplies it, an empty answer, or rows.
+/// What a category's answer is: nothing supplies it, an answer still awaited from the
+/// configured extension, an empty answer, or rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Supply {
     NotProvided,
+    Unanswered,
     None,
     Rows(usize),
 }
@@ -148,6 +150,7 @@ impl Supply {
     pub fn figure(self) -> String {
         match self {
             Supply::NotProvided => "not provided".into(),
+            Supply::Unanswered => "not answered".into(),
             Supply::None => "none".into(),
             Supply::Rows(n) => plural(n as u64, "item", "items"),
         }
@@ -224,7 +227,11 @@ pub fn shown(feed: &Feed, task: &str, trail: &[SystemAt], more: &BTreeSet<usize>
     if review.status == SystemStatus::Building && review.rows.is_empty() {
         return Shown::Said(BUILDING.into());
     }
-    let mut impact = impact(review, more);
+    let extension = feed
+        .systems
+        .get(review.project.as_str())
+        .and_then(|row| row.extension.as_deref());
+    let mut impact = impact(review, extension, more);
     if stale {
         impact.notices.insert(0, STALE.into());
     }
@@ -391,7 +398,37 @@ fn marks_of(review: &SystemReview, containers: &[String], file: Option<&str>) ->
     marks
 }
 
-pub fn impact(review: &SystemReview, more: &BTreeSet<usize>) -> Impact {
+/// Why a category an extension can supply has no answer: the extension's answer, its failure,
+/// or no answer yet from the configured `extension` each say so.
+fn unprovided(review: &SystemReview, extension: Option<&str>) -> (Supply, Option<String>) {
+    let said = match (&review.provider, extension) {
+        (Some(p), _) if p.error.is_some() => {
+            format!("Not provided: {} failed on this change.", p.extension)
+        }
+        (Some(p), _) => {
+            format!(
+                "Not provided: {} does not supply this category.",
+                p.extension
+            )
+        }
+        (None, Some(name)) => {
+            return (
+                Supply::Unanswered,
+                Some(format!(
+                    "Not answered yet: corrald has no answer from {name} for this change."
+                )),
+            );
+        }
+        (None, None) => NOTHING_SUPPLIES.into(),
+    };
+    (Supply::NotProvided, Some(said))
+}
+
+const NOTHING_SUPPLIES: &str = "Not provided: nothing in this project supplies this category.";
+
+/// `extension`: the facts extension the project's `system` row names, whose answer the
+/// provider categories wait for while the review carries none.
+pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<usize>) -> Impact {
     let map = head_map(review);
     let containers: Vec<String> = map
         .rows
@@ -518,20 +555,28 @@ pub fn impact(review: &SystemReview, more: &BTreeSet<usize>) -> Impact {
             && !review
                 .provider
                 .as_ref()
-                .is_some_and(|p| p.coverage.provided.iter().any(|c| c == "tests"))
+                .is_some_and(|p| p.coverage.provides("tests"))
         {
-            notes.push("Test candidates not provided: no extension supplies them.".into());
+            notes.push(match (&review.provider, extension) {
+                (Some(p), _) => format!(
+                    "Test candidates not provided: {} did not supply them.",
+                    p.extension
+                ),
+                (None, Some(name)) => {
+                    format!("Test candidates: {name} has not answered for this change yet.")
+                }
+                (None, None) => "Test candidates not provided: no extension supplies them.".into(),
+            });
         }
         let hidden = if more.contains(&index) {
             0
         } else {
             items.len().saturating_sub(LIMIT)
         };
-        let (supply, empty) = if !provided {
-            (
-                Supply::NotProvided,
-                Some("Not provided: nothing in this project supplies this category.".to_owned()),
-            )
+        let (supply, empty) = if !provided && provider_supplied(category) {
+            unprovided(review, extension)
+        } else if !provided {
+            (Supply::NotProvided, Some(NOTHING_SUPPLIES.to_owned()))
         } else if total == 0 {
             (Supply::None, Some(zero(category).to_owned()))
         } else {
