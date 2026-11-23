@@ -622,15 +622,19 @@ fn timeline_grouping_redraws_the_lanes_from_the_feed() {
     app.wait_for("id:session-log").unwrap();
 }
 
-/// A file copied in a file manager arrives as its path alone: pasted into Ask, which takes
-/// attachments, it is refused with that reason rather than dropped.
+/// A file copied in a file manager arrives as its path alone. Pasted into Ask, which takes
+/// attachments, it is routed to attachment handling, not typed into the field: the sample
+/// preview refuses it visibly, since only a connected corrald takes uploads.
 #[test]
-fn a_file_pasted_as_a_path_alone_is_refused_visibly() {
+fn a_file_manager_path_paste_is_an_attachment_not_text() {
     let mut app = preview(desktop(), &[]);
     app.press_key("/").unwrap();
     app.wait_for("id:ask-input").unwrap();
     let mut paste = PasteEvent::default();
-    paste.uris.push("file:///tmp/shot.png".into());
+    paste
+        .uris
+        .push("file:///clipboard-fixture/meeting%20notes.txt".into());
     app.paste("id:ask-input", &paste).unwrap();
-    app.wait_for("text:/path alone/").unwrap();
+    app.wait_for("id:toast").unwrap();
+    assert_eq!(app.screen().input_text("id:ask-input").unwrap(), Some(""));
 }
