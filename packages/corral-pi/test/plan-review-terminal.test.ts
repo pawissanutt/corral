@@ -54,8 +54,16 @@ test("the terminal plan review names the model again when it is changed from the
     await frame(h, `revision 1 · ${original?.provider}/${original?.id}`);
     const target = (await h.host.runtime.services.modelRuntime.getAvailable()).find(model => model.id !== original?.id && model.reasoning);
     if (!target) throw new Error("the fixture needs a second model");
-    // When the model is changed from another device:
-    await h.host.selectRemoteModel(`${target.provider}/${target.id}`);
+    // While a change from another device waits for auth, the old model is still displayed but cannot be approved.
+    const runtime = h.host.runtime.services.modelRuntime, auth = runtime.checkAuth.bind(runtime);
+    const checking = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    runtime.checkAuth = async (...args) => { checking.resolve(); await release.promise; return auth(...args); };
+    try {
+      const selected = h.host.selectRemoteModel(`${target.provider}/${target.id}`);
+      await checking.promise;
+      try { expect(() => plan.choose("execute")).toThrow("Wait for model selection"); }
+      finally { release.resolve(); await selected; }
+    } finally { runtime.checkAuth = auth; }
     // Then the review on screen names that model, and `e` executes on what it shows.
     await frame(h, `revision 1 · ${target.provider}/${target.id}`);
     fixtureTransport().script([{ text: "Executing." }]);

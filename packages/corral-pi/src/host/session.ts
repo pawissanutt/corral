@@ -367,6 +367,7 @@ export class HostSession {
   private planReview: PlanReviewUi | undefined;
   /** The summary a clean-context reset writes in place of a model-made one. */
   private planReset: string | undefined;
+  private modelSelections = 0;
   /** Inputs whose callers wait to learn whether that very input reached the transcript, by queue tag. */
   private readonly deliveries = new Map<unknown, (delivered: boolean) => void>();
   /** The user message Pi has told its listeners of and appends next, with the input it records. */
@@ -472,7 +473,8 @@ export class HostSession {
       append: record => { this.session.sessionManager.appendCustomEntry(PLAN_ENTRY, record, { immediate: true }); },
       busy: () => !this.remoteActionsReady ? "Session is not accepting plan actions"
         : this.open || this.session.isStreaming || this.session.isCompacting ? "Stop the current turn or wait for it to finish" : undefined,
-      blocked: () => this.session.isCompacting ? "Wait for the running compaction to finish, then choose again"
+      blocked: () => this.modelSelections ? "Wait for model selection to finish, then choose again"
+        : this.session.isCompacting ? "Wait for the running compaction to finish, then choose again"
         : options.paused?.() ? "The session is paused and would hold the plan instead of starting it. Resume it, then choose again"
         : undefined,
       stopTurn: () => this.planStopTurn(),
@@ -1414,6 +1416,19 @@ export class HostSession {
         delivery(true);
       }
     });
+    if (this.planMode) {
+      // Claim the selection before Pi awaits auth. Approval and model selection cannot both win.
+      const selecting = async <T>(select: () => Promise<T>): Promise<T> => {
+        if (this.planMode?.approving || (session.isStreaming && this.planMode?.approved)) {
+          throw new BridgeRefusal("remote_model_selection_unavailable", "Wait for plan execution to settle before changing models");
+        }
+        this.modelSelections++;
+        try { return await select(); } finally { this.modelSelections--; }
+      };
+      const set = session.setModel.bind(session), cycle = session.cycleModel.bind(session);
+      session.setModel = (...args) => selecting(() => set(...args));
+      session.cycleModel = (...args) => selecting(() => cycle(...args));
+    }
     this.startedInputFacts = undefined;
     this.remoteUsage = undefined;
     session.setQueueObserver({
@@ -1931,9 +1946,13 @@ export class HostSession {
    * Why an input that answers a plan review cannot start: the review is no longer the open one, or the model's
    * context is not the one the answer was given in. A clean context in particular is the plan and nothing else.
    */
-  private planAnswerRefused(answer: Pick<PlanAnswer, "card" | "context"> | undefined): string | undefined {
+  private planAnswerRefused(answer: PlanAnswer | undefined): string | undefined {
     if (answer === undefined) return undefined;
     if (this.planMode?.review !== answer.card) return "the plan review this answers is no longer open";
+    const model = this.session.model;
+    if (answer.kickoff && (this.modelSelections || answer.model !== (model && `${model.provider}/${model.id}`))) {
+      return "the model selected for this approval changed";
+    }
     return this.contextTip() === answer.context ? undefined : "the conversation went on after this answer to the plan review";
   }
 

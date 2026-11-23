@@ -92,7 +92,7 @@ const COMPACT_INSTRUCTIONS = "The owner approved a plan and execution starts nex
  * The review an input answers, and whether the input is that approval's kickoff rather than feedback on it. The
  * host adds the last entry of the model's `context` at the moment the answer is given.
  */
-export type PlanAnswer = { readonly card: string; readonly kickoff: boolean; readonly context?: string };
+export type PlanAnswer = { readonly card: string; readonly kickoff: boolean; readonly model?: string; readonly context?: string };
 
 const CHANGED = "the submitted plan's copy is missing or was changed; choose Keep planning and have it submitted again";
 const WITHDRAWN = "its review is no longer open";
@@ -201,7 +201,7 @@ export class PlanMode {
     return record.phase === "review" ? cardId(record) : undefined;
   }
   /** An approval is on its way into the transcript. */
-  private get approving(): boolean { return this.starting || (this.kickoff !== undefined && this.kickoff.card === this.review); }
+  get approving(): boolean { return this.starting || (this.kickoff !== undefined && this.kickoff.card === this.review); }
   /** One answer to the review is being carried out: nothing else may answer it or change the mode meanwhile. */
   private get pending(): boolean { return this.approving || (this.feedback !== undefined && this.feedback.card === this.review); }
 
@@ -465,7 +465,7 @@ export class PlanMode {
   private async execute(context: PlanContext, note?: string): Promise<void> {
     const record = this.record;
     if (record.phase !== "review") return;
-    const card = cardId(record);
+    const card = cardId(record), model = this.host.model();
     this.starting = true;
     try {
       await this.host.stopTurn();
@@ -495,7 +495,7 @@ export class PlanMode {
       this.kickoff = { card, text, path, admitted: false,
         journal: `Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})` };
       const kickoff = this.kickoff;
-      if (!await this.host.submit(text, "auto", { card, kickoff: true })) throw new Error("the session did not take it");
+      if (!await this.host.submit(text, "auto", { card, kickoff: true, model })) throw new Error("the session did not take it");
       kickoff.admitted = true;
     } catch (error) {
       this.kickoff = undefined;

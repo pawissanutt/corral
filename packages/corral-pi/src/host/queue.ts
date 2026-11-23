@@ -26,7 +26,7 @@ interface Input {
    * The plan review card this input answers, as approval or feedback, and the last entry of the model's context
    * when the answer was given: it starts only while that review is open and nothing was said since.
    */
-  readonly planAnswer?: { readonly card: string; readonly context?: string };
+  readonly planAnswer?: import("./plan-mode.ts").PlanAnswer;
 }
 /** What the transcript records of an input, and who it came from: `owner` and `pane` are the owner's own words. */
 export type InputFacts = Pick<Input, "facts" | "transcriptId" | "origin" | "planKickoff" | "planAnswer">;
