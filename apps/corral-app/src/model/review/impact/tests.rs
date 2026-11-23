@@ -163,7 +163,8 @@ fn cached(target: DetailRef, body: Option<DetailBody>, stale: bool, failed: bool
         transcript_seams: Default::default(),
         pages: Vec::new(),
         loading: false,
-        stale,
+        // The client keeps a failed read stale with its error.
+        stale: stale || failed,
         error: failed.then(|| ClientError {
             code: "unavailable".into(),
             message: "corrald is not reachable".into(),
@@ -316,7 +317,11 @@ fn open_in_system_waits_for_confirmed_levels_at_one_head() {
         let mut feed = Feed::default();
         for (target, body, stale) in [
             (request_map("p"), project.clone(), false),
-            (crate::model::system::request("p", Some(&at)), package, stale),
+            (
+                crate::model::system::request("p", Some(&at)),
+                package,
+                stale,
+            ),
         ] {
             feed.details.insert(
                 detail_key(&target),
@@ -327,6 +332,32 @@ fn open_in_system_waits_for_confirmed_levels_at_one_head() {
     };
     let checking = |feed: &Feed| matches!(reach(feed, "p", &target), Reach::Checking);
     assert!(checking(&feed_with(package("new"), true)));
+    // A package level whose read failed is said, not checked for ever.
+    let mut failed = feed_with(package("new"), false);
+    let level = crate::model::system::request("p", Some(&at));
+    failed.details.insert(
+        detail_key(&level),
+        cached(
+            level.clone(),
+            Some(DetailBody::SystemMap(package("new"))),
+            false,
+            true,
+        ),
+    );
+    assert!(matches!(
+        reach(&failed, "p", &target),
+        Reach::Unavailable(_)
+    ));
+    // One System cannot find at its head opens the package that holds it, said so.
+    let mut gone = cached(level.clone(), None, false, true);
+    if let Some(error) = gone.error.as_mut() {
+        error.code = "not_found".into();
+    }
+    failed.details.insert(detail_key(&level), gone);
+    assert!(matches!(
+        reach(&failed, "p", &target),
+        Reach::Open { node: Node::Container(path), note: Some(_), .. } if path == "a"
+    ));
     assert!(checking(&feed_with(package("old"), false)));
     assert!(matches!(
         reach(&feed_with(package("new"), false), "p", &target),

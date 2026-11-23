@@ -304,7 +304,8 @@ pub(super) fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             node: Node::Container(owner),
             ..
         }) => format!(
-            "Deleted by this change, so not on the head's map; {} that held it is selected.",
+            "Deleted by this change, so not on the head's map; {}, the deepest package there \
+             that contained it, is selected.",
             if owner.is_empty() { "(root)" } else { owner }
         ),
         _ => "Deleted by this change, and no package that held it is on the head's map.".into(),

@@ -62,27 +62,29 @@ pub fn reach(feed: &Feed, project: &str, target: &Target) -> Reach {
         let Some(cache) = feed.detail(&request(project, at)) else {
             return Reach::Checking;
         };
-        // Only a confirmed level can promise the node: a kept body may be another head's.
-        if cache.loading || cache.stale {
-            return Reach::Checking;
-        }
-        let map = match (cache.body(), &cache.error) {
+        // A failed read is kept stale with its error and waits for a retry: say so first.
+        match &cache.error {
             // A level System cannot find at its head does not hold the node.
-            (_, Some(error)) if error.code == "not_found" => break,
-            (_, Some(error)) => {
+            Some(error) if error.code == "not_found" => break,
+            Some(error) => {
                 return Reach::Unavailable(format!(
                     "Could not check Activity › System's map: {}",
                     error.message
                 ));
             }
-            (Some(DetailBody::SystemMap(map)), None) => map,
+            None => {}
+        }
+        // Only a confirmed level can promise the node: a kept body may be another head's.
+        let map = match cache.body() {
+            Some(DetailBody::SystemMap(map)) if !cache.loading && !cache.stale => map,
             _ => return Reach::Checking,
         };
         // Its facts are still being built: it may yet have the node.
         if map.status == SystemStatus::Building && map.rows.is_empty() {
             return Reach::Checking;
         }
-        // Levels read at different heads do not describe one map; the older is read again.
+        // Levels read at different heads do not describe one map. A System change marks every
+        // level of the project stale (`client/app/rows.rs`), so the keeper reads the older again.
         match &head {
             Some(head) if *head != map.head => return Reach::Checking,
             _ => head = Some(map.head.clone()),
