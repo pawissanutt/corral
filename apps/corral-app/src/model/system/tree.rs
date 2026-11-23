@@ -1,6 +1,6 @@
 //! The phone's and the terminal's form of the map: the same nodes as a list in the map's order
 //! (the connected ones, then the band), each with its overlay figure and a bar, and under the
-//! picked node its edges, each of which picks the other end. A list keeps every name whole and
+//! picked node its edges, each of which picks that edge. A list keeps every name whole and
 //! every edge readable where a drawing of thirty boxes could not (docs/plans/system-map.md §3.1).
 
 use super::scene::{Card, EdgeKind, Scene};

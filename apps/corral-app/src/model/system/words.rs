@@ -443,6 +443,9 @@ pub fn provenance(map: Option<&SystemMap>, row: Option<&SystemRow>) -> String {
     };
     let extension = row.and_then(|r| r.extension.clone());
     let depth = match (map.and_then(|m| m.provider.as_ref()), extension) {
+        (Some(p), _) if p.error.is_some() => {
+            format!("{} failed, so built-in facts only", p.extension)
+        }
         (Some(p), _) if p.coverage.provided.is_empty() => {
             format!("{} answered with nothing", p.extension)
         }

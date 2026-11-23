@@ -75,7 +75,12 @@ fn keep_loaded(app: AppState, data: Memo<Shown>) {
     });
     let wanted = computed(move || {
         let project = project.get()?;
-        let at = app.system.with(|state| state.at().cloned());
+        // A trail kept from another project names a level this one does not have.
+        let at = app.system.with(|state| {
+            (state.project.as_deref() == Some(project.as_str()))
+                .then(|| state.at().cloned())
+                .flatten()
+        });
         app.daemon().then(|| request(&project, at.as_ref()))
     });
     effect(move || {

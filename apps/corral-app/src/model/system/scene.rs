@@ -404,6 +404,9 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
             SystemMapRow::ModuleReference { reference } => {
                 let (from, to) = (&reference.from, &reference.to);
                 let pair = (from.clone(), to.clone(), reference.count);
+                if from == to {
+                    continue;
+                }
                 if from.container == path && to.container == path {
                     inside.push(Edge {
                         from: Node::Module(from.clone()),

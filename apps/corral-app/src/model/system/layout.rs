@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use super::layered::{LEdge, layered};
 use super::scene::{Card, EdgeKind, Kind, Level, Scene};
 use super::words::figure;
 use super::{Overlay, Window};
@@ -353,5 +354,3 @@ fn flow_pack(sizes: &[(f32, f32)], max_w: f32, gap: f32) -> (Vec<Rect>, f32, f32
     let h = if sizes.is_empty() { 0.0 } else { y + row_h };
     (out, w, h)
 }
-
-use super::layered::{LEdge, layered};

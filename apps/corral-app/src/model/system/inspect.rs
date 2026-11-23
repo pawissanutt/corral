@@ -1,5 +1,6 @@
 //! The inspector: what the picked node or edge is, its facts under every overlay, and its
-//! edges, each of which picks the other end. Every form shows the same sections.
+//! edges, each of which picks that edge; an edge's ends pick its nodes. Every form shows the
+//! same sections.
 
 use corral_types::{ReadStatus, ReferenceBasis, SystemActivity, SystemAt, WorkspaceStatus};
 

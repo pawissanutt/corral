@@ -617,16 +617,15 @@ fn hit_boxes(app: AppState, layout: &Layout, scene: &Scene) -> Vec<AnyElement> {
         let Some(card) = scene.cards.get(placed.card) else {
             continue;
         };
-        let figure = figure(
-            card,
-            app.system.with_untracked(|s| s.overlay),
-            app.system.with_untracked(|s| s.window),
-        );
-        let spoken = format!("{}, {}, {figure}", card.name, card.kind.word());
-        let hint = card.tag.as_ref().map_or_else(
-            || spoken.clone(),
-            |tag| format!("{} · {tag} · {figure}", card.name),
-        );
+        // The overlay re-paints the canvas without placing these again, so their words
+        // keep to what does not change with it.
+        let tag = card
+            .tag
+            .as_ref()
+            .map(|tag| format!(", {tag}"))
+            .unwrap_or_default();
+        let spoken = format!("{}, {}{tag}", card.name, card.kind.word());
+        let hint = spoken.clone();
         let node = card.node.clone();
         boxes.push(hit(
             app,
