@@ -30,16 +30,18 @@ index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d92
      /** Whether to dispatch extension commands and expand skill commands and prompt templates (default: true) */
      expandPromptTemplates?: boolean;
      /** Image attachments */
-@@ -221,6 +232,8 @@ export interface SessionStats {
+@@ -221,6 +232,10 @@ export interface SessionStats {
  }
  export declare class AgentSession {
      readonly agent: Agent;
 +    setQueueObserver(observer: HostQueueObserver | undefined): void;
++    /** Whether a terminal host can hand off without racing a prompt or ongoing SDK action. */
++    get isReadyForHandoff(): boolean;
 +    removeQueuedMessage(message: AgentMessage, cause?: string): boolean;
      readonly sessionManager: SessionManager;
      readonly settingsManager: SettingsManager;
      private _scopedModels;
-@@ -598,6 +611,7 @@ export declare class AgentSession {
+@@ -598,6 +613,7 @@ export declare class AgentSession {
       */
      steer(text: string, images?: ImageContent[], options?: {
          source?: InputSource;
@@ -47,7 +49,7 @@ index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d92
      }): Promise<QueuedInputDisposition>;
      /**
       * Queue a follow-up message to be processed after the agent finishes.
-@@ -609,6 +623,7 @@ export declare class AgentSession {
+@@ -609,6 +625,7 @@ export declare class AgentSession {
       */
      followUp(text: string, images?: ImageContent[], options?: {
          source?: InputSource;
@@ -55,7 +57,7 @@ index f61225f2da158f995127d6df58161937aa47afb3..790cc0849e73d4262eb97c63a0890d92
      }): Promise<QueuedInputDisposition>;
      /**
       * Internal: Queue a steering message (already expanded, no extension command check).
-@@ -664,7 +679,7 @@ export declare class AgentSession {
+@@ -664,7 +681,7 @@ export declare class AgentSession {
       * Useful for restoring to editor when user aborts.
       * @returns Object with steering and followUp arrays
       */
@@ -68,7 +70,7 @@ diff --git a/dist/core/agent-session.js b/dist/core/agent-session.js
 index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311230eae8c 100644
 --- a/dist/core/agent-session.js
 +++ b/dist/core/agent-session.js
-@@ -117,6 +117,14 @@ export class AgentSession {
+@@ -117,6 +117,18 @@ export class AgentSession {
      _idleWaitPromise;
      _resolveIdleWait;
      /** Tracks pending steering messages for UI display. Removed when delivered. */
@@ -76,6 +78,10 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
 +    _queueTags = new WeakMap();
 +    _queueDisplay = new Map();
 +    setQueueObserver(observer) { this._queueObserver = observer; }
++    get isReadyForHandoff() {
++        return this.isIdle && !this.isBashRunning && this._promptPreflightCount === 0
++            && !this._isEmittingAgentSettled && this._branchSummaryAbortController === undefined;
++    }
 +    removeQueuedMessage(message, cause) { return this.agent.removeQueuedMessage(message, cause); }
 +    _inputTag(text, images, source, mode, tag) {
 +        return tag ?? this._queueObserver?.input({ text, images, source, mode });
@@ -83,7 +89,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
      _steeringMessages = [];
      /** Tracks pending follow-up messages for UI display. Removed when delivered. */
      _followUpMessages = [];
-@@ -205,6 +213,18 @@ export class AgentSession {
+@@ -205,6 +217,18 @@ export class AgentSession {
      _runSystemPromptOptions;
      constructor(config) {
          this.agent = config.agent;
@@ -102,7 +108,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          this.sessionManager = config.sessionManager;
          this.settingsManager = config.settingsManager;
          this._scopedModels = config.scopedModels ?? [];
-@@ -789,21 +809,7 @@ export class AgentSession {
+@@ -789,21 +813,7 @@ export class AgentSession {
          // This ensures the UI sees the updated queue state
          if (event.type === "message_start" && event.message.role === "user") {
              this._overflowRecoveryAttempted = false;
@@ -125,7 +131,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              // Normalize queued images at delivery, before events and persistence see the message,
              // so they get the same resize as idle prompts with the current model's limits (#11738).
              if (this._queuedMessagesWithImages.has(event.message)) {
-@@ -1494,6 +1500,9 @@ export class AgentSession {
+@@ -1494,6 +1504,9 @@ export class AgentSession {
       * @param onStarted Called once the run's messages are prepared, before the first request.
       */
      async _startRun(trigger, onStarted) {
@@ -135,7 +141,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          this._isAgentRunActive = true;
          this._agentRunAbortRequested = false;
          let messages;
-@@ -1511,7 +1520,6 @@ export class AgentSession {
+@@ -1511,7 +1524,6 @@ export class AgentSession {
          // have while idle. No run exists yet, so they cannot split a tool call from its result.
          this._flushPendingBashMessages();
          this._flushPendingCustomMessages();
@@ -143,7 +149,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          // Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
          this._failedResponse = undefined;
          this._recordSelection();
-@@ -1519,6 +1527,7 @@ export class AgentSession {
+@@ -1519,6 +1531,7 @@ export class AgentSession {
          // are dropped, so a tool that never registers does not stay pending.
          this._pendingToolNames.clear();
          try {
@@ -151,7 +157,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              await this.agent.prompt(messages);
              while (!this._agentRunAbortRequested) {
                  if (await this._handlePostAgentRun()) {
-@@ -1702,8 +1711,28 @@ export class AgentSession {
+@@ -1702,8 +1715,28 @@ export class AgentSession {
       * @throws Error if no model selected or no API key available (when not streaming)
       */
      async prompt(text, options) {
@@ -181,7 +187,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              return;
          }
          const expandPromptTemplates = options?.expandPromptTemplates ?? true;
-@@ -1731,8 +1760,13 @@ export class AgentSession {
+@@ -1731,8 +1764,13 @@ export class AgentSession {
          finally {
              this._promptPreflightCount--;
          }
@@ -197,7 +203,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
      }
      /**
       * Run input hooks, expand templates, queue while streaming, and validate model and auth.
-@@ -1760,10 +1794,10 @@ export class AgentSession {
+@@ -1760,10 +1798,10 @@ export class AgentSession {
                  throw new Error("Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.");
              }
              if (options.streamingBehavior === "followUp") {
@@ -210,7 +216,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
              }
              preflightResult?.("queued");
              return undefined;
-@@ -1842,7 +1876,18 @@ export class AgentSession {
+@@ -1842,7 +1880,18 @@ export class AgentSession {
              return text; // Return original on error
          }
      }
@@ -230,7 +236,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          if (text.startsWith("/")) {
              this._throwIfExtensionCommand(text);
          }
-@@ -1852,10 +1897,10 @@ export class AgentSession {
+@@ -1852,10 +1901,10 @@ export class AgentSession {
          let expandedText = this._expandSkillCommand(processedInput.text);
          expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
          if (behavior === "steer") {
@@ -243,7 +249,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          }
          return "queued";
      }
-@@ -1869,7 +1914,7 @@ export class AgentSession {
+@@ -1869,7 +1918,7 @@ export class AgentSession {
       * @throws Error if text is an extension command
       */
      async steer(text, images, options) {
@@ -252,7 +258,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
      }
      /**
       * Queue a follow-up message to be processed after the agent finishes.
-@@ -1880,14 +1925,12 @@ export class AgentSession {
+@@ -1880,14 +1929,12 @@ export class AgentSession {
       * @throws Error if text is an extension command
       */
      async followUp(text, images, options) {
@@ -269,7 +275,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          const content = [{ type: "text", text }];
          if (images) {
              content.push(...images);
-@@ -1895,14 +1938,13 @@ export class AgentSession {
+@@ -1895,14 +1942,13 @@ export class AgentSession {
          const message = { role: "user", content, timestamp: Date.now() };
          if (images?.length)
              this._queuedMessagesWithImages.add(message);
@@ -286,7 +292,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          const content = [{ type: "text", text }];
          if (images) {
              content.push(...images);
-@@ -1910,6 +1952,7 @@ export class AgentSession {
+@@ -1910,6 +1956,7 @@ export class AgentSession {
          const message = { role: "user", content, timestamp: Date.now() };
          if (images?.length)
              this._queuedMessagesWithImages.add(message);
@@ -294,7 +300,7 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
          this.agent.followUp(message);
      }
      /** Replace a queued user message's images in place with normalized ones, appending hints to its text. */
-@@ -2052,13 +2095,16 @@ export class AgentSession {
+@@ -2052,13 +2099,16 @@ export class AgentSession {
       * Useful for restoring to editor when user aborts.
       * @returns Object with steering and followUp arrays
       */
@@ -2288,10 +2294,12 @@ index a2f792aa7a1b248101805095b3f20c5fed56d7dc..ca223dd62a0ba7bfe6b2d4a00798c1d5
  /**
   * Options for InteractiveMode initialization.
   */
-@@ -38,6 +160,40 @@ export interface InteractiveModeOptions {
+@@ -38,6 +160,42 @@ export interface InteractiveModeOptions {
      initialThemeSetting?: string;
      /** Terminal implementation. Defaults to the current process terminal. */
      terminal?: Terminal;
++    /** Consume a terminal submission before native slash commands or model input. */
++    onTerminalCommand?: (text: string) => boolean;
 +    /** Optional body composition; retains the original transcript and fixed input dock. */
 +    mainView?: (transcript: Component, presentation: () => InteractiveChatPresentation) => Component;
 +    /** Pi shows no queued input and never restores it into the owner's editor; the host owns the queue. */
@@ -2329,7 +2337,7 @@ index a2f792aa7a1b248101805095b3f20c5fed56d7dc..ca223dd62a0ba7bfe6b2d4a00798c1d5
  }
  export declare class InteractiveMode {
      private runtimeHost;
-@@ -298,6 +454,8 @@ export declare class InteractiveMode {
+@@ -298,6 +456,8 @@ export declare class InteractiveMode {
       * Show a text input for extensions.
       */
      private showExtensionInput;
@@ -2338,7 +2346,7 @@ index a2f792aa7a1b248101805095b3f20c5fed56d7dc..ca223dd62a0ba7bfe6b2d4a00798c1d5
      /**
       * Show a multi-line editor for extensions (with Ctrl+G support).
       */
-@@ -335,8 +493,12 @@ export declare class InteractiveMode {
+@@ -335,8 +495,12 @@ export declare class InteractiveMode {
       * we update the previous status line instead of appending new ones to avoid log spam.
       */
      private showStatus;
@@ -2351,7 +2359,7 @@ index a2f792aa7a1b248101805095b3f20c5fed56d7dc..ca223dd62a0ba7bfe6b2d4a00798c1d5
      private renderSessionItems;
      /**
       * Render session entries to chat. Used for initial load and rebuild after compaction.
-@@ -404,8 +566,8 @@ export declare class InteractiveMode {
+@@ -404,8 +568,8 @@ export declare class InteractiveMode {
      private toggleThinkingBlockVisibility;
      private handleOpenExternalEditor;
      clearEditor(): void;
@@ -2711,7 +2719,19 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          }
      }
      /** Show a custom component with keyboard focus. Overlay mode renders on top of existing content. */
-@@ -2824,7 +2990,7 @@ export class InteractiveMode {
+@@ -2693,6 +2859,11 @@ export class InteractiveMode {
+             text = text.trim();
+             if (!text)
+                 return;
++            if (this.options.onTerminalCommand?.(text)) {
++                this.editor.addToHistory?.(text);
++                this.editor.setText("");
++                return;
++            }
+             // Handle commands
+             if (text === "/settings") {
+                 this.showSettingsSelector();
+@@ -2824,7 +2995,7 @@ export class InteractiveMode {
                  this.editor.setText("");
                  return;
              }
@@ -2720,7 +2740,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                  this.showSessionSelector();
                  this.editor.setText("");
                  return;
-@@ -2925,8 +3091,6 @@ export class InteractiveMode {
+@@ -2925,8 +3096,6 @@ export class InteractiveMode {
                  this.ui.requestRender();
                  break;
              case "entry_appended":
@@ -2729,7 +2749,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                  if (event.entry.type === "custom") {
                      this.addCustomEntryToChat(event.entry);
                      this.ui.requestRender();
-@@ -2940,26 +3104,8 @@ export class InteractiveMode {
+@@ -2940,26 +3109,8 @@ export class InteractiveMode {
                      this.ui.requestRender();
                  }
                  else if (event.entry.type === "compaction") {
@@ -2758,7 +2778,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                      this.footer.invalidate();
                      this.ui.requestRender();
                  }
-@@ -2984,7 +3130,10 @@ export class InteractiveMode {
+@@ -2984,7 +3135,10 @@ export class InteractiveMode {
                      this.ui.requestRender();
                  }
                  else if (event.message.role === "assistant") {
@@ -2770,7 +2790,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                      this.streamingMessage = event.message;
                      this.chatContainer.addChild(this.streamingComponent);
                      this.streamingComponent.updateContent(this.streamingMessage, true);
-@@ -3037,11 +3186,14 @@ export class InteractiveMode {
+@@ -3037,11 +3191,14 @@ export class InteractiveMode {
                          if (!errorMessage) {
                              errorMessage = this.streamingMessage.errorMessage || "Error";
                          }
@@ -2790,7 +2810,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                          }
                          this.pendingTools.clear();
                          this.maybeSuggestBugReport(this.streamingMessage);
-@@ -3147,35 +3299,26 @@ export class InteractiveMode {
+@@ -3147,35 +3304,26 @@ export class InteractiveMode {
                  this.clearStatusIndicator("compaction");
                  if (event.aborted) {
                      if (event.reason === "manual") {
@@ -2835,7 +2855,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                          this.chatContainer.addChild(new Spacer(1));
                          const errorMessage = event.errorMessage;
                          this.chatContainer.addChild(new ThemedText(() => theme.fg("error", errorMessage), 1, 0));
-@@ -3204,7 +3347,24 @@ export class InteractiveMode {
+@@ -3204,7 +3352,24 @@ export class InteractiveMode {
                  this.clearStatusIndicator("retry");
                  // Show error only on final failure (success shows normal response)
                  if (!event.success) {
@@ -2861,7 +2881,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                  }
                  this.ui.requestRender();
                  break;
-@@ -3264,7 +3424,9 @@ export class InteractiveMode {
+@@ -3264,7 +3429,9 @@ export class InteractiveMode {
       * If multiple status messages are emitted back-to-back (without anything else being added to the chat),
       * we update the previous status line instead of appending new ones to avoid log spam.
       */
@@ -2872,7 +2892,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          const children = this.chatContainer.children;
          const last = children.length > 0 ? children[children.length - 1] : undefined;
          const secondLast = children.length > 1 ? children[children.length - 2] : undefined;
-@@ -3283,6 +3445,29 @@ export class InteractiveMode {
+@@ -3283,6 +3450,29 @@ export class InteractiveMode {
          this.lastStatusText = text;
          this.ui.requestRender();
      }
@@ -2902,7 +2922,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
      addCustomEntryToChat(entry) {
          const renderer = this.session.extensionRunner.getEntryRenderer(entry.customType);
          if (!renderer) {
-@@ -3305,7 +3490,7 @@ export class InteractiveMode {
+@@ -3305,7 +3495,7 @@ export class InteractiveMode {
      addMessageToChat(message, options) {
          switch (message.role) {
              case "bashExecution": {
@@ -2911,7 +2931,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                  if (message.output) {
                      component.appendOutput(message.output);
                  }
-@@ -3324,7 +3509,7 @@ export class InteractiveMode {
+@@ -3324,7 +3514,7 @@ export class InteractiveMode {
              }
              case "compactionSummary": {
                  this.chatContainer.addChild(new Spacer(1));
@@ -2920,7 +2940,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                  component.setExpanded(this.toolOutputExpanded);
                  this.chatContainer.addChild(component);
                  break;
-@@ -3358,6 +3543,15 @@ export class InteractiveMode {
+@@ -3358,6 +3548,15 @@ export class InteractiveMode {
                          }
                      }
                      else {
@@ -2936,7 +2956,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                          const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings(), this.outputPad, this.getMarkdownTransformers(), options?.messageId, options?.timestamp);
                          this.chatContainer.addChild(userComponent);
                      }
-@@ -3368,7 +3562,8 @@ export class InteractiveMode {
+@@ -3368,7 +3567,8 @@ export class InteractiveMode {
                  break;
              }
              case "assistant": {
@@ -2946,7 +2966,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                  this.chatContainer.addChild(assistantComponent);
                  break;
              }
-@@ -3381,6 +3576,33 @@ export class InteractiveMode {
+@@ -3381,6 +3581,33 @@ export class InteractiveMode {
              }
          }
      }
@@ -2980,7 +3000,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
      renderSessionItems(items, messageMeta, options = {}) {
          this.pendingTools.clear();
          const renderedPendingTools = new Map();
-@@ -3415,6 +3637,7 @@ export class InteractiveMode {
+@@ -3415,6 +3642,7 @@ export class InteractiveMode {
                      timestamp: meta?.timestamp,
                  });
                  // Render tool call components
@@ -2988,7 +3008,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                  for (const content of message.content) {
                      if (content.type === "toolCall") {
                          const component = new ToolExecutionComponent(content.name, content.id, content.arguments, {
-@@ -3425,24 +3648,29 @@ export class InteractiveMode {
+@@ -3425,24 +3653,29 @@ export class InteractiveMode {
                          component.setExpanded(this.toolOutputExpanded);
                          this.chatContainer.addChild(component);
                          if (message.stopReason === "aborted" || message.stopReason === "error") {
@@ -3030,7 +3050,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                  if (message.stopReason !== "aborted" && message.stopReason !== "error") {
                      const miss = cacheMisses.get(message);
                      if (miss)
-@@ -3582,19 +3810,177 @@ export class InteractiveMode {
+@@ -3582,19 +3815,177 @@ export class InteractiveMode {
          this.chatContainer.addChild(new ThemedText(() => theme.fg("warning", `${label}: ${reBilled}`), 1, 0));
      }
      renderInitialMessages() {
@@ -3216,7 +3236,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
      }
      renderProjectTrustWarningIfNeeded() {
          if (this.settingsManager.isProjectTrusted() || !hasTrustRequiringProjectResources(this.sessionManager.getCwd())) {
-@@ -3619,7 +4005,7 @@ export class InteractiveMode {
+@@ -3619,7 +4010,7 @@ export class InteractiveMode {
      }
      rebuildChatFromMessages() {
          this.chatContainer.clear();
@@ -3225,7 +3245,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
      }
      // =========================================================================
      // Key handlers
-@@ -3676,7 +4062,7 @@ export class InteractiveMode {
+@@ -3676,7 +4067,7 @@ export class InteractiveMode {
          this.stop();
          await this.runtimeHost.dispose();
          const resumeCommand = formatResumeCommand(this.sessionManager);
@@ -3234,7 +3254,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
              // Own line so the command can be selected with a triple-click (#12237).
              process.stdout.write(`${chalk.dim("To resume this session:")}\n${resumeCommand}\n`);
          }
-@@ -3849,6 +4235,10 @@ export class InteractiveMode {
+@@ -3849,6 +4240,10 @@ export class InteractiveMode {
          }
      }
      handleDequeue() {
@@ -3245,7 +3265,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          const restored = this.restoreQueuedMessagesToEditor();
          if (restored === 0) {
              this.showStatus("No queued messages to restore");
-@@ -3871,12 +4261,12 @@ export class InteractiveMode {
+@@ -3871,12 +4266,12 @@ export class InteractiveMode {
      cycleThinkingLevel() {
          const newLevel = this.session.cycleThinkingLevel();
          if (newLevel === undefined) {
@@ -3260,7 +3280,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          }
      }
      async cycleModel(direction) {
-@@ -3884,18 +4274,18 @@ export class InteractiveMode {
+@@ -3884,18 +4279,18 @@ export class InteractiveMode {
              const result = await this.session.cycleModel(direction);
              if (result === undefined) {
                  const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
@@ -3282,7 +3302,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          }
      }
      toggleToolOutputExpansion() {
-@@ -3961,12 +4351,16 @@ export class InteractiveMode {
+@@ -3961,12 +4356,16 @@ export class InteractiveMode {
          this.editor.setText("");
          this.ui.requestRender();
      }
@@ -3301,7 +3321,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          this.chatContainer.addChild(new Spacer(1));
          this.chatContainer.addChild(new ThemedText(() => theme.fg("warning", `Warning: ${warningMessage}`), 1, 0));
          this.ui.requestRender();
-@@ -4025,7 +4419,7 @@ export class InteractiveMode {
+@@ -4025,7 +4424,7 @@ export class InteractiveMode {
       * Clears both session queue and compaction queue.
       */
      clearAllQueues() {
@@ -3310,7 +3330,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          const compactionSteering = this.compactionQueuedMessages
              .filter((msg) => msg.mode === "steer")
              .map((msg) => msg.text);
-@@ -4045,6 +4439,8 @@ export class InteractiveMode {
+@@ -4045,6 +4444,8 @@ export class InteractiveMode {
              this.pendingMessagesContainer.addChild(component);
          }
          const { steering: steeringMessages, followUp: followUpMessages } = this.getAllQueuedMessages();
@@ -3319,7 +3339,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          if (steeringMessages.length > 0 || followUpMessages.length > 0) {
              this.pendingMessagesContainer.addChild(new Spacer(1));
              for (const message of steeringMessages) {
-@@ -4061,6 +4457,13 @@ export class InteractiveMode {
+@@ -4061,6 +4462,13 @@ export class InteractiveMode {
          }
      }
      restoreQueuedMessagesToEditor(options) {
@@ -3333,7 +3353,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          const { steering, followUp } = this.clearAllQueues();
          const allQueued = [...steering, ...followUp];
          if (allQueued.length === 0) {
-@@ -4213,10 +4616,11 @@ export class InteractiveMode {
+@@ -4213,10 +4621,11 @@ export class InteractiveMode {
      showSettingsSelector() {
          this.showSelector((done) => {
              let selector;
@@ -3346,7 +3366,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                  autoCompact: this.session.autoCompactionEnabled,
                  defaultModel,
                  currentModel: this.session.model,
-@@ -4259,7 +4663,8 @@ export class InteractiveMode {
+@@ -4259,7 +4668,8 @@ export class InteractiveMode {
                  fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
                  fullscreenWheelScrollLines: this.settingsManager.getFullscreenWheelScrollLines(),
                  warnings: this.settingsManager.getWarnings(),
@@ -3356,7 +3376,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                  onAutoCompactChange: (enabled) => {
                      this.session.setAutoCompactionEnabled(enabled);
                      this.footer.setAutoCompactEnabled(enabled);
-@@ -4413,6 +4818,7 @@ export class InteractiveMode {
+@@ -4413,6 +4823,7 @@ export class InteractiveMode {
                  onTuiModeChange: (mode) => {
                      if (!this.switchTuiMode(mode)) {
                          selector?.getSettingsList().updateValue("tui-mode", this.ui.mode);
@@ -3364,7 +3384,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
                          this.showStatus("Close active overlays before changing TUI mode");
                          return;
                      }
-@@ -4445,7 +4851,20 @@ export class InteractiveMode {
+@@ -4445,7 +4856,20 @@ export class InteractiveMode {
                      done();
                      this.ui.requestRender();
                  },
@@ -3386,7 +3406,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
              return { component: selector, focus: selector.getSettingsList() };
          });
      }
-@@ -4458,7 +4877,7 @@ export class InteractiveMode {
+@@ -4458,7 +4882,7 @@ export class InteractiveMode {
          const normalized = searchTerm.trim().toLowerCase();
          const level = availableLevels.find((candidate) => candidate.toLowerCase() === normalized);
          if (!level) {
@@ -3395,7 +3415,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
              return;
          }
          this.selectThinkingLevel(level, false);
-@@ -4468,10 +4887,10 @@ export class InteractiveMode {
+@@ -4468,10 +4892,10 @@ export class InteractiveMode {
              this.session.setThinkingLevel(level, { persist });
              this.footer.invalidate();
              this.updateEditorBorderColor();
@@ -3408,7 +3428,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          }
      }
      showThinkingSelector() {
-@@ -4480,10 +4899,25 @@ export class InteractiveMode {
+@@ -4480,10 +4904,25 @@ export class InteractiveMode {
                  this.selectThinkingLevel(level, persist);
                  done();
              };
@@ -3436,7 +3456,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
              return { component: selector, focus: selector };
          });
      }
-@@ -4498,11 +4932,11 @@ export class InteractiveMode {
+@@ -4498,11 +4937,11 @@ export class InteractiveMode {
                  await this.session.setModel(model, { persist: false });
                  this.footer.invalidate();
                  this.updateEditorBorderColor();
@@ -3450,7 +3470,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
              }
              return;
          }
-@@ -4515,7 +4949,7 @@ export class InteractiveMode {
+@@ -4515,7 +4954,7 @@ export class InteractiveMode {
          const cachedMatch = findExactModelReferenceMatch(searchTerm, cachedModels);
          if (cachedMatch || this.session.scopedModels.length > 0)
              return cachedMatch;
@@ -3459,7 +3479,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          const controller = new AbortController();
          let timedOut = false;
          const timeout = setTimeout(() => {
-@@ -4525,16 +4959,16 @@ export class InteractiveMode {
+@@ -4525,16 +4964,16 @@ export class InteractiveMode {
          try {
              const result = await refreshModelCatalogs(this.session.modelRuntime, controller.signal);
              if (result.aborted && timedOut) {
@@ -3479,7 +3499,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          }
          finally {
              clearTimeout(timeout);
-@@ -4630,20 +5064,36 @@ export class InteractiveMode {
+@@ -4630,20 +5069,36 @@ export class InteractiveMode {
                      this.footer.invalidate();
                      this.updateEditorBorderColor();
                      done();
@@ -3522,7 +3542,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
              return { component: selector, focus: selector, dispose: () => selector.dispose() };
          });
      }
-@@ -5954,7 +6404,7 @@ export class InteractiveMode {
+@@ -5954,7 +6409,7 @@ export class InteractiveMode {
  | \`${externalEditor}\` | Edit message in external editor |
  | \`${copyMessage}\` | Copy selection or last assistant message |
  | \`${followUp}\` | Queue follow-up message |
@@ -3531,7 +3551,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
  | \`${pasteImage}\` | Paste files on macOS, images, or text from clipboard |
  | \`/\` | Slash commands |
  | \`!\` | Run bash command |
-@@ -6057,7 +6507,7 @@ export class InteractiveMode {
+@@ -6057,7 +6512,7 @@ export class InteractiveMode {
          if (eventResult?.result) {
              const result = eventResult.result;
              // Create UI component for display
@@ -3540,7 +3560,7 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
              this.bashComponent.setExpanded(this.toolOutputExpanded);
              if (this.session.isStreaming) {
                  this.pendingMessagesContainer.addChild(this.bashComponent);
-@@ -6079,7 +6529,7 @@ export class InteractiveMode {
+@@ -6079,7 +6534,7 @@ export class InteractiveMode {
          }
          // Normal execution path (possibly with custom operations)
          const isDeferred = this.session.isStreaming;

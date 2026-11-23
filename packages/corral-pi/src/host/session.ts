@@ -1,7 +1,9 @@
 // One upstream AgentSessionRuntime, with local session state and engine CLI board access.
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { createCodeCommands } from "./code-commands.ts";
+import type { CodeHandoff } from "./code-handoff.ts";
 
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type {
@@ -130,6 +132,7 @@ export interface HostSessionOptions {
   readonly sdk: typeof Sdk;
   readonly identity: HostIdentity;
   readonly build?: BuildContext;
+  readonly codeHandoff?: CodeHandoff;
   readonly paneInput?: (text: string, images?: ImageContent[]) => Promise<boolean>;
   readonly transcriptRewound?: () => void;
   readonly automatedInput?: (input: SessionInput) => Promise<SubmitResult> | undefined;
@@ -445,9 +448,32 @@ export class HostSession {
   private readonly monitorFacts = new Map<string, MonitorFact>();
 
   readonly provider: ProviderId;
+  private switchingCode = false;
+  private readonly codeCommand?: (text: string) => boolean;
+
+  handleCodeCommand(text: string): boolean {
+    // Once the handoff is admitted, don't let native submissions (e.g. !bash) start new work.
+    return this.switchingCode || (this.codeCommand?.(text) ?? false);
+  }
 
   private constructor(private readonly options: HostSessionOptions) {
     const host = this;
+    const code = options.build;
+    const handoff = options.codeHandoff;
+    if (code?.session.trustedCode === true && handoff) {
+      this.codeCommand = createCodeCommands({
+        dataRoot: dirname(dirname(code.dir)), current: code.session, handoff: async request => {
+          this.switchingCode = true;
+          try { await handoff(request); }
+          finally { this.switchingCode = false; }
+        },
+        manager: () => this.session.sessionManager,
+        ui: () => this.session.extensionRunner.getUIContext(),
+        busy: () => !this.bound || this.closing || this.rewinding || this.open || this.admissions.size > 0
+          || !this.session.isReadyForHandoff || this.session.getSteeringMessages().length > 0
+          || this.session.getFollowUpMessages().length > 0 || this.session.sessionId !== this.boundSessionId,
+      });
+    }
     this.liveEvents = new LiveEvents();
     // A change here, from the app or from another session re-announces the catalog and redraws an open picker.
     this.modelFavorites = new WorkspaceModelFavorites(options.client.workspaceRoot, () => {
@@ -1356,7 +1382,7 @@ export class HostSession {
       });
     }
     pi.on("input", async (event) => {
-      if (this.closing || this.rewinding) return { action: "handled" as const };
+      if (this.closing || this.rewinding || this.switchingCode) return { action: "handled" as const };
       if (this.open && event.source === "interactive") this.ownerInput = true;
       else this.lastInputSource = event.source;
       // A build session's record keeps what the owner asked for, verbatim.
@@ -1491,7 +1517,7 @@ export class HostSession {
       },
       // Pi asks in the tick the run starts. What an answer to a plan review was given for was checked before
       // Pi's preflight, and a whole other run can have come and gone since.
-      admit: tag => this.planAnswerRefused(this.queue.inputFacts(tag)?.planAnswer),
+      admit: tag => this.switchingCode ? "code_handoff_in_progress" : this.planAnswerRefused(this.queue.inputFacts(tag)?.planAnswer),
       queue: change => {
         this.queue.observer.queue(change);
         if (change.action === "enqueue") {
@@ -1663,7 +1689,7 @@ export class HostSession {
 
   private get recordsTurnMarks(): boolean { return this.attached === "headless" || this.options.ui !== "plain"; }
 
-  get remoteActionsReady(): boolean { return this.bound && !this.closing && !this.rewinding; }
+  get remoteActionsReady(): boolean { return this.bound && !this.closing && !this.rewinding && !this.switchingCode; }
 
   installRemoteParts(): void {
     const registry = this.remoteRegistry, build = this.buildControls, commands = this.commands;
@@ -1910,6 +1936,7 @@ export class HostSession {
   }): Promise<SubmitResult> {
     if (!this.bound || this.closing) return Promise.resolve({ disposition: "rejected", reason: "host_not_ready" });
     if (this.rewinding) return Promise.resolve({ disposition: "rejected", reason: "rewind_in_progress" });
+    if (this.switchingCode) return Promise.resolve({ disposition: "rejected", reason: "code_handoff_in_progress" });
     const socketId = input.inputId ?? source?.requestId;
     const transcriptId = input.inputId ?? (input.origin === "owner" ? source?.requestId : undefined);
     if (input.origin === "owner" && (input.inputId || source?.requestId) && !source?.pane && !images?.length && !input.attachments?.length) {
