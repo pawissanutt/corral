@@ -131,7 +131,7 @@ export interface AgentUsage { readonly cost?: number; readonly contextPercent?: 
 /** What the selected row can do. Absent or false: not offered (no button, no hint, no F1 row). */
 export interface AgentCapabilities {
   readonly open: boolean;          // Enter: open its conversation
-  readonly transcript: boolean;    // t: bounded read-only JSONL
+  readonly transcript: boolean;    // t: paged read-only JSONL
   readonly steer?: boolean;        // s: point the composer at it (build)
   readonly cancel?: boolean;       // x: cancel it (build)
   readonly model?: boolean;        // m: change its model for the next request (build)
@@ -327,7 +327,7 @@ export function helperRows(snapshot: PanelSnapshot | null, now: number): AgentRo
       ...(agent?.tokens === undefined ? {} : { usage: { tokens: agent.tokens } }),
       spans: helperSpans(helper), ...(end ? { end } : {}),
       meta, notes,
-      capabilities: { open: true, transcript: bound && agent?.transcript === true },
+      capabilities: { open: true, transcript: bound && helper.kind !== "web_search" && agent?.transcript === true },
       conversation: helper,
     };
   });

@@ -1,5 +1,5 @@
 // One upstream AgentSessionRuntime, with local session state and engine CLI board access.
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createCodeCommands } from "./code-commands.ts";
@@ -32,6 +32,7 @@ import type { EventLog } from "../bridge/events.ts";
 import { LiveEvents } from "./live-events.ts";
 import { registerBoard } from "./remote/board.ts";
 import { boundCandidate, RemoteChanges } from "./remote/changes.ts";
+import { confinedRegularFile } from "./remote/fleet.ts";
 import { archivedChildren, childDetailsChanged, registerChildren } from "./remote/children.ts";
 import { commandsPart, registerCommands, typedSessionAction } from "./remote/commands.ts";
 import { jobsPart, registerJobs } from "./remote/jobs.ts";
@@ -112,7 +113,7 @@ import { fleetTools } from "../extensions/fleet/tools.ts";
 import { boundFleetSettings } from "../extensions/fleet/settings.ts";
 import { executionRefusal, exploreLoadout } from "../roles/common/execution.ts";
 import { workerDoneTool } from "../roles/worker/tools.ts";
-import { transcriptPreview } from "./transcript-preview.ts";
+import { readTranscriptPage, type TranscriptRequest, type TranscriptPage } from "./transcript-preview.ts";
 import { ManagedEffects } from "./managed-effects.ts";
 import { LocalControlPlane } from "./local.ts";
 import { failureClass, messageFailure, withProviderFailures } from "./provider-failure.ts";
@@ -125,6 +126,7 @@ import { MARK_ENTRY, observeTranscriptEntries, recordTranscriptMark, type MarkSi
   type TurnStopCause, type TurnWait } from "./transcript-marks.ts";
 import { TurnFacts, turnWaits } from "./turn-facts.ts";
 import { RemotePrompts } from "./remote-prompts.ts";
+import { mergeArchivedChildren, resolveChildRecording, type TranscriptRecording } from "./transcript-resolution.ts";
 import { RetainedChildren } from "./retained-children.ts";
 import { createSummaryRequest, summarizeQuick, type SummaryOptions, type SummaryRequest } from "./summary.ts";
 
@@ -403,6 +405,9 @@ export class HostSession {
   private lastInputSource: string | undefined;
   /** The owner typed into the pane while the current turn was open (a steer into it). */
   private ownerInput = false;
+  private readonly retainedChildren?: RetainedChildren;
+  private readonly transcriptRoot?: string;
+  private boundSessionFile?: string;
   private boundSessionId: string | undefined;
   private unsubscribe: (() => void) | undefined;
   private calls: Promise<unknown> = Promise.resolve();
@@ -531,14 +536,16 @@ export class HostSession {
       approved: summary => { this.buildControls?.noteOwnerInput(summary); },
     }) : undefined;
     const sessionRoot = options.build?.dir ?? options.sessionDir;
-    const retained = sessionRoot ? new RetainedChildren(sessionRoot) : undefined;
+    this.transcriptRoot = sessionRoot;
+    const retained = this.retainedChildren = sessionRoot ? new RetainedChildren(sessionRoot) : undefined;
     this.remoteDefaultModel = options.model.startsWith(`${this.provider}/`) ? options.model : `${this.provider}/${options.model}`;
     const { task, run } = options.identity, buildSession = options.build?.session;
     const reviewBases = persistedBases(
       () => options.sessionManager.getEntries().flatMap(entry => entry.type === "custom" && entry.customType === REVIEW_BASE_ENTRY ? [entry.data] : []),
       data => options.sessionManager.appendCustomEntry(REVIEW_BASE_ENTRY, data));
     this.workspaceGit = new WorkspaceGit(options.cwd, () => this.liveEvents.stateChanged());
-    this.archivedFleet = options.build ? archivedChildren(join(options.build.dir, "journal.json")) : [];
+    const archivedJournal = options.build && confinedRegularFile(options.build.dir, join(options.build.dir, "journal.json"));
+    this.archivedFleet = archivedJournal ? archivedChildren(archivedJournal) : [];
     this.remoteChanges = new RemoteChanges({
       cwd: options.cwd, defaultComparison: task && run && options.client.configured ? "candidate" : "session",
       scopeRequired: options.client.configured && options.identity.role === "assistant" && !options.identity.project,
@@ -626,7 +633,7 @@ export class HostSession {
       rewind: input => this.rewind(input),
       exportSession: async () => (await this.reportedExport()).text,
       readHistory: request => options.client.history(request),
-      readTranscript: id => this.readAgentTranscript(id),
+      readTranscript: (id, request) => this.readAgentTranscript(id, request),
       ...(options.identity.task ? { readTask: () => options.client.taskSnapshot() } : {}),
     });
     this.unsubscribePanels = this.panels ? options.events.on(event => {
@@ -1675,16 +1682,37 @@ export class HostSession {
     return true;
   }
 
-  get servesChildren(): boolean { return this.buildControls !== undefined || this.fleet !== undefined || this.auxiliary !== undefined; }
+  get servesChildren(): boolean { return !!(this.buildControls || this.fleet || this.auxiliary || this.retainedChildren); }
+
+  private transcriptBindingCurrent(): boolean {
+    return this.bound && !this.closing && !this.rewinding && this.session.sessionId === this.boundSessionId
+      && this.session.sessionFile === this.boundSessionFile;
+  }
+
+  private resolveAgentRecording(id: string, allowParent: boolean): TranscriptRecording | undefined {
+    if (!this.transcriptBindingCurrent()) return undefined;
+    if (id === this.boundSessionId) return allowParent && this.boundSessionFile
+      ? { file: this.boundSessionFile, session: id } : undefined;
+    const root = this.transcriptRoot;
+    if (!root) return undefined;
+    const current = (this.buildControls?.fleet ?? this.fleet)?.snapshot().children.find(entry => entry.id === id);
+    if (current?.sessionFile) return resolveChildRecording(root, id, { file: current.sessionFile });
+    const helper = this.auxiliary?.inspection().find(entry => entry.request === id);
+    if (helper) {
+      if (helper.kind === "web_search" || helper.parent !== this.boundSessionId) return undefined;
+      if (helper.sessionFile) return resolveChildRecording(root, id, { file: helper.sessionFile, session: helper.request });
+    }
+    const archived = this.archivedFleet.find(entry => entry.id === id);
+    if (!current && archived) {
+      const file = archived.sessionFile ?? join(root, "children", `${id}.jsonl`);
+      const recording = resolveChildRecording(root, id, { file });
+      if (recording) return recording;
+    }
+    return this.retainedChildren?.recording(id);
+  }
 
   childTranscript(child: string): string | undefined {
-    const fleet = this.buildControls?.fleet ?? this.fleet;
-    const current = fleet?.snapshot().children.find(entry => entry.id === child)?.sessionFile;
-    if (current) return current;
-    const helper = this.auxiliary?.inspection().find(entry => entry.request === child && entry.parent === this.boundSessionId);
-    if (helper?.sessionFile) return helper.sessionFile;
-    // A stopped build's fleet is not restarted, but its child files remain session-owned.
-    return this.options.build ? join(this.options.build.dir, "children", `${child}.jsonl`) : undefined;
+    return this.resolveAgentRecording(child, false)?.file;
   }
 
   private get recordsTurnMarks(): boolean { return this.attached === "headless" || this.options.ui !== "plain"; }
@@ -1849,6 +1877,7 @@ export class HostSession {
     // Pi defers a new transcript until the first message unless an entry is flushed explicitly.
     if (!existsSync(sessionFile)) sessionManager.appendCustomEntry("corral_host_started", { pid: process.pid }, { immediate: true });
     this.boundSessionId = sessionId;
+    this.boundSessionFile = sessionFile;
     const commandFacts: CommandFact[] = [], monitorFacts: MonitorFact[] = [];
     for (const entry of this.session.sessionManager.getEntries()) {
       if (entry.type === "custom" && entry.customType === COMMAND_ENTRY) commandFacts.push(entry.data as CommandFact);
@@ -2149,10 +2178,7 @@ export class HostSession {
   private readRemoteFleet(): FleetSnapshot | undefined {
     if (this.remoteFleetDirty) {
       this.remoteFleetDirty = false;
-      this.remoteFleet = (this.buildControls?.fleet ?? this.fleet)?.snapshot();
-      if (this.remoteFleet && this.archivedFleet.length) {
-        this.remoteFleet = { ...this.remoteFleet, children: [...this.archivedFleet, ...this.remoteFleet.children] };
-      }
+      this.remoteFleet = mergeArchivedChildren((this.buildControls?.fleet ?? this.fleet)?.snapshot(), this.archivedFleet);
       this.remoteHelpers = this.auxiliary?.inspections() ?? [];
       this.liveEvents.observeFleet(this.remoteFleet, this.remoteHelpers);
       if (this.servesChildren) this.remoteChildPart = childDetailsChanged(this.remoteFleet?.children ?? [], this.remoteHelpers);
@@ -2235,9 +2261,10 @@ export class HostSession {
     if (leaf !== this.panelTokenLeaf) { this.panelTokenLeaf = leaf; this.panelStats = undefined; }
     const jobs: PanelJob[] | null = this.jobs ? [...(this.commands?.inspection() ?? []).map(detail => ({ job: detail.job, state: detail.state, detail })),
       ...this.commands?.recovered() ?? []] : null;
+    const build = this.buildControls?.panelState();
+    const fleet = mergeArchivedChildren(build?.fleet ?? this.fleet?.snapshot(), this.archivedFleet);
     return {
-      ...(this.buildControls ? { build: this.buildControls.panelState() } : {}),
-      ...(this.fleet ? { fleet: this.fleet.snapshot() } : {}),
+      ...(build && fleet ? { build: { ...build, fleet } } : fleet ? { fleet } : {}),
       bound: this.bound, model: session.model ? `${session.model.provider}/${session.model.id}` : null,
       effort: session.thinkingLevel, effortAvailable: session.supportsThinking(),
       ...(this.terminalInput ? { input: this.terminalInput } : {}),
@@ -2267,19 +2294,22 @@ export class HostSession {
         model: session.model ? `${session.model.provider}/${session.model.id}` : null,
         tokens: this.panelStats.tokens, transcript: !!session.sessionFile && session.sessionId === this.boundSessionId },
         ...(this.auxiliary?.inspection() ?? []).map(child => ({ id: child.request, session: child.request,
-          parent: child.parent, kind: `native ${child.kind}`, state: child.state, model: child.model, transcript: !!child.sessionFile && child.parent === this.boundSessionId }))],
+          parent: child.parent, kind: `native ${child.kind}`, state: child.state, model: child.model, transcript: child.kind !== "web_search" && !!child.sessionFile && child.parent === this.boundSessionId }))],
       jobs, auxiliary: this.auxiliary?.state() ?? null, helpers: this.auxiliary?.inspections() ?? null,
       steering: session.getSteeringMessages().length, followUps: session.getFollowUpMessages().length,
       queue: this.queue.items(),
     };
   }
 
-  private async readAgentTranscript(id: string): Promise<string> {
-    if (!this.bound || this.session.sessionId !== this.boundSessionId) throw new Error("Transcript unavailable: stale/unbound host");
-    if (id === this.session.sessionId && this.session.sessionFile) return transcriptPreview(this.session.sessionFile, id);
-    const child = this.auxiliary?.inspection().find(child => child.request === id);
-    if (!child?.sessionFile || child.parent !== this.boundSessionId) throw new Error("Selected agent missing or transcript ineligible");
-    return transcriptPreview(child.sessionFile, child.request);
+  private async readAgentTranscript(id: string, request: TranscriptRequest): Promise<TranscriptPage> {
+    const recording = this.resolveAgentRecording(id, true);
+    if (!recording) throw new Error("Transcript unavailable: selected agent has no recording in this bound session");
+    const page = await readTranscriptPage(recording.file, recording.session, request);
+    if (!this.transcriptBindingCurrent()) throw new Error("Transcript unavailable: stale host");
+    if (id !== this.boundSessionId && confinedRegularFile(realpathSync(this.transcriptRoot!), recording.file) !== recording.file) {
+      throw new Error("Transcript unavailable: recording left the bound session");
+    }
+    return page;
   }
 
   /** Protocol v2 status: at most 8 KiB of JSON, independent of diagnostic state. */

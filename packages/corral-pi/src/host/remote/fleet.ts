@@ -1,5 +1,5 @@
-import { realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, sep } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { BridgeRefusal } from "../../bridge/protocol.ts";
 import { LIVE_CHILD_STATES, type ChildSnapshot, type FleetSnapshot } from "../../build/types.ts";
 import type { HelperInspection } from "../../extensions/subagent/inspection.ts";
@@ -100,19 +100,30 @@ export function boundFleet(fleet: SessionFleet, limit = LIVE_FLEET_BYTES): Sessi
   return { ...fleet, children: fleet.children.slice(firstChild), messages: fleet.messages.slice(firstMessage) };
 }
 
+/** Parent-local confinement: never follow a symlink in a child path. */
+export function confinedRegularFile(root: string, candidate: string): string | undefined {
+  if (!isAbsolute(candidate) || resolve(candidate) !== candidate) return undefined;
+  const path = relative(root, candidate);
+  if (!path || path === ".." || path.startsWith(`..${sep}`) || isAbsolute(path)) return undefined;
+  try {
+    let file = realpathSync(root);
+    const parts = path.split(sep);
+    for (const [index, part] of parts.entries()) {
+      file = join(file, part);
+      const stat = lstatSync(file);
+      if (!(index === parts.length - 1 ? stat.isFile() : stat.isDirectory())) return undefined;
+    }
+    return file;
+  } catch { return undefined; }
+}
+
 export function registerFleet(registry: RemoteRegistry, root: string, transcript: (child: string) => string | undefined): void {
   registry.register({ name: "child_file", parse: args => parseChildId(args.child), run: child => {
     const candidate = transcript(child);
-    if (candidate !== undefined) {
-      try {
-        const parent = realpathSync(root);
-        const file = realpathSync(candidate);
-        const path = relative(parent, file);
-        if (path.endsWith(".jsonl") && !path.startsWith(`..${sep}`) && !isAbsolute(path) && statSync(file).isFile()) {
-          return { session_file: file };
-        }
-      } catch { /* An absent transcript is not a readable child scope. */ }
-    }
+    if (candidate !== undefined) try {
+      const file = confinedRegularFile(realpathSync(root), candidate);
+      if (file?.endsWith(".jsonl")) return { session_file: file };
+    } catch { /* A removed session root is unavailable. */ }
     throw new BridgeRefusal("child_file_unavailable", "the child has no transcript in this session");
   } });
 }

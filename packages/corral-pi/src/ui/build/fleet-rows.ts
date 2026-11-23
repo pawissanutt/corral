@@ -113,7 +113,10 @@ export function childSpans(child: ChildSnapshot, origin: number, now: number): {
 }
 
 /** `control` false (no `FleetControl` in this session): the row is read-only, offering no steer, cancel, model or answer. */
-export function childRow(child: ChildSnapshot, fleet: FleetSnapshot, now: number, control = true): AgentRow {
+export function childRow(child: ChildSnapshot, fleet: FleetSnapshot, now: number, control = true, bound = true): AgentRow {
+  const archived = "archived" in child && child.archived === true;
+  control = control && !archived;
+  const transcript = bound && (archived || !!child.sessionFile);
   const id = clean(child.id), state = childState(child.state), { files, outside } = editedPaths(child), verdict = child.verdict;
   const status = agentStatus(state, child.startedAt === undefined ? undefined : duration((child.endedAt ?? now) - child.startedAt));
   const pending = child.pendingModel === undefined ? undefined : shortModel(child.pendingModel);
@@ -151,7 +154,7 @@ export function childRow(child: ChildSnapshot, fleet: FleetSnapshot, now: number
       other => fleet.children.some(entry => entry.id === other) ? childHue(fleet, other) : undefined),
     ...(child.question ? { question: clean(child.question.question) } : {}),
     meta, notes,
-    capabilities: control ? { open: true, transcript: false, steer: true, cancel: true, model: true, answer: child.state === "needs" } : { open: true, transcript: false },
+    capabilities: control ? { open: true, transcript, steer: true, cancel: true, model: true, answer: child.state === "needs" } : { open: true, transcript },
     ...(!control ? {} : finished ? { disabled: { steer: "not running", cancel: "not running", model: "not running" } }
       : child.state === "queued" ? { disabled: { steer: "not started yet" } } : {}),
     conversation: { request: child.id, prompt: child.brief, phase: child.state, messages: child.messages,
@@ -160,8 +163,8 @@ export function childRow(child: ChildSnapshot, fleet: FleetSnapshot, now: number
   };
 }
 
-export function childRows(fleet: FleetSnapshot, now: number, control = true): AgentRow[] {
-  return fleet.children.map(child => childRow(child, fleet, now, control));
+export function childRows(fleet: FleetSnapshot, now: number, control = true, bound = true): AgentRow[] {
+  return fleet.children.map(child => childRow(child, fleet, now, control, bound));
 }
 
 /** The fleet the Agents page shows: a build session's, else the snapshot's once it has children or messages. */
@@ -172,9 +175,9 @@ export function shownFleet(snapshot: PanelSnapshot | null | undefined): FleetSna
 }
 
 /** `{ agents: childRows(...), maxParallel, messages, origin: fleet.startedAt }`; undefined without a fleet. */
-export function fleetExtras(fleet: FleetSnapshot | undefined, now: number, control = true): AgentExtras | undefined {
+export function fleetExtras(fleet: FleetSnapshot | undefined, now: number, control = true, bound = true): AgentExtras | undefined {
   if (!fleet) return undefined;
-  return { agents: childRows(fleet, now, control), maxParallel: fleet.maxParallel, ...(fleet.mail.length ? { messages: fleet.mail.length } : {}),
+  return { agents: childRows(fleet, now, control, bound), maxParallel: fleet.maxParallel, ...(fleet.mail.length ? { messages: fleet.mail.length } : {}),
     ...(fleet.startedAt === undefined ? {} : { origin: fleet.startedAt }) };
 }
 
