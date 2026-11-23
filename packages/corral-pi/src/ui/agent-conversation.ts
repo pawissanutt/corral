@@ -1,4 +1,4 @@
-import type { TranscriptRow } from "../host/transcript-preview.ts";
+import type { TranscriptPage, TranscriptRow } from "../host/transcript-preview.ts";
 import { AgentHistory, recordedText, type Direction, type TranscriptRead } from "./agent-history.ts";
 // One agent's conversation in the reading area, as the mock's `childHTML`: a header line (back link, name,
 // profile and model, state and time, cost and context, and the activity sparkline while it runs), then the
@@ -23,6 +23,9 @@ export interface AgentConversationHost {
   changed?(): void;
   canInteract?(): boolean;
 }
+
+type Position = { top: number; following: boolean; anchor?: { id: string; offset: number } };
+type Saved = { position: Position; pages: readonly TranscriptPage[] };
 
 const BACK = "‹ Agents", BOLD = "\x1b[1m", UNBOLD = "\x1b[22m";
 
@@ -61,9 +64,13 @@ export function conversationHeader(row: AgentRow, width: number, now: number, co
 export class AgentConversation {
   readonly scroll: ScrollView;
   /** Per agent key: where the owner was reading, and whether the page was following the agent's end. */
-  private readonly positions = new Map<string, { readonly top: number; readonly following: boolean }>();
-  /** Set by `restore`: the next render places the page, from the saved position (if any) and whether the agent is live. */
-  private pending: { readonly saved?: { readonly top: number; readonly following: boolean } } | undefined = {};
+  // An LRU of bounded resident page windows and their reading positions.
+  private readonly positions = new Map<string, Saved>();
+  private pending: Position | null | undefined = null;
+  private checkpoint: Saved | undefined;
+  private preview = false;
+  private recordedPosition: Position | undefined;
+  private previewHit: { from: number; to: number } | undefined;
   private history = new AgentHistory();
   private ranges: { id: string; from: number; to: number }[] = [];
   private hits: { direction: Direction; from: number; to: number }[] = [];
@@ -77,7 +84,7 @@ export class AgentConversation {
   /** Rows of the clickable `▲` question line, and the agent it answers. */
   private ask: { readonly from: number; readonly to: number; readonly key: string } | undefined;
   constructor(private readonly host: AgentConversationHost) {
-    const edge = (lines: number) => this.navigate(lines < 0 ? "older" : "newer");
+    const edge = (lines: number) => !this.preview && this.navigate(lines < 0 ? "older" : "newer");
     this.scroll = new class extends ScrollView {
       override scrollBy(lines: number): number {
         if ((lines < 0 && this.scrollTop === 0 || lines > 0 && this.isFollowingEnd) && edge(lines)) return 0;
@@ -91,32 +98,50 @@ export class AgentConversation {
       invalidate: () => host.chat.invalidate(),
     }, { primary: true, follow: "end", scrollbar: "auto" });
   }
-  /** Keeps the current reading position for the shown agent. */
+  private position(): Position {
+    const top = this.scroll.scrollTop;
+    const span = this.ranges.find(row => top >= row.from && top < row.to);
+    return { top, following: this.following, ...(span ? { anchor: { id: span.id, offset: top - span.from } } : {}) };
+  }
   remember(): void {
     const key = this.host.row()?.key;
-    if (key !== undefined) this.positions.set(key, { top: this.scroll.scrollTop, following: this.scroll.isFollowingEnd });
+    if (key === undefined) return;
+    const position = this.preview && this.recordedPosition ? this.recordedPosition : this.pending ?? this.position();
+    const saved = this.checkpoint ?? { position, pages: this.history.pages };
+    this.positions.delete(key);
+    this.positions.set(key, saved);
+    if (this.positions.size > 8) this.positions.delete(this.positions.keys().next().value!);
   }
-  /**
-   * The next render starts where `key` was last read, or at the top. A live agent's page follows its end instead,
-   * unless the owner had scrolled up from the end there.
-   */
   restore(key: string): void {
     this.history = new AgentHistory();
     this.ranges = []; this.anchor = undefined; this.jump = undefined;
     this.attempted = false; this.wasLive = false; this.latestAvailable = false;
+    this.preview = false; this.recordedPosition = undefined;
     const saved = this.positions.get(key);
-    this.pending = saved === undefined ? {} : { saved };
+    this.checkpoint = saved?.pages.length ? saved : undefined;
+    this.pending = saved?.position ?? null;
   }
-  /** Whether the page keeps the newest row in view as the agent adds to it. */
+  /** Switch sources so native inspection does not duplicate the recorded transcript. */
+  togglePreview(): boolean {
+    if (!this.history.pages.length || !this.host.row()?.conversation) return false;
+    if (!this.preview) this.recordedPosition = this.pending ?? this.position();
+    this.preview = !this.preview;
+    this.pending = this.preview ? { top: 0, following: false } : this.recordedPosition;
+    this.host.changed?.();
+    return true;
+  }
   get following(): boolean { return this.scroll.isFollowingEnd; }
-  expandTools(expanded: boolean): void { this.host.chat.expandTools(expanded); }
+  expandTools(expanded: boolean): void {
+    if (!this.preview) this.togglePreview();
+    this.host.chat.expandTools(expanded);
+  }
 
   /** Called on entry and on workbench ticks, never by render or snapshot publication. */
   refresh(): void {
     const row = this.host.row();
-    if (!this.host.read || !row?.capabilities.transcript || this.history.busy) return;
+    if (!this.host.read || !row?.capabilities.transcript || this.history.busy || this.preview) return;
     const live = isLive(row.state);
-    const following = this.following && !this.history.newer && !this.history.retry;
+    const following = (this.pending?.following ?? this.following) && !this.history.newer && !this.history.retry;
     if (!this.attempted || (following && (live || this.wasLive || this.latestAvailable))) void this.load("latest", false, this.wasLive && !live);
     else if (this.wasLive && !live && this.history.pages.length) this.latestAvailable = true;
     this.wasLive = live;
@@ -124,11 +149,11 @@ export class AgentConversation {
 
   /** End jumps over evicted newer pages; it does not walk intermediate cursors. */
   jumpToRecordedEnd(): boolean {
-    return !!(this.history.newer || this.history.retry || this.latestAvailable) && this.navigate("latest");
+    return !this.preview && !!(this.history.newer || this.history.retry || this.latestAvailable) && this.navigate("latest");
   }
 
   navigate(direction: Direction): boolean {
-    if (!this.host.read || !this.host.row()?.capabilities.transcript || this.host.canInteract?.() === false
+    if (this.preview || !this.host.read || !this.host.row()?.capabilities.transcript || this.host.canInteract?.() === false
       || !this.history.request(direction)) return false;
     void this.load(direction, true);
     return true;
@@ -146,14 +171,26 @@ export class AgentConversation {
     try {
       const page = await read(row.id, request);
       if (!current()) { if (initial && this.history === history) this.attempted = false; return; }
-      if (!manual && !initial && !this.following) {
+      if (!manual && !initial && (this.preview || !this.following)) {
         if (settling) this.latestAvailable = true;
         return;
+      }
+      if (initial && this.checkpoint) {
+        const saved = this.checkpoint;
+        this.checkpoint = undefined;
+        if (history.resume(saved.pages, page)) {
+          this.pending = saved.position;
+          return;
+        }
       }
       if (direction === "latest") this.latestAvailable = false;
       const top = this.scroll.scrollTop;
       const range = this.ranges.find(span => top >= span.from && top < span.to);
       if (history.accept(direction, page)) {
+        if (this.preview) {
+          if (direction === "latest") this.recordedPosition = { top: 0, following: true };
+          return;
+        }
         this.anchor = direction !== "latest" && range ? { id: range.id, offset: top - range.from } : undefined;
         this.jump = direction === "latest" ? (initial && !isLive(row.state) ? "top" : "end") : undefined;
         this.pending = undefined;
@@ -171,7 +208,7 @@ export class AgentConversation {
     const row = this.host.row(), lines: string[] = [], now = this.host.now();
     const say = (text: string, color: string) => wrapTextWithAnsi(text, Math.max(1, width - 1)).map(line => " " + color + line + RESET);
     this.ask = undefined;
-    this.ranges = []; this.hits = [];
+    this.ranges = []; this.hits = []; this.previewHit = undefined;
     const link = (direction: Direction, label: string) => {
       const from = lines.length;
       lines.push(...say(label, PANEL_BLUE));
@@ -196,11 +233,17 @@ export class AgentConversation {
         return at === undefined ? { text } : { text, at };
       }), ...mailSteers(row.mail ?? [], (id, hue) => hue === undefined ? id : BOLD + this.host.color(hue) + id + UNBOLD)];
       const history = row.capabilities.transcript && this.host.read ? this.history : undefined;
-      if (history?.retry) link("latest", "Load latest messages · recording changed or unavailable");
-      else if (history?.older) link("older", "Show earlier messages");
+      const recorded = !!history?.pages.length;
+      if (recorded && row.conversation) {
+        const from = lines.length;
+        lines.push(...say(this.preview ? "Show recorded messages · v" : "Show live preview · v", PANEL_BLUE));
+        this.previewHit = { from, to: lines.length };
+      }
+      if (!this.preview && history?.retry) link("latest", "Load latest messages · recording changed or unavailable");
+      else if (!this.preview && history?.older) link("older", "Show earlier messages");
       else if (history?.busy && !history.pages.length) lines.push(...say("Loading recorded messages…", PANEL_MUTED));
-      if (history?.pages.length) {
-        if (!history.pages.some(page => page.rows.length)) lines.push(...say("No recorded messages yet.", PANEL_MUTED));
+      if (history && recorded && !this.preview) {
+        if (!history.pages.some(page => page.rows.length)) lines.push(...say(history.older ? "No recorded messages on these pages." : "No recorded messages yet.", PANEL_MUTED));
         let openingPrompt = !history.older && !history.retry;
         const append = (item: TranscriptRow) => {
           const from = lines.length;
@@ -228,14 +271,14 @@ export class AgentConversation {
         }
         this.chatRows = 0;
       } else {
-        if (history && this.attempted && !history.busy) link("latest", "Load latest messages");
+        if (history && !recorded && this.attempted && !history.busy) link("latest", "Load latest messages");
         this.chatStart = lines.length;
         const chat = row.conversation ? this.host.chat.renderHelper(row.conversation, width,
           { bubble: prompt, now, ...(child || steers.length ? { steers: { label: "you → " + BOLD + this.host.color(row.hue) + row.name + UNBOLD, items: steers } } : {}) })
           : [" " + PANEL_MUTED + "Conversation unavailable for this agent." + RESET];
         this.chatRows = row.conversation ? chat.length : 0;
         lines.push(...chat);
-        if (!history?.busy) lines.push(...say("Live preview · full transcript unavailable", PANEL_MUTED));
+        if (!history?.busy) lines.push(...say(recorded ? "Live preview · switch back for recorded history" : "Live preview · full transcript unavailable", PANEL_MUTED));
       }
       if (child) {
         if (row.state === "queued") lines.push("", ...say(`Not started: ${row.activity}.`, PANEL_MUTED));
@@ -264,10 +307,11 @@ export class AgentConversation {
       this.anchor = undefined; this.jump = undefined;
     }
     if (this.pending !== undefined) {
-      const saved = this.pending.saved, live = row !== undefined && isLive(row.state);
+      const saved = this.pending, live = row !== undefined && isLive(row.state);
       this.scroll.updateLayout(lines.length, this.scroll.viewportHeight, () => {});
-      if (live && (saved === undefined || saved.following)) this.scroll.scrollToEnd();
-      else this.scroll.scrollTo(saved?.top ?? 0, { disableFollow: true });
+      const span = this.ranges.find(item => item.id === saved?.anchor?.id);
+      if (saved?.following || (live && !saved)) this.scroll.scrollToEnd();
+      else this.scroll.scrollTo(span && saved?.anchor ? Math.min(span.to - 1, span.from + saved.anchor.offset) : saved?.top ?? 0, { disableFollow: true });
       this.pending = undefined;
     }
     return lines;
@@ -276,6 +320,7 @@ export class AgentConversation {
     if (!this.host.click(event)) return undefined;
     if (event.y === 0 && event.x >= this.back.from && event.x < this.back.to) { this.host.back(); return { handled: true }; }
     this.host.focus();
+    if (this.previewHit && event.y >= this.previewHit.from && event.y < this.previewHit.to && this.togglePreview()) return { handled: true };
     const hit = this.hits.find(item => event.y >= item.from && event.y < item.to);
     if (hit) { this.navigate(hit.direction); return { handled: true }; }
     const ask = this.ask;

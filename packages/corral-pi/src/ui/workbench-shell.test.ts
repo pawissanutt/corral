@@ -7,8 +7,8 @@ import * as sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { KeybindingsManager } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/keybindings.js";
 import { createChatViewport } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js";
-import { getKeybindings, setKeybindings, sliceByColumn, stripTerminalSequences, Text, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
-import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
+import { getKeybindings, setKeybindings, sliceByColumn, stripTerminalSequences, Text, TuiAltScreen, visibleWidth, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { getLayoutBoxesAt, renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { NativePanels, type NativePanelsOptions } from "./panels.ts";
 import { NativeWorkbench, type MainView } from "./workbench.ts";
 import type { InspectorSnapshot } from "./inspector.ts";
@@ -49,11 +49,11 @@ function settle(): Promise<void> {
   setImmediate(resolve);
   return promise;
 }
-function viewport(wb: NativeWorkbench, draft = "REAL_EDITOR_DRAFT") {
+function viewport(wb: NativeWorkbench, draft = "REAL_EDITOR_DRAFT", presentation?: Parameters<NativeWorkbench["mount"]>[1]) {
   let supplied: Component | undefined;
   const view = createChatViewport({ document: new Text(Array.from({ length: 120 }, (_, i) => `PARENT_${i}`).join("\n"), 0, 0),
     pendingMessages: new Text("", 0, 0), status: new Text("", 0, 0), editor: new Text(draft, 0, 0), footer: new Text("", 0, 0),
-    mainView: transcript => { supplied = transcript; return wb.mount(transcript); } });
+    mainView: transcript => { supplied = transcript; return wb.mount(transcript, presentation); } });
   return { ...view, supplied: () => supplied };
 }
 function bindUi(wb: NativeWorkbench, overrides: Partial<ExtensionUIContext> = {}): void {
@@ -542,4 +542,46 @@ test("raw transcript n and p request opaque host cursors without replacing the d
     expect(reads).toEqual([undefined, "next:opaque", "previous:opaque"]);
     expect(plain(renderLayoutFrame(view.root, 100, 40, () => {}).lines)).toContain("REAL_EDITOR_DRAFT");
   } finally { wb.dispose(); }
+});
+
+test("an empty recording keeps paging and opens settled native tool preview with Ctrl+O or v", async () => {
+  const previous = getKeybindings();
+  setKeybindings(new KeybindingsManager({ "app.tools.expand": "ctrl+o" }));
+  const state = snapshot({ helpers: [helper("first", { result: "UNRECORDED_RESULT", messages: [
+    { id: "tool", kind: "tool", tool: "read", phase: "completed", text: "NATIVE_TOOL_OUTPUT", arguments: '{"path":"native.txt"}' },
+  ] })], agents: [{ id: "first", session: "s-1", kind: "explore", state: "completed", model: null, transcript: true }] });
+  const wb = new NativeWorkbench({ cwd: work, identity: assistant, snapshot: () => state, changed() {}, canInteract: () => true,
+    readTranscript: async () => ({ stamp: "same", rows: [], older: "opaque" }) });
+  const tui = new TuiAltScreen(new RecordingTerminal());
+  const view = viewport(wb, undefined, () => ({ tui, markdownTheme: sdk.getMarkdownTheme(), markdownTransformers: [],
+    outputPad: 1, renderers: () => undefined }));
+  const screen = () => plain(renderLayoutFrame(view.root, 120, 40, () => {}).lines);
+  try {
+    wb.openAgents("helper:first"); wb.handleInput(KEY.enter); await settle();
+    expect(screen()).toContain("Show earlier messages");
+    expect(screen()).toContain("Show live preview");
+    expect(screen()).not.toContain("Find first callers");
+    expect(wb.handleInput(KEY.ctrlO)).toBeTrue();
+    expect(screen()).toContain("Find first callers");
+    expect(screen()).toContain("UNRECORDED_RESULT");
+    expect(screen()).toContain("NATIVE_TOOL_OUTPUT");
+    expect(screen()).not.toContain("Show earlier messages");
+    expect(wb.handleInput(KEY.ctrlO)).toBeTrue();
+    expect(screen()).not.toContain("NATIVE_TOOL_OUTPUT");
+    const frame = renderLayoutFrame(view.root, 120, 40, () => {});
+    const y = frame.lines.findIndex(line => stripTerminalSequences(line).includes("read native.txt"));
+    expect(y).toBeGreaterThan(0);
+    for (const box of getLayoutBoxesAt(frame, 3, y)) {
+      const result = box.component.handleMouse?.({ type: "click", button: "left", x: 3 - box.rect.x,
+        y: y - box.rect.y, screenX: 3, screenY: y, width: box.rect.width, height: box.rect.height,
+        shift: false, alt: false, ctrl: false, clickCount: 1 });
+      if (result?.handled) break;
+    }
+    expect(screen()).toContain("NATIVE_TOOL_OUTPUT");
+    expect(wb.handleInput("v")).toBeTrue();
+    expect(screen()).toContain("Show earlier messages");
+    expect(screen()).not.toContain("UNRECORDED_RESULT");
+    expect(wb.handleInput("v")).toBeTrue();
+    expect(screen()).toContain("UNRECORDED_RESULT");
+  } finally { setKeybindings(previous); wb.dispose(); }
 });

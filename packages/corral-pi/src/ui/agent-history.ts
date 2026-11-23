@@ -11,6 +11,13 @@ export class AgentHistory {
   get older(): string | undefined { return this.pages[0]?.older; }
   get newer(): string | undefined { return this.pages.at(-1)?.newer; }
 
+  /** Reuse resident cursors only after revalidating their recording snapshot. */
+  resume(pages: readonly TranscriptPage[], latest: TranscriptPage): boolean {
+    if (pages[0]?.stamp !== latest.stamp) return false;
+    this.pages = pages;
+    return true;
+  }
+
   request(direction: Direction): TranscriptRequest | undefined {
     if (this.busy) return undefined;
     if (direction === "latest") return { mode: "conversation" };

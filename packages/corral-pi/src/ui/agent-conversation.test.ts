@@ -249,3 +249,33 @@ test("a following live reader refreshes on settlement without retaining its prov
   expect(final).not.toContain("PROVISIONAL_REPLY");
   expect(final).not.toContain("Streaming · not yet recorded");
 });
+
+test("reopening a recording restores its row within the latest page or an earlier page", async () => {
+  const initial = rowOf(helper({ phase: "completed" }));
+  const row = { ...initial, capabilities: { open: true, transcript: true } };
+  let stamp = "same";
+  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
+    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {},
+    read: async (_id, request) => {
+      const page = request.cursor === "older" ? "EARLY" : "CURRENT";
+      return { stamp, rows: Array.from({ length: 20 }, (_, i) => ({ id: `${page}-${i}`, kind: "assistant", text: `${page}_${i}_ROW` })),
+        ...(page === "CURRENT" ? { older: "older" } : { newer: "newer" }) };
+    },
+  });
+  const frame = () => stripTerminalSequences(renderLayoutFrame(view.scroll, 80, 8, () => {}).lines.join("\n"));
+  const reopen = async () => { view.restore(row.key); view.refresh(); await Promise.resolve(); return frame(); };
+  await reopen();
+  view.scroll.scrollTo(22, { disableFollow: true });
+  const latest = frame();
+  expect(latest).toContain("CURRENT_6_ROW");
+  view.remember();
+  expect(await reopen()).toBe(latest);
+  expect(view.navigate("older")).toBeTrue(); await Promise.resolve(); frame();
+  view.scroll.scrollTo(22, { disableFollow: true });
+  const older = frame();
+  expect(older).toContain("EARLY_6_ROW");
+  view.remember();
+  expect(await reopen()).toBe(older);
+  stamp = "changed";
+  expect(await reopen()).not.toContain("EARLY_");
+});

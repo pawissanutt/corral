@@ -1193,6 +1193,7 @@ export class NativeWorkbench {
     if (view === "agents" && this.agentsView.handleKey(data)) { this.options.changed(); return true; }
     if (view === "board" && this.boardView?.handleKey(data)) { this.options.changed(); return true; }
     if (view === "agent") {
+      if (data === "v" && this.conversation?.togglePreview()) return true;
       if (getKeybindings().matches(data, "app.tools.expand")) {
         this.toolsExpanded = !this.toolsExpanded; this.conversation?.expandTools(this.toolsExpanded); this.options.changed(); return true;
       }
