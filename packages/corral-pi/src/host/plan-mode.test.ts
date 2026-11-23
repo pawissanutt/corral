@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { briefedCards, type CardEntry, type CardKind } from "./remote/cards.ts";
 import { PLAN_ENTRY, PLAN_FEEDBACK, PLAN_KICKOFF, PLAN_NOTE, PlanMode, type PlanEntry, type PlanHost } from "./plan-mode.ts";
 
 const dirs: string[] = [];
@@ -98,6 +99,15 @@ test("a rewind from one pending review to another tells the views, though the ph
   // Then a view showing the second one hears of it, and can stop showing a plan that is no longer the pending one.
   expect(plan.review).toBe(first);
   expect(told).toBe(1);
+});
+
+test("a pending plan review is briefed in live state behind eight older cards", () => {
+  const entry = (id: string, kind: CardKind, opened_at: string): CardEntry =>
+    ({ card: { id, kind, title: id, questions: [], opened_at }, answer: () => "missing" });
+  const older = Array.from({ length: 8 }, (_, n) => entry(`c-${n}`, "child_question", `2026-01-01T00:00:0${n}Z`));
+  const briefs = briefedCards([...older, entry("plan-1-ab", "plan_review", "2026-01-02T00:00:00Z")]);
+  // The app opens a review from its brief alone, so the newest card of nine still has to be one of the eight.
+  expect(briefs.map(brief => brief.id)).toEqual([...older.slice(0, 7).map(({ card }) => card.id), "plan-1-ab"]);
 });
 
 test("a submission whose copy changed after it was shown is not executed", async () => {

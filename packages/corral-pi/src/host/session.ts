@@ -40,7 +40,7 @@ import { terminalSettings } from "./terminal-settings.ts";
 import { usagePart, usageTotal, type ParentUsage } from "./remote/usage.ts";
 import { contextPart, planHistory, registerWorkspace, WorkspaceGit, type WorkspaceInputs } from "./remote/workspace.ts";
 import { RemoteBuild } from "./remote/build.ts";
-import { cardBrief, cardDetail, questionEntries, questionStatus, sortedCards } from "./remote/cards.ts";
+import { briefedCards, cardDetail, questionEntries, questionStatus, sortedCards } from "./remote/cards.ts";
 import { RemoteDialogs } from "./remote/dialogs.ts";
 import { RemoteRegistry } from "./remote/registry.ts";
 import type { TranscriptInput } from "./remote/input.ts";
@@ -2077,7 +2077,7 @@ export class HostSession {
     const model = session.model ? utf8Prefix(`${session.model.provider}/${session.model.id}`, 512) : undefined;
     const { queue, queue_total } = owner.queueBrief();
     const entries = sortedCards(this.dialogs.entries());
-    const cards = entries.slice(0, 8).map(entry => cardBrief(entry.card));
+    const cards = briefedCards(entries);
     const exitState = this.remoteBuild.exitState();
     const exit = exitState ? exitBrief(exitState) : undefined;
     const board = build?.board ? boardBrief(build.board) : undefined;

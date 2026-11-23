@@ -127,7 +127,10 @@ export function boundState(state: SessionState): BoundedSessionState {
   }
   // Extremely escaped IDs and optional diagnostics must not defeat the byte bound.
   while (bytes > LIVE_STATE_BYTES && clipped.cards.length) {
-    bytes -= Buffer.byteLength(JSON.stringify(clipped.cards.pop())) + Number(clipped.cards.length > 0);
+    // A pending plan review goes last: its brief is the only way to it.
+    const other = clipped.cards.findLastIndex(card => card.kind !== "plan_review");
+    const [dropped] = clipped.cards.splice(other < 0 ? clipped.cards.length - 1 : other, 1);
+    bytes -= Buffer.byteLength(JSON.stringify(dropped)) + Number(clipped.cards.length > 0);
   }
   // A gate log tail is the largest optional detail of an exit: it goes before the exit itself does.
   if (bytes > LIVE_STATE_BYTES && clipped.exit?.land?.gate?.tail.length) {

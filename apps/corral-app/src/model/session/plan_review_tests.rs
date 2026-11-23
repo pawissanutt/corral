@@ -360,6 +360,44 @@ fn a_new_submission_never_shows_the_previous_submissions_document() {
     );
 }
 
+/// Behind three older docked cards the plan review was only counted in `+1 more`, with no line
+/// to press: the plan could not be read until unrelated cards were answered.
+#[test]
+fn a_plan_review_keeps_its_line_behind_three_older_cards() {
+    let mut feed = feed_with(
+        card(
+            "plan-2-3fa9",
+            CardKind::PlanReview,
+            vec![question(vec![option("execute"), option("revise")], true)],
+        ),
+        SessionState::default(),
+    );
+    let cards = &mut feed
+        .live
+        .get_mut(SESSION)
+        .and_then(|live| live.state.as_mut())
+        .expect("the session's state")
+        .cards;
+    for n in 0..3 {
+        let mut asks = cards[cards.len() - 1].clone();
+        asks.id = format!("c-{n}");
+        asks.kind = CardKind::ChildQuestion;
+        cards.insert(n, asks);
+    }
+    let session = Id::from(SESSION);
+    let mut state = State::default();
+    let dock = super::page(&feed, &state, &session, daemon_env(&feed, Form::Desktop)).dock;
+    let line = dock
+        .waiting
+        .iter()
+        .find(|line| line.id == "dock-plan-2-3fa9")
+        .expect("the plan review has a line");
+
+    state.act(line.action.clone(), &feed);
+    let page = super::page(&feed, &state, &session, daemon_env(&feed, Form::Desktop));
+    assert!(page.dock.plan.is_some());
+}
+
 /// A plan review left open while another docked choice was brought forward drew both option
 /// lists on the dock's keys, and a digit meant for the other card could approve the plan. Only
 /// the card brought forward last is open.

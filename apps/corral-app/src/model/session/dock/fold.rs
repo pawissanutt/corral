@@ -269,7 +269,8 @@ pub(super) fn settle(ui: &mut Ui, state: &SessionState, advertised: Option<&str>
 }
 
 /// The docked choices of `cards`: the first the owner opened, and every other one as a line (up
-/// to three, then `+n more`).
+/// to three, then `+n more`). A plan review's line is always among those shown: it is the way
+/// to the plan, which older cards must not have to be answered to read.
 pub(super) fn docked_cards(
     cx: &Cx<'_>,
     cards: &[CardBrief],
@@ -277,6 +278,7 @@ pub(super) fn docked_cards(
 ) -> (Option<ChoiceCard>, Vec<AsideLine>, Option<String>) {
     let mut opened = None;
     let mut lines = Vec::new();
+    let mut review = None;
     for brief in cards.iter().filter(|brief| docked(brief.kind)) {
         let open = cx.ui.dock.opened.contains(&brief.id);
         // An opened plan review is the plan view's: neither a choice card nor a line.
@@ -288,8 +290,15 @@ pub(super) fn docked_cards(
             opened = Some(choice::card(cx, brief, body, inert.clone()));
         } else {
             let oldest = cards.first().is_some_and(|first| first.id == brief.id);
+            if brief.kind == CardKind::PlanReview {
+                review = Some(lines.len());
+            }
             lines.push(choice::line(cx, brief, oldest));
         }
+    }
+    if let Some(counted) = review.filter(|at| *at >= LINES) {
+        let line = lines.remove(counted);
+        lines.insert(LINES - 1, line);
     }
     let more = (lines.len() > LINES).then(|| format!("+{} more", lines.len() - LINES));
     lines.truncate(LINES);

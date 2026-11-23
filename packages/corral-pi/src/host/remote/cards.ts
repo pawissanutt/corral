@@ -124,6 +124,15 @@ export function sortedCards(entries: CardEntry[]): CardEntry[] {
 export function cardBrief({ id, kind, title, child, expires_at }: CardEntry["card"]): CardBrief {
   return { id, kind, title: utf8Prefix(title, 160), child, expires_at };
 }
+/**
+ * The cards live state briefs, of `sorted`: the oldest `limit`, and always a pending plan review. Its brief is
+ * the only way to it, and unrelated older cards must not have to be answered before a plan can be read.
+ */
+export function briefedCards(sorted: readonly CardEntry[], limit = 8): CardBrief[] {
+  const shown = sorted.slice(0, limit), review = sorted.find(entry => entry.card.kind === "plan_review");
+  if (review && !shown.includes(review)) shown[limit - 1] = review;
+  return shown.map(entry => cardBrief(entry.card));
+}
 
 function parseAnswer(args: Record<string, unknown>): { card: string; answers: CardAnswer[]; dismiss: boolean; device?: string } {
   const { card, answers = [], dismiss = false, device } = args;
