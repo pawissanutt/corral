@@ -62,11 +62,13 @@ export class PlanReviewUi {
     const lines: (string | PagerLine)[] = text === undefined
       ? ["The submitted plan's copy is missing or was changed. Choose keep planning and have it submitted again."]
       : text.split("\n").map(line => /^#{1,6}\s/.test(line) ? { text: line, heading: true } : line);
+    // The model that will execute the plan has a line of its own: the frame's title is cut at a long plan title.
+    const facts = `revision ${revision} · ${this.options.model() ?? "no model"}`;
     const control = new AbortController(), open = this.shown = { id, control };
     let key: string | undefined;
     try {
-      key = await openPager(ui, { title: `Plan review · ${title ?? "Plan"} · revision ${revision} · ${this.options.model() ?? "no model"}`,
-        lines, wrap: true, actions: ACTIONS }, control.signal);
+      key = await openPager(ui, { title: `Plan review · ${title ?? "Plan"}`,
+        lines: [facts, "", ...lines], wrap: true, actions: ACTIONS }, control.signal);
     } finally {
       if (this.shown === open) this.shown = undefined;
     }
