@@ -48,6 +48,19 @@ provider credentials or lift spending limits.
 Code keeps Build's editor, child agents, background jobs, questions, Todo and
 optional plan mode. It does not require a commit, gate, review or landing choice:
 quit normally and your edits stay in place. Resume with `corral-pi code --resume <id>`.
+From an interactive Code terminal you can change conversations without leaving the terminal:
+
+| Command | Result |
+|---|---|
+| `/new` | Start a fresh Code session in the current directory. |
+| `/resume` or `/resume <id>` | Pick a stopped Code session or reopen it by ID. Managed Builds are not destinations. |
+| `/fork` | Choose an earlier user message and start a separate Code session from just before it. |
+| `/clone` | Start a separate Code session with a copy of the current conversation branch. |
+| `/import <path>` | Copy a Pi JSONL conversation into a new Code session. The source file and its working directory are not adopted. |
+
+Each switch opens a separate host. New conversations do not inherit running child agents,
+jobs or pending approvals. `/tree` still navigates branches *within* one conversation.
+
 In a configured Corral project you can still request verification of a clean
 checkout, an independent review of committed changes, or a board proposal. None
 of these steps lands a branch, and filing a proposal remains your choice.
