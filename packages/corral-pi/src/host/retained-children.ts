@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, constants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { ChildSnapshot } from "../build/types.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
 import { childDetail, helperDetail } from "./remote/children.ts";
 import { boundFleet, childRow, confinedRegularFile, helperRow, LIVE_FLEET_BYTES, type SessionFleet } from "./remote/fleet.ts";
 import { parseChildId } from "./remote/input.ts";
-import { readTranscriptHeader } from "./transcript-preview.ts";
 import { resolveChildRecording, retainedReference, type TranscriptRecording } from "./transcript-resolution.ts";
 
 /** A parent-local readback index, separate from SDK-managed transcripts and unbounded live events. */
@@ -24,9 +23,13 @@ export class RetainedChildren {
     } catch { /* No usable previous roster; per-child records are independent. */ }
   }
 
-  has(id: string): boolean { return existsSync(join(this.dir, `${parseChildId(id)}.json`)); }
+  has(id: string): boolean {
+    const path = join(this.dir, `${parseChildId(id)}.json`);
+    try { lstatSync(path); return true; }
+    catch (error) { return (error as NodeJS.ErrnoException).code !== "ENOENT"; }
+  }
 
-  recording(id: string): TranscriptRecording | undefined {
+  recording(id: string, legacyBuild = true): TranscriptRecording | undefined {
     try {
       const candidate = join(this.dir, `${parseChildId(id)}.json`);
       const path = confinedRegularFile(this.root, candidate);
@@ -43,26 +46,25 @@ export class RetainedChildren {
         const record = JSON.parse(buffer.toString("utf8"));
         if (record.detail?.id !== id || typeof record.detail.kind !== "string" || record.detail.kind === "helper:web_search") return undefined;
         const reference = retainedReference(this.root, record.session_file, record.session_id);
-        return reference && resolveChildRecording(this.root, id, reference);
+        return reference && resolveChildRecording(this.root, id, { ...reference, legacyBuild: legacyBuild && !reference.session });
       } finally { closeSync(fd); }
     } catch { return undefined; }
   }
 
   child(child: ChildSnapshot): boolean {
-    return !!child.sessionFile && this.save(child.sessionFile, childRow(child), childDetail(child, false));
+    return !!child.sessionFile && this.save(child.sessionFile, child.sessionId, childRow(child), childDetail(child, false));
   }
 
   helper(helper: HelperInspection, file: string, result?: string): boolean {
     if (helper.kind === "web_search") return false; // Not a native, owner-readable transcript.
-    return this.save(file, helperRow(helper), helperDetail(helper, false, result));
+    return this.save(file, helper.request, helperRow(helper), helperDetail(helper, false, result));
   }
 
   /** True only when exact-ID readback has both the index record and a native file. */
-  private save(file: string, row: SessionFleet["children"][number], detail: ReturnType<typeof childDetail> | ReturnType<typeof helperDetail>): boolean {
+  private save(file: string, session: string | undefined, row: SessionFleet["children"][number], detail: ReturnType<typeof childDetail> | ReturnType<typeof helperDetail>): boolean {
     const path = relative(this.root, file);
     if (retainedReference(this.root, path, undefined)?.file !== file) return false;
-    const confined = confinedRegularFile(this.root, file);
-    const session = confined && readTranscriptHeader(confined);
+    if (!session) return false;
     try {
       const id = parseChildId(row.id);
       if (path.startsWith("children/") && path !== `children/${id}.jsonl`) return false;
@@ -81,7 +83,7 @@ export class RetainedChildren {
       if (existing < 0) this.fleet.children.push(row); else this.fleet.children[existing] = row;
       this.fleet.children = boundFleet(this.fleet).children;
       atomic("fleet", this.fleet);
-      return !!confined;
+      return !!resolveChildRecording(this.root, id, { file, session });
     } catch { return false; /* Readback never changes execution, the transcript or accounting. */ }
   }
 }

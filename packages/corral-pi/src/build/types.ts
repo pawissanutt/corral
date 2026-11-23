@@ -286,6 +286,8 @@ export interface ChildSnapshot {
   readonly report?: string;
   readonly error?: string;
   readonly sessionFile?: string;
+  /** SDK recording identity, absent in legacy snapshots. */
+  readonly sessionId?: string;
   /** Tool calls started per 5-second bucket since `startedAt`, capped at 7, last 120 buckets. */
   readonly pulse: readonly number[];
   /** One character per 5-second bucket since the fleet started: `q` queued, `r` running, `n` needs, `d` done, `f` failed, `c` cancelled. Last 240. */

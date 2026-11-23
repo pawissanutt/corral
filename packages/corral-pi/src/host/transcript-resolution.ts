@@ -5,10 +5,11 @@ import { confinedRegularFile } from "./remote/fleet.ts";
 import { readTranscriptHeader } from "./transcript-preview.ts";
 
 export interface TranscriptRecording { file: string; session: string }
-export interface RecordingReference { file: string; session?: string }
+export interface RecordingReference { file: string; session?: string; legacyBuild?: boolean }
 
 export function resolveChildRecording(root: string, id: string, reference: RecordingReference): TranscriptRecording | undefined {
   try { parseChildId(id); } catch { return undefined; }
+  if (reference.session !== undefined && (typeof reference.session !== "string" || !reference.session)) return undefined;
   const path = relative(root, reference.file);
   if (!isAbsolute(reference.file) || !/^(?:children|(?:runtime\/)?auxiliary)\/[^/]+\.jsonl$/.test(path)) return undefined;
   if (path.startsWith("children/") && path !== `children/${id}.jsonl`) return undefined;
@@ -16,9 +17,9 @@ export function resolveChildRecording(root: string, id: string, reference: Recor
   if (!file) return undefined;
   const header = readTranscriptHeader(file);
   if (!header || confinedRegularFile(root, reference.file) !== file) return undefined;
-  // Build child files are allocated by exact child ID. Auxiliary filenames instead
+  // Only legacy Build records lack a separate SDK identity. Auxiliary filenames
   // carry the SDK request identity, which need not be the displayed Explore ID.
-  const expected = reference.session ?? (path === `children/${id}.jsonl` ? header
+  const expected = reference.session ?? (reference.legacyBuild && path === `children/${id}.jsonl` ? header
     : /^(?:runtime\/)?auxiliary\//.test(path) ? basename(path, ".jsonl") : undefined);
   return expected === header ? { file, session: header } : undefined;
 }

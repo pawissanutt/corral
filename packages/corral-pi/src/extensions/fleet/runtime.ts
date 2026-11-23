@@ -637,7 +637,7 @@ export class FleetRuntime implements FleetControl {
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   private copy(entry: Entry): ChildSnapshot {
     const value = entry.value, inspection = entry.history.snapshot()[0];
-    return Object.freeze({ ...value, owns: Object.freeze([...value.owns]), after: Object.freeze([...value.after]),
+    return Object.freeze({ ...value, ...(value.sessionFile ? { sessionId: entry.request } : {}), owns: Object.freeze([...value.owns]), after: Object.freeze([...value.after]),
       edits: Object.freeze(value.edits.map(edit => Object.freeze({ ...edit }))), usage: Object.freeze({ ...value.usage }),
       steers: Object.freeze([...value.steers]), steeredAt: Object.freeze([...value.steeredAt ?? []]), pulse: Object.freeze([...value.pulse]),
       question: value.question ? Object.freeze({ ...value.question, options: Object.freeze(value.question.options.map(option => Object.freeze({ ...option }))) }) : undefined,

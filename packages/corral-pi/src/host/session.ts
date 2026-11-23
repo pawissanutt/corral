@@ -46,7 +46,7 @@ import { RemoteBuild } from "./remote/build.ts";
 import { briefedCards, cardDetail, questionEntries, questionStatus, sortedCards } from "./remote/cards.ts";
 import { RemoteDialogs } from "./remote/dialogs.ts";
 import { RemoteRegistry } from "./remote/registry.ts";
-import type { TranscriptInput } from "./remote/input.ts";
+import { parseChildId, type TranscriptInput } from "./remote/input.ts";
 import { boardBrief, capabilities, clipText, exitBrief, jobCounts, jsonBytes, planBrief, type SessionState, type StateProjection } from "./remote/state.ts";
 import { utf8Prefix } from "../roles/assistant/owner-action.ts";
 import { buildParentPolicy } from "../roles/build/guard.ts";
@@ -1696,17 +1696,29 @@ export class HostSession {
     const root = this.transcriptRoot;
     if (!root) return undefined;
     const current = (this.buildControls?.fleet ?? this.fleet)?.snapshot().children.find(entry => entry.id === id);
-    if (current?.sessionFile) return resolveChildRecording(root, id, { file: current.sessionFile });
+    if (current) {
+      if (current.sessionFile && current.sessionId !== undefined) {
+        return resolveChildRecording(root, id, { file: current.sessionFile, session: current.sessionId });
+      }
+      const recording = this.retainedChildren?.recording(id, false);
+      return recording?.file === current.sessionFile ? recording : undefined;
+    }
     const helper = this.auxiliary?.inspection().find(entry => entry.request === id);
     if (helper) {
       if (helper.kind === "web_search" || helper.parent !== this.boundSessionId) return undefined;
       if (helper.sessionFile) return resolveChildRecording(root, id, { file: helper.sessionFile, session: helper.request });
     }
     const archived = this.archivedFleet.find(entry => entry.id === id);
-    if (!current && archived) {
+    if (archived) {
       const file = archived.sessionFile ?? join(root, "children", `${id}.jsonl`);
-      const recording = resolveChildRecording(root, id, { file });
-      if (recording) return recording;
+      if (archived.sessionId !== undefined) return resolveChildRecording(root, id, { file, session: archived.sessionId });
+      // A known index that fails validation is not a legacy recording.
+      try { parseChildId(id); } catch { return undefined; }
+      if (this.retainedChildren?.has(id)) {
+        const recording = this.retainedChildren.recording(id);
+        return recording?.file === file ? recording : undefined;
+      }
+      return resolveChildRecording(root, id, { file, legacyBuild: true });
     }
     return this.retainedChildren?.recording(id);
   }

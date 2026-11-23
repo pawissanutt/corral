@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildSnapshot } from "../src/build/types.ts";
 import { childRows } from "../src/ui/build/fleet-rows.ts";
+import { HostSession } from "../src/host/session.ts";
 import { RetainedChildren } from "../src/host/retained-children.ts";
 import { mergeArchivedChildren, resolveChildRecording } from "../src/host/transcript-resolution.ts";
 
@@ -41,7 +42,8 @@ test("a known archived Build child uses its exact filename, never another parent
   const file = join(parent, "children/slice.jsonl"), foreign = join(other, "children/slice.jsonl");
   writeFileSync(file, header("build-request"));
   writeFileSync(foreign, header("build-request"));
-  expect(resolveChildRecording(parent, "slice", { file })).toEqual({ file, session: "build-request" });
+  expect(resolveChildRecording(parent, "slice", { file })).toBeUndefined();
+  expect(resolveChildRecording(parent, "slice", { file, legacyBuild: true })).toEqual({ file, session: "build-request" });
   expect(resolveChildRecording(parent, "slice", { file, session: "incorrect" })).toBeUndefined();
   expect(resolveChildRecording(parent, "different", { file })).toBeUndefined();
   expect(resolveChildRecording(parent, "slice", { file: foreign })).toBeUndefined();
@@ -73,11 +75,42 @@ test("new retained Build references persist their actual header ID for restart",
   writeFileSync(file, header("sdk-request"));
   const child: ChildSnapshot = { id: "slice", kind: "slice", title: "Child", brief: "Prompt", call: "call", profile: "default",
     model: "fixture/model", state: "done", createdAt: 1, owns: [], after: [], edits: [], usage: { input: 0, output: 0, turns: 0 },
-    steers: [], pulse: [], history: "d", messages: [], sessionFile: file };
+    steers: [], pulse: [], history: "d", messages: [], sessionFile: file, sessionId: "sdk-request" };
   expect(new RetainedChildren(root).child(child)).toBeTrue();
   expect(JSON.parse(readFileSync(join(root, "child-records/slice.json"), "utf8"))).toMatchObject({ session_id: "sdk-request" });
   const resumed = new RetainedChildren(root);
   expect(resumed.recording("slice")).toEqual({ file, session: "sdk-request" });
   writeFileSync(file, header("replaced"));
+  expect(resumed.child(child)).toBeFalse(); // Settlement must not re-pin a replacement header.
   expect(resumed.recording("slice")).toBeUndefined();
+}));
+
+
+test("HostSession rejects replacement headers for current and archived Build rows", () => fixture(root => {
+  const file = join(root, "children/slice.jsonl"), id = "slice";
+  mkdirSync(join(root, "children"));
+  mkdirSync(join(root, "child-records"));
+  const record = join(root, "child-records/slice.json");
+  const row = { id, sessionFile: file }, pinned = { ...row, sessionId: "sdk-request" };
+  const host: HostSession = Object.assign(Object.create(HostSession.prototype), {
+    boundSessionId: "parent", runtime: { session: { sessionId: "parent" } }, transcriptRoot: root,
+    retainedChildren: new RetainedChildren(root), archivedFleet: [row],
+  });
+  const select = (current?: typeof pinned | typeof row, archived = row): HostSession => Object.assign(host, {
+    fleet: current && { snapshot: () => ({ children: [current] }) }, archivedFleet: [archived],
+  });
+  writeFileSync(file, header("sdk-request"));
+  expect(select().childTranscript(id)).toBe(file); // Legacy archive with no identity metadata.
+  expect(select(row).childTranscript(id)).toBeUndefined(); // Current rows cannot take the legacy route.
+  expect(select(pinned).childTranscript(id)).toBe(file);
+  expect(select(undefined, pinned).childTranscript(id)).toBe(file);
+  writeFileSync(record, JSON.stringify({ session_file: "children/slice.jsonl", session_id: "sdk-request", detail: { id, kind: "slice" } }));
+  expect(select(row).childTranscript(id)).toBe(file);
+  expect(select().childTranscript(id)).toBe(file);
+  writeFileSync(file, header("replacement"));
+  expect(select(row).childTranscript(id)).toBeUndefined();
+  expect(select(pinned).childTranscript(id)).toBeUndefined();
+  expect(select().childTranscript(id)).toBeUndefined();
+  rmSync(record);
+  expect(select(undefined, pinned).childTranscript(id)).toBeUndefined();
 }));
