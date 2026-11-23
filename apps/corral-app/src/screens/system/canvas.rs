@@ -4,22 +4,27 @@
 //! no reference, dashed; referenced but not declared, in the held colour), cards re-coloured by
 //! the overlay on the same geometry. A canvas has no parts of its own for the pointer or a
 //! screen reader, so every card and every edge also gets a transparent button over it that
-//! carries its label: a press picks it, a press on the picked card opens its level.
+//! carries its label: a press picks it, a press on the picked card opens its level. A task
+//! page's Impact draws its map here too ([`Host::Impact`]): its marks replace the overlay's
+//! figure, ring the touched and dependent cards and dim the rest.
 
 use nsh_core::canvas::CanvasTextAlign;
 use nsh_core::prelude::*;
 
 use crate::model::system::layout::{self, Font, Layout, Rect};
+use crate::model::system::marks::{self as marked, Mark, Marks};
 use crate::model::system::scene::{Card, EdgeKind, Kind, Scene};
 use crate::model::system::tree::{matches, share};
 use crate::model::system::words::{
     activity, busiest, figure, language_slot, languages, read_shares, slot_hue,
 };
-use crate::model::system::{Action, Node, Overlay, Pick, State, Window};
+use crate::model::system::{Node, Overlay, Pick, State, Window};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::marks::hue_ink;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color};
+
+use super::Host;
 
 /// The CSS font of a map font.
 fn css(font: Font) -> String {
@@ -33,7 +38,7 @@ fn measure(font: Font, words: &str) -> f32 {
 
 /// The map of the shown level: laid out again when the scene or the room changes, painted
 /// again when the overlay, the pick or the filter does.
-pub fn map(app: AppState, scene: Memo<Option<Scene>>) -> AnyElement {
+pub fn map(app: AppState, scene: Memo<Option<Scene>>, host: Host) -> AnyElement {
     let width = signal(0.0_f32);
     let placed = computed(move || {
         let room = width.get();
@@ -49,12 +54,12 @@ pub fn map(app: AppState, scene: Memo<Option<Scene>>) -> AnyElement {
         .child(dynamic(move || {
             let (layout, scene) = placed.get()?;
             let room = width.get_untracked();
-            Some(untracked(|| drawn(app, layout, scene, room)))
+            Some(untracked(|| drawn(app, layout, scene, room, host)))
         }))
         .into_element()
 }
 
-fn drawn(app: AppState, layout: Layout, scene: Scene, room: f32) -> AnyElement {
+fn drawn(app: AppState, layout: Layout, scene: Scene, room: f32, host: Host) -> AnyElement {
     let (w, h) = (layout.width.max(1.0), layout.height.max(1.0));
     let spoken = format!(
         "Map, {} level: {} cards, {} edges drawn",
@@ -62,7 +67,7 @@ fn drawn(app: AppState, layout: Layout, scene: Scene, room: f32) -> AnyElement {
         scene.cards.len(),
         scene.edges.len()
     );
-    let boxes = hit_boxes(app, &layout, &scene);
+    let boxes = hit_boxes(app, &layout, &scene, host);
     let paint_layout = layout.clone();
     let paint_scene = scene.clone();
     let surface = view()
@@ -71,8 +76,9 @@ fn drawn(app: AppState, layout: Layout, scene: Scene, room: f32) -> AnyElement {
         .h(px(h))
         .child(
             canvas(move || {
-                let state = app.system.get();
-                paint(&paint_layout, &paint_scene, &state)
+                let state = host.state(app);
+                let marks = host.marks();
+                paint(&paint_layout, &paint_scene, &state, marks.as_ref())
             })
             .absolute()
             .top(px(0.0))
@@ -111,11 +117,17 @@ fn bounds(r: Rect) -> Bounds<Points> {
 struct Lit<'a> {
     scene: &'a Scene,
     state: &'a State,
+    /// A task's marks: what they leave unmarked is dimmed.
+    marks: Option<&'a Marks>,
 }
 
 impl Lit<'_> {
+    fn marked(&self, node: &Node) -> bool {
+        self.marks.is_none_or(|marks| marks.contains_key(node))
+    }
+
     fn card(&self, card: &Card) -> bool {
-        if !matches(card, &self.state.filter) {
+        if !matches(card, &self.state.filter) || !self.marked(&card.node) {
             return false;
         }
         match &self.state.picked {
@@ -137,7 +149,7 @@ impl Lit<'_> {
                 .card(node)
                 .is_some_and(|c| matches(c, &self.state.filter))
         };
-        if !matched(from) || !matched(to) {
+        if !matched(from) || !matched(to) || !(self.marked(from) || self.marked(to)) {
             return false;
         }
         match &self.state.picked {
@@ -154,8 +166,12 @@ impl Lit<'_> {
 
 const DIM: f32 = 0.28;
 
-fn paint(layout: &Layout, scene: &Scene, state: &State) -> Painter {
-    let lit = Lit { scene, state };
+fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -> Painter {
+    let lit = Lit {
+        scene,
+        state,
+        marks,
+    };
     let mut p = Painter::new();
     for caption in &layout.captions {
         if let Some(y) = caption.rule {
@@ -266,8 +282,9 @@ fn paint(layout: &Layout, scene: &Scene, state: &State) -> Painter {
             continue;
         };
         let picked = state.picked == Some(Pick::Node(card.node.clone()));
-        p = p.global_alpha(if lit.card(card) { 1.0 } else { DIM });
-        p = paint_card(p, card, placed.rect, &view, scene, picked);
+        p = p.global_alpha(if lit.card(card) || picked { 1.0 } else { DIM });
+        let mark = marks.map(|marks| marks.get(&card.node).copied());
+        p = paint_card(p, card, placed.rect, &view, scene, picked, mark);
     }
     p.global_alpha(1.0)
 }
@@ -364,6 +381,8 @@ fn paint_card(
     look: &Look,
     scene: &Scene,
     picked: bool,
+    // Under a task's marks: this card's, if any.
+    mark: Option<Option<Mark>>,
 ) -> Painter {
     let port = card.kind == Kind::Port;
     let radius = if port { r.h / 2.0 } else { 6.0 };
@@ -416,8 +435,26 @@ fn paint_card(
         .round_rect(bounds(r), px(radius))
         .stroke()
         .line_dash(&[]);
+    if let Some(Some(mark)) = mark {
+        let (hue, ring): (Hue, &[Points]) = match mark {
+            Mark::Touched { .. } => (Hue::Worker, &[]),
+            Mark::Dependent { .. } => (Hue::Held, &dash),
+        };
+        p = p
+            .stroke_color(now(hue_ink(hue)))
+            .line_width(2.0)
+            .line_dash(ring)
+            .begin_path()
+            .round_rect(bounds(r), px(radius))
+            .stroke()
+            .line_dash(&[]);
+    }
+    let figure = |card: &Card| match mark {
+        Some(mark) => mark.map_or_else(|| marked::UNTOUCHED.to_owned(), Mark::words),
+        None => figure(card, look.overlay, look.window),
+    };
     if port {
-        let tag = figure(card, look.overlay, look.window);
+        let tag = figure(card);
         let tag_w = measure(Font::Tag, &tag);
         return p
             .font(&css(Font::Name))
@@ -466,11 +503,7 @@ fn paint_card(
         .fill_color(ink(Token::Ink2))
         .text_align(CanvasTextAlign::Start)
         .fill_text(
-            &fit(
-                &figure(card, look.overlay, look.window),
-                r.w - 24.0,
-                Font::Sub,
-            ),
+            &fit(&figure(card), r.w - 24.0, Font::Sub),
             r.x + 12.0,
             r.y + 39.0,
         );
@@ -611,7 +644,7 @@ fn chip(p: Painter, r: Rect) -> Painter {
 }
 
 /// The buttons over the canvas: one per card and one at the start of each drawn edge.
-fn hit_boxes(app: AppState, layout: &Layout, scene: &Scene) -> Vec<AnyElement> {
+fn hit_boxes(app: AppState, layout: &Layout, scene: &Scene, host: Host) -> Vec<AnyElement> {
     let mut boxes = Vec::new();
     for placed in &layout.placed {
         let Some(card) = scene.cards.get(placed.card) else {
@@ -625,16 +658,15 @@ fn hit_boxes(app: AppState, layout: &Layout, scene: &Scene) -> Vec<AnyElement> {
             .map(|tag| format!(", {tag}"))
             .unwrap_or_default();
         let spoken = format!("{}, {}{tag}", card.name, card.kind.word());
-        let hint = spoken.clone();
         let node = card.node.clone();
         boxes.push(hit(
             app,
             placed.rect,
             card.node.test_id(),
             spoken,
-            hint,
             Pick::Node(node),
             6.0,
+            host,
         ));
     }
     for route in &layout.routes {
@@ -663,10 +695,10 @@ fn hit_boxes(app: AppState, layout: &Layout, scene: &Scene) -> Vec<AnyElement> {
             app,
             area,
             format!("edge-{}", route.edge),
-            spoken.clone(),
             spoken,
             pick,
             9.0,
+            host,
         ));
     }
     boxes
@@ -676,10 +708,11 @@ fn hit(
     app: AppState,
     area: Rect,
     test_id: String,
+    // Also the desktop's tooltip.
     spoken: String,
-    hint: String,
     pick: Pick,
     radius: f32,
+    host: Host,
 ) -> AnyElement {
     let desktop = app.form == Form::Desktop;
     view()
@@ -692,14 +725,14 @@ fn hit(
         .cursor_pointer()
         .rounded(px(radius))
         .role(AccessibilityRole::Button)
-        .label(spoken)
-        .on_press(move || app.system_act(Action::Pick(pick.clone())))
+        .label(spoken.clone())
+        .on_press(move || host.pick(app, pick.clone()))
         .focus_visible(|s| {
             s.outline(px(2.0))
                 .outline_color(color(Token::Focus))
                 .outline_offset(px(2.0))
         })
-        .when(desktop, |v| v.tooltip(tip(hint.into())))
+        .when(desktop, |v| v.tooltip(tip(spoken.into())))
         .into_element()
 }
 

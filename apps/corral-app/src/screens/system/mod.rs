@@ -10,19 +10,21 @@
 //! "system-pick-<project>", "system-map", "system-provenance", "inspector", "btn-system-open",
 //! "inspect-row-<n>", and those of `canvas.rs` and `tree.rs`.
 
-mod canvas;
-mod tree;
+pub(crate) mod canvas;
+pub(crate) mod tree;
 
 use nsh_core::element::color as for_appearance;
 use nsh_core::prelude::*;
 
 use crate::model::list::inspector_width;
 use crate::model::projects::Scope;
+use crate::model::review::impact;
 use crate::model::system::inspect::Inspector;
+use crate::model::system::marks::Marks;
 use crate::model::system::scene::EdgeKind;
 use crate::model::system::shown::{ASK_HEADING, ASK_WORDS, Shown, Status, TITLE, shown};
 use crate::model::system::words::{Swatch, slot_hue};
-use crate::model::system::{Action, Overlay, Window, request};
+use crate::model::system::{Action, Overlay, Pick, State, Window, request};
 use crate::model::text::span;
 use crate::model::{Form, Hue};
 use crate::screens::activity::subnav;
@@ -36,6 +38,42 @@ use crate::ui::kit::rows::list_row;
 use crate::ui::kit::text::{h3, label_value, plain};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
+
+/// Whose state a map draws and picks: Activity › System's, or a task page's Impact, which
+/// marks what its change touched.
+#[derive(Clone, Copy)]
+pub(crate) enum Host {
+    System,
+    Impact(Memo<Marks>),
+}
+
+impl Host {
+    /// Tracked.
+    fn state(self, app: AppState) -> State {
+        match self {
+            Host::System => app.system.get(),
+            Host::Impact(_) => State {
+                picked: app.impact.with(|state| state.picked.clone()),
+                ..State::default()
+            },
+        }
+    }
+
+    /// Tracked.
+    fn marks(self) -> Option<Marks> {
+        match self {
+            Host::System => None,
+            Host::Impact(marks) => Some(marks.get()),
+        }
+    }
+
+    fn pick(self, app: AppState, pick: Pick) {
+        match self {
+            Host::System => app.system_act(Action::Pick(pick)),
+            Host::Impact(_) => app.impact_act(impact::Action::Pick(pick)),
+        }
+    }
+}
 
 /// Activity › System.
 pub fn screen(app: AppState) -> AnyElement {
@@ -167,8 +205,8 @@ fn map_page(app: AppState, data: Memo<Shown>) -> AnyElement {
     let form = app.form;
     let scene = computed(move || data.with(|shown| shown.scene.clone()));
     let drawn = match form {
-        Form::Desktop => canvas::map(app, scene),
-        Form::Phone | Form::Terminal => tree::tree(app, scene),
+        Form::Desktop => canvas::map(app, scene, Host::System),
+        Form::Phone | Form::Terminal => tree::tree(app, scene, Host::System),
     };
     let main = view()
         .flex_col()

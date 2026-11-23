@@ -9,6 +9,7 @@
 pub mod inspect;
 mod layered;
 pub mod layout;
+pub mod marks;
 pub mod scene;
 pub mod shown;
 pub mod tree;

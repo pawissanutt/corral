@@ -13,6 +13,7 @@ mod brief_side;
 mod decide;
 mod diff;
 mod evidence;
+pub mod impact;
 mod live;
 mod live_files;
 mod loop_page;

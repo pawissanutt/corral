@@ -6,10 +6,12 @@
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
+use crate::model::review::impact::{Action, View};
 use crate::model::review::{Body, LoopContent, Tab};
 use crate::model::tasks::page;
 use crate::model::{Form, Id};
 use crate::state::AppState;
+use crate::ui::kit::button::seg;
 use crate::ui::kit::text::plain;
 use crate::ui::term;
 
@@ -23,9 +25,44 @@ enum Shown {
     Line(String),
 }
 
-/// The Changes tab of task `id`.
+/// The Changes tab of task `id`: Diff or Impact (`seg-changes-<n>`).
 pub(crate) fn changes(app: AppState, id: Id) -> AnyElement {
     let form = app.form;
+    {
+        let id = id.clone();
+        effect(move || untracked(|| app.impact.update(|state| state.follow(id.as_str()))));
+    }
+    let switch = seg(
+        app,
+        &View::ALL,
+        move || app.impact.with(|state| state.view),
+        move |view| app.impact_act(Action::View(view)),
+        "seg-changes",
+    );
+    let showing = computed(move || app.impact.with(|state| state.view));
+    let content = dynamic(move || {
+        let id = id.clone();
+        match showing.get() {
+            View::Diff => untracked(|| diff_view(app, id)),
+            View::Impact => untracked(|| super::impact::impact(app, id)),
+        }
+    });
+    let body = view()
+        .child(switch)
+        .child(match form {
+            Form::Terminal => term::blank(),
+            _ => view().h(px(10.0)).into_element(),
+        })
+        .child(content);
+    match form {
+        Form::Terminal => body.child(term::blank()).into_element(),
+        Form::Desktop => body.py(px(16.0)).into_element(),
+        Form::Phone => body.px(px(14.0)).py(px(14.0)).into_element(),
+    }
+}
+
+/// The worker's summary and the stored diff.
+fn diff_view(app: AppState, id: Id) -> AnyElement {
     let summary = {
         let id = id.clone();
         computed(move || app.feed.with(|feed| page::summary(feed, id.as_str())))
@@ -67,16 +104,12 @@ pub(crate) fn changes(app: AppState, id: Id) -> AnyElement {
             })
         })
     };
-    let body = view()
+    view()
         .test_id("task-changes")
         .on_layout(move |frame: &Bounds<Points>| measured.measured(frame.size.width.0))
         .child(summary)
-        .child(block(app, page::DIFF, None, files));
-    match form {
-        Form::Terminal => body.child(term::blank()).into_element(),
-        Form::Desktop => body.py(px(16.0)).into_element(),
-        Form::Phone => body.px(px(14.0)).py(px(14.0)).into_element(),
-    }
+        .child(block(app, page::DIFF, None, files))
+        .into_element()
 }
 
 /// Open tasks already have a candidate keeper. Closed tasks load their saved diff only here.

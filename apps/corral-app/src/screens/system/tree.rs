@@ -5,9 +5,9 @@
 
 use nsh_core::prelude::*;
 
+use crate::model::system::Pick;
 use crate::model::system::scene::{EdgeKind, Scene};
 use crate::model::system::tree::{Line, lines};
-use crate::model::system::{Action, Pick};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::marks::hue_ink;
@@ -15,16 +15,19 @@ use crate::ui::kit::rows::{list_row, list_row_tall};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
+use super::Host;
+
 /// Cells of a terminal row's bar.
 const BAR_CELLS: usize = 8;
 
-pub fn tree(app: AppState, scene: Memo<Option<Scene>>) -> AnyElement {
+pub fn tree(app: AppState, scene: Memo<Option<Scene>>, host: Host) -> AnyElement {
     let rows = computed(move || {
-        let state = app.system.get();
+        let state = host.state(app);
+        let marks = host.marks();
         scene.with(|scene| {
             scene
                 .as_ref()
-                .map(|scene| lines(scene, &state))
+                .map(|scene| lines(scene, &state, marks.as_ref()))
                 .unwrap_or_default()
         })
     });
@@ -43,7 +46,7 @@ pub fn tree(app: AppState, scene: Memo<Option<Scene>>) -> AnyElement {
                         if matches!(line, Line::Edge(_)) {
                             *edges += 1;
                         }
-                        Some(row(app, n, line))
+                        Some(row(app, n, line, host))
                     }))
                     .into_element()
             })
@@ -72,7 +75,7 @@ fn fixed(element: AnyElement) -> AnyElement {
     view().flex_shrink_0().child(element).into_element()
 }
 
-fn row(app: AppState, index: usize, line: Line) -> AnyElement {
+fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
     let form = app.form;
     match line {
         Line::Section(title) => {
@@ -100,11 +103,11 @@ fn row(app: AppState, index: usize, line: Line) -> AnyElement {
             let label = format!("{}, {}", node.name, node.figure);
             let name = text(node.name.clone())
                 .number_of_lines(1u32)
-                .text_color(color(Token::Ink))
+                .text_color(color(if node.dim { Token::Ink3 } else { Token::Ink }))
                 .font_weight(FontWeight::SEMIBOLD);
             let opens = if node.opens { " ›" } else { "" };
             let tag = node.tag.clone().unwrap_or_default();
-            let press = move || app.system_act(Action::Pick(pick.clone()));
+            let press = move || host.pick(app, pick.clone());
             match form {
                 Form::Terminal => list_row(
                     app,
@@ -211,7 +214,7 @@ fn row(app: AppState, index: usize, line: Line) -> AnyElement {
                     label,
                     format!("edge-line-{index}"),
                     move || picked,
-                    move || app.system_act(Action::Pick(pick.clone())),
+                    move || host.pick(app, pick.clone()),
                     content,
                 ),
                 None => view()

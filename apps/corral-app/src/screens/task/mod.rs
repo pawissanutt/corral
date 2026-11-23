@@ -14,6 +14,7 @@ mod band;
 pub(crate) mod candidate;
 mod changes;
 mod history;
+mod impact;
 pub(crate) mod keep;
 pub(crate) mod overview;
 pub(crate) mod parts;

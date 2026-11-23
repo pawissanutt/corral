@@ -72,6 +72,8 @@ pub struct AppState {
     pub artifacts: Signal<artifacts::State>,
     /// Activity › System: the level, pick, overlay and filter.
     pub system: Signal<system::State>,
+    /// A task page's Changes view (Diff or Impact) and the Impact's pick.
+    pub impact: Signal<review::impact::State>,
     pub agents: source::StateSource<agents::State>,
     /// Every session page's UI state (tab, draft, this device's sends), kept for the app's life.
     pub session: source::StateSource<session::State>,
@@ -214,6 +216,7 @@ impl AppState {
             usage: signal(usage::State::default()),
             artifacts: signal(artifacts::State::default()),
             system: signal(system::State::default()),
+            impact: signal(review::impact::State::default()),
             agents: source::StateSource::new(
                 data,
                 agents::State {

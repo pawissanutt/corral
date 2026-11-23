@@ -3,6 +3,7 @@
 //! picked node its edges, each of which picks that edge. A list keeps every name whole and
 //! every edge readable where a drawing of thirty boxes could not (docs/plans/system-map.md §3.1).
 
+use super::marks::{self, Marks};
 use super::scene::{Card, EdgeKind, Scene};
 use super::words::{activity, busiest, figure, read_shares};
 use super::{Node, Overlay, Pick, State, Window};
@@ -26,6 +27,8 @@ pub struct NodeLine {
     pub share: f32,
     pub picked: bool,
     pub opens: bool,
+    /// Untouched by the change a task page's Impact shows.
+    pub dim: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,7 +79,20 @@ pub fn share(scene: &Scene, card: &Card, overlay: Overlay, window: Window) -> f3
     }
 }
 
-pub fn lines(scene: &Scene, state: &State) -> Vec<Line> {
+/// The level's rows. Under `marks` (a task's Impact) each node's figure is what the change did
+/// to it, its bar its share of the most churned, and an unmarked node is dimmed.
+pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
+    let churn = |node: &Node| match marks.and_then(|marks| marks.get(node)) {
+        Some(marks::Mark::Touched { added, removed }) => added + removed,
+        _ => 0,
+    };
+    let most = scene
+        .cards
+        .iter()
+        .map(|card| churn(&card.node))
+        .max()
+        .unwrap_or(0)
+        .max(1);
     let mut out = Vec::new();
     let picked_node = match &state.picked {
         Some(Pick::Node(node)) => Some(node),
@@ -125,10 +141,19 @@ pub fn lines(scene: &Scene, state: &State) -> Vec<Line> {
                 node: card.node.clone(),
                 name: card.name.clone(),
                 tag: card.tag.clone(),
-                figure: figure(card, state.overlay, state.window),
-                share: share(scene, card, state.overlay, state.window).clamp(0.0, 1.0),
+                figure: match marks {
+                    Some(marks) => marks::figure(marks, &card.node),
+                    None => figure(card, state.overlay, state.window),
+                },
+                share: match marks {
+                    Some(_) => churn(&card.node) as f32 / most as f32,
+                    None => share(scene, card, state.overlay, state.window),
+                }
+                .clamp(0.0, 1.0),
                 picked: picked_node == Some(&card.node),
-                opens: card.node.opens().is_some(),
+                // The task's map is its head's project level, with no level to open.
+                opens: marks.is_none() && card.node.opens().is_some(),
+                dim: marks.is_some_and(|marks| !marks.contains_key(&card.node)),
             }));
             if picked {
                 out.extend(edges(scene, &card.node, picked_edge));
