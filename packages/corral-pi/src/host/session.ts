@@ -46,6 +46,7 @@ import { RemoteRegistry } from "./remote/registry.ts";
 import type { TranscriptInput } from "./remote/input.ts";
 import { boardBrief, capabilities, clipText, exitBrief, jobCounts, jsonBytes, planBrief, type SessionState, type StateProjection } from "./remote/state.ts";
 import { utf8Prefix } from "../roles/assistant/owner-action.ts";
+import { buildParentPolicy } from "../roles/build/guard.ts";
 import type { RemoteOwner } from "./remote-owner.ts";
 import { CLAUDE_SDK_API, type ClaudeLaneConfig, registerClaudeSdkApi } from "../claude/stream.ts";
 import { closeResidentSession, residentLifecycle } from "../claude/resident.ts";
@@ -1126,7 +1127,7 @@ export class HostSession {
     }
     // Follows the session's current model, so a mid-session model switch changes the overlay too.
     const calibration = this.options.modules.role.calibration;
-    if (calibration) pi.on("before_agent_start", event => {
+    if (calibration && this.roleContext.build?.session.trustedCode !== true) pi.on("before_agent_start", event => {
       const model = this.runtime?.session.model;
       const text = model ? calibration(model.provider, model.id) : undefined;
       if (text) event.systemPromptOptions.sections.model_calibration = text;
@@ -1294,17 +1295,15 @@ export class HostSession {
     const { cwd, workspaceRoot, identity, build } = this.roleContext;
     const assistantWorkspace = identity.role === "assistant" && workspaceRoot && existsSync(join(workspaceRoot, ".corral-next", "corral.toml"))
       ? workspaceRoot : undefined;
-    const writeScope = identity.role === "assistant" ? { cwd, root: cwd, workspace: assistantWorkspace }
-      : identity.role === "build" ? build ? { cwd, root: build.session.worktree,
-        buildWorktree: !build.session.here && build.session.repository !== false,
-        workspace: build.session.bare ? undefined : build.session.workspaceRoot } : null : undefined;
+    const policy = identity.role === "build" ? buildParentPolicy(this.roleContext, shellRefusal, this.controls.bashRules, plan) : {
+      fixed: shellRefusal && ((command: string) => shellRefusal(command, build?.session.bare === true)),
+      writeScope: identity.role === "assistant" ? { cwd, root: cwd, workspace: assistantWorkspace } : undefined,
+      rules: this.controls.bashRules, plan,
+    };
     installToolControls(pi, {
-      ...(shellRefusal ? { fixed: (command) => shellRefusal(command, build?.session.bare === true) } : {}),
+      ...policy,
       ...(this.hooks ? { hooks: this.hooks } : {}),
-      ...(this.controls.bashRules ? { rules: this.controls.bashRules } : {}),
       ...(this.toolApprovals ? { approvals: this.toolApprovals } : {}),
-      ...(writeScope === undefined ? {} : { writeScope }),
-      ...(plan ? { plan } : {}),
       events: this.options.events, corral, currentTurn: () => this.currentTurn(),
     });
     if (!this.loadout.includes("bash")) {
@@ -1340,7 +1339,7 @@ export class HostSession {
     });
     if (this.buildControls) {
       const { exit, board } = this.buildControls;
-      pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { if (!this.panels?.finish()) await exit.requestFinish(); } });
+      if (build?.session.trustedCode !== true) pi.registerCommand("finish", { description: "Choose what happens to this build branch", handler: async () => { if (!this.panels?.finish()) await exit.requestFinish(); } });
       if (board) pi.registerCommand("board", { description: "Refresh this build session's board tasks", handler: async () => { await board.refresh(); this.panels?.showBoard(); } });
     }
     if (this.exportable()) {

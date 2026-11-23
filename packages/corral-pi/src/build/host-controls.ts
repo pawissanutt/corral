@@ -84,7 +84,9 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
       session = updated;
     },
   });
-  const board = context.session.bare ? undefined : createBoard({ context, run, tmpDir: join(context.dir, "board"), changed: options.changed, now: options.now });
+  const trustedCode = context.session.trustedCode === true;
+  const workspaceProject = !!session.workspaceRoot && !!session.project;
+  const board = context.session.bare || (trustedCode && !workspaceProject) ? undefined : createBoard({ context, run, tmpDir: join(context.dir, "board"), changed: options.changed, now: options.now });
   const fleetDefinitions = fleetTools(fleet, undefined, options.wake, "build");
   const task = fleetDefinitions.find(tool => tool.name === "task")!;
   const start = task.execute;
@@ -98,7 +100,8 @@ export function createBuildControls(options: BuildControlsOptions): BuildControl
     return start(...args);
   };
   const evidence = createBuildEvidence({ context, git, fleet, journal: buildJournal, exit, changed: options.changed });
-  const tools = [...fleetDefinitions, ...evidence.tools, buildFinishTool(exit, buildJournal, evidence.finish),
+  const tools = [...fleetDefinitions, ...(!trustedCode || workspaceProject ? evidence.tools : []),
+    ...(!trustedCode ? [buildFinishTool(exit, buildJournal, evidence.finish)] : []),
     ...(board ? [boardPlanTool(plan => board.propose(plan), () => {
       if (!session.workspaceRoot) return "This session is outside a corral workspace.";
       if (!session.project) return "This session has no configured corral project.";

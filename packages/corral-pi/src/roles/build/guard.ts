@@ -2,6 +2,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { assistantShellRefusal } from "../assistant/guard.ts";
 import { classifyWriteScope } from "../assistant/write-scope.ts";
+import type { ToolControls } from "../../host/tool-controls.ts";
+import type { PlanMode } from "../../host/plan-mode.ts";
 import type { RoleContext } from "../types.ts";
 
 // Cover ordinary Git invocations, including -C/-c and explicit repository paths. These
@@ -214,7 +216,37 @@ export function classifyBuildWrite(path: string, worktree: string, workspace?: s
   return { allowed: false, reason: "build rule: writes must stay inside the session worktree; nothing was written." };
 }
 
+/** Only the bound parent gets this policy. Child execution uses its own ownership checks. */
+export function buildParentPolicy(
+  { build, cwd }: Pick<RoleContext, "build" | "cwd">,
+  shellRefusal: ((command: string, bare?: boolean) => string | undefined) | undefined,
+  rules: ToolControls["rules"],
+  plan?: Pick<PlanMode, "phase" | "refusal" | "writesPlan">,
+): Pick<ToolControls, "fixed" | "rules" | "writeScope" | "plan"> {
+  const session = build?.session;
+  if (session?.trustedCode === true) {
+    return { plan: plan && {
+      refusal(tool, input) {
+        if (plan.phase !== "off" && (tool === "bash" || tool === "job_start" || typeof input.command === "string"
+          || tool === "build_verify" || tool === "board_plan")) {
+          return "Plan mode: the working tree is read-only; nothing ran.";
+        }
+        return plan.refusal(tool, input);
+      },
+      writesPlan: (tool, input) => plan.writesPlan(tool, input),
+    } };
+  }
+  return {
+    fixed: shellRefusal && ((command) => shellRefusal(command, session?.bare === true)),
+    rules, plan,
+    writeScope: session ? { cwd, root: session.worktree,
+      buildWorktree: !session.here && session.repository !== false,
+      workspace: session.bare ? undefined : session.workspaceRoot } : null,
+  };
+}
+
 export function installBuildGuard(pi: ExtensionAPI, context: RoleContext): void {
+  if (context.build?.session.trustedCode === true) return;
   pi.on("tool_call", async (event) => {
     const input = event.input as Record<string, unknown>;
     // Host controls also inspect bash/job_start. Apply the boundary here as well so
