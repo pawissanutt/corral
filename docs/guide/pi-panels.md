@@ -460,7 +460,9 @@ History belongs only to this running parent host: at most 32 recent helpers, 64 
 
 ### Explore Fast tier
 
-After upgrading Corral and the Pi host, Codex Explore can use:
+The legacy `corral` engine can configure Codex Explore's priority tier as shown
+below. For the standalone model override in `corral-next`, see
+[Model for standalone Explore](corral-pi.md#model-for-standalone-explore).
 
 ```toml
 [agent.capabilities.assistant.subagents]

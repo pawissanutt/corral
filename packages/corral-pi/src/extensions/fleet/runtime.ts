@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join, relative, resolve, sep } from "node:path";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ModelRuntime, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { isProviderId } from "../../auth/providers.ts";
 import { AGENT_JOURNAL_MAX, AGENT_MESSAGE_MAX, AGENT_SEND_BUDGET, MAX_CHILDREN_PER_CALL, MAX_PARALLEL_LIMIT,
   type AgentMessage, type BuildProfile, type ChildKind, type ChildQuestion, type ChildSnapshot, type ChildSpec,
   type FleetControl, type FleetSnapshot, type MessageOutcome, type RosterEntry } from "../../build/types.ts";
@@ -189,9 +190,14 @@ export class FleetRuntime implements FleetControl {
     prompt: string, signal: AbortSignal | undefined, research: ResearchOptions): Promise<AuxiliaryResponse> {
     if (!prompt.trim() || prompt.length > 32768) throw new Error("auxiliary prompt must be 1-32768 characters");
     signal?.throwIfAborted();
-    const model = settings.model ?? this.options.parent.model;
-    if (settings.service_tier === "priority" && this.options.parent.provider !== "openai-codex") throw new Error("Explore priority service tier requires the openai-codex provider");
-    const profile = model.startsWith(`${this.options.parent.provider}/`) ? model : `${this.options.parent.provider}/${model}`;
+    const { provider, model: parentModel } = this.options.parent;
+    if (settings.service_tier === "priority" && provider !== "openai-codex") throw new Error("Explore priority service tier requires the openai-codex provider");
+    const configured = settings.model;
+    const slash = configured?.indexOf("/") ?? -1;
+    const configuredProvider = slash > 0 ? configured?.slice(0, slash) : undefined;
+    // An override never changes the parent's authentication or billing route.
+    const model = isProviderId(configuredProvider) && configuredProvider !== provider ? parentModel : configured ?? parentModel;
+    const profile = model.startsWith(`${provider}/`) ? model : `${provider}/${model}`;
     await this.start(id, [{ id: child, kind: "explore", title: prompt.slice(0, 120), brief: prompt, owns: [], profile }], undefined,
       { request, research, blocking: true });
     const entry = this.entries.get(child)!;

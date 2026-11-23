@@ -2,9 +2,10 @@ import { afterEach, expect, jest, test } from "bun:test";
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ChildSpec } from "../../build/types.ts";
+import { workspaceSettings } from "../../host/config.ts";
 import { exploreTool } from "../subagent/index.ts";
 import { researchBudget } from "../subagent/research.ts";
-import { ExploreSettingsSchema, OracleSettingsSchema, type ExploreSettings } from "../subagent/settings.ts";
+import { auxiliarySettings, ExploreSettingsSchema, OracleSettingsSchema, type ExploreSettings } from "../subagent/settings.ts";
 import type { ChildHandle, ChildHooks } from "./child.ts";
 import type { ResolvedModel } from "./profiles.ts";
 import { FleetRuntime } from "./runtime.ts";
@@ -134,6 +135,28 @@ test("explore timeout cancels the runner and records uncertain spend exactly onc
     expect(fx.records.map(record => record.action)).toEqual(["prepare", "started", "finish"]);
     expect(fx.records.at(-1)?.outcome).toBe("uncertain");
   } finally { await fx.runtime.close(); }
+});
+
+test("workspace Explore model applies only to standalone calls on the configured provider", async () => {
+  const { capabilities, guidance } = workspaceSettings("/unused", "worker", undefined, {
+    explore: { model: "openai-codex/gpt-6-luna" },
+  });
+  const explore = auxiliarySettings("worker", capabilities.enabled, guidance.settings).explore;
+  if (!explore) throw new Error("Explore is disabled");
+  const answer = async (): Promise<ResearchResult> => ({ report: "answer" });
+  const codex = fixture(answer, explore);
+  const anthropic = fixture(answer, explore, "anthropic");
+  try {
+    await codex.runtime.explore("standalone", "research");
+    await codex.runtime.start("task", [{ id: "named", kind: "explore", title: "Research", brief: "research", owns: [] }]);
+    await codex.runtime.wait(["named"]);
+    await anthropic.runtime.explore("standalone", "research");
+    expect(codex.calls.map(call => call.model)).toMatchObject([
+      { provider: "openai-codex", model: "gpt-6-luna" },
+      { provider: "openai-codex", model: "normal" },
+    ]);
+    expect(anthropic.calls[0]?.model).toMatchObject({ provider: "anthropic", model: "normal" });
+  } finally { await Promise.all([codex.runtime.close(), anthropic.runtime.close()]); }
 });
 
 test("Explore priority is validated and restricted to the Codex research runner", async () => {

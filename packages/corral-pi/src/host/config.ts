@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { TOML } from "bun";
+import { z } from "zod";
 
 import type { AwsBinding } from "../auth/aws.ts";
 import type { CapabilityGuidance } from "../capabilities/guidance.ts";
@@ -150,6 +151,10 @@ const ABILITIES: Readonly<Record<"worker" | "reviewer" | "assistant" | "build", 
   build: [...COMMON_ABILITIES, ...WORK_ABILITIES, "lsp"],
 };
 
+const ExploreConfigSchema = z.strictObject({
+  model: z.string().max(256).refine(selector => qualifiedModel(selector) !== undefined, "expected a known <provider>/<model>"),
+}).optional();
+
 function readPiSettings(root: string): Json {
   const settingsPath = join(root, ".corral-next", "pi.toml");
   try { return TOML.parse(readFileSync(settingsPath, "utf8")) as Json; }
@@ -171,12 +176,19 @@ export function workspaceSettings(root: string, role: keyof typeof ABILITIES, ru
   const local = raw.llama_cpp === undefined ? undefined : LlamaCppSettingsSchema.parse(raw.llama_cpp);
   if (local) enabled.push("llama_cpp.enabled");
   const fallbackPolicy = parseFallbackSettings(raw.fallback);
+  const standaloneExplore = role === "assistant" || role === "worker";
+  const explore = ExploreConfigSchema.safeParse(standaloneExplore ? raw.explore : undefined);
+  if (!explore.success) {
+    throw new Error(`.corral-next/pi.toml: [explore]: ${explore.error.issues.map(issue => issue.message).join("; ")}`);
+  }
   const guidance: CapabilityGuidance = {
     projectText: true,
     settings: {
       ...Object.fromEntries(["lsp", "browser", "hooks", "bash_rules"].flatMap(key =>
         raw[key] && typeof raw[key] === "object" ? [[key, raw[key] as Json]] : [])),
-      ...(enabled.includes("subagents") ? { subagents: { model: null, max_parallel: DEFAULT_MAX_PARALLEL, max_turns: 12, timeout_secs: 120 } } : {}),
+      ...(enabled.includes("subagents") ? {
+        subagents: { model: explore.data?.model ?? null, max_parallel: DEFAULT_MAX_PARALLEL, max_turns: 12, timeout_secs: 120 },
+      } : {}),
       ...(enabled.includes("oracle") ? { oracle: { model: null, timeout_secs: 120 } } : {}),
       ...(enabled.includes("expert") ? { expert: raw.expert as Json } : {}),
       ...(enabled.includes("background_shell") ? { background_shell: JobSettingsSchema.parse(raw.background_shell ?? {

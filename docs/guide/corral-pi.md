@@ -61,6 +61,21 @@ In the Corral app, open **Settings → Configuration → Harnesses → Pi** to e
 this same setting on the connected workspace. Use **Save startup model** to
 save it separately from `corral.toml` changes. Clear the field and save to reset.
 
+### Model for standalone Explore
+
+In `.corral-next/pi.toml`, set a provider-qualified model for the standalone
+`explore` tool in chat and worker sessions:
+
+```toml
+[explore]
+model = "openai-codex/gpt-6-luna"
+```
+
+The override applies when its provider matches the parent's bound provider.
+Otherwise Explore inherits the parent's model without changing the login or
+billing route. New hosts read the setting at launch, including on resume.
+It does not change the parent model or the profiles used by `task` children.
+
 ## From the app
 
 Open a Pi session in Agents to follow its transcript, send or steer messages,
