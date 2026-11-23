@@ -39,3 +39,28 @@ test("the terminal plan review keeps the keys after the owner changes the model 
     expect(session.model?.id).toBe(target.id);
   } finally { await h.stop(); }
 }, 30_000);
+
+test("the terminal plan review names the model again when it is changed from the app, before its keys approve", async () => {
+  const h = await startPanelHost(undefined, { role: "assistant" });
+  try {
+    const plan = h.host.planMode, session = h.host.session;
+    if (!plan) throw new Error("the assistant role has no plan mode");
+    await plan.enter();
+    writeFileSync(plan.path, "# Add the flag\n\n1. Parse --version.\n");
+    fixtureTransport().script([{ toolCalls: [{ callId: "submit", name: "plan_submit", arguments: {} }] }, { text: "Submitted." }]);
+    await session.prompt("Plan a --version flag", { source: "extension" });
+    // Given the review is open, naming the model the plan would run on:
+    const original = session.model;
+    await frame(h, `revision 1 · ${original?.provider}/${original?.id}`);
+    const target = (await h.host.runtime.services.modelRuntime.getAvailable()).find(model => model.id !== original?.id && model.reasoning);
+    if (!target) throw new Error("the fixture needs a second model");
+    // When the model is changed from another device:
+    await h.host.selectRemoteModel(`${target.provider}/${target.id}`);
+    // Then the review on screen names that model, and `e` executes on what it shows.
+    await frame(h, `revision 1 · ${target.provider}/${target.id}`);
+    fixtureTransport().script([{ text: "Executing." }]);
+    h.physical.send("e");
+    await h.physical.whenWritten(() => plan.phase === "off", "the plan to start");
+    expect(session.model?.id).toBe(target.id);
+  } finally { await h.stop(); }
+}, 30_000);

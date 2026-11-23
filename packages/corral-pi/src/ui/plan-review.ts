@@ -19,8 +19,8 @@ export interface PlanReviewOptions {
 
 export class PlanReviewUi {
   private ui: ExtensionUIContext | undefined;
-  /** The open review and the submission it shows. */
-  private shown: { readonly id: string; readonly control: AbortController } | undefined;
+  /** The open review, the submission it shows and the model it names as the one that will execute. */
+  private shown: { readonly id: string; readonly model: string | undefined; readonly control: AbortController } | undefined;
   /** The submission the review opened for unasked, so each is offered once. */
   private offered: string | undefined;
   /** The submission to return to once a model selection settles. */
@@ -43,11 +43,16 @@ export class PlanReviewUi {
       // Pi closes its selector and hands the composer the keys only after this handler has returned. A review
       // opened here would be drawn without them, so it reopens in a later task.
       if (id !== undefined) setTimeout(() => { if (id === this.plan.review) void this.show(); }, 0);
+      // Changed from elsewhere, as from the app, under an open review: it closes and is shown again with the
+      // model an execute key would now run on.
+      else setTimeout(() => { if (this.shown && this.options.model() !== this.shown.model) this.shown.control.abort(); }, 0);
     });
     // The review on screen is gone, or a rewind put another in its place: it must not go on showing that plan.
     const unsubscribe = this.plan.onChange(() => { if (this.plan.review !== this.shown?.id) this.shown?.control.abort(); });
     pi.on("session_shutdown", () => {
       unsubscribe();
+      // Nothing is shown again once the terminal is gone.
+      this.ui = undefined;
       this.shown?.control.abort();
     });
   }
@@ -63,8 +68,9 @@ export class PlanReviewUi {
       ? ["The submitted plan's copy is missing or was changed. Choose keep planning and have it submitted again."]
       : text.split("\n").map(line => /^#{1,6}\s/.test(line) ? { text: line, heading: true } : line);
     // The model that will execute the plan has a line of its own: the frame's title is cut at a long plan title.
-    const facts = `revision ${revision} · ${this.options.model() ?? "no model"}`;
-    const control = new AbortController(), open = this.shown = { id, control };
+    const model = this.options.model();
+    const facts = `revision ${revision} · ${model ?? "no model"}`;
+    const control = new AbortController(), open = this.shown = { id, model, control };
     let key: string | undefined;
     try {
       key = await openPager(ui, { title: `Plan review · ${title ?? "Plan"}`,
@@ -76,6 +82,11 @@ export class PlanReviewUi {
     // Closed under the owner because another review took its place: show that one instead.
     if (control.signal.aborted && now !== undefined && now !== id) {
       this.offered = now;
+      return this.show();
+    }
+    // An execute key approves a run on the model the review named. If the model was changed from elsewhere, the
+    // review closed for it or the key came first: either way it is shown again, and nothing is approved yet.
+    if (now === id && this.options.model() !== model && (control.signal.aborted || Object.hasOwn(CHOICES, key ?? ""))) {
       return this.show();
     }
     if (key === undefined || now !== id) return true;
