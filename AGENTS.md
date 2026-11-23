@@ -32,6 +32,12 @@ not a workspace member, and not built or tested by `scripts/gate.sh`. It depends
 - No `unwrap()`/`expect()` outside tests. No `todo!()` left in shipped code.
 - Subprocesses (herdr, git) are invoked with argv, never through a shell, except agent launch commands which are sent to a herdr pane's shell by design.
 
+### Commit messages
+
+- Use Conventional Commits for new commit subjects, including squash commits: `type(scope): short imperative summary`.
+- Pick the type that describes the change: `feat` for new behavior, `fix` for bug fixes, `docs` for documentation, `refactor` for behavior-preserving changes, and `test` for test-only changes.
+- Use a short scope when one area owns the change, e.g. `feat(app): add model favorites` or `fix(engine): skip inherited artifacts`. For cross-cutting changes, omit the scope but keep the prefix, e.g. `fix: preserve favorites across sessions`.
+
 ## Test cost and placement
 
 - Judge tests by the named defect they catch, not their count. Use the lowest layer that
