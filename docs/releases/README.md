@@ -23,6 +23,17 @@ A simulated upgrade is not evidence of an upgrade from a separately published re
 Capture the candidate SHA, workflow URL, native job logs and artifact checksums; hosted
 platform success cannot be inferred from a local Linux run.
 
+## Dependency refreshes
+
+Refresh the two Cargo lockfiles from their own workspaces to preserve their
+respective Rust version constraints. Keep the app's `wasm-bindgen` crate and
+the release workflow's `wasm-bindgen-cli` on the same version.
+
+When refreshing the Pi host's Bun lock, keep exactly one
+`@smithy/node-http-handler`. Corral's Bedrock transport guard patches that
+copy's prototypes, so both Pi and the AWS SDK must resolve it. The manifest
+override keeps Pi's exact upstream pin from installing a separate copy.
+
 ## Authorized publication
 
 Before publication select a previously unused tag matching `[workspace.package].version`,
