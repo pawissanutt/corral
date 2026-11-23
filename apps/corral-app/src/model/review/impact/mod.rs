@@ -411,6 +411,10 @@ fn unprovided(review: &SystemReview, extension: Option<&str>) -> (Supply, Option
                 p.extension
             )
         }
+        // corrald asks the extension only after its own read of the change succeeds.
+        (None, Some(name)) if review.error.is_some() => {
+            format!("Not provided: corrald could not read the change, so {name} was not asked.")
+        }
         (None, Some(name)) => {
             return (
                 Supply::Unanswered,
@@ -558,9 +562,16 @@ pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<us
                 .is_some_and(|p| p.coverage.provides("tests"))
         {
             notes.push(match (&review.provider, extension) {
+                (Some(p), _) if p.error.is_some() => format!(
+                    "Test candidates not provided: {} failed on this change.",
+                    p.extension
+                ),
                 (Some(p), _) => format!(
                     "Test candidates not provided: {} did not supply them.",
                     p.extension
+                ),
+                (None, Some(name)) if review.error.is_some() => format!(
+                    "Test candidates not provided: corrald could not read the change, so {name} was not asked."
                 ),
                 (None, Some(name)) => {
                     format!("Test candidates: {name} has not answered for this change yet.")
