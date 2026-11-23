@@ -15,11 +15,13 @@ export interface LocalBuildOptions {
   readonly id?: string;
   readonly socket?: string;
   readonly headless: boolean;
+  /** A new Code session operates from the invocation directory, even in a Git subdirectory. */
+  readonly codeCwd?: string;
   /** `--plan`: start in plan mode. */
   readonly plan?: boolean;
 }
 
-function buildDataRoot(value: string | undefined, env: NodeJS.ProcessEnv, cwd: string): string {
+export function buildDataRoot(value: string | undefined, env = process.env, cwd = process.cwd()): string {
   // Do not create the directory whose absence keeps a legacy installation's logins in use.
   const data = env.XDG_DATA_HOME;
   return value ? resolve(cwd, value)
@@ -45,7 +47,7 @@ function resolvedRepo(path: string): string | undefined {
 }
 
 export function parseBuildFlags(argv: readonly string[], assets: string, env = process.env,
-  cwd = process.cwd()): { launch: BuildLaunchOptions; local: LocalBuildOptions; startupModel: string | null } {
+  cwd = process.cwd(), command: "build" | "code" = "build"): { launch: BuildLaunchOptions; local: LocalBuildOptions; startupModel: string | null } {
   rejectRemovedModelOptions(argv);
   const options = {
     ...modelFlags, "data-dir": { type: "string" }, socket: { type: "string" }, corral: { type: "string" },
@@ -62,13 +64,18 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
   const resume = values.resume;
   const resuming = resume !== undefined;
   if (resuming) validateBuildId(resume);
-  const workspaceRoot = resuming ? undefined : findWorkspaceRoot(env, cwd);
+  const trustedCode = command === "code";
   const git = resuming ? undefined : spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8" });
-  const repoRoot = git?.status === 0 ? git.stdout.trim() : cwd;
+  if (trustedCode && git && git.status !== 0 && !git.stderr?.includes("not a git repository")) {
+    throw new Error(git.error?.message ?? (git.stderr?.trim() || `git exited with status ${git.status}`));
+  }
+  const codeOutsideGit = trustedCode && git !== undefined && git.status !== 0;
+  const workspaceRoot = resuming || codeOutsideGit ? undefined : findWorkspaceRoot(env, cwd);
+  const repoRoot = git?.status === 0 ? git.stdout.trim() : trustedCode && !resuming ? realpathSync(cwd) : cwd;
   const projects = workspaceRoot && readWorkspaceToml(workspaceRoot, "corral.toml").projects as Record<string, { path?: string }> | undefined;
   const project = values.project ?? (workspaceRoot && projects ? Object.entries(projects).find(([, entry]) =>
     typeof entry.path === "string" && resolvedRepo(resolve(workspaceRoot, entry.path)) === repoRoot)?.[0] : undefined);
-  const corral = values.corral ? resolve(cwd, values.corral) : workspaceRoot ? "corral-next" : undefined;
+  const corral = codeOutsideGit ? undefined : values.corral ? resolve(cwd, values.corral) : workspaceRoot ? "corral-next" : undefined;
   const dataRoot = buildDataRoot(values["data-dir"], env, cwd);
   const profileArgs = values.profile && !resuming ? buildProfileArgs(workspaceRoot ?? cwd, values.profile) : [];
   rejectRemovedModelOptions(profileArgs);
@@ -85,7 +92,7 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
     ...(values["no-fallback"] ? { fallback: undefined } : {}),
     ...(values.fallback?.length ? { "no-fallback": undefined } : {}),
   };
-  const managed = !resuming && values.headless === true && values.id !== undefined && env.CORRAL_PI_MANAGED_BUILD === "1";
+  const managed = !trustedCode && !resuming && values.headless === true && values.id !== undefined && env.CORRAL_PI_MANAGED_BUILD === "1";
   if (managed && flags.model === undefined && flags.provider === undefined) {
     const saved = (raw.startup as { model?: unknown } | undefined)?.model;
     if (saved !== undefined) {
@@ -96,11 +103,12 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
   // Native daemon Builds keep the behavior of the existing Project default route.
   const route = managed ? modelSettings(flags) : modelSettings(flags, "startup");
   return {
-    launch: { version: 1, assets, dataRoot, repoRoot, here: values.here === true,
+    launch: { version: 1, assets, dataRoot, repoRoot, here: trustedCode || values.here === true,
+      ...(trustedCode ? { trustedCode: true } : {}),
       ...route, ...(corral ? { corral } : { bare: true }),
       ...(workspaceRoot ? { workspaceRoot } : {}), ...(corral && project ? { project } : {}),
       ...(values.name ? { name: values.name } : {}), ...(resuming ? { resume } : {}), settings },
-    local: { headless: values.headless === true || !process.stdin.isTTY, ...(values.plan ? { plan: true } : {}),
+    local: { ...(trustedCode && !resuming ? { codeCwd: realpathSync(cwd) } : {}), headless: values.headless === true || !process.stdin.isTTY, ...(values.plan ? { plan: true } : {}),
       ...(values.id !== undefined ? { id: values.id } : {}),
       ...(values.socket ? { socket: resolve(cwd, values.socket) } : {}) },
     startupModel: workspaceRoot ? startupModelSetting(raw) : null,
@@ -108,6 +116,9 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
 }
 
 export function bindBuildResume(launch: BuildLaunchOptions, record: BuildSessionRecord): BuildLaunchOptions {
+  if ((launch.trustedCode === true) !== (record.trustedCode === true)) {
+    throw new Error(`Session ${record.id} is a ${record.trustedCode ? "trusted Code" : "Build"} session; resume it with \`corral-pi ${record.trustedCode ? "code" : "build"} --resume ${record.id}\`.`);
+  }
   // A pre-route record must use the transcript selection, never a model from today's flags or workspace.
   const noFallback = launch.noFallback === true || record.route?.noFallback === true;
   const fallback = launch.noFallback === true ? undefined : record.route?.fallback;

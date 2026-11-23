@@ -22,6 +22,7 @@ export function createSession(launch: BuildLaunch, worktree: Pick<BuildSessionRe
   const title = launch.name?.trim();
   return { version: 1, id, name, ...(title ? { title } : {}), created: now.toISOString(), updated: now.toISOString(),
     repoRoot: launch.repoRoot, ...worktree, here: launch.here, ...(launch.bare ? { bare: true } : {}),
+    ...(launch.trustedCode ? { trustedCode: true } : {}),
     route: {
       provider: launch.provider, model: launch.model, effort: launch.effort, aws: launch.aws, fallback: launch.fallback,
       ...(launch.noFallback ? { noFallback: true } : {}),
@@ -37,6 +38,7 @@ export function loadSession(dataRoot: string, id: string): BuildSessionRecord {
     || typeof record.here !== "boolean" || ![record.repoRoot, record.worktree].every(value => typeof value === "string" && isAbsolute(value))
     || !(record.branch === null || typeof record.branch === "string") || !(record.base === null || typeof record.base === "string")
     || [record.workspaceRoot, record.sessionFile, record.socket].some(value => value !== undefined && (typeof value !== "string" || !isAbsolute(value)))
+    || (record.trustedCode !== undefined && (record.trustedCode !== true || !record.here))
     || (record.bare !== undefined && typeof record.bare !== "boolean")
     || (record.repository !== undefined && typeof record.repository !== "boolean")
     || (record.baseBranch !== undefined && record.baseBranch !== null && typeof record.baseBranch !== "string")

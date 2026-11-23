@@ -217,7 +217,7 @@ export function createJournal(options: {
   async function refresh() {
     captureFleet();
     const current = session();
-    if (current.bare && current.repository === false) { persist(); return; }
+    if (current.repository === false || (current.trustedCode && current.base === null)) { persist(); return; }
     Object.assign(data, await readGit(current, options.git, 200));
     persist();
   }

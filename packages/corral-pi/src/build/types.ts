@@ -70,6 +70,8 @@ export interface BuildLaunchOptions extends Partial<BuildRoute> {
   readonly repoRoot: string;
   /** Write in the current checkout and branch instead of a new worktree. */
   readonly here: boolean;
+  /** Explicit `corral-pi code` launch, never set by Build flags. */
+  readonly trustedCode?: true;
   readonly name?: string;
   /** A build session id to resume instead of starting one. */
   readonly resume?: string;
@@ -93,13 +95,15 @@ export interface BuildSessionRecord {
   readonly created: string;
   readonly updated: string;
   readonly repoRoot: string;
-  /** Where tools write: `<repoRoot>/.worktrees/build-<name>`, or `repoRoot` when `here`. */
+  /** Where tools write: `<repoRoot>/.worktrees/build-<name>`, or the existing checkout/directory when `here`. */
   readonly worktree: string;
   /** `build/<name>` for a created worktree; the checked-out branch, or null when detached, for `here`. */
   readonly branch: string | null;
   /** The commit the session started from. */
   readonly base: string | null;
   readonly here: boolean;
+  /** Explicit trusted in-place Code session. Older and ordinary Build records omit this. */
+  readonly trustedCode?: true;
   /** Absent on older records; false only for bare sessions started outside Git. */
   readonly repository?: boolean;
   readonly bare?: boolean;

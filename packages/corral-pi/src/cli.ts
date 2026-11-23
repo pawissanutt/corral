@@ -8,6 +8,8 @@ const usage = `Usage:
   corral-pi chat [--new | --dir <chat-dir>] [--plan] [--socket <path>] [--corral <path>] [model flags]
   corral-pi build [--data-dir <path>] [--id <id>] [--name <name>] [--profile <name>] [--here] [--plan] [--socket <path>] [--corral <path>] [--headless] [model flags]
   corral-pi build --resume <id> [--data-dir <path>] [--socket <path>] [--corral <path>] [--headless] [--no-fallback]
+  corral-pi code [--data-dir <path>] [--id <id>] [--name <name>] [--profile <name>] [--plan] [--socket <path>] [--corral <path>] [--headless] [model flags]
+  corral-pi code --resume <id> [--data-dir <path>] [--socket <path>] [--corral <path>] [--headless] [--no-fallback]
   corral-pi build --prune [--session <id> [--json]] [--dry-run] [--data-dir <path>]
   corral-pi login [--provider <id>] [--auth-dir <path>]
   corral-pi models [--provider <id>]
@@ -15,7 +17,8 @@ Model flags: --model [<provider>/]<id>, --provider <id>, --effort <level>, --aws
 New terminal chat and Build sessions use a saved startup model or ask you to choose one.\nFor new headless sessions without an available default, pass --model <provider/model>.
 Fallback: configure [fallback.providers] in .corral-next/pi.toml, repeat --fallback <provider>/<model>, or pass --no-fallback.
 Sessions can also take --project <name> and --headless; non-interactive launches are headless by default.
---plan starts chat or Build in plan mode: the agent plans with you and waits for your approval before changing anything.
+Code explicitly trusts the parent agent to work directly in the current directory with your permissions, without creating a worktree.
+--plan starts chat, Build or Code in plan mode: the agent plans with you and waits for your approval before changing anything.
 `;
 
 export async function main(argv = process.argv.slice(2), compiled = fileURLToPath(import.meta.url).startsWith("/$bunfs/")): Promise<void> {
@@ -31,7 +34,7 @@ export async function main(argv = process.argv.slice(2), compiled = fileURLToPat
   }
   restrictEnvironment(process.env);
   const assets = fileURLToPath(new URL("..", import.meta.url));
-  if (compiled) await (await import("./host/compiled.ts")).prepareCompiled(command);
+  if (compiled) await (await import("./host/compiled.ts")).prepareCompiled(command === "code" ? "build" : command);
   switch (command) {
   // Defer SDK entry points until offline settings and compiled OAuth registration are installed.
     case "--check-code-kernel": await (await import("./host/code-kernel-check.ts")).checkCodeKernel(); return;
@@ -42,7 +45,7 @@ export async function main(argv = process.argv.slice(2), compiled = fileURLToPat
     }
     case "login": (await import("./auth/login.ts")).runLogin(args); return;
     case "models": (await import("./auth/models.ts")).runModels(args); return;
-    case "build": await (await import("./host/build.ts")).buildCommand(args, assets); return;
+    case "code": case "build": await (await import("./host/build.ts")).buildCommand(args, assets, command); return;
     case "run": case "chat": {
       const { parseRunFlags } = await import("./host/config.ts");
       const config = parseRunFlags(command, args, assets);

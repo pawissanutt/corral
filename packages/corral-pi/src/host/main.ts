@@ -229,6 +229,10 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
   const owner = new RemoteOwner(session, events, record, sessionFile, config.runtimeDir);
   remote = owner;
   await session.startLocal();
+  // Pi normally does not persist a transcript until the first prompt. Code can resume even before that.
+  if (overrides.build?.session.trustedCode && !record.transcript) {
+    sessionManager.appendCustomEntry("corral-code-start", undefined, { immediate: true });
+  }
   if (overrides.build) {
     saveSession(dirname(dirname(overrides.build.dir)), { ...overrides.build.session, sessionFile, updated: new Date().toISOString() });
   }
