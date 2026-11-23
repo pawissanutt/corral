@@ -162,6 +162,9 @@ pub struct Edge {
     pub pairs: Vec<(ModuleId, ModuleId, u64)>,
 }
 
+/// A module pair across a boundary, with its references.
+type Pair = (ModuleId, ModuleId, u64);
+
 /// A level ready to place or list.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Scene {
@@ -236,7 +239,13 @@ pub fn build(map: &SystemMap, at: Option<&SystemAt>) -> Scene {
         Some(SystemAt::Module { .. }) => module(&mut scene, &map.rows),
         Some(SystemAt::File { .. }) => file(&mut scene, &map.rows),
     }
-    scene.max_lines = scene.cards.iter().map(|c| c.lines).max().unwrap_or(0).max(1);
+    scene.max_lines = scene
+        .cards
+        .iter()
+        .map(|c| c.lines)
+        .max()
+        .unwrap_or(0)
+        .max(1);
     scene
 }
 
@@ -268,6 +277,10 @@ pub fn module_name(module: &ModuleId) -> String {
 }
 
 fn container_tag(container: &ContainerFact) -> String {
+    // A folder has no manifest, so no workspace to be a member of.
+    if container.kind == ContainerKind::Folder {
+        return kind_word(container.kind).into();
+    }
     match container.workspace_status {
         WorkspaceStatus::Excluded => "excluded".into(),
         WorkspaceStatus::SeparateWorkspace => "separate workspace".into(),
@@ -318,7 +331,9 @@ fn project(scene: &mut Scene, rows: &[SystemMapRow]) {
         match row {
             SystemMapRow::Container { container, stats } => {
                 let node = Node::Container(container.path.clone());
-                scene.cards.push(container_card(container, Some(stats), node));
+                scene
+                    .cards
+                    .push(container_card(container, Some(stats), node));
             }
             SystemMapRow::PackageEdge { edge } => scene.edges.push(Edge {
                 from: Node::Container(edge.from.clone()),
@@ -347,7 +362,8 @@ fn project(scene: &mut Scene, rows: &[SystemMapRow]) {
             && let Some(list) = spawns.remove(path)
         {
             card.spawns = list.into_iter().collect();
-            card.spawns.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            card.spawns
+                .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         }
     }
     // An edge to a container the level does not list cannot be drawn.
@@ -368,7 +384,7 @@ fn project(scene: &mut Scene, rows: &[SystemMapRow]) {
 
 fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
     let mut neighbours: BTreeMap<String, ContainerFact> = BTreeMap::new();
-    let mut boundary: BTreeMap<(Node, Node), Vec<(ModuleId, ModuleId, u64)>> = BTreeMap::new();
+    let mut boundary: BTreeMap<(Node, Node), Vec<Pair>> = BTreeMap::new();
     let mut inside = Vec::new();
     for row in rows {
         match row {
@@ -423,7 +439,7 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
     let mut port_refs: BTreeMap<Node, u64> = BTreeMap::new();
     let mut all = inside;
     for ((from, to), mut pairs) in boundary {
-        pairs.sort_by(|a, b| b.2.cmp(&a.2));
+        pairs.sort_by_key(|p| std::cmp::Reverse(p.2));
         let count = pairs.iter().map(|p| p.2).sum();
         let port = if matches!(from, Node::Port { .. }) {
             &from
@@ -442,13 +458,16 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
     }
     for (port, refs) in &port_refs {
         if let Node::Port { path, .. } = port {
-            let fact = neighbours.get(path).cloned().unwrap_or_else(|| ContainerFact {
-                path: path.clone(),
-                name: container_name(path),
-                kind: ContainerKind::Folder,
-                workspace_status: WorkspaceStatus::Member,
-                other_packages: Vec::new(),
-            });
+            let fact = neighbours
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| ContainerFact {
+                    path: path.clone(),
+                    name: container_name(path),
+                    kind: ContainerKind::Folder,
+                    workspace_status: WorkspaceStatus::Member,
+                    other_packages: Vec::new(),
+                });
             let mut card = container_card(&fact, None, port.clone());
             card.references = *refs;
             scene.cards.push(card);
@@ -456,7 +475,9 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
     }
     // A neighbour brought only by a declared package edge has no module reference to draw.
     for (path, fact) in &neighbours {
-        let linked = port_refs.keys().any(|port| matches!(port, Node::Port { path: p, .. } if p == path));
+        let linked = port_refs
+            .keys()
+            .any(|port| matches!(port, Node::Port { path: p, .. } if p == path));
         if !linked {
             let node = Node::Port {
                 path: path.clone(),
@@ -466,7 +487,8 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
         }
     }
     keep_legible(scene, all);
-    let drawn = |node: &Node, edges: &[Edge]| edges.iter().any(|e| &e.from == node || &e.to == node);
+    let drawn =
+        |node: &Node, edges: &[Edge]| edges.iter().any(|e| &e.from == node || &e.to == node);
     let mut modules = Vec::new();
     let mut band = Vec::new();
     let mut ports: Vec<usize> = Vec::new();
@@ -493,7 +515,7 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
 
 /// Keeps each node's strongest reference, then the strongest overall, up to the cap.
 fn keep_legible(scene: &mut Scene, mut all: Vec<Edge>) {
-    all.sort_by(|a, b| b.count.cmp(&a.count));
+    all.sort_by_key(|e| std::cmp::Reverse(e.count));
     let mut keep = vec![false; all.len()];
     let mut seen: Vec<&Node> = Vec::new();
     for (i, edge) in all.iter().enumerate() {

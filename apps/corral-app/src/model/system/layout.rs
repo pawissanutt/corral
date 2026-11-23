@@ -143,7 +143,10 @@ pub fn size(card: &Card, scene: &Scene, measure: Measure) -> (f32, f32) {
         (false, true) => 112.0 + 88.0 * t * t,
         (false, false) => 124.0 + 116.0 * t * t,
     };
-    let tag = card.tag.as_deref().map_or(0.0, |tag| measure(Font::Tag, tag) + 14.0);
+    let tag = card
+        .tag
+        .as_deref()
+        .map_or(0.0, |tag| measure(Font::Tag, tag) + 14.0);
     let name = measure(Font::Name, &card.name) + tag + 26.0;
     let mut sub: f32 = 0.0;
     for overlay in Overlay::ALL {
@@ -152,11 +155,22 @@ pub fn size(card: &Card, scene: &Scene, measure: Measure) -> (f32, f32) {
         }
     }
     let spawns = card.spawns.first().map_or(0.0, |(process, sites)| {
-        measure(Font::Sub, "spawns") + 32.0 + chip_width(measure, process, *sites)
+        measure(Font::Sub, "spawns")
+            + 32.0
+            + chip_width(measure, process, *sites)
             + if card.spawns.len() > 1 { 40.0 } else { 0.0 }
     });
-    let w = by_lines.max(name).max(sub + 26.0).max(spawns).clamp(min, MAX_CARD);
-    let h = CARD_HEIGHT + if card.spawns.is_empty() { 0.0 } else { SPAWN_HEIGHT };
+    let w = by_lines
+        .max(name)
+        .max(sub + 26.0)
+        .max(spawns)
+        .clamp(min, MAX_CARD);
+    let h = CARD_HEIGHT
+        + if card.spawns.is_empty() {
+            0.0
+        } else {
+            SPAWN_HEIGHT
+        };
     (w.ceil(), h)
 }
 
@@ -167,7 +181,11 @@ pub fn chip_width(measure: Measure, process: &str, sites: u64) -> f32 {
 
 /// Lays the scene out within `room` points of width.
 pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
-    let sizes: Vec<(f32, f32)> = scene.cards.iter().map(|c| size(c, scene, measure)).collect();
+    let sizes: Vec<(f32, f32)> = scene
+        .cards
+        .iter()
+        .map(|c| size(c, scene, measure))
+        .collect();
     let inner = (room - 2.0 * PAD).max(320.0);
     let mut out = Layout::default();
     let mut y = PAD;
@@ -180,10 +198,17 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
         .copied()
         .collect();
     if !graph.is_empty() {
-        let local: BTreeMap<usize, usize> = graph.iter().enumerate().map(|(i, c)| (*c, i)).collect();
+        let local: BTreeMap<usize, usize> =
+            graph.iter().enumerate().map(|(i, c)| (*c, i)).collect();
         let mut edges = Vec::new();
         for (index, edge) in scene.edges.iter().enumerate() {
-            let find = |node| scene.cards.iter().position(|c| &c.node == node).and_then(|c| local.get(&c).copied());
+            let find = |node| {
+                scene
+                    .cards
+                    .iter()
+                    .position(|c| &c.node == node)
+                    .and_then(|c| local.get(&c).copied())
+            };
             if let (Some(a), Some(b)) = (find(&edge.from), find(&edge.to)) {
                 let pri = match edge.kind {
                     EdgeKind::ReferencedOnly => edge.count as f64,
@@ -198,18 +223,32 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
         let has_bottom = bottom.iter().any(|b| *b);
         let caption_room = if has_top { 26.0 } else { 0.0 };
         let local_sizes: Vec<_> = graph.iter().map(|c| sizes[*c]).collect();
-        let g = layered(&local_sizes, &edges, &top, &bottom, inner, (has_top, has_bottom));
+        let g = layered(
+            &local_sizes,
+            &edges,
+            &top,
+            &bottom,
+            inner,
+            (has_top, has_bottom),
+        );
         y += caption_room;
         for (i, rect) in g.pos.iter().enumerate() {
             out.placed.push(Placed {
                 card: graph[i],
-                rect: Rect { x: rect.x + PAD, y: rect.y + y, ..*rect },
+                rect: Rect {
+                    x: rect.x + PAD,
+                    y: rect.y + y,
+                    ..*rect
+                },
             });
         }
         for (edge, points) in g.routes {
             out.routes.push(Route {
                 edge,
-                points: points.into_iter().map(|(x, py)| (x + PAD, py + y)).collect(),
+                points: points
+                    .into_iter()
+                    .map(|(x, py)| (x + PAD, py + y))
+                    .collect(),
             });
         }
         if has_top {
@@ -220,15 +259,13 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
                 rule: None,
             });
         }
-        if has_bottom {
-            if let Some(top) = g.bottom_top {
-                out.captions.push(Caption {
-                    x: PAD,
-                    y: y + top - 10.0,
-                    text: "Packages this one references",
-                    rule: None,
-                });
-            }
+        if has_bottom && let Some(top) = g.bottom_top {
+            out.captions.push(Caption {
+                x: PAD,
+                y: y + top - 10.0,
+                text: "Packages this one references",
+                rule: None,
+            });
         }
         width = width.max(g.width + 2.0 * PAD);
         y += g.height + 50.0;
@@ -236,20 +273,24 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
     if !scene.band.is_empty() {
         let band_sizes: Vec<_> = scene.band.iter().map(|c| sizes[*c]).collect();
         let (pos, w, h) = flow_pack(&band_sizes, inner.max(width - 2.0 * PAD), 14.0);
-        if !graph.is_empty() {
-            if let Some(text) = scene.band_title {
-                out.captions.push(Caption {
-                    x: PAD,
-                    y: y - 14.0,
-                    text,
-                    rule: Some(y - 34.0),
-                });
-            }
+        if !graph.is_empty()
+            && let Some(text) = scene.band_title
+        {
+            out.captions.push(Caption {
+                x: PAD,
+                y: y - 14.0,
+                text,
+                rule: Some(y - 34.0),
+            });
         }
         for (i, rect) in pos.into_iter().enumerate() {
             out.placed.push(Placed {
                 card: scene.band[i],
-                rect: Rect { x: rect.x + PAD, y: rect.y + y, ..rect },
+                rect: Rect {
+                    x: rect.x + PAD,
+                    y: rect.y + y,
+                    ..rect
+                },
             });
         }
         width = width.max(w + 2.0 * PAD);

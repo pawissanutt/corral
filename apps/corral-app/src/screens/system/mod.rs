@@ -86,8 +86,10 @@ fn keep_loaded(app: AppState, data: Memo<Shown>) {
 }
 
 fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
-    let overlays: Vec<(Overlay, &'static str)> = Overlay::ALL.iter().map(|o| (*o, o.label())).collect();
-    let windows: Vec<(Window, &'static str)> = Window::ALL.iter().map(|w| (*w, w.label())).collect();
+    let overlays: Vec<(Overlay, &'static str)> =
+        Overlay::ALL.iter().map(|o| (*o, o.label())).collect();
+    let windows: Vec<(Window, &'static str)> =
+        Window::ALL.iter().map(|w| (*w, w.label())).collect();
     // Asking for a project, there is no map to re-colour.
     let drawing = computed(move || data.with(|shown| shown.project.is_some()));
     let overlay = dynamic(move || {
@@ -105,9 +107,8 @@ fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
         })
     })
     .into_element();
-    let activity = computed(move || {
-        drawing.get() && app.system.with(|s| s.overlay == Overlay::Activity)
-    });
+    let activity =
+        computed(move || drawing.get() && app.system.with(|s| s.overlay == Overlay::Activity));
     let window = dynamic(move || {
         activity.get().then(|| {
             untracked(|| {
@@ -134,12 +135,20 @@ fn picker(app: AppState, data: Memo<Shown>) -> AnyElement {
         .gap(px(8.0))
         .children(projects.into_iter().map(|id| {
             let pick = id.clone();
-            button(app, id.to_string(), ButtonKind::Ghost, format!("system-pick-{id}"), move || {
-                app.set_scope(Scope::Project(pick.clone()))
-            })
+            button(
+                app,
+                id.to_string(),
+                ButtonKind::Ghost,
+                format!("system-pick-{id}"),
+                move || app.set_scope(Scope::Project(pick.clone())),
+            )
         }))
         .into_element();
-    body(app, "system-map", empty(app, ASK_HEADING, ASK_WORDS, Some(choices)))
+    body(
+        app,
+        "system-map",
+        empty(app, ASK_HEADING, ASK_WORDS, Some(choices)),
+    )
 }
 
 fn map_page(app: AppState, data: Memo<Shown>) -> AnyElement {
@@ -162,10 +171,18 @@ fn map_page(app: AppState, data: Memo<Shown>) -> AnyElement {
         .into_element();
     let side = context(app, "inspector", inspector(app, data));
     let page = match form {
-        Form::Phone => pane(app, "system-map", view().child(main).child(side).into_element()),
+        Form::Phone => pane(
+            app,
+            "system-map",
+            view().child(main).child(side).into_element(),
+        ),
         Form::Desktop | Form::Terminal => {
             let terminal = form == Form::Terminal;
-            let room = if terminal { term::page_columns(app) } else { 1200.0 };
+            let room = if terminal {
+                term::page_columns(app)
+            } else {
+                1200.0
+            };
             let side_w = inspector_width(room, terminal) * if terminal { 12.0 } else { 1.0 };
             columns(
                 app,
@@ -211,18 +228,25 @@ fn bar(app: AppState, data: Memo<Shown>) -> AnyElement {
                 .role(AccessibilityRole::Navigation)
                 .label("Map level")
                 .children(crumbs.into_iter().enumerate().flat_map(|(i, words)| {
-                    let sep = (i > 0).then(|| text("›").text_color(color(Token::Ink3)).into_element());
+                    let sep =
+                        (i > 0).then(|| text("›").text_color(color(Token::Ink3)).into_element());
                     let crumb = if i == last {
                         text(words)
                             .test_id(&format!("crumb-{i}"))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(color(Token::Ink))
-                            .when(form != Form::Terminal, |t| t.font_family(FONT_MONO).text_size(px(12.5)))
+                            .when(form != Form::Terminal, |t| {
+                                t.font_family(FONT_MONO).text_size(px(12.5))
+                            })
                             .into_element()
                     } else {
-                        button(app, words, ButtonKind::Quiet, format!("crumb-{i}"), move || {
-                            app.system_act(Action::To(i))
-                        })
+                        button(
+                            app,
+                            words,
+                            ButtonKind::Quiet,
+                            format!("crumb-{i}"),
+                            move || app.system_act(Action::To(i)),
+                        )
                     };
                     sep.into_iter().chain(Some(crumb))
                 }))
@@ -267,7 +291,12 @@ fn bar(app: AppState, data: Memo<Shown>) -> AnyElement {
             .border_color(color(Token::Rule2))
             .bg(color(Token::Surface))
             .focus_within(|s| s.border_color(color(Token::Focus)))
-            .child(entry.h(px(30.0)).font_family(FONT_TEXT).text_size(px(text_size(form))))
+            .child(
+                entry
+                    .h(px(30.0))
+                    .font_family(FONT_TEXT)
+                    .text_size(px(text_size(form))),
+            )
             .into_element(),
     };
     view()
@@ -278,7 +307,10 @@ fn bar(app: AppState, data: Memo<Shown>) -> AnyElement {
         .gap(px(10.0))
         .when(form == Form::Terminal, |v| v.px(term::cells(1.0)))
         .when(form != Form::Terminal, |v| {
-            v.px(px(16.0)).py(px(8.0)).border_b(px(1.0)).border_color(color(Token::Rule))
+            v.px(px(16.0))
+                .py(px(8.0))
+                .border_b(px(1.0))
+                .border_color(color(Token::Rule))
         })
         .child(view().flex_1().min_w(px(0.0)).child(trail))
         .child(filter)
@@ -295,8 +327,13 @@ fn notices(app: AppState, data: Memo<Shown>) -> AnyElement {
                 Status::Loading if shown.scene.is_none() => {
                     out.push((Hue::Neutral, "Loading the map from corrald…".into()))
                 }
-                Status::Stale => out.push((Hue::Held, "Shown as last read; corrald has not confirmed it since.".into())),
-                Status::Failed(why) => out.push((Hue::Fail, format!("The map could not be read: {why}"))),
+                Status::Stale => out.push((
+                    Hue::Held,
+                    "Shown as last read; corrald has not confirmed it since.".into(),
+                )),
+                Status::Failed(why) => {
+                    out.push((Hue::Fail, format!("The map could not be read: {why}")))
+                }
                 _ => {}
             }
             out.extend(shown.notices.iter().map(|n| (n.hue, n.words.clone())));
@@ -312,7 +349,10 @@ fn notices(app: AppState, data: Memo<Shown>) -> AnyElement {
             view()
                 .test_id("system-notices")
                 .gap(px(6.0))
-                .children(said.into_iter().map(|(hue, words)| notice(app, hue, &vec![span(words)], None)))
+                .children(
+                    said.into_iter()
+                        .map(|(hue, words)| notice(app, hue, &vec![span(words)], None)),
+                )
                 .into_element()
         })
     })
@@ -332,7 +372,9 @@ fn summary(app: AppState, data: Memo<Shown>) -> AnyElement {
     text(move || data.with(|shown| shown.summary.join("  ·  ")))
         .test_id("system-summary")
         .text_color(color(Token::Ink2))
-        .when(app.form != Form::Terminal, |t| t.font_family(FONT_TEXT).text_size(px(12.5)))
+        .when(app.form != Form::Terminal, |t| {
+            t.font_family(FONT_TEXT).text_size(px(12.5))
+        })
         .into_element()
 }
 
@@ -343,7 +385,10 @@ fn provenance(app: AppState, data: Memo<Shown>) -> AnyElement {
     if app.form == Form::Terminal {
         words.into_element()
     } else {
-        words.font_family(FONT_TEXT).text_size(px(12.0)).into_element()
+        words
+            .font_family(FONT_TEXT)
+            .text_size(px(12.0))
+            .into_element()
     }
 }
 
@@ -435,7 +480,9 @@ fn inspected(app: AppState, inspector: Inspector) -> AnyElement {
         .test_id("inspector-title")
         .font_weight(FontWeight::BOLD)
         .text_color(color(Token::Ink))
-        .when(form != Form::Terminal, |t| t.font_family(FONT_MONO).text_size(px(15.0)));
+        .when(form != Form::Terminal, |t| {
+            t.font_family(FONT_MONO).text_size(px(15.0))
+        });
     let mut n = 0usize;
     let sections: Vec<AnyElement> = inspector
         .sections
@@ -479,9 +526,13 @@ fn inspected(app: AppState, inspector: Inspector) -> AnyElement {
         })
         .collect();
     let open = inspector.open.map(|(words, node)| {
-        button(app, words, ButtonKind::Primary, "btn-system-open", move || {
-            app.system_act(Action::Open(node.clone()))
-        })
+        button(
+            app,
+            words,
+            ButtonKind::Primary,
+            "btn-system-open",
+            move || app.system_act(Action::Open(node.clone())),
+        )
     });
     view()
         .test_id("inspector-body")

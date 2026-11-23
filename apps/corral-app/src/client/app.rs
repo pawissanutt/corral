@@ -46,6 +46,7 @@ pub(super) const CAPS: &[&str] = &[
     AGENTS_V1,
     REVIEW_V1,
     TIMELINE_V1,
+    SYSTEM_V1,
     USAGE_V1,
     SETTINGS_V1,
     corral_protocol::config::PI_STARTUP_V1,

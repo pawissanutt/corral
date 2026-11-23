@@ -159,6 +159,21 @@ fn phone_tabs_reach_every_place_and_activity_page() {
     }
 }
 
+/// The phone has no canvas map: with a project chosen, System lists the same nodes, and the
+/// picked one's edges under it, which pick the other end.
+#[test]
+fn phone_system_lists_the_map_and_the_picked_nodes_edges() {
+    let mut app = preview(phone(), &[]);
+    app.press("id:tab-activity").unwrap();
+    app.press("id:nav-system").unwrap();
+    app.press("id:system-pick-corral").unwrap();
+    app.wait_for("id:system-tree").unwrap();
+    app.press("id:node-c-crates-corral-ops").unwrap();
+    app.wait_for("id:edge-line-0").unwrap();
+    app.press("id:edge-line-0").unwrap();
+    app.wait_for("id:inspector-title").unwrap();
+}
+
 /// Settings has no tab: the gear in the head opens it over the tab in view, and its sections
 /// push their pages.
 #[test]

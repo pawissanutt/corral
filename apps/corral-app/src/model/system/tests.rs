@@ -1,6 +1,6 @@
 use corral_types::{
-    ContainerFact, ContainerKind, ModuleId, PackageEdge, PackageEdgeKind, SystemMap,
-    SystemMapRow, SystemNodeStats, SystemStatus, WorkspaceStatus,
+    ContainerFact, ContainerKind, ModuleId, PackageEdge, PackageEdgeKind, SystemMap, SystemMapRow,
+    SystemNodeStats, SystemStatus, WorkspaceStatus,
 };
 
 use super::layout::{Font, layout};
@@ -37,7 +37,9 @@ fn edge(from: usize, to: usize, kind: PackageEdgeKind) -> SystemMapRow {
 /// Thirty containers, most of them linked: a few roots using many leaves, one cycle, one
 /// undeclared and one unused edge, and five with no edge at all.
 fn thirty() -> SystemMap {
-    let mut rows: Vec<SystemMapRow> = (0..30).map(|i| container(i, 200 + (i as u64 * 937) % 40_000)).collect();
+    let mut rows: Vec<SystemMapRow> = (0..30)
+        .map(|i| container(i, 200 + (i as u64 * 937) % 40_000))
+        .collect();
     for i in 0..25 {
         for j in [i + 1, i + 3, i * 2 + 1] {
             if j < 25 && j != i {
@@ -72,14 +74,23 @@ fn thirty_containers_fit_without_overlap() {
     assert_eq!(scene.band.len(), 5);
     let room = 860.0;
     // The text engine's fonts run wider than the estimate; both have to fit.
-    let wide = |font: Font, text: &str| font.estimate(text) * 1.25;
+    let wide = |font: Font, text: &str| font.estimate(text) * 1.5;
     for measure in [&estimate as &dyn Fn(Font, &str) -> f32, &wide] {
         let placed = layout(&scene, room, measure);
         assert_eq!(placed.placed.len(), 30);
         for (i, a) in placed.placed.iter().enumerate() {
-            assert!(a.rect.x >= 0.0 && a.rect.x + a.rect.w <= room + 0.5, "{:?} leaves the room", a.rect);
+            assert!(
+                a.rect.x >= 0.0 && a.rect.x + a.rect.w <= room + 0.5,
+                "{:?} leaves the room",
+                a.rect
+            );
             for b in &placed.placed[i + 1..] {
-                assert!(!a.rect.overlaps(&b.rect), "{:?} overlaps {:?}", a.rect, b.rect);
+                assert!(
+                    !a.rect.overlaps(&b.rect),
+                    "{:?} overlaps {:?}",
+                    a.rect,
+                    b.rect
+                );
             }
         }
         assert_eq!(placed.routes.len(), scene.edges.len());
@@ -93,8 +104,15 @@ fn cards_are_wide_enough_for_their_names() {
     let scene = build(&thirty(), None);
     for card in &scene.cards {
         let (w, _) = layout::size(card, &scene, &estimate);
-        let tag = card.tag.as_deref().map_or(0.0, |t| estimate(Font::Tag, t) + 14.0);
-        assert!(w >= estimate(Font::Name, &card.name) + tag + 24.0, "{}", card.name);
+        let tag = card
+            .tag
+            .as_deref()
+            .map_or(0.0, |t| estimate(Font::Tag, t) + 14.0);
+        assert!(
+            w >= estimate(Font::Name, &card.name) + tag + 24.0,
+            "{}",
+            card.name
+        );
     }
 }
 
@@ -113,12 +131,26 @@ fn selecting_again_drills_in_and_escape_comes_back_to_it() {
     state.act(Action::Open(Node::Module(module)));
     assert_eq!(state.trail.len(), 2);
     state.act(Action::To(1));
-    assert_eq!(state.picked, Some(Pick::Node(Node::Module(ModuleId { container: "crates/a".into(), path: "src".into() }))));
+    assert_eq!(
+        state.picked,
+        Some(Pick::Node(Node::Module(ModuleId {
+            container: "crates/a".into(),
+            path: "src".into()
+        })))
+    );
     state.act(Action::Up);
     assert!(state.trail.is_empty());
     assert_eq!(state.picked, Some(Pick::Node(a)));
     // A neighbouring package opens as its own package, not under this one.
     state.act(Action::Open(Node::Container("crates/a".into())));
-    state.act(Action::Open(Node::Port { path: "crates/b".into(), into: false }));
-    assert_eq!(state.trail, vec![SystemAt::Container { path: "crates/b".into() }]);
+    state.act(Action::Open(Node::Port {
+        path: "crates/b".into(),
+        into: false,
+    }));
+    assert_eq!(
+        state.trail,
+        vec![SystemAt::Container {
+            path: "crates/b".into()
+        }]
+    );
 }

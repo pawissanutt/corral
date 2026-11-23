@@ -208,9 +208,7 @@ impl Area {
 
 /// Every key that opens a place or one of Activity's pages: the places' own, the former
 /// destinations' (`n p r`), and Usage's, Artifacts' and System's (`u f m`).
-pub const PLACE_KEYS: [&str; 11] = [
-    "h", "t", "s", "a", ",", "n", "p", "r", "u", "f", "m",
-];
+pub const PLACE_KEYS: [&str; 11] = ["h", "t", "s", "a", ",", "n", "p", "r", "u", "f", "m"];
 
 /// A tab of the task page. The page is the one place tabs stay: the diff needs the width.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]

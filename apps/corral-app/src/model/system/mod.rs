@@ -71,10 +71,16 @@ pub enum Node {
     Container(String),
     /// A neighbouring package on a package's boundary: above it when it references the package
     /// shown (`into`), below it when the package shown references it.
-    Port { path: String, into: bool },
+    Port {
+        path: String,
+        into: bool,
+    },
     Module(ModuleId),
     File(String),
-    Definition { line: u64, name: String },
+    Definition {
+        line: u64,
+        name: String,
+    },
     /// What a level does not list, counted.
     More,
 }
@@ -239,7 +245,7 @@ pub fn count(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);

@@ -60,7 +60,10 @@ pub fn matches(card: &Card, filter: &str) -> bool {
 /// How many of the level's cards the filter matches, of how many.
 pub fn matched(scene: &Scene, filter: &str) -> (usize, usize) {
     let total = scene.cards.len();
-    (scene.cards.iter().filter(|c| matches(c, filter)).count(), total)
+    (
+        scene.cards.iter().filter(|c| matches(c, filter)).count(),
+        total,
+    )
 }
 
 /// The overlay's share of a card, for its bar.
@@ -84,11 +87,22 @@ pub fn lines(scene: &Scene, state: &State) -> Vec<Line> {
         _ => None,
     };
     let parts: [(Option<&'static str>, &[usize]); 4] = [
-        ((!scene.top.is_empty()).then_some("Packages that reference this one"), &scene.top),
-        ((!scene.top.is_empty() || !scene.bottom.is_empty()).then_some("Modules"), &scene.graph),
-        ((!scene.bottom.is_empty()).then_some("Packages this one references"), &scene.bottom),
         (
-            (!scene.graph.is_empty()).then_some(scene.band_title).flatten(),
+            (!scene.top.is_empty()).then_some("Packages that reference this one"),
+            &scene.top,
+        ),
+        (
+            (!scene.top.is_empty() || !scene.bottom.is_empty()).then_some("Modules"),
+            &scene.graph,
+        ),
+        (
+            (!scene.bottom.is_empty()).then_some("Packages this one references"),
+            &scene.bottom,
+        ),
+        (
+            (!scene.graph.is_empty())
+                .then_some(scene.band_title)
+                .flatten(),
             &scene.band,
         ),
     ];
@@ -152,15 +166,12 @@ fn edges(scene: &Scene, node: &Node, picked: Option<(&Node, &Node)>) -> Vec<Line
     list.into_iter()
         .map(|(arrow, e)| {
             let other = if arrow == "→" { &e.to } else { &e.from };
+            let refs = super::plural(e.count, "ref", "refs");
             let words = match e.kind {
-                EdgeKind::Declared => format!("declared · {} refs", super::count(e.count)),
+                EdgeKind::Declared => format!("declared · {refs}"),
                 EdgeKind::DeclaredOnly => "declared · 0 refs".into(),
-                EdgeKind::ReferencedOnly => {
-                    format!("not declared · {} refs", super::count(e.count))
-                }
-                EdgeKind::Module | EdgeKind::Boundary => {
-                    format!("{} refs", super::count(e.count))
-                }
+                EdgeKind::ReferencedOnly => format!("not declared · {refs}"),
+                EdgeKind::Module | EdgeKind::Boundary => refs,
             };
             Line::Edge(EdgeLine {
                 arrow,

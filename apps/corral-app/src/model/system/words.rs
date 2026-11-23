@@ -75,7 +75,11 @@ fn coverage(card: &Card) -> String {
     let Some(stats) = &card.stats else {
         return String::new();
     };
-    let mut words = format!("{} of {} read", count(stats.complete), plural(card.files(), "file", "files"));
+    let mut words = format!(
+        "{} of {} read",
+        count(stats.complete),
+        plural(card.files(), "file", "files")
+    );
     if stats.failed > 0 {
         words.push_str(&format!(" · {} failed", count(stats.failed)));
     }
@@ -95,7 +99,11 @@ pub fn read_shares(card: &Card) -> Option<(f32, f32, f32)> {
     let total = card.files();
     (total > 0).then(|| {
         let share = |n: u64| n as f32 / total as f32;
-        (share(stats.complete), share(stats.unsupported), share(stats.failed))
+        (
+            share(stats.complete),
+            share(stats.unsupported),
+            share(stats.failed),
+        )
     })
 }
 
@@ -149,16 +157,38 @@ pub fn busiest(scene: &Scene, window: Window) -> u64 {
 
 /// The summary over the map: a few figures for this level and overlay.
 pub fn summary(scene: &Scene, map: &SystemMap, overlay: Overlay, window: Window) -> Vec<String> {
-    let lines: u64 = scene.cards.iter().filter(|c| c.kind != Kind::Port).map(|c| c.lines).sum();
-    let files: u64 = scene.cards.iter().filter(|c| c.kind != Kind::Port).map(Card::files).sum();
+    let lines: u64 = scene
+        .cards
+        .iter()
+        .filter(|c| c.kind != Kind::Port)
+        .map(|c| c.lines)
+        .sum();
+    let files: u64 = scene
+        .cards
+        .iter()
+        .filter(|c| c.kind != Kind::Port)
+        .map(Card::files)
+        .sum();
     let mut out = Vec::new();
     match overlay {
         Overlay::Structure => {
             match scene.level {
                 Level::Project => {
-                    let packages = scene.cards.iter().filter(|c| c.kind == Kind::Package).count();
-                    let folders = scene.cards.iter().filter(|c| c.kind == Kind::Folder).count();
-                    out.push(format!("{} · {}", plural(files, "file", "files"), plural(lines, "line", "lines")));
+                    let packages = scene
+                        .cards
+                        .iter()
+                        .filter(|c| c.kind == Kind::Package)
+                        .count();
+                    let folders = scene
+                        .cards
+                        .iter()
+                        .filter(|c| c.kind == Kind::Folder)
+                        .count();
+                    out.push(format!(
+                        "{} · {}",
+                        plural(files, "file", "files"),
+                        plural(lines, "line", "lines")
+                    ));
                     out.push(format!(
                         "{} · {}",
                         plural(packages as u64, "package", "packages"),
@@ -166,16 +196,32 @@ pub fn summary(scene: &Scene, map: &SystemMap, overlay: Overlay, window: Window)
                     ));
                 }
                 Level::Package => {
-                    let modules = scene.cards.iter().filter(|c| c.kind == Kind::Module).count();
+                    let modules = scene
+                        .cards
+                        .iter()
+                        .filter(|c| c.kind == Kind::Module)
+                        .count();
                     out.push(plural(modules as u64, "module", "modules"));
-                    out.push(format!("{} · {}", plural(files, "file", "files"), plural(lines, "line", "lines")));
+                    out.push(format!(
+                        "{} · {}",
+                        plural(files, "file", "files"),
+                        plural(lines, "line", "lines")
+                    ));
                 }
                 Level::Module => {
-                    out.push(format!("{} · {}", plural(files, "file", "files"), plural(lines, "line", "lines")));
+                    out.push(format!(
+                        "{} · {}",
+                        plural(files, "file", "files"),
+                        plural(lines, "line", "lines")
+                    ));
                     out.push("largest first".into());
                 }
                 Level::File => {
-                    let defs = scene.cards.iter().filter(|c| c.kind == Kind::Definition).count();
+                    let defs = scene
+                        .cards
+                        .iter()
+                        .filter(|c| c.kind == Kind::Definition)
+                        .count();
                     out.push(plural(defs as u64, "definition", "definitions"));
                     out.push("in source order".into());
                 }
@@ -239,7 +285,11 @@ pub fn summary(scene: &Scene, map: &SystemMap, overlay: Overlay, window: Window)
                         _ => None,
                     })
                     .sum();
-                out.push(format!("Read {} of {}", count(read), plural(files, "file", "files")));
+                out.push(format!(
+                    "Read {} of {}",
+                    count(read),
+                    plural(files, "file", "files")
+                ));
             }
         },
     }
@@ -277,7 +327,10 @@ pub fn legend(scene: &Scene, overlay: Overlay, window: Window) -> Vec<(Swatch, S
         }
         Overlay::Activity => out.push((
             Swatch::Activity,
-            format!("commits in {} days, relative to the busiest here", window.days()),
+            format!(
+                "commits in {} days, relative to the busiest here",
+                window.days()
+            ),
         )),
         Overlay::Coverage => {
             out.push((Swatch::Read, "read".into()));
@@ -287,7 +340,11 @@ pub fn legend(scene: &Scene, overlay: Overlay, window: Window) -> Vec<(Swatch, S
     }
     match scene.level {
         Level::Project => {
-            for kind in [EdgeKind::Declared, EdgeKind::DeclaredOnly, EdgeKind::ReferencedOnly] {
+            for kind in [
+                EdgeKind::Declared,
+                EdgeKind::DeclaredOnly,
+                EdgeKind::ReferencedOnly,
+            ] {
                 out.push((Swatch::Edge(kind), kind.word().into()));
             }
             out.push((Swatch::Spawn, "processes it spawns, with sites".into()));
@@ -296,7 +353,10 @@ pub fn legend(scene: &Scene, overlay: Overlay, window: Window) -> Vec<(Swatch, S
         }
         Level::Package => {
             out.push((Swatch::Edge(EdgeKind::Module), "module reference".into()));
-            out.push((Swatch::Edge(EdgeKind::Boundary), "to or from a neighbouring package".into()));
+            out.push((
+                Swatch::Edge(EdgeKind::Boundary),
+                "to or from a neighbouring package".into(),
+            ));
             let total = scene.edges.len() + scene.undrawn.len();
             if !scene.undrawn.is_empty() {
                 out.push((
@@ -333,7 +393,10 @@ pub fn notices(map: Option<&SystemMap>, row: Option<&SystemRow>) -> Vec<Notice> 
             words: "Building this project's facts. The map fills in when they are ready.".into(),
         });
     }
-    if let Some(error) = map.and_then(|m| m.error.clone()).or_else(|| row.and_then(|r| r.error.clone())) {
+    if let Some(error) = map
+        .and_then(|m| m.error.clone())
+        .or_else(|| row.and_then(|r| r.error.clone()))
+    {
         out.push(Notice {
             hue: Hue::Fail,
             words: format!("The map could not be built: {error}"),
@@ -383,7 +446,11 @@ pub fn provenance(map: Option<&SystemMap>, row: Option<&SystemRow>) -> String {
         (Some(p), _) if p.coverage.provided.is_empty() => {
             format!("{} answered with nothing", p.extension)
         }
-        (Some(p), _) => format!("{} supplied {}", p.extension, p.coverage.provided.join(", ")),
+        (Some(p), _) => format!(
+            "{} supplied {}",
+            p.extension,
+            p.coverage.provided.join(", ")
+        ),
         (None, Some(name)) => format!("{name} has not answered"),
         (None, None) => "no facts extension configured".into(),
     };

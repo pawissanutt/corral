@@ -91,14 +91,28 @@ fn node_inspector(scene: &Scene, card: &Card, at: Option<&SystemAt>) -> Inspecto
                 "Package this one references".into()
             };
         }
-        let path = if container.path.is_empty() { "(repository root)".into() } else { container.path.clone() };
+        let path = if container.path.is_empty() {
+            "(repository root)".into()
+        } else {
+            container.path.clone()
+        };
         facts.push(Row::fact("Path", path));
         for other in &container.other_packages {
-            facts.push(Row::fact("Also", format!("{} ({})", other.name, kind_word(other.kind))));
+            facts.push(Row::fact(
+                "Also",
+                format!("{} ({})", other.name, kind_word(other.kind)),
+            ));
         }
     }
     if let Node::Module(module) = &card.node {
-        kind = format!("Module · {}", if module.container.is_empty() { "(root)" } else { &module.container });
+        kind = format!(
+            "Module · {}",
+            if module.container.is_empty() {
+                "(root)"
+            } else {
+                &module.container
+            }
+        );
     }
     if let Some((language, test, read)) = &card.file {
         kind = format!("File · {language}{}", if *test { " · test" } else { "" });
@@ -121,7 +135,10 @@ fn node_inspector(scene: &Scene, card: &Card, at: Option<&SystemAt>) -> Inspecto
             _ => "",
         };
         facts.push(Row::fact("Source", format!("{file}:{}", definition.line)));
-        facts.push(Row::fact("Lines", format!("{}–{}", definition.line, definition.end_line)));
+        facts.push(Row::fact(
+            "Lines",
+            format!("{}–{}", definition.line, definition.end_line),
+        ));
     }
     if let Some((n, noun)) = card.more {
         kind = "Not listed".into();
@@ -132,9 +149,16 @@ fn node_inspector(scene: &Scene, card: &Card, at: Option<&SystemAt>) -> Inspecto
         sections.push(Section {
             title: None,
             rows: facts,
-            note: Some(format!("The level lists the first {noun} and counts the rest here.")),
+            note: Some(format!(
+                "The level lists the first {noun} and counts the rest here."
+            )),
         });
-        return Inspector { kind, title: card.name.clone(), sections, open: None };
+        return Inspector {
+            kind,
+            title: card.name.clone(),
+            sections,
+            open: None,
+        };
     }
     if let Some(stats) = &card.stats {
         facts.push(Row::fact("Files", count(card.files())));
@@ -149,7 +173,9 @@ fn node_inspector(scene: &Scene, card: &Card, at: Option<&SystemAt>) -> Inspecto
         if !langs.is_empty() {
             let rows = langs
                 .into_iter()
-                .map(|(l, n)| Row::fact(l, format!("{} · {}%", count(*n), percent(*n, stats.lines))))
+                .map(|(l, n)| {
+                    Row::fact(l, format!("{} · {}%", count(*n), percent(*n, stats.lines)))
+                })
                 .collect();
             sections.push(Section::facts(Some("Languages"), rows));
         }
@@ -181,9 +207,15 @@ fn node_inspector(scene: &Scene, card: &Card, at: Option<&SystemAt>) -> Inspecto
     let edges = |out: bool| -> Vec<Row> {
         let mut list: Vec<&Edge> = scene
             .all_edges()
-            .filter(|e| if out { e.from == card.node } else { e.to == card.node })
+            .filter(|e| {
+                if out {
+                    e.from == card.node
+                } else {
+                    e.to == card.node
+                }
+            })
             .collect();
-        list.sort_by(|a, b| b.count.cmp(&a.count));
+        list.sort_by_key(|e| std::cmp::Reverse(e.count));
         list.into_iter()
             .map(|e| {
                 let other = if out { &e.to } else { &e.from };
@@ -198,7 +230,10 @@ fn node_inspector(scene: &Scene, card: &Card, at: Option<&SystemAt>) -> Inspecto
     };
     for (title, rows) in [("References", edges(true)), ("Referenced by", edges(false))] {
         if !rows.is_empty() {
-            sections.push(Section::facts(Some(&format!("{title} · {}", rows.len())), rows));
+            sections.push(Section::facts(
+                Some(&format!("{title} · {}", rows.len())),
+                rows,
+            ));
         }
     }
     if !card.spawns.is_empty() {
@@ -216,7 +251,12 @@ fn node_inspector(scene: &Scene, card: &Card, at: Option<&SystemAt>) -> Inspecto
         };
         (words, card.node.clone())
     });
-    Inspector { kind, title: card.name.clone(), sections, open }
+    Inspector {
+        kind,
+        title: card.name.clone(),
+        sections,
+        open,
+    }
 }
 
 fn edge_value(edge: &Edge) -> String {
@@ -256,9 +296,17 @@ fn edge_inspector(scene: &Scene, edge: &Edge) -> Inspector {
             .pairs
             .iter()
             .take(12)
-            .map(|(a, b, n)| Row::fact(&format!("{} → {}", module_name(a), module_name(b)), count(*n)))
+            .map(|(a, b, n)| {
+                Row::fact(
+                    &format!("{} → {}", module_name(a), module_name(b)),
+                    count(*n),
+                )
+            })
             .collect();
-        sections.push(Section::facts(Some(&format!("Module pairs · {}", edge.pairs.len())), rows));
+        sections.push(Section::facts(
+            Some(&format!("Module pairs · {}", edge.pairs.len())),
+            rows,
+        ));
     }
     let ends = [&edge.from, &edge.to]
         .into_iter()
@@ -291,7 +339,7 @@ fn activity(days: &SystemActivity) -> String {
 }
 
 fn percent(n: u64, of: u64) -> u64 {
-    if of == 0 { 0 } else { (n * 100 + of / 2) / of }
+    (n * 100 + of / 2).checked_div(of).unwrap_or(0)
 }
 
 fn capital(words: &str) -> String {

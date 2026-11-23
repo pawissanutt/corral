@@ -75,8 +75,18 @@ fn crumb(feed: &Feed, project: &str, at: &SystemAt) -> String {
     match at {
         SystemAt::Container { path } => map_of(feed, project, None)
             .map(|map| build(map, None))
-            .and_then(|scene| scene.card(&Node::Container(path.clone())).map(|c| c.name.clone()))
-            .unwrap_or_else(|| if path.is_empty() { "(root)".into() } else { base_name(path).into() }),
+            .and_then(|scene| {
+                scene
+                    .card(&Node::Container(path.clone()))
+                    .map(|c| c.name.clone())
+            })
+            .unwrap_or_else(|| {
+                if path.is_empty() {
+                    "(root)".into()
+                } else {
+                    base_name(path).into()
+                }
+            }),
         SystemAt::Module { module } => module_name(module),
         SystemAt::File { path } => base_name(path).into(),
     }
@@ -117,14 +127,16 @@ pub fn shown(state: &State, feed: &Feed, scope: &Scope) -> Shown {
     let mut crumbs = vec![project.clone()];
     crumbs.extend(trail.iter().map(|at| crumb(feed, &project, at)));
     let empty = match (&scene, map) {
-        (Some(scene), Some(map)) if scene.cards.is_empty() && map.error.is_none() => Some(match at {
-            None => "No packages or folders found at this commit.",
-            Some(SystemAt::Container { .. }) => "No modules found in this package.",
-            Some(SystemAt::Module { .. }) => "No files found in this module.",
-            Some(SystemAt::File { .. }) => {
-                "No definitions: a facts extension supplies them, and none has for this file."
-            }
-        }),
+        (Some(scene), Some(map)) if scene.cards.is_empty() && map.error.is_none() => {
+            Some(match at {
+                None => "No packages or folders found at this commit.",
+                Some(SystemAt::Container { .. }) => "No modules found in this package.",
+                Some(SystemAt::Module { .. }) => "No files found in this module.",
+                Some(SystemAt::File { .. }) => {
+                    "No definitions: a facts extension supplies them, and none has for this file."
+                }
+            })
+        }
         _ => None,
     };
     Shown {

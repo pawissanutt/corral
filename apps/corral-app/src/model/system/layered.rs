@@ -33,7 +33,12 @@ struct Vertex {
     dummy: bool,
 }
 
+/// A box's end of a segment, `(box, other end)`, and the x it heads toward.
+type Port = ((usize, usize), f32);
+
 const GAP: f32 = 24.0;
+/// The share of a row's room its cards may fill when a wide rank wraps.
+const ROOM_FOR_EDGES: f32 = 0.9;
 /// Room for a caption over the rows of ports.
 const CAPTION_GAP: f32 = 30.0;
 
@@ -114,7 +119,10 @@ pub(super) fn layered(
     (has_top, has_bottom): (bool, bool),
 ) -> Layered {
     let n = sizes.len();
-    let edges: Vec<&LEdge> = edges.iter().filter(|e| e.a != e.b && e.a < n && e.b < n).collect();
+    let edges: Vec<&LEdge> = edges
+        .iter()
+        .filter(|e| e.a != e.b && e.a < n && e.b < n)
+        .collect();
     // 1. Break cycles: strongest first; one that would close a cycle runs against the flow.
     let mut out: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut by_strength = edges.clone();
@@ -167,7 +175,8 @@ pub(super) fn layered(
     let mut next = 0;
     for list in by_rank.iter().filter(|l| !l.is_empty()) {
         let total: f32 = list.iter().map(|x| sizes[*x].0 + GAP).sum();
-        let parts = ((total / max_row_w).ceil() as usize).max(1);
+        // Edges crossing a row take room the cards alone do not; leave them some.
+        let parts = ((total / (max_row_w * ROOM_FOR_EDGES)).ceil() as usize).max(1);
         let target = total / parts as f32;
         let (mut part, mut acc) = (0, 0.0);
         for &x in list {
@@ -208,7 +217,7 @@ pub(super) fn layered(
             std::mem::swap(&mut ra, &mut rb);
         }
         let mut chain = vec![a];
-        for r in ra + 1..rb {
+        for (r, row) in rows.iter_mut().enumerate().take(rb).skip(ra + 1) {
             let d = *dummies.entry((a, r, flip)).or_insert_with(|| {
                 verts.push(Vertex {
                     row: r,
@@ -216,7 +225,7 @@ pub(super) fn layered(
                     h: 0.0,
                     dummy: true,
                 });
-                rows[r].push(verts.len() - 1);
+                row.push(verts.len() - 1);
                 verts.len() - 1
             });
             chain.push(d);
@@ -334,7 +343,8 @@ pub(super) fn layered(
     };
     let mut xs = vec![0.0_f32; v];
     let row_width = |row: &Vec<usize>, xs: &Vec<f32>| {
-        row.last().map_or(0.0, |last| xs[*last] + verts[*last].w / 2.0)
+        row.last()
+            .map_or(0.0, |last| xs[*last] + verts[*last].w / 2.0)
     };
     for row in &rows {
         let mut x = 0.0;
@@ -389,7 +399,9 @@ pub(super) fn layered(
             })
             .collect();
         let widths: Vec<f32> = items.iter().map(|x| verts[*x].w).collect();
-        let placed = pava(&widths, &desired, &weights, |i| gap_between(items[i - 1], items[i]));
+        let placed = pava(&widths, &desired, &weights, |i| {
+            gap_between(items[i - 1], items[i])
+        });
         for (i, &vx) in items.iter().enumerate() {
             xs[vx] = placed[i];
         }
@@ -406,7 +418,9 @@ pub(super) fn layered(
         place(r, &[&up, &down], &mut xs);
     }
     // Close empty vertical corridors (between unconnected groups) down to one wide gap.
-    let mut spans: Vec<(f32, f32)> = (0..v).map(|x| (xs[x] - verts[x].w / 2.0, xs[x] + verts[x].w / 2.0)).collect();
+    let mut spans: Vec<(f32, f32)> = (0..v)
+        .map(|x| (xs[x] - verts[x].w / 2.0, xs[x] + verts[x].w / 2.0))
+        .collect();
     spans.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut cuts: Vec<(f32, f32)> = Vec::new();
     let mut end: Option<f32> = None;
@@ -428,7 +442,10 @@ pub(super) fn layered(
     // again without overlap.
     let bounds = |xs: &Vec<f32>| {
         (0..v).fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), x| {
-            (lo.min(xs[x] - verts[x].w / 2.0), hi.max(xs[x] + verts[x].w / 2.0))
+            (
+                lo.min(xs[x] - verts[x].w / 2.0),
+                hi.max(xs[x] + verts[x].w / 2.0),
+            )
         })
     };
     let (lo, hi) = bounds(&xs);
@@ -456,12 +473,45 @@ pub(super) fn layered(
     // A row the settling left past the room's right edge slides back left as far as its own
     // left edge allows; rows never overlap each other, so this cannot make two cards collide.
     for row in &rows {
-        let right = row.iter().map(|x| xs[*x] + verts[*x].w / 2.0).fold(0.0, f32::max);
-        let left = row.iter().map(|x| xs[*x] - verts[*x].w / 2.0).fold(f32::INFINITY, f32::min);
+        let right = row
+            .iter()
+            .map(|x| xs[*x] + verts[*x].w / 2.0)
+            .fold(0.0, f32::max);
+        let left = row
+            .iter()
+            .map(|x| xs[*x] - verts[*x].w / 2.0)
+            .fold(f32::INFINITY, f32::min);
         if right > max_row_w && left.is_finite() {
             let shift = (right - max_row_w).min(left).max(0.0);
             for &vx in row {
                 xs[vx] -= shift;
+            }
+        }
+        // Still over: the edges crossing this row widened it past the room the wrapping
+        // measured for its cards alone. Squeeze it in, the crossing edges packed tight.
+        let right = row
+            .iter()
+            .map(|x| xs[*x] + verts[*x].w / 2.0)
+            .fold(0.0, f32::max);
+        if right > max_row_w {
+            let k = max_row_w / right;
+            let widths: Vec<f32> = row.iter().map(|x| verts[*x].w).collect();
+            let desired: Vec<f32> = row.iter().map(|x| xs[*x] * k).collect();
+            // Crossing edges may share a lane here rather than push a card out of the room.
+            let tight = |i: usize| match (verts[row[i - 1]].dummy, verts[row[i]].dummy) {
+                (true, true) => -2.0,
+                (true, false) | (false, true) => 4.0,
+                (false, false) => GAP,
+            };
+            let placed = pava(&widths, &desired, &vec![1.0; row.len()], tight);
+            let lo = row
+                .iter()
+                .enumerate()
+                .map(|(i, x)| placed[i] - verts[*x].w / 2.0)
+                .fold(f32::INFINITY, f32::min);
+            let lift = lo.min(0.0);
+            for (i, &vx) in row.iter().enumerate() {
+                xs[vx] = placed[i] - lift;
             }
         }
     }
@@ -501,8 +551,8 @@ pub(super) fn layered(
         })
         .collect();
     // 7. Routes: ports spread along each box edge, in the order of where the edge goes next.
-    let mut bot: BTreeMap<usize, Vec<((usize, usize), f32)>> = BTreeMap::new();
-    let mut tops: BTreeMap<usize, Vec<((usize, usize), f32)>> = BTreeMap::new();
+    let mut bot: BTreeMap<usize, Vec<Port>> = BTreeMap::new();
+    let mut tops: BTreeMap<usize, Vec<Port>> = BTreeMap::new();
     for &(a, b) in &segs {
         if !verts[a].dummy {
             bot.entry(a).or_default().push(((a, b), xs[b]));
@@ -548,7 +598,10 @@ pub(super) fn layered(
             ]
         } else {
             let mut pts = vec![(
-                port_x.get(&(first, chain[1])).copied().unwrap_or(a.x + a.w / 2.0),
+                port_x
+                    .get(&(first, chain[1]))
+                    .copied()
+                    .unwrap_or(a.x + a.w / 2.0),
                 a.y + a.h,
             )];
             for &d in &chain[1..chain.len() - 1] {

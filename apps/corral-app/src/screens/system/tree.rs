@@ -1,7 +1,7 @@
 //! The map's form on the phone and in a terminal: the level's nodes as rows in the map's order,
 //! each with its overlay figure and a bar, and under the picked one its edges, each a row that
 //! picks the edge (docs/plans/system-map.md §3.1 says why a list and not a smaller drawing).
-//! Test ids: a node's row is its `node-…` id, an edge's `edge-line-<n>`.
+//! Test ids: a node's row is its `node-…` id, the picked node's edges `edge-line-<n>` from 0.
 
 use nsh_core::prelude::*;
 
@@ -21,7 +21,12 @@ const BAR_CELLS: usize = 8;
 pub fn tree(app: AppState, scene: Memo<Option<Scene>>) -> AnyElement {
     let rows = computed(move || {
         let state = app.system.get();
-        scene.with(|scene| scene.as_ref().map(|scene| lines(scene, &state)).unwrap_or_default())
+        scene.with(|scene| {
+            scene
+                .as_ref()
+                .map(|scene| lines(scene, &state))
+                .unwrap_or_default()
+        })
     });
     view()
         .test_id("system-tree")
@@ -31,7 +36,15 @@ pub fn tree(app: AppState, scene: Memo<Option<Scene>>) -> AnyElement {
             let rows = rows.get();
             untracked(|| {
                 view()
-                    .children(rows.into_iter().enumerate().map(|(i, line)| row(app, i, line)))
+                    // Edge rows count on their own, so an edge keeps its id as nodes come
+                    // and go above it.
+                    .children(rows.into_iter().scan(0, |edges, line| {
+                        let n = *edges;
+                        if matches!(line, Line::Edge(_)) {
+                            *edges += 1;
+                        }
+                        Some(row(app, n, line))
+                    }))
                     .into_element()
             })
         }))
@@ -55,6 +68,10 @@ fn small(app: AppState, words: String, token: Token) -> AnyElement {
     }
 }
 
+fn fixed(element: AnyElement) -> AnyElement {
+    view().flex_shrink_0().child(element).into_element()
+}
+
 fn row(app: AppState, index: usize, line: Line) -> AnyElement {
     let form = app.form;
     match line {
@@ -63,11 +80,17 @@ fn row(app: AppState, index: usize, line: Line) -> AnyElement {
             let t = if form == Form::Terminal {
                 t.font_weight(FontWeight::BOLD)
             } else {
-                t.font_family(FONT_TEXT).text_size(px(12.0)).font_weight(FontWeight::SEMIBOLD)
+                t.font_family(FONT_TEXT)
+                    .text_size(px(12.0))
+                    .font_weight(FontWeight::SEMIBOLD)
             };
             view()
-                .when(form == Form::Terminal, |v| v.pt(term::rows(1.0)).px(term::cells(1.0)))
-                .when(form != Form::Terminal, |v| v.pt(px(14.0)).pb(px(4.0)).px(px(18.0)))
+                .when(form == Form::Terminal, |v| {
+                    v.pt(term::rows(1.0)).px(term::cells(1.0))
+                })
+                .when(form != Form::Terminal, |v| {
+                    v.pt(px(14.0)).pb(px(4.0)).px(px(18.0))
+                })
                 .child(t)
                 .into_element()
         }
@@ -98,9 +121,9 @@ fn row(app: AppState, index: usize, line: Line) -> AnyElement {
                             .items_end()
                             .child(small(app, tag, Token::Ink3))
                             .into_element(),
-                        small(app, node.figure, Token::Ink2),
-                        small(app, bar_cells(node.share), Token::Ink3),
-                        small(app, opens.trim().to_owned(), Token::Ink3),
+                        fixed(small(app, node.figure, Token::Ink2)),
+                        fixed(small(app, bar_cells(node.share), Token::Ink3)),
+                        fixed(small(app, opens.trim().to_owned(), Token::Ink3)),
                     ],
                 ),
                 Form::Desktop | Form::Phone => {
@@ -152,7 +175,11 @@ fn row(app: AppState, index: usize, line: Line) -> AnyElement {
             let picked = edge.picked;
             let content = vec![
                 view()
-                    .w(if form == Form::Terminal { term::cells(4.0) } else { px(28.0) })
+                    .w(if form == Form::Terminal {
+                        term::cells(4.0)
+                    } else {
+                        px(28.0)
+                    })
                     .flex_shrink_0()
                     .child(text(format!("  {}", edge.arrow)).text_color(color(Token::Ink3)))
                     .into_element(),
@@ -163,13 +190,17 @@ fn row(app: AppState, index: usize, line: Line) -> AnyElement {
                         text(edge.name.clone())
                             .number_of_lines(1u32)
                             .text_color(color(Token::Ink))
-                            .when(form != Form::Terminal, |t| t.font_family(FONT_MONO).text_size(px(12.5))),
+                            .when(form != Form::Terminal, |t| {
+                                t.font_family(FONT_MONO).text_size(px(12.5))
+                            }),
                     )
                     .into_element(),
                 text(edge.words.clone())
                     .number_of_lines(1u32)
                     .text_color(ink)
-                    .when(form != Form::Terminal, |t| t.font_family(FONT_TEXT).text_size(px(12.0)))
+                    .when(form != Form::Terminal, |t| {
+                        t.font_family(FONT_TEXT).text_size(px(12.0))
+                    })
                     .into_element(),
             ];
             match edge.pick {

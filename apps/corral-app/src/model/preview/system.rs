@@ -6,10 +6,10 @@
 use std::collections::BTreeMap;
 
 use corral_types::{
-    ContainerFact, ContainerKind, Coverage, DefinitionFact, ModuleId, PackageEdge,
-    PackageEdgeKind, ProviderCoverage, ReadStatus, Reference, ReferenceBasis, ReferenceKind,
-    SpawnFact, SystemActivity, SystemAt, SystemMap, SystemMapRow, SystemNodeStats,
-    SystemProvider, SystemRow, SystemStatus, WorkspaceStatus,
+    ContainerFact, ContainerKind, Coverage, DefinitionFact, ModuleId, PackageEdge, PackageEdgeKind,
+    ProviderCoverage, ReadStatus, Reference, ReferenceBasis, ReferenceKind, SpawnFact,
+    SystemActivity, SystemAt, SystemMap, SystemMapRow, SystemNodeStats, SystemProvider, SystemRow,
+    SystemStatus, WorkspaceStatus,
 };
 
 use crate::model::Id;
@@ -45,23 +45,142 @@ const fn c(
 }
 
 const CORRAL: &[Container] = &[
-    c("crates/corral-core", Cargo, Member, "Rust", 48_200, &["store", "task", "config", "events", "lock", "frontmatter"]),
-    c("crates/corral-types", Cargo, Member, "Rust", 9_800, &["facts", "system", "status", "op"]),
-    c("crates/corral-protocol", Cargo, Member, "Rust", 21_400, &["detail", "rows", "subscription", "app", "session"]),
-    c("crates/corral-git", Cargo, Member, "Rust", 7_300, &["worktree", "diff", "merge"]),
-    c("crates/corral-herdr", Cargo, Member, "Rust", 5_100, &["client", "pane"]),
-    c("crates/corral-engine", Cargo, Member, "Rust", 61_000, &["dispatch", "review", "gate", "land", "facts", "pipeline"]),
-    c("crates/corral-ops", Cargo, Member, "Rust", 34_700, &["sync", "artifacts", "pm", "review"]),
-    c("crates/corral-daemon", Cargo, Member, "Rust", 52_300, &["views", "system", "topics", "app", "state"]),
-    c("crates/corral-tui", Cargo, Member, "Rust", 28_900, &["board", "screens", "keys"]),
-    c("crates/corral", Cargo, Member, "Rust", 18_600, &["cli", "plugin"]),
-    c("crates/corral-legacy-board", Cargo, Excluded, "Rust", 22_400, &["board", "render"]),
-    c("apps/corral-app", Cargo, SeparateWorkspace, "Rust", 141_000, &["model", "screens", "client", "state", "ui", "shell"]),
-    c("packages/corral-pi", Npm, Member, "TypeScript", 38_500, &["host", "tools", "session", "test"]),
-    c("tools/pi-compare", Npm, Member, "TypeScript", 2_900, &["compare"]),
-    c("tools/load-sandbox", Folder, Member, "Shell", 600, &["sandbox"]),
-    c("scripts", Folder, Member, "Python", 9_400, &["gate", "slow", "walk"]),
-    c("docs", Folder, Member, "Markdown", 31_000, &["plans", "guide", "mockup", "app-design"]),
+    c(
+        "crates/corral-core",
+        Cargo,
+        Member,
+        "Rust",
+        48_200,
+        &["store", "task", "config", "events", "lock", "frontmatter"],
+    ),
+    c(
+        "crates/corral-types",
+        Cargo,
+        Member,
+        "Rust",
+        9_800,
+        &["facts", "system", "status", "op"],
+    ),
+    c(
+        "crates/corral-protocol",
+        Cargo,
+        Member,
+        "Rust",
+        21_400,
+        &["detail", "rows", "subscription", "app", "session"],
+    ),
+    c(
+        "crates/corral-git",
+        Cargo,
+        Member,
+        "Rust",
+        7_300,
+        &["worktree", "diff", "merge"],
+    ),
+    c(
+        "crates/corral-herdr",
+        Cargo,
+        Member,
+        "Rust",
+        5_100,
+        &["client", "pane"],
+    ),
+    c(
+        "crates/corral-engine",
+        Cargo,
+        Member,
+        "Rust",
+        61_000,
+        &["dispatch", "review", "gate", "land", "facts", "pipeline"],
+    ),
+    c(
+        "crates/corral-ops",
+        Cargo,
+        Member,
+        "Rust",
+        34_700,
+        &["sync", "artifacts", "pm", "review"],
+    ),
+    c(
+        "crates/corral-daemon",
+        Cargo,
+        Member,
+        "Rust",
+        52_300,
+        &["views", "system", "topics", "app", "state"],
+    ),
+    c(
+        "crates/corral-tui",
+        Cargo,
+        Member,
+        "Rust",
+        28_900,
+        &["board", "screens", "keys"],
+    ),
+    c(
+        "crates/corral",
+        Cargo,
+        Member,
+        "Rust",
+        18_600,
+        &["cli", "plugin"],
+    ),
+    c(
+        "crates/corral-legacy-board",
+        Cargo,
+        Excluded,
+        "Rust",
+        22_400,
+        &["board", "render"],
+    ),
+    c(
+        "apps/corral-app",
+        Cargo,
+        SeparateWorkspace,
+        "Rust",
+        141_000,
+        &["model", "screens", "client", "state", "ui", "shell"],
+    ),
+    c(
+        "packages/corral-pi",
+        Npm,
+        Member,
+        "TypeScript",
+        38_500,
+        &["host", "tools", "session", "test"],
+    ),
+    c(
+        "tools/pi-compare",
+        Npm,
+        Member,
+        "TypeScript",
+        2_900,
+        &["compare"],
+    ),
+    c(
+        "tools/load-sandbox",
+        Folder,
+        Member,
+        "Shell",
+        600,
+        &["sandbox"],
+    ),
+    c(
+        "scripts",
+        Folder,
+        Member,
+        "Python",
+        9_400,
+        &["gate", "slow", "walk"],
+    ),
+    c(
+        "docs",
+        Folder,
+        Member,
+        "Markdown",
+        31_000,
+        &["plans", "guide", "mockup", "app-design"],
+    ),
     c(".config", Folder, Member, "Config", 900, &["nextest"]),
 ];
 
@@ -100,11 +219,46 @@ const CORRAL_SPAWNS: &[(usize, &str, u64)] = &[
 ];
 
 const SITE: &[Container] = &[
-    c("apps/web", Npm, Member, "TypeScript", 24_600, &["routes", "components", "hooks", "styles"]),
-    c("packages/ui", Npm, Member, "TypeScript", 11_200, &["button", "form", "table"]),
-    c("packages/api-client", Npm, Member, "TypeScript", 3_800, &["client", "types"]),
-    c("services/api", Python, Member, "Python", 18_900, &["handlers", "models", "auth", "db"]),
-    c("services/worker", Python, Member, "Python", 6_300, &["jobs", "queue"]),
+    c(
+        "apps/web",
+        Npm,
+        Member,
+        "TypeScript",
+        24_600,
+        &["routes", "components", "hooks", "styles"],
+    ),
+    c(
+        "packages/ui",
+        Npm,
+        Member,
+        "TypeScript",
+        11_200,
+        &["button", "form", "table"],
+    ),
+    c(
+        "packages/api-client",
+        Npm,
+        Member,
+        "TypeScript",
+        3_800,
+        &["client", "types"],
+    ),
+    c(
+        "services/api",
+        Python,
+        Member,
+        "Python",
+        18_900,
+        &["handlers", "models", "auth", "db"],
+    ),
+    c(
+        "services/worker",
+        Python,
+        Member,
+        "Python",
+        6_300,
+        &["jobs", "queue"],
+    ),
     c("infra", Folder, Member, "Config", 2_100, &["deploy"]),
     c("docs", Folder, Member, "Markdown", 4_700, &["guides"]),
 ];
@@ -132,7 +286,12 @@ const DEFINITION_WORDS: &[(&str, &str)] = &[
     ("fn", "parse"),
 ];
 
-fn table(project: &str) -> Option<(&'static [Container], &'static [(usize, usize, PackageEdgeKind, u64)], &'static [(usize, &'static str, u64)])> {
+/// (from, to, kind, references) by index into the containers.
+type Edges = &'static [(usize, usize, PackageEdgeKind, u64)];
+/// (container, process, sites).
+type Spawns = &'static [(usize, &'static str, u64)];
+
+fn table(project: &str) -> Option<(&'static [Container], Edges, Spawns)> {
     match project {
         "corral" => Some((CORRAL, CORRAL_EDGES, CORRAL_SPAWNS)),
         "site" => Some((SITE, SITE_EDGES, SITE_SPAWNS)),
@@ -174,7 +333,11 @@ fn spread(seed: &str, modulo: u64) -> u64 {
 fn stats(seed: &str, language: &str, lines: u64, files: u64) -> SystemNodeStats {
     let commits = spread(seed, 40);
     let week = commits / 4;
-    let unsupported = if matches!(language, "Markdown" | "Config" | "Shell") { files } else { files / 12 };
+    let unsupported = if matches!(language, "Markdown" | "Config" | "Shell") {
+        files
+    } else {
+        files / 12
+    };
     let failed = u64::from(spread(seed, 9) == 0);
     SystemNodeStats {
         lines,
@@ -200,7 +363,12 @@ fn stats(seed: &str, language: &str, lines: u64, files: u64) -> SystemNodeStats 
 fn fact(container: &Container) -> ContainerFact {
     ContainerFact {
         path: container.path.into(),
-        name: container.path.rsplit('/').next().unwrap_or(container.path).into(),
+        name: container
+            .path
+            .rsplit('/')
+            .next()
+            .unwrap_or(container.path)
+            .into(),
         kind: container.kind,
         workspace_status: container.status,
         other_packages: Vec::new(),
@@ -209,7 +377,9 @@ fn fact(container: &Container) -> ContainerFact {
 
 fn module_lines(container: &Container, index: usize) -> u64 {
     // The first module is the largest; each next one is about two thirds of the one before.
-    let weights: Vec<u64> = (0..container.modules.len()).map(|i| 3u64.pow((container.modules.len() - i) as u32)).collect();
+    let weights: Vec<u64> = (0..container.modules.len())
+        .map(|i| 3u64.pow((container.modules.len() - i) as u32))
+        .collect();
     let total: u64 = weights.iter().sum();
     container.lines * weights[index] / total.max(1)
 }
@@ -231,8 +401,16 @@ fn extension(language: &str) -> &'static str {
 
 fn file_path(container: &Container, module: &str, n: u64) -> String {
     let word = FILE_WORDS[n as usize % FILE_WORDS.len()];
-    let suffix = if n as usize >= FILE_WORDS.len() { format!("_{}", n as usize / FILE_WORDS.len()) } else { String::new() };
-    format!("{}/src/{module}/{word}{suffix}.{}", container.path, extension(container.language))
+    let suffix = if n as usize >= FILE_WORDS.len() {
+        format!("_{}", n as usize / FILE_WORDS.len())
+    } else {
+        String::new()
+    };
+    format!(
+        "{}/src/{module}/{word}{suffix}.{}",
+        container.path,
+        extension(container.language)
+    )
 }
 
 fn files_of(container: &Container, index: usize) -> Vec<SystemMapRow> {
@@ -260,7 +438,8 @@ fn files_of(container: &Container, index: usize) -> Vec<SystemMapRow> {
 
 /// The `system_map` detail the preview serves.
 pub(super) fn detail(project: &str, at: Option<&SystemAt>) -> Result<SystemMap, String> {
-    let (containers, edges, spawns) = table(project).ok_or_else(|| format!("not_found: project {project}"))?;
+    let (containers, edges, spawns) =
+        table(project).ok_or_else(|| format!("not_found: project {project}"))?;
     let corral = project == "corral";
     let module_id = |i: usize, m: usize| ModuleId {
         container: containers[i].path.into(),
@@ -270,7 +449,9 @@ pub(super) fn detail(project: &str, at: Option<&SystemAt>) -> Result<SystemMap, 
     match at {
         None => {
             for container in containers {
-                let files: u64 = (0..container.modules.len()).map(|m| file_count(container, m)).sum();
+                let files: u64 = (0..container.modules.len())
+                    .map(|m| file_count(container, m))
+                    .sum();
                 rows.push(SystemMapRow::Container {
                     container: fact(container),
                     stats: stats(container.path, container.language, container.lines, files),
@@ -298,13 +479,21 @@ pub(super) fn detail(project: &str, at: Option<&SystemAt>) -> Result<SystemMap, 
             }
         }
         Some(SystemAt::Container { path }) => {
-            let i = containers.iter().position(|c| c.path == path).ok_or("not_found: system container not found")?;
+            let i = containers
+                .iter()
+                .position(|c| c.path == path)
+                .ok_or("not_found: system container not found")?;
             let container = &containers[i];
             for m in 0..container.modules.len() {
                 let seed = format!("{}/{}", container.path, container.modules[m]);
                 rows.push(SystemMapRow::Module {
                     module: module_id(i, m),
-                    stats: stats(&seed, container.language, module_lines(container, m), file_count(container, m)),
+                    stats: stats(
+                        &seed,
+                        container.language,
+                        module_lines(container, m),
+                        file_count(container, m),
+                    ),
                 });
             }
             let mut references = Vec::new();
@@ -313,7 +502,11 @@ pub(super) fn detail(project: &str, at: Option<&SystemAt>) -> Result<SystemMap, 
             for m in 0..linked {
                 for n in [m + 1, m + 2] {
                     if n < linked {
-                        references.push((module_id(i, m), module_id(i, n), 4 + spread(&format!("{m}{n}{path}"), 60)));
+                        references.push((
+                            module_id(i, m),
+                            module_id(i, n),
+                            4 + spread(&format!("{m}{n}{path}"), 60),
+                        ));
                     }
                 }
             }
@@ -340,19 +533,33 @@ pub(super) fn detail(project: &str, at: Option<&SystemAt>) -> Result<SystemMap, 
                 .collect();
             neighbours.sort_unstable();
             neighbours.dedup();
-            rows.extend(neighbours.into_iter().map(|n| SystemMapRow::Neighbor { container: fact(&containers[n]) }));
-            rows.extend(references.into_iter().filter(|r| r.2 > 0).map(|(from, to, count)| SystemMapRow::ModuleReference {
-                reference: Reference {
-                    from,
-                    to,
-                    kind: if container.language == "Rust" { ReferenceKind::Use } else { ReferenceKind::Import },
-                    basis: ReferenceBasis::Syntax,
-                    count,
-                },
+            rows.extend(neighbours.into_iter().map(|n| SystemMapRow::Neighbor {
+                container: fact(&containers[n]),
             }));
+            rows.extend(
+                references
+                    .into_iter()
+                    .filter(|r| r.2 > 0)
+                    .map(|(from, to, count)| SystemMapRow::ModuleReference {
+                        reference: Reference {
+                            from,
+                            to,
+                            kind: if container.language == "Rust" {
+                                ReferenceKind::Use
+                            } else {
+                                ReferenceKind::Import
+                            },
+                            basis: ReferenceBasis::Syntax,
+                            count,
+                        },
+                    }),
+            );
         }
         Some(SystemAt::Module { module }) => {
-            let i = containers.iter().position(|c| c.path == module.container).ok_or("not_found: system module not found")?;
+            let i = containers
+                .iter()
+                .position(|c| c.path == module.container)
+                .ok_or("not_found: system module not found")?;
             let m = containers[i]
                 .modules
                 .iter()
@@ -367,7 +574,11 @@ pub(super) fn detail(project: &str, at: Option<&SystemAt>) -> Result<SystemMap, 
         }
         Some(SystemAt::File { path }) => {
             let known = containers.iter().enumerate().any(|(i, c)| {
-                (0..c.modules.len()).any(|m| files_of(&containers[i], m).iter().any(|row| matches!(row, SystemMapRow::File { path: p, .. } if p == path)))
+                (0..c.modules.len()).any(|m| {
+                    files_of(&containers[i], m)
+                        .iter()
+                        .any(|row| matches!(row, SystemMapRow::File { path: p, .. } if p == path))
+                })
             });
             if !known {
                 return Err("not_found: system file not found".into());
@@ -375,7 +586,11 @@ pub(super) fn detail(project: &str, at: Option<&SystemAt>) -> Result<SystemMap, 
             // Only an extension supplies definitions; `site`'s failed.
             if corral && !path.ends_with(".md") {
                 let mut line = 1;
-                for (n, (kind, name)) in DEFINITION_WORDS.iter().enumerate().take(4 + spread(path, 5) as usize) {
+                for (n, (kind, name)) in DEFINITION_WORDS
+                    .iter()
+                    .enumerate()
+                    .take(4 + spread(path, 5) as usize)
+                {
                     let length = 6 + spread(&format!("{path}{n}"), 40);
                     rows.push(SystemMapRow::Definition {
                         definition: DefinitionFact {
@@ -390,7 +605,10 @@ pub(super) fn detail(project: &str, at: Option<&SystemAt>) -> Result<SystemMap, 
             }
         }
     }
-    let files: u64 = containers.iter().map(|c| (0..c.modules.len()).map(|m| file_count(c, m)).sum::<u64>()).sum();
+    let files: u64 = containers
+        .iter()
+        .map(|c| (0..c.modules.len()).map(|m| file_count(c, m)).sum::<u64>())
+        .sum();
     let provider = SystemProvider {
         extension: if corral { "cxm-facts" } else { "site-facts" }.into(),
         coverage: if corral {

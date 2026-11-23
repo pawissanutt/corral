@@ -91,7 +91,11 @@ fn drawn(app: AppState, layout: Layout, scene: Scene, room: f32) -> AnyElement {
 }
 
 fn now(adaptive: AdaptiveColor) -> Hsla {
-    if dark() { adaptive.dark } else { adaptive.light }
+    if dark() {
+        adaptive.dark
+    } else {
+        adaptive.light
+    }
 }
 
 fn ink(token: Token) -> Hsla {
@@ -117,11 +121,10 @@ impl Lit<'_> {
         match &self.state.picked {
             Some(Pick::Node(node)) => {
                 node == &card.node
-                    || self
-                        .scene
-                        .edges
-                        .iter()
-                        .any(|e| (&e.from == node && e.to == card.node) || (&e.to == node && e.from == card.node))
+                    || self.scene.edges.iter().any(|e| {
+                        (&e.from == node && e.to == card.node)
+                            || (&e.to == node && e.from == card.node)
+                    })
             }
             Some(Pick::Edge(a, b)) => a == &card.node || b == &card.node,
             None => true,
@@ -129,7 +132,11 @@ impl Lit<'_> {
     }
 
     fn edge(&self, from: &Node, to: &Node) -> bool {
-        let matched = |node: &Node| self.scene.card(node).is_some_and(|c| matches(c, &self.state.filter));
+        let matched = |node: &Node| {
+            self.scene
+                .card(node)
+                .is_some_and(|c| matches(c, &self.state.filter))
+        };
         if !matched(from) || !matched(to) {
             return false;
         }
@@ -168,7 +175,13 @@ fn paint(layout: &Layout, scene: &Scene, state: &State) -> Painter {
             .text_align(CanvasTextAlign::Start)
             .fill_text(caption.text, caption.x, caption.y);
     }
-    let most = scene.edges.iter().map(|e| e.count).max().unwrap_or(1).max(1) as f32;
+    let most = scene
+        .edges
+        .iter()
+        .map(|e| e.count)
+        .max()
+        .unwrap_or(1)
+        .max(1) as f32;
     for route in &layout.routes {
         let Some(edge) = scene.edges.get(route.edge) else {
             continue;
@@ -182,11 +195,22 @@ fn paint(layout: &Layout, scene: &Scene, state: &State) -> Painter {
             EdgeKind::ReferencedOnly => (now(hue_ink(Hue::Held)), base, &[]),
             EdgeKind::Boundary => (ink(Token::Ink3), base, &[px(5.0), px(3.0)]),
         };
-        let stroke = if lit.picked_edge(&edge.from, &edge.to) { ink(Token::Focus) } else if strong { ink(Token::Ink) } else { stroke };
+        let stroke = if lit.picked_edge(&edge.from, &edge.to) {
+            ink(Token::Focus)
+        } else if strong {
+            ink(Token::Ink)
+        } else {
+            stroke
+        };
         p = p.global_alpha(if on { 1.0 } else { DIM });
-        p = curve(p.stroke_color(stroke).line_width(width + if strong { 0.6 } else { 0.0 }).line_dash(dash), &trim(&route.points, 7.0))
-            .stroke()
-            .line_dash(&[]);
+        p = curve(
+            p.stroke_color(stroke)
+                .line_width(width + if strong { 0.6 } else { 0.0 })
+                .line_dash(dash),
+            &trim(&route.points, 7.0),
+        )
+        .stroke()
+        .line_dash(&[]);
         p = arrow(p.fill_color(stroke), &route.points);
     }
     p = p.global_alpha(1.0);
@@ -194,19 +218,40 @@ fn paint(layout: &Layout, scene: &Scene, state: &State) -> Painter {
         let Some(edge) = scene.edges.get(label.edge) else {
             continue;
         };
-        let hue = if edge.kind == EdgeKind::ReferencedOnly { Hue::Held } else { Hue::Neutral };
-        let r = Rect { x: label.x - label.w / 2.0, y: label.y - 9.0, w: label.w, h: 18.0 };
+        let hue = if edge.kind == EdgeKind::ReferencedOnly {
+            Hue::Held
+        } else {
+            Hue::Neutral
+        };
+        let r = Rect {
+            x: label.x - label.w / 2.0,
+            y: label.y - 9.0,
+            w: label.w,
+            h: 18.0,
+        };
         p = p
-            .global_alpha(if lit.edge(&edge.from, &edge.to) { 1.0 } else { DIM })
+            .global_alpha(if lit.edge(&edge.from, &edge.to) {
+                1.0
+            } else {
+                DIM
+            })
             .fill_color(ink(Token::Surface))
             .begin_path()
             .round_rect(bounds(r), px(4.0))
             .fill()
-            .stroke_color(if hue == Hue::Held { now(hue_ink(hue)) } else { ink(Token::Rule2) })
+            .stroke_color(if hue == Hue::Held {
+                now(hue_ink(hue))
+            } else {
+                ink(Token::Rule2)
+            })
             .line_width(1.0)
             .stroke()
             .font(&css(Font::Label))
-            .fill_color(if hue == Hue::Held { now(hue_ink(hue)) } else { ink(Token::Ink3) })
+            .fill_color(if hue == Hue::Held {
+                now(hue_ink(hue))
+            } else {
+                ink(Token::Ink3)
+            })
             .text_align(CanvasTextAlign::Center)
             .fill_text(label.text, label.x, label.y + 4.0);
     }
@@ -257,7 +302,11 @@ fn curve(p: Painter, points: &[(f32, f32)]) -> Painter {
             p.line_to(x1, y1)
         } else {
             let my = (y0 + y1) / 2.0;
-            p.bezier_curve_to(point(px(x0), px(my)), point(px(x1), px(my)), point(px(x1), px(y1)))
+            p.bezier_curve_to(
+                point(px(x0), px(my)),
+                point(px(x1), px(my)),
+                point(px(x1), px(y1)),
+            )
         };
     }
     p
@@ -308,7 +357,14 @@ fn fit(words: &str, room: f32, font: Font) -> String {
     String::new()
 }
 
-fn paint_card(p: Painter, card: &Card, r: Rect, look: &Look, scene: &Scene, picked: bool) -> Painter {
+fn paint_card(
+    p: Painter,
+    card: &Card,
+    r: Rect,
+    look: &Look,
+    scene: &Scene,
+    picked: bool,
+) -> Painter {
     let port = card.kind == Kind::Port;
     let radius = if port { r.h / 2.0 } else { 6.0 };
     let mut p = p;
@@ -317,11 +373,25 @@ fn paint_card(p: Painter, card: &Card, r: Rect, look: &Look, scene: &Scene, pick
             .stroke_color(ink(Token::Focus))
             .line_width(2.0)
             .begin_path()
-            .round_rect(bounds(Rect { x: r.x - 4.0, y: r.y - 4.0, w: r.w + 8.0, h: r.h + 8.0 }), px(radius + 3.0))
+            .round_rect(
+                bounds(Rect {
+                    x: r.x - 4.0,
+                    y: r.y - 4.0,
+                    w: r.w + 8.0,
+                    h: r.h + 8.0,
+                }),
+                px(radius + 3.0),
+            )
             .stroke();
     }
-    p = p.fill_color(ink(Token::Surface)).begin_path().round_rect(bounds(r), px(radius)).fill();
-    if look.overlay == Overlay::Activity && matches!(card.kind, Kind::Package | Kind::Folder | Kind::Module) {
+    p = p
+        .fill_color(ink(Token::Surface))
+        .begin_path()
+        .round_rect(bounds(r), px(radius))
+        .fill();
+    if look.overlay == Overlay::Activity
+        && matches!(card.kind, Kind::Package | Kind::Folder | Kind::Module)
+    {
         let commits = activity(card, look.window).map_or(0, |a| a.0);
         if commits > 0 {
             let strength = 0.06 + 0.34 * (commits as f32 / look.busiest as f32).sqrt();
@@ -335,7 +405,11 @@ fn paint_card(p: Painter, card: &Card, r: Rect, look: &Look, scene: &Scene, pick
     let dashed = card.excluded() || card.kind == Kind::Folder || card.kind == Kind::More;
     let dash = [px(4.0), px(3.0)];
     p = p
-        .stroke_color(ink(if card.excluded() { Token::Ink4 } else { Token::Rule2 }))
+        .stroke_color(ink(if card.excluded() {
+            Token::Ink4
+        } else {
+            Token::Rule2
+        }))
         .line_width(1.0)
         .line_dash(if dashed { &dash } else { &[] })
         .begin_path()
@@ -349,13 +423,21 @@ fn paint_card(p: Painter, card: &Card, r: Rect, look: &Look, scene: &Scene, pick
             .font(&css(Font::Name))
             .fill_color(ink(Token::Ink))
             .text_align(CanvasTextAlign::Start)
-            .fill_text(&fit(&card.name, r.w - tag_w - 36.0, Font::Name), r.x + 14.0, r.y + r.h / 2.0 + 4.5)
+            .fill_text(
+                &fit(&card.name, r.w - tag_w - 36.0, Font::Name),
+                r.x + 14.0,
+                r.y + r.h / 2.0 + 4.5,
+            )
             .font(&css(Font::Tag))
             .fill_color(ink(Token::Ink3))
             .text_align(CanvasTextAlign::End)
             .fill_text(&tag, r.x + r.w - 13.0, r.y + r.h / 2.0 + 4.0);
     }
-    let name_font = if card.kind == Kind::More { Font::Sub } else { Font::Name };
+    let name_font = if card.kind == Kind::More {
+        Font::Sub
+    } else {
+        Font::Name
+    };
     let name_w = measure(name_font, &card.name);
     // The name wins: a tag that would crowd it stays in the inspector.
     let tag = card
@@ -367,7 +449,11 @@ fn paint_card(p: Painter, card: &Card, r: Rect, look: &Look, scene: &Scene, pick
         .font(&css(name_font))
         .fill_color(ink(Token::Ink))
         .text_align(CanvasTextAlign::Start)
-        .fill_text(&fit(&card.name, r.w - 24.0 - tag_w, name_font), r.x + 12.0, r.y + 22.0);
+        .fill_text(
+            &fit(&card.name, r.w - 24.0 - tag_w, name_font),
+            r.x + 12.0,
+            r.y + 22.0,
+        );
     if let Some(tag) = tag {
         p = p
             .font(&css(Font::Tag))
@@ -379,11 +465,30 @@ fn paint_card(p: Painter, card: &Card, r: Rect, look: &Look, scene: &Scene, pick
         .font(&css(Font::Sub))
         .fill_color(ink(Token::Ink2))
         .text_align(CanvasTextAlign::Start)
-        .fill_text(&fit(&figure(card, look.overlay, look.window), r.w - 24.0, Font::Sub), r.x + 12.0, r.y + 39.0);
+        .fill_text(
+            &fit(
+                &figure(card, look.overlay, look.window),
+                r.w - 24.0,
+                Font::Sub,
+            ),
+            r.x + 12.0,
+            r.y + 39.0,
+        );
     if matches!(card.kind, Kind::More | Kind::Definition) {
         return p;
     }
-    p = bar(p, card, Rect { x: r.x + 12.0, y: r.y + 46.0, w: r.w - 24.0, h: 4.0 }, look, scene);
+    p = bar(
+        p,
+        card,
+        Rect {
+            x: r.x + 12.0,
+            y: r.y + 46.0,
+            w: r.w - 24.0,
+            h: 4.0,
+        },
+        look,
+        scene,
+    );
     if !card.spawns.is_empty() {
         p = spawn_chips(p, card, r);
     }
@@ -393,7 +498,9 @@ fn paint_card(p: Painter, card: &Card, r: Rect, look: &Look, scene: &Scene, pick
 /// The overlay's bar under the figure: the language mix, the activity relative to the busiest
 /// here, or the files read, not read and failed.
 fn bar(p: Painter, card: &Card, area: Rect, look: &Look, scene: &Scene) -> Painter {
-    let mut p = p.fill_color(ink(Token::Rule)).fill_rect(area.x, area.y, area.w, area.h);
+    let mut p = p
+        .fill_color(ink(Token::Rule))
+        .fill_rect(area.x, area.y, area.w, area.h);
     match look.overlay {
         Overlay::Structure => {
             let mut parts: Vec<(Option<usize>, u64)> = Vec::new();
@@ -421,7 +528,12 @@ fn bar(p: Painter, card: &Card, area: Rect, look: &Look, scene: &Scene) -> Paint
         Overlay::Activity => {
             let s = share(scene, card, Overlay::Activity, look.window);
             if s > 0.0 {
-                p = p.fill_color(now(hue_ink(Hue::Worker))).fill_rect(area.x, area.y, (area.w * s).max(2.0), area.h);
+                p = p.fill_color(now(hue_ink(Hue::Worker))).fill_rect(
+                    area.x,
+                    area.y,
+                    (area.w * s).max(2.0),
+                    area.h,
+                );
             }
             p
         }
@@ -460,10 +572,18 @@ fn spawn_chips(p: Painter, card: &Card, r: Rect) -> Painter {
         if i > 0 && x + w + if rest > 0 { 30.0 } else { 0.0 } > end {
             let more = format!("+{}", card.spawns.len() - i);
             let mw = measure(Font::Label, &more) + 14.0;
-            return chip(p, Rect { x, y, w: mw, h: 17.0 })
-                .fill_color(ink(Token::Ink2))
-                .text_align(CanvasTextAlign::Center)
-                .fill_text(&more, x + mw / 2.0, y + 12.5);
+            return chip(
+                p,
+                Rect {
+                    x,
+                    y,
+                    w: mw,
+                    h: 17.0,
+                },
+            )
+            .fill_color(ink(Token::Ink2))
+            .text_align(CanvasTextAlign::Center)
+            .fill_text(&more, x + mw / 2.0, y + 12.5);
         }
         p = chip(p, Rect { x, y, w, h: 17.0 })
             .font(&css(Font::Label))
@@ -497,11 +617,26 @@ fn hit_boxes(app: AppState, layout: &Layout, scene: &Scene) -> Vec<AnyElement> {
         let Some(card) = scene.cards.get(placed.card) else {
             continue;
         };
-        let figure = figure(card, app.system.with_untracked(|s| s.overlay), app.system.with_untracked(|s| s.window));
+        let figure = figure(
+            card,
+            app.system.with_untracked(|s| s.overlay),
+            app.system.with_untracked(|s| s.window),
+        );
         let spoken = format!("{}, {}, {figure}", card.name, card.kind.word());
-        let hint = card.tag.as_ref().map_or_else(|| spoken.clone(), |tag| format!("{} · {tag} · {figure}", card.name));
+        let hint = card.tag.as_ref().map_or_else(
+            || spoken.clone(),
+            |tag| format!("{} · {tag} · {figure}", card.name),
+        );
         let node = card.node.clone();
-        boxes.push(hit(app, placed.rect, card.node.test_id(), spoken, hint, Pick::Node(node), 6.0));
+        boxes.push(hit(
+            app,
+            placed.rect,
+            card.node.test_id(),
+            spoken,
+            hint,
+            Pick::Node(node),
+            6.0,
+        ));
     }
     for route in &layout.routes {
         let Some(edge) = scene.edges.get(route.edge) else {
@@ -519,13 +654,34 @@ fn hit_boxes(app: AppState, layout: &Layout, scene: &Scene) -> Vec<AnyElement> {
             edge.count
         );
         let pick = Pick::Edge(edge.from.clone(), edge.to.clone());
-        let area = Rect { x: x - 9.0, y: y - 9.0, w: 18.0, h: 18.0 };
-        boxes.push(hit(app, area, format!("edge-{}", route.edge), spoken.clone(), spoken, pick, 9.0));
+        let area = Rect {
+            x: x - 9.0,
+            y: y - 9.0,
+            w: 18.0,
+            h: 18.0,
+        };
+        boxes.push(hit(
+            app,
+            area,
+            format!("edge-{}", route.edge),
+            spoken.clone(),
+            spoken,
+            pick,
+            9.0,
+        ));
     }
     boxes
 }
 
-fn hit(app: AppState, area: Rect, test_id: String, spoken: String, hint: String, pick: Pick, radius: f32) -> AnyElement {
+fn hit(
+    app: AppState,
+    area: Rect,
+    test_id: String,
+    spoken: String,
+    hint: String,
+    pick: Pick,
+    radius: f32,
+) -> AnyElement {
     let desktop = app.form == Form::Desktop;
     view()
         .absolute()
