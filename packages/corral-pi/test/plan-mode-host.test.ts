@@ -464,7 +464,11 @@ test("review feedback whose preflight outlasts a resubmission is not delivered t
   });
 }), 120_000);
 
-test("a clean-context kickoff does not start once another turn has added to the reset context", () => planning(undefined, async (live, plan) => {
+for (const { turn, source, reason, phase } of [
+  // An automated turn leaves the same review open; the owner's own message is feedback, and withdraws it.
+  { turn: "an automated turn", source: "extension", reason: "conversation went on", phase: "review" },
+  { turn: "a message the owner typed", source: "interactive", reason: "no longer open", phase: "planning" },
+] as const) test(`a clean-context kickoff does not start once ${turn} has added to the reset context`, () => planning(undefined, async (live, plan) => {
   writeFileSync(plan.path, PLAN);
   fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
   await live.session.prompt("Plan a --version flag", { source: "extension" });
@@ -477,21 +481,22 @@ test("a clean-context kickoff does not start once another turn has added to the 
     if (text.startsWith("[corral plan approved ")) sent.catch(refused.resolve);
     return sent;
   };
-  await overlapping(live, async (kickoff, typed) => {
+  await overlapping(live, async (kickoff, other) => {
     // Given the context was reset to the plan and the kickoff is in Pi's preflight,
     expect(answerCard(live).answer([{ options: ["execute_clean"] }], false, async () => {})).toBe("started");
     await kickoff.reached;
-    // and a message the owner typed meanwhile runs and settles first:
-    typed.pass();
+    // and another turn meanwhile runs and settles first:
+    other.pass();
     fixtureTransport().script([{ text: "Noted." }]);
-    await prompt("By the way, keep the changelog", { source: "interactive" });
+    await prompt("By the way, keep the changelog", { source });
     await live.drained();
     // When the kickoff's preflight ends:
     kickoff.pass();
-    // Then it is refused: the context is no longer the plan alone, and the review is open to be answered again.
-    expect(String(await refused.promise)).toContain("conversation went on");
+    // Then it is refused: the context is no longer the plan alone, and nothing was approved.
+    expect(String(await refused.promise)).toContain(reason);
     await live.drained();
-    expect(plan.review).toBe(review);
+    expect(plan.phase).toBe(phase);
+    expect(plan.review).toBe(phase === "review" ? review : undefined);
     expect(plan.approved).toBeUndefined();
   });
 }), 120_000);

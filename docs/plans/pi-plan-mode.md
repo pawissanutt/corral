@@ -246,7 +246,9 @@ On an execute answer the host, in order:
    until then the approval is pending: any other answer to the review is refused, and entering or
    leaving plan mode is refused. Only the approval's own compaction and the kickoff's own run
    go without the planning contract; any other turn that gets in first is still a turn under
-   review and is given it. If the turn ends without the kickoff having reached the
+   review and is given it, and the kickoff is then refused for the changed conversation. An
+   owner message that gets in first is feedback like any other: it withdraws the review, and
+   the kickoff is refused for the review that is gone. If the turn ends without the kickoff having reached the
    transcript, the pending state is dropped and the review is answerable again.
 
 Because nothing is recorded before the kickoff itself, any refusal, failure or restart on the

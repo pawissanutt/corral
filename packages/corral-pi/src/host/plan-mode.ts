@@ -412,11 +412,13 @@ export class PlanMode {
 
   /**
    * An ordinary owner message that reached the model during review is feedback: the review is withdrawn and
-   * planning resumes. The agent knows what it is without being told again: only a kickoff is an approval.
+   * planning resumes. The agent knows what it is without being told again: only a kickoff is an approval. That
+   * holds while an approval is on its way too: the message got there first, and the kickoff of a review that is
+   * gone is refused when it comes to start.
    */
   ownerSpoke(): void {
     const { phase, revision, title } = this.record;
-    if (phase !== "review" || this.approving) return;
+    if (phase !== "review") return;
     this.feedback = undefined;
     this.write({ phase: "planning", revision, title });
   }
