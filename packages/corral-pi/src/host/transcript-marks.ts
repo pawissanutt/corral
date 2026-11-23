@@ -85,8 +85,12 @@ export function recordTranscriptMark(sink: MarkSink | undefined, mark: Transcrip
 const VISIBLE_CUSTOM = new Set([MARK_ENTRY, "corral_code_cell", "corral_code_call", "corral_owner_question",
   "corral_command", "corral_command_monitor", "corral_job_control"]);
 
-/** Publish only after an append succeeded, including appends performed inside the SDK or an extension. */
-export function observeTranscriptEntries(manager: SessionManager, entry: () => void, changed: () => void): () => void {
+/**
+ * Publish only after an append succeeded, including appends performed inside the SDK or an extension. `user` is
+ * told which user message it was, before `entry`.
+ */
+export function observeTranscriptEntries(manager: SessionManager, entry: () => void, changed: () => void,
+  user?: (message: object) => void): () => void {
   const { appendMessage, appendCustomEntry, appendCustomMessageEntry, appendCompaction, branchWithSummary,
     appendLabelChange, appendModelChange, appendThinkingLevelChange, appendContextEdit, appendUsage } = manager;
   const after = <A extends unknown[], R>(method: (...args: A) => R, notify: (...args: A) => void) =>
@@ -96,6 +100,7 @@ export function observeTranscriptEntries(manager: SessionManager, entry: () => v
       return result;
     };
   manager.appendMessage = after(appendMessage, message => {
+    if (message.role === "user") user?.(message);
     if (message.role === "user" || message.role === "bashExecution") entry();
     else changed();
   });

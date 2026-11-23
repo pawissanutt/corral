@@ -521,6 +521,24 @@ test("a move to a branch before the submission, with nothing appended, tells the
   expect(told).toBe(1);
 }), 120_000);
 
+test("going back in Pi's tree to the owner's feedback message reopens the review it withdrew", () => planning(undefined, async (live, plan) => {
+  writeFileSync(plan.path, PLAN);
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+  await live.session.prompt("Plan a --version flag", { source: "extension" });
+  await live.drained();
+  const review = plan.review;
+  // Given a message the owner typed withdrew the review:
+  fixtureTransport().script([{ text: "Noted." }]);
+  await live.session.prompt("Change step 1", { source: "interactive" });
+  await live.drained();
+  expect(plan.phase).toBe("planning");
+  // When the owner selects that message in the tree, which leaves the branch at the entry before it:
+  const feedback = live.session.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "user");
+  await live.session.navigateTree(feedback?.id ?? "", { summarize: false });
+  // Then the feedback is no longer said, and neither is the withdrawal that came with it.
+  expect(plan.review).toBe(review);
+}), 120_000);
+
 test("an overlapping prompt that loses the run to a kickoff costs it neither its approval nor its turn", () => planning(undefined, async (live, plan, _cwd, owner) => {
   writeFileSync(plan.path, PLAN);
   fixtureTransport().script([SUBMIT, { text: "Submitted." }]);

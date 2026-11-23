@@ -178,7 +178,10 @@ its way into the transcript, any other answer to that review is refused, not ack
 message enters the transcript, and only if the host's queue tagged that very message as the
 owner's (typed in the terminal or sent by the owner over the socket). A refused message never
 gets there, and the same words from an extension or automated input are not the owner's, so
-both leave the review open.
+both leave the review open. Like an approval, the withdrawal has no record of its own: the
+host sets `corralPlanFeedback: <card id>` on that user message, and the phase is read from
+it. A rewind or a move in Pi's tree to before the message therefore reopens the same review,
+and the answer that sent feedback is acknowledged only once Pi has appended the message.
 
 **Different model.** The review shows the session's current model with a change control that
 opens the existing model picker. The session is idle during review, so the existing

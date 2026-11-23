@@ -69,7 +69,7 @@ import { TodoLedger, installPlanCommand } from "../ui/todo.ts";
 import type { HostCapabilities, ModelChoice, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { askUserTool, localQuestionAsk } from "./ask-user.ts";
-import { PLAN_ENTRY, PLAN_KICKOFF, PLAN_OPTIONS, PLAN_SUBMIT_TOOL, PlanMode, planSubmitTool, type PlanAnswer } from "./plan-mode.ts";
+import { PLAN_ENTRY, PLAN_FEEDBACK, PLAN_KICKOFF, PLAN_OPTIONS, PLAN_SUBMIT_TOOL, PlanMode, planSubmitTool, type PlanAnswer } from "./plan-mode.ts";
 import { registerPlanMode } from "./remote/plan.ts";
 import { PlanReviewUi } from "../ui/plan-review.ts";
 import { isToolApproval, PENDING_MAX, PendingQuestions, QUESTION_ENTRY, validAnswer } from "./pending-questions.ts";
@@ -369,6 +369,8 @@ export class HostSession {
   private planReset: string | undefined;
   /** Inputs whose callers wait to learn whether that very input reached the transcript, by queue tag. */
   private readonly deliveries = new Map<unknown, (delivered: boolean) => void>();
+  /** The user message Pi has told its listeners of and appends next, with the input it records. */
+  private arriving: { readonly message: object; readonly input: InputFacts } | undefined;
   /** Callers waiting for the open turn to have settled for everyone. */
   private readonly closeWaiters: (() => void)[] = [];
   /** Inputs handed to Pi whose admission is not answered yet, by queue tag, with how to refuse each. */
@@ -1398,9 +1400,20 @@ export class HostSession {
     this.syncBuildTitle(session);
     this.unobserveTranscript = observeTranscriptEntries(session.sessionManager, () => {
       this.liveEvents.entry();
-      // A user message is in the transcript now; an approved plan's kickoff ends its review there.
+      // A user message is in the transcript now; an approved plan's kickoff ends its review there, and the
+      // owner's own message withdraws it.
       this.planMode?.refresh();
-    }, () => this.liveEvents.stateChanged());
+    }, () => this.liveEvents.stateChanged(), message => {
+      // Only now is the input delivered for whoever waits on it: the append has succeeded.
+      const arrived = this.arriving;
+      if (arrived?.message !== message) return;
+      this.arriving = undefined;
+      const delivery = this.deliveries.get(arrived.input);
+      if (delivery) {
+        this.deliveries.delete(arrived.input);
+        delivery(true);
+      }
+    });
     this.startedInputFacts = undefined;
     this.remoteUsage = undefined;
     session.setQueueObserver({
@@ -1465,17 +1478,16 @@ export class HostSession {
           const queued = this.queuedInputFacts.get(event.message);
           const tagged = queued ?? this.startedInputFacts;
           if (!queued) this.startedInputFacts = undefined;
+          // The owner's own message answers a pending plan review as feedback. Like the kickoff, that is a fact
+          // of the recorded message: the review comes back if a rewind or a tree move takes the message away.
+          const feedback = tagged?.origin === "owner" || tagged?.origin === "pane" ? this.planMode?.review : undefined;
           Object.assign(event.message, { corralInput: tagged?.facts ?? { origin: "auto" },
             ...(tagged?.transcriptId === undefined ? {} : { corralRequestId: tagged.transcriptId }),
             // Only the message the host itself admitted as an approved plan's kickoff carries this; its text proves nothing.
-            ...(tagged?.planKickoff === undefined ? {} : { [PLAN_KICKOFF]: tagged.planKickoff }) });
-          const delivery = tagged && this.deliveries.get(tagged);
-          if (delivery) {
-            this.deliveries.delete(tagged);
-            delivery(true);
-          }
-          // This very input reached the model. From the owner, it answers a pending plan review as feedback.
-          if (tagged?.origin === "owner" || tagged?.origin === "pane") this.planMode?.ownerSpoke();
+            ...(tagged?.planKickoff === undefined ? {} : { [PLAN_KICKOFF]: tagged.planKickoff }),
+            ...(feedback === undefined ? {} : { [PLAN_FEEDBACK]: feedback }) });
+          // Its input is delivered once Pi has appended this very message, which it does next.
+          this.arriving = tagged && { message: event.message, input: tagged };
           const content = event.message.content;
           this.ownerQuestions?.observeUser(typeof content === "string" ? content
             : content.map(p => p.type === "text" ? p.text : "").join(""));

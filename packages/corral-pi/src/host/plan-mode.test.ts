@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PLAN_ENTRY, PLAN_KICKOFF, PLAN_NOTE, PlanMode, type PlanEntry, type PlanHost } from "./plan-mode.ts";
+import { PLAN_ENTRY, PLAN_FEEDBACK, PLAN_KICKOFF, PLAN_NOTE, PlanMode, type PlanEntry, type PlanHost } from "./plan-mode.ts";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -20,9 +20,13 @@ async function planning(session: { blocked?: string; kickoff?: "taken" | "refuse
   const sent: { text: string; kickoff?: string }[] = [];
   let leaf = 0;
   const add = (entry: PlanEntry) => { entries.push(entry); leaf++; };
-  /** A user message in the transcript; the host alone tags the one it admitted as a kickoff. */
-  const user = (text: string, kickoff?: string) => {
-    add({ type: "message", message: { role: "user", content: text, ...(kickoff === undefined ? {} : { [PLAN_KICKOFF]: kickoff }) } });
+  /**
+   * A user message in the transcript; the host alone tags the one it admitted as a kickoff, and the owner's own
+   * with the review it found open as `feedback`.
+   */
+  const user = (text: string, kickoff?: string, feedback?: string) => {
+    add({ type: "message", message: { role: "user", content: text, ...(kickoff === undefined ? {} : { [PLAN_KICKOFF]: kickoff }),
+      ...(feedback === undefined ? {} : { [PLAN_FEEDBACK]: feedback }) } });
     running.refresh();
   };
   const host: PlanHost = {
@@ -80,10 +84,10 @@ test("an approval whose review a rewind removed while its turn was being stopped
 });
 
 test("a rewind from one pending review to another tells the views, though the phase is the same", async () => {
-  const { plan, rewind } = await planning();
+  const { plan, user, rewind } = await planning();
   plan.submit();
   const first = plan.review;
-  plan.ownerSpoke();
+  user("Split step 2", undefined, first);
   plan.submit();
   expect(plan.review).not.toBe(first);
   let told = 0;
@@ -176,14 +180,14 @@ test("feedback the session does not take leaves the review open for it", async (
   expect(refusing.plan.review).toBe(review);
 
   // Feedback the session takes withdraws the review when it reaches the model, like any owner message.
-  const taking = await planning();
+  const taking = await planning({ kickoff: "taken" });
   taking.plan.submit();
   expect(await taking.plan.choose("revise", "Use a flag parser")).toBe("delivered");
   expect(taking.sent[0]?.text).toContain("Use a flag parser");
   // Until it does, no other answer can override it.
   expect(taking.plan.phase).toBe("review");
   expect(() => taking.plan.choose("execute")).toThrow("already being answered");
-  taking.plan.ownerSpoke();
+  taking.user(taking.sent[0]?.text ?? "", undefined, taking.plan.review);
   expect(taking.plan.phase).toBe("planning");
 });
 

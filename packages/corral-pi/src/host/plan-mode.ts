@@ -108,10 +108,16 @@ const kickoffLine = (card: string): string => `[corral plan approved ${card}]`;
 /** The field the host sets on the one user message it admitted as an approval's kickoff; its value is the card id. */
 export const PLAN_KICKOFF = "corralPlanKickoff";
 
-/** The card a user message was admitted as the kickoff for. Its text proves nothing: anyone can send the words. */
-function kickoffOf(entry: PlanEntry): string | undefined {
-  const message = entry.type === "message" ? entry.message as { role?: unknown; [PLAN_KICKOFF]?: unknown } | undefined : undefined;
-  const card = message?.role === "user" ? message[PLAN_KICKOFF] : undefined;
+/**
+ * The field the host sets on a message of the owner's own that it records while a review is open; its value is
+ * that review's card id. Such a message is feedback, and withdraws the review for as long as it is on the branch.
+ */
+export const PLAN_FEEDBACK = "corralPlanFeedback";
+
+/** The card the host tagged a user message for under `field`. Its text proves nothing: anyone can send the words. */
+function taggedFor(entry: PlanEntry, field: typeof PLAN_KICKOFF | typeof PLAN_FEEDBACK): string | undefined {
+  const message = entry.type === "message" ? entry.message as { role?: unknown; [field: string]: unknown } | undefined : undefined;
+  const card = message?.role === "user" ? message[field] : undefined;
   return typeof card === "string" ? card : undefined;
 }
 
@@ -145,11 +151,14 @@ function scan(entries: readonly PlanEntry[]): Scan {
         if (kind === "contract") announced = told = true;
         else if (kind === due) due = undefined;
       }
-    } else if (record.phase === "review" && record.path && kickoffOf(entry) === cardId(record)) {
+    } else if (record.phase === "review" && record.path && taggedFor(entry, PLAN_KICKOFF) === cardId(record)) {
       approved = { title: record.title ?? "Plan", revision: record.revision, path: record.path };
       record = { version: 1, phase: "off", revision: record.revision, at: record.at };
       announced = told = false;
       due = undefined;
+    } else if (record.phase === "review" && taggedFor(entry, PLAN_FEEDBACK) === cardId(record)) {
+      // The owner's own message is feedback: planning resumes with it, and the review returns without it.
+      record = { version: 1, phase: "planning", revision: record.revision, at: record.at, ...(record.title ? { title: record.title } : {}) };
     }
   }
   // The read-only rules hold in review too, so a turn there needs the contract as much as a planning one.
@@ -420,21 +429,10 @@ export class PlanMode {
   }
 
   /**
-   * An ordinary owner message that reached the model during review is feedback: the review is withdrawn and
-   * planning resumes. The agent knows what it is without being told again: only a kickoff is an approval. That
-   * holds while an approval is on its way too: the message got there first, and the kickoff of a review that is
-   * gone is refused when it comes to start.
-   */
-  ownerSpoke(): void {
-    const { phase, revision, title } = this.record;
-    if (phase !== "review") return;
-    this.feedback = undefined;
-    this.write({ phase: "planning", revision, title });
-  }
-
-  /**
    * Keep planning. Feedback is the owner's message: like any owner message it withdraws the review when it
-   * reaches the model. It starts a turn or is refused, never queued, so "delivered" means taken; feedback the
+   * is recorded, by the tag the host puts on it (`PLAN_FEEDBACK`). The agent knows what it is without being told
+   * again: only a kickoff is an approval. That holds while an approval is on its way too: the message got there
+   * first, and the kickoff of a review that is gone is refused when it comes to start. It starts a turn or is refused, never queued, so "delivered" means taken; feedback the
    * session does not take leaves the review, and the owner's text, as they were.
    */
   private revise(feedback?: string): AnswerStatus | Promise<AnswerStatus> {
