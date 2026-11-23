@@ -167,8 +167,8 @@ export class PlanMode {
   private kickoff: { readonly card: string; readonly text: string; readonly path: string; readonly journal: string; admitted: boolean } | undefined;
   /** The review whose feedback the session took but the transcript does not hold yet. */
   private feedback: { readonly card: string; admitted: boolean } | undefined;
-  /** The phase the views were last told; unknown until the first change, as after a restart. */
-  private seen: PlanPhase | undefined;
+  /** The phase and review the views were last told; unknown until the first change, as after a restart. */
+  private seen: string | undefined;
   private readonly listeners = new Set<() => void>();
 
   constructor(private readonly host: PlanHost) { this.path = join(host.dir, PLAN_FILE); }
@@ -204,13 +204,19 @@ export class PlanMode {
     this.announce();
   }
 
+  /** What a view shows of the mode: a rewind can replace one pending review with another in the same phase. */
+  private get shown(): string { return `${this.phase} ${this.review ?? ""}`; }
+
   private announce(): void {
-    this.seen = this.phase;
+    this.seen = this.shown;
     this.host.changed();
     for (const listener of [...this.listeners]) { try { listener(); } catch { /* A view does not own the mode. */ } }
   }
 
-  /** The transcript grew: an approval's kickoff may have arrived in it, which ends the review and is the approval. */
+  /**
+   * The transcript grew or was rewound: an approval's kickoff may have arrived in it, which ends the review and
+   * is the approval, or the branch may now hold another review or none.
+   */
   refresh(): void {
     // The kickoff is settled by what the transcript holds, whatever the views were last told.
     const kickoff = this.kickoff;
@@ -218,7 +224,7 @@ export class PlanMode {
       this.kickoff = undefined;
       if (this.approved?.path === kickoff.path) this.host.approved?.(kickoff.journal);
     }
-    if (this.phase !== this.seen) this.announce();
+    if (this.shown !== this.seen) this.announce();
   }
 
   /**

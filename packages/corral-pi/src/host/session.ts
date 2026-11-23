@@ -2006,6 +2006,8 @@ export class HostSession {
       this.restoreTurn(manager);
       this.turnError = null;
       this.stopCause = undefined;
+      // The branch may hold another plan review now, or none: an open review must not go on showing the old one.
+      this.planMode?.refresh();
       this.toolApprovals?.clear();
       for (const question of this.ownerQuestions?.list() ?? []) {
         if (question.status === "pending") this.options.herdr?.questionChanged(question.id, false);

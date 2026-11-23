@@ -79,6 +79,23 @@ test("an approval whose review a rewind removed while its turn was being stopped
   expect(notes.join("\n")).toContain("no longer open");
 });
 
+test("a rewind from one pending review to another tells the views, though the phase is the same", async () => {
+  const { plan, rewind } = await planning();
+  plan.submit();
+  const first = plan.review;
+  plan.ownerSpoke();
+  plan.submit();
+  expect(plan.review).not.toBe(first);
+  let told = 0;
+  plan.onChange(() => { told++; });
+  // When the branch is taken back to the first submission, still under review:
+  rewind(2);
+  plan.refresh();
+  // Then a view showing the second one hears of it, and can stop showing a plan that is no longer the pending one.
+  expect(plan.review).toBe(first);
+  expect(told).toBe(1);
+});
+
 test("a submission whose copy changed after it was shown is not executed", async () => {
   const { plan, notes } = await planning();
   plan.submit();

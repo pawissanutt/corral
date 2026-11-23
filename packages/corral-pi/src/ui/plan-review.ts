@@ -19,7 +19,8 @@ export interface PlanReviewOptions {
 
 export class PlanReviewUi {
   private ui: ExtensionUIContext | undefined;
-  private shown: AbortController | undefined;
+  /** The open review and the submission it shows. */
+  private shown: { readonly id: string; readonly control: AbortController } | undefined;
   /** The submission the review opened for unasked, so each is offered once. */
   private offered: string | undefined;
   /** The submission to return to once a model selection settles. */
@@ -43,10 +44,11 @@ export class PlanReviewUi {
       // opened here would be drawn without them, so it reopens in a later task.
       if (id !== undefined) setTimeout(() => { if (id === this.plan.review) void this.show(); }, 0);
     });
-    const unsubscribe = this.plan.onChange(() => { if (this.plan.review === undefined) this.shown?.abort(); });
+    // The review on screen is gone, or a rewind put another in its place: it must not go on showing that plan.
+    const unsubscribe = this.plan.onChange(() => { if (this.plan.review !== this.shown?.id) this.shown?.control.abort(); });
     pi.on("session_shutdown", () => {
       unsubscribe();
-      this.shown?.abort();
+      this.shown?.control.abort();
     });
   }
 
@@ -60,15 +62,21 @@ export class PlanReviewUi {
     const lines: (string | PagerLine)[] = text === undefined
       ? ["The submitted plan's copy is missing or was changed. Choose keep planning and have it submitted again."]
       : text.split("\n").map(line => /^#{1,6}\s/.test(line) ? { text: line, heading: true } : line);
-    const control = this.shown = new AbortController();
+    const control = new AbortController(), open = this.shown = { id, control };
     let key: string | undefined;
     try {
       key = await openPager(ui, { title: `Plan review · ${title ?? "Plan"} · revision ${revision} · ${this.options.model() ?? "no model"}`,
         lines, wrap: true, actions: ACTIONS }, control.signal);
     } finally {
-      if (this.shown === control) this.shown = undefined;
+      if (this.shown === open) this.shown = undefined;
     }
-    if (key === undefined || this.plan.review !== id) return true;
+    const now = this.plan.review;
+    // Closed under the owner because another review took its place: show that one instead.
+    if (control.signal.aborted && now !== undefined && now !== id) {
+      this.offered = now;
+      return this.show();
+    }
+    if (key === undefined || now !== id) return true;
     if (key === "m") {
       if (this.options.selectModel?.()) this.selecting = id;
       else this.options.notice("Change the model with /model, then reopen the review with /plan.");
