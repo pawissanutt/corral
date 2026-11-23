@@ -1,3 +1,5 @@
+import type { TranscriptPage } from "../host/transcript-preview.ts";
+import { recordedText, type TranscriptRead } from "./agent-history.ts";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { basename, relative, resolve } from "node:path";
@@ -15,7 +17,7 @@ import { ReviewStore, comparisonLabel, fileStatus, type PatchSnapshot, type Revi
 import { ChangesView, changesModel, type ChangeAuthor, type ChangesModel } from "./changes-view.ts";
 import { LifecycleView } from "./lifecycle-view.ts";
 import { ArtifactView } from "./artifact-view.ts";
-import { agentsModel, isLive, liveCount, statusLabel, visibleCommands, type AgentActions, type AgentRow, type AgentsModel } from "./agents-model.ts";
+import { agentStatus, agentsModel, isLive, liveCount, statusLabel, visibleCommands, type AgentActions, type AgentRow, type AgentsModel } from "./agents-model.ts";
 import { AgentsView, type AgentsAction } from "./agents-view.ts";
 import { AgentConversation } from "./agent-conversation.ts";
 import { HelperChat } from "./helper-chat.ts";
@@ -173,7 +175,7 @@ export interface WorkbenchOptions {
   /** `corral artifact show` into a private file: the artifact's exact bytes, for the Artifacts view's text and image preview. */
   readonly artifactFile?: (reference: string) => Promise<string>;
   readonly exportSession?: () => Promise<string>;
-  readonly readTranscript?: (id: string) => Promise<string>;
+  readonly readTranscript?: TranscriptRead;
   readonly readTask?: () => Promise<unknown>;
   /** Physical terminal size for the chrome tiers; without a terminal the render width stands in and rows count as tall. */
   readonly terminal?: () => { readonly columns: number; readonly rows: number } | undefined;
@@ -238,6 +240,8 @@ export class NativeWorkbench {
   private changesScroll: ScrollView | undefined;
   private shownChanges: ChangesModel | undefined;
   private readingTranscript = false;
+  private transcriptEpoch = 0;
+  private openingRetained = false;
   /** Read-only pagers (job output, peek, transcript) this workbench has open. */
   private pagers = 0;
   private transcript: ScrollView | undefined; private transcriptWidth = 0;
@@ -310,7 +314,7 @@ export class NativeWorkbench {
       options.build ? this.buildBases(options.reviewBases) : options.reviewBases);
     this.launchRoot = this.review.root;
     this.agentsView = new AgentsView({
-      model: () => this.agentsModel(), now: () => Date.now(), short: () => this.size(0).rows < SHORT_ROWS,
+      model: () => this.agentsWithTranscriptPicker(), now: () => Date.now(), short: () => this.size(0).rows < SHORT_ROWS,
       legend: () => this.legend, freeze: () => this.jobFreeze, color: agentColor,
       click: event => options.canInteract() && plainClick(event), focus: () => { this.focusMain(); options.changed(); },
       act: (action, key) => this.agentAction(action, key), focused,
@@ -388,10 +392,12 @@ export class NativeWorkbench {
       this.options.changed();
       return;
     }
+    this.transcriptEpoch++;
     if (this.view === "agent" && view !== "agent") { this.conversation?.remember(); this.leaveChild(); }
     if (view === "conversation") this.watch?.back();
     this.images.close();
     this.view = view; this.focused = view !== "conversation";
+    if (view === "agent") this.conversation?.refresh();
     if (this.focused) this.options.onFocusMain?.();
     clearInterval(this.timer);
     this.timer = undefined;
@@ -403,6 +409,7 @@ export class NativeWorkbench {
       let ticks = 0;
       this.timer = setInterval(() => {
         ticks++;
+        if (this.view === "agent") this.conversation?.refresh();
         if (this.view === "changes" && ticks % 2 === 0) void this.review.refresh();
         if ((this.view === "evidence" && ticks % 10 === 0) || (this.view === "task" && ticks % 15 === 0)) void this.task.refresh();
         this.options.changed();
@@ -447,6 +454,7 @@ export class NativeWorkbench {
   openSettings(): void {
     if (!this.options.settingsPage || this.view === "settings") return;
     this.images.close();
+    this.transcriptEpoch++;
     this.settingsFrom = this.view; this.view = "settings";
     this.settingsScroll?.scrollToStart();
     this.focused = true; this.options.onFocusMain?.();
@@ -512,13 +520,51 @@ export class NativeWorkbench {
   }
   agentsModel(): AgentsModel {
     const snapshot = this.options.snapshot(), now = Date.now();
-    const extra = fleetExtras(shownFleet(snapshot), now, !!this.options.build || !!this.options.fleet?.());
+    const extra = fleetExtras(shownFleet(snapshot), now, !!this.options.build || !!this.options.fleet?.(), snapshot?.bound === true);
     return agentsModel(snapshot, now, { jobControl: !!this.options.jobControl, ...(extra ? { extra } : {}) });
   }
+  private agentsWithTranscriptPicker(): AgentsModel {
+    const model = this.agentsModel();
+    if (!this.options.snapshot()?.bound || !this.options.readTranscript) return model;
+    return { ...model, agents: [...model.agents, this.retainedRow("retained-picker", "", "Open an agent by id", false)] };
+  }
+  private retainedRow(key: string, id: string, name: string, transcript: boolean): AgentRow {
+    return { key, id, name, title: name, source: "helper", hue: 0, profile: "recorded", model: "—",
+      state: "uncertain", status: agentStatus("uncertain"), activity: "Read-only", createdAt: 0, spans: [], meta: [], notes: [],
+      capabilities: { open: true, transcript } };
+  }
   private agentRow(key: string | undefined): AgentRow | undefined {
+    if (key?.startsWith("retained:")) return this.options.snapshot()?.bound
+      ? this.retainedRow(key, key.slice("retained:".length), key.slice("retained:".length), true) : undefined;
     return key === undefined ? undefined : this.agentsModel().agents.find(row => row.key === key);
   }
+  private transcriptLifetime(): () => boolean {
+    const epoch = this.transcriptEpoch, view = this.view, ui = this.ui, conversation = this.conversation;
+    const key = () => this.view === "agent" ? this.agentKey : this.agentsView.entry()?.row.key;
+    const selected = key(), binding = this.options.snapshot()?.inspector?.session;
+    return () => !this.scopeAbort.signal.aborted && this.ui === ui && this.conversation === conversation
+      && epoch === this.transcriptEpoch && view === this.view && key() === selected
+      && this.options.snapshot()?.bound === true && this.options.snapshot()?.inspector?.session === binding;
+  }
+  async openRetainedAgent(): Promise<void> {
+    const ui = this.ui;
+    if (!ui || !this.options.canInteract() || !this.options.snapshot()?.bound || this.view !== "agents" || this.openingRetained) return;
+    const valid = this.transcriptLifetime();
+    this.openingRetained = true;
+    try {
+      const id = (await ui.input("Open an agent by id"))?.trim();
+      if (!valid() || !id) return;
+      if (!/^[A-Za-z0-9._:-]{1,128}$/.test(id) || id === "." || id === "..") {
+        this.notice("Invalid agent id", "warning"); return;
+      }
+      const row = this.agentsModel().agents.find(agent => agent.id === id && agent.capabilities.transcript);
+      this.openAgent(row?.key ?? `retained:${id}`);
+    } catch {
+      if (valid()) this.notice("Could not open the agent ID prompt", "warning");
+    } finally { this.openingRetained = false; }
+  }
   private agentAction(action: AgentsAction, key: string): void {
+    if (action === "open" && key === "retained-picker") { void this.openRetainedAgent(); return; }
     const child = this.childActs ? childIdOf(key) : undefined;
     if (action === "open") { if (child !== undefined) this.openChild(child); else this.openAgent(key); return; }
     if (action === "transcript") { void this.openAgentTranscript(key); return; }
@@ -759,8 +805,11 @@ export class NativeWorkbench {
     chat.expandTools(this.toolsExpanded);
     this.conversation = new AgentConversation({ row: () => this.agentRow(this.agentKey), chat, color: agentColor, now: () => Date.now(),
       click: event => this.options.canInteract() && plainClick(event), focus: () => { this.focusMain(); this.options.changed(); },
+      ...(this.options.readTranscript ? { read: this.options.readTranscript } : {}),
+      lifetime: () => this.transcriptLifetime(), changed: this.options.changed, canInteract: this.options.canInteract,
       back: () => this.openAgents(), answer: (key: string) => this.agentAction("answer", key) });
     if (this.agentKey !== undefined) this.conversation.restore(this.agentKey);
+    if (this.view === "agent") this.conversation.refresh();
     this.childWatch = new TranscriptWatch(this.conversation.scroll, this.options.modal);
     // Task, Proof, lifecycle, Usage and Artifacts draw from their first column: `inset` puts them one cell in, as the frame is.
     this.evidenceScroll = new ScrollView(inset({ render: width => this.renderEvidence(width), handleMouse: event => {
@@ -873,26 +922,51 @@ export class NativeWorkbench {
     if (!this.proofOpen.delete(item)) this.proofOpen.add(item);
     this.options.changed();
   }
-  /** Bounded read-only transcript of the agent at `key`, only when its observation is eligible on a bound host. */
+  /** Read-only native JSONL, one opaque-host-cursor page at a time. */
   async openAgentTranscript(key: string | undefined): Promise<void> {
     const ui = this.ui, read = this.options.readTranscript, row = this.agentRow(key);
     if (!ui || !this.options.canInteract() || this.readingTranscript) return;
-    if (key === undefined || !row?.capabilities.transcript || !read) {
+    const shown = () => this.view === "agent" ? this.agentKey : this.view === "agents" ? this.agentsView.entry()?.row.key : undefined;
+    if (key === undefined || shown() !== key || !row?.capabilities.transcript || !read) {
       this.notice("Transcript unavailable: the agent is missing, stale or has no eligible transcript", "warning"); return;
     }
+    const lifetime = this.transcriptLifetime();
+    const valid = () => lifetime() && shown() === key && this.agentRow(key)?.capabilities.transcript === true;
     this.readingTranscript = true;
     try {
-      const text = await read(row.id);
-      if (this.scopeAbort.signal.aborted) return;
-      const shown = this.view === "agent" ? this.agentKey : this.agentsView.entry()?.row.key;
-      if (shown !== key || !this.agentRow(key)?.capabilities.transcript) throw new Error("Agent selection or binding changed during read");
-      // Read-only bounded text, never an SDK switchSession/open/resume call; the pager replaces control characters.
+      let page: TranscriptPage = await read(row.id, { mode: "raw" });
+      if (!valid() || !this.options.canInteract()) return;
       await this.inPager(async () => {
-        await openPager(ui, { title: `Transcript · ${plainLabel(row.name)} · read-only`, lines: text.slice(0, 32 * 1024).split("\n"), wrap: true });
+        let unavailable = false;
+        while (valid()) {
+          const action = await openPager(ui, {
+            title: `Transcript · ${plainLabel(row.name)} · raw · read-only`, wrap: true,
+            lines: [
+              ...(unavailable ? [{ text: "Recording changed or unavailable · reopen from the beginning", heading: true }] : []),
+              ...page.rows.flatMap(item => [
+                ...(item.id.endsWith(":continued") ? [{ text: "Continued record fragment", heading: true }] : []),
+                ...recordedText(item.text.replace(/\n$/, "")).split("\n"),
+              ]),
+            ],
+            actions: unavailable ? [{ key: "r", label: "Restart raw transcript" }] : [
+              ...(page.older ? [{ key: "p", label: "Previous page" }] : []),
+              ...(page.newer ? [{ key: "n", label: "Next page" }] : []),
+            ],
+          }, this.scopeAbort.signal);
+          if (!valid() || !action) return;
+          const cursor = action === "n" ? page.newer : action === "p" ? page.older : undefined;
+          if (!cursor && action !== "r") return;
+          try {
+            const next = await read(row.id, { mode: "raw", ...(cursor ? { cursor } : {}) });
+            if (!valid()) return;
+            unavailable = !!cursor && next.stamp !== page.stamp;
+            if (!unavailable) page = next;
+          } catch { if (!valid()) return; unavailable = true; }
+        }
       });
     } catch (error) {
-      if (!this.scopeAbort.signal.aborted) this.notice(`Transcript unavailable: ${plainLabel(error instanceof Error ? error.message : String(error))}`, "warning");
-    } finally { this.readingTranscript = false; this.options.changed(); }
+      if (valid()) this.notice(`Transcript unavailable: ${plainLabel(error instanceof Error ? error.message : String(error))}`, "warning");
+    } finally { this.readingTranscript = false; if (valid()) this.options.changed(); }
   }
   private acceptPatch(): void {
     const snapshot = this.review.patchSnapshot;
@@ -1002,7 +1076,9 @@ export class NativeWorkbench {
    */
   hintState(context: KeyContext, queue: HintState["queue"], questions = 0): HintState {
     const identity = this.options.identity, build = this.options.build, controller = this.options.buildController;
-    const selection = context === "agents" || context === "agent" ? this.agentsView.actions() : context === "board" ? this.boardView?.actions() : undefined;
+    const selection = context === "agent" && this.agentKey?.startsWith("retained:")
+      ? this.agentRow(this.agentKey)?.capabilities.transcript ? ["transcript" as const] : []
+      : context === "agents" || context === "agent" ? this.agentsView.actions() : context === "board" ? this.boardView?.actions() : undefined;
     const target = controller?.target();
     const lead = this.focused && !this.images.isOpen && this.view !== "conversation" && context === CONTEXT_OF[this.view] ? this.place() : undefined;
     return {
@@ -1103,7 +1179,10 @@ export class NativeWorkbench {
     if (this.images.isOpen && matchesKey(data, "escape")) { this.images.close(); return true; }
     // End: the open conversation (Chat or one agent's) back to its latest row, as the jump control says.
     const active = this.activeWatch();
-    if (active && !active.following && matchesKey(data, "end") && this.endJumps()) { active.jump(); this.options.changed(); return true; }
+    if (active && matchesKey(data, "end") && this.endJumps()) {
+      if (this.view === "agent" && this.conversation?.jumpToRecordedEnd()) return true;
+      if (!active.following) { active.jump(); this.options.changed(); return true; }
+    }
     if (!this.focused || this.view === "conversation") return false;
     if (matchesKey(data, "escape")) { this.back(); return true; }
     if (matchesKey(data, "tab")) { this.focused = false; this.options.changed(); return true; }
@@ -1121,7 +1200,7 @@ export class NativeWorkbench {
       const key = this.agentKey, offered = this.agentsView.actions();
       const action = this.childActs && key !== undefined && childIdOf(key) !== undefined ? CHILD_KEYS[data] : undefined;
       if (key !== undefined && action && offered.includes(action)) { this.agentAction(action, key); return true; }
-      if (data === "t" && offered.includes("transcript")) { void this.openAgentTranscript(this.agentKey); return true; }
+      if (data === "t" && this.agentRow(key)?.capabilities.transcript) { void this.openAgentTranscript(this.agentKey); return true; }
     }
     if (view === "evidence" && data === "a") { this.setView("artifacts"); return true; }
     if (view === "evidence" && matchesKey(data, "enter")) { this.proofEnter(); return true; }

@@ -134,13 +134,13 @@ test("steers sit where they were sent, an untimed steer comes last, and the rete
   const row = childRow(child, { children: [child], mail: [], maxParallel: 3, startedAt: NOW - 9000 }, NOW);
   const rows = conversation(() => row, new HelperChat(() => undefined, "/tmp")).scroll.render(80).map(line => stripTerminalSequences(line));
   const at = (needle: string) => rows.findIndex(line => line.includes(needle));
-  const note = rows.findIndex(line => line.trim().startsWith("! 12 earlier messages were dropped"));
+  const note = rows.findIndex(line => line.trim().startsWith("! 12 earlier messages are not shown"));
   expect(note).toBe(at("Owns: src/picker/") + 2);
   expect(at("EARLY_REPLY")).toBeGreaterThan(note);
   expect(at("TIMED_STEER")).toBeGreaterThan(at("EARLY_REPLY"));
   expect(at("LATE_REPLY")).toBeGreaterThan(at("TIMED_STEER"));
   expect(at("UNTIMED_STEER")).toBeGreaterThan(at("LATE_REPLY"));
-  expect(rows.filter(line => line.includes("dropped by the retention limit"))).toHaveLength(1);
+  expect(rows.filter(line => line.includes("not shown in this live preview"))).toHaveLength(1);
 });
 
 test("messages with other agents sit among the replies by their time, labelled sender to recipient; a helper without mail is unchanged", () => {
@@ -193,4 +193,59 @@ test("a running agent's page follows its end until the owner scrolls up; a finis
   view.restore(row.key);
   expect(shown()).toContain("Question");
   expect(view.scroll.scrollTop).toBe(0);
+});
+
+test("recorded history pages in both directions through an eight-page window without splicing snapshots", async () => {
+  const live = rowOf(helper({ phase: "completed", truncated: true, dropped: 200 }));
+  const row = { ...live, capabilities: { ...live.capabilities, transcript: true } };
+  let stamp = "original";
+  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
+    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {},
+    read: async (_id, request) => {
+      const index = request.cursor === undefined ? 9 : Number(request.cursor);
+      return { stamp, rows: [{ id: String(index), kind: "assistant", text: `RECORDED_${index}` }],
+        ...(index ? { older: String(index - 1) } : {}), ...(index < 9 ? { newer: String(index + 1) } : {}) };
+    },
+  });
+  const render = () => stripTerminalSequences(view.scroll.render(80).join("\n"));
+  async function go(direction: "older" | "newer" | "latest") {
+    expect(view.navigate(direction)).toBeTrue(); await Promise.resolve(); return render();
+  }
+  view.restore(row.key);
+  view.refresh(); await Promise.resolve();
+  expect(render()).toContain("RECORDED_9");
+  expect(render()).not.toContain("Visible response");
+  expect(render()).toContain("Show earlier messages");
+  for (let i = 8; i >= 0; --i) expect(await go("older")).toContain(`RECORDED_${i}`);
+  expect(render()).not.toContain("RECORDED_8");
+  expect(render()).toContain("Show newer messages");
+  expect(await go("newer")).toContain("RECORDED_8");
+  expect(render()).not.toContain("RECORDED_0");
+  stamp = "different";
+  expect(await go("newer")).toContain("Load latest messages");
+  expect(render()).toContain("RECORDED_8");
+  expect(render()).not.toContain("RECORDED_9");
+  expect(await go("latest")).toContain("RECORDED_9");
+  expect(render()).not.toContain("RECORDED_8");
+});
+
+test("a following live reader refreshes on settlement without retaining its provisional reply", async () => {
+  const initial = rowOf(helper({ messages: [{ id: "a", kind: "assistant", text: "PROVISIONAL_REPLY" }] }));
+  let row = { ...initial, capabilities: { open: true, transcript: true } };
+  let latest = "FIRST_COMMITTED";
+  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
+    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {},
+    read: async () => ({ stamp: latest, rows: [{ id: "reply", kind: "assistant", text: latest }] }),
+  });
+  const render = () => stripTerminalSequences(view.scroll.render(80).join("\n"));
+  view.restore(row.key);
+  view.refresh(); await Promise.resolve();
+  expect(render()).toContain("Streaming · not yet recorded");
+  expect(render()).toContain("PROVISIONAL_REPLY");
+  latest = "FINAL_COMMITTED"; row = { ...row, state: "done" };
+  view.refresh(); await Promise.resolve();
+  const final = render();
+  expect(final).toContain("FINAL_COMMITTED");
+  expect(final).not.toContain("PROVISIONAL_REPLY");
+  expect(final).not.toContain("Streaming · not yet recorded");
 });

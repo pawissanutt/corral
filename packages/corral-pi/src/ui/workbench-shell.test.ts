@@ -1,3 +1,4 @@
+import type { TranscriptPage } from "../host/transcript-preview.ts";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -176,7 +177,7 @@ test("t on an agent without a transcript is typing; an eligible one reads by its
   let current = snapshot({ helpers: [helper("first")], agents: [{ id: "first", session: "s-1", kind: "explore", state: "completed", model: "model-a", transcript: false }] });
   const reads: string[] = [];
   const wb = new NativeWorkbench({ cwd: work, identity: assistant, snapshot: () => current, changed() {}, canInteract: () => true,
-    readTranscript: async id => { reads.push(id); return "EXISTING_TRANSCRIPT"; } });
+    readTranscript: async id => { reads.push(id); return { stamp: "s", rows: [{ id: "1", kind: "raw", text: "EXISTING_TRANSCRIPT" }] }; } });
   bindUi(wb);
   wb.mount(new Text("PARENT", 0, 0));
   try {
@@ -488,4 +489,57 @@ test("a one-line notice takes header row 1's state place and is kept with its ti
     void h.panels.workbench.openAgentDetails(); await settle();
     expect(plain(h.customs.at(-1)?.render(100) ?? [])).toContain("model");
   } finally { h.stop(); }
+});
+
+test("Open an agent by id reads an evicted ID and a stale completion cannot replace the selected agent", async () => {
+  const state = snapshot({ helpers: [helper("first", { phase: "completed" })] });
+  const reads: string[] = [];
+  const deferred = Promise.withResolvers<TranscriptPage>();
+  const wb = new NativeWorkbench({ cwd: work, identity: assistant, snapshot: () => state, changed() {}, canInteract: () => true,
+    readTranscript: (id, request) => { reads.push(`${id}:${request.mode}`); return deferred.promise; } });
+  bindUi(wb, { input: async () => "evicted-agent" });
+  const view = viewport(wb);
+  const frame = () => plain(renderLayoutFrame(view.root, 100, 40, () => {}).lines);
+  try {
+    wb.openAgents("retained-picker");
+    expect(frame()).toContain("Open an agent by id");
+    expect(wb.handleInput(KEY.enter)).toBeTrue(); await settle();
+    expect(reads).toEqual(["evicted-agent:conversation"]);
+    expect(wb.view).toBe("agent");
+    wb.openAgent("helper:first");
+    deferred.resolve({ stamp: "stable", rows: [{ id: "1", kind: "user", text: "STALE_RECORDING" }] }); await settle();
+    expect(frame()).not.toContain("STALE_RECORDING");
+    expect(frame()).toContain("Find first callers");
+    expect(frame()).toContain("REAL_EDITOR_DRAFT");
+  } finally { wb.dispose(); }
+});
+
+test("raw transcript n and p request opaque host cursors without replacing the draft", async () => {
+  const reads: (string | undefined)[] = [];
+  const state = snapshot({ helpers: [helper("first")], agents: [{ id: "first", session: "s-1", kind: "explore", state: "completed", model: null, transcript: true }] });
+  const wb = new NativeWorkbench({ cwd: work, identity: assistant, snapshot: () => state, changed() {}, canInteract: () => true,
+    readTranscript: async (_id, request) => {
+      expect(request.mode).toBe("raw"); reads.push(request.cursor);
+      return { stamp: "same", rows: [{ id: "raw", kind: "raw", text: request.cursor === "next:opaque" ? "TAIL_TEXT" : "HEADER_TEXT" }],
+        ...(request.cursor === "next:opaque" ? { older: "previous:opaque" } : { newer: "next:opaque" }) };
+    } });
+  const overlay = { current: undefined as Component | undefined };
+  bindUi(wb, { custom: <T>(make: (tui: never, theme: never, keys: never, done: (value: T) => void) => Component | Promise<Component>) => {
+    const { promise, resolve } = Promise.withResolvers<T>();
+    overlay.current = make({ terminal: { rows: 30 }, requestRender() {} } as never, undefined as never, undefined as never, resolve) as Component;
+    return promise;
+  } });
+  const view = viewport(wb);
+  try {
+    wb.openAgents("helper:first");
+    expect(wb.handleInput("t")).toBeTrue(); await settle();
+    expect(plain(overlay.current!.render(80))).toContain("HEADER_TEXT");
+    overlay.current!.handleInput?.("n"); await settle();
+    expect(plain(overlay.current!.render(80))).toContain("TAIL_TEXT");
+    overlay.current!.handleInput?.("p"); await settle();
+    expect(plain(overlay.current!.render(80))).toContain("HEADER_TEXT");
+    overlay.current!.handleInput?.(KEY.esc); await settle();
+    expect(reads).toEqual([undefined, "next:opaque", "previous:opaque"]);
+    expect(plain(renderLayoutFrame(view.root, 100, 40, () => {}).lines)).toContain("REAL_EDITOR_DRAFT");
+  } finally { wb.dispose(); }
 });

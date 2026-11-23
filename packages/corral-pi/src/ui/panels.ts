@@ -1,3 +1,4 @@
+import type { TranscriptRead } from "./agent-history.ts";
 // First-party native panels over the existing InteractiveMode, never a second agent/editor loop.
 import type * as Sdk from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionUIContext, InteractiveChatPresentation, InteractiveModeOptions, SelectorComponent } from "@earendil-works/pi-coding-agent";
@@ -64,7 +65,7 @@ export interface NativePanelsOptions {
   /** The host's in-process rewind (workers with turn checkpoints); F2 offers the rewind picker while it is given. */
   readonly rewind?: RewindCall;
   readonly exportSession?: () => Promise<string>;
-  readonly readTranscript?: (id: string) => Promise<string>;
+  readonly readTranscript?: TranscriptRead;
   readonly jobControl?: JobControl;
   readonly queueControl?: QueueControl;
   readonly readTask?: () => Promise<unknown>;
