@@ -13,7 +13,7 @@ use std::rc::Rc;
 use nsh_core::prelude::*;
 
 use crate::model::Form;
-use crate::model::session::{Body, Focus, PlanDoc, PlanReview, SessionPage};
+use crate::model::session::{Body, PlanDoc, PlanReview, SessionPage};
 use crate::screens::markdown::{markdown, provide_styles};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, ButtonOptions, button};
@@ -132,8 +132,7 @@ fn review_card(
     });
     let options =
         computed(move || card.with(|c| c.as_ref().map(|c| c.options.clone()).unwrap_or_default()));
-    // The model list walks with the same arrows while it is open.
-    let keyed = computed(move || page.with(|p| p.focus == Focus::Dock && p.picker.is_none()));
+    let keyed = computed(move || page.with(SessionPage::plan_option_keys));
     let armed = Rc::new(Cell::new(true));
     let rows = options_list(app, options, armed.clone(), Some(keyed), true, None);
     let row = computed(move || card.with(|c| c.as_ref().map(|c| c.words.clone())));
@@ -171,6 +170,7 @@ fn review_card(
     });
     let foot = dynamic(move || {
         let (send, not_now, keys) = foot.get()?;
+        let show_keys = keyed.get();
         Some(untracked(|| {
             let not_now = press(
                 app,
@@ -195,7 +195,7 @@ fn review_card(
             });
             foot_row(
                 app,
-                hint(app, &keys),
+                if show_keys { hint(app, &keys) } else { None },
                 [not_now].into_iter().chain(send).collect(),
             )
         }))

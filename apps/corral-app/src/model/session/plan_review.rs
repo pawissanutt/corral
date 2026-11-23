@@ -39,6 +39,16 @@ const CAPABILITY: &str = "plan_mode_doc";
 const REVISE: &str = "revise";
 const UNKNOWN_MODEL: &str = "the execution model has not been reported";
 
+impl SessionPage {
+    /// A card in the composer's place owns the option keys even after the plan opens above it.
+    pub fn plan_option_keys(&self) -> bool {
+        self.focus == Focus::Dock
+            && self.picker.is_none()
+            && self.dock.decision.is_none()
+            && self.dock.answer.is_none()
+    }
+}
+
 /// The document of one submission: the host serves, under the review card's id, exactly the
 /// text an execute answer to that card runs, so another submission's read never answers it.
 pub fn target(session: &str, card: &str) -> DetailRef {

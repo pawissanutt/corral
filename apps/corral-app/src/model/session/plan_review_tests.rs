@@ -95,6 +95,7 @@ fn execute_sends_the_model_shown_even_if_the_feed_has_changed() {
         &feed,
     );
     let page = super::page(&feed, &state, &session, daemon_env(&feed, Form::Desktop));
+    assert!(page.plan_option_keys());
     let plan = page.dock.plan.unwrap();
     assert!(plan.model.contains("provider/first"));
     let execute = plan.options[0].action.clone().unwrap();
@@ -108,6 +109,54 @@ fn execute_sends_the_model_shown_even_if_the_feed_has_changed() {
     let sent = answers(&state.act(execute, &feed));
     let wire = serde_json::to_value(&sent[0]).unwrap();
     assert_eq!(wire["expected_model"], "provider/first");
+}
+
+#[test]
+fn opening_a_plan_above_a_composer_card_leaves_digits_with_the_composer() {
+    for kind in [CardKind::Select, CardKind::Confirm, CardKind::Question] {
+        let mut review = card(
+            "plan-1",
+            CardKind::PlanReview,
+            vec![question(vec![option("execute")], false)],
+        );
+        review.body = Some("whole plan".into());
+        let mut feed = feed_with(
+            review,
+            SessionState {
+                model: Some("provider/model".into()),
+                ..SessionState::default()
+            },
+        );
+        feed.link = crate::model::daemon::Link::Up;
+        let cards = &mut feed
+            .live
+            .get_mut(SESSION)
+            .unwrap()
+            .state
+            .as_mut()
+            .unwrap()
+            .cards;
+        let mut other = cards[0].clone();
+        other.id = "other".into();
+        other.kind = kind;
+        cards.push(other);
+        let session = Id::from(SESSION);
+        let mut state = State::default();
+        for id in ["other", "plan-1"] {
+            state.act(
+                Action::Dock(DockAction::Bring {
+                    session: session.clone(),
+                    card: id.into(),
+                }),
+                &feed,
+            );
+        }
+        let page = super::page(&feed, &state, &session, daemon_env(&feed, Form::Desktop));
+        assert_eq!(page.focus, super::Focus::Dock);
+        assert!(!page.plan_option_keys());
+        let direct = page.dock.plan.unwrap().options[0].action.clone().unwrap();
+        assert_eq!(answers(&state.act(direct, &feed))[0].card, "plan-1");
+    }
 }
 
 fn cached(card: &str, body: Option<&str>, error: Option<ClientError>) -> DetailCache {

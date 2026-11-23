@@ -376,6 +376,8 @@ pub(super) fn options_list(
         Rc::new(move || keyed.is_none_or(|keyed| keyed.get_untracked()));
     dynamic(move || {
         let options = options.get();
+        // An inactive dock binding can shadow the composer even if its handler does nothing.
+        let bind_keys = keyed.is_none_or(|keyed| keyed.get());
         if options.is_empty() {
             return None;
         }
@@ -418,7 +420,9 @@ pub(super) fn options_list(
                 .map(|choice| choice.action.clone())
                 .zip(handles)
                 .collect();
-            option_keys(app, Rc::new(actions), armed, gate, keyed.is_some());
+            if bind_keys {
+                option_keys(app, Rc::new(actions), armed, gate, keyed.is_some());
+            }
             view()
                 .role(AccessibilityRole::List)
                 .gap(px(if app.form == Form::Terminal { 0.0 } else { 2.0 }))
