@@ -233,6 +233,13 @@ pub enum DockAction {
         card: String,
         option: String,
     },
+    /// A plan review choice, bound to the model shown for execution.
+    ChoosePlan {
+        session: Id,
+        card: String,
+        option: String,
+        expected_model: Option<String>,
+    },
     /// Answer nothing: a decision card resolves as no; a docked choice folds back to its line
     /// and stays pending; a question's card closes.
     Dismiss { session: Id, card: String },
@@ -396,6 +403,17 @@ pub(super) fn send(
     answers: Vec<CardAnswer>,
     dismiss: bool,
 ) -> Vec<Effect> {
+    send_with_model(state, session, card, answers, dismiss, None)
+}
+
+pub(super) fn send_with_model(
+    state: &mut State,
+    session: &Id,
+    card: &str,
+    answers: Vec<CardAnswer>,
+    dismiss: bool,
+    expected_model: Option<String>,
+) -> Vec<Effect> {
     let key = state.ids.next_id();
     state.ui_mut(session).dock.pending.insert(
         key.clone(),
@@ -409,6 +427,7 @@ pub(super) fn send(
             id: session.to_string(),
             card: card.to_owned(),
             answers,
+            expected_model,
             dismiss,
         },
     }]
@@ -526,11 +545,21 @@ pub(super) fn act(state: &mut State, action: DockAction, feed: &Feed) -> Vec<Eff
             card,
             option,
         } => match kind(feed, session.as_str(), &card) {
-            Some(CardKind::PlanReview) => {
-                plan_review::choose(state, &session, &card, &option, feed)
-            }
+            Some(CardKind::PlanReview) => Vec::new(),
             _ => choice::choose(state, &session, &card, &option, feed),
         },
+        DockAction::ChoosePlan {
+            session,
+            card,
+            option,
+            expected_model,
+        } => {
+            if kind(feed, session.as_str(), &card) == Some(CardKind::PlanReview) {
+                plan_review::choose(state, &session, &card, &option, expected_model, feed)
+            } else {
+                Vec::new()
+            }
+        }
         DockAction::Dismiss { session, card } => fold::dismiss(state, &session, card, feed),
         DockAction::Confirm { session, yes } => choice::confirm(state, &session, yes, feed),
         DockAction::Own { session, card } => {

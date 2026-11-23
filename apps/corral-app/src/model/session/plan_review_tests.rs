@@ -41,9 +41,10 @@ fn a_plan_review_opens_the_plan_view_and_keep_planning_carries_the_feedback() {
     assert!(page.dock.choice.is_none() && page.dock.plan.is_some());
 
     let asked = state.act(
-        dock(|session, card| DockAction::Choose {
+        dock(|session, card| DockAction::ChoosePlan {
             session,
             card,
+            expected_model: None,
             option: "revise".into(),
         }),
         &feed,
@@ -65,6 +66,48 @@ fn a_plan_review_opens_the_plan_view_and_keep_planning_carries_the_feedback() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].answers[0].options, ["revise"]);
     assert_eq!(sent[0].answers[0].text.as_deref(), Some("split step 2"));
+    assert_eq!(sent[0].expected_model, None);
+}
+
+#[test]
+fn execute_sends_the_model_shown_even_if_the_feed_has_changed() {
+    let mut review = card(
+        "plan-1",
+        CardKind::PlanReview,
+        vec![question(vec![option("execute")], false)],
+    );
+    review.body = Some("whole plan".into());
+    let session = Id::from(SESSION);
+    let mut feed = feed_with(
+        review,
+        SessionState {
+            model: Some("provider/first".into()),
+            ..SessionState::default()
+        },
+    );
+    feed.link = crate::model::daemon::Link::Up;
+    let mut state = State::default();
+    state.act(
+        Action::Dock(DockAction::Bring {
+            session: session.clone(),
+            card: "plan-1".into(),
+        }),
+        &feed,
+    );
+    let page = super::page(&feed, &state, &session, daemon_env(&feed, Form::Desktop));
+    let plan = page.dock.plan.unwrap();
+    assert!(plan.model.contains("provider/first"));
+    let execute = plan.options[0].action.clone().unwrap();
+    feed.live
+        .get_mut(SESSION)
+        .unwrap()
+        .state
+        .as_mut()
+        .unwrap()
+        .model = Some("provider/second".into());
+    let sent = answers(&state.act(execute, &feed));
+    let wire = serde_json::to_value(&sent[0]).unwrap();
+    assert_eq!(wire["expected_model"], "provider/first");
 }
 
 fn cached(card: &str, body: Option<&str>, error: Option<ClientError>) -> DetailCache {
@@ -101,13 +144,20 @@ fn execute_waits_for_the_whole_plan_while_keep_planning_does_not() {
     );
     clipped.body = Some("the plan's start".into());
     clipped.body_more = true;
-    let mut feed = feed_with(clipped, SessionState::default());
+    let mut feed = feed_with(
+        clipped,
+        SessionState {
+            model: Some("provider/model".into()),
+            ..SessionState::default()
+        },
+    );
     let session = Id::from(SESSION);
     let choose = |state: &mut State, feed: &Feed, option: &str| {
         answers(&state.act(
-            Action::Dock(DockAction::Choose {
+            Action::Dock(DockAction::ChoosePlan {
                 session: Id::from(SESSION),
                 card: CARD.into(),
+                expected_model: (option != "revise").then(|| "provider/model".into()),
                 option: option.into(),
             }),
             feed,
@@ -178,9 +228,10 @@ fn execute_goes_out_only_from_the_page_showing_the_plan_document() {
     let env = daemon_env(&feed, Form::Desktop);
     let execute = |state: &mut State| {
         answers(&state.act(
-            Action::Dock(DockAction::Choose {
+            Action::Dock(DockAction::ChoosePlan {
                 session: Id::from(SESSION),
                 card: CARD.into(),
+                expected_model: Some("provider/model".into()),
                 option: "execute".into(),
             }),
             &feed,
@@ -273,9 +324,10 @@ fn a_started_execute_keeps_the_note_until_the_review_is_gone() {
         &feed,
     );
     let effects = state.act(
-        Action::Dock(DockAction::Choose {
+        Action::Dock(DockAction::ChoosePlan {
             session: session.clone(),
             card: CARD.into(),
+            expected_model: Some("provider/model".into()),
             option: "execute".into(),
         }),
         &feed,

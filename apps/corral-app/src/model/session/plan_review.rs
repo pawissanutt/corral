@@ -37,6 +37,7 @@ use super::{Action, Can, Cx, Focus, Host, PickerAction, PickerKind, SessionPage,
 const CAPABILITY: &str = "plan_mode_doc";
 /// The option that returns to planning: its text is the owner's feedback.
 const REVISE: &str = "revise";
+const UNKNOWN_MODEL: &str = "the execution model has not been reported";
 
 /// The document of one submission: the host serves, under the review card's id, exactly the
 /// text an execute answer to that card runs, so another submission's read never answers it.
@@ -276,12 +277,14 @@ pub(super) fn review(cx: &Cx<'_>, inert: Option<String>) -> Option<PlanReview> {
     let draft = cx.ui.dock.drafts.get(&brief.id);
     let picks = draft.map(|draft| draft.picks(0)).unwrap_or_default();
     let question = card.and_then(|card| card.questions.first());
+    let model = cx.model().filter(|model| !model.trim().is_empty());
     let mut options = question.map_or_else(Vec::new, |question| {
         choice::options(&brief.id, question, picks, enabled, |option| {
-            Action::Dock(DockAction::Choose {
+            Action::Dock(DockAction::ChoosePlan {
                 session: cx.id.clone(),
                 card: brief.id.clone(),
                 option: option.to_owned(),
+                expected_model: model.as_ref().filter(|_| option != REVISE).cloned(),
             })
         })
     });
@@ -292,7 +295,9 @@ pub(super) fn review(cx: &Cx<'_>, inert: Option<String>) -> Option<PlanReview> {
             Some((Hue::Held, _)) => "the whole plan cannot be read here; answer in the terminal",
             _ => why,
         });
-    let unread = hidden(cx.ui, &brief.id).or(unread);
+    let unread = hidden(cx.ui, &brief.id)
+        .or(unread)
+        .or_else(|| model.is_none().then_some(UNKNOWN_MODEL));
     if let Some(why) = unread {
         for option in options
             .iter_mut()
@@ -323,10 +328,7 @@ pub(super) fn review(cx: &Cx<'_>, inert: Option<String>) -> Option<PlanReview> {
         id: format!("dock-{}", brief.id),
         card: brief.id.clone(),
         title: question.map_or_else(|| brief.title.clone(), |question| question.text.clone()),
-        model: format!(
-            "Model: {}",
-            cx.model().unwrap_or_else(|| "not reported".into())
-        ),
+        model: format!("Model: {}", model.as_deref().unwrap_or("not reported")),
         change: Action::Picker(PickerAction::Open {
             session: cx.id.clone(),
             kind: PickerKind::Model,
@@ -383,6 +385,7 @@ pub(super) fn choose(
     session: &Id,
     card_id: &str,
     option: &str,
+    expected_model: Option<String>,
     feed: &Feed,
 ) -> Vec<Effect> {
     let Some(card) = dock::card(feed, session.as_str(), card_id) else {
@@ -400,6 +403,7 @@ pub(super) fn choose(
         .then(|| {
             hidden(state.ui(session.as_str()), card_id)
                 .or_else(|| unread(feed, session.as_str(), card))
+                .or_else(|| expected_model.is_none().then_some(UNKNOWN_MODEL))
         })
         .flatten();
     if let Some(why) = found.unavailable.as_deref().or(unread) {
@@ -424,7 +428,14 @@ pub(super) fn choose(
         ui.focus = Focus::Dock;
         return Vec::new();
     }
-    dock::send(state, session, card_id, answer(option, &text), false)
+    dock::send_with_model(
+        state,
+        session,
+        card_id,
+        answer(option, &text),
+        false,
+        expected_model.filter(|_| option != REVISE),
+    )
 }
 
 /// The owner's feedback or note; an option waiting for it stays chosen.

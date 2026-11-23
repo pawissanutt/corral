@@ -228,6 +228,15 @@ pub(super) fn answer(
         "revise" => "delivered",
         other => return Err(format!("{other} is not an option of this review")),
     };
+    if status == "started" {
+        let current = feed
+            .assistants
+            .get(id.as_str())
+            .and_then(|row| row.model.as_ref());
+        if current.is_none() || current != answer.expected_model.as_ref() {
+            return Err("The execution model changed or is unknown; review the model again".into());
+        }
+    }
     host.pending.remove(index);
     let parts = parts(host)?;
     parts.plan_mode = match (status, parts.plan_mode.take()) {
