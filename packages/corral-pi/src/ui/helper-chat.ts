@@ -136,12 +136,12 @@ export function mailSteers(mail: readonly AgentMail[], name: (id: string, hue: n
 }
 /**
  * What the retention limit took from a conversation: the count of earlier messages dropped when it is known
- * (`12 earlier messages were dropped by the retention limit`), otherwise that some content was omitted.
+ * without implying that the source recording has been truncated.
  */
 export function retentionNote(source: { readonly dropped?: number }): string {
   const dropped = source.dropped ?? 0;
-  return dropped > 0 ? `${dropped} earlier ${dropped === 1 ? "message was" : "messages were"} dropped by the retention limit`
-    : "Some content was omitted by the retention limit";
+  return dropped > 0 ? `${dropped} earlier ${dropped === 1 ? "message is" : "messages are"} not shown in this live preview`
+    : "Some content is not shown in this live preview";
 }
 /** The call-site hint of a Code Mode script: the tools it calls, in order of first use (`read, bash`). */
 function callSites(code: string): string {
