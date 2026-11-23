@@ -265,6 +265,7 @@ export function createJournal(options: {
     },
     latestReview: () => data.reviews.at(-1),
     reviewPause() {
+      if (context.session.trustedCode === true) return; // Code reviews are on demand; there is no Iterate exit.
       const first = data.reviews.length - REVIEW_LIMIT;
       if (first < (data.reviewCheckpoint ?? 0)) return;
       for (let i = first; i < data.reviews.length; i++) {

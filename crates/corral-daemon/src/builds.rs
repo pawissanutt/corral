@@ -49,6 +49,8 @@ struct Record {
     here: bool,
     #[serde(default)]
     bare: bool,
+    #[serde(default)]
+    trusted_code: bool,
     created: String,
     updated: String,
     session_file: Option<PathBuf>,
@@ -147,7 +149,8 @@ impl Build {
         let Some(record) = read_json::<Record>(&dir.join("session.json"))? else {
             return Ok(None);
         };
-        if record.bare || record.id != id {
+        // Trusted CLI sessions must never be attached or resumed as managed Builds.
+        if record.bare || record.trusted_code || record.id != id {
             return Ok(None);
         }
         if !record.workspace_root.as_ref().is_some_and(|workspace| {

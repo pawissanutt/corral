@@ -70,6 +70,17 @@ function fixture(tap?: (args: readonly string[], result: Awaited<ReturnType<Run>
     async close() { await evidence.close(); exit.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
+test("Code runs project gates from the checkout root when launched in a subdirectory", async () => {
+  const f = fixture();
+  try {
+    const nested = join(f.context.session.repoRoot, "nested");
+    mkdirSync(nested);
+    f.setGate(["test -f source.txt"]);
+    const context = { ...f.context, session: { ...f.context.session, trustedCode: true as const, worktree: nested } };
+    expect((await verifyBuild(context, f.run, f.journal)).result).toBe("pass");
+  } finally { await f.close(); }
+});
+
 async function waitForFile(path: string): Promise<void> {
   const deadline = performance.now() + 4000;
   while (!existsSync(path)) {

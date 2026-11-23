@@ -112,7 +112,8 @@ export async function checkGateSource(git: Run, worktree: string, head: string):
 
 export async function verifyBuild(context: BuildContext, git: Run, journal: BuildJournal, signal?: AbortSignal, watch?: GateWatch,
   pin?: GatePin): Promise<BuildGateResult> {
-  const { worktree } = context.session;
+  // Code's interactive cwd can be nested; configured commands apply to the entire project.
+  const worktree = context.session.trustedCode === true ? context.session.repoRoot : context.session.worktree;
   signal?.throwIfAborted();
   const project = buildProject(context.session);
   const inputFingerprint = gateInputFingerprint(project);

@@ -343,6 +343,8 @@ test("the repair limit survives resume and all reviewer launch calls until the o
     verdict: "changes", summary: "Input still fails", head: prior, at: 1000,
     findings: [{ severity: "major", text: "Handle empty input." }],
   } }, prior, base);
+  const codeContext = { ...context, session: { ...context.session, trustedCode: true as const } };
+  expect(createJournal({ ...options, context: codeContext }).reviewPause()).toBeUndefined();
   const starts: string[] = [];
   const controls = createBuildControls({
     context, git: f.run, sdk: {} as typeof Sdk, agentDir: f.ctx.dir, localTools: () => [],
