@@ -7,7 +7,12 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 export type CodeHandoffRequest = { kind: "new"; seed?: readonly SessionEntry[]; draft?: string } | { kind: "resume"; id: string };
 export type CodeHandoff = (request: CodeHandoffRequest) => Promise<void>;
 
-export interface CodeBootstrap { seed?: string; draft?: string }
+export interface CodeBootstrap {
+  seed?: string;
+  draft?: string;
+  /** Fresh handoffs inherit workspace identity; null preserves a standalone session. */
+  workspaceRoot?: string | null;
+}
 // The private parent/child IPC channel carries this data, never argv, env or terminal input.
 export interface CodeLaunch extends CodeBootstrap {
   cwd: string;
@@ -90,7 +95,7 @@ export async function superviseCode(command: readonly string[], first: CodeLaunc
     child.on("message", (message: { type?: string; next?: CodeLaunch }) => {
       if (message?.type === "ready" && !receivedReady) {
         receivedReady = true;
-        child.send({ seed: current.seed, draft: current.draft }, () => {});
+        child.send({ seed: current.seed, draft: current.draft, workspaceRoot: current.workspaceRoot }, () => {});
       } else if (message?.type === "handoff") {
         const accepted = !stopping && receivedReady && !next && message.next;
         if (accepted) next = accepted;

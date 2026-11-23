@@ -47,7 +47,7 @@ function resolvedRepo(path: string): string | undefined {
 }
 
 export function parseBuildFlags(argv: readonly string[], assets: string, env = process.env,
-  cwd = process.cwd(), command: "build" | "code" = "build"): { launch: BuildLaunchOptions; local: LocalBuildOptions; startupModel: string | null } {
+  cwd = process.cwd(), command: "build" | "code" = "build", inheritedWorkspace?: string | null): { launch: BuildLaunchOptions; local: LocalBuildOptions; startupModel: string | null } {
   rejectRemovedModelOptions(argv);
   const options = {
     ...modelFlags, "data-dir": { type: "string" }, socket: { type: "string" }, corral: { type: "string" },
@@ -70,7 +70,8 @@ export function parseBuildFlags(argv: readonly string[], assets: string, env = p
     throw new Error(git.error?.message ?? (git.stderr?.trim() || `git exited with status ${git.status}`));
   }
   const codeOutsideGit = trustedCode && git !== undefined && git.status !== 0;
-  const workspaceRoot = resuming || codeOutsideGit ? undefined : findWorkspaceRoot(env, cwd);
+  const workspaceRoot = resuming || codeOutsideGit ? undefined
+    : trustedCode && inheritedWorkspace !== undefined ? inheritedWorkspace ?? undefined : findWorkspaceRoot(env, cwd);
   const repoRoot = git?.status === 0 ? git.stdout.trim() : trustedCode && !resuming ? realpathSync(cwd) : cwd;
   const projects = workspaceRoot && readWorkspaceToml(workspaceRoot, "corral.toml").projects as Record<string, { path?: string }> | undefined;
   const project = values.project ?? (workspaceRoot && projects ? Object.entries(projects).find(([, entry]) =>

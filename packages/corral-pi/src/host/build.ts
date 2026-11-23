@@ -159,7 +159,7 @@ export async function buildCommand(argv: readonly string[], assets: string, comm
       } else await pruneBuilds(prune.dataRoot, prune.dryRun, line => process.stdout.write(`${line}\n`));
       return;
     }
-    const parsed = parseBuildFlags(argv, assets, process.env, process.cwd(), command);
+    const parsed = parseBuildFlags(argv, assets, process.env, process.cwd(), command, bootstrap?.workspaceRoot);
     let { launch } = parsed;
     const { local, startupModel } = parsed;
     resume = launch.resume;
@@ -260,7 +260,7 @@ export async function buildCommand(argv: readonly string[], assets: string, comm
           const selector = `${fallback.provider}/${fallback.model}`;
           if (selector !== activeModel) args.push("--fallback", selector);
         }
-        return { cwd: config.cwd, args, draft: request.draft,
+        return { cwd: config.cwd, args, draft: request.draft, workspaceRoot: record.workspaceRoot ?? null,
           seed: request.seed ? serializeCodeSeed(request.seed, request.draft) : undefined };
       } : undefined;
     let handingOff = false;

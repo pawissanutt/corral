@@ -21,6 +21,11 @@ test("Code preserves invocation cwd in an unborn Git checkout", () => {
     const code = parseBuildFlags([], "/assets", {}, cwd, "code");
     expect(code.launch).toMatchObject({ repoRoot: root, here: true, trustedCode: true });
     expect(code.local.codeCwd).toBe(cwd);
+    // A terminal may have resumed into a different workspace (or an unbound Code session).
+    const ambient = { CORRAL_NEXT_ROOT: join(root, "original-workspace") };
+    const next = (workspace: string | null) => parseBuildFlags([], "/assets", ambient, cwd, "code", workspace).launch;
+    expect(next(root).workspaceRoot).toBe(root);
+    expect(next(null).workspaceRoot).toBeUndefined();
     expect(prepareCodeCheckout(code.launch.repoRoot, code.local.codeCwd!)).toEqual({
       worktree: cwd, base: null, branch: "main", baseBranch: "main", repository: true,
     });
