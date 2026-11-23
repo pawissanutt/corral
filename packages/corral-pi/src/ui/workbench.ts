@@ -615,11 +615,12 @@ export class NativeWorkbench {
     const docked = controller.dialog()?.key.startsWith("exit:") ?? false;
     const status = exitStatus(build.exit.phase, docked);
     const place = session.here ? `checkout (${plainLabel(session.branch ?? "detached")})` : plainLabel(relative(session.repoRoot, session.worktree) || ".");
-    const policy = session.bare ? barePolicy(session) : POLICY[build.settings.exitPolicy];
+    const policy = session.trustedCode ? { long: "direct checkout · no managed exit", short: "direct checkout" }
+      : session.bare ? barePolicy(session) : POLICY[build.settings.exitPolicy];
     const elsewhere = r.scopeRequired || this.realRoot(r.root) !== this.realRoot(session.worktree);
     const scope = elsewhere ? `Changes: ${this.scopeLabel} · ` : "";
     return {
-      title: `build · ${plainLabel(build.record.title)}`, state: snapshot.streaming || live ? "Working" : "Idle",
+      title: `${session.trustedCode ? "code · trusted" : "build"} · ${plainLabel(build.record.title)}`, state: snapshot.streaming || live ? "Working" : "Idle",
       context: { left: `${plainLabel(session.project ?? basename(session.repoRoot))} · ${place}`, right: scope + policy.long, rightShort: scope + policy.short },
       ...(asking ? { attention: { text: `▲ ${asking} needs you`, short: `▲ ${asking}`, tone: "warning" as const } } : {}),
       ...(status ? { status } : {}),
@@ -805,7 +806,7 @@ export class NativeWorkbench {
     // An empty Chat says who receives the message and how to send, find the keys and quit; it goes with the first row.
     const send = piKey("tui.input.submit"), quit = piKey("app.clear");
     const emptyChat: Component = { render: width => emptyChatLines({ identity: this.options.identity, ...(send ? { send: keyLabel(send) } : {}),
-      ...(quit ? { quit: keyLabel(quit) } : {}) }, width), invalidate() {} };
+      ...(quit ? { quit: keyLabel(quit) } : {}), trustedCode: this.options.snapshot()?.build?.session.trustedCode === true }, width), invalidate() {} };
     const chrome = this.chrome();
     const views = new class extends VStack {
       // Laid out by height only: the rail's row beside it never needs this stack's natural height.

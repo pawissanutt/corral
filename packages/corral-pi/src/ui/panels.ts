@@ -1214,7 +1214,9 @@ export class NativePanels implements PanelSurface {
         () => ready() ?? (ui.fleet.snapshot().children.some(steerable) ? undefined : "no agent is running")),
       ...build.questions().map(child => action("message", `build.answer.${child.id}`, `Answer ${plainLabel(child.id)}'s question`, "",
         () => { build.open("question", child.id); })),
-      action("message", "build.finish", "Finish: choose how this leaves the session", "", () => { build.openFinish(); }, () => ready() ?? build.finishUnavailable()),
+      ...(build.state()?.session.trustedCode ? [] : [
+        action("message", "build.finish", "Finish: choose how this leaves the session", "", () => { build.openFinish(); }, () => ready() ?? build.finishUnavailable()),
+      ]),
     ];
     if (!board) return { message };
     return {
@@ -1270,7 +1272,7 @@ export class NativePanels implements PanelSurface {
     const identity = this.options.identity, answerKey = this.questions ? questionsKey() : undefined;
     const groups = keyGroups({ taskBound: !!identity.task,
       jobs: this.snapshot()?.jobs != null, queueControl: this.queue.controllable, lifecycle: !!identity.task,
-      sidebarKey: this.sidebarToggle, ...(answerKey ? { questionsKey: answerKey } : {}), ...(this.build ? { build: true, board: !!this.options.build?.board } : {}) });
+      sidebarKey: this.sidebarToggle, ...(answerKey ? { questionsKey: answerKey } : {}), ...(this.build ? { build: true, board: !!this.options.build?.board, trustedCode: this.build.state()?.session.trustedCode === true } : {}) });
     this.overlay = "keys"; this.refresh();
     let data: string | undefined;
     try {

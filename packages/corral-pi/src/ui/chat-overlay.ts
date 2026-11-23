@@ -97,14 +97,17 @@ export function jumpLabel(newRows: number, key: string | undefined): string {
 
 export interface EmptyChat {
   readonly identity: HostIdentity;
+  readonly trustedCode?: boolean;
   /** Key labels from Pi's bindings; an unbound key leaves its hint out. */
   readonly send?: string; readonly quit?: string;
 }
 
 /** The empty Chat's sentences for a role: the bold lead, then muted paragraphs (the mock's wording for build). */
-function emptyCopy(identity: HostIdentity): { readonly lead: string; readonly rest: string; readonly more?: string } {
+function emptyCopy(identity: HostIdentity, trustedCode: boolean): { readonly lead: string; readonly rest: string; readonly more?: string } {
   switch (identity.role) {
     case "build":
+      if (trustedCode) return { lead: "Trusted code session.", rest: "Describe what to build and press Enter.",
+        more: "Work happens directly in this checkout. There is no managed branch exit." };
       return { lead: "Build session.", rest: "Describe what to build and press Enter.",
         more: "Independent slices run in parallel in one worktree, each on the profile that fits it. Nothing is filed on the board until you choose an exit." };
     case "assistant":
@@ -119,11 +122,11 @@ function emptyCopy(identity: HostIdentity): { readonly lead: string; readonly re
  * rest, then a muted line with how to send, the keys list and how to quit (`/finish` ends a build).
  */
 export function emptyChatLines(input: EmptyChat, width: number): string[] {
-  const copy = emptyCopy(input.identity), inner = Math.max(1, width - 2);
+  const copy = emptyCopy(input.identity, input.trustedCode === true), inner = Math.max(1, width - 2);
   const wrap = (text: string) => new Text(text, 0, 0).render(inner).map(line => " " + line);
   const keys = [
     input.send && `${input.send} send`, "F1 keys",
-    input.identity.role === "build" && "/finish ends the build",
+    input.identity.role === "build" && !input.trustedCode && "/finish ends the build",
     input.quit && `${input.quit} twice quits`,
   ].filter((item): item is string => typeof item === "string");
   return [

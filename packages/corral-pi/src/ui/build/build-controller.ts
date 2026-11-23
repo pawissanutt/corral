@@ -365,6 +365,7 @@ export class BuildController implements BuildCardSource {
    * episode's, so refusing on it would let the first Finish open and every Finish after an Iterate fail.
    */
   finishUnavailable(): string | undefined {
+    if (this.host.state()?.session.trustedCode) return "trusted code sessions do not have a managed branch exit";
     const ui = this.host.ui, exit = ui.exit.state(), phase = exit.phase;
     if (phase === "pending") return undefined;
     // A rebase or gate while the candidate is prepared lands nothing: Land only fast-forwards a ready candidate.

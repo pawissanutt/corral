@@ -260,9 +260,10 @@ test("F1 lists each view's F-key with its Alt+digit, and the Scroll and Exit gro
   const views = groups.find(group => group.title === "Views")!.rows.map(row => row.key);
   expect(views).toEqual(["F9/Alt+1", "F8/Alt+2", "F7/Alt+3"]);
   for (const title of ["Scroll", "Exit"]) expect(groups.some(group => group.title === title)).toBeTrue();
-  const exit = (build: boolean) => keyGroups({ taskBound: false, jobs: false, queueControl: false, lifecycle: false, build })
+  const exit = (build: boolean, trustedCode = false) => keyGroups({ taskBound: false, jobs: false, queueControl: false, lifecycle: false, build, trustedCode })
     .find(group => group.title === "Exit")!.rows.map(row => row.key);
   expect(exit(true)).toContain("/finish"); expect(exit(false)).not.toContain("/finish");
+  expect(exit(true, true)).not.toContain("/finish");
   expect(exit(false)).toContain("Ctrl+D");
   // Exit rows are reference only: Enter in F1 never replays Ctrl+C or Ctrl+D.
   expect(groups.find(group => group.title === "Exit")!.rows.every(row => row.data === undefined)).toBeTrue();

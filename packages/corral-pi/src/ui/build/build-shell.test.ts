@@ -62,7 +62,7 @@ const asking = (id: string, askedAt: number) => child(id, "needs", {
 });
 
 /** A BuildUi over plain state: tests change the state, then `fire()` notifies the panels as the host does. `bare` has no board and no project. */
-function fakeBuild(worktree: string, base = "a", bare = false) {
+function fakeBuild(worktree: string, base = "a", bare = false, trustedCode = false) {
   const s = {
     children: [] as ChildSnapshot[], target: "parent", exit: { phase: "none" } as ExitState, tasks: [] as BoardTaskStatus[],
     steer: true, calls: [] as string[], listeners: new Set<() => void>(),
@@ -96,7 +96,7 @@ function fakeBuild(worktree: string, base = "a", bare = false) {
     setTarget: target => { s.target = target === "parent" || live(target) ? target : "parent"; },
   };
   const session: BuildSessionRecord = { version: 1, id: "B-1", name: "save-slots", created: "", updated: "", repoRoot: work, worktree,
-    branch: "build/save-slots", base, here: false, ...(bare ? { bare: true, baseBranch: "main" } : { project: "mitiplay", workspaceRoot: work }) };
+    branch: "build/save-slots", base, here: false, ...(trustedCode ? { trustedCode: true } : {}), ...(bare ? { bare: true, baseBranch: "main" } : { project: "mitiplay", workspaceRoot: work }) };
   const state = (): BuildPanelState => ({ session, settings: { exitPolicy: "gate", maxParallel: 3, profiles: [] },
     fleet: ui.fleet.snapshot(), target: s.target, exit: s.exit, record: RECORD, board: s.tasks });
   return { s, ui, state, fire: () => { for (const listener of [...s.listeners]) listener(); } };
@@ -201,6 +201,20 @@ test("F10 opens Board in a build session, and a click on the Board tab does the 
     const x = column(frame, row, "Board");
     expect(x).toBeGreaterThan(0);
     expect(click(frame, x, row)).toBeTrue(); expect(h.panels.workbench.view).toBe("board");
+  } finally { h.stop(); }
+});
+
+test("trusted code is marked and keeps board actions without a managed finish", () => {
+  const h = shell(140, 46, fakeBuild(work, "a", false, true));
+  try {
+    const text = h.frame().lines.map(stripTerminalSequences).join("\n");
+    expect(text).toContain("code · trusted · Save slots");
+    expect(text).not.toContain("/finish");
+    expect(text).not.toContain("exit policy:");
+    const actions = h.panels.actions().map(action => action.id);
+    expect(actions).not.toContain("build.finish");
+    expect(actions).toContain("build.plan.draft");
+    expect(actions).toContain("build.target");
   } finally { h.stop(); }
 });
 

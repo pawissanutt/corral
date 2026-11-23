@@ -353,7 +353,7 @@ export function footerRow(hints: readonly Hint[], tier: ChromeTier, width: numbe
  */
 export function keyGroups(mode: {
   readonly taskBound: boolean; readonly jobs: boolean;
-  readonly queueControl: boolean; readonly lifecycle: boolean; readonly build?: boolean; readonly board?: boolean;
+  readonly queueControl: boolean; readonly lifecycle: boolean; readonly build?: boolean; readonly board?: boolean; readonly trustedCode?: boolean;
   readonly sidebarKey?: KeyId; readonly questionsKey?: KeyId;
 }): KeyGroup[] {
   const row = (binding: string, label: string): KeyRow => {
@@ -480,7 +480,7 @@ export function keyGroups(mode: {
     ) });
   }
   groups.push({ title: "Exit", rows: rows(
-    build && info("/finish", "Choose what happens to this build branch"),
+    build && !mode.trustedCode && info("/finish", "Choose what happens to this build branch"),
     info("/questions", "Answer owner questions the agent deferred"),
     piInfo("app.clear", "Clear the draft; twice in a row quits"),
     piInfo("app.exit", "Quit, when the draft is empty"),

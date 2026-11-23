@@ -71,3 +71,11 @@ test("the empty Chat names who receives the message per role, with send, F1 and 
     expect(text(role)).toContain("⏎ send"); expect(text(role)).toContain("F1 keys"); expect(text(role)).toContain("Ctrl+C twice quits");
   }
 });
+
+test("trusted code empty Chat explains direct checkout without a managed exit hint", () => {
+  const text = emptyChatLines({ identity: { store: "s", project: "demo", role: "build" }, trustedCode: true }, 90)
+    .map(stripTerminalSequences).join("\n");
+  expect(text).toContain("Trusted code session.");
+  expect(text).toContain("directly in this checkout");
+  expect(text).not.toContain("/finish");
+});
