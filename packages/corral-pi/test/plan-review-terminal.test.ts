@@ -1,6 +1,8 @@
 // The terminal's plan review through a real InteractiveMode and editor: only the provider is scripted.
 import { expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
+import { registerCards } from "../src/host/remote/cards.ts";
+import { RemoteRegistry } from "../src/host/remote/registry.ts";
 import { fixtureTransport } from "./fixtures/auth/index.ts";
 import { startPanelHost, type PanelHost } from "./support/panel-host.ts";
 
@@ -64,6 +66,15 @@ test("the terminal plan review names the model again when it is changed from the
       try { expect(() => plan.choose("execute")).toThrow("Wait for model selection"); }
       finally { release.resolve(); await selected; }
     } finally { runtime.checkAuth = auth; }
+    // A second device still displaying the old model cannot start even a clean reset.
+    const manager = session.sessionManager, leaf = manager.getLeafId();
+    const registry = new RemoteRegistry();
+    registerCards(registry, { dialogs: h.host.dialogs, ready: () => true, beforeQuestion: async () => {} });
+    const approve = registry.get("card_answer")!;
+    await expect(approve({ card: plan.review, answers: [{ options: ["execute_clean"] }],
+      expected_model: `${original?.provider}/${original?.id}` })).rejects.toThrow("Review the current model");
+    expect(manager.getLeafId()).toBe(leaf);
+    expect(plan.phase).toBe("review");
     // Then the review on screen names that model, and `e` executes on what it shows.
     await frame(h, `revision 1 · ${target.provider}/${target.id}`);
     fixtureTransport().script([{ text: "Executing." }]);

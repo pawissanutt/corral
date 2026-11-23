@@ -5,7 +5,7 @@ import {
 
 type DialogOptions = NonNullable<Parameters<ExtensionUIContext["select"]>[2]>;
 export type CardDraft = Omit<CardEntry["card"], "id" | "opened_at" | "expires_at">;
-export type AnswerSource = { source: "terminal" } | { source: "remote"; device?: string };
+export type AnswerSource = { source: "terminal" } | { source: "remote"; device?: string; expectedModel?: string };
 type DialogSettlement =
   | { kind: "answered"; answers: readonly CardAnswer[]; by: AnswerSource }
   | { kind: "cancelled"; reason: "dismissed" | "expired" | "closed"; by?: AnswerSource };

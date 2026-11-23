@@ -134,8 +134,11 @@ export function briefedCards(sorted: readonly CardEntry[], limit = 8): CardBrief
   return shown.map(entry => cardBrief(entry.card));
 }
 
-function parseAnswer(args: Record<string, unknown>): { card: string; answers: CardAnswer[]; dismiss: boolean; device?: string } {
-  const { card, answers = [], dismiss = false, device } = args;
+function parseAnswer(args: Record<string, unknown>) {
+  const { card, answers = [], dismiss = false, device, expected_model: expectedModel } = args;
+  if (expectedModel !== undefined && (typeof expectedModel !== "string" || !expectedModel || Buffer.byteLength(expectedModel) > 512)) {
+    throw new BridgeRefusal("bad_input", "expected_model must be a nonempty model ID of at most 512 bytes");
+  }
   if (device !== undefined && (typeof device !== "string" || Buffer.byteLength(device) > 64)) {
     throw new BridgeRefusal("bad_input", "device must be a string of at most 64 bytes");
   }
@@ -152,7 +155,7 @@ function parseAnswer(args: Record<string, unknown>): { card: string; answers: Ca
     }
     parsed.push(text === undefined ? { options } : { options, text });
   }
-  return { card, answers: parsed, dismiss, device };
+  return { card, answers: parsed, dismiss, device, expectedModel };
 }
 
 export function registerCards(registry: RemoteRegistry, source: {
@@ -176,10 +179,10 @@ export function registerCards(registry: RemoteRegistry, source: {
     }
     return { cards };
   } });
-  registry.register({ name: "card_answer", parse: parseAnswer, run: async ({ card, answers, dismiss, device }) => {
+  registry.register({ name: "card_answer", parse: parseAnswer, run: async ({ card, answers, dismiss, device, expectedModel }) => {
     if (!source.ready()) throw new BridgeRefusal("host_not_ready", "session is not accepting card answers");
     const status = await source.dialogs.resolve(card, answers, dismiss,
-      { source: "remote", ...(device === undefined ? {} : { device }) }, source.beforeQuestion);
+      { source: "remote", ...(device === undefined ? {} : { device }), ...(expectedModel === undefined ? {} : { expectedModel }) }, source.beforeQuestion);
     return { status };
   } });
 }

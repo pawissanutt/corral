@@ -11,6 +11,7 @@ import { BridgeRefusal, SESSION_PART_MAX } from "../bridge/protocol.ts";
 import { real, resolveToolPath } from "../roles/assistant/paths.ts";
 import type { PlanContext, PlanPrompts } from "../roles/types.ts";
 import { cardQuestion, invalidAnswer, singleAnswer, type AnswerStatus, type CardAnswer, type CardEntry } from "./remote/cards.ts";
+import type { AnswerSource } from "./remote/dialogs.ts";
 import { clipText, cursorOffset, fingerprintPart, jsonBytes, partCursor } from "./remote/state.ts";
 
 export const PLAN_ENTRY = "corral_plan_mode";
@@ -403,15 +404,18 @@ export class PlanMode {
         meta: [`revision ${record.revision}`, this.host.model()].filter(Boolean).join(" · "),
         ...(body === undefined ? {} : { body }), opened_at: new Date(record.at).toISOString(),
         questions: [cardQuestion("How should this plan proceed?", PLAN_OPTIONS.map(option => ({ ...option, destructive: false })), true)] },
-      answer: (answers, dismiss) => dismiss ? "dismissed" : this.answer(singleAnswer(answers)),
+      answer: (answers, dismiss, _before, by) => dismiss ? "dismissed" : this.answer(singleAnswer(answers), by),
     };
   }
 
-  private answer({ options, text }: CardAnswer): AnswerStatus | Promise<AnswerStatus> {
+  private answer({ options, text }: CardAnswer, by?: AnswerSource): AnswerStatus | Promise<AnswerStatus> {
     const choice = options[0];
     // Feedback typed without picking an option can only mean the plan is not approved yet.
     if (choice === undefined && text?.trim()) return this.choose("revise", text);
     if (choice !== "revise" && !Object.hasOwn(EXECUTE, choice ?? "")) invalidAnswer("choose one of the listed plan actions");
+    if (choice !== "revise" && by?.source === "remote" && (!by.expectedModel || by.expectedModel !== this.host.model())) {
+      throw new BridgeRefusal("plan_mode_unavailable", "Review the current model before executing; the approval did not match it");
+    }
     return this.choose(choice as PlanChoice, text);
   }
 
