@@ -26,6 +26,7 @@ mod sample;
 mod session_ops;
 mod sessions;
 mod system;
+mod system_review;
 mod workspace;
 
 use crate::model::daemon::*;

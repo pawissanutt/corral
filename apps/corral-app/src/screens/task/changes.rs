@@ -28,15 +28,14 @@ enum Shown {
 /// The Changes tab of task `id`: Diff or Impact (`seg-changes-<n>`).
 pub(crate) fn changes(app: AppState, id: Id) -> AnyElement {
     let form = app.form;
-    {
-        let id = id.clone();
-        effect(move || untracked(|| app.impact.update(|state| state.follow(id.as_str()))));
-    }
     let switch = seg(
         app,
         &View::ALL,
         move || app.impact.with(|state| state.view),
-        move |view| app.impact_act(Action::View(view)),
+        {
+            let id = id.clone();
+            move |view| app.impact_act(id.as_str(), Action::View(view))
+        },
         "seg-changes",
     );
     let showing = computed(move || app.impact.with(|state| state.view));

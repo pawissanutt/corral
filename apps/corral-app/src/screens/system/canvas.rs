@@ -282,7 +282,9 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
             continue;
         };
         let picked = state.picked == Some(Pick::Node(card.node.clone()));
-        p = p.global_alpha(if lit.card(card) || picked { 1.0 } else { DIM });
+        // A task's pick may be an untouched card; it is shown whole all the same.
+        let shown = lit.card(card) || (picked && marks.is_some());
+        p = p.global_alpha(if shown { 1.0 } else { DIM });
         let mark = marks.map(|marks| marks.get(&card.node).copied());
         p = paint_card(p, card, placed.rect, &view, scene, picked, mark);
     }

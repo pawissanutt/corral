@@ -29,11 +29,16 @@ impl AppState {
 }
 
 impl AppState {
-    pub fn impact_act(&self, action: crate::model::review::impact::Action) {
-        self.impact.update(|state| state.act(action));
+    /// An action on task `task`'s Impact; another task's pick is let go first.
+    pub fn impact_act(&self, task: &str, action: crate::model::review::impact::Action) {
+        self.impact.update(|state| {
+            state.follow(task);
+            state.act(action);
+        });
     }
 
-    /// Activity › System scoped to `project`, at its project level with `node` selected.
+    /// Activity › System scoped to `project` (the one scope every place shares, as the
+    /// System page's own project picker sets it), at its project level with `node` selected.
     pub fn open_in_system(&self, project: Id, node: Option<Node>) {
         self.set_scope(Scope::Project(project.clone()));
         self.system.update(|state| {

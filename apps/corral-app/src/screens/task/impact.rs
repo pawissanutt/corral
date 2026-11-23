@@ -10,7 +10,8 @@
 use nsh_core::prelude::*;
 
 use crate::model::review::impact::{
-    self, Action, HEADING, Item, LEAD, NO_ANCHOR, OPEN_IN_SYSTEM, Section, Shown, Sign, TOUCHED,
+    self, Action, HEADING, Item, LEAD, LEGEND_DRAWN, LEGEND_LISTED, NO_ANCHOR, NO_MODULE,
+    OPEN_IN_SYSTEM, READING, Section, Shown, Sign, TOUCHED,
 };
 use crate::model::system::marks::Marks;
 use crate::model::{Form, Hue, Id};
@@ -25,8 +26,12 @@ use crate::ui::tokens::{Token, color};
 
 use super::parts::{block, quiet};
 
-const READING: &str = "Reading the change's impact…";
-const LEGEND: &str = "Ringed: touched, with lines added and removed. Dashed ring: holds dependents. Dimmed: untouched.";
+/// The task whose Impact this is, and its project.
+#[derive(Clone)]
+struct At {
+    task: Id,
+    project: Id,
+}
 
 /// The Impact view of task `id`.
 pub(crate) fn impact(app: AppState, id: Id) -> AnyElement {
@@ -35,6 +40,10 @@ pub(crate) fn impact(app: AppState, id: Id) -> AnyElement {
         computed(move || vec![impact::request(id.as_str())])
     };
     super::keep::keep_details(app, target, None);
+    let task = {
+        let id = id.clone();
+        computed(move || id.clone())
+    };
     // The pick is read by each row and by the map, so selecting does not rebuild the list
     // (and lose the keyboard's place in it).
     let shown = computed(move || {
@@ -62,19 +71,20 @@ pub(crate) fn impact(app: AppState, id: Id) -> AnyElement {
                 dynamic(move || quiet(app, said.get().unwrap_or_default())).into_element()
             });
         }
-        untracked(|| drawn(app, shown, scene, marks))
+        untracked(|| drawn(app, task, shown, scene, marks))
     });
     view().test_id("task-impact").child(body).into_element()
 }
 
 fn drawn(
     app: AppState,
+    task: Memo<Id>,
     shown: Memo<Shown>,
     scene: Memo<Option<crate::model::system::scene::Scene>>,
     marks: Memo<Marks>,
 ) -> AnyElement {
     let form = app.form;
-    let host = Host::Impact(marks);
+    let host = Host::Impact(marks, task);
     let map = match form {
         Form::Desktop => canvas::map(app, scene, host),
         Form::Phone | Form::Terminal => tree::tree(app, scene, host),
@@ -100,12 +110,15 @@ fn drawn(
         let Shown::Ready(impact) = shown.get() else {
             return None;
         };
-        let project = Id::from(impact.project.clone());
+        let at = At {
+            task: untracked(|| task.get()),
+            project: Id::from(impact.project.clone()),
+        };
         Some(untracked(|| {
             let touched = if impact.touched.is_empty() {
-                quiet(app, "No module changed.")
+                quiet(app, NO_MODULE)
             } else {
-                items(app, &project, impact.touched.clone())
+                items(app, &at, impact.touched.clone())
             };
             view()
                 .child(block(app, TOUCHED, None, touched))
@@ -119,7 +132,7 @@ fn drawn(
                             impact
                                 .sections
                                 .into_iter()
-                                .map(|section| category(app, &project, section)),
+                                .map(|section| category(app, &at, section)),
                         )
                         .into_element(),
                 ))
@@ -130,7 +143,14 @@ fn drawn(
         .gap(px(if form == Form::Terminal { 0.0 } else { 10.0 }))
         .child(head)
         .child(map)
-        .child(quiet(app, LEGEND))
+        .child(quiet(
+            app,
+            if form == Form::Desktop {
+                LEGEND_DRAWN
+            } else {
+                LEGEND_LISTED
+            },
+        ))
         .when(form == Form::Terminal, |v| v.child(term::blank()))
         .child(list)
         .into_element()
@@ -140,7 +160,8 @@ fn hued(app: AppState, words: String, hue: Hue) -> Text {
     plain(app, words).text_color(hue_ink(hue))
 }
 
-fn category(app: AppState, project: &Id, section: Section) -> AnyElement {
+fn category(app: AppState, at: &At, section: Section) -> AnyElement {
+    let task = at.task.clone();
     let shown = section.items.len() - section.hidden;
     let index = section.index;
     let content = view()
@@ -148,7 +169,7 @@ fn category(app: AppState, project: &Id, section: Section) -> AnyElement {
         .children(section.notes.into_iter().map(|note| quiet(app, note)))
         .child(items(
             app,
-            project,
+            at,
             section.items.into_iter().take(shown).collect(),
         ))
         .children((section.hidden > 0).then(|| {
@@ -157,13 +178,18 @@ fn category(app: AppState, project: &Id, section: Section) -> AnyElement {
                 format!("Show {} more", section.hidden),
                 ButtonKind::Quiet,
                 format!("btn-impact-more-{index}"),
-                move || app.impact_act(Action::More(index)),
+                move || app.impact_act(task.as_str(), Action::More(index)),
             )
         }))
         .into_element();
     view()
         .when(app.form != Form::Terminal, |v| v.pt(px(8.0)))
-        .child(block(app, section.title, Some(section.figure), content))
+        .child(block(
+            app,
+            section.title,
+            Some(section.supply.figure()),
+            content,
+        ))
         .into_element()
 }
 
@@ -177,21 +203,22 @@ fn sign_hue(sign: Sign) -> Hue {
     }
 }
 
-fn items(app: AppState, project: &Id, items: Vec<Item>) -> AnyElement {
+fn items(app: AppState, at: &At, items: Vec<Item>) -> AnyElement {
     view()
-        .children(
-            items
-                .into_iter()
-                .map(|item| row(app, project.clone(), item)),
-        )
+        .children(items.into_iter().map(|item| row(app, at.clone(), item)))
         .into_element()
 }
 
-fn row(app: AppState, project: Id, item: Item) -> AnyElement {
+fn row(app: AppState, at: At, item: Item) -> AnyElement {
     let form = app.form;
+    let At { task, project } = at;
     let selected = {
-        let key = item.key.clone();
-        computed(move || app.impact.with(|state| state.item.as_ref() == Some(&key)))
+        let (key, task) = (item.key.clone(), task.clone());
+        computed(move || {
+            app.impact.with(|state| {
+                state.task.as_deref() == Some(task.as_str()) && state.item.as_ref() == Some(&key)
+            })
+        })
     };
     let label = format!("{} {} {}", item.sign.word(), item.main, item.right);
     let (key, node) = (item.key.clone(), item.node.clone());
@@ -201,10 +228,13 @@ fn row(app: AppState, project: Id, item: Item) -> AnyElement {
         format!("impact-item-{}", item.key),
         move || selected.get(),
         move || {
-            app.impact_act(Action::Item {
-                key: key.clone(),
-                node: node.clone(),
-            })
+            app.impact_act(
+                task.as_str(),
+                Action::Item {
+                    key: key.clone(),
+                    node: node.clone(),
+                },
+            )
         },
         vec![
             view()

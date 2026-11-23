@@ -26,7 +26,7 @@ use crate::model::system::shown::{ASK_HEADING, ASK_WORDS, Shown, Status, TITLE, 
 use crate::model::system::words::{Swatch, slot_hue};
 use crate::model::system::{Action, Overlay, Pick, State, Window, request};
 use crate::model::text::span;
-use crate::model::{Form, Hue};
+use crate::model::{Form, Hue, Id};
 use crate::screens::activity::subnav;
 use crate::state::AppState;
 use crate::ui::composer::copyable_input;
@@ -44,7 +44,8 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 #[derive(Clone, Copy)]
 pub(crate) enum Host {
     System,
-    Impact(Memo<Marks>),
+    /// The marks, and the task whose Impact this is.
+    Impact(Memo<Marks>, Memo<Id>),
 }
 
 impl Host {
@@ -52,8 +53,12 @@ impl Host {
     fn state(self, app: AppState) -> State {
         match self {
             Host::System => app.system.get(),
-            Host::Impact(_) => State {
-                picked: app.impact.with(|state| state.picked.clone()),
+            Host::Impact(_, task) => State {
+                picked: app.impact.with(|state| {
+                    (state.task.as_deref() == Some(task.get().as_str()))
+                        .then(|| state.picked.clone())
+                        .flatten()
+                }),
                 ..State::default()
             },
         }
@@ -63,14 +68,17 @@ impl Host {
     fn marks(self) -> Option<Marks> {
         match self {
             Host::System => None,
-            Host::Impact(marks) => Some(marks.get()),
+            Host::Impact(marks, _) => Some(marks.get()),
         }
     }
 
     fn pick(self, app: AppState, pick: Pick) {
         match self {
             Host::System => app.system_act(Action::Pick(pick)),
-            Host::Impact(_) => app.impact_act(impact::Action::Pick(pick)),
+            Host::Impact(_, task) => {
+                let task = untracked(|| task.get());
+                app.impact_act(task.as_str(), impact::Action::Pick(pick));
+            }
         }
     }
 }

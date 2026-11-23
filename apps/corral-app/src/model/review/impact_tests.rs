@@ -68,16 +68,17 @@ fn unsupplied_category_is_not_zero_and_dependents_are_marked_apart() {
         },
     ];
     let impact = impact(&review(categories, rows), &BTreeSet::new());
-    let figure = |title: &str| {
+    let supply = |category: Category| {
+        let index = Category::ALL.iter().position(|c| *c == category);
         impact
             .sections
             .iter()
-            .find(|s| s.title == title)
-            .map(|s| s.figure.clone())
+            .find(|s| Some(s.index) == index)
+            .map(|s| s.supply)
     };
-    assert_eq!(figure("Definitions").as_deref(), Some("not provided"));
-    assert_eq!(figure("Call edges").as_deref(), Some("none"));
-    assert_eq!(figure("Dependents").as_deref(), Some("1 item"));
+    assert_eq!(supply(Category::Definitions), Some(Supply::NotProvided));
+    assert_eq!(supply(Category::CallEdges), Some(Supply::None));
+    assert_eq!(supply(Category::Dependents), Some(Supply::Rows(1)));
     assert_eq!(
         impact.marks.get(&Node::Container("a".into())),
         Some(&Mark::Touched {

@@ -169,3 +169,19 @@ fn a_new_task_keeps_its_tags_exactly_and_the_filter_finds_it() {
     app.wait_for_gone("id:task-T-9", Duration::from_secs(5))
         .unwrap();
 }
+
+/// Changes › Impact draws T-11's change on the System page's map; an item selects its package
+/// there, and Open in System opens Activity › System with that package selected.
+#[test]
+fn an_impact_item_opens_in_system_with_its_package_selected() {
+    let mut app = preview("tasks");
+    select(&mut app, "T-11 Collapse the sidebar on narrow screens");
+    app.wait_for("id:task-page").unwrap();
+    app.press("id:tab-task-1").unwrap();
+    app.press("id:seg-changes-1").unwrap();
+    app.wait_for("id:node-c-apps-corral-app").unwrap();
+    app.press("id:impact-item-row-1").unwrap();
+    app.press("id:btn-open-in-system").unwrap();
+    app.wait_for("id:inspector-title").unwrap();
+    app.wait_for("text:/^corral-app$/").unwrap();
+}

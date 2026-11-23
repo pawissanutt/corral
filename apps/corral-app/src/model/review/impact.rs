@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use corral_protocol::detail::{DetailBody, DetailRef};
 use corral_types::{
     ChangeKind, ModuleId, PackageEdgeKind, ReadStatus, SystemImpactCategory as Category, SystemMap,
-    SystemMapRow, SystemReview, SystemReviewRow as Row, SystemStatus,
+    SystemMapRow, SystemProvider, SystemReview, SystemReviewRow as Row, SystemStatus,
 };
 
 use crate::model::daemon::Feed;
@@ -74,6 +74,7 @@ impl State {
             Action::Item { key, node } => {
                 if self.item.as_deref() == Some(key.as_str()) {
                     self.item = None;
+                    self.picked = None;
                 } else {
                     self.item = Some(key);
                     self.picked = node.map(Pick::Node);
@@ -104,6 +105,11 @@ pub const LEAD: &str = "What this change moved in the project's facts. Select an
 pub const TOUCHED: &str = "Touched";
 pub const OPEN_IN_SYSTEM: &str = "Open in System";
 pub const NO_ANCHOR: &str = "No source line for this item.";
+pub const READING: &str = "Reading the change's impact…";
+pub const NO_MODULE: &str = "No module changed.";
+/// The map's legend where it is drawn (rings) and where it is listed (figures).
+pub const LEGEND_DRAWN: &str = "Ringed: touched, with lines added and removed. Dashed ring: holds dependents. Dimmed: untouched.";
+pub const LEGEND_LISTED: &str = "Each package shows its lines added and removed, the dependents it holds, or untouched (dimmed).";
 
 /// How an item changed, by shape as well as colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,13 +169,30 @@ pub struct Item {
     pub node: Option<Node>,
 }
 
+/// What a category's answer is: nothing supplies it, an empty answer, or rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Supply {
+    NotProvided,
+    None,
+    Rows(usize),
+}
+
+impl Supply {
+    pub fn figure(self) -> String {
+        match self {
+            Supply::NotProvided => "not provided".into(),
+            Supply::None => "none".into(),
+            Supply::Rows(n) => plural(n as u64, "item", "items"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Section {
     /// Its place in `Category::ALL`.
     pub index: usize,
     pub title: &'static str,
-    /// `3 items`, `none` or `not provided`.
-    pub figure: String,
+    pub supply: Supply,
     /// Said when the list is empty.
     pub empty: Option<String>,
     /// What the list leaves out and why.
@@ -210,7 +233,10 @@ pub fn shown(feed: &Feed, task: &str, more: &BTreeSet<usize>) -> Shown {
     };
     let review = match (cache.body(), &cache.error) {
         (Some(DetailBody::SystemReview(review)), _) => review,
-        (_, Some(error)) if error.code == "not_found" => return Shown::Said(NO_CHANGE.into()),
+        // corrald answers not_found for a missing task or project too; only this one is ours.
+        (_, Some(error)) if error.code == "not_found" && error.message.contains("submitted") => {
+            return Shown::Said(NO_CHANGE.into());
+        }
         (_, Some(error)) => {
             return Shown::Said(format!("Could not read the impact: {}", error.message));
         }
@@ -272,14 +298,34 @@ const fn zero(category: Category) -> &'static str {
     }
 }
 
-/// The provider's name for what supplies a category.
-const fn provider_key(category: Category) -> Option<&'static str> {
-    match category {
-        Category::Definitions | Category::CallEdges => Some("changes"),
-        Category::Dependents => Some("dependents"),
-        Category::Tests => Some("tests"),
-        _ => None,
-    }
+/// Whether a facts extension supplies (some of) a category.
+const fn provider_supplied(category: Category) -> bool {
+    matches!(
+        category,
+        Category::Definitions | Category::CallEdges | Category::Dependents | Category::Tests
+    )
+}
+
+/// What the extension left out of its answer, by its reason: it does not split them by
+/// category, so each category it supplies says them.
+fn provider_omissions(provider: &SystemProvider) -> Vec<String> {
+    let said = |counts: &BTreeMap<String, u64>, verb: &str| {
+        counts
+            .iter()
+            .filter(|(_, n)| **n > 0)
+            .map(|(reason, n)| {
+                format!(
+                    "{} {verb} by {} ({}).",
+                    count(*n),
+                    provider.extension,
+                    reason.replace('_', " ")
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut out = said(&provider.coverage.omitted, "omitted");
+    out.extend(said(&provider.coverage.skipped, "skipped"));
+    out
 }
 
 const fn category_of(row: &Row) -> Option<Category> {
@@ -310,16 +356,16 @@ impl Ctx<'_> {
     fn node(&self, path: &str) -> Option<Node> {
         container_of(&self.containers, path).map(|c| Node::Container(c.clone()))
     }
-    fn anchor(&self, path: &str, line: Option<u64>, at_base: bool) -> Option<String> {
+    fn anchor(&self, path: &str, line: Option<u64>, at_base: bool) -> String {
         let place = match line {
             Some(line) => format!("{path}:{line}"),
             None => path.to_owned(),
         };
-        Some(if at_base {
+        if at_base {
             format!("{place} @ {} (base)", short(self.base))
         } else {
             format!("{place} @ {} (head)", short(self.head))
-        })
+        }
     }
 }
 
@@ -340,7 +386,7 @@ fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
     Some(match row {
         Row::Manifest { path } => Item {
             sub: Some("manifest changed".into()),
-            anchor: cx.anchor(path, None, false),
+            anchor: Some(cx.anchor(path, None, false)),
             node: cx.node(path),
             ..item(key, Sign::Changed, path.clone(), String::new())
         },
@@ -354,7 +400,7 @@ fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             };
             Item {
                 sub: Some(format!("{} · {}", fact.manifest, fact.section)),
-                anchor: cx.anchor(&fact.manifest, None, after.is_none()),
+                anchor: Some(cx.anchor(&fact.manifest, None, after.is_none())),
                 node: Some(Node::Container(fact.container.clone())),
                 ..item(
                     key,
@@ -411,7 +457,7 @@ fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             line,
         } => Item {
             sub: Some(format!("{path} · {}", Sign::of(*change).word())),
-            anchor: cx.anchor(path, Some(*line), *change == ChangeKind::Removed),
+            anchor: Some(cx.anchor(path, Some(*line), *change == ChangeKind::Removed)),
             node: cx.node(path),
             ..item(key, Sign::of(*change), name.clone(), format!(":{line}"))
         },
@@ -435,7 +481,7 @@ fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             }
             Item {
                 sub: Some(path.clone()),
-                anchor: cx.anchor(path, Some(*line), false),
+                anchor: Some(cx.anchor(path, Some(*line), false)),
                 node: Some(Node::Container(from.container.clone())),
                 ..item(
                     key,
@@ -452,7 +498,7 @@ fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             after,
         } => Item {
             sub: Some(path.clone()),
-            anchor: cx.anchor(path, None, *after == 0),
+            anchor: Some(cx.anchor(path, None, *after == 0)),
             node: cx.node(path),
             ..item(
                 key,
@@ -467,7 +513,7 @@ fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
         },
         Row::Dependent { dependent } => Item {
             sub: Some(format!("{} · via {}", dependent.path, dependent.of)),
-            anchor: cx.anchor(&dependent.path, Some(dependent.line), false),
+            anchor: Some(cx.anchor(&dependent.path, Some(dependent.line), false)),
             node: cx.node(&dependent.path),
             ..item(
                 key,
@@ -478,13 +524,13 @@ fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
         },
         Row::TestFile { path } => Item {
             sub: Some("test file changed".into()),
-            anchor: cx.anchor(path, None, false),
+            anchor: Some(cx.anchor(path, None, false)),
             node: cx.node(path),
             ..item(key, Sign::Changed, path.clone(), String::new())
         },
         Row::TestCandidate { candidate } => Item {
             sub: Some(format!("{} · test candidate", candidate.path)),
-            anchor: cx.anchor(&candidate.path, None, false),
+            anchor: Some(cx.anchor(&candidate.path, None, false)),
             node: cx.node(&candidate.path),
             ..item(key, Sign::Neutral, candidate.name.clone(), String::new())
         },
@@ -496,7 +542,7 @@ fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
                 }
                 .into(),
             ),
-            anchor: cx.anchor(path, None, false),
+            anchor: Some(cx.anchor(path, None, false)),
             node: cx.node(path),
             ..item(key, Sign::Neutral, path.clone(), String::new())
         },
@@ -630,13 +676,10 @@ pub fn impact(review: &SystemReview, more: &BTreeSet<usize>) -> Impact {
                 count((total - items.len()) as u64)
             ));
         }
-        if let (Some(key), Some(provider)) = (provider_key(category), &review.provider) {
-            if let Some(n) = provider.coverage.omitted.get(key).filter(|n| **n > 0) {
-                notes.push(format!("{} omitted by {}.", count(*n), provider.extension));
-            }
-            if let Some(n) = provider.coverage.skipped.get(key).filter(|n| **n > 0) {
-                notes.push(format!("{} skipped by {}.", count(*n), provider.extension));
-            }
+        if provider_supplied(category)
+            && let Some(provider) = &review.provider
+        {
+            notes.extend(provider_omissions(provider));
         }
         if category == Category::Tests
             && !items.iter().any(|i| i.sign == Sign::Neutral)
@@ -652,20 +695,20 @@ pub fn impact(review: &SystemReview, more: &BTreeSet<usize>) -> Impact {
         } else {
             items.len().saturating_sub(LIMIT)
         };
-        let (figure, empty) = if !provided {
+        let (supply, empty) = if !provided {
             (
-                "not provided".to_owned(),
+                Supply::NotProvided,
                 Some("Not provided: nothing in this project supplies this category.".to_owned()),
             )
         } else if total == 0 {
-            ("none".to_owned(), Some(zero(category).to_owned()))
+            (Supply::None, Some(zero(category).to_owned()))
         } else {
-            (plural(total as u64, "item", "items"), None)
+            (Supply::Rows(total), None)
         };
         sections.push(Section {
             index,
             title: title(category),
-            figure,
+            supply,
             empty,
             notes,
             items,
