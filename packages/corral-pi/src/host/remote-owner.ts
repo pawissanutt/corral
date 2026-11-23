@@ -2,6 +2,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import type { EventLog } from "../bridge/events.ts";
 import { BridgeRefusal, type AnswerInput, type RewindInput, type SessionInput, type SubmitResult } from "../bridge/protocol.ts";
 import { loadOwnerAttachments } from "./owner-attachments.ts";
+import type { PlanAnswer } from "./plan-mode.ts";
 import type { HeldInput, SessionRecord } from "./session-record.ts";
 import type { Withdrawal } from "./queue.ts";
 import { rejectInput } from "./remote/input.ts";
@@ -24,13 +25,13 @@ export class RemoteOwner {
   get paused(): boolean { return this.record.paused; }
 
   /**
-   * Start automated input now or not at all. It is ordered against pause like every admission, but a paused
+   * Start an input now or not at all. It is ordered against pause like every admission, but a paused
    * session refuses it instead of parking it, and the order is held until its turn is open, so a pause that
    * follows cancels that turn rather than finding nothing to cancel.
    */
-  start(input: SessionInput, planKickoff?: string): Promise<SubmitResult> {
+  start(input: SessionInput, answers?: PlanAnswer): Promise<SubmitResult> {
     return this.order(async () => this.paused ? { disposition: "rejected", reason: "paused" }
-      : this.host.submitOpened(input, planKickoff));
+      : this.host.submitOpened(input, answers));
   }
 
   submit(input: SessionInput, images?: ImageContent[], requestId?: string, pane = false): Promise<SubmitResult> {

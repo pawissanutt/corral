@@ -127,9 +127,9 @@ index 009632bb5679380e48ec2473c6128163d9cde7eb..fd64af140d5e3de8c5042cd1fd304311
       * @param onStarted Called once the run's messages are prepared, before the first request.
       */
      async _startRun(trigger, onStarted) {
-+        // A prompt's preflight can overlap another's, or a whole run. Only one owns a run, through its settle.
-+        if (this._isAgentRunActive || this._isEmittingAgentSettled)
-+            throw new Error("Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.");
++        // A prompt's preflight can overlap another's, a whole run and its settle, or a manual compaction.
++        if (this._isAgentRunActive || this._isEmittingAgentSettled || this._compactionAbortController !== undefined || this._branchSummaryAbortController !== undefined)
++            throw new Error("Agent is already processing a prompt or compacting. Wait for it to finish and retry.");
          this._isAgentRunActive = true;
          this._agentRunAbortRequested = false;
          let messages;

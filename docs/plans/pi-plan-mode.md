@@ -228,9 +228,11 @@ On an execute answer the host, in order:
    run, which it could outlive to be drained later after the owner had decided otherwise.
    A rewind is ordered the same way, so the review is checked again after the turn is
    stopped, after the context is prepared and at admission: a kickoff whose review a rewind
-   removed is refused. The patched Pi lets one prompt own a run from its start through its
-   settle, so a kickoff whose preflight overlapped another prompt's, or the settle of
-   another run, is refused before it starts instead of sharing that run's turn.
+   removed is refused. Feedback on a review is admitted through the same ordered start. The
+   patched Pi lets one prompt own a run from its start through its settle, so a kickoff
+   whose preflight overlapped another prompt's, or the settle of another run, is refused
+   before it starts instead of sharing that run's turn; it also refuses a prompt whose
+   preflight ends during a manual compaction, such as the approval's own.
 5. The review ends when that kickoff message is in the transcript, and only then does the
    Build record note `Approved plan: <title> (revision N, <context option>)`. From the answer
    until then the approval is pending: any other answer to the review is refused, and entering or

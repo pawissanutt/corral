@@ -59,10 +59,11 @@ export interface PlanHost {
   /** Replace the model's context with `summary`, keeping no earlier entry. */
   reset(summary: string): Promise<void>;
   /**
-   * Start or steer a turn; false when the session refused the input. `kickoff` is the card id of the approval
-   * this input starts: the host tags the exact message it admits with it, and only that tag ends the review.
+   * Start a turn; false when the session refused the input. An input that `answers` a review is ordered against
+   * pause and rewind, and refused once that review is gone. The host tags the exact message it admits as a
+   * `kickoff` with the card id, and only that tag ends the review.
    */
-  submit(text: string, origin: "owner" | "auto", kickoff?: string): Promise<boolean>;
+  submit(text: string, origin: "owner" | "auto", answers?: PlanAnswer): Promise<boolean>;
   model(): string | undefined;
   changed(): void;
   note(text: string, tone?: "text" | "warning" | "error"): void;
@@ -84,6 +85,9 @@ const COMPACT_INSTRUCTIONS = "The owner approved a plan and execution starts nex
   + "Keep the reasons behind the plan's choices, alternatives the owner rejected, constraints and preferences the owner stated, "
   + "and the files, symbols and code paths that were discovered. Drop tool output already reflected in the plan, superseded "
   + "drafts and anything the plan itself states. Do not restate the plan; it is delivered in full after this summary.";
+/** The review an input answers, and whether the input is that approval's kickoff rather than feedback on it. */
+export type PlanAnswer = { readonly card: string; readonly kickoff: boolean };
+
 const CHANGED = "the submitted plan's copy is missing or was changed; choose Keep planning and have it submitted again";
 const WITHDRAWN = "its review is no longer open";
 const ANSWERING = "This review is already being answered; wait for it";
@@ -430,7 +434,7 @@ export class PlanMode {
     this.feedback = { card, admitted: false };
     const feedbackSent = this.feedback;
     return this.host.submit("[corral plan review]\nThe owner reviewed the plan and wants changes before approving:\n"
-      + `${text}\n\nRevise \`${this.path}\`, then call plan_submit again.`, "owner").then(taken => {
+      + `${text}\n\nRevise \`${this.path}\`, then call plan_submit again.`, "owner", { card, kickoff: false }).then(taken => {
       if (!taken) throw new Error("refused");
       feedbackSent.admitted = true;
       return "delivered" as const;
@@ -478,7 +482,7 @@ export class PlanMode {
       this.kickoff = { card, text, path, admitted: false,
         journal: `Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})` };
       const kickoff = this.kickoff;
-      if (!await this.host.submit(text, "auto", card)) throw new Error("the session did not take it");
+      if (!await this.host.submit(text, "auto", { card, kickoff: true })) throw new Error("the session did not take it");
       kickoff.admitted = true;
     } catch (error) {
       this.kickoff = undefined;

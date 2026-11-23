@@ -69,7 +69,7 @@ import { TodoLedger, installPlanCommand } from "../ui/todo.ts";
 import type { HostCapabilities, ModelChoice, UiMode } from "./config.ts";
 import { EXPORT_COMMAND, type SessionExport, exportSnapshot } from "./export.ts";
 import { askUserTool, localQuestionAsk } from "./ask-user.ts";
-import { PLAN_ENTRY, PLAN_KICKOFF, PLAN_OPTIONS, PLAN_SUBMIT_TOOL, PlanMode, planSubmitTool } from "./plan-mode.ts";
+import { PLAN_ENTRY, PLAN_KICKOFF, PLAN_OPTIONS, PLAN_SUBMIT_TOOL, PlanMode, planSubmitTool, type PlanAnswer } from "./plan-mode.ts";
 import { registerPlanMode } from "./remote/plan.ts";
 import { PlanReviewUi } from "../ui/plan-review.ts";
 import { isToolApproval, PENDING_MAX, PendingQuestions, QUESTION_ENTRY, validAnswer } from "./pending-questions.ts";
@@ -131,7 +131,7 @@ export interface HostSessionOptions {
   readonly transcriptRewound?: () => void;
   readonly automatedInput?: (input: SessionInput) => Promise<SubmitResult> | undefined;
   /** Automated input that must start now or be refused, ordered against pause; never parked while paused. */
-  readonly startInput?: (input: SessionInput, planKickoff?: string) => Promise<SubmitResult> | undefined;
+  readonly startInput?: (input: SessionInput, answers?: PlanAnswer) => Promise<SubmitResult> | undefined;
   readonly cwd: string;
   readonly agentDir: string;
   readonly model: string;
@@ -471,11 +471,12 @@ export class HostSession {
       compact: instructions => this.planCompact(instructions),
       reset: summary => this.planResetContext(summary),
       // Plan mode's own inputs start a run or are refused: queued into another run, an answer to a review would
-      // be acknowledged before it had any effect, and could outlive that run to be drained by a later one. The
-      // kickoff is also ordered against pause and never parked in a paused session's held queue.
-      submit: async (text, origin, kickoff) => {
+      // be acknowledged before it had any effect, and could outlive that run to be drained by a later one. An
+      // answer is also ordered against pause and never parked in a paused session's held queue. A `/plan`
+      // request is not: it can already be running inside that order.
+      submit: async (text, origin, answers) => {
         const input: SessionInput = { text, origin, busyPolicy: "prompt" };
-        const result = await (origin === "auto" ? options.startInput?.(input, kickoff) ?? this.submitOpened(input, kickoff)
+        const result = await (answers ? options.startInput?.(input, answers) ?? this.submitOpened(input, answers)
           : this.submitOpened(input));
         return result.disposition === "started";
       },
@@ -1882,15 +1883,15 @@ export class HostSession {
    * turn is open by the time the input is recorded, so a caller ordering admissions against pause leaves no
    * gap in which a started run cannot be cancelled.
    */
-  async submitOpened(input: SessionInput, planKickoff?: string): Promise<SubmitResult> {
+  async submitOpened(input: SessionInput, answers?: PlanAnswer): Promise<SubmitResult> {
     // Checked in the same tick as the call into Pi. A turn that is open for the host is running or still
     // settling, and Pi would queue this input or defer it into its settle list, where it can be dropped.
     if (this.open) return { disposition: "rejected", reason: "busy" };
-    // A rewind ordered ahead of this kickoff may have taken the branch back past the review it answers.
-    if (planKickoff !== undefined && this.planMode?.review !== planKickoff) return { disposition: "rejected", reason: "stale" };
+    // A rewind ordered ahead of this answer may have taken the branch back past the review it answers.
+    if (answers !== undefined && this.planMode?.review !== answers.card) return { disposition: "rejected", reason: "stale" };
     const delivered = Promise.withResolvers<boolean>();
     const result = await this.submitLocal(input, undefined,
-      { ...(planKickoff === undefined ? {} : { planKickoff }), delivered: delivered.resolve });
+      { ...(answers?.kickoff ? { planKickoff: answers.card } : {}), delivered: delivered.resolve });
     if (result.disposition !== "started") return result;
     return await delivered.promise ? result : { disposition: "rejected", reason: "busy" };
   }

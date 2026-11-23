@@ -209,12 +209,15 @@ test("a plan review is withdrawn only by an owner message the session takes", ()
   expect(plan.phase).toBe("planning");
 }), 120_000);
 
-test("a pause that follows an approval cancels the plan's turn instead of missing it", () => planning(undefined, async (live, plan, _cwd, owner) => {
+for (const { answer, choice, status, phase } of [
+  { answer: "an approval", choice: { options: ["execute"] }, status: "started", phase: "off" },
+  { answer: "review feedback", choice: { options: ["revise"], text: "Change step 1" }, status: "delivered", phase: "planning" },
+]) test(`a pause that follows ${answer} cancels the turn it starts instead of missing it`, () => planning(undefined, async (live, plan, _cwd, owner) => {
   writeFileSync(plan.path, PLAN);
   fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
   await live.session.prompt("Plan a --version flag", { source: "extension" });
   await live.drained();
-  // Given Pi is still admitting the approved plan's kickoff when the owner pauses:
+  // Given Pi is still admitting the input that answers the review when the owner pauses:
   const admission = Promise.withResolvers<void>(), preflight = Promise.withResolvers<void>();
   const prompt = live.session.prompt.bind(live.session);
   live.session.prompt = async (text, options) => {
@@ -222,15 +225,16 @@ test("a pause that follows an approval cancels the plan's turn instead of missin
     await admission.promise;
     return prompt(text, options);
   };
-  expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+  const answered = answerCard(live).answer([choice], false, async () => {});
   await preflight.promise;
   const paused = owner.pause();
   admission.resolve();
   // Then the pause waits for that admission and cancels the turn it opened, rather than finding nothing to cancel.
   expect(await paused).toMatchObject({ cancelled: true, paused: true });
+  expect(await answered).toBe(status);
   await until(() => !live.session.isStreaming, "the cancelled turn to end");
   await live.drained();
-  expect(plan.phase).toBe("off");
+  expect(plan.phase).toBe(phase);
 }), 120_000);
 
 test("a kickoff Pi refuses after deferring it leaves the review and the session usable", () => planning(undefined, async (live, plan, _cwd, owner) => {
@@ -413,6 +417,35 @@ test("a kickoff whose preflight ends while another run settles does not start un
     expect(plan.approved).toBeUndefined();
   });
 }), 120_000);
+
+test("a prompt whose preflight ends while an approval compacts the context does not start under that compaction",
+  () => planning({ settings: { compaction: { keep_recent_tokens: 1 } }, projectText: false }, async (live, plan) => {
+    writeFileSync(plan.path, PLAN);
+    fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+    await live.session.prompt("Plan a --version flag", { source: "extension" });
+    await live.drained();
+    await overlapping(live, async (first, second) => {
+      // Given an independent prompt is in Pi's preflight, past its check for a running compaction,
+      const other = live.session.prompt("an independent input", { source: "extension" });
+      other.catch(() => {});
+      await first.reached;
+      second.pass();
+      // and the owner approves with a compacted context, whose summary is still being written:
+      fixtureTransport().script([{ text: "Summary." }, { text: "Executing." }]);
+      fixtureTransport().holdNext();
+      const held = fixtureTransport().whenHeld();
+      expect(answerCard(live).answer([{ options: ["execute_compact"] }], false, async () => {})).toBe("started");
+      await held;
+      // When that prompt's preflight ends:
+      first.pass();
+      // Then it is refused rather than run on a context about to be replaced, and the approval goes on.
+      await expect(other).rejects.toThrow("compacting");
+      fixtureTransport().release();
+      await until(() => plan.phase === "off" && !live.session.isStreaming, "the approved plan to run");
+      await live.drained();
+      expect(plan.approved?.title).toBe("Add the flag");
+    });
+  }), 120_000);
 
 test("an overlapping prompt that loses the run to a kickoff costs it neither its approval nor its turn", () => planning(undefined, async (live, plan, _cwd, owner) => {
   writeFileSync(plan.path, PLAN);

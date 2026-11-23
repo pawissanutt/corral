@@ -31,7 +31,8 @@ async function planning(session: { blocked?: string; kickoff?: "taken" | "refuse
     busy: () => undefined, blocked: () => session.blocked, stopTurn: async () => { session.stopping?.(); },
     // The owner pauses while the approved plan's context is being summarised.
     compact: async () => { session.blocked = "The session is paused"; }, reset: async () => {},
-    submit: async (text, _origin, kickoff) => {
+    submit: async (text, _origin, answers) => {
+      const kickoff = answers?.kickoff ? answers.card : undefined;
       if (session.kickoff === "throws") throw new Error("the held queue could not be saved");
       if (session.kickoff === "refused") return false;
       sent.push({ text, kickoff });

@@ -180,7 +180,7 @@ async function runSession(config: HostConfig, overrides: HostOverrides, events: 
     paneInput: async (text, images) => await remote?.paneInput(text, images) ?? false,
     transcriptRewound: () => { if (terminal) repaintTranscript(terminal); },
     automatedInput: input => remote?.submit(input),
-    startInput: (input, planKickoff) => remote?.start(input, planKickoff),
+    startInput: (input, answers) => remote?.start(input, answers),
     ...(effort ? { effort } : {}),
     quickSummary: config.quickSummary,
     ...(summary ? { summary } : {}),
