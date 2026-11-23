@@ -56,6 +56,68 @@ test("terminal dispatch claims handoff commands before native Pi, and leaves ord
   expect(f.command("/newly")).toBe(false);
 }));
 
+function sessionKeys(onTerminalCommand?: (text: string) => boolean) {
+  const actions = new Map<string, () => void>();
+  const native: string[] = [];
+  let draft = "";
+  const editor = {
+    onAction: (id: string, action: () => void) => { actions.set(id, action); },
+    onEscape: () => {},
+    getText: () => draft,
+    setText: (text: string) => { draft = text; },
+  };
+  const fakeMode = {
+    defaultEditor: editor, editor, ui: {}, session: {}, options: { onTerminalCommand }, lastEscapeTime: 0,
+    settingsManager: { getDoubleEscapeAction: () => "fork" },
+    handleClearCommand: () => native.push("new"),
+    showSessionSelector: () => native.push("resume"),
+    showUserMessageSelector: () => native.push("fork"),
+    showTreeSelector: () => native.push("tree"),
+  };
+  const mode = InteractiveMode.prototype as unknown as { setupKeyHandlers: (this: typeof fakeMode) => void };
+  mode.setupKeyHandlers.call(fakeMode);
+  return {
+    editor, native,
+    press: (action: string) => actions.get(`app.session.${action}`)!(),
+    doubleEscape: () => { editor.onEscape(); editor.onEscape(); },
+  };
+}
+
+test("native session shortcuts use Code handoff without submitting a draft", async () => fixture(async f => {
+  f.save("B-stopped");
+  f.manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
+  f.manager.appendMessage({ role: "user", content: "second", timestamp: 2 });
+  const keys = sessionKeys(f.command);
+  keys.editor.setText("keep my draft");
+  keys.doubleEscape();
+  keys.press("new");
+  await flush();
+  expect(keys.editor.getText()).toBe("keep my draft");
+  f.setPick(async choices => choices[0]);
+  keys.press("resume");
+  await flush();
+  f.setPick(async choices => choices[1]);
+  keys.press("fork");
+  await flush();
+  keys.editor.setText("");
+  keys.doubleEscape();
+  await flush();
+  keys.press("tree");
+  expect(keys.native).toEqual(["tree"]);
+  expect(f.requests).toMatchObject([
+    { kind: "new" }, { kind: "resume", id: "B-stopped" },
+    { kind: "new", draft: "second", seed: [{ type: "message" }] },
+    { kind: "new", draft: "second", seed: [{ type: "message" }] },
+  ]);
+}));
+
+test("managed session shortcuts retain Pi's native actions", () => {
+  const keys = sessionKeys();
+  for (const action of ["new", "resume", "fork", "tree"]) keys.press(action);
+  keys.doubleEscape();
+  expect(keys.native).toEqual(["new", "resume", "fork", "tree", "fork"]);
+});
+
 test("resume picker lists stopped Code only; Esc cancels and explicit id bypasses picker", async () => fixture(async f => {
   f.save("B-current");
   f.save("B-stopped");

@@ -2298,7 +2298,7 @@ index a2f792aa7a1b248101805095b3f20c5fed56d7dc..ca223dd62a0ba7bfe6b2d4a00798c1d5
      initialThemeSetting?: string;
      /** Terminal implementation. Defaults to the current process terminal. */
      terminal?: Terminal;
-+    /** Consume a terminal submission before native slash commands or model input. */
++    /** Claim terminal submissions and session shortcuts before native handling. */
 +    onTerminalCommand?: (text: string) => boolean;
 +    /** Optional body composition; retains the original transcript and fixed input dock. */
 +    mainView?: (transcript: Component, presentation: () => InteractiveChatPresentation) => Component;
@@ -2719,6 +2719,29 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
          }
      }
      /** Show a custom component with keyboard focus. Overlay mode renders on top of existing content. */
+@@ -2586,7 +2752,7 @@ export class InteractiveMode {
+                             this.showTreeSelector();
+                         }
+-                        else {
++                        else if (!this.options.onTerminalCommand?.("/fork")) {
+                             this.showUserMessageSelector();
+                         }
+                         this.lastEscapeTime = 0;
+                     }
+@@ -2612,10 +2778,10 @@ export class InteractiveMode {
+         this.defaultEditor.onAction("app.message.copy", () => void this.handleCopyCommand({ flashConfirmation: true, preferSelection: true }));
+         this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
+         this.defaultEditor.onAction("app.message.dequeue", () => this.handleDequeue());
+-        this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
++        this.defaultEditor.onAction("app.session.new", () => this.options.onTerminalCommand?.("/new") || this.handleClearCommand());
+         this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
+-        this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
+-        this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
++        this.defaultEditor.onAction("app.session.fork", () => this.options.onTerminalCommand?.("/fork") || this.showUserMessageSelector());
++        this.defaultEditor.onAction("app.session.resume", () => this.options.onTerminalCommand?.("/resume") || this.showSessionSelector());
+         this.defaultEditor.onChange = (text) => {
+             const wasBashMode = this.isBashMode;
+             this.isBashMode = text.trimStart().startsWith("!");
 @@ -2693,6 +2859,11 @@ export class InteractiveMode {
              text = text.trim();
              if (!text)
