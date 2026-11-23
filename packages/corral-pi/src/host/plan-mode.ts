@@ -85,8 +85,11 @@ const COMPACT_INSTRUCTIONS = "The owner approved a plan and execution starts nex
   + "Keep the reasons behind the plan's choices, alternatives the owner rejected, constraints and preferences the owner stated, "
   + "and the files, symbols and code paths that were discovered. Drop tool output already reflected in the plan, superseded "
   + "drafts and anything the plan itself states. Do not restate the plan; it is delivered in full after this summary.";
-/** The review an input answers, and whether the input is that approval's kickoff rather than feedback on it. */
-export type PlanAnswer = { readonly card: string; readonly kickoff: boolean };
+/**
+ * The review an input answers, and whether the input is that approval's kickoff rather than feedback on it. The
+ * host adds the last entry of the model's `context` at the moment the answer is given.
+ */
+export type PlanAnswer = { readonly card: string; readonly kickoff: boolean; readonly context?: string };
 
 const CHANGED = "the submitted plan's copy is missing or was changed; choose Keep planning and have it submitted again";
 const WITHDRAWN = "its review is no longer open";

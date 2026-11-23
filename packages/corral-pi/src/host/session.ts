@@ -476,7 +476,9 @@ export class HostSession {
       // request is not: it can already be running inside that order.
       submit: async (text, origin, answers) => {
         const input: SessionInput = { text, origin, busyPolicy: "prompt" };
-        const result = await (answers ? options.startInput?.(input, answers) ?? this.submitOpened(input, answers)
+        // Read before the answer waits its turn in the order: it holds for the conversation as it is now.
+        const answer = answers && { ...answers, context: this.contextTip() };
+        const result = await (answer ? options.startInput?.(input, answer) ?? this.submitOpened(input, answer)
           : this.submitOpened(input));
         return result.disposition === "started";
       },
@@ -1402,9 +1404,9 @@ export class HostSession {
         }
         if (event.event === "rejected") this.admissions.get(event.tag)?.(event.reason ?? "rejected");
       },
-      // Pi asks in the tick the run starts. The review an input answers was checked before Pi's preflight, and
-      // another run can have withdrawn it and put a newer submission in its place since.
-      admit: tag => this.answeredReviewGone(this.queue.inputFacts(tag)?.planReview),
+      // Pi asks in the tick the run starts. What an answer to a plan review was given for was checked before
+      // Pi's preflight, and a whole other run can have come and gone since.
+      admit: tag => this.planAnswerRefused(this.queue.inputFacts(tag)?.planAnswer),
       queue: change => {
         this.queue.observer.queue(change);
         if (change.action === "enqueue") {
@@ -1818,7 +1820,7 @@ export class HostSession {
   }
 
   submitLocal(input: SessionInput, images?: ImageContent[], source?: {
-    requestId?: string; queueKey?: string; text?: string; pane?: boolean; planKickoff?: string; planReview?: string;
+    requestId?: string; queueKey?: string; text?: string; pane?: boolean; planKickoff?: string; planAnswer?: PlanAnswer;
     /** Told once whether this very input reached the transcript. */
     delivered?: (delivered: boolean) => void;
   }): Promise<SubmitResult> {
@@ -1890,19 +1892,30 @@ export class HostSession {
     // Checked in the same tick as the call into Pi. A turn that is open for the host is running or still
     // settling, and Pi would queue this input or defer it into its settle list, where it can be dropped.
     if (this.open) return { disposition: "rejected", reason: "busy" };
-    // A rewind ordered ahead of this answer may have taken the branch back past the review it answers.
-    const gone = this.answeredReviewGone(answers?.card);
-    if (gone) return { disposition: "rejected", reason: gone };
+    // A rewind or a turn ordered ahead of this answer may have changed what it was given for.
+    const refused = this.planAnswerRefused(answers);
+    if (refused) return { disposition: "rejected", reason: refused };
     const delivered = Promise.withResolvers<boolean>();
-    const result = await this.submitLocal(input, undefined, { ...(answers ? { planReview: answers.card } : {}),
+    const result = await this.submitLocal(input, undefined, { ...(answers ? { planAnswer: answers } : {}),
       ...(answers?.kickoff ? { planKickoff: answers.card } : {}), delivered: delivered.resolve });
     if (result.disposition !== "started") return result;
     return await delivered.promise ? result : { disposition: "rejected", reason: "busy" };
   }
 
-  /** Why an input that answers the review `card` cannot be taken, when that review is no longer the open one. */
-  private answeredReviewGone(card: string | undefined): string | undefined {
-    return card === undefined || this.planMode?.review === card ? undefined : "the plan review this answers is no longer open";
+  /**
+   * Why an input that answers a plan review cannot start: the review is no longer the open one, or the model's
+   * context is not the one the answer was given in. A clean context in particular is the plan and nothing else.
+   */
+  private planAnswerRefused(answer: Pick<PlanAnswer, "card" | "context"> | undefined): string | undefined {
+    if (answer === undefined) return undefined;
+    if (this.planMode?.review !== answer.card) return "the plan review this answers is no longer open";
+    return this.contextTip() === answer.context ? undefined : "the conversation went on after this answer to the plan review";
+  }
+
+  /** The last entry of the current branch that the model's context is built from. */
+  private contextTip(): string | undefined {
+    return this.session.sessionManager.getBranch().findLast(entry => entry.type === "message" || entry.type === "custom_message"
+      || entry.type === "compaction" || entry.type === "branch_summary" || entry.type === "context_edit")?.id;
   }
   pendingOwnerQuestions() {
     return this.ownerQuestions?.pending().flatMap(record => {

@@ -22,11 +22,14 @@ interface Input {
   readonly transcriptId?: string;
   /** Set only by the host, for the one input it admits as an approved plan's kickoff: the review card's id. */
   readonly planKickoff?: string;
-  /** The plan review card this input answers, as approval or feedback: it starts only while that review is open. */
-  readonly planReview?: string;
+  /**
+   * The plan review card this input answers, as approval or feedback, and the last entry of the model's context
+   * when the answer was given: it starts only while that review is open and nothing was said since.
+   */
+  readonly planAnswer?: { readonly card: string; readonly context?: string };
 }
 /** What the transcript records of an input, and who it came from: `owner` and `pane` are the owner's own words. */
-export type InputFacts = Pick<Input, "facts" | "transcriptId" | "origin" | "planKickoff" | "planReview">;
+export type InputFacts = Pick<Input, "facts" | "transcriptId" | "origin" | "planKickoff" | "planAnswer">;
 interface Queued extends Input { mode: "steer" | "follow_up"; message: AgentMessage }
 export type Withdrawal = { outcome: "withdrawn" | "already_started" | "unknown_item"; item?: string; turn?: number; text?: string };
 export interface QueuedInput {
@@ -113,14 +116,14 @@ export class HostQueue {
 
   bridgeInput(input: SessionInput, source: {
     socketId?: string; transcriptId?: string; text?: string; pane?: boolean; queueKey?: string; planKickoff?: string;
-    planReview?: string;
+    planAnswer?: Input["planAnswer"];
   }): unknown {
     const { socketId, transcriptId, pane } = source;
     const origin = pane ? "pane" : input.origin;
     return { key: source.queueKey ?? socketId ?? `q-${crypto.randomUUID()}`, text: source.text ?? input.text,
       mode: input.busyPolicy, origin, socketId, transcriptId,
       ...(source.planKickoff === undefined ? {} : { planKickoff: source.planKickoff }),
-      ...(source.planReview === undefined ? {} : { planReview: source.planReview }),
+      ...(source.planAnswer === undefined ? {} : { planAnswer: source.planAnswer }),
       facts: transcriptInput(input, !pane && socketId === undefined ? "auto" : origin) } satisfies Input;
   }
 

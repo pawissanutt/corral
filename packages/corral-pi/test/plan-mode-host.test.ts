@@ -371,12 +371,7 @@ test("a kickoff that loses the run to another prompt neither marks that prompt n
   });
 }), 120_000);
 
-test("a kickoff whose preflight ends while another run settles does not start under that settle", () => planning(undefined, async (live, plan) => {
-  writeFileSync(plan.path, PLAN);
-  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
-  await live.session.prompt("Plan a --version flag", { source: "extension" });
-  await live.drained();
-  const review = plan.review;
+test("a prompt whose preflight ends while another run settles does not start under that settle", () => planning(undefined, async live => {
   // Given Pi is held while it settles a run, with its hooks still to hear of it,
   const settling = Promise.withResolvers<void>(), settled = Promise.withResolvers<void>();
   const runner = (live.session as unknown as { _extensionRunner: { emit(event: { type: string }): Promise<unknown> } })._extensionRunner;
@@ -390,31 +385,23 @@ test("a kickoff whose preflight ends while another run settles does not start un
     }
     return emit(event);
   };
-  const prompt = live.session.prompt.bind(live.session);
-  const refused = Promise.withResolvers<unknown>();
-  live.session.prompt = (text, options) => {
-    const sent = prompt(text, options);
-    if (text.startsWith("[corral plan approved ")) sent.catch(refused.resolve);
-    return sent;
-  };
   await overlapping(live, async (first, second) => {
-    fixtureTransport().script([{ text: "Independent." }]);
-    const other = prompt("an independent input", { source: "extension" });
+    fixtureTransport().script([{ text: "First." }]);
+    const running = live.session.prompt("an input", { source: "extension" });
     await first.reached;
-    // and the kickoff of an approval made before that run began is still in its own preflight:
-    expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+    // and a prompt sent before that run began is still in its own preflight:
+    const late = live.session.prompt("an overlapping input", { source: "extension" });
+    late.catch(() => {});
     await second.reached;
     first.pass();
     await settling.promise;
-    // When the kickoff's preflight ends inside that settle:
+    // When that prompt's preflight ends inside the settle:
     second.pass();
-    expect(String(await refused.promise)).toContain("already processing");
+    // Then it is refused, rather than starting a run whose turn the settle would close for the host.
+    await expect(late).rejects.toThrow("already processing");
     settled.resolve();
-    await other;
+    await running;
     await live.drained();
-    // Then it started no run for the settle to close: nothing was approved, and the review is still open.
-    expect(plan.review).toBe(review);
-    expect(plan.approved).toBeUndefined();
   });
 }), 120_000);
 
@@ -474,6 +461,38 @@ test("review feedback whose preflight outlasts a resubmission is not delivered t
     await expect(answered).rejects.toThrow("no longer open");
     await live.drained();
     expect(plan.review).toBe(second);
+  });
+}), 120_000);
+
+test("a clean-context kickoff does not start once another turn has added to the reset context", () => planning(undefined, async (live, plan) => {
+  writeFileSync(plan.path, PLAN);
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+  await live.session.prompt("Plan a --version flag", { source: "extension" });
+  await live.drained();
+  const review = plan.review;
+  const prompt = live.session.prompt.bind(live.session);
+  const refused = Promise.withResolvers<unknown>();
+  live.session.prompt = (text, options) => {
+    const sent = prompt(text, options);
+    if (text.startsWith("[corral plan approved ")) sent.catch(refused.resolve);
+    return sent;
+  };
+  await overlapping(live, async (kickoff, typed) => {
+    // Given the context was reset to the plan and the kickoff is in Pi's preflight,
+    expect(answerCard(live).answer([{ options: ["execute_clean"] }], false, async () => {})).toBe("started");
+    await kickoff.reached;
+    // and a message the owner typed meanwhile runs and settles first:
+    typed.pass();
+    fixtureTransport().script([{ text: "Noted." }]);
+    await prompt("By the way, keep the changelog", { source: "interactive" });
+    await live.drained();
+    // When the kickoff's preflight ends:
+    kickoff.pass();
+    // Then it is refused: the context is no longer the plan alone, and the review is open to be answered again.
+    expect(String(await refused.promise)).toContain("conversation went on");
+    await live.drained();
+    expect(plan.review).toBe(review);
+    expect(plan.approved).toBeUndefined();
   });
 }), 120_000);
 

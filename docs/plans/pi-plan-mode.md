@@ -236,7 +236,11 @@ On an execute answer the host, in order:
    asynchronous, and another run can withdraw a review and submit a newer one while an
    answer waits in it, so the patched Pi asks the host once more in the tick the run starts
    (`admit` on the queue observer): an answer to a review that is no longer the open one is
-   refused there, before anything is emitted or recorded.
+   refused there, before anything is emitted or recorded. So is an answer given in a
+   conversation that has since gone on: the host notes the last entry of the model's context
+   when the answer is given, and refuses it if another message, summary or context edit
+   follows by then. A clean context is therefore the plan alone or the kickoff does not
+   start, and the review stays open to be answered again.
 5. The review ends when that kickoff message is in the transcript, and only then does the
    Build record note `Approved plan: <title> (revision N, <context option>)`. From the answer
    until then the approval is pending: any other answer to the review is refused, and entering or
