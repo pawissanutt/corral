@@ -31,7 +31,7 @@ test("retained history reaches both ends across forks and large UTF-8 results", 
   const result = "é🪶".repeat(12000);
   const entries: object[] = [{ type: "session", id: "existing" }];
   for (let i = 0; i <= 250; i++) entries.push({ type: "message", id: `m${i}`, parentId: i ? `m${i - 1}` : null, message: { role: "user", content: `marker-${i};` } });
-  entries.push({ type: "message", id: "fork", parentId: "m0", message: { role: "assistant", content: "abandoned branch" } });
+  for (let i = 0; i < 65; i++) entries.push({ type: "message", id: `fork${i}`, parentId: i ? `fork${i-1}` : "m0", message: { role: "assistant", content: "abandoned branch" } });
   entries.push({ type: "message", id: "tip", parentId: "m250", message: { role: "toolResult", content: [{ type: "text", text: result }] } });
   const source = entries.map(e => JSON.stringify(e) + "\n").join("");
   try {
@@ -50,6 +50,7 @@ test("retained history reaches both ends across forks and large UTF-8 results", 
       expect(page.newer).toBeDefined();
       expect((await readTranscriptPage(file, "existing", { mode: "conversation", cursor: page.newer })).rows).toEqual(previous.rows);
     }
+    expect(snapshots.some(rows => !rows.length)).toBeTrue(); // A scan-only page crossing the abandoned branch.
     expect(conversation).toBe(Array.from({ length: 251 }, (_, i) => `marker-${i};`).join("") + result);
     for (let i = snapshots.length - 2; i >= 0; i--) {
       expect(page.newer).toBeDefined();

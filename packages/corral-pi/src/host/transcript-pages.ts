@@ -74,11 +74,12 @@ export async function conversationPage(bytes: TranscriptBytes, floor: number, po
     } catch (error) {
       if (!(error instanceof SyntaxError)) throw error;
     }
+    // Skipped siblings cost a decode too; the cursor carries the sought parent across empty pages.
+    records++;
     if (entry && parent !== undefined && parent !== entry.id) {
       end = start;
       continue;
     }
-    records++;
     const malformed = !entry || (entry.type === "message" && (!entry.message || typeof entry.message !== "object" || Array.isArray(entry.message)));
     const items = malformed ? [{ kind: "note" as const, text: `[Malformed transcript record at byte ${start}; inspect raw transcript]` }] : project(entry!);
     const date = typeof entry?.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
