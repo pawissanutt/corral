@@ -133,22 +133,29 @@ fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
 
 /// All projects in scope: the page asks for one.
 fn picker(app: AppState, data: Memo<Shown>) -> AnyElement {
-    let projects = untracked(|| data.with(|shown| shown.projects.clone()));
-    let choices = view()
-        .flex_row()
-        .flex_wrap()
-        .gap(px(8.0))
-        .children(projects.into_iter().map(|id| {
-            let pick = id.clone();
-            button(
-                app,
-                id.to_string(),
-                ButtonKind::Ghost,
-                format!("system-pick-{id}"),
-                move || app.set_scope(Scope::Project(pick.clone())),
-            )
-        }))
-        .into_element();
+    // The projects can arrive, come and go while the page asks; the choices follow them.
+    let projects = computed(move || data.with(|shown| shown.projects.clone()));
+    let choices = dynamic(move || {
+        let projects = projects.get();
+        untracked(|| {
+            view()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(8.0))
+                .children(projects.into_iter().map(|id| {
+                    let pick = id.clone();
+                    button(
+                        app,
+                        id.to_string(),
+                        ButtonKind::Ghost,
+                        format!("system-pick-{id}"),
+                        move || app.set_scope(Scope::Project(pick.clone())),
+                    )
+                }))
+                .into_element()
+        })
+    })
+    .into_element();
     body(
         app,
         "system-map",

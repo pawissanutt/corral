@@ -112,17 +112,19 @@ fn row(app: AppState, index: usize, line: Line) -> AnyElement {
                     node.node.test_id(),
                     move || picked,
                     press,
-                    // The name keeps its whole width; the tag gives way first.
+                    // A terminal row is one line: the name keeps its whole width and everything
+                    // after it gives way, the tag first, so a long name is never cut.
                     vec![
-                        view().flex_shrink_0().child(name).into_element(),
+                        fixed(name.into_element()),
                         view()
                             .flex_1()
                             .min_w(px(0.0))
-                            .items_end()
-                            .child(small(app, tag, Token::Ink3))
+                            .child(small(
+                                app,
+                                format!(" {}  {}  {tag}", node.figure, bar_cells(node.share)),
+                                Token::Ink2,
+                            ))
                             .into_element(),
-                        fixed(small(app, node.figure, Token::Ink2)),
-                        fixed(small(app, bar_cells(node.share), Token::Ink3)),
                         fixed(small(app, opens.trim().to_owned(), Token::Ink3)),
                     ],
                 ),
