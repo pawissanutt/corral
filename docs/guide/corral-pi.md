@@ -11,6 +11,7 @@ package's locked dependencies (`bun install --frozen-lockfile`).
 | A worker on a task | `corral-next dispatch <task> --profile <pi-profile>` |
 | An independent reviewer | Set the project's `reviewer` profile. Corral asks for review after a green gate. |
 | Chat without a task | `corral-pi chat` in a workspace, or send to the daemon's quick thread. |
+| Code in place as your user, without a Corral task, worktree or required finish | `corral-pi code` (trusted mode; see below). |
 | Work directly in Git without a task | `corral-pi build`; see [Build sessions](build-sessions.md). |
 
 ## Command reference
@@ -18,6 +19,8 @@ package's locked dependencies (`bun install --frozen-lockfile`).
 ```text
 corral-pi run --dir <run-dir> [--socket <path>] [--prompt-file <path>] [--corral <path>] [model flags]
 corral-pi chat [--new | --dir <chat-dir>] [--plan] [--socket <path>] [--corral <path>] [model flags]
+corral-pi code [--plan] [--name <name>] [--profile <name>] [--data-dir <path>] [model flags]
+corral-pi code --resume <id> [--data-dir <path>]
 corral-pi build [--project <name>] [--data-dir <path>] [--id <id>] [--name <name>] [--profile <name>] [--here] [--plan] [--socket <path>] [--corral <path>] [--headless] [model flags]
 corral-pi build --resume <id> [--data-dir <path>] [--socket <path>] [--corral <path>] [--headless]
 corral-pi build --prune [--session <id> [--json]] [--dry-run] [--data-dir <path>]
@@ -32,6 +35,23 @@ Sessions also accept `--project <name>` and `--headless`; non-interactive
 launches are headless by default. `--plan` starts chat or Build in
 [plan mode](plan-mode.md). For build defaults and cleanup, see
 [Build sessions](build-sessions.md).
+
+### Trusted coding in place
+
+Run `corral-pi code` from the directory you want to work in. It does not need a
+Corral workspace or even a Git repository. Unlike `build --here`, Code explicitly
+trusts the **parent agent** to edit files outside the checkout and run shell
+commands without Corral's Build permission prompts. Use it only where you would
+trust an agent with your own shell. It does not elevate OS privileges, change
+provider credentials or lift spending limits.
+
+Code keeps Build's editor, child agents, background jobs, questions, Todo and
+optional plan mode. It does not require a commit, gate, review or landing choice:
+quit normally and your edits stay in place. Resume with `corral-pi code --resume <id>`.
+In a configured Corral project you can still request verification of a clean
+checkout, an independent review of committed changes, or a board proposal. None
+of these steps lands a branch, and filing a proposal remains your choice.
+Managed Build, workers and reviewers do not opt into these permissions.
 
 ### Default model for terminal launches
 

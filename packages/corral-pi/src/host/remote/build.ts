@@ -50,7 +50,7 @@ export class RemoteBuild {
   }
 
   register(registry: RemoteRegistry): void {
-    if (!this.build) return;
+    if (!this.build || this.build.panelState().session.trustedCode === true) return;
     registry.register({ name: "exit_open", parse: () => undefined, run: () => ({ phase: this.openExit() }) });
   }
 
