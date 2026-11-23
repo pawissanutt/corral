@@ -85,6 +85,7 @@ const COMPACT_INSTRUCTIONS = "The owner approved a plan and execution starts nex
   + "and the files, symbols and code paths that were discovered. Drop tool output already reflected in the plan, superseded "
   + "drafts and anything the plan itself states. Do not restate the plan; it is delivered in full after this summary.";
 const CHANGED = "the submitted plan's copy is missing or was changed; choose Keep planning and have it submitted again";
+const WITHDRAWN = "its review is no longer open";
 const ANSWERING = "This review is already being answered; wait for it";
 
 const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
@@ -445,18 +446,21 @@ export class PlanMode {
    * transcript, so a refusal, a failure or a restart at any point before that leaves the same review open.
    */
   private async execute(context: PlanContext, note?: string): Promise<void> {
+    const record = this.record;
+    if (record.phase !== "review") return;
+    const card = cardId(record);
     this.starting = true;
     try {
-      const record = this.record;
-      if (record.phase !== "review") return;
       await this.host.stopTurn();
+      // A rewind may have taken the branch back past this review while its turn was being stopped.
+      if (this.review !== card) throw new Error(WITHDRAWN);
       // Read after the planning turn can no longer touch it: what runs must be what the digest names, now.
       const plan = this.copy(record);
       if (plan === undefined || !record.path) {
         this.submitted = undefined;
         throw new Error(CHANGED);
       }
-      const title = record.title ?? "Plan", { revision, path } = record, card = cardId(record);
+      const title = record.title ?? "Plan", { revision, path } = record;
       this.preparing = true;
       try {
         if (context === "compact") await this.host.compact(COMPACT_INSTRUCTIONS);
@@ -465,9 +469,11 @@ export class PlanMode {
       } finally {
         this.preparing = false;
       }
-      // The owner may have paused while the context was prepared; the admission order then decides for good.
+      // The owner may have paused or rewound while the context was prepared; the admission order then decides
+      // for good.
       const blocked = this.host.blocked();
       if (blocked) throw new Error(blocked);
+      if (this.review !== card) throw new Error(WITHDRAWN);
       const text = `${kickoffLine(card)}\n${this.host.prompts.approved({ path, title, revision, plan, context, note, todo: this.host.todo })}`;
       this.kickoff = { card, text, path, admitted: false,
         journal: `Approved plan: ${title} (revision ${revision}, ${CONTEXT_LABEL[context]})` };
@@ -476,7 +482,8 @@ export class PlanMode {
       kickoff.admitted = true;
     } catch (error) {
       this.kickoff = undefined;
-      this.host.note(`The plan was not started: ${error instanceof Error ? error.message : String(error)}. The review is still open.`, "error");
+      this.host.note(`The plan was not started: ${error instanceof Error ? error.message : String(error)}.`
+        + (this.review === card ? " The review is still open." : ""), "error");
       this.announce();
     } finally {
       this.starting = false;

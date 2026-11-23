@@ -12,7 +12,8 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 0));
  * A plan mode over an in-memory branch, already planning with a plan file written. `kickoff` says what the session
  * does with an approved plan's kickoff: it reaches the transcript unless it is only `taken`, `refused` or `throws`.
  */
-async function planning(session: { blocked?: string; kickoff?: "taken" | "refused" | "throws" | "after-a-settle" } = {}) {
+async function planning(session: { blocked?: string; kickoff?: "taken" | "refused" | "throws" | "after-a-settle";
+  stopping?: () => void } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "plan-mode-unit-"));
   dirs.push(dir);
   const entries: PlanEntry[] = [], notes: string[] = [], journal: string[] = [];
@@ -27,7 +28,7 @@ async function planning(session: { blocked?: string; kickoff?: "taken" | "refuse
   const host: PlanHost = {
     dir, cwd: dir, prompts: { contract: () => "CONTRACT", reset: () => "", approved: () => "EXECUTE" }, askUser: false, todo: false,
     entries: () => entries, leaf: () => String(leaf), append: record => { add({ type: "custom", customType: PLAN_ENTRY, data: record }); },
-    busy: () => undefined, blocked: () => session.blocked, stopTurn: async () => {},
+    busy: () => undefined, blocked: () => session.blocked, stopTurn: async () => { session.stopping?.(); },
     // The owner pauses while the approved plan's context is being summarised.
     compact: async () => { session.blocked = "The session is paused"; }, reset: async () => {},
     submit: async (text, _origin, kickoff) => {
@@ -61,6 +62,20 @@ test("a plan resubmitted after a rewind is its own card and its own copy", async
   expect(plan.review).not.toBe(first);
   expect(plan.record.path).not.toBe(firstCopy);
   expect(existsSync(firstCopy ?? "")).toBeTrue();
+});
+
+test("an approval whose review a rewind removed while its turn was being stopped starts nothing", async () => {
+  const session: Parameters<typeof planning>[0] = {};
+  const { plan, sent, notes, rewind } = await planning(session);
+  plan.submit();
+  // Given the owner rewinds to before the submission while the approval waits for the submitting turn to stop:
+  session.stopping = () => rewind(1);
+  expect(plan.choose("execute")).toBe("started");
+  await settle();
+  // Then the kickoff of a review that is gone is not sent into the rewound branch.
+  expect(sent).toEqual([]);
+  expect(plan.phase).toBe("planning");
+  expect(notes.join("\n")).toContain("no longer open");
 });
 
 test("a submission whose copy changed after it was shown is not executed", async () => {

@@ -1886,6 +1886,8 @@ export class HostSession {
     // Checked in the same tick as the call into Pi. A turn that is open for the host is running or still
     // settling, and Pi would queue this input or defer it into its settle list, where it can be dropped.
     if (this.open) return { disposition: "rejected", reason: "busy" };
+    // A rewind ordered ahead of this kickoff may have taken the branch back past the review it answers.
+    if (planKickoff !== undefined && this.planMode?.review !== planKickoff) return { disposition: "rejected", reason: "stale" };
     const delivered = Promise.withResolvers<boolean>();
     const result = await this.submitLocal(input, undefined,
       { ...(planKickoff === undefined ? {} : { planKickoff }), delivered: delivered.resolve });

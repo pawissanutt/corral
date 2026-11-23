@@ -367,6 +367,53 @@ test("a kickoff that loses the run to another prompt neither marks that prompt n
   });
 }), 120_000);
 
+test("a kickoff whose preflight ends while another run settles does not start under that settle", () => planning(undefined, async (live, plan) => {
+  writeFileSync(plan.path, PLAN);
+  fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
+  await live.session.prompt("Plan a --version flag", { source: "extension" });
+  await live.drained();
+  const review = plan.review;
+  // Given Pi is held while it settles a run, with its hooks still to hear of it,
+  const settling = Promise.withResolvers<void>(), settled = Promise.withResolvers<void>();
+  const runner = (live.session as unknown as { _extensionRunner: { emit(event: { type: string }): Promise<unknown> } })._extensionRunner;
+  const emit = runner.emit.bind(runner);
+  let hold = true;
+  runner.emit = async event => {
+    if (event.type === "agent_settled" && hold) {
+      hold = false;
+      settling.resolve();
+      await settled.promise;
+    }
+    return emit(event);
+  };
+  const prompt = live.session.prompt.bind(live.session);
+  const refused = Promise.withResolvers<unknown>();
+  live.session.prompt = (text, options) => {
+    const sent = prompt(text, options);
+    if (text.startsWith("[corral plan approved ")) sent.catch(refused.resolve);
+    return sent;
+  };
+  await overlapping(live, async (first, second) => {
+    fixtureTransport().script([{ text: "Independent." }]);
+    const other = prompt("an independent input", { source: "extension" });
+    await first.reached;
+    // and the kickoff of an approval made before that run began is still in its own preflight:
+    expect(answerCard(live).answer([{ options: ["execute"] }], false, async () => {})).toBe("started");
+    await second.reached;
+    first.pass();
+    await settling.promise;
+    // When the kickoff's preflight ends inside that settle:
+    second.pass();
+    expect(String(await refused.promise)).toContain("already processing");
+    settled.resolve();
+    await other;
+    await live.drained();
+    // Then it started no run for the settle to close: nothing was approved, and the review is still open.
+    expect(plan.review).toBe(review);
+    expect(plan.approved).toBeUndefined();
+  });
+}), 120_000);
+
 test("an overlapping prompt that loses the run to a kickoff costs it neither its approval nor its turn", () => planning(undefined, async (live, plan, _cwd, owner) => {
   writeFileSync(plan.path, PLAN);
   fixtureTransport().script([SUBMIT, { text: "Submitted." }]);
