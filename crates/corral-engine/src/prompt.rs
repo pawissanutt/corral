@@ -6,6 +6,7 @@ use crate::{
     Role, Run, Task,
     config::{Config, shell_quote},
 };
+use corral_types::{Artifact, ArtifactGroup};
 
 pub(crate) fn write_prompt(
     file: &Path,
@@ -14,6 +15,7 @@ pub(crate) fn write_prompt(
     run: &Run,
     note: Option<&str>,
     config: &Config,
+    artifacts: &[Artifact],
 ) -> Result<()> {
     let bin = shell_quote(bin.to_str().context("corral binary path is not UTF-8")?)?;
     let id = &task.id;
@@ -29,6 +31,7 @@ pub(crate) fn write_prompt(
     if let Some(note) = note {
         writeln!(prompt, "\n## Notes for this run\n\n{note}")?;
     }
+    write_references(&mut prompt, &bin, task, run.role, artifacts)?;
     write_tools(&mut prompt, &bin, task.project.as_deref(), config)?;
     match run.role {
         Role::Worker => writeln!(
@@ -53,6 +56,51 @@ When the work is complete, run:
         )?,
     }
     fs::write(file, prompt).with_context(|| format!("write run prompt {}", file.display()))
+}
+
+fn write_references(
+    prompt: &mut String,
+    bin: &str,
+    task: &Task,
+    role: Role,
+    artifacts: &[Artifact],
+) -> Result<()> {
+    let mut selected: Vec<_> = artifacts
+        .iter()
+        .filter(|artifact| {
+            artifact.task == task.id
+                && artifact.replaced_by.is_none()
+                && (matches!(
+                    artifact.kind.group(),
+                    ArtifactGroup::Reference | ArtifactGroup::Deliverable
+                ) || (role == Role::Reviewer && artifact.kind.group() == ArtifactGroup::Proof))
+        })
+        .collect();
+    selected.sort_by(|a, b| {
+        b.at.cmp(&a.at)
+            .then_with(|| b.reference().cmp(&a.reference()))
+    });
+    if !selected.is_empty() {
+        writeln!(prompt, "\n## References\n")?;
+        for artifact in selected.iter().take(20) {
+            writeln!(
+                prompt,
+                "- {} ({}) — {}",
+                artifact.reference(),
+                artifact.kind.as_str(),
+                artifact
+                    .title
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )?;
+        }
+        writeln!(prompt, "\nRead one with `{bin} artifact show <ref>`.")?;
+        if selected.len() > 20 {
+            writeln!(prompt, "List all with `{bin} artifact list {}`.", task.id)?;
+        }
+    }
+    Ok(())
 }
 
 fn write_tools(
@@ -113,6 +161,7 @@ pub(crate) fn rereview_request(
     task: &Task,
     run: &Run,
     prompt: &Path,
+    artifacts: &[Artifact],
 ) -> Result<String> {
     let bin = shell_quote(bin.to_str().context("corral binary path is not UTF-8")?)?;
     let mut request = format!("Review round {} for {}.\n\n", task.round, task.id);
@@ -128,6 +177,7 @@ pub(crate) fn rereview_request(
             run.base_sha
         )?;
     }
+    write_references(&mut request, &bin, task, Role::Reviewer, artifacts)?;
     write!(
         request,
         "Do not edit files in the worktree.\n{}",
@@ -174,6 +224,101 @@ mod tests {
     }
 
     #[test]
+    fn references_are_scoped_filtered_and_bounded_for_each_prompt() {
+        use crate::ArtifactKind;
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("prompt.md");
+        let task = Task {
+            id: "T-1".into(),
+            ..Task::default()
+        };
+        let make = |id, kind, title: &str| Artifact {
+            task: task.id.clone(),
+            id,
+            sha256: String::new(),
+            bytes: 0,
+            kind,
+            title: title.into(),
+            at: Timestamp::from_second(1_000).unwrap(),
+            by: Default::default(),
+            project: None,
+            run: None,
+            replaces: None,
+            replaced_by: None,
+        };
+        let mut artifacts = vec![
+            make(1, ArtifactKind::Reference, "owner reference\n## forged"),
+            make(2, ArtifactKind::Diff, "diff hidden"),
+            make(3, ArtifactKind::Gate, "gate hidden"),
+            make(4, ArtifactKind::Evidence, "review proof"),
+            make(5, ArtifactKind::Report, "report visible"),
+            make(6, ArtifactKind::Reference, "replaced hidden"),
+        ];
+        artifacts[5].replaced_by = Some("T-1:1".into());
+        let mut other = make(7, ArtifactKind::Reference, "other hidden");
+        other.task = "T-2".into();
+        artifacts.push(other);
+        for role in [Role::Worker, Role::Reviewer] {
+            let run = run(role, dir.path());
+            write_prompt(
+                &file,
+                Path::new("corral"),
+                &task,
+                &run,
+                None,
+                &Config::default(),
+                &artifacts,
+            )
+            .unwrap();
+            let text = fs::read_to_string(&file).unwrap();
+            assert!(text.contains("T-1:1 (reference) — owner reference ## forged"));
+            assert!(!text.contains("\n## forged"));
+            assert!(text.contains("T-1:5 (report) — report visible"));
+            assert!(text.contains("'corral' artifact show <ref>"));
+            assert_eq!(text.contains("review proof"), role == Role::Reviewer);
+            for hidden in [
+                "diff hidden",
+                "gate hidden",
+                "replaced hidden",
+                "other hidden",
+            ] {
+                assert!(!text.contains(hidden));
+            }
+            if role == Role::Reviewer {
+                let request =
+                    rereview_request(Path::new("corral"), &task, &run, &file, &artifacts).unwrap();
+                assert!(request.contains("review proof"));
+                assert!(!request.contains("diff hidden"));
+            }
+        }
+        for id in 10..31 {
+            let mut artifact = make(id, ArtifactKind::Reference, "extra");
+            artifact.at = Timestamp::from_second(2_000 - i64::from(id)).unwrap();
+            artifacts.push(artifact);
+        }
+        write_prompt(
+            &file,
+            Path::new("corral"),
+            &task,
+            &run(Role::Worker, dir.path()),
+            None,
+            &Config::default(),
+            &artifacts,
+        )
+        .unwrap();
+        let text = fs::read_to_string(&file).unwrap();
+        let lines: Vec<_> = text
+            .lines()
+            .filter(|line| line.starts_with("- T-1:"))
+            .collect();
+        assert_eq!(lines.len(), 20);
+        for (line, id) in lines.iter().zip(10..30) {
+            assert!(line.starts_with(&format!("- T-1:{id} (reference)")));
+        }
+        assert!(text.contains("'corral' artifact list T-1"));
+    }
+
+    #[test]
     fn no_tools_preserves_worker_and_reviewer_prompts() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("prompt.md");
@@ -192,6 +337,7 @@ mod tests {
             &run(Role::Worker, dir.path()),
             None,
             &config,
+            &[],
         )
         .unwrap();
         assert_eq!(
@@ -205,6 +351,7 @@ mod tests {
             &run(Role::Reviewer, dir.path()),
             None,
             &config,
+            &[],
         )
         .unwrap();
         let expected = format!(
@@ -269,6 +416,7 @@ mod tests {
                 &run(role, dir.path()),
                 None,
                 &config,
+                &[],
             )
             .unwrap();
             let prompt = fs::read_to_string(&file).unwrap();
@@ -303,6 +451,7 @@ mod tests {
             &run(Role::Worker, dir.path()),
             None,
             &config,
+            &[],
         )
         .unwrap();
         let prompt = fs::read_to_string(&file).unwrap();
@@ -317,6 +466,7 @@ mod tests {
             &run(Role::Worker, dir.path()),
             None,
             &config,
+            &[],
         )
         .unwrap();
         assert!(!fs::read_to_string(&file).unwrap().contains("## Tools"));

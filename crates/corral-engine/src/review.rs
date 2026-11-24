@@ -314,8 +314,14 @@ impl Engine {
                         .join(id)
                         .join(&reviewer.id)
                         .join("prompt.md");
-                    let request =
-                        rereview_request(&crate::binary_path()?, &task, &reviewer, &prompt)?;
+                    let artifacts = store.list_artifacts(Some(&task.id))?;
+                    let request = rereview_request(
+                        &crate::binary_path()?,
+                        &task,
+                        &reviewer,
+                        &prompt,
+                        &artifacts,
+                    )?;
                     match self.session_runner().send(session, &request, Origin::Auto) {
                         Ok(()) => {
                             self.record_review_request(
