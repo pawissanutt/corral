@@ -509,3 +509,80 @@ fn open_in_system_waits_for_confirmed_levels_at_one_head() {
         Reach::Open { note: None, .. }
     ));
 }
+
+/// A data model change opens its own source line on the side that holds it: a removed field at
+/// the base, a retyped one at the head, each with only the excerpt served for that line (one
+/// served for another line would show the wrong source).
+#[test]
+fn data_changes_anchor_removals_at_the_base_with_their_own_excerpt() {
+    use corral_types::{
+        DataChange, DataChangeKind, DataField, DataKind, DataSource, SourceExcerpt,
+    };
+    let field = |name: &str, ty: &str, line| DataField {
+        name: name.into(),
+        ty: ty.into(),
+        line,
+        optional: false,
+    };
+    let change = |change| DataChange {
+        path: "crates/t/src/lib.rs".into(),
+        name: "Task".into(),
+        line: 3,
+        kind: DataKind::Record,
+        source: DataSource::RustSerde,
+        contract: true,
+        change,
+    };
+    let excerpt = |commit: &str, line| SourceExcerpt {
+        path: "crates/t/src/lib.rs".into(),
+        commit: commit.into(),
+        line,
+        first: line - 1,
+        lines: vec!["a".into(), "b".into(), "c".into()],
+    };
+    let rows = vec![
+        container("crates/t"),
+        Row::DataChange {
+            change: change(DataChangeKind::FieldRemoved {
+                field: field("pane", "String", 9),
+            }),
+            excerpt: Some(excerpt("base-commit", 9)),
+        },
+        Row::DataChange {
+            change: change(DataChangeKind::FieldRetyped {
+                before: field("round", "u32", 5),
+                after: field("round", "u64", 6),
+            }),
+            excerpt: Some(excerpt("head-commit", 5)),
+        },
+    ];
+    let categories = vec![SystemCategorySummary {
+        category: Category::DataModel,
+        provided: true,
+        total: 2,
+    }];
+    let shown = impact(&review(categories, rows), None, &BTreeSet::new());
+    let section = shown
+        .sections
+        .iter()
+        .find(|s| s.title == "Data model")
+        .unwrap_or_else(|| panic!("no Data model section"));
+    let [removed, retyped] = section.items.as_slice() else {
+        panic!("{:?}", section.items);
+    };
+    let anchor = removed
+        .anchor
+        .as_ref()
+        .map(|a| (a.line, a.base, a.commit.as_str()));
+    assert_eq!(anchor, Some((Some(9), true, "base-commit")));
+    let lines = removed.source.clone().flatten().map(|s| s.lines.len());
+    assert_eq!(lines, Some(3));
+    assert_eq!(retyped.right, "u32 → u64");
+    let anchor = retyped.anchor.as_ref().map(|a| (a.line, a.base));
+    assert_eq!(anchor, Some((Some(6), false)));
+    assert_eq!(
+        retyped.source,
+        Some(None),
+        "an excerpt for line 5 is not line 6's"
+    );
+}

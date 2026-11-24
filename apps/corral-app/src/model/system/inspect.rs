@@ -58,6 +58,9 @@ pub fn inspect(scene: &Scene, pick: &Pick, at: Option<&SystemAt>) -> Option<Insp
     if scene.level == Level::Runtime {
         return super::runtime_inspect::inspect(scene, pick);
     }
+    if scene.level == Level::Data {
+        return super::data_inspect::inspect(scene, pick);
+    }
     match pick {
         Pick::Node(node) => scene.card(node).map(|card| node_inspector(scene, card, at)),
         Pick::Edge(from, to) => scene

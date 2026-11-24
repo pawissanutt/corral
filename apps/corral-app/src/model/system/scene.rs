@@ -7,9 +7,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use corral_types::{
-    ContainerFact, ContainerKind, DefinitionFact, EntryDetector, EntryPoint, ModuleId,
-    PackageEdgeKind, ReadStatus, ReferenceBasis, RuntimeBasis, RuntimeSite, RuntimeUnit,
-    RuntimeUnitKind, SystemAt, SystemMap, SystemMapRow, SystemNodeStats, WorkspaceStatus,
+    ContainerFact, ContainerKind, DataKind, DataType, DataTypeId, DefinitionFact, EntryDetector,
+    EntryPoint, ModuleId, PackageEdgeKind, ReadStatus, ReferenceBasis, RuntimeBasis, RuntimeSite,
+    RuntimeUnit, RuntimeUnitKind, SystemAt, SystemMap, SystemMapRow, SystemNodeStats,
+    WorkspaceStatus,
 };
 
 use super::{Node, base_name};
@@ -23,6 +24,8 @@ pub enum Level {
     File,
     /// The Runtime view's one level: units, the packages that start or build them, edges.
     Runtime,
+    /// The Data view's one level: data types by container, with the types their fields hold.
+    Data,
 }
 
 impl Level {
@@ -41,6 +44,7 @@ impl Level {
             Level::Module => "module",
             Level::File => "file",
             Level::Runtime => "runtime",
+            Level::Data => "data",
         }
     }
 }
@@ -61,12 +65,15 @@ pub enum Kind {
     Owner,
     /// The npm scripts, folded.
     Scripts,
+    /// A stored or wire data type of this kind.
+    Type(DataKind),
 }
 
 impl Kind {
     pub const fn word(self) -> &'static str {
         match self {
             Kind::Unit(kind) => unit_word(kind),
+            Kind::Type(kind) => data_kind_word(kind),
             Kind::Owner => "package or folder",
             Kind::Scripts => "npm scripts, folded",
             Kind::Package => "package",
@@ -79,10 +86,34 @@ impl Kind {
         }
     }
 
-    /// Whether the card is on the Runtime view, whose cards carry no overlay bar.
-    pub const fn runtime(self) -> bool {
-        matches!(self, Kind::Unit(_) | Kind::Owner | Kind::Scripts)
+    /// Whether the card is on the Runtime or Data view, whose cards carry no overlay bar.
+    pub const fn barless(self) -> bool {
+        matches!(
+            self,
+            Kind::Unit(_) | Kind::Owner | Kind::Scripts | Kind::Type(_)
+        )
     }
+}
+
+/// A data type's kind in a sentence.
+pub const fn data_kind_word(kind: DataKind) -> &'static str {
+    match kind {
+        DataKind::Record => "record",
+        DataKind::Enum => "enum",
+        DataKind::Table => "table",
+        DataKind::Message => "message",
+    }
+}
+
+/// A data type as the Data view draws it: its declaration, and the types it holds and that
+/// hold it through a field, every one of them, whether or not the filter shows the other end.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DataCard {
+    pub ty: DataType,
+    pub container: String,
+    /// The other type, the field and the field's line.
+    pub holds: Vec<(DataTypeId, String, u64)>,
+    pub held_by: Vec<(DataTypeId, String, u64)>,
 }
 
 /// A unit kind in a sentence.
@@ -128,6 +159,8 @@ pub struct Card {
     pub detectors: Option<BTreeSet<EntryDetector>>,
     /// The scripts the folded card stands for.
     pub folded: Vec<RuntimeUnit>,
+    /// A data type's declaration and links.
+    pub data: Option<DataCard>,
 }
 
 impl Card {
@@ -149,6 +182,7 @@ impl Card {
             entries: Vec::new(),
             detectors: None,
             folded: Vec::new(),
+            data: None,
         }
     }
 
@@ -190,6 +224,8 @@ pub enum EdgeKind {
     DependsOn,
     /// A service's or image's build context or Dockerfile lies in a package.
     Builds,
+    /// A field of one data type names another.
+    Has,
 }
 
 impl EdgeKind {
@@ -199,6 +235,7 @@ impl EdgeKind {
             EdgeKind::Runs => "runs",
             EdgeKind::DependsOn => "depends on",
             EdgeKind::Builds => "builds",
+            EdgeKind::Has => "has",
             EdgeKind::Declared => "declared and referenced",
             EdgeKind::DeclaredOnly => "declared, no reference found",
             EdgeKind::ReferencedOnly => "used in code · no dependency match",
@@ -245,6 +282,10 @@ pub struct Scene {
     /// Unconnected cards, packed under the graph.
     pub band: Vec<usize>,
     pub band_title: Option<&'static str>,
+    /// Fixed bands, one rank per card (the higher, the nearer the top), which replace the
+    /// ranks references give; with each band's caption.
+    pub ranks: Option<Vec<i32>>,
+    pub rank_titles: BTreeMap<i32, String>,
     /// Edges the map draws.
     pub edges: Vec<Edge>,
     /// Edges left undrawn to stay legible; the inspector lists them.
@@ -296,6 +337,8 @@ pub fn build(map: &SystemMap, at: Option<&SystemAt>) -> Scene {
         bottom: Vec::new(),
         band: Vec::new(),
         band_title: None,
+        ranks: None,
+        rank_titles: BTreeMap::new(),
         edges: Vec::new(),
         undrawn: Vec::new(),
         max_lines: 1,
@@ -325,6 +368,7 @@ fn fallback_name(node: &Node) -> String {
         Node::More => "more".into(),
         Node::Unit(id) => id.name.clone(),
         Node::Scripts => "scripts".into(),
+        Node::Type(id) => id.name.clone(),
     }
 }
 

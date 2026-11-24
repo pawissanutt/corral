@@ -258,6 +258,8 @@ pub fn build(runtime: &SystemRuntime, scripts: bool) -> Scene {
             bottom: Vec::new(),
             band: Vec::new(),
             band_title: None,
+            ranks: None,
+            rank_titles: BTreeMap::new(),
             edges: Vec::new(),
             undrawn: Vec::new(),
             max_lines: 1,
@@ -383,6 +385,13 @@ pub fn build(runtime: &SystemRuntime, scripts: bool) -> Scene {
     graph.sort_by(|a, c| {
         (group(cards[*a].kind).0, &cards[*a].name).cmp(&(group(cards[*c].kind).0, &cards[*c].name))
     });
+    b.scene.ranks = Some(b.scene.cards.iter().map(|c| band(c.kind)).collect());
+    b.scene.rank_titles = b
+        .scene
+        .cards
+        .iter()
+        .map(|c| (band(c.kind), band_title(band(c.kind)).to_owned()))
+        .collect();
     b.scene.graph = graph;
     b.scene
 }

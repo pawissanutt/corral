@@ -8,7 +8,6 @@
 use std::collections::BTreeMap;
 
 use super::layered::{LEdge, layered};
-use super::runtime;
 use super::scene::{Card, EdgeKind, Kind, Level, Scene};
 use super::words::figure;
 use super::{Overlay, Window};
@@ -102,7 +101,7 @@ pub struct EdgeLabel {
 pub struct Caption {
     pub x: f32,
     pub y: f32,
-    pub text: &'static str,
+    pub text: String,
     pub rule: Option<f32>,
 }
 
@@ -225,11 +224,11 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
         let has_bottom = bottom.iter().any(|b| *b);
         let caption_room = if has_top { 26.0 } else { 0.0 };
         let local_sizes: Vec<_> = graph.iter().map(|c| sizes[*c]).collect();
-        // The Runtime view lays every card in its kind's band.
-        let bands: Option<Vec<i32>> = (scene.level == Level::Runtime).then(|| {
+        // The Runtime view lays every card in its kind's band, the Data view in its container's.
+        let bands: Option<Vec<i32>> = scene.ranks.as_ref().map(|ranks| {
             graph
                 .iter()
-                .map(|c| runtime::band(scene.cards[*c].kind))
+                .map(|c| ranks.get(*c).copied().unwrap_or(0))
                 .collect()
         });
         let g = layered(
@@ -265,7 +264,7 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
             out.captions.push(Caption {
                 x: PAD,
                 y: y - 10.0,
-                text: "Packages that reference this one",
+                text: "Packages that reference this one".into(),
                 rule: None,
             });
         }
@@ -273,7 +272,7 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
             out.captions.push(Caption {
                 x: PAD,
                 y: y + top - 10.0,
-                text: "Packages this one references",
+                text: "Packages this one references".into(),
                 rule: None,
             });
         }
@@ -281,7 +280,7 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
             out.captions.push(Caption {
                 x: PAD,
                 y: y + top - 10.0,
-                text: runtime::band_title(*rank),
+                text: scene.rank_titles.get(rank).cloned().unwrap_or_default(),
                 rule: (i > 0).then_some(y + top - 32.0),
             });
         }
@@ -300,7 +299,7 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
             out.captions.push(Caption {
                 x: PAD,
                 y: y - 14.0,
-                text,
+                text: text.into(),
                 rule: Some(y - 34.0),
             });
         }

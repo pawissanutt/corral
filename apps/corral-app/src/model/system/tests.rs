@@ -261,7 +261,7 @@ fn runtime_folds_scripts_merges_sites_and_bands_every_kind() {
         let y = card.and_then(|c| placed.rect(c)).map(|r| r.y);
         y.unwrap_or_else(|| panic!("{name} is not placed"))
     };
-    let captions: Vec<&str> = placed.captions.iter().map(|c| c.text).collect();
+    let captions: Vec<&str> = placed.captions.iter().map(|c| c.text.as_str()).collect();
     for title in ["Packages and folders", "CI jobs", "Binaries", "npm scripts"] {
         assert!(captions.contains(&title), "{title} in {captions:?}");
     }
@@ -276,4 +276,108 @@ fn runtime_folds_scripts_merges_sites_and_bands_every_kind() {
     let unfolded = runtime::build(&runtime, state.scripts);
     assert!(unfolded.card(&Node::Scripts).is_none());
     assert_eq!(unfolded.cards.len(), scene.cards.len() + 2);
+}
+
+fn data_fixture() -> corral_types::SystemData {
+    use corral_types::{
+        DataEdge, DataEdgeKind, DataField, DataKind, DataSource, DataType, DataTypeId,
+        SystemDataRow,
+    };
+    let id = |path: &str| DataTypeId {
+        path: path.into(),
+        name: path.rsplit('/').next().unwrap_or_default().into(),
+    };
+    let ty = |path: &str, fields: &[&str]| SystemDataRow::Type {
+        data_type: DataType {
+            path: path.into(),
+            name: id(path).name,
+            line: 1,
+            kind: DataKind::Record,
+            source: DataSource::RustSerde,
+            fields: fields
+                .iter()
+                .enumerate()
+                .map(|(i, f)| DataField {
+                    name: (*f).into(),
+                    ty: "T".into(),
+                    line: 2 + i as u64,
+                    optional: false,
+                })
+                .collect(),
+        },
+    };
+    let container = |path: &str, language: &str| SystemDataRow::Container {
+        path: path.into(),
+        name: path.into(),
+        languages: [language.to_owned()].into(),
+    };
+    let has = |from: &str, to: &str, field: &str| SystemDataRow::Has {
+        edge: DataEdge {
+            kind: DataEdgeKind::Has,
+            from: id(from),
+            to: id(to),
+            field: field.into(),
+            line: 2,
+        },
+    };
+    corral_types::SystemData {
+        project: "p".into(),
+        commit: Some("abc".into()),
+        status: SystemStatus::Ready,
+        error: None,
+        provider: None,
+        omitted_rows: 0,
+        rows: vec![
+            container("a", "rust"),
+            container("b", "rust"),
+            container("web", "typescript"),
+            SystemDataRow::Coverage {
+                language: "rust".into(),
+                sources: [DataSource::RustSerde].into(),
+            },
+            SystemDataRow::Coverage {
+                language: "typescript".into(),
+                sources: Default::default(),
+            },
+            ty("a/src/Task", &["run", "id"]),
+            ty("b/src/Run", &["check"]),
+            ty("b/src/Check", &[]),
+            has("a/src/Task", "b/src/Run", "run"),
+            has("b/src/Run", "b/src/Check", "check"),
+        ],
+    }
+}
+
+/// The Data view groups types in their containers' bands, draws a has edge only where both
+/// types are drawn (an edge to a filtered-out type has no card to reach) while the inspector
+/// still names the holder, and says a container no source reads is not provided, never empty.
+#[test]
+fn data_view_bands_by_container_and_keeps_links_past_the_filter() {
+    let data = data_fixture();
+    let scene = data::build(&data, "");
+    assert_eq!(scene.edges.len(), 2);
+    let placed = layout(&scene, 600.0, &estimate);
+    let captions: Vec<&str> = placed.captions.iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(captions, ["a", "b"]);
+    let filtered = data::build(&data, "check");
+    assert_eq!(filtered.cards.len(), 1);
+    assert!(filtered.edges.is_empty());
+    let check = Node::Type(corral_types::DataTypeId {
+        path: "b/src/Check".into(),
+        name: "Check".into(),
+    });
+    let inspected = inspect::inspect(&filtered, &Pick::Node(check), None);
+    let held = inspected
+        .iter()
+        .flat_map(|i| &i.sections)
+        .find(|s| s.title.as_deref().is_some_and(|t| t.starts_with("Held by")))
+        .map(|s| (s.rows.len(), s.rows[0].pick.is_none()));
+    assert_eq!(
+        held,
+        Some((1, true)),
+        "Run holds Check though the filter hides Run"
+    );
+    let summary = data::summary(&data).join(" | ");
+    assert!(summary.contains("Not provided for typescript"), "{summary}");
+    assert!(summary.contains("web"), "{summary}");
 }

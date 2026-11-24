@@ -7,7 +7,8 @@
 //! `model::review::impact`'s.
 //!
 //! Test ids: "task-impact", "impact-crumb-<n>", "impact-item-<key>", "btn-open-in-system",
-//! "impact-unreachable", "btn-impact-more-<n>", "impact-lens" (a touched lens, drawn under its item).
+//! "impact-unreachable", "btn-impact-more-<n>", "impact-lens" (a touched lens, drawn under its item),
+//! "impact-source" (a data model change's committed lines, or why there are none).
 
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
@@ -21,7 +22,7 @@ use crate::model::system::lens::{self, Touch};
 use crate::model::system::marks::Marks;
 use crate::model::system::scene::Scene;
 use crate::model::{Form, Hue, Id};
-use crate::screens::system::{Host, canvas, lens_impact, tree};
+use crate::screens::system::{Host, canvas, lens_impact, lenses, tree};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::marks::hue_ink;
@@ -352,6 +353,10 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
             return None;
         }
         let (sub, anchor, note) = (item.sub.clone(), item.anchor.clone(), item.note.clone());
+        let lined = matches!(item.source, Some(Some(_)));
+        let excerpt = item.source.clone().map(|lines| {
+            untracked(|| lenses::source(app, lines, "impact-source", impact::SOURCE_UNAVAILABLE))
+        });
         let drawn = item.lens.clone().map(|touched| {
             let head = lens::lens_request(project.as_str(), &touched.file, Some(&touched.head));
             let base = lens::lens_request(project.as_str(), &touched.file, Some(&touched.base));
@@ -381,11 +386,15 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
                     v.pl(px(28.0)).py(px(4.0)).gap(px(4.0)).items_start()
                 })
                 .children(sub.map(|sub| quiet(app, sub)))
-                .child(plain(
-                    app,
-                    anchor.map_or_else(|| NO_ANCHOR.to_owned(), |a| a.words()),
-                ))
+                // Served lines carry the anchor as their heading.
+                .children((!lined).then(|| {
+                    plain(
+                        app,
+                        anchor.map_or_else(|| NO_ANCHOR.to_owned(), |a| a.words()),
+                    )
+                }))
                 .children(note.map(|note| quiet(app, note)))
+                .children(excerpt)
                 .children(drawn)
                 .child(to_system)
                 .into_element()

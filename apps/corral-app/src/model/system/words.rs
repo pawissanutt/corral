@@ -26,6 +26,7 @@ pub fn activity(card: &Card, window: Window) -> Option<(u64, u64, u64)> {
 pub fn figure(card: &Card, overlay: Overlay, window: Window) -> String {
     match card.kind {
         Kind::Unit(_) | Kind::Owner | Kind::Scripts => super::runtime::figure(card),
+        Kind::Type(_) => super::data::figure(card),
         Kind::More => {
             if card.lines > 0 {
                 format!("{} lines · not listed", count(card.lines))
@@ -226,7 +227,7 @@ pub fn summary(scene: &Scene, map: &SystemMap, overlay: Overlay, window: Window)
                     out.push(plural(defs as u64, "definition", "definitions"));
                     out.push("in source order".into());
                 }
-                Level::Runtime => {}
+                Level::Runtime | Level::Data => {}
             }
             let langs = languages(scene);
             if !langs.is_empty() && matches!(scene.level, Level::Project | Level::Package) {
@@ -371,7 +372,7 @@ pub fn legend(scene: &Scene, overlay: Overlay, window: Window) -> Vec<(Swatch, S
                 ));
             }
         }
-        Level::Module | Level::File | Level::Runtime => {}
+        Level::Module | Level::File | Level::Runtime | Level::Data => {}
     }
     out
 }

@@ -10,8 +10,8 @@ use corral_protocol::{
     detail::{DetailBody, DetailGet, DetailRef, DetailReply},
 };
 use corral_types::{
-    DataChangeKind, RuntimeEdgeKind, SystemAt, SystemImpactCategory, SystemMapRow, SystemReview,
-    SystemReviewRow, SystemRow, SystemRuntimeRow, SystemStatus,
+    DataChangeKind, RuntimeEdgeKind, SourceExcerpt, SystemAt, SystemDataRow, SystemImpactCategory,
+    SystemMapRow, SystemReview, SystemReviewRow, SystemRow, SystemRuntimeRow, SystemStatus,
 };
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -44,7 +44,7 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
         repo.join(CHANGED),
         r#"pub fn value() -> u8 { let _ = std::process::Command::new("git"); 1 }
 #[derive(serde::Serialize)]
-struct Record { id: u64 }
+struct Record { id: u64, legacy: bool }
 "#,
     )
     .unwrap();
@@ -212,6 +212,25 @@ struct Record {
         SystemMapRow::Module { module, .. } if module.container == "app" && module.path == "feature"
     )));
 
+    let data = client.ok::<DetailReply>(
+        DETAIL_GET,
+        DetailGet {
+            target: DetailRef::SystemData {
+                project: "demo".into(),
+                at: None,
+            },
+            etag: None,
+            page: None,
+        },
+    );
+    let Some(DetailBody::SystemData(data)) = data.body else {
+        panic!("expected a system data detail: {data:?}");
+    };
+    assert!(data.rows.iter().any(|row| matches!(row,
+        SystemDataRow::Container { path, name, languages }
+            if path == "app" && name == "app" && languages.iter().map(String::as_str).eq(["Rust", "TOML"])
+    )));
+
     // Request the delta and wait for the provider to reach the barrier. It is
     // impossible for enriched rows to arrive before the provider is released.
     let _: DetailReply = client.ok(DETAIL_GET, &review);
@@ -246,12 +265,39 @@ struct Record {
     assert!(built_in.categories.iter().any(|category| category.category
         == SystemImpactCategory::DataModel
         && category.provided
-        && category.total == 1));
-    assert!(built_in.rows.iter().any(|row| matches!(row,
-        SystemReviewRow::DataChange { change }
+        && category.total == 2));
+    let anchored_at = |excerpt: &SourceExcerpt, commit: &str, line, field: &str| {
+        assert_eq!(excerpt.path, CHANGED);
+        assert_eq!(excerpt.commit, commit);
+        assert_eq!(excerpt.line, line);
+        assert!(excerpt.lines[(line - excerpt.first) as usize].contains(field));
+    };
+    let added = built_in.rows.iter().find_map(|row| match row {
+        SystemReviewRow::DataChange { change, excerpt }
             if change.path == CHANGED && change.line == 8 && change.contract
                 && matches!(&change.change, DataChangeKind::FieldAdded { field } if field.name == "count" && field.line == 10)
-    )));
+            => excerpt.as_ref(),
+        _ => None,
+    });
+    anchored_at(
+        added.expect("added field excerpt"),
+        candidate_head,
+        10,
+        "count",
+    );
+    let removed = built_in.rows.iter().find_map(|row| match row {
+        SystemReviewRow::DataChange { change, excerpt }
+            if change.path == CHANGED
+                && matches!(&change.change, DataChangeKind::FieldRemoved { field } if field.name == "legacy")
+            => excerpt.as_ref(),
+        _ => None,
+    });
+    anchored_at(
+        removed.expect("removed field excerpt"),
+        &submitted.base_sha,
+        3,
+        "legacy",
+    );
     let previous = previous_system_client.ok::<DetailReply>(DETAIL_GET, &review);
     assert_ne!(previous.etag, before.etag);
     let Some(DetailBody::SystemReview(previous)) = previous.body else {

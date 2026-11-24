@@ -148,6 +148,14 @@ pub enum SystemDataRow {
     Unreadable {
         path: String,
     },
+    /// A package or folder in the tree. Absent without tree facts, such as for some
+    /// explicit commit selections, and from older daemons.
+    Container {
+        path: String,
+        name: String,
+        /// Languages of this container's files, using the same names as Coverage rows.
+        languages: BTreeSet<String>,
+    },
     Type {
         #[serde(rename = "type")]
         data_type: DataType,
@@ -281,6 +289,18 @@ impl SystemImpactCategory {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceExcerpt {
+    pub path: String,
+    /// Full commit ID the lines were read at.
+    pub commit: String,
+    /// One-based anchored line.
+    pub line: u64,
+    /// One-based line of `lines[0]`.
+    pub first: u64,
+    pub lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SystemReviewRow {
     /// Project-level geometry at the submitted head, including untouched nodes.
@@ -367,6 +387,10 @@ pub enum SystemReviewRow {
     /// Removed types and fields are anchored at the base; other changes at the head.
     DataChange {
         change: DataChange,
+        /// Committed lines around the anchor; absent from older daemons and when
+        /// the line could not be read within bounds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        excerpt: Option<SourceExcerpt>,
     },
     Dependent {
         dependent: DependentFact,

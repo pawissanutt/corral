@@ -513,7 +513,7 @@ fn swatch(app: AppState, swatch: Swatch) -> AnyElement {
         Swatch::Edge(EdgeKind::DeclaredOnly) => ("┄", color(Token::Ink4), true),
         Swatch::Edge(EdgeKind::Boundary) => ("┄", color(Token::Ink3), true),
         Swatch::Edge(EdgeKind::ReferencedOnly) => ("━", hue_ink(Hue::Held), false),
-        Swatch::Edge(EdgeKind::Starts) => ("━", hue_ink(Hue::Worker), false),
+        Swatch::Edge(EdgeKind::Starts | EdgeKind::Has) => ("━", hue_ink(Hue::Worker), false),
         Swatch::Edge(EdgeKind::DependsOn) => ("┄", color(Token::Ink3), true),
         Swatch::Edge(EdgeKind::Builds) => ("┄", hue_ink(Hue::Held), true),
         Swatch::Edge(_) => ("━", color(Token::Ink3), false),

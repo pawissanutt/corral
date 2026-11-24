@@ -203,6 +203,9 @@ pub(super) fn review(
             _ => {}
         }
     }
+    for (change, excerpt) in super::system_data::data_changes(project, base, head) {
+        facts.push((Category::DataModel, Row::DataChange { change, excerpt }));
+    }
     for result in results(project)? {
         if let Some(impact) = impact(result, files) {
             facts.push((Category::Lenses, Row::Lens { impact }));

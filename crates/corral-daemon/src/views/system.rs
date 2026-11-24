@@ -3,14 +3,14 @@ use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result, ensure};
 use corral_engine::facts::FactsReport;
-use corral_facts::DataFacts;
 use corral_protocol::{
     app::APP_CONTROL_MAX,
     detail::{DetailBody, DetailGet, DetailRef, DetailReply},
 };
 use corral_types::{
-    SystemCategorySummary, SystemData, SystemImpactCategory, SystemLens, SystemLensSummary,
-    SystemLenses, SystemMap, SystemProvider, SystemReview, SystemRuntime, SystemStatus,
+    SystemCategorySummary, SystemData, SystemDataRow, SystemImpactCategory, SystemLens,
+    SystemLensSummary, SystemLenses, SystemMap, SystemProvider, SystemReview, SystemReviewRow,
+    SystemRuntime, SystemStatus,
 };
 
 use serde::Serialize;
@@ -94,14 +94,14 @@ pub(super) fn read(
                 query,
                 project,
                 shared.system.data_at(shared, project, at)?,
-                |data| data,
+                |facts| projection::data(facts, None),
             )?,
             None => data(
                 shared,
                 query,
                 project,
                 shared.system.map(shared, project)?,
-                |facts| &facts.structure.data,
+                |facts| projection::data(&facts.structure.data, Some(&facts.structure)),
             )?,
         },
         DetailRef::SystemLenses { project } => {
@@ -187,7 +187,7 @@ pub(super) fn read(
         DetailRef::SystemReview { task, at } => {
             let impact = shared.system.review(shared, task)?;
             let (etag, offset) = selection(shared, query, impact.revision, &features)?;
-            let (categories, rows) = match (offset, impact.facts.as_deref()) {
+            let (categories, mut rows) = match (offset, impact.facts.as_deref()) {
                 (Some(_), Some(facts)) => projection::review(
                     &facts.delta,
                     (&facts.base, &facts.head),
@@ -216,6 +216,16 @@ pub(super) fn read(
                     Vec::new(),
                 ),
             };
+            if let Some(facts) = &impact.facts {
+                // Review projects data changes in delta order, without drill-in filtering.
+                let changes = rows.iter_mut().filter_map(|row| match row {
+                    SystemReviewRow::DataChange { excerpt, .. } => Some(excerpt),
+                    _ => None,
+                });
+                for (target, source) in changes.zip(facts.data_excerpts.iter()) {
+                    *target = source.clone();
+                }
+            }
             let (rows, omitted_rows) = bounded_rows(rows)?;
             let body = DetailBody::SystemReview(SystemReview {
                 task: impact.task,
@@ -258,11 +268,11 @@ fn data<T>(
     query: &DetailGet,
     project: &str,
     snapshot: Snapshot<T>,
-    model: impl Fn(&T) -> &DataFacts,
+    project_rows: impl Fn(&T) -> Vec<SystemDataRow>,
 ) -> Result<(String, Option<usize>, DetailBody)> {
     let (etag, offset) = selection(shared, query, snapshot.revision, &())?;
     let rows = match (offset, snapshot.facts.as_deref()) {
-        (Some(_), Some(facts)) => projection::data(model(facts)),
+        (Some(_), Some(facts)) => project_rows(facts),
         _ => Vec::new(),
     };
     let (rows, omitted_rows) = bounded_rows(rows)?;

@@ -190,7 +190,7 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
             .font(&css(Font::Sub))
             .fill_color(ink(Token::Ink3))
             .text_align(CanvasTextAlign::Start)
-            .fill_text(caption.text, caption.x, caption.y);
+            .fill_text(&caption.text, caption.x, caption.y);
     }
     let most = scene
         .edges
@@ -215,6 +215,7 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
             EdgeKind::Runs => (ink(Token::Ink3), base, &[]),
             EdgeKind::DependsOn => (ink(Token::Ink3), base, &[px(5.0), px(3.0)]),
             EdgeKind::Builds => (now(hue_ink(Hue::Held)), base, &[px(4.0), px(3.0)]),
+            EdgeKind::Has => (now(hue_ink(Hue::Worker)), base, &[]),
         };
         let stroke = if lit.picked_edge(&edge.from, &edge.to) {
             ink(Token::Focus)
@@ -519,7 +520,7 @@ fn paint_card(
             r.x + 12.0,
             r.y + 39.0,
         );
-    if matches!(card.kind, Kind::More | Kind::Definition) || card.kind.runtime() {
+    if matches!(card.kind, Kind::More | Kind::Definition) || card.kind.barless() {
         return p;
     }
     p = bar(

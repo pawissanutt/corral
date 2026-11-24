@@ -610,7 +610,12 @@ pub(crate) fn inspector(
                     label_value(app, label, plain(app, value).into_element())
                 }))
                 .child(h3(app, "Source", None))
-                .child(source(app, i.source))
+                .child(source(
+                    app,
+                    i.source,
+                    "lens-source",
+                    lens::SOURCE_UNAVAILABLE,
+                ))
                 .child(h3(app, "Checks", None))
                 .children(
                     i.checks
@@ -623,12 +628,20 @@ pub(crate) fn inspector(
     .into_element()
 }
 
-/// The committed lines around the picked element, its anchored line marked, or why there are
-/// none.
-fn source(app: AppState, source: Option<lens::Source>) -> AnyElement {
+/// Committed lines around an anchor, the anchored line marked, under the test id `id`, or why
+/// there are none (`unavailable`). A lens element's Source and an Impact item's share it.
+pub(crate) fn source(
+    app: AppState,
+    source: Option<lens::Source>,
+    id: &'static str,
+    unavailable: &'static str,
+) -> AnyElement {
     let form = app.form;
     let Some(source) = source else {
-        return quiet(app, lens::SOURCE_UNAVAILABLE).into_element();
+        return view()
+            .test_id(id)
+            .child(quiet(app, unavailable))
+            .into_element();
     };
     let width = source
         .lines
@@ -646,7 +659,7 @@ fn source(app: AppState, source: Option<lens::Source>) -> AnyElement {
             .into_element()
     });
     view()
-        .test_id("lens-source")
+        .test_id(id)
         .child(quiet(app, source.heading))
         .children(lines)
         .into_element()

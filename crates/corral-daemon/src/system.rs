@@ -16,7 +16,9 @@ use anyhow::{Context, Result, bail, ensure};
 use corral_engine::{Config, Store, config::Slot, facts::FactsReport};
 use corral_facts::{ProjectDelta, ProjectFacts, Revision, TreeFacts};
 use corral_protocol::app::APP_CONTROL_MAX;
-use corral_types::{Event, EventKind, Role, SystemRow, SystemStatus, lenses::LensImpact};
+use corral_types::{
+    Event, EventKind, Role, SourceExcerpt, SystemRow, SystemStatus, lenses::LensImpact,
+};
 use data::{DataEntry, DataKey};
 use lenses::{LensEntry, LensKey};
 use serde::Serialize;
@@ -64,6 +66,8 @@ pub(crate) struct ImpactFacts {
     pub base: Arc<TreeFacts>,
     pub head: Arc<TreeFacts>,
     pub lenses: Option<Arc<[LensImpact]>>,
+    /// Parallel to the bounded prefix of `delta.data` considered for excerpts.
+    pub data_excerpts: Arc<[Option<SourceExcerpt>]>,
 }
 
 #[derive(Default)]

@@ -634,24 +634,39 @@ pub const SOURCE_UNAVAILABLE: &str =
     "Source unavailable: corrald served no committed lines for this element.";
 
 fn source(diagram: &Diagram, name: &str) -> Option<Source> {
-    let excerpt = diagram.excerpts.iter().find(|e| e.element == name)?;
-    let at = diagram
-        .commit
-        .as_deref()
+    let e = diagram.excerpts.iter().find(|e| e.element == name)?;
+    Some(excerpt_source(
+        &e.path,
+        e.line,
+        e.first,
+        &e.lines,
+        diagram.commit.as_deref(),
+    ))
+}
+
+/// Committed lines from `first`, the anchored `line` marked, headed by where and at which
+/// commit they were read.
+pub fn excerpt_source(
+    path: &str,
+    line: u64,
+    first: u64,
+    lines: &[String],
+    commit: Option<&str>,
+) -> Source {
+    let at = commit
         .map(|c| format!(" @ {}", short(c)))
         .unwrap_or_default();
-    Some(Source {
-        heading: format!("{}:{}{at}", excerpt.path, excerpt.line),
-        lines: excerpt
-            .lines
+    Source {
+        heading: format!("{path}:{line}{at}"),
+        lines: lines
             .iter()
             .enumerate()
             .map(|(n, text)| {
-                let number = excerpt.first + n as u64;
-                (number, text.clone(), number == excerpt.line)
+                let number = first + n as u64;
+                (number, text.clone(), number == line)
             })
             .collect(),
-    })
+    }
 }
 
 pub fn inspect(diagram: &Diagram, name: &str) -> Option<Inspect> {

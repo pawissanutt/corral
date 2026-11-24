@@ -121,6 +121,8 @@ pub fn request(task: &str, at: Option<&SystemAt>) -> DetailRef {
 pub const LIMIT: usize = 8;
 
 pub const HEADING: &str = "Model impact";
+pub const SOURCE_UNAVAILABLE: &str =
+    "Source unavailable: corrald served no committed lines for this change's anchor.";
 pub const LEAD: &str = "What this change moved in the project's facts. Select an item for its source anchor; the map follows it.";
 pub const TOUCHED: &str = "Touched";
 pub const OPEN_IN_SYSTEM: &str = "Open in System";

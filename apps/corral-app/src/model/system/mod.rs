@@ -7,8 +7,11 @@
 //! the pick is, and `words` the page's sentences. The Runtime view reads the `system_runtime`
 //! detail instead and `runtime` turns it into a scene the same code places, lists and inspects.
 //! The Lenses view reads `system_lenses` and `system_lens`: `lens` turns a checked lens into a
-//! diagram and `lens_layout` places it.
+//! diagram and `lens_layout` places it. The Data view reads `system_data` and `data` turns it
+//! into a scene of types by container, as Runtime does.
 
+pub mod data;
+pub mod data_inspect;
 pub mod inspect;
 mod layered;
 pub mod layout;
@@ -24,7 +27,7 @@ pub mod words;
 
 use corral_protocol::detail::DetailRef;
 use corral_types::lenses::LensKind;
-use corral_types::{ModuleId, RuntimeUnitId, SystemAt};
+use corral_types::{DataTypeId, ModuleId, RuntimeUnitId, SystemAt};
 
 use crate::model::Id;
 
@@ -34,16 +37,19 @@ pub enum View {
     #[default]
     Structure,
     Runtime,
+    /// The types it stores and sends, and which types hold which.
+    Data,
     /// The project's saved state and sequence diagrams.
     Lenses,
 }
 
 impl View {
-    pub const ALL: [View; 3] = [Self::Structure, Self::Runtime, Self::Lenses];
+    pub const ALL: [View; 4] = [Self::Structure, Self::Runtime, Self::Data, Self::Lenses];
     pub const fn label(self) -> &'static str {
         match self {
             Self::Structure => "Structure",
             Self::Runtime => "Runtime",
+            Self::Data => "Data",
             Self::Lenses => "Lenses",
         }
     }
@@ -52,6 +58,7 @@ impl View {
         match self {
             Self::Structure => "structure",
             Self::Runtime => "runtime",
+            Self::Data => "data",
             Self::Lenses => "lenses",
         }
     }
@@ -145,6 +152,8 @@ pub enum Node {
     Unit(RuntimeUnitId),
     /// The project's npm scripts, folded into one card.
     Scripts,
+    /// A data type on the Data view.
+    Type(DataTypeId),
 }
 
 impl Node {
@@ -158,7 +167,11 @@ impl Node {
                 module: module.clone(),
             }),
             Node::File(path) => Some(SystemAt::File { path: path.clone() }),
-            Node::Definition { .. } | Node::More | Node::Unit(_) | Node::Scripts => None,
+            Node::Definition { .. }
+            | Node::More
+            | Node::Unit(_)
+            | Node::Scripts
+            | Node::Type(_) => None,
         }
     }
 
@@ -191,6 +204,7 @@ impl Node {
                 slug(&id.name)
             ),
             Node::Scripts => "node-scripts".into(),
+            Node::Type(id) => format!("node-t-{}-{}", slug(&id.path), slug(&id.name)),
         }
     }
 }
@@ -294,7 +308,7 @@ impl State {
             Action::Open(node) => self.open(&node),
             // The Runtime and Lenses views have one level: the trail is the Structure view's.
             Action::To(_) if self.view != View::Structure => {}
-            Action::Up if self.view == View::Runtime => self.picked = None,
+            Action::Up if matches!(self.view, View::Runtime | View::Data) => self.picked = None,
             Action::Up if self.view == View::Lenses => {
                 if self.draft.is_some() {
                     self.draft = None;
@@ -376,11 +390,20 @@ pub fn runtime_request(project: &str) -> DetailRef {
     }
 }
 
+/// The `system_data` detail at the project head: types, has edges, containers and coverage.
+pub fn data_request(project: &str) -> DetailRef {
+    DetailRef::SystemData {
+        project: project.to_owned(),
+        at: None,
+    }
+}
+
 /// The detail the page's view reads at the level shown.
 pub fn view_request(state: &State, project: &str, at: Option<&SystemAt>) -> DetailRef {
     match state.view {
         View::Structure => request(project, at),
         View::Runtime => runtime_request(project),
+        View::Data => data_request(project),
         View::Lenses => lens::list_request(project),
     }
 }

@@ -318,8 +318,11 @@ impl Worker {
         if !self.check_submission(job, submission) {
             return;
         }
+        let cancelled = || self.cancelled(job);
         let result = (|| {
-            let reader = self.reader(job, &submission.project)?;
+            let reader = self
+                .reader(job, &submission.project)?
+                .with_cancellation(&cancelled);
             let base_sha = if submission.legacy {
                 reader.legacy_submitted_base(&submission.base, &submission.head)?
             } else {
@@ -338,6 +341,7 @@ impl Worker {
                 Arc::new(reader.builtin_tree(&head)?)
             };
             let delta = reader.builtin_delta(&base, &head)?;
+            let data_excerpts = data_work::review_excerpts(&reader, &base, &head, &delta.data);
             let lenses =
                 lens_work::review_lenses(&reader, (&base, &before), (&head, &after), false)
                     .unwrap_or_else(|error| {
@@ -355,6 +359,7 @@ impl Worker {
                     base: before,
                     head: after,
                     lenses,
+                    data_excerpts,
                 },
             ))
         })();
@@ -461,17 +466,20 @@ impl Worker {
             changes.iter().all(|change| {
                 provider_row_fits(&SystemReviewRow::DataChange {
                     change: change.clone(),
+                    excerpt: None,
                 })
                 .is_ok()
             })
         });
-        if let Some((changes, unreadable)) = data {
+        let data_excerpts = if let Some((changes, unreadable)) = data {
             delta.data = changes;
             delta.data_unreadable = unreadable;
             report.coverage.provided.push("types".into());
+            data_work::review_excerpts(&reader, base, head, &delta.data)
         } else {
             report.coverage.not_provided.push("types".into());
-        }
+            Arc::clone(&facts.data_excerpts)
+        };
         let lenses = if facts.lenses.is_some() {
             lens_work::review_lenses(&reader, (base, &facts.base), (head, &facts.head), true)
                 .unwrap_or_else(|error| {
@@ -495,6 +503,7 @@ impl Worker {
                     base: Arc::clone(&facts.base),
                     head: Arc::clone(&facts.head),
                     lenses: lenses.or_else(|| facts.lenses.clone()),
+                    data_excerpts,
                 })
             } else {
                 Arc::clone(facts)

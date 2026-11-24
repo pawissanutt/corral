@@ -50,6 +50,7 @@ pub(super) const CAPS: &[&str] = &[
     SYSTEM_RUNTIME_V1,
     SYSTEM_ENTRIES_V1,
     SYSTEM_LENSES_V1,
+    SYSTEM_DATA_V1,
     USAGE_V1,
     SETTINGS_V1,
     corral_protocol::config::PI_STARTUP_V1,

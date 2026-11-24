@@ -48,6 +48,7 @@ fn words(node: &Node) -> String {
         Node::More => "more".into(),
         Node::Unit(id) => id.name.clone(),
         Node::Scripts => "npm scripts".into(),
+        Node::Type(id) => id.name.clone(),
     }
 }
 

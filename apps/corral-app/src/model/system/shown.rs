@@ -3,14 +3,14 @@
 //! notices, the summary, the legend, the inspector and the provenance line.
 
 use corral_protocol::detail::DetailBody;
-use corral_types::{SystemAt, SystemMap, SystemRow, SystemRuntime};
+use corral_types::{SystemAt, SystemData, SystemDataRow, SystemMap, SystemRow, SystemRuntime};
 
 use super::inspect::{Inspector, inspect};
-use super::runtime;
 use super::scene::{Scene, build, module_name};
 use super::tree::matched;
 use super::words::{Notice, Swatch, legend, notices, provenance, summary};
-use super::{Node, State, View, base_name, request, runtime_request};
+use super::{Node, State, View, base_name, data_request, request, runtime_request};
+use super::{data, runtime};
 use crate::model::Id;
 use crate::model::daemon::{DetailCache, Feed};
 use crate::model::projects::{Scope, known_projects};
@@ -67,6 +67,7 @@ pub struct Shown {
 }
 
 pub const HINT: &str = "Select a package, module, file or edge for its facts. Select it again to open it; Escape goes up.";
+pub const DATA_HINT: &str = "Select a type for its fields, where it is declared and the types that hold it, or a has edge for its fields.";
 pub const RUNTIME_HINT: &str = "Select a unit, a package or an edge for where it is declared, its entry points and what starts it.";
 
 /// The served map of one level, if any.
@@ -130,6 +131,9 @@ pub fn shown(state: &State, feed: &Feed, scope: &Scope) -> Shown {
     let row: Option<&SystemRow> = feed.systems.get(project.as_str());
     if state.view == View::Runtime {
         return runtime_shown(state, feed, project, row);
+    }
+    if state.view == View::Data {
+        return data_shown(state, feed, project, row);
     }
     // The Lenses view draws from its own reads (`screens::system::lenses`).
     if state.view == View::Lenses {
@@ -201,6 +205,67 @@ pub fn runtime_of<'a>(feed: &'a Feed, project: &str) -> Option<&'a SystemRuntime
     match feed.detail(&runtime_request(project))?.body()? {
         DetailBody::SystemRuntime(runtime) => Some(runtime),
         _ => None,
+    }
+}
+
+/// The served `system_data` at the project head, if any.
+pub fn data_of<'a>(feed: &'a Feed, project: &str) -> Option<&'a SystemData> {
+    match feed.detail(&data_request(project))?.body()? {
+        DetailBody::SystemData(data) => Some(data),
+        _ => None,
+    }
+}
+
+/// The Data view: one level, the types by container and the types their fields hold.
+fn data_shown(state: &State, feed: &Feed, project: String, row: Option<&SystemRow>) -> Shown {
+    let status = status_of(feed.detail(&data_request(&project)));
+    let served = data_of(feed, &project);
+    let scene = served.map(|served| data::build(served, &state.filter));
+    let total = served.map_or(0, |served| {
+        served
+            .rows
+            .iter()
+            .filter(|row| matches!(row, SystemDataRow::Type { .. }))
+            .count()
+    });
+    let filtering = !state.filter.trim().is_empty();
+    let empty = match (&scene, served) {
+        (Some(scene), Some(served)) if scene.cards.is_empty() && served.error.is_none() => {
+            Some(if total > 0 && filtering {
+                data::FILTERED
+            } else {
+                data::EMPTY
+            })
+        }
+        _ => None,
+    };
+    let matched = scene.as_ref().filter(|_| filtering).map(|scene| {
+        let drawn = scene.cards.iter().filter(|c| c.data.is_some()).count();
+        let more = scene
+            .cards
+            .iter()
+            .filter_map(|c| c.more)
+            .map(|m| m.0 as usize)
+            .sum::<usize>();
+        (drawn + more, total)
+    });
+    Shown {
+        projects: Vec::new(),
+        status,
+        crumbs: vec![project.clone()],
+        notices: data::notices(served, row),
+        summary: served.map(data::summary).unwrap_or_default(),
+        legend: data::legend(),
+        inspector: scene
+            .as_ref()
+            .zip(state.picked.as_ref())
+            .and_then(|(scene, pick)| inspect(scene, pick, None)),
+        matched,
+        provenance: data::provenance(served, row),
+        empty,
+        scene,
+        project: Some(project),
+        hint: DATA_HINT,
     }
 }
 

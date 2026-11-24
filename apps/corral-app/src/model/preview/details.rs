@@ -186,6 +186,9 @@ pub(super) fn build(feed: &Feed, target: &DetailRef) -> Result<DetailBody, Strin
         DetailRef::SystemRuntime { project } => {
             DetailBody::SystemRuntime(super::system_runtime::detail(project)?)
         }
+        DetailRef::SystemData { project, .. } => {
+            DetailBody::SystemData(super::system_data::detail(project)?)
+        }
         DetailRef::SystemLenses { project } => {
             DetailBody::SystemLenses(super::system_lenses::list(project)?)
         }

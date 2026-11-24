@@ -1,8 +1,11 @@
 use std::{sync::Arc, time::Instant};
 
 use anyhow::{Result, ensure};
+use corral_engine::facts::FactsReader;
 use corral_facts::Revision;
-use corral_types::{DataSource, DataType, SystemDataRow};
+use corral_types::{
+    DataChange, DataChangeKind, DataSource, DataType, SourceExcerpt, SystemDataRow, SystemReviewRow,
+};
 
 use super::{Job, Worker};
 use crate::system::{
@@ -15,6 +18,53 @@ pub(super) fn check_type(data_type: &DataType) -> Result<()> {
     provider_row_fits(&SystemDataRow::Type {
         data_type: data_type.clone(),
     })
+}
+
+fn review_anchor(change: &DataChange) -> (bool, u64) {
+    // The boolean selects the base for removals and the head otherwise.
+    match &change.change {
+        DataChangeKind::TypeAdded => (false, change.line),
+        DataChangeKind::TypeRemoved => (true, change.line),
+        DataChangeKind::FieldAdded { field } => (false, field.line),
+        DataChangeKind::FieldRemoved { field } => (true, field.line),
+        DataChangeKind::FieldRetyped { after, .. }
+        | DataChangeKind::FieldOptionalityChanged { after, .. } => (false, after.line),
+    }
+}
+
+pub(super) fn review_excerpts(
+    reader: &FactsReader<'_>,
+    base: &Revision,
+    head: &Revision,
+    changes: &[DataChange],
+) -> Arc<[Option<SourceExcerpt>]> {
+    // Bound the worker's staging vectors across both revisions, even for huge deltas.
+    const MAX_ANCHORS: usize = 2048;
+    let limit = changes.len().min(MAX_ANCHORS);
+    let mut sides = [
+        (base, Vec::new(), Vec::new()),
+        (head, Vec::new(), Vec::new()),
+    ];
+    for (index, change) in changes[..limit].iter().enumerate() {
+        let (at_base, line) = review_anchor(change);
+        let (_, anchors, indices) = &mut sides[usize::from(!at_base)];
+        anchors.push((change.path.clone(), line));
+        indices.push(index);
+    }
+    let mut excerpts = vec![None; limit];
+    for (rev, anchors, indices) in sides {
+        for (index, excerpt) in indices.into_iter().zip(reader.line_excerpts(rev, &anchors)) {
+            // Optional source must not make an otherwise pageable row disappear.
+            excerpts[index] = excerpt.filter(|excerpt| {
+                provider_row_fits(&SystemReviewRow::DataChange {
+                    change: changes[index].clone(),
+                    excerpt: Some(excerpt.clone()),
+                })
+                .is_ok()
+            });
+        }
+    }
+    excerpts.into()
 }
 
 impl Worker {

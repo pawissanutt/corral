@@ -75,7 +75,7 @@ pub(crate) fn runtime(tree: &TreeFacts, entries: bool) -> Vec<SystemRuntimeRow> 
     rows
 }
 
-pub(crate) fn data(facts: &DataFacts) -> Vec<SystemDataRow> {
+pub(crate) fn data(facts: &DataFacts, tree: Option<&TreeFacts>) -> Vec<SystemDataRow> {
     use SystemDataRow as Row;
     facts
         .coverage
@@ -91,6 +91,7 @@ pub(crate) fn data(facts: &DataFacts) -> Vec<SystemDataRow> {
                 .cloned()
                 .map(|path| Row::Unreadable { path }),
         )
+        .chain(tree.into_iter().flat_map(data_containers))
         .chain(
             facts
                 .types
@@ -100,6 +101,36 @@ pub(crate) fn data(facts: &DataFacts) -> Vec<SystemDataRow> {
         )
         .chain(facts.edges.iter().cloned().map(|edge| Row::Has { edge }))
         .collect()
+}
+
+fn data_containers(tree: &TreeFacts) -> impl Iterator<Item = SystemDataRow> {
+    let paths: HashSet<_> = tree.containers.iter().map(|c| c.path.as_str()).collect();
+    let mut languages = HashMap::<_, BTreeSet<_>>::new();
+    for file in &tree.files {
+        let path = file.path.as_str();
+        if let Some(owner) = paths
+            .get(path)
+            .copied()
+            .or_else(|| container_owner(path, &paths))
+        {
+            languages
+                .entry(owner)
+                .or_default()
+                .insert(file.language.as_str());
+        }
+    }
+    tree.containers
+        .iter()
+        .map(move |container| SystemDataRow::Container {
+            path: container.path.clone(),
+            name: container.name.clone(),
+            languages: languages
+                .remove(container.path.as_str())
+                .into_iter()
+                .flatten()
+                .map(str::to_owned)
+                .collect(),
+        })
 }
 
 fn map_rows(
@@ -556,13 +587,12 @@ pub(crate) fn review(
     if features.data {
         // Like Runtime, data changes are task-wide; a type in another package
         // can be part of this task's stored or wire contract.
-        review.rows.extend(
-            delta
-                .data
-                .iter()
-                .cloned()
-                .map(|change| Row::DataChange { change }),
-        );
+        review
+            .rows
+            .extend(delta.data.iter().cloned().map(|change| Row::DataChange {
+                change,
+                excerpt: None,
+            }));
         let provided = !delta.data.is_empty()
             || (delta.data_unreadable.is_empty()
                 && (extension_provided_data

@@ -9,7 +9,11 @@ use corral_types::{
     SystemReviewRow as Row,
 };
 
+use crate::model::system::data::{mark, source_word, type_words};
+use crate::model::system::data_inspect::field_name;
+use crate::model::system::lens::{Source, excerpt_source};
 use crate::model::system::runtime::{at, basis_word, entry_word};
+use crate::model::system::scene::data_kind_word;
 use crate::model::system::scene::{module_name, unit_word};
 use crate::model::system::{Node, count};
 
@@ -100,6 +104,9 @@ pub struct Item {
     pub note: Option<String>,
     /// A lens the change touches, drawn with what it touched marked.
     pub lens: Option<LensItem>,
+    /// For an item whose source line corrald serves (a data model change): the committed lines
+    /// around its anchor, or none where corrald could not read them within bounds.
+    pub source: Option<Option<Source>>,
 }
 
 /// A touched lens: its file, the review's two commits, and the elements the change touched,
@@ -306,6 +313,7 @@ pub(super) fn item(key: String, sign: Sign, main: String, right: String) -> Item
         target: None,
         note: None,
         lens: None,
+        source: None,
     }
 }
 
@@ -568,12 +576,105 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             }
         }
         Row::Lens { impact } => lens_item(cx, key, impact),
-        // This client does not negotiate system.data.v1; the Data view renders these rows.
-        Row::DataChange { .. } => return None,
+        Row::DataChange { change, excerpt } => data_item(cx, key, change, excerpt.as_ref()),
         Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
             return None;
         }
     })
+}
+
+/// A data model change: the type and field, how the field changed, and its source line at the
+/// base for what the change removed, at the head otherwise, with the lines corrald served.
+fn data_item(
+    cx: &Ctx,
+    key: String,
+    change: &corral_types::DataChange,
+    excerpt: Option<&corral_types::SourceExcerpt>,
+) -> Item {
+    use corral_types::DataChangeKind as C;
+    let kind = data_kind_word(change.kind);
+    let named = |field: &corral_types::DataField| format!("{}.{}", change.name, field_name(field));
+    let (sign, main, right, line, base) = match &change.change {
+        C::TypeAdded => (
+            Sign::Added,
+            change.name.clone(),
+            kind.to_owned(),
+            change.line,
+            false,
+        ),
+        C::TypeRemoved => (
+            Sign::Removed,
+            change.name.clone(),
+            kind.to_owned(),
+            change.line,
+            true,
+        ),
+        C::FieldAdded { field } => (
+            Sign::Added,
+            named(field),
+            type_words(&field.ty),
+            field.line,
+            false,
+        ),
+        C::FieldRemoved { field } => (
+            Sign::Removed,
+            named(field),
+            type_words(&field.ty),
+            field.line,
+            true,
+        ),
+        C::FieldRetyped { before, after } => (
+            Sign::Changed,
+            named(after),
+            format!("{} → {}", type_words(&before.ty), type_words(&after.ty)),
+            after.line,
+            false,
+        ),
+        C::FieldOptionalityChanged { before, after } => {
+            let word = |f: &corral_types::DataField| {
+                if f.optional { "optional" } else { "required" }
+            };
+            (
+                Sign::Changed,
+                format!("{}.{}", change.name, after.name),
+                format!("{} → {}", word(before), word(after)),
+                after.line,
+                false,
+            )
+        }
+    };
+    let what = match &change.change {
+        C::TypeAdded | C::TypeRemoved => "type",
+        _ => "field",
+    };
+    let mut sub = vec![format!("{kind} {what} {}", sign.word())];
+    match (change.contract, mark(change.source)) {
+        (true, Some(mark)) => sub.push(mark.to_owned()),
+        _ => sub.push(source_word(change.source).to_owned()),
+    }
+    // A served excerpt for another place than the anchor is not this item's line.
+    let source = excerpt
+        .filter(|e| e.path == change.path && e.line == line)
+        .map(|e| excerpt_source(&e.path, e.line, e.first, &e.lines, Some(&e.commit)));
+    let anchor = cx.anchor(&change.path, Some(line), base);
+    // The lines go under the anchor's own words, which say which side they were read at.
+    let source = source.map(|mut source| {
+        if let Some(anchor) = &anchor {
+            source.heading = anchor.words();
+        }
+        source
+    });
+    Item {
+        sub: Some(sub.join(" · ")),
+        anchor,
+        target: if base {
+            cx.container(&change.path)
+        } else {
+            cx.file(&change.path)
+        },
+        source: Some(source),
+        ..item(key, sign, main, right)
+    }
 }
 
 /// A touched lens: its title, how many elements the change touched, added and removed, and
