@@ -79,7 +79,8 @@ function encodeToolResult(result: McpResult): string {
 
 export async function openAgyMcp(
   tools: readonly Tool[],
-  onCall: (id: Id, name: string, args: Json, meta: Json | undefined, signal: AbortSignal) => Promise<McpResult>,
+  onCall: (id: Id, name: string, args: Json, meta: Json | undefined, signal: AbortSignal,
+    responseDrained: Promise<void>) => Promise<McpResult>,
   signal: AbortSignal,
 ): Promise<AgyMcp> {
   const aborted = () => new AcpFailure("aborted", "MCP bridge cancelled");
@@ -175,8 +176,14 @@ export async function openAgyMcp(
     }, CALL_MS);
     // Keep the slot until the host really settles, even if it ignores cancellation.
     activeCalls.add(controller);
+    // A terminal Pi run can release its result now but must not close the response socket
+    // before HTTP finishes writing that result (or the client disconnects).
+    const responseDrained = new Promise<void>(resolve => {
+      res.once("finish", resolve);
+      res.once("close", resolve);
+    });
     try {
-      const result = await onCall(id, name, args, meta, controller.signal);
+      const result = await onCall(id, name, args, meta, controller.signal, responseDrained);
       if (isLive()) success(res, id, encodeToolResult(result));
     } catch {
       if (isLive()) error(res, id, -32603, "Tool call failed");

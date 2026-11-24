@@ -211,6 +211,7 @@ async function runThroughPi(scenario: BridgeCase) {
   writeFileSync(join(cwd, "review.txt"), "review sentinel");
   writeFileSync(join(root, "denied.txt"), "outside sentinel");
   const writes: string[] = [], commands: string[] = [];
+  let modelRequests = 0;
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const terminalObserved = Promise.withResolvers<void>();
@@ -231,7 +232,8 @@ async function runThroughPi(scenario: BridgeCase) {
         const write = createWriteTool(cwd);
         pi.registerTool({ ...write, async execute(id, input, signal, update) {
           writes.push(input.path);
-          return write.execute(id, input, signal, update);
+          const result = await write.execute(id, input, signal, update);
+          return scenario === "mcp-terminate" ? { ...result, terminate: true } : result;
         } });
         pi.registerTool({ name: "bash", label: "Bash", description: "Fixture command effect",
           parameters: Type.Object({ command: Type.String() }), async execute(_id, input) {
@@ -262,8 +264,8 @@ async function runThroughPi(scenario: BridgeCase) {
     await session.bindExtensions({ onError: error => { throw error.error; } });
     await session.modelRuntime.setRuntimeApiKey(sessionModel.provider, "fixture-not-a-secret");
     const agent = session.agent;
-    lane = new AgyToolLane({ cwd, home, executable, setupTimeoutMs: 1500, turnTimeoutMs: 2000 }, agent);
-    agent.streamFunction = lane.stream;
+    const toolLane = lane = new AgyToolLane({ cwd, home, executable, setupTimeoutMs: 1500, turnTimeoutMs: 2000 }, agent);
+    agent.streamFunction = (...args) => { modelRequests++; return toolLane.stream(...args); };
     if (scenario === "mcp-terminal") agent.onProviderStreamEvent = async wire => {
       if ((wire as { result?: { stopReason?: string } }).result?.stopReason !== "end_turn") return;
       terminalObserved.resolve();
@@ -296,7 +298,7 @@ async function runThroughPi(scenario: BridgeCase) {
     const rpc = Object.fromEntries(replyLog.map(({ label, result }) => [label, result]));
     const wire = readFileSync(join(root, "wire.ndjson"), "utf8").trim().split("\n").map(line => JSON.parse(line));
     const allowed = join(cwd, "allowed.txt");
-    return { calls, results, rpc, writes, commands, methods: wire.flatMap(packet => packet.method ?? []),
+    return { calls, results, rpc, writes, commands, modelRequests, methods: wire.flatMap(packet => packet.method ?? []),
       allowed: existsSync(allowed) ? readFileSync(allowed, "utf8") : undefined,
       denied: readFileSync(join(root, "denied.txt"), "utf8"), pending: existsSync(join(cwd, "pending.txt")),
       reviewerDenied: existsSync(join(cwd, "reviewer-denied.txt")) };
@@ -341,6 +343,16 @@ posixTest("agy MCP advertises only the reviewer's active tools, never write", as
   expect(rpc.read).toMatchObject({ result: { content: [{ type: "text", text: "review sentinel" }] } });
   expect(rpc["unlisted-write"]).toMatchObject({ error: { code: -32602 } });
   expect(reviewerDenied).toBe(false);
+});
+
+posixTest("agy receives the recorded result from a terminal Pi tool without another model turn", async () => {
+  const { calls, results, rpc, writes, allowed, modelRequests } = await runThroughPi("mcp-terminate");
+  expect(modelRequests).toBe(1);
+  expect(writes).toEqual(["allowed.txt"]);
+  expect(allowed).toBe("once");
+  expect(results).toMatchObject([{ toolCallId: calls[0]!.id, toolName: "write", isError: false }]);
+  expect(rpc["fixture-error"]).toBeUndefined();
+  expect(rpc.terminate).toMatchObject({ result: { content: results[0]!.content, isError: false } });
 });
 
 for (const scenario of ["mcp-cancel", "mcp-stale", "mcp-terminal"] as const) {

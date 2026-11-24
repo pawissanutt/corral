@@ -5,7 +5,7 @@ import { createInterface } from "node:readline";
 
 export type FakeAgyCase = "stream" | "cancel" | "timeout" | "unavailable" | "mismatch" | "current-mismatch"
   | "unchanged-variant" | "auth" | "quota" | "warning" | "bad-error" | "oversize"
-  | "mcp-build" | "mcp-reviewer" | "mcp-stale" | "mcp-terminal" | "mcp-cancel";
+  | "mcp-build" | "mcp-reviewer" | "mcp-stale" | "mcp-terminal" | "mcp-cancel" | "mcp-terminate";
 
 type Id = string | number;
 type Packet = { jsonrpc: "2.0"; id?: Id; method?: string; params?: any; result?: any };
@@ -108,6 +108,9 @@ async function runBridge() {
   } else if (scenario === "mcp-reviewer") {
     await call("read", "read", { path: "review.txt" }, "read-review");
     await call("unlisted-write", "write", { path: "reviewer-denied.txt", content: "no" }, "write-unlisted");
+  } else if (scenario === "mcp-terminate") {
+    await call("terminate", "write", { path: "allowed.txt", content: "once" }, "write-terminates-run");
+    send(chunk("message", "ACP follow-up after a terminal Pi tool"));
   } else {
     const args = { path: "pending.txt", content: "pending" };
     await requestPermission(descriptor.name, "write", args, "write-pending");

@@ -1,24 +1,25 @@
 // A dormant one-prompt lane. Pi executes and records ordinary model-issued tool calls;
 // the MCP server only joins an ACP proposal to its HTTP request and returns Pi's result.
-import type { Agent } from "@earendil-works/pi-agent-core";
+import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   declarationsEqual, getCurrentSystemPrompt, getCurrentTools, type JsonObject,
   type Model, type SimpleStreamOptions, type Tool, type ToolCall, type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { record, type AgyLaunch } from "./acp.ts";
+import { bounded, record, type AgyLaunch } from "./acp.ts";
 import type { McpResult } from "./mcp.ts";
 import { AgyOutput, driveAgy, type AgyTurn, type ToolExchange } from "./stream.ts";
 import { flatObjectSchema, type JsonSchema } from "../tools/schema.ts";
 
 const CONVERSATION_ID = "antigravity.google/conversation_id";
 const MAX_CALLS = 128;
+const TERMINAL_RESULT_DRAIN_MS = 1_000;
 const denied = (text: string): McpResult => ({ content: [{ type: "text", text }], isError: true });
 const stale = () => denied("Corral tool session is no longer active.");
 
 type RunOwner = Pick<Agent, "signal" | "abort" | "subscribe" | "state">;
-type Pending = { call: ToolCall; reply: (result: McpResult) => void };
+type Pending = { call: ToolCall; reply: (result: McpResult) => void; responseDrained: Promise<void> };
 
 class Exchange implements ToolExchange {
   private readonly prefix = `agy_${randomUUID()}_`;
@@ -76,7 +77,7 @@ class Exchange implements ToolExchange {
     return allow;
   };
 
-  call: ToolExchange["call"] = async (rpcId, name, args, meta, signal) => {
+  call: ToolExchange["call"] = async (rpcId, name, args, meta, signal, responseDrained) => {
     if (!this.scope || !this.live() || signal.aborted || meta?.[CONVERSATION_ID] !== this.scope.sessionId) return stale();
     if (this.requests.has(rpcId) || this.requests.size >= MAX_CALLS) return denied("Duplicate or excess Corral tool request.");
     this.requests.add(rpcId);
@@ -99,7 +100,7 @@ class Exchange implements ToolExchange {
     const expected = structuredClone(call);
     this.dispatched.push(expected);
     const reply = await new Promise<McpResult>(resolve => {
-      this.pending = { call: expected, reply: resolve };
+      this.pending = { call: expected, reply: resolve, responseDrained };
       signal.addEventListener("abort", this.revoke, { once: true });
       this.output.handoff(call);
     });
@@ -107,18 +108,38 @@ class Exchange implements ToolExchange {
     return reply;
   };
 
-  resume(model: Model<string>, context: TranscriptContext, tools: readonly Tool[], signal: AbortSignal) {
+  private complete(messages: readonly AgentMessage[]): Pending | undefined {
     const pending = this.pending;
-    const result = context.messages.at(-1);
-    const previous = context.messages.at(-2);
-    if (!this.live() || signal !== this.runSignal || !pending || model.id !== this.model.id ||
-      model.api !== this.model.api || model.provider !== this.model.provider || !isDeepStrictEqual(tools, this.tools) ||
-      getCurrentSystemPrompt(context.messages) !== this.turn.instructions || previous?.role !== "assistant" ||
+    const result = messages.at(-1);
+    const previous = messages.at(-2);
+    if (!this.live() || !pending || previous?.role !== "assistant" ||
       !previous.content.some(part => part.type === "toolCall" && isDeepStrictEqual(part, pending.call)) ||
       result?.role !== "toolResult" || result.toolCallId !== pending.call.id || result.toolName !== pending.call.name) return;
     this.pending = undefined;
     pending.reply({ content: result.content, isError: result.isError });
-    return this.output.current.stream;
+    return pending;
+  }
+
+  resume(model: Model<string>, context: TranscriptContext, tools: readonly Tool[], signal: AbortSignal) {
+    if (signal !== this.runSignal || model.id !== this.model.id || model.api !== this.model.api ||
+      model.provider !== this.model.provider || !isDeepStrictEqual(tools, this.tools) ||
+      getCurrentSystemPrompt(context.messages) !== this.turn.instructions) return;
+    if (this.complete(context.messages)) return this.output.current.stream;
+  }
+
+  async settle(messages: readonly AgentMessage[], signal: AbortSignal): Promise<void> {
+    if (signal !== this.runSignal) return;
+    // Pi may terminate after recording the tool result, without requesting another model
+    // segment. Return that same result, but close admission before yielding to the HTTP writer.
+    const answered = this.complete(messages);
+    this.stop();
+    if (answered) {
+      try {
+        await bounded(() => answered.responseDrained, TERMINAL_RESULT_DRAIN_MS, "terminal tool result", this.turnSignal);
+      } catch { /* A cancelled or unresponsive peer must not hold the Pi run open. */ }
+    }
+    this.revoke();
+    await this.finished;
   }
 
   stop(): void {
@@ -157,8 +178,8 @@ export class AgyToolLane {
   private readonly runs = new WeakSet<AbortSignal>();
 
   constructor(private readonly launch: AgyLaunch, private readonly owner: RunOwner) {
-    this.unsubscribe = owner.subscribe(event => {
-      if (event.type === "agent_end") this.active?.revoke();
+    this.unsubscribe = owner.subscribe((event, signal) => {
+      if (event.type === "agent_end") return this.active?.settle(event.messages, signal);
     });
   }
 
