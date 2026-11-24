@@ -9,8 +9,9 @@ export type TranscriptPage = { rows: readonly TranscriptRow[]; older?: string; n
  * One slice of a recorded item. A conversation row names its record (`record`, the record's byte offset) and its
  * item inside the record (`item`); `from` is where the slice starts in the item's text when the page budget split
  * it, and `more` says the item continues on a newer page. `call` is a tool call: `tool` names it and `text` is its
- * arguments as JSON. `tool` is a tool result, `error` when it failed. `stop` ends an assistant turn that failed, was
- * stopped or hit the output limit; its text is the recorded error message.
+ * arguments as JSON. `tool` is a tool result, `error` when it failed. A call and its result share `callId`, a
+ * fixed-size key of the call's id (`toolMessageId`). `stop` ends an assistant turn that failed, was stopped or hit
+ * the output limit; its text is the recorded error message.
  */
 export type TranscriptRow = {
   id: string; kind: "user" | "assistant" | "thinking" | "call" | "tool" | "stop" | "note" | "raw"; text: string; at?: number; callId?: string;

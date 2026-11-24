@@ -298,10 +298,14 @@ test("a running agent's unrecorded work follows its recording once, and the sett
   let rows: TranscriptRow[] = [
     { id: "u", kind: "user", text: "Question", record: 0, item: 0 },
     { id: "a", kind: "assistant", text: "FIRST_REPLY", record: 10, item: 0 },
-    { id: "c", kind: "call", tool: "read", callId: "c1", text: '{"path":"a.ts"}', record: 10, item: 1 }];
+    { id: "c", kind: "call", tool: "read", callId: call, text: '{"path":"a.ts"}', record: 10, item: 1 }];
+  let unreadable = false;
   const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
     color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {},
-    read: async () => ({ stamp: String(rows.length), rows }),
+    read: async () => {
+      if (unreadable) { unreadable = false; throw new Error("transient read failure"); }
+      return { stamp: String(rows.length), rows };
+    },
   });
   const render = () => stripTerminalSequences(view.scroll.render(80).join("\n"));
   const times = (text: string, needle: string) => text.split(needle).length - 1;
@@ -312,12 +316,93 @@ test("a running agent's unrecorded work follows its recording once, and the sett
   expect(times(live, "read a.ts")).toBe(1);
   expect(live).not.toContain("✓ read a.ts");
   expect(times(live, "TYPING_NOW")).toBe(1);
-  rows = [...rows, { id: "o", kind: "tool", tool: "read", callId: "c1", text: "one\n", record: 20, item: 0 },
+  // The reply ends before the recording is read again: it stays on screen.
+  row = { ...row, conversation: { ...row.conversation!, messages: row.conversation!.messages.map(message =>
+    message.id === "assistant-2" ? { ...message, stopReason: "stop" as const } : message) } };
+  expect(times(render(), "TYPING_NOW")).toBe(1);
+  rows = [...rows, { id: "o", kind: "tool", tool: "read", callId: call, text: "one\n", record: 20, item: 0 },
     { id: "f", kind: "assistant", text: "FINAL_ANSWER", record: 30, item: 0 }];
   row = { ...row, state: "done" };
+  // The read that follows its settlement fails once: the next tick still owes it.
+  unreadable = true;
+  view.refresh(); await settle();
+  expect(render()).not.toContain("FINAL_ANSWER");
   view.refresh(); await settle();
   const final = render();
   expect(times(final, "FINAL_ANSWER")).toBe(1);
   expect(final).toContain("✓ read a.ts");
   expect(final).not.toContain("TYPING_NOW");
+});
+
+test("pages that draw no rows are not traded across a full window, and a push against its edge reads on", async () => {
+  const live = rowOf(helper({ phase: "completed" }));
+  const row = { ...live, capabilities: { ...live.capabilities, transcript: true } };
+  // 80 pages of one tool result too long for a page each: only the oldest page has a row to draw.
+  const reads: string[] = [];
+  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
+    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {},
+    read: async (_id, request) => {
+      const index = request.cursor === undefined ? 79 : Number(request.cursor);
+      reads.push(String(index));
+      return { stamp: "same", rows: index ? [] : [{ id: "u", kind: "user", text: "RECORDED_PROMPT", record: 0, item: 0 }],
+        ...(index ? { older: String(index - 1) } : {}), ...(index < 79 ? { newer: String(index + 1) } : {}) };
+    } });
+  const rest = async () => { for (let before = -1; before !== reads.length;) { before = reads.length; reading(view); await settle(); } };
+  view.restore(row.key);
+  view.refresh(); await settle(); await rest();
+  // Reading ahead fills the window and stops: the newest page, which the reader is on, stays resident.
+  expect(reads).toEqual(Array.from({ length: 64 }, (_, index) => String(79 - index)));
+  // The owner pushes up against the first row: the read goes on to the recording's start, and rests there.
+  view.scroll.scrollBy(-3); await settle(); await rest();
+  expect(reads).toHaveLength(80);
+  expect(reading(view)).toContain("RECORDED_PROMPT");
+  for (let frames = 0; frames < 4; frames++) { reading(view); await settle(); }
+  expect(reads).toHaveLength(80);
+});
+
+test("the bottom of the resident pages is not the recording's end: the next page joins under the reader's rows", async () => {
+  const live = rowOf(helper({ phase: "completed" }));
+  const row = { ...live, capabilities: { ...live.capabilities, transcript: true } };
+  const { read, reads } = recording(() => 70, () => "same");
+  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
+    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {}, read });
+  const rest = async () => { for (let before = -1; before !== reads.length;) { before = reads.length; reading(view); await settle(); } };
+  view.restore(row.key);
+  view.refresh(); await settle(); await rest();
+  // Up to the first row: the newest pages leave the 64-page window.
+  for (let step = 0; step < 400 && !(view.scroll.scrollTop === 0 && reads.includes("same:0")); step++) { view.scroll.scrollBy(-200); await rest(); }
+  const before = reads.length;
+  // Straight down to the last resident row, where the view would follow an end.
+  view.scroll.scrollBy(100000);
+  const bottom = reading(view); await settle();
+  expect(reads.length).toBe(before + 1);
+  expect(reading(view)).toBe(bottom);
+});
+
+test("reopening a reply that was read from its last rows returns to the same rows once its first rows are read", async () => {
+  const live = rowOf(helper({ phase: "completed" }));
+  const row = { ...live, capabilities: { ...live.capabilities, transcript: true } };
+  const lines = (from: number, to: number) => Array.from({ length: to - from }, (_, index) => `REPLY_ROW_${from + index}`).join("\n\n");
+  const first = lines(0, 20) + "\n\n";
+  const pages: TranscriptPage[] = [
+    { stamp: "same", rows: [{ id: "u", kind: "user", text: "RECORDED_PROMPT", record: 0, item: 0 }], newer: "1" },
+    { stamp: "same", rows: [{ id: "a0", kind: "assistant", text: first, record: 100, item: 0, more: true }], older: "0", newer: "2" },
+    { stamp: "same", rows: [{ id: "a1", kind: "assistant", text: lines(20, 40), record: 100, item: 0, from: first.length }], older: "1" }];
+  let reach = false;
+  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
+    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {}, canInteract: () => reach,
+    read: async (_id, request) => pages[request.cursor === undefined ? 2 : Number(request.cursor)]! });
+  // Only the newest page is resident: the reader is in the reply's last rows.
+  view.restore(row.key);
+  view.refresh(); await settle(); reading(view, 8);
+  view.scroll.scrollBy(-9);
+  const place = reading(view, 8);
+  expect(place).toContain("REPLY_ROW_3");
+  expect(stripTerminalSequences(view.scroll.render(80).join("\n"))).not.toContain("REPLY_ROW_19");
+  view.remember();
+  reach = true;
+  view.restore(row.key);
+  view.refresh(); await settle(); await settle();
+  expect(reading(view, 8)).toBe(place);
+  expect(stripTerminalSequences(view.scroll.render(80).join("\n"))).toContain("REPLY_ROW_0");
 });

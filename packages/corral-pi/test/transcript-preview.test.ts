@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readTranscriptHeader, readTranscriptPage } from "../src/host/transcript-preview.ts";
 import { TranscriptBytes } from "../src/host/transcript-pages.ts";
+import { toolMessageId } from "../src/extensions/subagent/inspection.ts";
 
 test("reader validates identity, bounds bytes/lines and never rewrites or revives", async () => {
   const dir = mkdtempSync(join(tmpdir(), "transcript-preview-")), file = join(dir, "session.jsonl");
@@ -165,7 +166,9 @@ test("conversation rows name calls, results, stops and the slices of a split ite
     { type: "message", id: "a", parentId: "u", message: { role: "assistant", stopReason: "toolUse", content: [
       { type: "thinking", thinking: "plan" }, { type: "text", text: "reading" }, { type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } }] } },
     { type: "message", id: "r", parentId: "a", message: { role: "toolResult", toolCallId: "c1", toolName: "read", isError: true, content: [{ type: "text", text: output }] } },
-    { type: "message", id: "e", parentId: "r", message: { role: "assistant", stopReason: "error", errorMessage: "overloaded", content: [] } },
+    { type: "message", id: "b", parentId: "r", message: { role: "assistant", stopReason: "toolUse", content: [{ type: "toolCall", id: "c2", name: "bash", arguments: {} }] } },
+    { type: "message", id: "q", parentId: "b", message: { role: "toolResult", toolCallId: "c2", toolName: "bash", content: [] } },
+    { type: "message", id: "e", parentId: "q", message: { role: "assistant", stopReason: "error", errorMessage: "overloaded", content: [] } },
   ];
   try {
     writeFileSync(file, entries.map(entry => JSON.stringify(entry) + "\n").join(""));
@@ -175,9 +178,11 @@ test("conversation rows name calls, results, stops and the slices of a split ite
       page = await readTranscriptPage(file, "existing", { mode: "conversation", cursor: page.older });
       rows = [...page.rows, ...rows];
     }
-    const slices = rows.filter(row => row.kind === "tool");
-    expect(rows.map(row => row.kind)).toEqual(["user", "thinking", "assistant", "call", ...slices.map(() => "tool" as const), "stop"]);
-    expect(rows.find(row => row.kind === "call")).toMatchObject({ tool: "read", callId: "c1", text: '{"path":"a.ts"}' });
+    // A call and its result share a fixed-size key of the call's id; a result without content still settles its call.
+    const slices = rows.filter(row => row.kind === "tool" && row.callId === toolMessageId("c1"));
+    expect(rows.map(row => row.kind)).toEqual(["user", "thinking", "assistant", "call", ...slices.map(() => "tool" as const), "call", "tool", "stop"]);
+    expect(rows.find(row => row.kind === "call")).toMatchObject({ tool: "read", callId: toolMessageId("c1"), text: '{"path":"a.ts"}' });
+    expect(rows.at(-2)).toMatchObject({ kind: "tool", tool: "bash", callId: toolMessageId("c2"), text: "" });
     expect(rows.at(-1)).toMatchObject({ stop: "error", text: "overloaded" });
     // One result over two pages: every slice names the same record and item, and says where it stands in it.
     expect(slices.length).toBeGreaterThan(1);

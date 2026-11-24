@@ -4,7 +4,7 @@
 // reasoning and text become one reply, and a tool result joins its call on the call's row. While the page with a
 // call is not read yet, its result holds the row under the same id, so the row keeps its place when the call arrives.
 import type { TranscriptPage, TranscriptRow } from "../host/transcript-preview.ts";
-import { toolMessageId, type HelperMessage } from "../extensions/subagent/inspection.ts";
+import type { HelperMessage } from "../extensions/subagent/inspection.ts";
 import type { ConversationSource } from "./agents-model.ts";
 import type { ChatAside, ChatMessage, ChatReply, ReplyBlock } from "./helper-chat.ts";
 
@@ -82,7 +82,7 @@ export function assembleRecording(pages: readonly TranscriptPage[], start: boole
       made = reply;
     } else if (row.kind === "call") {
       called.add(unit);
-      const tool: Tool = { type: "tool", id: unique(row.callId === undefined ? `${unit}:${row.item ?? 0}` : toolMessageId(row.callId)), at: row.at,
+      const tool: Tool = { type: "tool", id: unique(row.callId ?? `${unit}:${row.item ?? 0}`), at: row.at,
         name: row.tool ?? "tool", args: part, head: !row.from, whole: row.more !== true, results: [], done: false, failed: false, rows: [] };
       more = value => { tool.whole = !value; };
       if (row.callId !== undefined) calls.set(row.callId, tool);
@@ -90,7 +90,7 @@ export function assembleRecording(pages: readonly TranscriptPage[], start: boole
     } else {
       let tool = row.callId === undefined ? undefined : calls.get(row.callId);
       if (!tool) {
-        tool = { type: "tool", id: unique(row.callId === undefined ? unit : toolMessageId(row.callId)), at: row.at, name: row.tool ?? "tool",
+        tool = { type: "tool", id: unique(row.callId ?? unit), at: row.at, name: row.tool ?? "tool",
           head: false, whole: false, results: [], done: false, failed: false, rows: [] };
         if (row.callId !== undefined) calls.set(row.callId, tool);
         place(tool);
@@ -133,40 +133,37 @@ export function assembleRecording(pages: readonly TranscriptPage[], start: boole
   return { ...(prompt === undefined ? {} : { prompt }), messages, records, made: rows };
 }
 
-const worded = (message: ChatMessage): boolean => message.kind === "assistant"
-  && (message.blocks ? message.blocks.some(block => block.type === "text") : (message.textBlocks?.join("") ?? message.text).trim() !== "");
+/** A live message whose record is written: a reply the agent ended, a tool call that returned. */
+function settled(message: HelperMessage): boolean {
+  return message.kind === "assistant" ? message.stopReason !== undefined && message.partial !== true
+    : message.partial !== true && (message.phase === "completed" || message.phase === "error");
+}
+/**
+ * The live messages a recording read now holds, by id: a session writes each message to its file as the message
+ * ends, before the reader's next read begins.
+ */
+export function recordedLive(live: ConversationSource | undefined): ReadonlySet<string> {
+  return new Set(live?.messages.filter(settled).map(message => message.id));
+}
 
 /**
- * A recording ends at the last message the agent finished; what it does now is in its live projection `live`. The
- * recording's messages stay as recorded, and the live ones it does not hold yet follow them. The two are joined at
- * the last tool call both hold (a call's id is the same in each), or at the first message when the recording is read
- * from its start and `live` dropped nothing: from there, the recording's replies stand for the first finished live
- * replies, one for one. Without a join only what is still unfinished follows. A recorded call still waiting for its
- * result takes the live call's state and output.
+ * A recording ends at the last message the agent had finished when it was read; what the agent did since is in its
+ * live projection `live`. The recording's messages stay as recorded and the live ones it cannot hold follow them:
+ * those not in `known` (`recordedLive` of the projection, taken when the recording was read), so a reply stays on
+ * screen from its first word until a later read has it. A tool call the recording holds is one row either way (a
+ * call's id is the same in both), and takes the live call's state and output while its result is not recorded.
  */
-export function withLiveTail(recorded: RecordedChat, live: ConversationSource | undefined, options: { readonly running: boolean; readonly start: boolean }): readonly ChatMessage[] {
+export function withLiveTail(recorded: RecordedChat, live: ConversationSource | undefined, known: ReadonlySet<string>): readonly ChatMessage[] {
   if (!live?.messages.length) return recorded.messages;
   const held = new Map<string, number>();
   recorded.messages.forEach((message, index) => { if (message.kind === "tool") held.set(message.id, index); });
   const messages = [...recorded.messages];
-  let join = -1;
-  live.messages.forEach((message, index) => {
+  const tail = live.messages.filter(message => {
     const at = message.kind === "tool" ? held.get(message.id) : undefined;
-    if (at === undefined) return;
-    join = index;
+    if (at === undefined) return !known.has(message.id) && !(settled(message) && message.kind === "assistant" && !(message.textBlocks?.join("") ?? message.text).trim());
     const kept = messages[at] as ChatReply;
     if (kept.phase === undefined && message.phase !== undefined) messages[at] = { ...kept, phase: message.phase, text: message.text, ...(message.partial === undefined ? {} : { partial: message.partial }) };
-  });
-  const joined = join >= 0 || (options.start && !live.truncated);
-  let stand = joined ? recorded.messages.slice(join >= 0 ? held.get(live.messages[join]!.id)! + 1 : 0).filter(worded).length : 0;
-  const unfinished = (message: HelperMessage) => options.running && (message.kind === "assistant"
-    ? message.partial === true || message.stopReason === undefined
-    : message.partial === true || message.phase === "requested" || message.phase === "running");
-  const tail = live.messages.slice(join + 1).filter(message => {
-    if (message.kind === "tool") return !held.has(message.id) && (joined || unfinished(message));
-    if (unfinished(message)) return true;
-    // A finished reply without words drew nothing, and the recording has the first `stand` of the others.
-    return joined && worded(message) && stand-- <= 0;
+    return false;
   });
   return tail.length ? [...messages, ...tail] : messages;
 }

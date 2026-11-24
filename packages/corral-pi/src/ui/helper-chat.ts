@@ -206,6 +206,12 @@ interface Cached {
   /** The message the component was last given; a frozen message met again needs no comparison. */
   readonly source: ChatReply;
   readonly mode?: "native" | "generic"; readonly argsComplete?: boolean;
+  /** A tool card's name, and how far its result had come: a card takes what follows, never less. */
+  readonly tool?: string; readonly started?: boolean; readonly stage?: number;
+}
+/** How far a tool call's result has come: none, a live tail, the final result. */
+function resultStage(message: HelperMessage): number {
+  return message.phase === "completed" || message.phase === "error" ? 2 : message.partial === true && message.text !== "" ? 1 : 0;
 }
 /** A rendered stretch of rows: a native component, or the one-line form of the tool call `tool`. `id` is its message. */
 interface Hit { readonly start: number; readonly end: number; readonly component?: Component; readonly tool?: string; readonly id?: string }
@@ -291,10 +297,12 @@ export class HelperChat {
         return;
       }
       let cached = this.cached.get(message.id);
-      // A frozen message cannot have changed since the component last took it.
-      const key = frozen && cached?.source === message ? cached.key
+      // What a component was last given. A frozen message cannot have changed since the component took it, and a
+      // tool on its one row has no component, so neither costs a pass over its text.
+      const keyOf = () => frozen && cached?.source === message ? cached.key
         : JSON.stringify([message.text, message.textBlocks, message.blocks, message.arguments, message.argsComplete, message.partial, message.phase, message.stopReason, message.errorMessage, message.hasToolCalls]);
       if (message.kind === "assistant") {
+        const key = keyOf();
         // A recording has the agent's reasoning, drawn as the transcript draws it; a live projection never carries any.
         const component = cached?.component instanceof AssistantMessageComponent ? cached.component
           : new AssistantMessageComponent(undefined, !message.blocks, style.markdownTheme, "", style.outputPad, transformers);
@@ -326,23 +334,27 @@ export class HelperChat {
         append(cached.component, message.id, message.id); lastLine = false;
         return;
       }
-      // One card per call id: it is rebuilt only when the arguments stop being readable, never because they completed.
-      const args = toolArgs(message);
-      const reused = cached?.component instanceof ToolExecutionComponent && cached.mode === args.mode;
+      // One card per call id: it is rebuilt when the arguments stop being readable, when the call is named anew, and
+      // when its result goes back (the page with it is no longer resident, a live tail is gone), since a card only
+      // ever adds to what it shows; never because the arguments completed.
+      const args = toolArgs(message), key = keyOf(), name = helperText(message.tool ?? "unavailable"), stage = resultStage(message);
+      const ran = message.phase !== undefined && message.phase !== "requested";
+      const reused = cached?.component instanceof ToolExecutionComponent && cached.mode === args.mode && cached.tool === name
+        && !(cached.argsComplete && !args.complete) && !(cached.started && !ran) && (cached.stage ?? 0) <= stage;
       const component = reused && cached?.component instanceof ToolExecutionComponent ? cached.component
-        : new ToolExecutionComponent(helperText(message.tool ?? "unavailable"), message.id, args.value,
+        : new ToolExecutionComponent(name, message.id, args.value,
           { showImages: false, outputPad: style.outputPad }, args.mode === "native" ? style.renderers(message.tool ?? "") : undefined, tui, this.cwd);
       if (!reused) component.setExpanded(true);
       if (!cached || cached.key !== key || !reused) {
         component.updateArgs(args.value);
         if (args.complete && !(reused && cached?.argsComplete)) component.setArgsComplete();
-        if (message.phase !== undefined && message.phase !== "requested") component.markExecutionStarted();
+        if (ran) component.markExecutionStarted();
         if (message.phase === "completed" || message.phase === "error") component.updateResult({
           content: [{ type: "text", text: helperText(message.text) }], isError: message.phase === "error",
         });
         else if (message.partial === true && message.text !== "") component.updateResult({ content: [{ type: "text", text: helperText(message.text) }], isError: false }, true);
       }
-      cached = { component, key, source: message, mode: args.mode, argsComplete: args.complete };
+      cached = { component, key, source: message, mode: args.mode, argsComplete: args.complete, tool: name, started: ran, stage };
       this.cached.set(message.id, cached); append(component, message.id, message.id); lastLine = false;
     });
     while (steered < timed.length) steer(timed[steered++]!);

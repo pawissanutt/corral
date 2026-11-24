@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
+import { toolMessageId } from "../extensions/subagent/inspection.ts";
 import type { TranscriptRow } from "./transcript-preview.ts";
 
 export const BYTES = 24 * 1024;
@@ -42,8 +43,10 @@ export type BranchPosition = { end: number; parent?: string; skip?: number; offs
 export type Position = number | BranchPosition;
 
 type Item = Pick<TranscriptRow, "text" | "kind" | "callId" | "tool" | "error" | "stop">;
-// Names sit outside the page's text budget, so they are bounded here.
+// Names and call ids sit outside the page's text budget and repeat on every slice, so they are bounded here. A call
+// and its result carry the same fixed-size key of the call's id, the one its live projection has.
 const toolName = (value: unknown) => typeof value === "string" && value ? value.slice(0, 200) : undefined;
+const callKey = (value: unknown) => typeof value === "string" ? toolMessageId(value) : undefined;
 function project(entry: Record<string, unknown>): Item[] {
   const msg = entry.type === "message" ? entry.message as Record<string, unknown> | undefined : entry;
   if (entry.type === "compaction" || entry.type === "branch_summary") {
@@ -55,7 +58,7 @@ function project(entry: Record<string, unknown>): Item[] {
   const result = msg.role === "toolResult" || msg.role === "tool";
   const kind = msg.role === "user" ? "user" : msg.role === "assistant" ? "assistant" : result ? "tool" : "note";
   const base: Omit<Item, "text"> = result
-    ? { kind, callId: typeof msg.toolCallId === "string" ? msg.toolCallId : undefined, tool: toolName(msg.toolName), ...(msg.isError === true ? { error: true } : {}) }
+    ? { kind, callId: callKey(msg.toolCallId), tool: toolName(msg.toolName), ...(msg.isError === true ? { error: true } : {}) }
     : { kind };
   const content = msg.content;
   const items = typeof content === "string" ? [{ ...base, text: content }] : !Array.isArray(content) ? [] : content.map((block): Item => {
@@ -63,10 +66,12 @@ function project(entry: Record<string, unknown>): Item[] {
     if (block?.type === "thinking" && typeof block.thinking === "string") return { kind: "thinking", text: block.thinking };
     if (block?.type === "toolCall") return {
       kind: "call", tool: toolName(block.name) ?? "tool", text: JSON.stringify(block.arguments ?? {}),
-      callId: typeof block.id === "string" ? block.id : undefined,
+      callId: callKey(block.id),
     };
     return { ...base, text: `[${typeof block?.type === "string" ? block.type.slice(0, 80) : "non-text"} attachment]` };
   });
+  // A result without text still settles its call.
+  if (result && !items.length) items.push({ ...base, text: "" });
   const stop = msg.role === "assistant" && (msg.stopReason === "error" || msg.stopReason === "aborted" || msg.stopReason === "length") ? msg.stopReason : undefined;
   return stop ? [...items, { kind: "stop", stop, text: typeof msg.errorMessage === "string" ? msg.errorMessage : "" }] : items;
 }

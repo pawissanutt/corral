@@ -173,3 +173,17 @@ test("data controls are sanitized before Markdown and tool argument rendering; n
     expect(stripTerminalSequences(rendered)).toContain("safe.ts");
   }
 });
+
+test("an open tool card whose result is no longer held is drawn anew, never left with the result it had", () => {
+  const tui = new TuiAltScreen(new RecordingTerminal());
+  const chat = new HelperChat(() => tui, "/tmp", () => ({ ...style(1), renderers: () => undefined }));
+  chat.expandTools(true);
+  const call = { id: "read", kind: "tool" as const, tool: "read", arguments: JSON.stringify({ path: "sample.ts" }) };
+  const card = (message: object) => stripTerminalSequences(chat.renderHelper({ ...fixture(), messages: [{ ...call, text: "", ...message }] }, 80).join("\n"));
+  expect(card({ text: "RESULT_ONCE_HELD", phase: "completed" })).toContain("RESULT_ONCE_HELD");
+  // The page with its result left the resident pages: the call is all that is held.
+  expect(card({})).not.toContain("RESULT_ONCE_HELD");
+  // A live tail that the projection no longer carries goes too, while the call still runs.
+  expect(card({ text: "LIVE_TAIL_ONCE", phase: "running", partial: true })).toContain("LIVE_TAIL_ONCE");
+  expect(card({ phase: "running" })).not.toContain("LIVE_TAIL_ONCE");
+});

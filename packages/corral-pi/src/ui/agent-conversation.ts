@@ -15,7 +15,7 @@ import { duration, isLive, money, sparkline, timeLabel, toneColor, type AgentRow
 import { spinner } from "./frame.ts";
 import { helperText, mailSteers, type ChatSource, type HelperChat, type MessageSpan, type Steer } from "./helper-chat.ts";
 import { PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING, RESET, plainLabel } from "./panels-view.ts";
-import { assembleRecording, peerMessage, withLiveTail, type RecordedChat } from "./recorded-chat.ts";
+import { assembleRecording, peerMessage, recordedLive, withLiveTail, type RecordedChat } from "./recorded-chat.ts";
 import { shiftRows } from "./selection.ts";
 
 export interface AgentConversationHost {
@@ -32,7 +32,11 @@ export interface AgentConversationHost {
 }
 
 /** Where the view's first row is in the message it shows: from that message's first row, and to its last. */
-type Anchor = { readonly id: string; readonly offset: number; readonly tail: number; readonly record?: number };
+/**
+ * `side` is the end of the message that stays put while more of it is read: a recorded message is read back from
+ * its last row, so its first rows may arrive later; a message still being written grows at its last row.
+ */
+type Anchor = { readonly id: string; readonly offset: number; readonly tail: number; readonly side: "from" | "to"; readonly record?: number };
 type Position = { readonly top: number; readonly following: boolean; readonly anchor?: Anchor };
 /** The reader's row, held while pages are read around it: `edge` is the side that grew, `below` the rows from the view's first row to the end. */
 type Hold = { readonly edge: Direction; readonly anchor?: Anchor; readonly below?: number };
@@ -96,6 +100,14 @@ export class AgentConversation {
   private failed = false;
   /** The owner has scrolled since the agent opened: a first read that arrives late leaves them where they are. */
   private moved = false;
+  /** The side the owner last scrolled to: only that side is read ahead, so two near edges never trade pages. */
+  private toward: Direction = "older";
+  /** That scroll pushed against the edge of what is resident: the next page is read even at the cost of the far end. */
+  private pushed = false;
+  /** This view is placing the reader, not the owner. */
+  private placing = false;
+  /** The live messages the resident recording holds: `recordedLive` when it was read. */
+  private known: ReadonlySet<string> = new Set();
   private wasLive = false;
   /** The agent settled while the reader was above its end: the recording holds more than the resident pages. */
   private latestAvailable = false;
@@ -105,9 +117,22 @@ export class AgentConversation {
   /** Rows of the clickable `▲` question line, and the agent it answers. */
   private ask: { readonly from: number; readonly to: number; readonly key: string } | undefined;
   constructor(private readonly host: AgentConversationHost) {
-    const laid = () => this.ahead(), scrolled = () => { this.failed = false; this.moved = true; };
+    const laid = () => this.ahead();
+    const scrolled = (by: number, edge: boolean) => {
+      if (this.placing || by === 0) return;
+      this.failed = false; this.moved = true;
+      this.toward = by < 0 ? "older" : "newer"; this.pushed = edge;
+      // A push against an edge moves nothing, so no frame follows it.
+      if (edge) this.ahead();
+    };
     this.scroll = new class extends ScrollView {
-      override scrollBy(lines: number): number { scrolled(); return super.scrollBy(lines); }
+      override scrollBy(lines: number): number { const left = super.scrollBy(lines); scrolled(lines, left !== 0); return left; }
+      override scrollTo(top: number, options?: Parameters<ScrollView["scrollTo"]>[1]): void {
+        const from = this.scrollTop;
+        super.scrollTo(top, options); scrolled(this.scrollTop - from, false);
+      }
+      override scrollToStart(): void { super.scrollToStart(); scrolled(-1, false); }
+      override scrollToEnd(): void { super.scrollToEnd(); scrolled(1, false); }
       override updateLayout(contentHeight: number, viewportHeight: number, requestRender: () => void): void {
         super.updateLayout(contentHeight, viewportHeight, requestRender);
         laid();
@@ -124,12 +149,23 @@ export class AgentConversation {
     const top = this.scroll.scrollTop, following = this.following;
     const span = this.spans.find(item => item.to > top);
     if (!span) return { top, following };
-    const record = this.recorded?.chat.records.get(span.id);
-    return { top, following, anchor: { id: span.id, offset: top - span.from, tail: span.to - top, ...(record === undefined ? {} : { record }) } };
+    const recorded = this.history.pages.length ? this.recorded?.chat : undefined, record = recorded?.records.get(span.id);
+    // The newest resident message of a recording whose newer pages are not resident may be cut at its last row.
+    const side = record !== undefined && !(this.history.newer && recorded?.messages.at(-1)?.id === span.id) ? "to" : "from";
+    return { top, following, anchor: { id: span.id, offset: top - span.from, tail: span.to - top, side, ...(record === undefined ? {} : { record }) } };
   }
-  /** The reader's row before pages join at `edge`; none while they follow the end. `exact`: the rows below it stay as they are. */
+  /** The view's first row moved by this view, which is not the owner scrolling. */
+  private place(top: number | "end"): void {
+    this.placing = true;
+    try { if (top === "end") this.scroll.scrollToEnd(); else this.scroll.scrollTo(top, { disableFollow: true }); }
+    finally { this.placing = false; }
+  }
+  /**
+   * The reader's row before pages join at `edge`; none while they follow the recording's end. The end of the resident
+   * pages is not that end while newer pages are not resident. `exact`: the rows below it stay as they are.
+   */
   private grip(edge: Direction, exact: boolean): Hold | undefined {
-    if (this.following) return undefined;
+    if (this.following && !this.history.newer) return undefined;
     const { anchor, top } = this.position();
     return { edge, ...(anchor ? { anchor } : {}), ...(exact ? { below: this.height - top } : {}) };
   }
@@ -144,6 +180,7 @@ export class AgentConversation {
     this.history = new AgentHistory(); this.recorded = undefined;
     this.spans = []; this.hold = undefined; this.jump = undefined;
     this.failed = false; this.moved = false; this.wasLive = false; this.latestAvailable = false;
+    this.toward = "older"; this.pushed = false; this.known = new Set();
     this.reopen = this.positions.get(key);
     this.pending = this.reopen ?? null;
   }
@@ -186,8 +223,11 @@ export class AgentConversation {
       this.scheduled = false;
       const history = this.history, top = this.scroll.scrollTop, view = this.scroll.viewportHeight, margin = Math.max(AHEAD_ROWS, 2 * view);
       if (this.failed || history.busy) return;
-      if (history.older && top < margin) this.navigate("older");
-      else if (history.newer && this.height - top - view < margin) this.navigate("newer");
+      const above = top < margin, below = this.height - top - view < margin;
+      // A full window gives up a page at its far end for each one read. Unless the owner pushes on, that end must be
+      // out of the reader's reach, or pages that draw few rows would be traded back and forth.
+      const room = this.pushed || history.pages.length < RESIDENT_PAGES;
+      if (this.toward === "older" ? above && (room || !below) : below && (room || !above)) this.navigate(this.toward);
     });
   }
 
@@ -234,12 +274,13 @@ export class AgentConversation {
     const hold = mode === "place" ? this.grip("older", false) : undefined;
     const until = (saved && !saved.following ? saved.anchor : hold?.anchor)?.record;
     const pages = until === undefined ? Math.min(Math.max(1, history.pages.length), FOLLOW_PAGES) : REREAD_PAGES;
+    const known = recordedLive(row.conversation);
     let next: AgentHistory | undefined;
     history.busy = true;
     try {
       const latest = await read(row.id, { mode: "conversation" });
       if (!current()) return;
-      if (mode === "follow" && latest.stamp === history.stamp && !history.newer) { this.latestAvailable = false; return; }
+      if (mode === "follow" && latest.stamp === history.stamp && !history.newer) { this.latestAvailable = false; this.known = known; return; }
       const walk = new AgentHistory();
       walk.open(latest);
       // The reader's record is whole once the record before it is resident too.
@@ -253,14 +294,15 @@ export class AgentConversation {
     } catch { /* `next` stays undefined. */ }
     finally { history.busy = false; }
     if (!current()) return;
-    if (!next) { this.failed = true; this.host.changed?.(); return; }
+    // A refresh that failed is owed: a settled agent's last messages are read on a later tick.
+    if (!next) { this.failed = true; if (mode === "follow" || mode === "end") this.latestAvailable = true; this.host.changed?.(); return; }
     // An automatic refresh never moves a reader who left the end while it was read.
     if (mode === "follow" && !(this.pending?.following ?? this.following)) { if (settling) this.latestAvailable = true; return; }
-    this.history = next; this.failed = false; this.latestAvailable = false;
+    this.history = next; this.known = known; this.failed = false; this.latestAvailable = false;
     if (mode === "open") this.reopen = undefined;
     if (saved) this.pending = saved;
     else if (hold) this.hold = hold;
-    else if (mode !== "open" || !this.moved || this.following) { this.pending = undefined; this.jump = "end"; }
+    else if (mode !== "open" || !this.moved || this.following) { this.pending = undefined; this.jump = "end"; this.toward = "older"; this.pushed = false; }
     this.host.rewrapped?.(); this.host.changed?.();
   }
 
@@ -304,7 +346,7 @@ export class AgentConversation {
       let chat: string[];
       if (history && recorded) {
         const end = !history.newer, running = isLive(row.state);
-        const messages = end && (running || this.latestAvailable) ? withLiveTail(recorded, row.conversation, { running, start: !history.older }) : recorded.messages;
+        const messages = end && (running || this.latestAvailable) ? withLiveTail(recorded, row.conversation, this.known) : recorded.messages;
         // A message that never reached the agent is in no recording: it follows the replies, as in the live view.
         const missed = end ? mailSteers((row.mail ?? []).filter(message => message.from !== row.id
           && (message.delivery === "undeliverable" || message.delivery === "answered_from_report")), name) : [];
@@ -360,18 +402,19 @@ export class AgentConversation {
       const hold = this.hold, anchor = hold?.anchor, span = anchor && this.spans.find(item => item.id === anchor.id);
       // Pages read above leave the reader's row where it is from the end of its message, which may have grown at
       // its head; pages read below, from its start.
-      if (hold && anchor && span) this.scroll.scrollTo(hold.edge === "older" ? span.to - anchor.tail : span.from + anchor.offset, { disableFollow: true });
-      else if (hold?.edge === "older" && hold.below !== undefined) this.scroll.scrollTo(lines.length - hold.below, { disableFollow: true });
-      else if (hold ? hold.edge === "older" : this.jump === "end") this.scroll.scrollToEnd();
-      else if (!hold) this.scroll.scrollTo(0, { disableFollow: true });
+      if (hold && anchor && span) this.place(hold.edge === "older" ? span.to - anchor.tail : span.from + anchor.offset);
+      else if (hold?.edge === "older" && hold.below !== undefined) this.place(lines.length - hold.below);
+      else if (hold ? hold.edge === "older" : this.jump === "end") this.place("end");
+      else if (!hold) this.place(0);
       this.hold = undefined; this.jump = undefined;
     }
     if (this.pending !== undefined) {
       const saved = this.pending, live = row !== undefined && isLive(row.state);
       this.scroll.updateLayout(lines.length, this.scroll.viewportHeight, () => {});
       const span = this.spans.find(item => item.id === saved?.anchor?.id);
-      if (saved?.following || (live && !saved)) this.scroll.scrollToEnd();
-      else this.scroll.scrollTo(span && saved?.anchor ? Math.min(span.to - 1, span.from + saved.anchor.offset) : saved?.top ?? 0, { disableFollow: true });
+      const anchor = saved?.anchor;
+      if (saved?.following || (live && !saved)) this.place("end");
+      else this.place(!span || !anchor ? saved?.top ?? 0 : anchor.side === "to" ? span.to - anchor.tail : Math.min(span.to - 1, span.from + anchor.offset));
       this.pending = undefined;
     }
     return lines;
