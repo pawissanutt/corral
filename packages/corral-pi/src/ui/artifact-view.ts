@@ -135,8 +135,7 @@ export class ArtifactView implements Component {
       if (foreign) throw new Error(`the read returned ${foreign.task}, not this session's task`);
       if (this.disposed) return;
       this.current = data.toSorted((a, b) => b.id - a.id); this.error = undefined; this.failedAt = undefined; this.readAt = Date.now();
-      const first = this.current[0];
-      this.selected ??= first && ref(first);
+      this.normalizeSelection();
     } catch (error) {
       if (this.disposed) return;
       this.error = error instanceof z.ZodError ? "the read returned data of an unexpected shape" : error instanceof Error ? error.message : String(error);
@@ -146,6 +145,13 @@ export class ArtifactView implements Component {
   }
   /** The rows the list shows: all of them, or by default the shown groups. */
   private get visible(): Entry[] { return (this.current ?? []).filter(a => this.showAll || artifactShown(a)); }
+  /** Keeps the selection on a visible row (the first when it is not), and clears it when no row is visible. */
+  private normalizeSelection(): void {
+    const rows = this.visible;
+    if (!rows.some(a => ref(a) === this.selected)) { const first = rows[0]; this.selected = first && ref(first); }
+    this.marks = this.marks.filter(m => rows.some(a => ref(a) === m) || this.showAll);
+    if (this.marks.length < 2) this.compare = false;
+  }
   private entry(reference: string | undefined): Entry | undefined {
     return reference === undefined ? undefined : this.current?.find(a => ref(a) === reference);
   }
@@ -154,8 +160,7 @@ export class ArtifactView implements Component {
     const list = this.visible;
     if (data === "a") {
       this.showAll = !this.showAll;
-      const rows = this.visible;
-      if (!rows.some(a => ref(a) === this.selected)) this.selected = rows[0] && ref(rows[0]);
+      this.normalizeSelection();
       this.opened = undefined; this.options.changed(); return true;
     }
     if (data === "j" || data === "k" || matchesKey(data, "down") || matchesKey(data, "up")) {
@@ -323,7 +328,10 @@ export class ArtifactView implements Component {
       lines.push(...stateRow(state, "artifact catalog", width, why));
       return lines;
     }
-    if (!items.length) { full(`${PANEL_MUTED}No artifacts registered for this task${PANEL_TEXT}`); return lines; }
+    if (!items.length) {
+      full(`${PANEL_MUTED}${data.length ? `${data.length} registered ${data.length === 1 ? "artifact is" : "artifacts are"} hidden by the filter · a shows all` : "No artifacts registered for this task"}${PANEL_TEXT}`);
+      return lines;
+    }
     if (this.selected !== undefined && !this.entry(this.selected)) full(`${PANEL_WARNING}! Selected artifact no longer in the catalog · j/k selects an existing row${PANEL_TEXT}`);
     const index = Math.max(0, items.findIndex(a => ref(a) === this.selected)), entry = items[index];
     const wide = width + VIEW_INSET >= SPLIT_MIN;

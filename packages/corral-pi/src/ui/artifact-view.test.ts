@@ -42,9 +42,11 @@ const text = (view: ArtifactView, width = 100) => view.render(width).map(row => 
 const settle = () => { const { promise, resolve } = Promise.withResolvers<void>(); setImmediate(resolve); return promise; };
 
 test("an extension row and a legacy row parse and render; the default list omits diff and replaced rows, a toggle shows them", async () => {
-  const { view } = harness([...catalog, row(6, "ext.md", { by: "extension", kind: "legacy" }), row(7, "change.diff", { kind: "diff" }),
+  const { view, calls } = harness([...catalog, row(6, "ext.md", { by: "extension", kind: "legacy" }), row(7, "change.diff", { kind: "diff" }),
     row(8, "old.md", { replaced_by: "T-1:3" })]);
   await view.refresh();
+  view.handleInput("\r"); await settle();
+  expect(calls).toEqual(["T-1:4"]);
   expect(view.state.phase).not.toBe("failed");
   const shown = text(view);
   expect(shown).toContain("4 artifacts, newest first"); expect(shown).toContain("3 hidden · a shows all");
@@ -53,6 +55,13 @@ test("an extension row and a legacy row parse and render; the default list omits
   const all = text(view);
   expect(all).toContain("7 artifacts, newest first");
   for (const name of ["ext.md", "change.diff", "old.md"]) expect(all).toContain(name);
+});
+
+test("a catalog whose rows are all filtered says so, not that nothing is registered", async () => {
+  const { view } = harness([row(1, "change.diff", { kind: "diff" })]);
+  await view.refresh();
+  expect(text(view)).toContain("1 registered artifact is hidden by the filter");
+  expect(text(view)).not.toContain("No artifacts registered");
 });
 
 test("catalog renders newest first with its provenance and reads no content", async () => {

@@ -65,7 +65,7 @@ function sectionDetail(data: TaskView, run: string | undefined, id: SectionId, o
       break;
     case "artifacts":
       note("Registered files, not proof");
-      if (!data.artifacts.some(artifactShown)) note("No artifacts registered");
+      if (!data.artifacts.some(artifactShown)) note(data.artifacts.length ? `${data.artifacts.length} registered, all hidden by the default filter · a opens the Artifacts view` : "No artifacts registered");
       for (const a of data.artifacts.filter(artifactShown)) {
         const meta = `${plainLabel(a.kind)} · sha256 ${a.sha256.slice(0, 8)}…`;
         out.push(`${PANEL_BLUE}▤${PANEL_TEXT} ${plainFit(`${artifactRef(a)} ${a.title}`, width - 4 - visibleWidth(meta))}  ${PANEL_MUTED}${plainFit(meta, width - 4)}${PANEL_TEXT}`);
