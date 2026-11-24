@@ -286,9 +286,10 @@ fn edges(scene: &Scene, node: &Node, picked: Option<(&Node, &Node)>) -> Vec<Line
                 EdgeKind::Has => has_words(scene, e),
                 _ => edge_words(e),
             };
-            let words = match change_words(&e.change) {
-                Some(change) => format!("{words} · changed {change}"),
-                None => words,
+            let words = match (change_words(&e.change), e.change.len()) {
+                (Some(change), 1) => format!("{words} · changed {change}"),
+                (Some(change), _) => format!("{words} · {change}"),
+                (None, _) => words,
             };
             Line::Edge(EdgeLine {
                 arrow,
