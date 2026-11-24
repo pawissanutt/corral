@@ -67,6 +67,13 @@ fn a_phone_tap_on_a_citation_opens_its_section_or_says_not_found() {
     app.wait_for("id:artifact-full").unwrap();
     app.wait_for("text:/Only the cited section “acceptance” shows/")
         .unwrap();
+    // The served section's own words show, and none of the brief around it.
+    app.wait_for("text:/covered by one test at the lowest layer/")
+        .unwrap();
+    assert!(
+        app.wait_for_gone("text:Goal", Duration::from_secs(1))
+            .is_ok()
+    );
     app.press("id:tab-tasks").unwrap();
     select_from(&mut app, "id:btn-search", "T-12 Timeline zoom presets");
     app.press("id:tab-task-2").unwrap();

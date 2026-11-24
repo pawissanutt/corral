@@ -108,17 +108,18 @@ pub enum Found {
     Missing,
 }
 
-/// The cited task's title as the app holds it, or where its lookup stands. Only corrald's
-/// `not_found` makes it missing, and it does even over an older cached detail.
+/// The cited task's title as the app holds it, or where its lookup stands. The live board
+/// outranks an older answer; otherwise only corrald's `not_found` makes it missing, and it does
+/// even over an older cached detail.
 fn task(feed: &Feed, id: &str) -> Result<Option<String>, Found> {
+    if let Some(row) = feed.board.task(id) {
+        return Ok(Some(row.title().to_owned()));
+    }
     let error = feed
         .detail(&task_ref(id))
         .and_then(|cache| cache.error.as_ref());
     if error.is_some_and(|error| error.code == "not_found") {
         return Err(Found::Missing);
-    }
-    if let Some(row) = feed.board.task(id) {
-        return Ok(Some(row.title().to_owned()));
     }
     if let Some(detail) = loaded_task(feed, id) {
         return Ok(Some(detail.task.title.clone()));
@@ -170,22 +171,47 @@ pub fn resolve(feed: &Feed, cite: &Cite) -> Found {
     if error.is_some_and(|error| error.code == "not_found") {
         return Found::Missing;
     }
-    if !content.is_some_and(|cache| cache.body().is_some()) {
-        return if error.is_some() || task == Err(Found::Unavailable) {
-            Found::Unavailable
-        } else {
-            Found::Looking
-        };
+    // Any other failure leaves it unknown, even over content an earlier read cached.
+    if error.is_some() || task == Err(Found::Unavailable) {
+        return Found::Unavailable;
     }
+    if !content.is_some_and(|cache| cache.body().is_some()) {
+        return Found::Looking;
+    }
+    // corrald served it, so it exists: a detail that does not list it yet is behind.
     match held(feed, address, &cite.task) {
         Some(artifact) => Found::Artifact(Box::new(artifact)),
-        // The task's detail lists every artifact it has: once it is here, an absent row is absent.
-        None if loaded_task(feed, &cite.task).is_some() => Found::Missing,
         None => match task {
             Err(found) => found,
             Ok(_) => Found::Looking,
         },
     }
+}
+
+/// Each cited task's served detail version, which says when what it holds may have changed.
+pub fn versions(feed: &Feed, cites: &[Cite]) -> Vec<Option<String>> {
+    targets(cites)
+        .into_iter()
+        .filter(|target| matches!(target, DetailRef::Task { .. }))
+        .map(|target| {
+            feed.detail(&target)
+                .and_then(|cache| cache.pages.last())
+                .map(|page| page.etag.clone())
+        })
+        .collect()
+}
+
+/// The content reads of `cites` corrald answered with an error, asked again once a cited
+/// task's detail changes (an artifact attached since, a blob restored): a miss is not kept.
+pub fn failed_reads(feed: &Feed, cites: &[Cite]) -> Vec<DetailRef> {
+    targets(cites)
+        .into_iter()
+        .filter(|target| matches!(target, DetailRef::Artifact { .. }))
+        .filter(|target| {
+            feed.detail(target)
+                .is_some_and(|cache| cache.error.is_some())
+        })
+        .collect()
 }
 
 /// The spellings among `cites` that open something now: the ones an inline link is drawn for.

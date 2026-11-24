@@ -47,6 +47,21 @@ fn a_cited_section_is_served_by_the_engines_rules_and_a_miss_is_not_found() {
         page.content,
         "# Configuration\nsetting = true\n## Deeper\nx\n"
     );
+    // A section far past the first served page is still found: corrald reads the whole source.
+    let late = fixture.shared.root().join("late.md");
+    fs::write(
+        &late,
+        format!("{}\n# Late\nfound\n", "filler\n".repeat(2000)),
+    )
+    .unwrap();
+    let late = engine
+        .add_artifact(&task, &late, ArtifactKind::Reference, None)
+        .unwrap();
+    let Some(DetailBody::Artifact(page)) = get(format!("{}#late", late.reference())).unwrap().body
+    else {
+        panic!("expected the late section");
+    };
+    assert_eq!(page.content, "# Late\nfound\n");
     for missing in [
         format!("{}#configuration", settings.reference()),
         format!("{}#absent", design.reference()),

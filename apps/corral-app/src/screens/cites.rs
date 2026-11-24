@@ -4,6 +4,9 @@
 //! (`cite-<citation>`), saying "not found" for one that does not resolve. The cited tasks'
 //! details are kept loaded while the text shows, so citations resolve as corrald answers.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use nsh_base::text_view::{Block, Inline};
 use nsh_core::prelude::*;
 
@@ -22,6 +25,23 @@ pub(crate) fn keep_cited(app: AppState, cites: &[Cite]) {
     let targets = cite::targets(cites);
     let targets = computed(move || targets.clone());
     keep_details(app, targets, None);
+    // A failed read is not retried by itself; a cited task's changed detail asks again.
+    let app = untracked(|| app.scope());
+    let cites = cites.to_vec();
+    let watched = cites.clone();
+    let versions = computed(move || app.feed.with(|feed| cite::versions(feed, &watched)));
+    let seen = Rc::new(RefCell::new(None::<Vec<Option<String>>>));
+    effect(move || {
+        let now = versions.get();
+        let was = seen.replace(Some(now.clone()));
+        if was.is_some_and(|was| was != now) {
+            untracked(|| {
+                for target in app.feed.with(|feed| cite::failed_reads(feed, &cites)) {
+                    app.refresh(target);
+                }
+            });
+        }
+    });
 }
 
 /// Every citation of `blocks` among `open` as a link to it; inside an existing link nothing
