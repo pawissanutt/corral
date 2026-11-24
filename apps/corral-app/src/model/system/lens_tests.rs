@@ -145,3 +145,54 @@ fn parallel_transitions_take_separate_lanes_and_stay_on_their_states() {
         }
     }
 }
+
+/// Repeated self-transitions grow their loops up and down; on a first-row state the fifth
+/// bent above the canvas and was clipped.
+#[test]
+fn repeated_self_transitions_stay_inside_the_canvas() {
+    let transitions = (0..5)
+        .map(|n| LensTransition {
+            to: "a".into(),
+            label: format!("t{n}"),
+            ..retry()
+        })
+        .collect();
+    let lens = Lens::State {
+        id: "l".into(),
+        title: "L".into(),
+        read_at: "c".into(),
+        states_from: StatesFrom {
+            path: "src/lib.rs".into(),
+            name: "S".into(),
+        },
+        states: vec![node("a"), node("b")],
+        transitions,
+    };
+    let result = LensResult {
+        file: "l.toml".into(),
+        lens: Some(lens),
+        status: LensStatus::Current,
+        failures: Vec::new(),
+        not_checked: Vec::new(),
+        locations: Vec::new(),
+        missing_states: Vec::new(),
+        extra_states: Vec::new(),
+    };
+    let Some(d) = diagram(&result, None, &[], &Touch::default()) else {
+        panic!("a readable lens draws");
+    };
+    let measure = |font: crate::model::system::layout::Font, words: &str| font.estimate(words);
+    let placed = crate::model::system::lens_layout::layout(&d, 800.0, &measure);
+    assert_eq!(placed.arrows.len(), 5);
+    for arrow in &placed.arrows {
+        let inside = arrow
+            .points
+            .iter()
+            .all(|p| (0.0..=placed.width).contains(&p.0) && (0.0..=placed.height).contains(&p.1));
+        assert!(
+            inside,
+            "{:?} in {}x{}",
+            arrow.points, placed.width, placed.height
+        );
+    }
+}

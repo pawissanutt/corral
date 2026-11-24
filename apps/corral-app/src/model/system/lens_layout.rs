@@ -217,12 +217,32 @@ fn state(diagram: &Diagram, room: f32, measure: Measure) -> LensLayout {
         }
         width += by;
     }
-    let right = out
+    // Repeated loops on a state grow up and down; one on the first row moves the drawing down.
+    let top = out
         .arrows
         .iter()
-        .flat_map(|a| a.points.iter().map(|p| p.0))
-        .fold(0.0, f32::max);
+        .flat_map(|a| a.points.iter().map(|p| p.1).chain([a.label.y]))
+        .fold(PAD, f32::min);
+    if top < PAD {
+        let by = PAD - top;
+        for n in &mut out.nodes {
+            n.rect.y += by;
+        }
+        for a in &mut out.arrows {
+            a.label.y += by;
+            for p in &mut a.points {
+                p.1 += by;
+            }
+        }
+        height += by;
+    }
+    let (right, bottom) = out
+        .arrows
+        .iter()
+        .flat_map(|a| a.points.iter().copied())
+        .fold((0.0_f32, 0.0_f32), |(x, y), p| (x.max(p.0), y.max(p.1)));
     width = width.max(right + PAD);
+    height = height.max(bottom + PAD);
     out.width = width.ceil();
     out.height = height.ceil();
     out

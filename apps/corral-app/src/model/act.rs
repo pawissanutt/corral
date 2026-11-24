@@ -369,9 +369,13 @@ pub enum Follow {
 }
 
 /// Errors after which the same operation can be asked for again: the request never reached
-/// corrald, or its reply was lost with the connection.
+/// corrald, its reply was lost with the connection, or this device stopped waiting for it. None
+/// says whether the operation filed anything.
 fn transient(code: &str) -> bool {
-    matches!(code, "offline" | "disconnected" | "busy" | "unavailable")
+    matches!(
+        code,
+        "offline" | "disconnected" | "busy" | "unavailable" | "deadline_expired"
+    )
 }
 
 /// The operation a `running` reply names: what is followed under its key.
@@ -528,6 +532,16 @@ mod tests {
             ..running.clone()
         };
         assert_eq!(follow(Some(&lost), "a-1"), Follow::Ask("a-1".into()));
+        // This device stopped waiting for the follow-up (requests queue on one connection):
+        // that is not the filing's outcome, so the same operation is asked for again.
+        let expired = Operation {
+            error: Some(crate::model::daemon::ClientError {
+                code: "deadline_expired".into(),
+                message: String::new(),
+            }),
+            ..lost.clone()
+        };
+        assert_eq!(follow(Some(&expired), "a-1"), Follow::Ask("a-1".into()));
         feed.operations.insert(Id::new("k"), running);
         assert_eq!(status(&feed, "k"), Some(ActStatus::Pending));
         let done = reply(OpReply::Done {
