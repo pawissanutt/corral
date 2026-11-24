@@ -15,7 +15,7 @@ type Json = Readonly<Record<string, unknown>>;
 /** Every registered local tool this module draws (MCP server tools, named `mcp_<server>_<tool>_<hash>`, too). */
 export const LOCAL_TOOL_NAMES = [
   "lsp_diagnostics", "lsp_definition", "lsp_references", "web_fetch", "web_read", "web_search", "browser_navigate",
-  "browser_screenshot", "ask_user", "ask_owner", "explore", "oracle", "tool_search", "mcp_connect", "mcp_resources",
+  "browser_screenshot", "ask_user", "ask_owner", "explore", "tool_search", "mcp_connect", "mcp_resources",
   "mcp_read_resource", "mcp_activate",
 ] as const;
 
@@ -315,7 +315,7 @@ function helperPresenter(kind: "explore" | "oracle", deps: ToolRenderDeps): Pres
     const request = text(details, "request"), transcript = text(details, "sessionFile");
     const open = deps.openView, agent = request ?? conversation;
     const view = open && agent ? { view: { label: "Agents", open: () => open("agents", `helper:${agent}`) } } : {};
-    if (state === "failed" && (!details || text(details, "error") !== undefined)) {
+    if (state === "failed" && (!details || Object.keys(details).length === 0 || text(details, "error") !== undefined)) {
       return { ...base, ...view, state, outcome: reasonOf(output) || "failed",
         ...(reference.length || output ? { expanded: () => [...reference, ...textLines(output, "text")] } : {}) };
     }
@@ -404,7 +404,7 @@ const PRESENTERS: Readonly<Record<string, (deps: ToolRenderDeps) => Presenter>> 
   ask_user: () => askUserPresenter(),
   ask_owner: () => askOwnerPresenter(),
   explore: deps => helperPresenter("explore", deps),
-  oracle: deps => helperPresenter("oracle", deps),
+  oracle: deps => helperPresenter("oracle", deps), // Historical transcripts only.
   tool_search: () => toolSearchPresenter(),
   mcp_connect: () => mcpControlPresenter("mcp_connect"),
   mcp_resources: () => mcpControlPresenter("mcp_resources"),

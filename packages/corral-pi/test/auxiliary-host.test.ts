@@ -21,7 +21,7 @@ import { workerRole } from "../src/roles/worker/index.ts";
 import { PACKAGE_ROOT } from "./support/fixture-install.ts";
 import type { FleetSnapshot } from "../src/build/types.ts";
 
-test("host wires explore/oracle to bound runtime and keeps child restrictions after reload", async () => {
+test("an old full snapshot cannot run oracle; bound explore works across reload", async () => {
   const assets = buildFixtureInstall();
   const cwd = mkdtempSync(join(tmpdir(), "corral-aux-host-"));
   const originalFetch = globalThis.fetch;
@@ -52,7 +52,7 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     await host.session.bindExtensions({});
     await host.startLocal();
     expect(host.loadout).toContain("explore");
-    expect(host.loadout).toContain("oracle");
+    expect(host.loadout).not.toContain("oracle");
     const workbench = host.panels?.workbench;
     if (!workbench) throw new Error("Native workbench missing");
     sdk.initTheme("dark", false);
@@ -60,20 +60,19 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     const root = workbench.mount(new Text("PARENT_TRANSCRIPT", 0, 0), () => ({ tui, outputPad: 1,
       markdownTheme: sdk.getMarkdownTheme(), markdownTransformers: [], renderers: name => sdk.withBuiltInRenderers(name, undefined) }));
     const screen = () => stripTerminalSequences(renderLayoutFrame(root, 80, 70, () => {}).lines.join("\n"));
-    workbench.openAgents(); expect(screen()).toContain("No agents yet.");
     let previousExplore: string | undefined;
     for (const stage of ["startup", "reload"]) {
       if (stage === "reload") {
         await host.session.reload();
         expect((host.state().fleet as FleetSnapshot | null)?.children.some(child => child.call === previousExplore)).toBeTrue();
       }
+      expect(host.session.agent.state.tools.map(tool => tool.name)).not.toContain("oracle");
       fixtureTransport().script([
         { toolCalls: [{ callId: `${stage}-explore`, name: "explore", arguments: { prompt: "research only" } }] },
         { toolCalls: [{ callId: "write", name: "write", arguments: { path: "bad", content: "bad" } }] },
         { toolCalls: [{ callId: "recurse", name: "explore", arguments: { prompt: "no" } }] },
         { text: "child findings" },
         { toolCalls: [{ callId: `${stage}-oracle`, name: "oracle", arguments: { prompt: "consult only" } }] },
-        { text: "oracle advice" },
         { text: "parent finished" },
       ]);
       const ended = nextEvent(events, (e) => e.kind === "turn_ended");
@@ -81,13 +80,10 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
       await ended;
       await host.drained();
       const results = host.session.messages.filter((m) => m.role === "toolResult" && m.toolCallId.startsWith(`${stage}-`));
-      expect(results.map((m) => m.role === "toolResult" && m.isError)).toEqual([false, false]);
+      expect(results.map((m) => m.role === "toolResult" && m.isError)).toEqual([false, true]);
+      expect(results[1]).toMatchObject({ role: "toolResult", toolName: "oracle", content: [{ type: "text", text: "Tool oracle not found" }] });
       const prepared = events.since(0, 64 * 1024).events.filter(event => event.kind === "auxiliary" && event.action === "prepare");
-      const reference = prepared.findLast(event => event.usage_kind === "oracle")?.request;
-      if (typeof reference !== "string") throw new Error("Oracle reference missing");
       const beforeInspection = requestCount;
-      workbench.openAgent(`helper:${reference}`);
-      expect(screen()).toContain("oracle advice"); expect(screen()).toContain("consult only");
       const exploreReference = prepared.findLast(event => event.usage_kind === "explore")?.request;
       if (typeof exploreReference !== "string") throw new Error("Explore reference missing");
       const fleet = host.state().fleet as FleetSnapshot | null;
@@ -103,9 +99,11 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
       if (!file) throw new Error("Parent Pi transcript missing");
       const recorded = sdk.SessionManager.open(file).getBranch().flatMap(entry => entry.type === "message"
         && entry.message.role === "toolResult" && entry.message.toolCallId.startsWith(`${stage}-`) ? [entry.message.details] : []);
-      expect(recorded).toMatchObject([{ conversationId: explore?.id }, { conversationId: reference }]);
+      expect(recorded[0]).toMatchObject({ conversationId: explore?.id });
       expect(explore?.messages.some(message => message.text.includes("child findings"))).toBeTrue();
       expect(explore?.messages.some(message => message.tool === "write" && message.text.includes("Tool write not found"))).toBeTrue();
+      workbench.openChild(explore!.id);
+      expect(screen()).toContain("child findings");
       expect(requestCount).toBe(beforeInspection); // Inspecting never invokes a model or resumes a child.
     }
     const researchRequests = requests.filter(request => request.model === "gpt-6-luna");
@@ -113,11 +111,12 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     expect(researchRequests.filter(request => request.service_tier !== "priority")).toEqual([]);
     expect(requests.filter(request => request.model !== "gpt-6-luna").every(request => request.service_tier === undefined)).toBeTrue();
     const lifecycle = events.since(0, 64 * 1024).events.filter(event => event.kind === "auxiliary");
-    expect(lifecycle).toHaveLength(12);
-    expect(new Set(lifecycle.map(event => event.request)).size).toBe(4);
+    expect(lifecycle).toHaveLength(6);
+    expect(lifecycle.every(event => event.usage_kind === "explore")).toBeTrue();
+    expect(new Set(lifecycle.map(event => event.request)).size).toBe(2);
     expect(lifecycle.filter(event => event.action === "finish").map(event => event.outcome))
-      .toEqual(["completed", "completed", "completed", "completed"]);
-    // Fence/stop while the fifth child is actually streaming. Subscribe before the exact
+      .toEqual(["completed", "completed"]);
+    // Fence/stop while the third child is actually streaming. Subscribe before the exact
     // provider barrier; final close aborts the parent too, so no follow-up request escapes.
     const before = requestCount;
     holdOnRequest = before + 2;
@@ -130,7 +129,7 @@ test("host wires explore/oracle to bound runtime and keeps child restrictions af
     await held;
     await host.close();
     expect(requestCount - before).toBe(2);
-    expect(host.state().auxiliary).toEqual({ explore: { running: 0, queued: 0 }, oracle: { running: 0, queued: 0 },
+    expect(host.state().auxiliary).toEqual({ explore: { running: 0, queued: 0 },
       web_search: { running: 0, queued: 0 }, stopped: true });
     expect((host.state().fleet as FleetSnapshot | null)?.children.every(child => !["running", "queued", "needs"].includes(child.state))).toBeTrue();
     const terminal = events.since(0, 64 * 1024).events.findLast(event => event.kind === "auxiliary" && event.action === "finish");

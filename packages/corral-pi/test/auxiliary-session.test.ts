@@ -11,11 +11,10 @@ import { guardedFetch } from "../src/host/restrict.ts";
 import { runAuxiliarySession } from "../src/extensions/subagent/session.ts";
 import { AuxiliaryRuntime, type AuxiliaryResponse } from "../src/extensions/subagent/runtime.ts";
 import { exploreTool } from "../src/extensions/subagent/index.ts";
-import { oracleTool } from "../src/extensions/oracle/index.ts";
 import { FleetRuntime } from "../src/extensions/fleet/runtime.ts";
 import { RetainedChildren } from "../src/host/retained-children.ts";
 
-test("real SDK explore reads but cannot write or recurse; oracle has no tools and persists cancellation", async () => {
+test("real SDK explore and expert are read-only and preserve cancelled child transcripts", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "corral-auxiliary-"));
   const originalFetch = globalThis.fetch;
   try {
@@ -26,7 +25,6 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
     restrictProvider(models, "openai-codex", network.fetch as typeof globalThis.fetch);
     writeFileSync(join(cwd, "source.txt"), "fixture source");
     const settings = { explore: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 30 },
-      oracle: { model: "openai-codex/gpt-6.1-sol", timeout_secs: 30 },
       expert: { model: "openai-codex/gpt-6.1-sol", max_turns: 3, timeout_secs: 600, max_parallel: 1 } };
     const refs: Record<string, unknown>[] = [];
     const retained = new RetainedChildren(cwd);
@@ -40,11 +38,11 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
       sessionId: () => "parent", record,
       retain: (helper, file, report) => retained.helper(helper, file, report),
       execute: (invocation, signal) => runAuxiliarySession({ sdk, models, provider: "openai-codex", cwd,
-        agentDir: join(cwd, "agent"), parentLoadout: ["read", "write", "bash", "explore", "oracle"], localTools: [] }, invocation, signal),
+        agentDir: join(cwd, "agent"), parentLoadout: ["read", "write", "bash", "explore"], localTools: [] }, invocation, signal),
     });
     const fleet = new FleetRuntime({ sdk, models, approved: ["openai-codex"], parent: { provider: "openai-codex", model: "gpt-6.1-sol" },
       context: { dir: cwd, session: { worktree: cwd, name: "parent" }, settings: { maxParallel: 3, profiles: [] } },
-      agentDir: join(cwd, "agent"), localTools: [], parentLoadout: ["read", "write", "bash", "explore", "oracle"],
+      agentDir: join(cwd, "agent"), localTools: [], parentLoadout: ["read", "write", "bash", "explore"],
       allowedKinds: ["explore"], research: { settings: settings.explore }, record, retained,
       changed() {}, deliverToParent() { throw new Error("Blocking research must not be redelivered"); },
     });
@@ -117,28 +115,18 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
       detail: { id: research.conversationId, kind: "explore", state: "cancelled" } });
     expect(transport.requests - beforeCancel).toBe(1);
     const cancel = new AbortController();
-    transport.script([{ text: "oracle partial response" }]);
+    transport.script([{ text: "expert partial response" }]);
     transport.holdNext();
     const held = transport.whenHeld();
-    const request = oracleTool(runtime).execute("consult", { prompt: "review this approach" }, cancel.signal, undefined, undefined as never);
+    const request = runtime.run("expert", "cancel-expert", "review this approach", cancel.signal);
     await held;
     cancel.abort();
-    const oracle = (await request).details as AuxiliaryResponse;
-    expect(oracle.outcome).toBe("uncertain");
-    expect(oracle.conversationId).toBe(oracle.request);
-    expect(readRetained(oracle.conversationId)).toMatchObject({ session_file: `runtime/auxiliary/${oracle.request}.jsonl`,
-      detail: { id: oracle.conversationId, kind: "helper:oracle", state: "failed" } });
-    const transcript = readFileSync(path(oracle.request), "utf8").split("\n").filter(Boolean).map((s) => JSON.parse(s));
-    const declarations = transcript.flatMap((e) => e.message?.toolsAdded ?? []);
-    expect(declarations).toHaveLength(0);
-    expect(refs.filter((r) => r.request === oracle.request && r.action === "finish")).toHaveLength(1);
-    expect(refs.at(-1)?.outcome).toBe("uncertain");
-    // A tool-hallucinating oracle cannot turn its single completion into a request loop.
-    const before = transport.requests;
-    transport.script([{ toolCalls: [{ callId: "forbidden", name: "read", arguments: { path: "source.txt" } }] }]);
-    const limited = await runtime.run("oracle", "limited", "consult once");
-    expect(limited.outcome).toBe("uncertain");
-    expect(transport.requests - before).toBe(1);
+    const cancelled = await request;
+    expect(cancelled.outcome).toBe("uncertain");
+    expect(cancelled.conversationId).toBe(cancelled.request);
+    expect(readRetained(cancelled.conversationId)).toMatchObject({ session_file: `runtime/auxiliary/${cancelled.request}.jsonl`,
+      detail: { id: cancelled.conversationId, kind: "helper:expert", state: "failed" } });
+    expect(refs.filter(r => r.request === cancelled.request && r.action === "finish").map(r => r.outcome)).toEqual(["uncertain"]);
     transport.script([
       { toolCalls: [
         { callId: "expert-read", name: "read", arguments: { path: "source.txt" } },
@@ -156,6 +144,5 @@ test("real SDK explore reads but cannot write or recurse; oracle has no tools an
       .toEqual([["read", false], ["write", true], ["bash", true], ["corral_expert", true]]);
     expect(existsSync(join(cwd, "expert-bad.txt"))).toBeFalse();
     await Promise.all([runtime.close(), fleet.close()]);
-    console.log("real SDK: allowed read succeeded; write/recursive spawn failed; oracle declared zero tools; cancellation saved once");
   } finally { globalThis.fetch = originalFetch; rmSync(cwd, { recursive: true, force: true }); }
 }, 30_000);

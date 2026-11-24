@@ -143,7 +143,7 @@ export function modelSettings(values: ModelFlags, mode?: "startup") {
 }
 
 const COMMON_ABILITIES = ["ask_user", "todo", "queue_control", "context_files", "skills", "compaction", "tool_search"];
-const WORK_ABILITIES = ["codemode", "subagents", "oracle", "background_shell"];
+const WORK_ABILITIES = ["codemode", "subagents", "background_shell"];
 const ABILITIES: Readonly<Record<"worker" | "reviewer" | "assistant" | "build", readonly string[]>> = {
   worker: [...COMMON_ABILITIES, ...WORK_ABILITIES, "fleet", "lsp", "session_export"],
   reviewer: [...COMMON_ABILITIES, "session_export"],
@@ -189,7 +189,6 @@ export function workspaceSettings(root: string, role: keyof typeof ABILITIES, ru
       ...(enabled.includes("subagents") ? {
         subagents: { model: explore.data?.model ?? null, max_parallel: DEFAULT_MAX_PARALLEL, max_turns: 12, timeout_secs: 120 },
       } : {}),
-      ...(enabled.includes("oracle") ? { oracle: { model: null, timeout_secs: 120 } } : {}),
       ...(enabled.includes("expert") ? { expert: raw.expert as Json } : {}),
       ...(enabled.includes("background_shell") ? { background_shell: JobSettingsSchema.parse(raw.background_shell ?? {
         max_jobs: 4, max_output_bytes: 8 * 1024 * 1024, max_runtime_secs: 3600, wait_ms: 10_000,

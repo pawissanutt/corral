@@ -1,4 +1,4 @@
-// Host-owned review and oracle/expert admission and accounting. Every invocation is recorded before
+// Host-owned auxiliary admission and accounting. Every invocation is recorded before
 // billable work; an interrupted request is uncertain, never silently charged as zero.
 import { randomUUID } from "node:crypto";
 import type { AuxiliarySettings } from "./settings.ts";
@@ -6,7 +6,7 @@ import { AuxiliaryHistory, type HelperEvent, type HelperInspection } from "./ins
 import { researchBudget, type ResearchOptions, type ResearchReport } from "./research.ts";
 import { RetainedConversationError } from "./conversation.ts";
 
-export type AuxiliaryKind = "explore" | "oracle" | "web_search" | "expert";
+export type AuxiliaryKind = "explore" | "web_search" | "expert";
 export type Outcome = "completed" | "uncertain" | "not_started";
 export interface Invocation {
   readonly request: string;
@@ -86,7 +86,6 @@ export class AuxiliaryRuntime {
   private readonly history: AuxiliaryHistory;
   inspections() { return this.history.snapshot(); }
   private readonly explore: Slots;
-  private readonly oracle = new Slots(1);
   private readonly webSearch = new Slots(1);
   private readonly expert: Slots;
   private readonly controllers = new Set<AbortController>();
@@ -109,6 +108,7 @@ export class AuxiliaryRuntime {
   }
   run(kind: Exclude<AuxiliaryKind, "explore">, id: string, prompt: string, signal?: AbortSignal) {
     if (kind === ("explore" as AuxiliaryKind)) return Promise.reject(new Error("explore must use FleetRuntime.explore"));
+    if (kind !== "web_search" && kind !== "expert") return Promise.reject(new Error("Unknown auxiliary kind"));
     const key = `${kind}:${id}`;
     const previous = this.requests.get(key);
     if (previous) return previous.done;
@@ -125,7 +125,6 @@ export class AuxiliaryRuntime {
   private slots(kind: AuxiliaryKind): Slots {
     switch (kind) {
       case "explore": return this.explore;
-      case "oracle": return this.oracle;
       case "web_search": return this.webSearch;
       case "expert": return this.expert;
     }
@@ -240,8 +239,7 @@ export class AuxiliaryRuntime {
     await Promise.allSettled([...this.requests.values()].map(({ done }) => done));
   }
   state() {
-    return { explore: this.explore.state(), oracle: this.oracle.state(),
-      web_search: this.webSearch.state(),
+    return { explore: this.explore.state(), web_search: this.webSearch.state(),
       ...(this.options.settings.expert ? { expert: this.expert.state() } : {}),
       stopped: this.stopped };
   }

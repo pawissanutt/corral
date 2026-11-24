@@ -9,6 +9,7 @@ export class RetainedConversationError extends Error {
 
 /** A bounded projection for renderers and nested-call journals, not arbitrary tool details. */
 export function helperConversationId(tool: string, value: unknown): string | undefined {
+  // Retired oracle calls can still link to their recorded conversations.
   if (!["explore", "oracle", "corral_expert"].includes(tool)) return;
   if (typeof value === "string" && /^[a-z0-9-]{1,36}$/.test(value)) return value;
 }

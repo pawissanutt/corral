@@ -33,7 +33,7 @@ export interface PanelSnapshot {
   /** The continuation record for the plan; null when none is recorded, absent when the snapshot never read one. */
   readonly ledgerContinued?: ContinuedState | null;
   readonly jobs: readonly PanelJob[] | null;
-  readonly auxiliary: { explore: { running: number; queued: number }; oracle: { running: number; queued: number } } | null;
+  readonly auxiliary: ReturnType<import("../extensions/subagent/runtime.ts").AuxiliaryRuntime["state"]> | null;
   readonly helpers?: readonly import("../extensions/subagent/inspection.ts").HelperInspection[] | null;
   readonly steering: number;
   readonly followUps: number;

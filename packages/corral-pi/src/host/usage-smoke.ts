@@ -47,7 +47,7 @@ async function main() {
     requests_max: 4, max_output_tokens: 1024, max_retries: 0, paid_api_usd: 0,
     transport: "sse", effort: "none", order: profiles.map(p => `${p.role}/${p.preset}`),
     static_log_sha256: sha256Hex(raw), task,
-    excluded: ["web", "MCP", "configurable LSP", "explore", "oracle", "native plan roles", "workflow outcomes"],
+    excluded: ["web", "MCP", "configurable LSP", "explore", "native plan roles", "workflow outcomes"],
   };
   const save = (file: string, value: unknown) => writeFileSync(join(out, file), `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
   save("controls.json", controls);

@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expertTool } from "../src/extensions/subagent/index.ts";
-import { oracleTool } from "../src/extensions/oracle/index.ts";
 import { RetainedChildren } from "../src/host/retained-children.ts";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { AuxiliaryHistory, HELPER_HISTORY_LIMIT, HELPER_TEXT_LIMIT } from "../src/extensions/subagent/inspection.ts";
@@ -57,7 +56,7 @@ test("native text boundaries and response errors are projected safely, bounded, 
   expect(final?.textBlocks).toBeUndefined(); expect(final?.text).toBe("Visible answer");
   expect(final?.stopReason).toBe("error"); expect(final?.errorMessage).toBe("Provider interrupted");
   expect(before[0]?.messages[0]?.textBlocks).toEqual(["Visible answer", "Second block"]);
-  history.begin("cap", "oracle", "fixture/model", "Question");
+  history.begin("cap", "expert", "fixture/model", "Question");
   observeHelperEvent({ type: "message_end", message: { ...assistant, content: [...assistant.content,
     ...Array.from({ length: 20 }, () => ({ type: "text" as const, text: "x".repeat(5000) }))] } }, event => history.observe("cap", event));
   const capped = history.snapshot()[0];
@@ -70,21 +69,22 @@ test("native text boundaries and response errors are projected safely, bounded, 
 test("broken UI observers cannot abort projection, change canonical accounting, or retain a slot", async () => {
   expect(() => observeHelperEvent({ type: "message_end", message: assistant }, () => { throw new Error("observer failed"); })).not.toThrow();
   const terminal: unknown[] = [];
-  const runtime = new AuxiliaryRuntime({ settings: { oracle: { model: "model", timeout_secs: 30 } }, provider: "fixture", model: "parent", sessionId: () => "parent",
+  const runtime = new AuxiliaryRuntime({ settings: { expert: { model: "model", timeout_secs: 30, max_turns: 2, max_parallel: 1 } },
+    provider: "fixture", model: "parent", sessionId: () => "parent",
     changed: () => { throw new Error("renderer failed"); },
     record: async value => { if (value.action === "finish") terminal.push(value.outcome); return { session_id: value.request, session_file: "/unused/reference" }; },
     execute: async invocation => { invocation.observe?.({ type: "assistant_delta", text: "Live text" }); return { outcome: "completed", text: "Final answer" }; },
   });
-  await runtime.run("oracle", "one", "First"); await runtime.run("oracle", "two", "Second");
+  await runtime.run("expert", "one", "First"); await runtime.run("expert", "two", "Second");
   expect(terminal).toEqual(["completed", "completed"]);
-  expect(runtime.state().oracle).toEqual({ running: 0, queued: 0 });
+  expect(runtime.state().expert).toEqual({ running: 0, queued: 0 });
   expect(runtime.inspections().every(entry => entry.phase === "completed" && entry.inspectionError?.includes("renderer failed"))).toBeTrue();
   await runtime.close();
 });
 
 test("history is bounded and completed entries ignore late callbacks without resurrecting evicted records", () => {
   const history = new AuxiliaryHistory();
-  history.begin("r", "oracle", "fixture/model", "p".repeat(10000));
+  history.begin("r", "expert", "fixture/model", "p".repeat(10000));
   for (let index = 0; index < 100; index++) history.observe("r", { type: "tool", id: String(index), name: "read", phase: "completed", text: "x".repeat(10000) });
   history.finish("r", "completed", "answer".repeat(10000));
   const entry = history.snapshot()[0];
@@ -93,7 +93,7 @@ test("history is bounded and completed entries ignore late callbacks without res
   expect(entry?.messages.reduce((sum, message) => sum + message.text.length, 0)).toBeLessThanOrEqual(32768);
   history.observe("r", { type: "assistant_delta", text: "late" });
   expect(history.snapshot()[0]).toEqual(entry);
-  for (let index = 0; index < HELPER_HISTORY_LIMIT; index++) history.begin(String(index), "oracle", "fixture/model", "next");
+  for (let index = 0; index < HELPER_HISTORY_LIMIT; index++) history.begin(String(index), "expert", "fixture/model", "next");
   history.observe("r", { type: "assistant_delta", text: "must not resurrect" });
   expect(history.snapshot()).toHaveLength(HELPER_HISTORY_LIMIT);
   expect(history.snapshot().some(value => value.request === "r")).toBeFalse();
@@ -149,15 +149,15 @@ test("the ID returned by expert opens its retained transcript after the roster d
   const dir = mkdtempSync(join(tmpdir(), "expert-readback-"));
   const kept = new RetainedChildren(dir);
   const records: Record<string, unknown>[] = [];
-  const runtime = new AuxiliaryRuntime({ settings: { expert: { model: "model", max_parallel: 1, max_turns: 24, timeout_secs: 30 },
-    oracle: { model: "model", timeout_secs: 30 } }, provider: "fixture", model: "parent", sessionId: () => "parent",
+  const runtime = new AuxiliaryRuntime({ settings: { expert: { model: "model", max_parallel: 1, max_turns: 24, timeout_secs: 30 } },
+    provider: "fixture", model: "parent", sessionId: () => "parent",
     retain: (helper, file, report) => kept.helper(helper, file, report),
     async record(value) { records.push(value); return { session_id: value.request, session_file: join(dir, `runtime/auxiliary/${value.request}.jsonl`) }; },
-    async execute({ kind, sessionId, sessionFile }) {
+    async execute({ prompt, sessionId, sessionFile }) {
       mkdirSync(dirname(sessionFile), { recursive: true });
       writeFileSync(sessionFile, JSON.stringify({ type: "session", version: Sdk.CURRENT_SESSION_VERSION,
         id: sessionId, timestamp: new Date().toISOString(), cwd: dir }) + "\n");
-      if (kind === "oracle") throw new Error("Unrelated test helper failed. ".repeat(10));
+      if (prompt.includes("New call")) throw new Error("Unrelated test helper failed. ".repeat(10));
       Sdk.SessionManager.open(sessionFile).appendMessage(assistant);
       return { text: "Visible answer", outcome: "completed", turns: 2 };
     },
@@ -170,10 +170,10 @@ test("the ID returned by expert opens its retained transcript after the roster d
     expect(records.slice(0, 3).map(record => [record.action, record.outcome])).toEqual([
       ["prepare", undefined], ["started", undefined], ["finish", "completed"],
     ]);
-    const oracle = oracleTool(runtime);
+    const expert = expertTool(runtime);
     // Exercise both bounds: live auxiliary observations keep 100, and the file roster is byte-bounded.
     for (let index = 0; index < 100; index++) {
-      const reply = await oracle.execute(`evict-${index}`, { prompt: "New call" }, undefined, undefined, undefined as never);
+      const reply = await expert.execute(`evict-${index}`, { question: "New call" }, undefined, undefined, undefined as never);
       if (index === 0) {
         expect(reply.isError).toBe(true);
         expect(reply.details).toMatchObject({ conversationId: records[3]?.request });
@@ -192,12 +192,33 @@ test("the ID returned by expert opens its retained transcript after the roster d
   } finally { await runtime.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("recordings made by the retired oracle remain readable", () => {
+  const dir = mkdtempSync(join(tmpdir(), "oracle-readback-"));
+  try {
+    const id = "3ac14dd6-8070-4270-a3a0-d00710ffd4f6";
+    const relative = `runtime/auxiliary/${id}.jsonl`;
+    const file = join(dir, relative);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, JSON.stringify({ type: "session", version: Sdk.CURRENT_SESSION_VERSION,
+      id, timestamp: new Date().toISOString(), cwd: dir }) + "\n");
+    Sdk.SessionManager.open(file).appendMessage(assistant);
+    mkdirSync(join(dir, "child-records"));
+    writeFileSync(join(dir, "child-records", `${id}.json`), JSON.stringify({
+      session_file: relative, session_id: id, detail: { id, kind: "helper:oracle" },
+    }));
+    const recording = new RetainedChildren(dir).recording(id);
+    expect(recording).toEqual({ file, session: id });
+    expect(Sdk.SessionManager.open(recording!.file).getBranch()).toMatchObject([{ type: "message", message: assistant }]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a failed terminal record remains uncertain, not a successful helper or task", async () => {
-  const runtime = new AuxiliaryRuntime({ settings: { oracle: { model: "model", timeout_secs: 30 } }, provider: "fixture", model: "parent", sessionId: () => "parent",
+  const runtime = new AuxiliaryRuntime({ settings: { expert: { model: "model", timeout_secs: 30, max_turns: 2, max_parallel: 1 } },
+    provider: "fixture", model: "parent", sessionId: () => "parent",
     record: async value => { if (value.action === "finish") throw new Error("record unavailable"); return { session_id: value.request, session_file: "/unused/reference" }; },
     execute: async () => ({ outcome: "completed", text: "Returned response" }),
   });
-  await expect(runtime.run("oracle", "one", "Question")).rejects.toThrow("record unavailable");
+  await expect(runtime.run("expert", "one", "Question")).rejects.toThrow("record unavailable");
   expect(runtime.inspections()[0]?.phase).toBe("uncertain"); expect(runtime.inspections()[0]?.error).toBe("record unavailable");
   expect(runtime.inspection()[0]).toMatchObject({ state: "uncertain", parent: "parent", sessionFile: "/unused/reference" });
   await runtime.close();

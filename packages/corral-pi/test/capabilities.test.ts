@@ -43,6 +43,14 @@ test("standalone worker and assistant child limits match the engine capability d
   }
 });
 
+test("standalone launch does not enable or configure oracle", () => {
+  for (const role of ["worker", "reviewer", "assistant", "build"] as const) {
+    const { capabilities, guidance } = workspaceSettings("/unused", role, undefined, { oracle: { model: "old-model", timeout_secs: 30 } });
+    expect(capabilities.enabled).not.toContain("oracle");
+    expect(guidance.settings?.oracle).toBeUndefined();
+  }
+});
+
 test("availability intersects policy and credentials, not the initial provider", async () => {
   // Given two corral-owned logins and a standalone session.
   const auth = fixture(PROVIDER_IDS);

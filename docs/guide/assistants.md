@@ -253,7 +253,7 @@ generation records a transition when its snapshot differs from the previous one.
 | `context_files`, `skills`, `prompt_templates`, `todo`, `codemode`, `mcp.enabled`, `tool_search`, `web.enabled`, `lsp`, `subagents`, `fleet` | off / on / on |
 | `write_permissions` | off / on / on (assistant only) |
 | `compaction` | on / on / on |
-| `bash_rules`, `oracle`, `browser` | off / off / on |
+| `bash_rules`, `browser` | off / off / on |
 | `budget`, `llama_cpp.enabled` | off unless configured |
 
 `mcp.enabled` shows the assistant every workspace-configured MCP server, with read-only tool

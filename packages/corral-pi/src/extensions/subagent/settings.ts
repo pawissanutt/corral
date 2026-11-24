@@ -9,17 +9,14 @@ export const ExploreSettingsSchema = z.object({
   max_turns: z.number().int().min(1).max(64), timeout_secs,
   service_tier: z.enum(["default", "priority"]).optional(),
 }).strict();
-export const OracleSettingsSchema = z.object({ model, timeout_secs }).strict();
 export const ExpertSettingsSchema = z.object({
   model: z.string().min(1).max(256), max_turns: z.number().int().min(1).max(64),
   timeout_secs, max_parallel: z.number().int().min(1).max(16),
 }).strict();
 export type ExpertSettings = z.infer<typeof ExpertSettingsSchema>;
 export type ExploreSettings = z.infer<typeof ExploreSettingsSchema>;
-export type OracleSettings = z.infer<typeof OracleSettingsSchema>;
 export interface AuxiliarySettings {
   readonly explore?: ExploreSettings;
-  readonly oracle?: OracleSettings;
   readonly web_search?: { readonly model: null; readonly timeout_secs: number };
   readonly expert?: ExpertSettings;
 }
@@ -27,7 +24,6 @@ export interface AuxiliarySettings {
 export function auxiliarySettings(role: Role, enabled: readonly string[], settings?: Readonly<Record<string, unknown>>): AuxiliarySettings {
   return {
     ...(enabled.includes("subagents") ? { explore: ExploreSettingsSchema.parse(settings?.subagents) } : {}),
-    ...(enabled.includes("oracle") ? { oracle: OracleSettingsSchema.parse(settings?.oracle) } : {}),
     ...(role === "assistant" && enabled.includes("expert") ? { expert: ExpertSettingsSchema.parse(settings?.expert) } : {}),
   };
 }

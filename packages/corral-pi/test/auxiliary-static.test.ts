@@ -28,7 +28,7 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
       async function profile(enabled: string[], expertSettings = true) {
         const host = await HostSession.create({ sdk, identity, cwd, agentDir: join(cwd, "agent"), model: "gpt-6.1-sol", modules,
           network, events: new EventLog(), capabilities: { catalog: 6, digest: "a".repeat(64), preset: "full", enabled },
-          guidance: { projectText: false, settings: { subagents: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 120 }, oracle: { model: null, timeout_secs: 120 },
+          guidance: { projectText: false, settings: { subagents: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 120 },
             ...(expertSettings ? { expert: { model: "gpt-6.1-sol", max_turns: 24, timeout_secs: 600, max_parallel: 1 } } : {}) } },
           client: new CorralClient({ corral: "/unused", root: cwd, cwd, identity }),
           sessionManager: sdk.SessionManager.inMemory(cwd),
@@ -61,7 +61,7 @@ test("auxiliary static deltas record actual host prompts and tool schemas for al
       }
       for (const preset of ["strict", "standard", "full"]) {
         const explore = preset === "full" || (preset === "standard" && role !== "reviewer");
-        const enabled = [...(explore ? ["subagents"] : []), ...(preset === "full" ? ["oracle"] : [])];
+        const enabled = explore ? ["subagents"] : [];
         const candidate = enabled.length ? await profile(enabled) : base;
         const promptDelta = candidate.promptBytes - base.promptBytes;
         const toolDelta = candidate.toolBytes - base.toolBytes;

@@ -31,8 +31,7 @@ models.registerNativeProvider({ ...provider,
 try {
   const scenarios = (["inert", "configured"] as const).flatMap(resource =>
     (["worker", "planner", "plan_reviewer"] as const).map(role => ({ resource, role, kind: "explore" as const })));
-  // Oracle is full/override only. Include a reference overhead, never call it standard-enabled.
-  for (const scenario of [...scenarios, { resource: "inert", role: "worker", kind: "oracle" } as const]) {
+  for (const scenario of scenarios) {
     const { resource, role, kind } = scenario;
     const p = validateProfile(JSON.parse(readFileSync(join(directory, `${resource}-${role}-standard.json`), "utf8")));
     const key = `${resource}-${role}-${kind}`;
@@ -43,7 +42,7 @@ try {
     }));
     const result = await runAuxiliarySession({ sdk, models, provider: "openai-codex", cwd: work, agentDir: work,
       parentLoadout: p.tools!.map(tool => tool.name), localTools }, {
-      request: key, kind, model: "gpt-6.1-sol", prompt: "Return concise fixture findings. Do not call tools.",
+      request: key, kind, provider: "openai-codex", model: "gpt-6.1-sol", prompt: "Return concise fixture findings. Do not call tools.",
       sessionFile: join(work, `${key}.jsonl`), sessionId: key, maxTurns: 1,
     }, AbortSignal.timeout(15_000));
     const context = JSON.parse(JSON.stringify(captured).split(work).join("<fixture>"));

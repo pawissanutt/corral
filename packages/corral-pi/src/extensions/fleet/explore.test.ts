@@ -5,7 +5,7 @@ import type { ChildSpec } from "../../build/types.ts";
 import { workspaceSettings } from "../../host/config.ts";
 import { exploreTool } from "../subagent/index.ts";
 import { researchBudget } from "../subagent/research.ts";
-import { auxiliarySettings, ExploreSettingsSchema, OracleSettingsSchema, type ExploreSettings } from "../subagent/settings.ts";
+import { auxiliarySettings, ExploreSettingsSchema, type ExploreSettings } from "../subagent/settings.ts";
 import type { ChildHandle, ChildHooks } from "./child.ts";
 import type { ResolvedModel } from "./profiles.ts";
 import { FleetRuntime } from "./runtime.ts";
@@ -163,7 +163,6 @@ test("Explore priority is validated and restricted to the Codex research runner"
   const explore: ExploreSettings = { ...settings, model: "gpt-6-luna", service_tier: "priority" };
   expect(ExploreSettingsSchema.parse(explore).service_tier).toBe("priority");
   expect(() => ExploreSettingsSchema.parse({ ...explore, service_tier: "fast" })).toThrow();
-  expect(() => OracleSettingsSchema.parse({ model: "stronger", timeout_secs: 30, service_tier: "priority" })).toThrow();
   const answer = async (): Promise<ResearchResult> => ({ report: "answer", researchReport: { status: "completed", stopReason: "completed" } });
   const priority = fixture(answer, explore);
   const other = fixture(answer, explore, "anthropic");

@@ -26,7 +26,8 @@ export interface HelperMessage {
   readonly at?: number;
 }
 export interface HelperInspection {
-  readonly request: string; readonly kind: AuxiliaryKind; readonly model: string;
+  /** Oracle can appear in historical records but is not an executable auxiliary kind. */
+  readonly request: string; readonly kind: AuxiliaryKind | "oracle"; readonly model: string;
   readonly serviceTier?: "priority";
   readonly prompt: string; readonly phase: "preparing" | "queued" | "running" | Outcome;
   readonly createdAt: number; readonly startedAt?: number; readonly endedAt?: number;

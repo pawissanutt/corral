@@ -106,7 +106,6 @@ import type { HelperInspection } from "../extensions/subagent/inspection.ts";
 import { AuxiliaryRuntime } from "../extensions/subagent/runtime.ts";
 import { auxiliarySettings } from "../extensions/subagent/settings.ts";
 import { expertTool, exploreTool } from "../extensions/subagent/index.ts";
-import { oracleTool } from "../extensions/oracle/index.ts";
 import { runAuxiliarySession } from "../extensions/subagent/session.ts";
 import { FleetRuntime } from "../extensions/fleet/runtime.ts";
 import { fleetTools } from "../extensions/fleet/tools.ts";
@@ -748,7 +747,7 @@ export class HostSession {
         },
       });
     }
-    if (auxiliary.explore || auxiliary.oracle || auxiliary.web_search || auxiliary.expert) {
+    if (auxiliary.explore || auxiliary.web_search || auxiliary.expert) {
       this.auxiliary = new AuxiliaryRuntime({
         settings: auxiliary, provider: helperModel.provider, model: helperModel.model,
         changed: () => this.fleetChanged(),
@@ -821,7 +820,6 @@ export class HostSession {
         } : undefined) : []),
       ...(this.jobs ? jobTools(this.jobs, true, this.commands, this.inputWake).filter(tool => tool.name !== "bash" || role.upstreamTools.includes("bash")) : []),
       ...(this.fleet && auxiliary.explore ? [exploreTool(this.fleet)] : []),
-      ...(this.auxiliary && auxiliary.oracle ? [oracleTool(this.auxiliary)] : []),
       ...(this.auxiliary && auxiliary.expert ? [expertTool(this.auxiliary)] : []),
       ...(browser ? browserTools(browser, { cwd: options.cwd, registerCapability }) : [])];
     if (this.buildControls) this.localTools = [...this.localTools, ...this.buildControls.tools];

@@ -33,6 +33,21 @@ test("every registered local tool has its own presenter and never prints key=\"j
   }
 });
 
+test("a retired oracle call renders the SDK not-found error as a failure", () => {
+  const lines = row("oracle", { prompt: "Consult" }, { isError: true, result: reply("Tool oracle not found", {}) });
+  expect(lines[0]).toContain("Tool oracle not found");
+  expect(lines[0]).not.toContain("partial");
+});
+
+test("a historical oracle result renders its answer and conversation ID", () => {
+  const id = "3ac14dd6-8070-4270-a3a0-d00710ffd4f6";
+  const lines = row("oracle", { prompt: "Consult on past work" }, { expanded: true,
+    result: reply("Retained advice", { text: "Retained advice", outcome: "completed", conversationId: id }) });
+  expect(lines[0]).toContain("oracle Consult on past work");
+  expect(lines.join("\n")).toContain("Retained advice");
+  expect(lines.join("\n")).toContain(`Conversation ID: ${id}`);
+});
+
 test("a 24 KiB one-line JSON result collapses to one row", () => {
   const body = { url: "https://example.dev/docs", status: 200, total_bytes: 24_576, body: "# Docs\n" + "x".repeat(24_000), next_offset: 24_576 };
   const lines = row("web_fetch", { url: body.url }, { result: reply(JSON.stringify(body)) });

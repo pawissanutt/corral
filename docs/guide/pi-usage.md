@@ -13,7 +13,7 @@ Views shorter than 12 body rows open with a three-row digest of the first three 
 
 ## Session
 
-Tokens, the API-equivalent USD estimate, the context window (`48,000 / 200,000 · 24%`) and the model with its effort. An unknown value reads `unknown` (a context share without a known window reads `percent unknown`). A build session lists this pane and each of its build agents as rows with a `total` row; the total cost is the status bar's rule (the parent plus the agents' known costs), and a `+` beside a total marks a member whose value is unknown. Helper calls (Explore, Oracle) are neither listed nor added, so no child's usage is counted twice. Session tokens and cost are counted by this pane and priced from the model catalog: an estimate, not a bill or a provider quota.
+Tokens, the API-equivalent USD estimate, the context window (`48,000 / 200,000 · 24%`) and the model with its effort. An unknown value reads `unknown` (a context share without a known window reads `percent unknown`). A build session lists this pane and each of its build agents as rows with a `total` row; the total cost is the status bar's rule (the parent plus the agents' known costs), and a `+` beside a total marks a member whose value is unknown. Helper calls (Explore) are neither listed nor added, so no child's usage is counted twice. Session tokens and cost are counted by this pane and priced from the model catalog: an estimate, not a bill or a provider quota.
 
 ## Run budget
 

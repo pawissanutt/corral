@@ -10,7 +10,7 @@ function barrier<T = void>() {
   return { promise, resolve };
 }
 const settings = { explore: { max_parallel: 3, model: null, max_turns: 12, timeout_secs: 30, service_tier: "priority" as const },
-  oracle: { model: "stronger", timeout_secs: 30 } };
+  expert: { model: "stronger", timeout_secs: 30, max_turns: 5, max_parallel: 1 } };
 function fixture(execute: (i: Invocation, s: AbortSignal) => Promise<AuxiliaryResult>) {
   const records: Record<string, unknown>[] = [];
   const runtime = new AuxiliaryRuntime({ settings, provider: "openai-codex", model: "normal",
@@ -23,28 +23,28 @@ function fixture(execute: (i: Invocation, s: AbortSignal) => Promise<AuxiliaryRe
   return { records, runtime };
 }
 
-test("oracle cancellation uses the shared attribution seam and records uncertain spend once", async () => {
+test("expert cancellation uses the shared attribution seam and records uncertain spend once", async () => {
   const response = barrier();
   let model = "";
   const fx = fixture(async (invocation, signal) => {
     model = invocation.model;
-    expect(invocation.kind).toBe("oracle");
-    expect(invocation.maxTurns).toBe(1);
+    expect(invocation.kind).toBe("expert");
+    expect(invocation.maxTurns).toBe(5);
     response.resolve();
     expect(invocation.serviceTier).toBeUndefined();
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
     return { text: "partial", outcome: "uncertain" };
   });
   const cancel = new AbortController();
-  const request = fx.runtime.run("oracle", "call", "question", cancel.signal);
-  expect(fx.runtime.run("oracle", "call", "question", cancel.signal)).toBe(request);
+  const request = fx.runtime.run("expert", "call", "question", cancel.signal);
+  expect(fx.runtime.run("expert", "call", "question", cancel.signal)).toBe(request);
   await response.promise;
   cancel.abort();
   expect((await request).outcome).toBe("uncertain");
   expect(model).toBe("stronger");
   expect(fx.records.map((r) => r.action)).toEqual(["prepare", "started", "finish"]);
   expect(fx.records[2]?.outcome).toBe("uncertain");
-  console.log("oracle: configured stronger model; response cancelled; one uncertain terminal record; duplicate request reused");
+  await fx.runtime.close();
 });
 
 test("relaunching the same parent with a reused tool call ID allocates a new auxiliary transcript", async () => {
@@ -52,27 +52,30 @@ test("relaunching the same parent with a reused tool call ID allocates a new aux
     text: invocation.sessionId, outcome: "completed",
   });
   const first = fixture(execute);
-  const before = await first.runtime.run("oracle", "call", "question");
+  const before = await first.runtime.run("expert", "call", "question");
   await first.runtime.close();
   const next = fixture(execute);
   try {
-    const after = await next.runtime.run("oracle", "call", "question");
+    const after = await next.runtime.run("expert", "call", "question");
     expect(after.request).not.toBe(before.request);
     expect(after.sessionFile).toBe(`/private/${after.request}.jsonl`);
     expect(after.text).toBe(after.request);
   } finally { await next.runtime.close(); }
 });
 
-test("disabled/unconfigured auxiliary calls and bypassed explore calls create no billing records", async () => {
+test("disabled, retired and bypassed auxiliary calls create no billing records", async () => {
   let calls = 0;
-  const runtime = new AuxiliaryRuntime({ settings: { oracle: { model: null, timeout_secs: 30 } },
+  const legacySettings = { web_search: { model: null, timeout_secs: 30 }, oracle: { model: "stronger", timeout_secs: 30 } };
+  const runtime = new AuxiliaryRuntime({ settings: legacySettings,
     provider: "fixture", model: "parent", sessionId: () => "parent",
     record: async () => { calls++; return {}; }, execute: async () => { calls++; return { text: "bad", outcome: "completed" }; },
   });
   // @ts-expect-error Public auxiliary calls cannot enter the private review explore pool.
   await expect(runtime.run("explore", "bypass", "question")).rejects.toThrow("FleetRuntime.explore");
   await expect(runtime.run("expert", "disabled", "question")).rejects.toThrow("disabled");
-  await expect(runtime.run("oracle", "unconfigured", "question")).rejects.toThrow("not configured");
+  // @ts-expect-error An old caller cannot execute oracle, even with stale settings.
+  await expect(runtime.run("oracle", "retired", "question")).rejects.toThrow("Unknown auxiliary kind");
+  await expect(runtime.run("web_search", "unconfigured", "question")).rejects.toThrow("web_search_unavailable");
   expect(calls).toBe(0);
   await runtime.close();
 });
