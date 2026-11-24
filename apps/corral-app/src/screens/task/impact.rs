@@ -152,7 +152,7 @@ fn drawn(
     listing: Memo<Listing>,
 ) -> AnyElement {
     let form = app.form;
-    let host = Host::Impact(marks, task);
+    let host = Host::Impact(marks, task, scene);
     let map = match form {
         Form::Desktop => canvas::map(app, scene, host),
         Form::Phone | Form::Terminal => tree::tree(app, scene, host),

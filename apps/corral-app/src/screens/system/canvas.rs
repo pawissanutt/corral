@@ -224,8 +224,9 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
         };
         let picked = lit.picked_edge(&edge.from, &edge.to);
         let changed = marks.is_some() && !edge.change.is_empty();
-        // A task's pick may be an unchanged edge; it is shown whole all the same.
-        let on = lit.edge(edge) || (picked && marks.is_some());
+        // In a task's Impact the stroke says what the change did, picked or not: an unchanged
+        // edge stays dimmed and a changed one keeps the change colour; a halo marks the pick.
+        let on = lit.edge(edge);
         let strong = state.picked.is_some() && on;
         let base = 1.1 + 2.4 * (1.0 + edge.count as f32).log10() / (1.0 + most).log10();
         let (stroke, width, dash): (Hsla, f32, &[Points]) = match edge.kind {
@@ -244,7 +245,16 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
         } else {
             (stroke, width)
         };
-        let stroke = if picked {
+        if picked && marks.is_some() {
+            p = curve(
+                p.global_alpha(0.55)
+                    .stroke_color(ink(Token::Focus))
+                    .line_width(width + 6.0),
+                &trim(&route.points, 7.0),
+            )
+            .stroke();
+        }
+        let stroke = if picked && marks.is_none() {
             ink(Token::Focus)
         } else if changed {
             stroke

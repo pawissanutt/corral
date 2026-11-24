@@ -4,14 +4,14 @@
 use std::collections::BTreeMap;
 
 use corral_types::{
-    ChangeKind, ModuleId, PackageEdge, PackageEdgeKind, SystemAt, SystemReview,
-    SystemReviewRow as Row,
+    ChangeKind, ContainerFact, ModuleId, PackageEdge, PackageEdgeKind, SystemAt, SystemMapRow,
+    SystemReview, SystemReviewRow as Row,
 };
 
 use super::items::module_words;
 use crate::model::system::Node;
 use crate::model::system::marks::{Delta, Mark, Marks, figure};
-use crate::model::system::scene::{Edge, EdgeKind, Scene};
+use crate::model::system::scene::{Edge, EdgeKind, Scene, port_card};
 
 /// Gives each edge of the level `at` shows the module pairs whose reference count the change
 /// moved: a module reference its own pair, a boundary edge the pairs it sums, a package edge
@@ -27,11 +27,16 @@ pub(super) fn edges(scene: &mut Scene, review: &SystemReview, at: Option<&System
     };
     let refs = |edge: &Option<PackageEdge>| edge.as_ref().map_or(0, |e| e.references);
     // Each change by the two cards it joins, with the kind a new edge between them takes.
-    let mut joined: BTreeMap<(Node, Node), (EdgeKind, Vec<Delta>)> = BTreeMap::new();
+    let mut moved: Vec<((Node, Node), EdgeKind, Delta)> = Vec::new();
     let mut packages: BTreeMap<(Node, Node), (EdgeKind, Delta)> = BTreeMap::new();
-    let listed = |node: &Node| scene.card(node).is_some();
+    let mut facts: BTreeMap<&str, &ContainerFact> = BTreeMap::new();
     for row in &review.rows {
         match row {
+            Row::Map {
+                row: SystemMapRow::Container { container, .. },
+            } => {
+                facts.insert(container.path.as_str(), container);
+            }
             Row::ModuleReference {
                 from,
                 to,
@@ -45,24 +50,21 @@ pub(super) fn edges(scene: &mut Scene, review: &SystemReview, at: Option<&System
                     ),
                     Some(path) => (end(from, path, true), end(to, path, false)),
                 };
+                if ends.0 == ends.1 {
+                    continue;
+                }
                 let kind = match &ends {
                     (Node::Module(_), Node::Module(_)) => EdgeKind::Module,
                     (Node::Container(_), _) => EdgeKind::Declared,
                     _ => EdgeKind::Boundary,
                 };
-                if ends.0 == ends.1 || !listed(&ends.0) || !listed(&ends.1) {
-                    continue;
-                }
-                joined
-                    .entry(ends)
-                    .or_insert((kind, Vec::new()))
-                    .1
-                    .push(Delta {
-                        from: module_words(from),
-                        to: module_words(to),
-                        before: *before,
-                        after: *after,
-                    });
+                let delta = Delta {
+                    from: module_words(from),
+                    to: module_words(to),
+                    before: *before,
+                    after: *after,
+                };
+                moved.push((ends, kind, delta));
             }
             Row::PackageEdge { before, after }
                 if shown.is_none() && refs(before) != refs(after) =>
@@ -85,16 +87,51 @@ pub(super) fn edges(scene: &mut Scene, review: &SystemReview, at: Option<&System
                     before: refs(before),
                     after: refs(after),
                 };
-                if listed(&ends.0) && listed(&ends.1) {
-                    packages.insert(ends, (kind, delta));
-                }
+                packages.insert(ends, (kind, delta));
             }
             _ => {}
         }
     }
+    // The head's package level lists a neighbour only while a reference or a declaration
+    // joins them, so one whose last reference the change removed has no port: it gets one.
+    if shown.is_some() {
+        for ((from, to), ..) in &moved {
+            for node in [from, to] {
+                let Node::Port { path, into } = node else {
+                    continue;
+                };
+                let inside = if *into { to } else { from };
+                if scene.card(node).is_some() || scene.card(inside).is_none() {
+                    continue;
+                }
+                if let Some(fact) = facts.get(path.as_str()) {
+                    let side = if *into {
+                        &mut scene.top
+                    } else {
+                        &mut scene.bottom
+                    };
+                    side.push(scene.cards.len());
+                    scene.cards.push(port_card(fact, *into));
+                }
+            }
+        }
+    }
+    let listed = |node: &Node| scene.card(node).is_some();
+    let mut joined: BTreeMap<(Node, Node), (EdgeKind, Vec<Delta>)> = BTreeMap::new();
+    for (ends, kind, delta) in moved {
+        if listed(&ends.0) && listed(&ends.1) {
+            joined
+                .entry(ends)
+                .or_insert((kind, Vec::new()))
+                .1
+                .push(delta);
+        }
+    }
     // A package edge whose module pairs are not listed says its own count.
     for (ends, (kind, delta)) in packages {
-        joined.entry(ends).or_insert_with(|| (kind, vec![delta]));
+        if listed(&ends.0) && listed(&ends.1) {
+            joined.entry(ends).or_insert_with(|| (kind, vec![delta]));
+        }
     }
     for edge in scene.edges.iter_mut().chain(scene.undrawn.iter_mut()) {
         let key = (edge.from.clone(), edge.to.clone());
@@ -181,6 +218,8 @@ pub(super) fn more(marks: &mut Marks, scene: &Scene, review: &SystemReview, at: 
                 mark.touched = true;
                 mark.added += added;
                 mark.removed += removed;
+                mark.file_added += added;
+                mark.file_removed += removed;
                 mark.files += 1;
             }
             (

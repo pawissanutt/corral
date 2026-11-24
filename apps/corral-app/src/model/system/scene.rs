@@ -416,6 +416,15 @@ pub fn kind_word(kind: ContainerKind) -> &'static str {
     }
 }
 
+/// A neighbouring package's port on a package level, for a reference the head no longer has.
+pub fn port_card(container: &ContainerFact, into: bool) -> Card {
+    let node = Node::Port {
+        path: container.path.clone(),
+        into,
+    };
+    container_card(container, None, node)
+}
+
 fn container_card(container: &ContainerFact, stats: Option<&SystemNodeStats>, node: Node) -> Card {
     let kind = match (&node, container.kind) {
         (Node::Port { .. }, _) => Kind::Port,

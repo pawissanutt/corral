@@ -8,7 +8,8 @@
 
 use std::collections::BTreeMap;
 
-use super::{Node, count, plural};
+use super::scene::Scene;
+use super::{Node, Pick, count, plural};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Mark {
@@ -16,8 +17,11 @@ pub struct Mark {
     pub touched: bool,
     pub added: u64,
     pub removed: u64,
-    /// Changed files under the node.
+    /// Changed files under the node that the head still has, and their lines: what a node
+    /// standing for them says, so the churn and the count describe the same files.
     pub files: u64,
+    pub file_added: u64,
+    pub file_removed: u64,
     /// Definitions here, outside the change, that reference a changed one.
     pub dependents: u64,
 }
@@ -105,8 +109,8 @@ impl Mark {
         }
         let mut said = vec![format!(
             "+{} −{} in {} not listed",
-            count(self.added),
-            count(self.removed),
+            count(self.file_added),
+            count(self.file_removed),
             plural(self.files, "file", "files")
         )];
         said.extend(self.dependent_words());
@@ -164,11 +168,37 @@ pub fn figure(marks: &Marks, node: &Node) -> String {
 pub fn spoken(marks: &Marks, node: &Node) -> String {
     match (node, of(marks, node)) {
         (_, None) => UNTOUCHED.to_owned(),
-        (Node::More | Node::Port { .. }, Some(mark)) if mark.files > 0 => format!(
-            "{}, in {} not listed",
-            mark.spoken(),
-            plural(mark.files, "file", "files")
-        ),
+        (Node::More | Node::Port { .. }, Some(mark)) if mark.files > 0 => {
+            let mut said = format!(
+                "changed: {} added, {} deleted, in {} not listed",
+                count(mark.file_added),
+                count(mark.file_removed),
+                plural(mark.files, "file", "files")
+            );
+            if mark.dependents > 0 {
+                said.push_str(&format!(
+                    ", {}",
+                    plural(mark.dependents, "dependent", "dependents")
+                ));
+            }
+            said
+        }
         (_, Some(mark)) => mark.spoken(),
+    }
+}
+
+/// The pick as a task's map draws it: a file or definition the level folds into its "N more"
+/// card is shown by that card when the card carries the change, so following an item never
+/// leaves its only mark dimmed.
+pub fn drawn_pick(scene: &Scene, marks: &Marks, picked: Option<Pick>) -> Option<Pick> {
+    match picked {
+        Some(Pick::Node(node @ (Node::File(_) | Node::Definition { .. })))
+            if scene.card(&node).is_none()
+                && scene.card(&Node::More).is_some()
+                && marks.contains_key(&Node::More) =>
+        {
+            Some(Pick::Node(Node::More))
+        }
+        other => other,
     }
 }

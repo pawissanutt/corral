@@ -108,6 +108,8 @@ fn unsupplied_category_is_not_zero_and_dependents_survive_a_touched_package() {
             added: 3,
             removed: 1,
             files: 0,
+            file_added: 0,
+            file_removed: 0,
             dependents: 1,
         })
     );
@@ -606,9 +608,13 @@ fn reference(from: &ModuleId, to: &ModuleId, count: u64) -> SystemMapRow {
 /// hides.
 #[test]
 fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
+    use crate::model::system::Pick;
+    use crate::model::system::marks::{drawn_pick, figure};
     use crate::model::system::scene::MAX_FILES;
     use corral_types::{PackageEdge, PackageEdgeKind, ReadStatus};
     let (x, z, y) = (module("a", "x"), module("a", "z"), module("b", "y"));
+    // `d` is a neighbour only through the reference the change removed.
+    let w = module("d", "w");
     let edge = |to: &str, references| SystemMapRow::PackageEdge {
         edge: PackageEdge {
             from: "a".into(),
@@ -628,11 +634,28 @@ fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
         container("a"),
         container("b"),
         container("c"),
+        container("d"),
         Row::Map { row: edge("b", 10) },
         Row::Map { row: edge("c", 5) },
         moved(&x, &y, 4, 7),
         moved(&z, &y, 1, 3),
         moved(&z, &x, 2, 0),
+        moved(&x, &w, 5, 0),
+        // The package's total counts a file the change deleted; no level of the head has it.
+        Row::Container {
+            path: "a".into(),
+            added: 9,
+            removed: 12,
+        },
+        Row::File {
+            path: "a/src/x/gone.rs".into(),
+            container: "a".into(),
+            module: x.clone(),
+            added: 0,
+            removed: 10,
+            binary: false,
+            deleted: true,
+        },
         Row::File {
             path: hidden.into(),
             container: "a".into(),
@@ -661,6 +684,8 @@ fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
     );
     assert_eq!(change(&project, &a, &b), Some(vec![(4, 7), (1, 3)]));
     assert_eq!(change(&project, &a, &c), Some(Vec::new()));
+    let d = Node::Container("d".into());
+    assert_eq!(change(&project, &a, &d), Some(vec![(5, 0)]));
 
     let at = SystemAt::Container { path: "a".into() };
     let package = SystemMap {
@@ -692,6 +717,13 @@ fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
     );
     // A pair the head no longer has keeps an edge for its change.
     assert_eq!(change(&scene, &Node::Module(z), &from), Some(vec![(2, 0)]));
+    // The head lists no port for `d`; the removed pair gets one.
+    let gone = Node::Port {
+        path: "d".into(),
+        into: false,
+    };
+    assert_eq!(change(&scene, &from, &gone), Some(vec![(5, 0)]));
+    assert!(scene.bottom.iter().any(|i| scene.cards[*i].node == gone));
 
     let at = SystemAt::Module { module: x };
     let file = |path: String, lines| SystemMapRow::File {
@@ -714,4 +746,16 @@ fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
     changes::more(&mut marks, &scene, &review, &at);
     let more = marks.get(&Node::More).copied().unwrap();
     assert_eq!((more.added, more.removed, more.files), (9, 2, 1));
+    // A port's churn and count describe the same surviving files.
+    let port = Node::Port {
+        path: "a".into(),
+        into: true,
+    };
+    assert_eq!(figure(&marks, &port), "+9 −2 in 1 file not listed");
+    // Following an item to a folded file draws its marked "N more" card picked.
+    let picked = Some(Pick::Node(Node::File(hidden.into())));
+    assert_eq!(
+        drawn_pick(&scene, &marks, picked),
+        Some(Pick::Node(Node::More))
+    );
 }

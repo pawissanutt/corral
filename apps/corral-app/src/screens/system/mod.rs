@@ -24,8 +24,9 @@ use crate::model::list::inspector_width;
 use crate::model::projects::Scope;
 use crate::model::review::impact;
 use crate::model::system::inspect::Inspector;
-use crate::model::system::marks::Marks;
+use crate::model::system::marks::{Marks, drawn_pick};
 use crate::model::system::scene::EdgeKind;
+use crate::model::system::scene::Scene;
 use crate::model::system::shown::{ASK_HEADING, ASK_WORDS, Shown, Status, TITLE, shown};
 use crate::model::system::words::{Swatch, slot_hue};
 use crate::model::system::{
@@ -50,8 +51,8 @@ use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 #[derive(Clone, Copy)]
 pub(crate) enum Host {
     System,
-    /// The marks, and the task whose Impact this is.
-    Impact(Memo<Marks>, Memo<Id>),
+    /// The marks, the task whose Impact this is, and the level drawn.
+    Impact(Memo<Marks>, Memo<Id>, Memo<Option<Scene>>),
 }
 
 impl Host {
@@ -59,13 +60,22 @@ impl Host {
     fn state(self, app: AppState) -> State {
         match self {
             Host::System => app.system.get(),
-            Host::Impact(_, task) => app.impact.with(|state| {
-                if state.task.as_deref() == Some(task.get().as_str()) {
-                    state.map.clone()
-                } else {
-                    State::default()
-                }
-            }),
+            Host::Impact(marks, task, scene) => {
+                let mut state = app.impact.with(|state| {
+                    if state.task.as_deref() == Some(task.get().as_str()) {
+                        state.map.clone()
+                    } else {
+                        State::default()
+                    }
+                });
+                scene.with(|scene| {
+                    if let Some(scene) = scene {
+                        state.picked =
+                            marks.with(|marks| drawn_pick(scene, marks, state.picked.take()));
+                    }
+                });
+                state
+            }
         }
     }
 
@@ -73,14 +83,14 @@ impl Host {
     fn marks(self) -> Option<Marks> {
         match self {
             Host::System => None,
-            Host::Impact(marks, _) => Some(marks.get()),
+            Host::Impact(marks, ..) => Some(marks.get()),
         }
     }
 
     fn pick(self, app: AppState, pick: Pick) {
         match self {
             Host::System => app.system_act(Action::Pick(pick)),
-            Host::Impact(_, task) => {
+            Host::Impact(_, task, _) => {
                 let task = untracked(|| task.get());
                 app.impact_act(task.as_str(), impact::Action::Map(Action::Pick(pick)));
             }

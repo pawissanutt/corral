@@ -375,6 +375,8 @@ fn marks_of(review: &SystemReview, containers: &[String], file: Option<&str>) ->
                     let mark = marks.entry(node).or_default();
                     mark.touched = true;
                     mark.files += 1;
+                    mark.file_added += added;
+                    mark.file_removed += removed;
                 }
             }
             Row::Definition {
