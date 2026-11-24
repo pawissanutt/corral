@@ -32,7 +32,14 @@ export class AgentHistory {
   /** False when `page` is of another snapshot of the recording: it does not join the resident pages. */
   accept(direction: Direction, page: TranscriptPage): boolean {
     if (page.stamp !== this.stamp) return false;
-    this.pages = direction === "older" ? [page, ...this.pages].slice(0, RESIDENT_PAGES) : [...this.pages, page].slice(-RESIDENT_PAGES);
+    this.pages = direction === "older" ? [page, ...this.pages] : [...this.pages, page];
+    return true;
+  }
+
+  /** Gives up the pages past the resident limit at the end away from `direction`; false when there were none. */
+  trim(direction: Direction): boolean {
+    if (this.pages.length <= RESIDENT_PAGES) return false;
+    this.pages = direction === "older" ? this.pages.slice(0, RESIDENT_PAGES) : this.pages.slice(-RESIDENT_PAGES);
     return true;
   }
 }

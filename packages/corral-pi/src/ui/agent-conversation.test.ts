@@ -2,7 +2,8 @@ import { beforeAll, expect, test } from "bun:test";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { TuiAltScreen, stripTerminalSequences, visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { getLayoutBoxesAt, renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
-import { AgentConversation, conversationHeader } from "./agent-conversation.ts";
+import { AgentConversation, conversationHeader, type AgentConversationHost } from "./agent-conversation.ts";
+import type { TranscriptRead } from "./agent-history.ts";
 import { helperRows, type AgentRow } from "./agents-model.ts";
 import { agentColor } from "./agent-hues.ts";
 import { HelperChat } from "./helper-chat.ts";
@@ -207,7 +208,7 @@ function recording(count: () => number, stamp: () => string) {
       { id: `c${index}`, kind: "call", tool: "read", callId: `call-${index}`, text: `{"path":"src/file-${index}.ts"}`, record: index * 100, item: 2 },
       { id: `o${index}`, kind: "tool", tool: "read", callId: `call-${index}`, text: "one\ntwo\n", record: index * 100 + 50, item: 0 }],
     ...(index ? { older: `${stamp()}:${index - 1}` } : {}), ...(index < count() ? { newer: `${stamp()}:${index + 1}` } : {}) });
-  const read = async (_id: string, request: { cursor?: string }): Promise<TranscriptPage> => {
+  const read: TranscriptRead = async (_id, request) => {
     reads.push(request.cursor ?? "latest");
     if (request.cursor === undefined) return page(count());
     const [of, index] = request.cursor.split(":");
@@ -225,21 +226,36 @@ function settle(): Promise<void> {
 function reading(view: AgentConversation, rows = 12): string {
   return renderLayoutFrame(view.scroll, 80, rows, () => {}).lines.map(line => stripTerminalSequences(line).slice(0, 78).trimEnd()).join("\n");
 }
+/** A helper's row with a saved session. */
+function recorded(entry: Partial<HelperInspection> = { phase: "completed" }): AgentRow {
+  const live = rowOf(helper(entry));
+  return { ...live, capabilities: { ...live.capabilities, transcript: true } };
+}
+/**
+ * The view over `read`, drawn whenever it asks for a frame, as the TUI draws it. `rest` returns once nothing is being
+ * read and no frame is asked for; `open` opens the agent and rests.
+ */
+function reader(row: () => AgentRow, read: TranscriptRead, more: Partial<AgentConversationHost> = {}) {
+  let asked = false;
+  const view = new AgentConversation({ row, chat: new HelperChat(() => undefined, "/tmp"), color: agentColor, now: () => NOW,
+    click: () => false, focus() {}, back() {}, read, changed: () => { asked = true; }, ...more });
+  const rest = async (rows = 12) => { do { asked = false; reading(view, rows); await settle(); } while (asked); };
+  const open = async (rows = 12) => { view.restore(row().key); view.refresh(); await settle(); await rest(rows); };
+  return { view, rest, open };
+}
+const whole = (view: AgentConversation) => stripTerminalSequences(view.scroll.render(80).join("\n"));
+const times = (text: string, needle: string) => text.split(needle).length - 1;
 
 test("a recording is drawn as the live conversation and read by scrolling: no page that joins moves the reader", async () => {
-  const live = rowOf(helper({ phase: "completed", truncated: true, dropped: 200 }));
-  const row = { ...live, capabilities: { ...live.capabilities, transcript: true } };
+  const row = recorded({ phase: "completed", truncated: true, dropped: 200 });
   const { read, reads } = recording(() => 9, () => "same");
-  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
-    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {}, read });
-  view.restore(row.key);
-  view.refresh(); await settle();
+  const { view, open } = reader(() => row, read);
+  await open();
   // It opens at its latest turn: the reply as words, the call on one row with its result.
   const opened = reading(view);
   expect(opened).toContain("More words here.");
   expect(opened).toContain("✓ read src/file-9.ts · 2 lines");
-  // Pages beyond the view are read ahead of the reader, who stays at the end.
-  for (let before = -1; before !== reads.length;) { before = reads.length; await settle(); expect(reading(view)).toBe(opened); }
+  // Pages beyond the view were read ahead of the reader, who is still at the end.
   expect(reads.length).toBeGreaterThan(1);
   expect(reads).not.toContain("same:0");
   expect(view.following).toBeTrue();
@@ -251,67 +267,56 @@ test("a recording is drawn as the live conversation and read by scrolling: no pa
   }
   expect(reads).toEqual(["latest", ...Array.from({ length: 9 }, (_, index) => `same:${8 - index}`)]);
   expect(reading(view)).toContain("prompt from parent RECORDED_PROMPT");
-  const whole = stripTerminalSequences(view.scroll.render(80).join("\n"));
-  for (let index = 1; index <= 9; index++) expect(whole.split(`RECORDED_${index}_REPLY`).length - 1).toBe(1);
-  expect(whole).toContain("THOUGHT_3");
+  const text = whole(view);
+  for (let index = 1; index <= 9; index++) expect(times(text, `RECORDED_${index}_REPLY`)).toBe(1);
+  expect(text).toContain("THOUGHT_3");
   // The recording stands for the live projection, and nothing asks to be clicked.
-  expect(whole).not.toContain("Visible response");
-  expect(whole).not.toMatch(/Show |Load /);
+  expect(text).not.toContain("Visible response");
+  expect(text).not.toMatch(/Show |Load /);
 });
 
 test("a recording that grew is read again around the reader's row, and reopening returns to that row", async () => {
-  const live = rowOf(helper({ phase: "completed" }));
-  const row = { ...live, capabilities: { ...live.capabilities, transcript: true } };
+  const row = recorded();
   let count = 9, stamp = "one";
   const { read, reads } = recording(() => count, () => stamp);
-  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
-    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {}, read });
-  const rest = async () => { for (let before = -1; before !== reads.length;) { before = reads.length; reading(view); await settle(); } };
-  view.restore(row.key);
-  view.refresh(); await settle(); await rest();
+  const { view, open, rest } = reader(() => row, read);
+  await open();
   view.scroll.scrollBy(-30); await rest();
   const resident = reads.length;
   expect(reads).not.toContain("one:2");
   // The agent wrote another turn: the cursors of the pages on screen no longer read the file.
   count = 10; stamp = "two";
   view.scroll.scrollBy(-20);
-  const before = reading(view); await settle(); await rest();
+  const before = reading(view); await rest();
   expect(reads[resident]?.startsWith("one:")).toBeTrue();
   expect(reads[resident + 1]).toBe("latest");
   expect(reading(view)).toBe(before);
-  expect(stripTerminalSequences(view.scroll.render(80).join("\n"))).toContain("RECORDED_10_REPLY");
+  expect(whole(view)).toContain("RECORDED_10_REPLY");
   // Leaving and coming back after it grew again: the same row, read back from the new end.
   view.remember();
   count = 11; stamp = "three";
-  view.restore(row.key);
-  view.refresh(); await settle(); reading(view); await rest();
+  await open();
   expect(reading(view)).toBe(before);
 });
 
 test("a running agent's unrecorded work follows its recording once, and the settled recording replaces it", async () => {
   const call = toolMessageId("c1");
-  const running = rowOf(helper({ messages: [
+  let row = recorded({ messages: [
     { id: "assistant-1", kind: "assistant", text: "FIRST_REPLY", stopReason: "toolUse", hasToolCalls: true },
     { id: call, kind: "tool", tool: "read", phase: "running", arguments: '{"path":"a.ts"}', text: "" },
-    { id: "assistant-2", kind: "assistant", text: "TYPING_NOW" }] }));
-  let row = { ...running, capabilities: { open: true, transcript: true } };
+    { id: "assistant-2", kind: "assistant", text: "TYPING_NOW" }] });
   let rows: TranscriptRow[] = [
     { id: "u", kind: "user", text: "Question", record: 0, item: 0 },
     { id: "a", kind: "assistant", text: "FIRST_REPLY", record: 10, item: 0 },
     { id: "c", kind: "call", tool: "read", callId: call, text: '{"path":"a.ts"}', record: 10, item: 1 }];
   let unreadable = false;
-  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
-    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {},
-    read: async () => {
-      if (unreadable) { unreadable = false; throw new Error("transient read failure"); }
-      return { stamp: String(rows.length), rows };
-    },
+  const { view } = reader(() => row, async () => {
+    if (unreadable) { unreadable = false; throw new Error("transient read failure"); }
+    return { stamp: String(rows.length), rows };
   });
-  const render = () => stripTerminalSequences(view.scroll.render(80).join("\n"));
-  const times = (text: string, needle: string) => text.split(needle).length - 1;
   view.restore(row.key);
   view.refresh(); await settle();
-  const live = render();
+  const live = whole(view);
   expect(times(live, "FIRST_REPLY")).toBe(1);
   expect(times(live, "read a.ts")).toBe(1);
   expect(live).not.toContain("✓ read a.ts");
@@ -319,69 +324,94 @@ test("a running agent's unrecorded work follows its recording once, and the sett
   // The reply ends before the recording is read again: it stays on screen.
   row = { ...row, conversation: { ...row.conversation!, messages: row.conversation!.messages.map(message =>
     message.id === "assistant-2" ? { ...message, stopReason: "stop" as const } : message) } };
-  expect(times(render(), "TYPING_NOW")).toBe(1);
+  expect(times(whole(view), "TYPING_NOW")).toBe(1);
   rows = [...rows, { id: "o", kind: "tool", tool: "read", callId: call, text: "one\n", record: 20, item: 0 },
     { id: "f", kind: "assistant", text: "FINAL_ANSWER", record: 30, item: 0 }];
   row = { ...row, state: "done" };
   // The read that follows its settlement fails once: the next tick still owes it.
   unreadable = true;
   view.refresh(); await settle();
-  expect(render()).not.toContain("FINAL_ANSWER");
+  expect(whole(view)).not.toContain("FINAL_ANSWER");
   view.refresh(); await settle();
-  const final = render();
+  const final = whole(view);
   expect(times(final, "FINAL_ANSWER")).toBe(1);
   expect(final).toContain("✓ read a.ts");
   expect(final).not.toContain("TYPING_NOW");
 });
 
+test("a reply that ends while the recording is being read is drawn once", async () => {
+  let row = recorded({ messages: [{ id: "assistant-1", kind: "assistant", text: "LATE_REPLY" }] });
+  let rows: TranscriptRow[] = [{ id: "u", kind: "user", text: "Question", record: 0, item: 0 }];
+  // The first read is held until the reply has ended and is in the file it then returns.
+  const held = Promise.withResolvers<void>();
+  let first = true;
+  const { view } = reader(() => row, async () => {
+    if (first) { first = false; await held.promise; }
+    return { stamp: String(rows.length), rows };
+  });
+  view.restore(row.key);
+  view.refresh(); await settle();
+  rows = [...rows, { id: "a", kind: "assistant", text: "LATE_REPLY", record: 10, item: 0 }];
+  row = { ...row, conversation: { ...row.conversation!, messages: [{ id: "assistant-1", kind: "assistant", text: "LATE_REPLY", stopReason: "stop" }] } };
+  held.resolve(); await settle(); await settle();
+  expect(times(whole(view), "LATE_REPLY")).toBe(1);
+});
+
 test("pages that draw no rows are not traded across a full window, and a push against its edge reads on", async () => {
-  const live = rowOf(helper({ phase: "completed" }));
-  const row = { ...live, capabilities: { ...live.capabilities, transcript: true } };
+  const row = recorded();
   // 80 pages of one tool result too long for a page each: only the oldest page has a row to draw.
   const reads: string[] = [];
-  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
-    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {},
-    read: async (_id, request) => {
-      const index = request.cursor === undefined ? 79 : Number(request.cursor);
-      reads.push(String(index));
-      return { stamp: "same", rows: index ? [] : [{ id: "u", kind: "user", text: "RECORDED_PROMPT", record: 0, item: 0 }],
-        ...(index ? { older: String(index - 1) } : {}), ...(index < 79 ? { newer: String(index + 1) } : {}) };
-    } });
-  const rest = async () => { for (let before = -1; before !== reads.length;) { before = reads.length; reading(view); await settle(); } };
-  view.restore(row.key);
-  view.refresh(); await settle(); await rest();
+  const { view, open, rest } = reader(() => row, async (_id, request) => {
+    const index = request.cursor === undefined ? 79 : Number(request.cursor);
+    reads.push(String(index));
+    return { stamp: "same", rows: index ? [] : [{ id: "u", kind: "user", text: "RECORDED_PROMPT", record: 0, item: 0 }],
+      ...(index ? { older: String(index - 1) } : {}), ...(index < 79 ? { newer: String(index + 1) } : {}) };
+  });
+  await open();
   // Reading ahead fills the window and stops: the newest page, which the reader is on, stays resident.
   expect(reads).toEqual(Array.from({ length: 64 }, (_, index) => String(79 - index)));
   // The owner pushes up against the first row: the read goes on to the recording's start, and rests there.
   view.scroll.scrollBy(-3); await settle(); await rest();
   expect(reads).toHaveLength(80);
   expect(reading(view)).toContain("RECORDED_PROMPT");
-  for (let frames = 0; frames < 4; frames++) { reading(view); await settle(); }
+  await rest();
   expect(reads).toHaveLength(80);
 });
 
-test("the bottom of the resident pages is not the recording's end: the next page joins under the reader's rows", async () => {
-  const live = rowOf(helper({ phase: "completed" }));
-  const row = { ...live, capabilities: { ...live.capabilities, transcript: true } };
+test("the bottom of the resident pages is not the recording's end: a page joins under the reader's rows, and leaving keeps that row", async () => {
+  const row = recorded();
   const { read, reads } = recording(() => 70, () => "same");
-  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
-    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {}, read });
-  const rest = async () => { for (let before = -1; before !== reads.length;) { before = reads.length; reading(view); await settle(); } };
-  view.restore(row.key);
-  view.refresh(); await settle(); await rest();
+  const { view, open, rest } = reader(() => row, read);
+  await open();
   // Up to the first row: the newest pages leave the 64-page window.
   for (let step = 0; step < 400 && !(view.scroll.scrollTop === 0 && reads.includes("same:0")); step++) { view.scroll.scrollBy(-200); await rest(); }
   const before = reads.length;
   // Straight down to the last resident row, where the view would follow an end.
   view.scroll.scrollBy(100000);
-  const bottom = reading(view); await settle();
+  const bottom = reading(view);
+  view.remember();
+  await settle();
   expect(reads.length).toBe(before + 1);
+  expect(reading(view)).toBe(bottom);
+  // The place kept a moment ago was that row, not the recording's end.
+  await open();
   expect(reading(view)).toBe(bottom);
 });
 
+test("a jump to the end while the newest pages are not resident reads the recording's end", async () => {
+  const row = recorded();
+  const { read, reads } = recording(() => 70, () => "same");
+  const { view, open, rest } = reader(() => row, read);
+  await open();
+  for (let step = 0; step < 400 && !(view.scroll.scrollTop === 0 && reads.includes("same:0")); step++) { view.scroll.scrollBy(-200); await rest(); }
+  // Pi's jump control asks the scroll view for its end.
+  view.scroll.scrollToEnd(); await rest();
+  expect(reading(view)).toContain("✓ read src/file-70.ts · 2 lines");
+  expect(view.following).toBeTrue();
+});
+
 test("reopening a reply that was read from its last rows returns to the same rows once its first rows are read", async () => {
-  const live = rowOf(helper({ phase: "completed" }));
-  const row = { ...live, capabilities: { ...live.capabilities, transcript: true } };
+  const row = recorded();
   const lines = (from: number, to: number) => Array.from({ length: to - from }, (_, index) => `REPLY_ROW_${from + index}`).join("\n\n");
   const first = lines(0, 20) + "\n\n";
   const pages: TranscriptPage[] = [
@@ -389,20 +419,40 @@ test("reopening a reply that was read from its last rows returns to the same row
     { stamp: "same", rows: [{ id: "a0", kind: "assistant", text: first, record: 100, item: 0, more: true }], older: "0", newer: "2" },
     { stamp: "same", rows: [{ id: "a1", kind: "assistant", text: lines(20, 40), record: 100, item: 0, from: first.length }], older: "1" }];
   let reach = false;
-  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
-    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {}, canInteract: () => reach,
-    read: async (_id, request) => pages[request.cursor === undefined ? 2 : Number(request.cursor)]! });
+  const { view } = reader(() => row, async (_id, request) => pages[request.cursor === undefined ? 2 : Number(request.cursor)]!, { canInteract: () => reach });
   // Only the newest page is resident: the reader is in the reply's last rows.
   view.restore(row.key);
   view.refresh(); await settle(); reading(view, 8);
   view.scroll.scrollBy(-9);
   const place = reading(view, 8);
   expect(place).toContain("REPLY_ROW_3");
-  expect(stripTerminalSequences(view.scroll.render(80).join("\n"))).not.toContain("REPLY_ROW_19");
+  expect(whole(view)).not.toContain("REPLY_ROW_19");
   view.remember();
   reach = true;
   view.restore(row.key);
   view.refresh(); await settle(); await settle();
   expect(reading(view, 8)).toBe(place);
-  expect(stripTerminalSequences(view.scroll.render(80).join("\n"))).toContain("REPLY_ROW_0");
+  expect(whole(view)).toContain("REPLY_ROW_0");
+});
+
+test("a reply longer than the resident window keeps the reader's rows as the window slides along it", async () => {
+  const row = recorded();
+  // One reply over 80 pages, three paragraphs a page, after the prompt's page.
+  const slice = (index: number) => [0, 1, 2].map(line => `SLICE_${index}_ROW_${line}\n\n`).join("");
+  const size = slice(1).length;
+  const { view, open } = reader(() => row, async (_id, request) => {
+    const index = request.cursor === undefined ? 80 : Number(request.cursor);
+    return { stamp: "same", rows: index === 0 ? [{ id: "u", kind: "user", text: "RECORDED_PROMPT", record: 0, item: 0 }]
+      : [{ id: `a${index}`, kind: "assistant", text: slice(index), record: 100, item: 0, ...(index > 1 ? { from: (index - 1) * size } : {}), ...(index < 80 ? { more: true } : {}) }],
+      ...(index ? { older: String(index - 1) } : {}), ...(index < 80 ? { newer: String(index + 1) } : {}) };
+  });
+  await open();
+  for (let step = 0; step < 400 && !whole(view).includes("SLICE_1_ROW_0"); step++) {
+    view.scroll.scrollBy(-4);
+    const before = reading(view); await settle();
+    // An earlier slice joins at the reply's first rows; then the window gives up a slice at its last rows.
+    expect(reading(view)).toBe(before);
+    expect(reading(view)).toBe(before);
+  }
+  expect(whole(view)).not.toContain("SLICE_80_ROW_0");
 });
