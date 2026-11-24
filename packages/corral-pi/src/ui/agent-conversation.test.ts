@@ -390,12 +390,19 @@ test("pages that draw no rows are not traded across a full window, and a push ag
   await open();
   // Reading ahead fills the window and stops: the newest page, which the reader is on, stays resident.
   expect(reads).toEqual(Array.from({ length: 64 }, (_, index) => String(79 - index)));
-  // The owner pushes up against the first row: the read goes on to the recording's start, and rests there.
+  // The window fits on screen, so the view still follows its end. The owner pushes up against the first row, which
+  // reads one more page, and presses End before a frame joins it: the window keeps its newest page and rests.
+  view.scroll.scrollBy(-3); await settle();
+  expect(reads).toHaveLength(65);
+  expect(view.following).toBeTrue();
+  expect(view.jumpToRecordedEnd()).toBeFalse(); await rest();
+  expect(reads).toHaveLength(65);
+  // They push up again: the read goes on to the recording's start, with the page given up read once more, and rests there.
   view.scroll.scrollBy(-3); await settle(); await rest();
-  expect(reads).toHaveLength(80);
+  expect(reads).toHaveLength(81);
   expect(reading(view)).toContain("RECORDED_PROMPT");
   await rest();
-  expect(reads).toHaveLength(80);
+  expect(reads).toHaveLength(81);
 });
 
 test("the bottom of the resident pages is not the recording's end: a page joins under the reader's rows, and leaving keeps that row", async () => {

@@ -232,6 +232,8 @@ export class AgentConversation {
   jumpToRecordedEnd(): boolean {
     if (this.host.canInteract?.() === false || !this.session()) return false;
     this.ending = true;
+    // They are headed for the end now, however they last scrolled: the window keeps its newest pages.
+    this.toward = "newer"; this.pushed = false;
     // The place kept for the agent, if no frame has taken it yet, gives way too.
     if (this.pending !== undefined) this.pending = { top: 0, following: true };
     // The next frame goes there, or shows what is being read first.
