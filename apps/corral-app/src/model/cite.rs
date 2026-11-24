@@ -138,23 +138,28 @@ pub fn citation_ref(reference: &str) -> DetailRef {
     }
 }
 
-/// The cited artifact among every artifact row the app holds: the task's detail first, then
-/// a citation corrald resolved, then the finder's served pages.
+/// The cited artifact among every artifact row the app holds: a citation corrald resolved,
+/// then the task's detail (which may be older), then the finder's served pages.
 pub fn held(feed: &Feed, reference: &str, task: &str) -> Option<Artifact> {
-    if let Some(detail) = loaded_task(feed, task) {
-        return detail
-            .artifacts
-            .iter()
-            .find(|row| row.reference() == reference)
-            .cloned();
-    }
-    feed.details
-        .values()
-        .flat_map(|cache| cache.bodies())
-        .find_map(|body| match body {
-            DetailBody::Citation(found) if found.artifact.reference() == reference => {
-                Some(found.artifact.clone())
-            }
+    let bodies = || feed.details.values().flat_map(|cache| cache.bodies());
+    let cited = bodies().find_map(|body| match body {
+        DetailBody::Citation(found) if found.artifact.reference() == reference => {
+            Some(found.artifact.clone())
+        }
+        _ => None,
+    });
+    let listed = || {
+        loaded_task(feed, task)
+            .and_then(|detail| {
+                detail
+                    .artifacts
+                    .iter()
+                    .find(|row| row.reference() == reference)
+            })
+            .cloned()
+    };
+    let found = || {
+        bodies().find_map(|body| match body {
             DetailBody::Artifacts(page) => page
                 .rows
                 .iter()
@@ -162,6 +167,8 @@ pub fn held(feed: &Feed, reference: &str, task: &str) -> Option<Artifact> {
                 .cloned(),
             _ => None,
         })
+    };
+    cited.or_else(listed).or_else(found)
 }
 
 /// Where `cite` stands. An artifact citation opens only once corrald has served its content
@@ -186,8 +193,9 @@ pub fn resolve(feed: &Feed, cite: &Cite) -> Found {
     if error.is_some_and(|error| error.code == "not_found") {
         return Found::Missing;
     }
-    // Any other failure leaves it unknown, even over an answer an earlier read cached.
-    if error.is_some() || task == Err(Found::Unavailable) {
+    // Any other failure leaves it unknown, even over an answer an earlier read cached. The
+    // task's own detail failing says nothing: corrald's answer names the artifact.
+    if error.is_some() {
         return Found::Unavailable;
     }
     match probe.and_then(|cache| cache.body()) {

@@ -1,16 +1,19 @@
 //! Task-text citations of artifacts (`T-12:3`, `T-12:3#goal`), resolved by the engine's rules.
-//! Resolving one reads no content for the client: the catalog row, the blob's presence and,
-//! for a section, where it lies. A cited section's content pages from a window of the blob
-//! whose range the first page found and the page token carries, so a continuation never reads
-//! the source again. Whatever the engine would not resolve is `not_found`.
+//! Resolving one sends no content to the client: the catalog row, the blob's presence and, for
+//! a section, where it lies. A section's range is found by the engine once and then held, as a
+//! catalog row and its blob never change, so answering again or paging the section (from its
+//! window of the blob) does not read the source again. Whatever the engine would not resolve
+//! is `not_found`.
 
 use std::{
+    collections::HashMap,
     fs::File,
     io::{self, Read, Seek, SeekFrom},
     ops::Range,
+    sync::{LazyLock, Mutex, PoisonError},
 };
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use corral_engine::Engine;
 use corral_protocol::detail::{CitationDetail, DetailGet, DetailReply};
 use corral_types::{Artifact, Reference, Refusal};
@@ -50,12 +53,41 @@ fn cited(engine: &Engine, address: &str) -> Result<(Artifact, File)> {
     Ok((artifact, file))
 }
 
-/// Where `section` lies in the artifact's stored bytes.
+/// What the engine decided about a section, by artifact reference, blob digest and slug:
+/// where it lies, or that it is not there (no such heading, not Markdown).
+type Found = HashMap<(String, String, String), Option<Range<u64>>>;
+
+/// How many decided sections are held before they are let go together.
+const HELD: usize = 512;
+
+const NO_SECTION: &str = "artifact section not found";
+
+static FOUND: LazyLock<Mutex<Found>> = LazyLock::new(Mutex::default);
+
+/// Where `section` lies in the artifact's stored bytes, as the engine finds it: decided once
+/// per artifact and section while held. Only the engine's own answer is ever used; a read
+/// that failed (not a refusal) is not held.
 fn section_range(engine: &Engine, artifact: &Artifact, section: &str) -> Result<Range<u64>> {
-    let range = engine
-        .artifact_section_range(artifact, section)
-        .map_err(|error| missing(error, "artifact section not found"))?;
-    Ok(range.start as u64..range.end as u64)
+    let key = (
+        artifact.reference(),
+        artifact.sha256.clone(),
+        section.to_owned(),
+    );
+    let held = || FOUND.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(decided) = held().get(&key) {
+        return decided.clone().ok_or_else(|| NotFound(NO_SECTION).into());
+    }
+    let decided = match engine.artifact_section_range(artifact, section) {
+        Ok(range) => Some(range.start as u64..range.end as u64),
+        Err(error) if error.is::<Refusal>() => None,
+        Err(error) => return Err(error),
+    };
+    let mut found = held();
+    if found.len() >= HELD {
+        found.clear();
+    }
+    found.insert(key, decided.clone());
+    decided.ok_or_else(|| NotFound(NO_SECTION).into())
 }
 
 /// Whether an artifact citation resolves, without its content.
@@ -91,6 +123,7 @@ pub(super) fn artifact(
     let Some(section) = cited_ref.and_then(Reference::section) else {
         let content = ArtifactSource {
             media_type: media_type(&artifact.title),
+            text: None,
             fingerprint: fingerprint(&(&query.target, &artifact))?,
             bytes: artifact.bytes,
             task,
@@ -98,45 +131,17 @@ pub(super) fn artifact(
         };
         return artifact_page(query, seq, file, content);
     };
-    // The first page finds the range; a continuation carries it as `<start>-<end>~<token>`.
-    let (range, page) = match query.page.as_deref() {
-        None => (section_range(engine, &artifact, section)?, None),
-        Some(token) => {
-            let (range, page) = token
-                .split_once('~')
-                .context("invalid: section page token")?;
-            let (start, end) = range
-                .split_once('-')
-                .context("invalid: section page token")?;
-            let range = start
-                .parse::<u64>()
-                .context("invalid: section page token")?
-                ..end.parse::<u64>().context("invalid: section page token")?;
-            ensure!(
-                range.start <= range.end && range.end <= artifact.bytes,
-                "invalid: section page token"
-            );
-            (range, Some(page.to_owned()))
-        }
-    };
-    let inner = DetailGet {
-        target: query.target.clone(),
-        etag: query.etag.clone(),
-        page,
-    };
+    let range = section_range(engine, &artifact, section)?;
     let content = ArtifactSource {
         media_type: Some("text/markdown"),
+        // The engine read the source as UTF-8 without NULs to find the section.
+        text: Some(true),
         fingerprint: fingerprint(&(&query.target, &artifact, range.start, range.end))?,
         bytes: range.end - range.start,
         task,
         key,
     };
-    let window = Window::new(file, range.clone())?;
-    let mut reply = artifact_page(&inner, seq, window, content)?;
-    reply.next = reply
-        .next
-        .map(|next| format!("{}-{}~{next}", range.start, range.end));
-    Ok(reply)
+    artifact_page(query, seq, Window::new(file, range)?, content)
 }
 
 /// `len` bytes of a blob from `start`, read and sought as a file of their own.

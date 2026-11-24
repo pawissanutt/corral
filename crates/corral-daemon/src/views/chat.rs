@@ -103,6 +103,7 @@ pub(super) fn detail(
                 file,
                 ArtifactSource {
                     media_type: None,
+                    text: None,
                     fingerprint: fingerprint(&query.target)?,
                     bytes,
                     task: sessions::attachment_scope(entry)?.into(),

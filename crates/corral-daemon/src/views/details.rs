@@ -431,6 +431,9 @@ pub(super) fn paginate(body: &mut DetailBody, offset: usize) -> Result<Option<us
 
 pub(super) struct ArtifactSource<'a> {
     pub media_type: Option<&'a str>,
+    /// Whether the content is text, when the caller already knows (a cited section the
+    /// engine read as UTF-8 without NULs); otherwise the first page inspects it.
+    pub text: Option<bool>,
     pub fingerprint: String,
     pub bytes: u64,
     pub task: String,
@@ -445,6 +448,7 @@ pub(super) fn artifact_page(
 ) -> Result<DetailReply> {
     let ArtifactSource {
         media_type,
+        text: known,
         fingerprint,
         bytes: total,
         task,
@@ -456,6 +460,7 @@ pub(super) fn artifact_page(
             Some(b'b') => false,
             _ => bail!("invalid: artifact page encoding"),
         },
+        None if known.is_some() => known.unwrap_or_default(),
         None if media_type.is_some_and(|media| {
             (media.starts_with("image/") && media != "image/svg+xml") || media == "application/pdf"
         }) =>

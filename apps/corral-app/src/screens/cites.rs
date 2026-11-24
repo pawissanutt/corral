@@ -7,6 +7,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use corral_protocol::app::CITATIONS_V1;
+use corral_protocol::detail::DetailRef;
 use nsh_base::text_view::{Block, Inline};
 use nsh_core::prelude::*;
 
@@ -22,9 +24,12 @@ use super::task::parts::{link_row, mono_words};
 
 /// Keeps the details that resolve `cites` loaded while the calling view shows.
 pub(crate) fn keep_cited(app: AppState, cites: &[Cite]) {
-    let targets = cite::targets(cites);
-    let targets = computed(move || targets.clone());
-    keep_details(app, targets, None);
+    // Citation reads only where corrald answers them (`citations.v1`); task details always.
+    let (citations, tasks): (Vec<_>, Vec<_>) = cite::targets(cites)
+        .into_iter()
+        .partition(|target| matches!(target, DetailRef::Citation { .. }));
+    keep_details(app, computed(move || tasks.clone()), None);
+    keep_details(app, computed(move || citations.clone()), Some(CITATIONS_V1));
     // A failed read is not retried by itself; a cited task's changed detail asks again.
     let app = untracked(|| app.scope());
     let cites = cites.to_vec();
