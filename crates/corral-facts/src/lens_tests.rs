@@ -446,7 +446,8 @@ fn review_uses_edited_lines_in_each_snapshot_and_reports_element_changes() {
     let row = &impact[0];
     assert_eq!(row.path, format!("{DIR}/flow.toml"));
     assert!(row.touched.iter().any(|item| item == "participant driver"));
-    assert!(row.touched.iter().any(|item| item.contains("execute")));
+    // The removed message's deleted literal is a base-side touch.
+    assert!(row.touched_base.iter().any(|item| item.contains("execute")));
     assert!(row.added.iter().any(|item| item == "participant driver"));
     assert_eq!(
         row.added
@@ -462,4 +463,55 @@ fn review_uses_edited_lines_in_each_snapshot_and_reports_element_changes() {
     let impact = compare(&edited, &binary, None, None);
     assert_eq!(impact.len(), 1);
     assert_eq!(impact[0].touched, ["participant driver"]);
+}
+
+/// Removing the first of two same-labelled messages renumbers the survivor: at the head it
+/// takes the removed message's unsuffixed name. A touch on the removed one must stay on the
+/// base side, or Impact marks the surviving message as touched.
+#[test]
+fn a_removed_repeat_is_touched_at_the_base_not_on_the_surviving_head_repeat() {
+    let repo = Repo::new();
+    repo.put("code.rs", CODE);
+    repo.put("package.json", "{}");
+    let at = repo.commit(DATE, "source");
+    let message = |text: &str| {
+        format!(
+            "[[messages]]\nfrom = \"cli\"\nto = \"engine\"\nlabel = \"call\"\nanchor = {{ path = \"code.rs\", text = {text:?} }}\n"
+        )
+    };
+    let nodes = r#"
+[[participants]]
+id = "cli"
+label = "CLI"
+anchor = { path = "package.json" }
+[[participants]]
+id = "engine"
+label = "Engine"
+anchor = { path = "code.rs" }
+"#;
+    let both = format!("{nodes}{}{}", message("fn run() {"), message("fn other()"));
+    write(&repo, "flow", "sequence", "flow", &at, &both);
+    let base = repo.commit(DATE, "two repeats");
+    repo.put(
+        "code.rs",
+        &CODE.replace("fn run() {\n    execute();\n}\n", ""),
+    );
+    let survivor = format!("{nodes}{}", message("fn other()"));
+    write(&repo, "flow", "sequence", "flow", &at, &survivor);
+    let head = repo.commit(DATE, "remove the first repeat and its code");
+    let impact = lenses::impact(
+        repo.path(),
+        &base,
+        &head,
+        &load(&repo, &base),
+        &load(&repo, &head),
+        &tree(&repo, &base),
+        &tree(&repo, &head),
+    )
+    .unwrap();
+    let name = r#"message "cli" -> "engine": "call""#;
+    assert_eq!(impact.len(), 1);
+    assert!(impact[0].touched.is_empty(), "{:?}", impact[0]);
+    assert_eq!(impact[0].touched_base, [name]);
+    assert_eq!(impact[0].removed, [name]);
 }

@@ -2,12 +2,15 @@
 //! asks, `op.submit`, the receipt toast, and the refusal sheet whose buttons are the engine's
 //! typed next steps. No daemon round trip happens before a submit.
 
+use std::collections::BTreeSet;
+
 use corral_protocol::op::OpSubmit;
 use nsh_core::prelude::*;
 
 use super::AppState;
 use crate::client::requests;
 use crate::model::act::{self, Confirming, RefusalSheet};
+use crate::model::daemon::Link;
 use crate::model::{Act, ActStatus, Id};
 
 const NO_SOURCE: &str = "Not connected. Choose Preview explicitly to use sample data.";
@@ -116,7 +119,44 @@ impl AppState {
     }
 
     /// Each watched operation's outcome, once: a refusal opens its sheet, anything else toasts.
+    /// Follows every operation corrald answered `running` with an id to its outcome, under its
+    /// own key: one `op.result` at a time, each waiting at corrald, until the outcome replaces
+    /// the running reply. Nothing is submitted again.
+    fn follow_running(self) {
+        // Keys sent and not yet taken up by the client, so one reply is followed once.
+        let sent = stored(BTreeSet::<Id>::new());
+        effect(move || {
+            let (up, running, loading) = self.feed.with(|feed| {
+                let running: Vec<(Id, String)> = feed
+                    .operations
+                    .iter()
+                    .filter_map(|(key, op)| Some((key.clone(), act::running_operation(op)?)))
+                    .collect();
+                let loading: BTreeSet<Id> = feed
+                    .operations
+                    .iter()
+                    .filter(|(_, op)| op.loading)
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                (feed.link == Link::Up, running, loading)
+            });
+            sent.with(|sent| sent.retain(|key| !loading.contains(key)));
+            if !up || untracked(|| self.fixture()) {
+                return;
+            }
+            for (key, operation) in running {
+                if sent.with(|sent| sent.contains(&key)) {
+                    continue;
+                }
+                if requests::op_result(key.to_string(), operation) {
+                    sent.with(|sent| _ = sent.insert(key));
+                }
+            }
+        });
+    }
+
     pub(super) fn watch_receipts(self) {
+        self.follow_running();
         effect(move || {
             let watched = self.watching.get();
             if watched.is_empty() {

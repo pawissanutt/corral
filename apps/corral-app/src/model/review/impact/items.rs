@@ -113,6 +113,8 @@ pub struct LensItem {
     pub touched: Vec<String>,
     pub added: Vec<String>,
     pub removed: Vec<String>,
+    /// Removed elements whose code the change also edited, by their base-side names.
+    pub touched_base: Vec<String>,
 }
 
 pub(super) fn short(commit: &str) -> &str {
@@ -613,6 +615,7 @@ fn lens_item(cx: &Ctx, key: String, impact: &corral_types::lenses::LensImpact) -
             touched: impact.touched.clone(),
             added: impact.added.clone(),
             removed: impact.removed.clone(),
+            touched_base: impact.touched_base.clone(),
         }),
         ..item(key, sign, impact.title.clone(), right.join(" · "))
     }

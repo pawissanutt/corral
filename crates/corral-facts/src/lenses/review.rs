@@ -58,6 +58,7 @@ pub fn impact(
             touched: Vec::new(),
             added: Vec::new(),
             removed: Vec::new(),
+            touched_base: Vec::new(),
         };
         // A malformed file has unknown contents, not an empty diagram.
         let know_old = left.is_none_or(Result::is_ok);
@@ -95,9 +96,15 @@ pub fn impact(
         }
         row.touched.sort_unstable();
         row.touched.dedup();
+        row.touched_base.sort_unstable();
+        row.touched_base.dedup();
         row.added.sort_unstable();
         row.removed.sort_unstable();
-        if !row.touched.is_empty() || !row.added.is_empty() || !row.removed.is_empty() {
+        if !row.touched.is_empty()
+            || !row.added.is_empty()
+            || !row.removed.is_empty()
+            || !row.touched_base.is_empty()
+        {
             result.push(row);
         }
     }
@@ -225,10 +232,14 @@ impl Review<'_> {
         }
         let old_anchor = old.as_ref().map(|element| element.anchor);
         let new_anchor = new.as_ref().map(|element| element.anchor);
-        if self.touched(old_anchor, new_anchor)?
-            && let Some(element) = new.or(old)
-        {
-            row.touched.push(element.name);
+        // A removed element's base-side name can equal a surviving repeat's head-side name, so
+        // each side's touches are kept apart.
+        if self.touched(old_anchor, new_anchor)? {
+            match (new, old) {
+                (Some(element), _) => row.touched.push(element.name),
+                (None, Some(element)) => row.touched_base.push(element.name),
+                (None, None) => {}
+            }
         }
         Ok(())
     }

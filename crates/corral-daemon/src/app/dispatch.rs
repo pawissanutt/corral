@@ -143,6 +143,7 @@ pub(crate) fn serve(
             Ok(())
         }),
         op::OP_SUBMIT => answer!(Ok(ops::submit(shared, decode(params)?)?)),
+        op::OP_RESULT => answer!(Ok(ops::result(shared, decode(params)?)?)),
         chat::ASSISTANT_WARM => answer!(Ok(assistant::warm(shared, decode(params)?)?)),
         chat::ASSISTANT_SESSION => answer!(Ok(assistant::session(shared, decode(params)?)?)),
         build::BUILD_START => answer!(Ok(builds::start(shared, decode(params)?)?)),

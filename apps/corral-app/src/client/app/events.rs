@@ -212,7 +212,7 @@ impl AppState {
         }
         match method {
             APP_SESSION => self.session(feed, decode(result)?).await,
-            OP_SUBMIT => Ok(self.refresh_details(feed)),
+            OP_SUBMIT | OP_RESULT => Ok(self.refresh_details(feed)),
             SESSION_SEND => {
                 if let Some(id) = id {
                     feed.update(|feed| {

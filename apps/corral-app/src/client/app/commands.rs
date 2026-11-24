@@ -112,6 +112,15 @@ impl AppState {
                 request_id,
                 request,
             } => self.operation(feed, request_id, OP_SUBMIT, value(request)),
+            ClientRequest::OpResult {
+                request_id,
+                operation,
+            } => self.operation(
+                feed,
+                request_id,
+                OP_RESULT,
+                value(corral_protocol::op::OpResult { operation }),
+            ),
             ClientRequest::ConfigGet { request_id } => {
                 self.operation(feed, request_id, CONFIG_GET, json!({}))
             }

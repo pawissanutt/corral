@@ -727,6 +727,7 @@ fn request_deadline(method: &str, params: &Value) -> u64 {
         | wire::assistant::ASSISTANT_WARM => APP_LAUNCH_DEADLINE_MS,
         // These wait on an operation, on a running host or on prune.
         wire::op::OP_SUBMIT
+        | wire::op::OP_RESULT
         | wire::session::SESSION_CANCEL
         | wire::session::SESSION_PAUSE
         | wire::session::SESSION_RESUME

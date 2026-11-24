@@ -72,15 +72,22 @@ fn a_failure_on_a_repeated_transition_marks_that_repeat() {
     assert_eq!(d.nodes[1].marks, vec![Mark::Extra]);
 }
 
-/// A transition and its reverse share one layered route; drawn on it, the later stroke hides
-/// the earlier one and its failing mark.
+/// Transitions between the same two states share one layered route. Each must take its own
+/// lane, or the later stroke hides the earlier one and its mark, and each must still leave and
+/// reach its states: shifting whole routes put the eighth of eight 56pt off an 84pt state.
 #[test]
-fn transitions_between_the_same_states_take_separate_lanes() {
-    let back = LensTransition {
+fn parallel_transitions_take_separate_lanes_and_stay_on_their_states() {
+    let mut transitions: Vec<LensTransition> = (0..8)
+        .map(|n| LensTransition {
+            label: format!("t{n}"),
+            ..retry()
+        })
+        .collect();
+    transitions.push(LensTransition {
         from: "b".into(),
         to: "a".into(),
         ..retry()
-    };
+    });
     let lens = Lens::State {
         id: "l".into(),
         title: "L".into(),
@@ -90,7 +97,7 @@ fn transitions_between_the_same_states_take_separate_lanes() {
             name: "S".into(),
         },
         states: vec![node("a"), node("b")],
-        transitions: vec![retry(), back],
+        transitions,
     };
     let result = LensResult {
         file: "l.toml".into(),
@@ -107,11 +114,25 @@ fn transitions_between_the_same_states_take_separate_lanes() {
     };
     let measure = |font: crate::model::system::layout::Font, words: &str| font.estimate(words);
     let placed = crate::model::system::lens_layout::layout(&d, 800.0, &measure);
-    let mids: Vec<f32> = placed
-        .arrows
-        .iter()
-        .map(|a| a.points.iter().map(|p| p.0).sum::<f32>() / a.points.len() as f32)
-        .collect();
-    assert_eq!(mids.len(), 2);
-    assert!((mids[0] - mids[1]).abs() > 4.0, "{mids:?}");
+    let boxes: Vec<_> = placed.nodes.iter().map(|n| n.rect).collect();
+    let on_a_state = |(x, y): (f32, f32)| {
+        boxes
+            .iter()
+            .any(|r| x >= r.x && x <= r.x + r.w && y >= r.y - 1.0 && y <= r.y + r.h + 1.0)
+    };
+    assert_eq!(placed.arrows.len(), 9);
+    let mut mids = Vec::new();
+    for arrow in &placed.arrows {
+        let (Some(&first), Some(&last)) = (arrow.points.first(), arrow.points.last()) else {
+            panic!("an arrow has ends");
+        };
+        assert!(on_a_state(first) && on_a_state(last), "{:?}", arrow.points);
+        let bends = &arrow.points[1..arrow.points.len() - 1];
+        mids.push(bends.iter().map(|p| p.0).sum::<f32>() / bends.len() as f32);
+    }
+    for (i, a) in mids.iter().enumerate() {
+        for b in &mids[i + 1..] {
+            assert!((a - b).abs() > 4.0, "{mids:?}");
+        }
+    }
 }

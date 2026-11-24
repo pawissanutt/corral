@@ -141,6 +141,10 @@ fn state(diagram: &Diagram, room: f32, measure: Measure) -> LensLayout {
     // Transitions between the same two states (either way) share a route, and repeats on one
     // state share a loop: each takes its own lane so no stroke or mark hides another.
     let mut lanes: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    let mut pairs: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    for (a, b) in diagram.edges.iter().filter_map(|e| e.ends) {
+        *pairs.entry((a.min(b), a.max(b))).or_default() += 1;
+    }
     // Routes arrive by edge index; one from a state to itself has none.
     for (edge, e) in diagram.edges.iter().enumerate() {
         let Some((a, b)) = e.ends else { continue };
@@ -166,11 +170,13 @@ fn state(diagram: &Diagram, room: f32, measure: Measure) -> LensLayout {
             let Some((_, points)) = g.routes.iter().find(|(i, _)| *i == edge) else {
                 continue;
             };
-            let dx = lane_offset(k);
-            let points: Vec<(f32, f32)> = points
+            let points: Vec<(f32, f32)> = points.iter().map(|(x, y)| (x + PAD, y + PAD)).collect();
+            let boxes: Vec<Rect> = [a, b]
                 .iter()
-                .map(|(x, y)| (x + PAD + dx, y + PAD))
+                .filter_map(|n| out.nodes.get(*n).map(|n| n.rect))
                 .collect();
+            let count = pairs.get(&(a.min(b), a.max(b))).copied().unwrap_or(1);
+            let points = in_lane(&points, k, count, &boxes);
             let at = middle(&points);
             (points, at)
         };
@@ -202,6 +208,60 @@ fn state(diagram: &Diagram, room: f32, measure: Measure) -> LensLayout {
 fn lane_offset(k: usize) -> f32 {
     let step = 14.0 * k.div_ceil(2) as f32;
     if k % 2 == 1 { step } else { -step }
+}
+
+/// Room kept between a lane's end and its state's rounded edge.
+const END_INSET: f32 = 10.0;
+
+/// A route moved into lane `k` of `count` between the same two states: its ends stay on the
+/// states, spread across their width (never past it), and only its bends go out to the lane,
+/// so every transition is drawn apart and still leaves and reaches its states. A route with no
+/// bend gets two, a third and two thirds of the way down.
+fn in_lane(points: &[(f32, f32)], k: usize, count: usize, boxes: &[Rect]) -> Vec<(f32, f32)> {
+    let (Some(&first), Some(&last)) = (points.first(), points.last()) else {
+        return points.to_vec();
+    };
+    if count <= 1 {
+        return points.to_vec();
+    }
+    let dx = lane_offset(k);
+    let widest = (0..count).map(|i| lane_offset(i).abs()).fold(0.0, f32::max);
+    let narrowest = boxes.iter().map(|r| r.w).fold(f32::MAX, f32::min);
+    let room = (narrowest / 2.0 - END_INSET).max(0.0);
+    let end_dx = if widest > 0.0 {
+        dx * (room / widest).min(1.0)
+    } else {
+        0.0
+    };
+    // An end belongs to the state whose edge it sits on: the nearest by height.
+    let attach = |(x, y): (f32, f32)| {
+        let Some(r) = boxes.iter().min_by(|p, q| {
+            let d = |r: &&Rect| (y - (r.y + r.h / 2.0)).abs();
+            d(p).total_cmp(&d(q))
+        }) else {
+            return (x, y);
+        };
+        let lo = r.x + END_INSET;
+        let hi = (r.x + r.w - END_INSET).max(lo);
+        ((x + end_dx).clamp(lo, hi), y)
+    };
+    let mut bends: Vec<(f32, f32)> = points[1..points.len() - 1]
+        .iter()
+        .map(|&(x, y)| (x + dx, y))
+        .collect();
+    if bends.is_empty() {
+        let at = |t: f32| {
+            (
+                first.0 + (last.0 - first.0) * t + dx,
+                first.1 + (last.1 - first.1) * t,
+            )
+        };
+        bends = vec![at(1.0 / 3.0), at(2.0 / 3.0)];
+    }
+    let mut out = vec![attach(first)];
+    out.extend(bends);
+    out.push(attach(last));
+    out
 }
 
 /// The middle of a path: halfway along its middle segment.

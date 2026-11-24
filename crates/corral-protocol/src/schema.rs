@@ -107,6 +107,14 @@ fn document() -> Value {
     );
     op_submit["x-error-data-schema"] =
         json!({"refused": generator.subschema_for::<schema_types::Refusal>()});
+    let mut op_result = method::<op::OpResult, op::OpReply>(
+        &mut generator,
+        op::OP_RESULT,
+        false,
+        &[InvalidParams, NotFound, Refused, Unavailable, Internal],
+    );
+    op_result["x-error-data-schema"] =
+        json!({"refused": generator.subschema_for::<schema_types::Refusal>()});
     let methods = vec![
         method::<Hello, Welcome>(
             &mut generator,
@@ -123,6 +131,7 @@ fn document() -> Value {
         method::<HealthGet, Health>(&mut generator, HEALTH_GET, false, &common),
         method::<Stop, Stopped>(&mut generator, DAEMON_STOP, false, &common),
         op_submit,
+        op_result,
         method::<config::ConfigGet, config::ConfigDocument>(
             &mut generator,
             config::CONFIG_GET,

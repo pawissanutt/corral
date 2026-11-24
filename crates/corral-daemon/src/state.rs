@@ -31,6 +31,7 @@ pub(crate) struct Shared {
     pub(crate) session_live: crate::topics::SessionLive,
     pub(crate) chat: crate::assistant::Service,
     pub(crate) build_ops: Mutex<()>,
+    pub(crate) late_ops: crate::ops::Late,
     state: Mutex<State>,
     pub(crate) changed: Condvar,
 }
@@ -81,6 +82,7 @@ impl Shared {
             session_live: Default::default(),
             chat: Default::default(),
             build_ops: Mutex::default(),
+            late_ops: Default::default(),
             state: Mutex::new(State {
                 stop: false,
                 closed: false,

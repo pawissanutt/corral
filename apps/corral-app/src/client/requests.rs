@@ -81,6 +81,12 @@ pub enum ClientRequest {
         request_id: String,
         request: OpSubmit,
     },
+    /// `op.result` for an `op.submit` that answered `running`, under the submission's own
+    /// request id so its outcome replaces the running reply.
+    OpResult {
+        request_id: String,
+        operation: String,
+    },
     ConfigGet {
         request_id: String,
     },
@@ -261,6 +267,13 @@ pub fn submit(request_id: String, request: OpSubmit) -> bool {
     send(ClientRequest::OpSubmit {
         request_id,
         request,
+    })
+}
+/// Follows a running operation to its outcome, read under `request_id` as its submission was.
+pub fn op_result(request_id: String, operation: String) -> bool {
+    send(ClientRequest::OpResult {
+        request_id,
+        operation,
     })
 }
 /// Call once when a view starts reading away from the end, and release that registration

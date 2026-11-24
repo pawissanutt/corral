@@ -13,6 +13,7 @@
 pub(crate) mod canvas;
 pub(crate) mod lens_canvas;
 mod lens_draft;
+pub(crate) mod lens_impact;
 pub(crate) mod lenses;
 pub(crate) mod tree;
 

@@ -200,8 +200,8 @@ pub(super) fn filed(app: AppState) -> AnyElement {
                 (Some(ActStatus::Failed(why)), _) => {
                     hued(app, Hue::Fail, format!("Not filed: {why}"))
                 }
-                // corrald answers Running when the operation outlasts its reply; the task it
-                // files then appears in Tasks without its id coming back here.
+                // A slow operation stays "Filing" while `op.result` follows it; only a corrald
+                // too old to name the operation answers a bare Running.
                 (Some(ActStatus::Running), _) | (Some(ActStatus::Done), None) => quiet(
                     app,
                     format!("Sent: {title}. corrald did not name the task; look for it in Tasks."),

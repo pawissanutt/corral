@@ -645,3 +645,47 @@ fn external_engine_commits_reach_socket_subscribers() {
     fixture.shared().stop();
     observer.join().unwrap();
 }
+
+/// A lens draft or repair that outlasts the reply used to leave the client at "running" with
+/// no task. The client follows the same submission to the task it filed, which is given once.
+#[test]
+fn socket_op_result_returns_the_task_of_an_operation_that_outlasted_its_reply() {
+    let fixture = Fixture::with_repository();
+    let mut client = Client::connect(&fixture.unix_server());
+    fixture.shared.late_ops.set_wait(std::time::Duration::ZERO);
+    let reply = client.op(
+        Op::New {
+            task: NewTask {
+                title: "late".into(),
+                project: Some("demo".into()),
+                ..NewTask::default()
+            },
+        },
+        false,
+    );
+    let OpReply::Running {
+        operation: Some(operation),
+        ..
+    } = reply
+    else {
+        panic!("expected a running operation, got {reply:?}");
+    };
+    fixture
+        .shared
+        .late_ops
+        .set_wait(std::time::Duration::from_secs(30));
+    let result = wire::op::OpResult {
+        operation: operation.clone(),
+    };
+    let reply: OpReply = client.ok(wire::op::OP_RESULT, result.clone());
+    let OpReply::Done {
+        task: Some(task), ..
+    } = reply
+    else {
+        panic!("expected the filed task, got {reply:?}");
+    };
+    let engine = fixture.shared.engine().unwrap();
+    assert!(engine.store.get_task(&task).unwrap().is_some());
+    let again = client.call(wire::op::OP_RESULT, result).unwrap_err();
+    assert_eq!(again.code, rpc::ErrorCode::NotFound);
+}

@@ -21,7 +21,7 @@ use crate::model::system::lens::{self, Touch};
 use crate::model::system::marks::Marks;
 use crate::model::system::scene::Scene;
 use crate::model::{Form, Hue, Id};
-use crate::screens::system::{Host, canvas, lenses, tree};
+use crate::screens::system::{Host, canvas, lens_impact, tree};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::marks::hue_ink;
@@ -355,12 +355,18 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
         let drawn = item.lens.clone().map(|touched| {
             let head = lens::lens_request(project.as_str(), &touched.file, Some(&touched.head));
             let base = lens::lens_request(project.as_str(), &touched.file, Some(&touched.base));
-            let touch = Touch {
+            // Each side's names are that side's own numbering of repeats.
+            let at_head = Touch {
                 touched: touched.touched,
                 added: touched.added,
+                removed: Vec::new(),
+            };
+            let at_base = Touch {
+                touched: touched.touched_base,
+                added: Vec::new(),
                 removed: touched.removed,
             };
-            untracked(|| lenses::touched_lens(app, head, base, touch))
+            untracked(|| lens_impact::touched_lens(app, head, base, at_head, at_base))
         });
         // A lens has no node on the map; it is drawn here instead.
         let to_system = if item.lens.is_some() {

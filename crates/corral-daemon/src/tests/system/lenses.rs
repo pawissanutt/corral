@@ -48,6 +48,25 @@ anchor = {anchor}
     .unwrap();
     const MALFORMED: &str = "diagrams/broken.toml";
     fs::write(repo.join(MALFORMED), "kind = 'nonsense'\n").unwrap();
+    // Two same-labelled messages: removing the first renumbers the second at the head.
+    let repeats = |first: bool| {
+        let message = |anchor: &str| {
+            format!(
+                "[[messages]]\nfrom = \"worker\"\nto = \"worker\"\nlabel = \"Runs\"\nanchor = {anchor}\n"
+            )
+        };
+        format!(
+            "id = \"repeats\"\ntitle = \"Repeats\"\nkind = \"sequence\"\nread_at = \"{}\"\n[[participants]]\nid = \"worker\"\nlabel = \"Worker\"\nanchor = {{ path = \".gitignore\" }}\n{}{}",
+            read_at.commit(),
+            if first {
+                message(r#"{ path = "note", text = "base" }"#)
+            } else {
+                String::new()
+            },
+            message(r#"{ path = ".gitignore" }"#),
+        )
+    };
+    fs::write(repo.join("diagrams/repeats.toml"), repeats(true)).unwrap();
     git(&repo, &["add", "diagrams"]);
     git(&repo, &["commit", "-m", "add lens examples"]);
     let base = corral_facts::resolve_revision(&repo, "HEAD").unwrap();
@@ -74,6 +93,7 @@ anchor = {anchor}
         .id;
     let run = engine.apply(dispatch(&task), false).unwrap().run.unwrap();
     fs::write(run.worktree.join("note"), "changed\n").unwrap();
+    fs::write(run.worktree.join("diagrams/repeats.toml"), repeats(false)).unwrap();
     let submitted = engine
         .apply(
             Op::Done {
@@ -170,11 +190,24 @@ anchor = {anchor}
             .iter()
             .any(|row| row.category == SystemImpactCategory::Lenses
                 && row.provided
-                && row.total == 1)
+                && row.total == 2)
     );
     assert!(accepted.rows.iter().any(|row| matches!(row,
         SystemReviewRow::Lens { impact } if impact.id == "run" && !impact.touched.is_empty()
     )));
+    // The removed repeat's touch stays on the base side; the survivor, unsuffixed at the
+    // head, is not marked touched.
+    let removed = r#"message "worker" -> "worker": "Runs""#;
+    assert!(
+        accepted.rows.iter().any(|row| matches!(row,
+            SystemReviewRow::Lens { impact } if impact.id == "repeats"
+                && impact.touched.is_empty()
+                && impact.touched_base == [removed]
+                && impact.removed == [removed]
+        )),
+        "{:?}",
+        accepted.rows
+    );
     let ordinary: DetailReply = system.ok(DETAIL_GET, query(review));
     let Some(DetailBody::SystemReview(ordinary)) = ordinary.body else {
         panic!("expected review detail")

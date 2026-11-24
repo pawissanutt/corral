@@ -49,6 +49,8 @@ struct Listed {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Read {
     Loading,
+    /// corrald has no such lens at that commit: a change deleted it, or it was not yet written.
+    Missing,
     Failed(String),
     /// A file that is not a lens: its failures.
     Malformed(Vec<String>),
@@ -194,6 +196,8 @@ pub(crate) fn read_of(
             }
             (None, None) => Read::Loading,
         },
+        // A read that failed for any other reason says nothing about whether the lens exists.
+        (None, Some(error)) if error.code == "not_found" => Read::Missing,
         (None, Some(error)) => Read::Failed(error.message.clone()),
         (None, None) => Read::Loading,
     }
@@ -328,6 +332,7 @@ fn drawn_lens(
     let form = app.form;
     let state = computed(move || match read.get() {
         Read::Loading => Some((Hue::Neutral, "Reading the lens…".to_owned())),
+        Read::Missing => Some((Hue::Fail, lens::MISSING.to_owned())),
         Read::Failed(why) => Some((Hue::Fail, format!("The lens could not be read: {why}"))),
         Read::Malformed(why) => Some((
             Hue::Fail,
@@ -476,7 +481,7 @@ fn checks(app: AppState, d: Diagram, on_pick: OnPick) -> AnyElement {
 }
 
 /// The phone's and a terminal's form: a section per kind of element, a row each.
-fn listing(
+pub(super) fn listing(
     app: AppState,
     shown: Memo<Option<Diagram>>,
     picked: Memo<Option<String>>,
@@ -606,76 +611,6 @@ pub(crate) fn inspector(
         })
     })
     .into_element()
-}
-
-/// A lens a task's change touches, for its Impact: drawn with the touched and added elements
-/// marked, the picked element's inspector under it.
-pub(crate) fn touched_lens(
-    app: AppState,
-    head: corral_protocol::detail::DetailRef,
-    base: corral_protocol::detail::DetailRef,
-    touch: Touch,
-) -> AnyElement {
-    let form = app.form;
-    // A lens the change removed is read at the base, its removed elements marked there.
-    let read = computed(move || {
-        app.feed.with(|feed| {
-            let at_head = Touch {
-                removed: Vec::new(),
-                ..touch.clone()
-            };
-            match read_of(feed, &head, &at_head) {
-                Read::Failed(why) => {
-                    let at_base = Touch {
-                        added: Vec::new(),
-                        ..touch.clone()
-                    };
-                    match read_of(feed, &base, &at_base) {
-                        Read::Ready(d, stale) => (Read::Ready(d, stale), true),
-                        _ => (Read::Failed(why), false),
-                    }
-                }
-                read => (read, false),
-            }
-        })
-    });
-    let shown = computed(move || match read.get().0 {
-        Read::Ready(d, _) => Some(*d),
-        _ => None,
-    });
-    let chosen = signal(None::<String>);
-    let picked = computed(move || chosen.get());
-    let on_pick: OnPick = Rc::new(move |name: String| {
-        chosen.update(|p| *p = (p.as_ref() != Some(&name)).then_some(name));
-    });
-    let said = dynamic(move || {
-        let (read, at_base) = read.get();
-        let (hue, words) = match read {
-            Read::Loading => (
-                Hue::Neutral,
-                "Reading the lens at the task's head…".to_owned(),
-            ),
-            Read::Failed(why) => (Hue::Fail, format!("The lens could not be read: {why}")),
-            Read::Malformed(why) => (Hue::Fail, format!("Malformed: {}", why.join(" "))),
-            Read::Ready(_, _) if at_base => (
-                Hue::Held,
-                "The change removes this lens; drawn as it was at the base.".to_owned(),
-            ),
-            Read::Ready(d, _) => (lens::status_hue(d.status), d.verdict()),
-        };
-        Some(untracked(|| hued(app, hue, words)))
-    });
-    let picture = match form {
-        Form::Desktop => lens_canvas::diagram(app, shown, picked, on_pick),
-        Form::Phone | Form::Terminal => listing(app, shown, picked, on_pick),
-    };
-    view()
-        .test_id("impact-lens")
-        .gap(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
-        .child(said)
-        .child(picture)
-        .child(inspector(app, shown, picked))
-        .into_element()
 }
 
 /// The committed lines around the picked element, its anchored line marked, or why there are

@@ -422,6 +422,7 @@ pub(super) fn impact(result: LensResult, files: &[(String, u64, u64)]) -> Option
         touched,
         added: Vec::new(),
         removed: Vec::new(),
+        touched_base: Vec::new(),
     })
 }
 

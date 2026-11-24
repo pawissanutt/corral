@@ -307,7 +307,8 @@ const fn effect(op: &Op) -> Option<&'static str> {
 pub enum ActStatus {
     /// Sent; no answer yet.
     Pending,
-    /// The daemon answered that it is still running; the outcome arrives as the task's status.
+    /// The daemon answered that it is still running and named no operation to follow (an older
+    /// corrald); the outcome arrives as the task's status.
     Running,
     Done,
     /// The engine refused it and named what gets past.
@@ -347,9 +348,25 @@ pub fn status(feed: &Feed, key: &str) -> Option<ActStatus> {
         return Some(ActStatus::Pending);
     }
     Some(match operation.decode::<corral_protocol::op::OpReply>() {
+        // A named operation is followed to its outcome (`running_operation`).
+        Some(corral_protocol::op::OpReply::Running {
+            operation: Some(_), ..
+        }) => ActStatus::Pending,
         Some(corral_protocol::op::OpReply::Running { .. }) => ActStatus::Running,
         _ => ActStatus::Done,
     })
+}
+
+/// The operation a `running` reply names, when no follow-up for it is in flight: what
+/// `op.result` is asked for, under the same key, until the outcome replaces the reply.
+pub fn running_operation(operation: &crate::model::daemon::Operation) -> Option<String> {
+    if operation.loading || operation.error.is_some() {
+        return None;
+    }
+    match operation.decode::<corral_protocol::op::OpReply>()? {
+        corral_protocol::op::OpReply::Running { operation, .. } => operation,
+        corral_protocol::op::OpReply::Done { .. } => None,
+    }
 }
 
 /// The task a finished operation reports, as the engine's reply names it: the id a new task got.
@@ -435,5 +452,35 @@ mod tests {
             true,
         );
         assert!(land.title.starts_with("Land anyway"));
+    }
+    /// A draft or repair that outlasts corrald's reply was left at "running" with no task. The
+    /// named operation is followed under the same key until the outcome names the task.
+    #[test]
+    fn a_running_operation_is_followed_until_its_outcome_names_the_task() {
+        use crate::model::daemon::{Feed, Operation};
+        use corral_protocol::op::OpReply;
+        let reply = |reply: OpReply| Operation {
+            method: corral_protocol::op::OP_SUBMIT.into(),
+            loading: false,
+            value: serde_json::to_value(reply).ok(),
+            error: None,
+            refusal: None,
+        };
+        let mut feed = Feed::default();
+        let running = reply(OpReply::Running {
+            seq: 1,
+            operation: Some("a-1".into()),
+        });
+        assert_eq!(running_operation(&running).as_deref(), Some("a-1"));
+        feed.operations.insert(Id::new("k"), running);
+        assert_eq!(status(&feed, "k"), Some(ActStatus::Pending));
+        let done = reply(OpReply::Done {
+            seq: 2,
+            task: Some("T-9".into()),
+        });
+        assert_eq!(running_operation(&done), None);
+        feed.operations.insert(Id::new("k"), done);
+        assert_eq!(status(&feed, "k"), Some(ActStatus::Done));
+        assert_eq!(created(&feed, "k").as_deref(), Some("T-9"));
     }
 }

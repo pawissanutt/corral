@@ -4,6 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const OP_SUBMIT: &str = "op.submit";
+/// Waits for the outcome of an `op.submit` that answered `running` with an `operation`.
+pub const OP_RESULT: &str = "op.result";
 
 /// For `usage_add`, absent token counters are unknown unless listed in
 /// `explicit_zero_tokens`. A sparse payload's supplied zero counters are evidence.
@@ -72,8 +74,25 @@ mod submission_op {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum OpReply {
-    Done { seq: u64, task: Option<String> },
-    Running { seq: u64 },
+    Done {
+        seq: u64,
+        task: Option<String>,
+    },
+    /// The operation outlasted the reply. With `operation`, `op.result` returns its outcome;
+    /// older daemons send none.
+    Running {
+        seq: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation: Option<String>,
+    },
+}
+
+/// `op.result`: the outcome of a running operation, as `op.submit` would have answered it
+/// (including a refusal). Answers `running` again when it has not finished within the wait;
+/// an outcome is returned once, then forgotten.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OpResult {
+    pub operation: String,
 }
 
 #[cfg(test)]

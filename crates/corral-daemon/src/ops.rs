@@ -2,7 +2,6 @@
 use std::{
     sync::{Arc, atomic::Ordering, mpsc},
     thread,
-    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -12,7 +11,8 @@ use corral_types::Op;
 
 use crate::state::Shared;
 
-const REPLY_WAIT: Duration = Duration::from_secs(5);
+mod late;
+pub(crate) use late::{Late, result};
 
 pub(crate) fn submit(shared: &Arc<Shared>, submit: OpSubmit) -> Result<OpReply> {
     {
@@ -23,8 +23,8 @@ pub(crate) fn submit(shared: &Arc<Shared>, submit: OpSubmit) -> Result<OpReply> 
         state.op_workers += 1;
     }
     let permit = OperationPermit(Arc::clone(shared));
-    // A rendezvous makes a timeout exact: the worker can tell whether its error was delivered.
-    let (send, receive) = mpsc::sync_channel(0);
+    // One slot: the worker never waits for its reader, which may come late through `op.result`.
+    let (send, receive) = mpsc::sync_channel(1);
     thread::Builder::new()
         .name("corrald-op".into())
         .spawn(move || {
@@ -51,11 +51,9 @@ pub(crate) fn submit(shared: &Arc<Shared>, submit: OpSubmit) -> Result<OpReply> 
             }
         })
         .context("start daemon operation worker")?;
-    match receive.recv_timeout(REPLY_WAIT) {
+    match receive.recv_timeout(shared.late_ops.wait()) {
         Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => Ok(OpReply::Running {
-            seq: shared.latest_seq.load(Ordering::Acquire),
-        }),
+        Err(mpsc::RecvTimeoutError::Timeout) => Ok(late::park(shared, receive)),
         Err(error) => Err(error).context("receive daemon operation outcome"),
     }
 }

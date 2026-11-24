@@ -24,7 +24,7 @@ use corral_protocol::device::{
     DEVICE_PAGE, DEVICE_PAGE_LIMIT_MAX, DEVICE_REVOKE, DeviceInfo, DevicePage, DevicePageQuery,
     PUSH_STATUS, PUSH_SUBSCRIBE, PUSH_UNSUBSCRIBE,
 };
-use corral_protocol::op::OP_SUBMIT;
+use corral_protocol::op::{OP_RESULT, OP_SUBMIT};
 use corral_protocol::session as control;
 use corral_protocol::session_host::{
     SESSION_ACTION, SESSION_CARD_ANSWER, SESSION_MODEL, SESSION_QUEUE_MOVE, SESSION_QUEUE_WITHDRAW,
@@ -72,7 +72,7 @@ pub(super) fn handles(event: &Event) -> bool {
         event,
         Event::Health(_) | Event::Rows { .. } | Event::Reset { .. } | Event::TopicError { .. }
     ) || matches!(event, Event::Reply { method, .. } if matches!(*method,
-            APP_SESSION | OP_SUBMIT | CONFIG_GET | CONFIG_PUT | SESSION_SEND | BUILD_START |
+            APP_SESSION | OP_SUBMIT | OP_RESULT | CONFIG_GET | CONFIG_PUT | SESSION_SEND | BUILD_START |
             SESSION_CARD_ANSWER | SESSION_QUEUE_WITHDRAW | SESSION_QUEUE_MOVE | SESSION_ACTION |
             SESSION_MODEL | BUILD_REMOVE | DETAIL_GET | CHANGES_PAGE | SEEN_ADVANCE | DEVICE_REVOKE |
             wire::device::PAIR_BEGIN | wire::device::PAIR_STATUS | wire::device::PAIR_CONFIRM | wire::device::PAIR_CANCEL |
@@ -88,6 +88,7 @@ fn refusable(method: &str) -> bool {
     matches!(
         method,
         OP_SUBMIT
+            | OP_RESULT
             | CONFIG_PUT
             | SESSION_CARD_ANSWER
             | SESSION_QUEUE_WITHDRAW

@@ -193,7 +193,15 @@ pub struct LensImpact {
     pub path: String,
     pub id: String,
     pub title: String,
+    /// Head-side names of elements whose anchor the change edits. Names follow each side's own
+    /// numbering of repeats, so a name is only meaningful on the revision it was read at.
     pub touched: Vec<String>,
+    /// Head-side names.
     pub added: Vec<String>,
+    /// Base-side names.
     pub removed: Vec<String>,
+    /// Base-side names of removed elements whose anchor the change also edits. Absent from
+    /// older daemons, which put these names in `touched`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub touched_base: Vec<String>,
 }

@@ -4669,7 +4669,14 @@
             "type": "object"
           },
           {
+            "description": "The operation outlasted the reply. With `operation`, `op.result` returns its outcome;\nolder daemons send none.",
             "properties": {
+              "operation": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "seq": {
                 "format": "uint64",
                 "minimum": 0,
@@ -4687,6 +4694,18 @@
             "type": "object"
           }
         ]
+      },
+      "OpResult": {
+        "description": "`op.result`: the outcome of a running operation, as `op.submit` would have answered it\n(including a refusal). Answers `running` again when it has not finished within the wait;\nan outcome is returned once, then forgotten.",
+        "properties": {
+          "operation": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "type": "object"
       },
       "OpSubmit": {
         "description": "For `usage_add`, absent token counters are unknown unless listed in\n`explicit_zero_tokens`. A sparse payload's supplied zero counters are evidence.\nLegacy clients serialized all four counters even when unknown, so an all-four\npayload must list its reported zeros in `explicit_zero_tokens` to disambiguate.",
@@ -10675,6 +10694,55 @@
         {
           "code": "invalid_params",
           "message": "invalid_params"
+        },
+        {
+          "code": "refused",
+          "message": "refused"
+        },
+        {
+          "code": "unavailable",
+          "message": "unavailable"
+        },
+        {
+          "code": "internal",
+          "message": "internal"
+        }
+      ]
+    },
+    {
+      "name": "op.result",
+      "params": [
+        {
+          "name": "operation",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "result": {
+        "name": "result",
+        "schema": {
+          "$ref": "#/components/schemas/OpReply"
+        }
+      },
+      "x-error-data-schema": {
+        "refused": {
+          "$ref": "#/components/schemas/Refusal"
+        }
+      },
+      "x-notification": false,
+      "x-params-schema": {
+        "$ref": "#/components/schemas/OpResult"
+      },
+      "x-wire-errors": [
+        {
+          "code": "invalid_params",
+          "message": "invalid_params"
+        },
+        {
+          "code": "not_found",
+          "message": "not_found"
         },
         {
           "code": "refused",
