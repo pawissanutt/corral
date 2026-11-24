@@ -231,9 +231,11 @@ conversation records and never forces Git to delete a worktree or branch.
 
 ### Attaching artifacts
 
-`corral_artifact` is available to workers, reviewers, chat assistants, and trusted
-Code sessions bound to a Corral workspace. Guarded Build and bare sessions do not
-have it. It takes a required `path` and `kind` (`reference`, `report`, or `evidence`),
+`corral_artifact` is available to workers, reviewers, chat assistants, and trusted,
+non-bare Code sessions. Guarded Build and bare Code sessions do not have it. A Code
+session can be non-bare with an explicit `--corral` even without a discovered workspace;
+tool availability alone does not provide a default project or a workspace able to accept
+the attachment. It takes a required `path` and `kind` (`reference`, `report`, or `evidence`),
 plus optional `title`, `to` (task ID or project name), and `replaces` (an earlier
 artifact reference). Relative paths resolve from the session working directory.
 The destination defaults to the bound task, then the session's project; if neither is

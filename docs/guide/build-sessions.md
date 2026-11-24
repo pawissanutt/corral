@@ -59,10 +59,12 @@ proposed plans; you can file a proposal, file and start its tasks, or dismiss it
 
 ## Artifacts in Code sessions
 
-A trusted `corral-pi code` session bound to a Corral workspace has `corral_artifact`;
-a guarded Build or bare session does not. Code attaches to its configured project by
-default, or can specify a task or project with `to`. Without a project or bound task,
-provide `to`. To revise a report, edit the working file and attach it again with the
+A trusted, non-bare `corral-pi code` session has `corral_artifact`; a guarded Build
+or bare Code session does not. In a Git checkout, explicit `--corral` can make Code
+non-bare even without a discovered workspace. Tool availability does not itself provide
+a default project or a workspace able to accept the attachment. Code defaults to its
+configured project when available, or can specify a task or project with `to`. Without a
+project or bound task, provide `to`. To revise a report, edit the working file and attach it again with the
 previous reference in `replaces`; this publishes a new row without changing the old
 one. Plan mode refuses `corral_artifact` calls while planning or awaiting plan review. See
 [corral-pi](corral-pi.md#attaching-artifacts) for tool parameters and

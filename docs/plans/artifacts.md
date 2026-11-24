@@ -71,7 +71,7 @@ These exist to keep the change from regrowing what the simple engine removed.
 |---|---|
 | One new concept | The project as a second owner. Everything else is one optional field or a default in a view |
 | Rows stay immutable | Revising an artifact publishes a new row that names the row it replaces. No row or blob is rewritten |
-| The engine never guesses | `kind` and `replaces` are declared by whoever adds the row. Nothing is inferred from a title, a file name or the actor |
+| Explicit classification and revision | `kind` and `replaces` are declared by whoever adds the row, except that the CLI defaults an owner's omitted kind to `reference`. Nothing is inferred from a title or file name |
 | A kind must change behaviour | A value exists only when some surface treats it differently from every other value |
 | Every add is recorded | Each add writes a row and an event, as today. Surfaces that find rows through events keep working |
 | Additive storage only | New tables and indexes are created if absent at open, as the usage table already is (`store.rs:46-48`). No stored row is rewritten |
@@ -83,11 +83,11 @@ These exist to keep the change from regrowing what the simple engine removed.
 `Artifact.kind` changes from `Option<String>` (`crates/corral-types/src/lib.rs:234`) to a closed enum. A
 kind's group is a `match` in `corral-types`.
 
-| Group | Kind | Meaning | Added by |
+| Group | Kind | Meaning | Typical producer |
 |---|---|---|---|
 | Reference | `reference` | An input the work should follow: a plan, a mockup, a reference image, a specification | owner, chat, Code |
 | Deliverable | `report` | A document written for the owner to read | any agent, the scan |
-| Proof | `evidence` | Output or a capture that supports a claim | worker, reviewer, chat |
+| Proof | `evidence` | Output or a capture that supports a claim | worker, reviewer, chat, Code |
 | Submission | `diff` | The submitted diff | engine, at `done` |
 | Submission | `summary` | The `done` summary | engine, at `done` |
 | Record | `gate` | A gate log | engine |
@@ -95,6 +95,11 @@ kind's group is a `match` in `corral-types`.
 | Record | `usage` | Model usage of a run | host |
 | Record | `tool` | Output of a configured tool | engine |
 | Record | `legacy` | A row stored before this change with no kind or an unknown one. Decoded, never assignable | nobody |
+
+These are typical producers, not CLI restrictions: the CLI accepts every kind except
+`legacy`. Every role with the Pi tool can choose any of `reference`, `report` and
+`evidence`; the tool requires a kind. Only an owner using the CLI has a default kind,
+`reference`.
 
 Eight of these are the values the store already holds, kept verbatim so no producer is renamed.
 `reference` and `legacy` are new.
@@ -132,7 +137,8 @@ log reference respectively. Its Artifacts view filters by the three shown groups
   `tool` (`crates/corral-engine/src/artifacts.rs:272`).
 - **The scan** stamps `report`: a glob is the owner's statement that those files are reports. It skips a
   file when a row with the same title and content already exists on the task. This is the scan's own
-  rule, not a general one: nothing finds a scanned row through its event.
+  rule, not a general one. Published scan rows still have events; the finder uses artifact
+  events for run attribution.
 - **The host** stamps `log` for the session record (formerly `report`, `pi/roles/worker/tools.ts`) and for
   the transcript export (already `log`, `pi/host/export.ts:29`), and `usage` as today.
 
