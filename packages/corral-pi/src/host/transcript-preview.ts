@@ -43,7 +43,12 @@ export function readTranscriptHeader(file: string): string | undefined {
   return undefined;
 }
 
-type Cursor = { stamp: string; mode: TranscriptRequest["mode"]; index: number; end: number; position?: Position; previous?: Position };
+type Cursor = { stamp: string; mode: TranscriptRequest["mode"]; index: number; generation: string };
+// Store resumable boundaries, never rows or record contents. Page indices
+// include empty scan-only pages and are independent in each mode.
+const MAX_SNAPSHOTS = 16;
+type Checkpoints = { generation: string; end: number; raw: Position[]; conversation: Position[] };
+const snapshots = new Map<string, Checkpoints>();
 const key = randomBytes(32);
 const mac = (body: string) => createHmac("sha256", key).update(body).digest();
 function encode(cursor: Cursor) {
@@ -81,30 +86,32 @@ export async function readTranscriptPage(file: string, session: string, request:
     const bytes = new TranscriptBytes(fd);
     const first = header(await bytes.read(0, Math.min(BYTES, size)));
     if (first.id !== session) throw new Error("Transcript identity mismatch");
-    const end = cursor?.end ?? await bytes.boundary(size, first.end);
+    const cached = snapshots.get(stamp);
+    if (cursor && (!cached || cached.generation !== cursor.generation)) throw stale();
+    const end = cached?.end ?? await bytes.boundary(size, first.end);
     if (!Number.isSafeInteger(end) || end < first.end || end > size) throw new Error("Invalid transcript cursor bounds");
     const initial = mode === "raw" ? 0 : { end };
     const read = (position: Position) => mode === "raw"
       ? rawPage(bytes, end, position as number)
       : conversationPage(bytes, first.end, position as BranchPosition);
     const index = cursor?.index ?? 0;
-    let position = cursor?.position ?? initial;
-    const offset = typeof position === "number" ? position : position.end;
-    if (!Number.isSafeInteger(offset) || offset < (mode === "raw" ? 0 : first.end) || offset > end) throw new Error("Invalid transcript cursor bounds");
-    // The preceding boundary is carried for immediate reversal. With no
-    // checkpoint, replay deterministically without retaining an unbounded index.
-    let previous = cursor?.previous;
-    for (let i = 0; cursor?.position === undefined && i < index; i++) {
-      previous = position;
-      const { next } = await read(position);
-      if (next === undefined) throw new Error("Invalid transcript cursor bounds");
-      position = next;
-    }
+    const position = index === 0 ? initial : cached?.[mode][index];
+    if (position === undefined) throw stale();
     const page = await read(position);
     await checkPath();
     if (snapshot(await fd.stat({ bigint: true })) !== sig) throw stale();
-    const next = page.next === undefined ? undefined : encode({ stamp, mode, index: index + 1, end, position: page.next, previous: position });
-    const prev = index === 0 ? undefined : encode({ stamp, mode, index: index - 1, end, position: previous });
+    // A concurrent request may have evicted this cursor's index or created
+    // an index for a concurrent first-page read. Publish only after validation.
+    let active = snapshots.get(stamp);
+    if (cursor && active !== cached) throw stale();
+    active ??= { end, generation: randomBytes(12).toString("base64url"), raw: [0], conversation: [{ end }] };
+    if (page.next !== undefined) active[mode][index + 1] = page.next;
+    snapshots.delete(stamp);
+    snapshots.set(stamp, active);
+    if (snapshots.size > MAX_SNAPSHOTS) snapshots.delete(snapshots.keys().next().value!);
+    const link = (index: number) => encode({ stamp, mode, index, generation: active.generation });
+    const next = page.next === undefined ? undefined : link(index + 1);
+    const prev = index === 0 ? undefined : link(index - 1);
     return { rows: page.rows, stamp, older: mode === "raw" ? prev : next, newer: mode === "raw" ? next : prev };
   } finally { await fd.close(); }
 }

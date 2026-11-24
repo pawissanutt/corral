@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import type { TranscriptRow } from "./transcript-preview.ts";
 
@@ -35,6 +36,8 @@ export class TranscriptBytes {
   }
 }
 
+// IDs can be arbitrarily large. Retain only a fixed-size key in checkpoints.
+const idKey = (id: string) => createHash("sha256").update(id, "utf16le").digest("base64url");
 export type BranchPosition = { end: number; parent?: string; skip?: number; offset?: number };
 export type Position = number | BranchPosition;
 
@@ -76,7 +79,7 @@ export async function conversationPage(bytes: TranscriptBytes, floor: number, po
     }
     // Skipped siblings cost a decode too; the cursor carries the sought parent across empty pages.
     records++;
-    if (entry && parent !== undefined && parent !== entry.id) {
+    if (entry && parent !== undefined && (typeof entry.id !== "string" || parent !== idKey(entry.id))) {
       end = start;
       continue;
     }
@@ -110,7 +113,7 @@ export async function conversationPage(bytes: TranscriptBytes, floor: number, po
       end = floor;
       break;
     }
-    if (typeof entry?.parentId === "string" && typeof entry.id === "string") parent = entry.parentId;
+    if (typeof entry?.parentId === "string" && typeof entry.id === "string") parent = idKey(entry.parentId);
     end = start;
     skip = 0;
     offset = undefined;

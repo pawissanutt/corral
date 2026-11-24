@@ -71,6 +71,58 @@ test("retained history reaches both ends across forks and large UTF-8 results", 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("repeated deep reverse clicks read only the requested page in both modes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "transcript-reverse-")), file = join(dir, "session.jsonl");
+  const original = TranscriptBytes.prototype.read;
+  let reads = 0;
+  try {
+    writeFileSync(file, '{"type":"session","id":"existing"}\n' + Array.from({ length: 32 * 64 }, (_, i) =>
+      JSON.stringify({ type: "message", message: { role: "user", content: `row-${i}` } }) + "\n").join(""));
+    TranscriptBytes.prototype.read = function (start, length) { reads++; return original.call(this, start, length); };
+    for (const mode of ["raw", "conversation"] as const) {
+      const read = (cursor?: string) => readTranscriptPage(file, "existing", { mode, cursor });
+      const forward = mode === "raw" ? "newer" : "older", reverse = mode === "raw" ? "older" : "newer";
+      let page = await read();
+      const firstIds = [page.rows[0]!.id];
+      while (page[forward]) {
+        page = await read(page[forward]);
+        firstIds.push(page.rows[0]!.id);
+      }
+      expect(firstIds.length).toBeGreaterThanOrEqual(64);
+      for (let i = firstIds.length - 2; i >= 0; i--) {
+        expect(page[reverse]).toBeDefined();
+        reads = 0;
+        page = await read(page[reverse]);
+        expect(page.rows[0]!.id).toBe(firstIds[i]!);
+        // Header plus one page: raw data + continuation probe, or up to
+        // 32 decoded records and a boundary window (two at a window edge).
+        expect(reads).toBeLessThanOrEqual(mode === "raw" ? 3 : 35);
+      }
+      expect(page[reverse]).toBeUndefined();
+    }
+  } finally { TranscriptBytes.prototype.read = original; rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("evicted snapshots require loading latest, even after the same snapshot is reopened", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "transcript-evict-"));
+  try {
+    const source = '{"type":"session","id":"existing"}\n' + "{}\n".repeat(40);
+    const read = (file: string, cursor?: string) => readTranscriptPage(file, "existing", { mode: "raw", cursor });
+    const file = join(dir, "first");
+    writeFileSync(file, source);
+    const cursor = (await read(file)).newer!;
+    for (let i = 0; i < 16; i++) {
+      const other = join(dir, String(i));
+      writeFileSync(other, source);
+      await read(other);
+    }
+    await expect(read(file, cursor)).rejects.toThrow("load latest");
+    const latest = await read(file);
+    await expect(read(file, cursor)).rejects.toThrow("load latest");
+    expect((await read(file, latest.newer)).older).toBeDefined();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("header-only sessions are empty; unfinished appends wait and changed reads fail", async () => {
   const dir = mkdtempSync(join(tmpdir(), "transcript-change-")), file = join(dir, "session.jsonl");
   const header = '{"type":"session","id":"existing"}\n';
