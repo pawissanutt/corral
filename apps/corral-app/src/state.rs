@@ -113,6 +113,9 @@ pub struct AppState {
     pub root: Owner,
     /// Operations submitted from here whose receipt has not been shown yet.
     watching: Signal<BTreeMap<Id, Act>>,
+    /// Operations corrald answered `running`, by their submission's key: the id `op.result`
+    /// follows until the outcome is in, kept here so a lost reply is asked for again.
+    following: Signal<BTreeMap<Id, String>>,
     device_ops: Signal<BTreeMap<Id, devices::DeviceOperation>>,
     /// Assistant session operations by their caller key, to the client's correlation.
     sessions: Signal<BTreeMap<Id, Id>>,
@@ -291,6 +294,7 @@ impl AppState {
             ask_field_error: signal(None),
             root: Owner::current(),
             watching: signal(BTreeMap::new()),
+            following: signal(BTreeMap::new()),
             device_ops: signal(BTreeMap::new()),
             sessions: signal(BTreeMap::new()),
             toast: signal_with(None, SignalEquals::Never),
@@ -554,6 +558,8 @@ impl AppState {
                 state.draft = None;
                 state.filed = None;
             });
+            // Another source has other operations.
+            self.following.set(BTreeMap::new());
             self.refusal.set(None);
             let uploads = self.ask_staged.with_untracked(|staged| {
                 staged

@@ -602,7 +602,7 @@ fn lens_item(cx: &Ctx, key: String, impact: &corral_types::lenses::LensImpact) -
         listed("touched", &impact.touched),
         listed("added", &impact.added),
         listed("removed", &impact.removed),
-        listed("removed with their code edited", &impact.touched_base),
+        listed("edited at the base", &impact.touched_base),
     ]
     .into_iter()
     .flatten()

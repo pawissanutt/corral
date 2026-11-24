@@ -88,8 +88,8 @@ pub enum OpReply {
 }
 
 /// `op.result`: the outcome of a running operation, as `op.submit` would have answered it
-/// (including a refusal). Answers `running` again when it has not finished within the wait;
-/// an outcome is returned once, then forgotten.
+/// (including a refusal). Answers `running` again when it has not finished within the wait,
+/// and the same outcome again on a later call, until corrald drops the oldest operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct OpResult {
     pub operation: String,

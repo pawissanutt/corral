@@ -114,11 +114,11 @@ fn parallel_transitions_take_separate_lanes_and_stay_on_their_states() {
     };
     let measure = |font: crate::model::system::layout::Font, words: &str| font.estimate(words);
     let placed = crate::model::system::lens_layout::layout(&d, 800.0, &measure);
-    let boxes: Vec<_> = placed.nodes.iter().map(|n| n.rect).collect();
-    let on_a_state = |(x, y): (f32, f32)| {
-        boxes
-            .iter()
-            .any(|r| x >= r.x && x <= r.x + r.w && y >= r.y - 1.0 && y <= r.y + r.h + 1.0)
+    let on = |node: usize, (x, y): (f32, f32)| {
+        placed.nodes.iter().any(|n| {
+            let r = n.rect;
+            n.node == node && x >= r.x && x <= r.x + r.w && y >= r.y - 1.0 && y <= r.y + r.h + 1.0
+        })
     };
     assert_eq!(placed.arrows.len(), 9);
     let mut mids = Vec::new();
@@ -126,7 +126,16 @@ fn parallel_transitions_take_separate_lanes_and_stay_on_their_states() {
         let (Some(&first), Some(&last)) = (arrow.points.first(), arrow.points.last()) else {
             panic!("an arrow has ends");
         };
-        assert!(on_a_state(first) && on_a_state(last), "{:?}", arrow.points);
+        let Some((from, to)) = d.edges[arrow.edge].ends else {
+            panic!("a transition has ends");
+        };
+        // It leaves its own source and reaches its own target, inside the canvas.
+        assert!(on(from, first) && on(to, last), "{:?}", arrow.points);
+        let inside = arrow
+            .points
+            .iter()
+            .all(|p| p.0 >= 0.0 && p.0 <= placed.width);
+        assert!(inside, "{:?} in {}", arrow.points, placed.width);
         let bends = &arrow.points[1..arrow.points.len() - 1];
         mids.push(bends.iter().map(|p| p.0).sum::<f32>() / bends.len() as f32);
     }

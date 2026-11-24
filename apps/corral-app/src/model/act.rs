@@ -357,8 +357,24 @@ pub fn status(feed: &Feed, key: &str) -> Option<ActStatus> {
     })
 }
 
-/// The operation a `running` reply names, when no follow-up for it is in flight: what
-/// `op.result` is asked for, under the same key, until the outcome replaces the reply.
+/// What following a running operation needs next.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Follow {
+    /// Ask corrald for this operation's outcome.
+    Ask(String),
+    /// A request is in flight.
+    Wait,
+    /// The outcome is in, or the operation can no longer be followed.
+    Finished,
+}
+
+/// Errors after which the same operation can be asked for again: the request never reached
+/// corrald, or its reply was lost with the connection.
+fn transient(code: &str) -> bool {
+    matches!(code, "offline" | "disconnected" | "busy" | "unavailable")
+}
+
+/// The operation a `running` reply names: what is followed under its key.
 pub fn running_operation(operation: &crate::model::daemon::Operation) -> Option<String> {
     if operation.loading || operation.error.is_some() {
         return None;
@@ -366,6 +382,35 @@ pub fn running_operation(operation: &crate::model::daemon::Operation) -> Option<
     match operation.decode::<corral_protocol::op::OpReply>()? {
         corral_protocol::op::OpReply::Running { operation, .. } => operation,
         corral_protocol::op::OpReply::Done { .. } => None,
+    }
+}
+
+/// The next step for operation `id`, followed under a key whose reply table entry is
+/// `operation`. A lost reply keeps the id, so the outcome is asked for again, never guessed.
+pub fn follow(operation: Option<&crate::model::daemon::Operation>, id: &str) -> Follow {
+    let Some(operation) = operation else {
+        return Follow::Finished;
+    };
+    if operation.loading {
+        return Follow::Wait;
+    }
+    if let Some(error) = &operation.error {
+        return if transient(&error.code) {
+            Follow::Ask(id.to_owned())
+        } else {
+            Follow::Finished
+        };
+    }
+    if operation.refusal.is_some() {
+        return Follow::Finished;
+    }
+    match operation.decode::<corral_protocol::op::OpReply>() {
+        Some(corral_protocol::op::OpReply::Running {
+            operation: Some(next),
+            ..
+        }) => Follow::Ask(next),
+        Some(_) => Follow::Finished,
+        None => Follow::Wait,
     }
 }
 
@@ -472,6 +517,17 @@ mod tests {
             operation: Some("a-1".into()),
         });
         assert_eq!(running_operation(&running).as_deref(), Some("a-1"));
+        assert_eq!(follow(Some(&running), "a-1"), Follow::Ask("a-1".into()));
+        // The follow-up's reply is lost with the connection: the same operation is asked for.
+        let lost = Operation {
+            value: None,
+            error: Some(crate::model::daemon::ClientError {
+                code: "disconnected".into(),
+                message: String::new(),
+            }),
+            ..running.clone()
+        };
+        assert_eq!(follow(Some(&lost), "a-1"), Follow::Ask("a-1".into()));
         feed.operations.insert(Id::new("k"), running);
         assert_eq!(status(&feed, "k"), Some(ActStatus::Pending));
         let done = reply(OpReply::Done {
@@ -479,6 +535,7 @@ mod tests {
             task: Some("T-9".into()),
         });
         assert_eq!(running_operation(&done), None);
+        assert_eq!(follow(Some(&done), "a-1"), Follow::Finished);
         feed.operations.insert(Id::new("k"), done);
         assert_eq!(status(&feed, "k"), Some(ActStatus::Done));
         assert_eq!(created(&feed, "k").as_deref(), Some("T-9"));

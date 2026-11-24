@@ -2,7 +2,8 @@
 //! touched and added marked; at the base too, with what it removed (and touched there), when
 //! it removed anything; only at the base when corrald has no such lens at the head. Each side
 //! marks the names of its own revision, so a removed repeat never marks the head's survivor.
-//! A head read that failed for any other reason is said as such, never taken for a deletion.
+//! A head read that failed for any other reason, or a not-found one while the base is not
+//! read, is said as such, never taken for a deletion.
 //!
 //! Test ids: "impact-lens", and those of `lens_canvas.rs` or the list form for each side.
 
@@ -29,7 +30,11 @@ pub(crate) fn touched_lens(
     let base_marks = !at_base.touched.is_empty() || !at_base.removed.is_empty();
     let head_read = computed(move || app.feed.with(|feed| read_of(feed, &head, &at_head)));
     let base_read = computed(move || app.feed.with(|feed| read_of(feed, &base, &at_base)));
-    let deleted = computed(move || matches!(head_read.get(), Read::Missing));
+    // A not-found head read is a deleted lens only once the same project answered at the
+    // base: the project and the request are the same, so only the lens can be missing.
+    let deleted = computed(move || {
+        matches!(head_read.get(), Read::Missing) && matches!(base_read.get(), Read::Ready(..))
+    });
     let parts = dynamic(move || {
         let deleted = deleted.get();
         untracked(|| {

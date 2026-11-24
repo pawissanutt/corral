@@ -111,6 +111,10 @@ impl AppState {
 
     /// Tracked status of an operation this app submitted.
     pub fn act_status(&self, key: &Id) -> Option<ActStatus> {
+        // An operation still followed is pending, whatever its last reply said.
+        if self.following.with(|following| following.contains_key(key)) {
+            return Some(ActStatus::Pending);
+        }
         self.feed.with(|feed| act::status(feed, key)).or_else(|| {
             self.watching
                 .with(|watching| watching.contains_key(key))
@@ -118,47 +122,64 @@ impl AppState {
         })
     }
 
-    /// Each watched operation's outcome, once: a refusal opens its sheet, anything else toasts.
     /// Follows every operation corrald answered `running` with an id to its outcome, under its
     /// own key: one `op.result` at a time, each waiting at corrald, until the outcome replaces
     /// the running reply. Nothing is submitted again.
     fn follow_running(self) {
-        // Keys sent and not yet taken up by the client, so one reply is followed once.
+        // Keys asked for and not yet taken up by the client, so one reply is followed once.
         let sent = stored(BTreeSet::<Id>::new());
         effect(move || {
-            let (up, running, loading) = self.feed.with(|feed| {
-                let running: Vec<(Id, String)> = feed
-                    .operations
-                    .iter()
-                    .filter_map(|(key, op)| Some((key.clone(), act::running_operation(op)?)))
-                    .collect();
-                let loading: BTreeSet<Id> = feed
-                    .operations
-                    .iter()
-                    .filter(|(_, op)| op.loading)
-                    .map(|(key, _)| key.clone())
-                    .collect();
-                (feed.link == Link::Up, running, loading)
+            let up = self.feed.with(|feed| feed.link == Link::Up);
+            let steps: Vec<(Id, act::Follow)> = self.feed.with(|feed| {
+                let mut following = untracked(|| self.following.get());
+                for (key, op) in &feed.operations {
+                    if let Some(id) = act::running_operation(op) {
+                        following.insert(key.clone(), id);
+                    }
+                }
+                if untracked(|| self.following.with(|f| *f != following)) {
+                    untracked(|| self.following.set(following.clone()));
+                }
+                following
+                    .into_iter()
+                    .map(|(key, id)| {
+                        let step = act::follow(feed.operations.get(&key), &id);
+                        (key, step)
+                    })
+                    .collect()
             });
-            sent.with(|sent| sent.retain(|key| !loading.contains(key)));
             if !up || untracked(|| self.fixture()) {
+                sent.with(BTreeSet::clear);
                 return;
             }
-            for (key, operation) in running {
-                if sent.with(|sent| sent.contains(&key)) {
-                    continue;
-                }
-                if requests::op_result(key.to_string(), operation) {
-                    sent.with(|sent| _ = sent.insert(key));
+            for (key, step) in steps {
+                match step {
+                    act::Follow::Wait => _ = sent.with(|sent| sent.remove(&key)),
+                    act::Follow::Finished => {
+                        sent.with(|sent| sent.remove(&key));
+                        untracked(|| self.following.update(|f| _ = f.remove(&key)));
+                    }
+                    act::Follow::Ask(id) => {
+                        if sent.with(|sent| sent.contains(&key)) {
+                            continue;
+                        }
+                        if requests::op_result(key.to_string(), id) {
+                            sent.with(|sent| _ = sent.insert(key));
+                        }
+                    }
                 }
             }
         });
     }
 
+    /// Each watched operation's outcome, once: a refusal opens its sheet, anything else toasts.
     pub(super) fn watch_receipts(self) {
         self.follow_running();
         effect(move || {
-            let watched = self.watching.get();
+            let mut watched = self.watching.get();
+            // An operation still followed has not settled; its outcome is still to come.
+            self.following
+                .with(|following| watched.retain(|key, _| !following.contains_key(key)));
             if watched.is_empty() {
                 return;
             }

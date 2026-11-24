@@ -51,7 +51,12 @@ pub(crate) fn submit(shared: &Arc<Shared>, submit: OpSubmit) -> Result<OpReply> 
             }
         })
         .context("start daemon operation worker")?;
-    match receive.recv_timeout(shared.late_ops.wait()) {
+    let wait = shared.late_ops.wait();
+    // A zero wait (tests only) parks at once, so the delayed path is taken deterministically.
+    if wait.is_zero() {
+        return Ok(late::park(shared, receive));
+    }
+    match receive.recv_timeout(wait) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => Ok(late::park(shared, receive)),
         Err(error) => Err(error).context("receive daemon operation outcome"),

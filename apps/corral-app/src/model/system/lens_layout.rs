@@ -198,6 +198,31 @@ fn state(diagram: &Diagram, room: f32, measure: Measure) -> LensLayout {
             label,
         });
     }
+    // A lane can bend left of the first state; the drawing moves right rather than clip it.
+    let left = out
+        .arrows
+        .iter()
+        .flat_map(|a| a.points.iter().map(|p| p.0).chain([a.label.x]))
+        .fold(PAD, f32::min);
+    if left < PAD {
+        let by = PAD - left;
+        for n in &mut out.nodes {
+            n.rect.x += by;
+        }
+        for a in &mut out.arrows {
+            a.label.x += by;
+            for p in &mut a.points {
+                p.0 += by;
+            }
+        }
+        width += by;
+    }
+    let right = out
+        .arrows
+        .iter()
+        .flat_map(|a| a.points.iter().map(|p| p.0))
+        .fold(0.0, f32::max);
+    width = width.max(right + PAD);
     out.width = width.ceil();
     out.height = height.ceil();
     out

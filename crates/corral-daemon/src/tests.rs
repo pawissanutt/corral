@@ -647,7 +647,7 @@ fn external_engine_commits_reach_socket_subscribers() {
 }
 
 /// A lens draft or repair that outlasts the reply used to leave the client at "running" with
-/// no task. The client follows the same submission to the task it filed, which is given once.
+/// no task. The client follows the same submission to the task it filed, as often as it asks.
 #[test]
 fn socket_op_result_returns_the_task_of_an_operation_that_outlasted_its_reply() {
     let fixture = Fixture::with_repository();
@@ -686,6 +686,7 @@ fn socket_op_result_returns_the_task_of_an_operation_that_outlasted_its_reply() 
     };
     let engine = fixture.shared.engine().unwrap();
     assert!(engine.store.get_task(&task).unwrap().is_some());
-    let again = client.call(wire::op::OP_RESULT, result).unwrap_err();
-    assert_eq!(again.code, rpc::ErrorCode::NotFound);
+    // A reply lost with the connection is asked for again and given again.
+    let again: OpReply = client.ok(wire::op::OP_RESULT, result);
+    assert!(matches!(again, OpReply::Done { task: Some(t), .. } if t == task));
 }

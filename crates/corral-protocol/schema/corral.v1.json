@@ -4696,7 +4696,7 @@
         ]
       },
       "OpResult": {
-        "description": "`op.result`: the outcome of a running operation, as `op.submit` would have answered it\n(including a refusal). Answers `running` again when it has not finished within the wait;\nan outcome is returned once, then forgotten.",
+        "description": "`op.result`: the outcome of a running operation, as `op.submit` would have answered it\n(including a refusal). Answers `running` again when it has not finished within the wait,\nand the same outcome again on a later call, until corrald drops the oldest operations.",
         "properties": {
           "operation": {
             "type": "string"

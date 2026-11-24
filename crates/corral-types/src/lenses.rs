@@ -200,8 +200,9 @@ pub struct LensImpact {
     pub added: Vec<String>,
     /// Base-side names.
     pub removed: Vec<String>,
-    /// Base-side names of removed elements whose anchor the change also edits. Absent from
-    /// older daemons, which put these names in `touched`.
+    /// Base-side names of elements the head does not have (removed, or the head lens is
+    /// unreadable) whose anchor the change edits. Absent from older daemons, which put these
+    /// names in `touched`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub touched_base: Vec<String>,
 }

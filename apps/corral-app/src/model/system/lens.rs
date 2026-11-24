@@ -734,7 +734,7 @@ pub const DRAFT_LEAD: &str =
 pub const DRAFT_PLACEHOLDER: &str = "e.g. how a run moves from dispatch to review";
 pub const MISSING: &str = "No such lens at this commit.";
 /// Impact's heading over the lens as it was before the change.
-pub const AT_BASE: &str = "At the base: what the change removed";
+pub const AT_BASE: &str = "At the base: what the change removed or edited there";
 pub const AT_BASE_DELETED: &str = "The change deletes this lens; as it was at the base";
 pub const REPAIR_LEAD: &str = "Files a task for an agent to fix the failing checks.";
 

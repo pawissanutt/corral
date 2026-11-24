@@ -186,6 +186,9 @@ pub(crate) fn read_of(
     ) {
         (Some(served), _) => match (&served.lens, &served.error) {
             (_, Some(error)) => Read::Failed(error.clone()),
+            // The app asks by file; corrald falls back to a lens whose ID equals the text, and
+            // that is another lens, not this file at this commit.
+            (Some(result), None) if !asks_for(target, &result.file) => Read::Missing,
             (Some(result), None) => {
                 match lens::diagram(result, served.commit.as_deref(), &served.excerpts, touch) {
                     Some(d) => Read::Ready(Box::new(d), stale),
@@ -200,6 +203,13 @@ pub(crate) fn read_of(
         (None, Some(error)) if error.code == "not_found" => Read::Missing,
         (None, Some(error)) => Read::Failed(error.message.clone()),
         (None, None) => Read::Loading,
+    }
+}
+
+fn asks_for(target: &corral_protocol::detail::DetailRef, file: &str) -> bool {
+    match target {
+        corral_protocol::detail::DetailRef::SystemLens { id, .. } => id == file,
+        _ => true,
     }
 }
 
