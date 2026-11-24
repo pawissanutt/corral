@@ -79,7 +79,8 @@ fn drawn(
         scene.cards.len(),
         scene.edges.len()
     );
-    let boxes = hit_boxes(app, &layout, &scene, host, marks);
+    let (boxes, handles) = hit_boxes(app, &layout, &scene, host, marks);
+    reveal_pick(app, host, handles);
     let paint_layout = layout.clone();
     let paint_scene = scene.clone();
     let surface = view()
@@ -106,6 +107,28 @@ fn drawn(
     } else {
         surface.into_element()
     }
+}
+
+/// Brings the picked card into view when the pick changes, as it does when a list item or the
+/// inspector picks a card the map's scroll has out of sight.
+fn reveal_pick(app: AppState, host: Host, handles: Vec<(Node, ElementRef)>) {
+    let picked = computed(move || match host.state(app).picked {
+        Some(Pick::Node(node)) => Some(node),
+        _ => None,
+    });
+    effect(move || {
+        let Some(node) = picked.get() else {
+            return;
+        };
+        if let Some(&(_, handle)) = handles.iter().find(|(n, _)| *n == node) {
+            // A map just placed for a new level has no layout to scroll to until its frame.
+            request_animation_frame(move |_| {
+                let mut options = RevealOptions::default();
+                options.vertical = ScrollAlignment::Nearest;
+                handle.reveal(options);
+            });
+        }
+    });
 }
 
 pub(super) fn now(adaptive: AdaptiveColor) -> Hsla {
@@ -389,8 +412,9 @@ fn hit_boxes(
     scene: &Scene,
     host: Host,
     marks: Option<&Marks>,
-) -> Vec<AnyElement> {
+) -> (Vec<AnyElement>, Vec<(Node, ElementRef)>) {
     let mut boxes = Vec::new();
+    let mut handles = Vec::new();
     for placed in &layout.placed {
         let Some(card) = scene.cards.get(placed.card) else {
             continue;
@@ -407,6 +431,8 @@ fn hit_boxes(
             .unwrap_or_default();
         let spoken = format!("{}, {}{tag}{mark}", card.name, card.kind.word());
         let node = card.node.clone();
+        let handle = element_ref();
+        handles.push((node.clone(), handle));
         boxes.push(hit(
             app,
             placed.rect,
@@ -415,6 +441,7 @@ fn hit_boxes(
             Pick::Node(node),
             6.0,
             host,
+            Some(handle),
         ));
     }
     for route in &layout.routes {
@@ -451,9 +478,10 @@ fn hit_boxes(
             pick,
             9.0,
             host,
+            None,
         ));
     }
-    boxes
+    (boxes, handles)
 }
 
 fn hit(
@@ -465,10 +493,16 @@ fn hit(
     pick: Pick,
     radius: f32,
     host: Host,
+    // A card's, so a pick made elsewhere can bring it into view.
+    handle: Option<ElementRef>,
 ) -> AnyElement {
     let desktop = app.form == Form::Desktop;
-    view()
-        .absolute()
+    let v = view();
+    let v = match handle {
+        Some(handle) => v.element_ref(&handle),
+        None => v,
+    };
+    v.absolute()
         .left(px(area.x))
         .top(px(area.y))
         .w(px(area.w))

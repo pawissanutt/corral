@@ -157,8 +157,7 @@ pub const NO_LEVELS: &str =
     "This corrald serves a task's map at the project level only; update it to open a level.";
 pub const NO_MODULE: &str = "No module changed.";
 pub const STALE: &str = "Shown as last read; corrald has not confirmed it since.";
-/// The map's legend where it is drawn (rings) and where it is listed (figures).
-pub const LEGEND_DRAWN: &str = "Ringed: touched, with lines added and removed. Dashed ring: holds dependents. Dimmed: untouched. A labelled line in the change colour: reference count changed, before → after; other lines are dimmed. Select a node again to open it.";
+/// The map's legend where it is listed (figures); where it is drawn, `foot::legend`.
 pub const LEGEND_LISTED: &str = "Each node shows its lines added and removed, the dependents it holds, or untouched (dimmed). Under a node, each reference count the change moved, before → after. Select a node again to open it.";
 
 /// What a category's answer is: nothing supplies it, an answer still awaited from the

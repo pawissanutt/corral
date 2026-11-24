@@ -30,6 +30,8 @@ pub struct ThisTask {
 }
 
 pub const TITLE: &str = "This task";
+/// Said while the pick names nothing this level shows, until it is read or let go.
+pub const NOTHING: &str = "Nothing on this level matches the selection.";
 pub const UNTOUCHED: &str = "No line of this change is here.";
 
 /// The file's place on the map: its module's level with the file selected.

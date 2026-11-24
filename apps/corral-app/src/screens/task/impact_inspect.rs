@@ -46,19 +46,21 @@ pub(super) fn inspector(
             let this = app
                 .feed
                 .with(|feed| this_task::this_task(feed, task.as_str(), &pick));
-            Some((this, inspector))
+            (this.is_some() || inspector.is_some()).then_some((this, inspector))
         })
     });
     let host = Host::Impact(marks, task, scene);
     dynamic(move || {
-        let (this, inspector) = shown.get()?;
-        Some(untracked(|| {
+        let Some((this, inspector)) = shown.get() else {
+            return untracked(|| quiet(app, this_task::NOTHING));
+        };
+        untracked(|| {
             view()
                 .gap(px(10.0))
                 .children(this.map(|this| this_task(app, task, this)))
                 .children(inspector.map(|inspector| inspected(app, inspector, host)))
                 .into_element()
-        }))
+        })
     })
     .into_element()
 }
@@ -79,40 +81,49 @@ fn this_task(app: AppState, task: Memo<Id>, this: ThisTask) -> AnyElement {
             files
                 .into_iter()
                 .enumerate()
-                .map(|(n, line)| row(app, task, line, format!("impact-file-{n}"))),
+                .map(|(n, line)| row(app, task, line, format!("impact-file-{n}"), false)),
         )
         .children(held.map(|held| quiet(app, held)))
         .children(
             dependents
                 .into_iter()
                 .enumerate()
-                .map(|(n, line)| row(app, task, line, format!("impact-dependent-{n}"))),
+                .map(|(n, line)| row(app, task, line, format!("impact-dependent-{n}"), true)),
         )
         .into_element()
 }
 
 /// A file or dependent; selecting it shows its file on the map where the head has it.
-fn row(app: AppState, task: Memo<Id>, line: Line, id: String) -> AnyElement {
+fn row(app: AppState, task: Memo<Id>, line: Line, id: String, stacked: bool) -> AnyElement {
     let Line {
         main,
         right,
         target,
     } = line;
-    let words = vec![
-        view()
-            .flex_1()
-            .min_w(px(0.0))
-            .child(plain(app, main.clone()).number_of_lines(1u32))
-            .into_element(),
-        view()
-            .flex_shrink_0()
-            .child(
-                text(right.clone())
-                    .number_of_lines(1u32)
-                    .text_color(color(Token::Ink3)),
-            )
-            .into_element(),
-    ];
+    // A file's churn is short and sits beside its path; a dependent's place is long and goes
+    // under its name.
+    let words = if stacked {
+        vec![
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .child(plain(app, main.clone()).number_of_lines(1u32))
+                .child(quiet(app, right.clone()))
+                .into_element(),
+        ]
+    } else {
+        vec![
+            view()
+                .flex_1()
+                .min_w(px(0.0))
+                .child(plain(app, main.clone()).number_of_lines(1u32))
+                .into_element(),
+            view()
+                .flex_shrink_0()
+                .child(text(right.clone()).text_color(color(Token::Ink3)))
+                .into_element(),
+        ]
+    };
     match target {
         Some(target) => list_row(
             app,
