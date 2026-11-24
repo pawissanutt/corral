@@ -14,6 +14,9 @@ use corral_types::{
     WorkspaceStatus,
 };
 
+// The fact model's reference, not a citation in task text (`corral_types::Reference`).
+use corral_types::facts::Reference;
+
 use crate::model::Id;
 
 use ContainerKind::{Cargo, Folder, Npm, Python};

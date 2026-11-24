@@ -333,7 +333,13 @@ pub struct EventLine {
     /// What it says, from its kind and detail: `moved backlog → ready`, `gate failed`.
     pub text: String,
     pub by: &'static str,
+    /// What its free text cites: a comment, a reply, a verdict's notes, a done summary, why
+    /// the task is blocked.
+    pub cites: Vec<crate::model::cite::Cite>,
 }
+
+/// The free-text fields of an event's detail a citation can stand in.
+const CITING: [&str; 5] = ["text", "reason", "detail", "notes", "summary"];
 
 const fn actor_word(actor: corral_types::Actor) -> &'static str {
     match actor {
@@ -359,6 +365,11 @@ pub fn history(feed: &Feed, id: &str) -> Vec<EventLine> {
             at: work::when_at(event.ts, feed),
             text: work::event_text(event),
             by: actor_word(event.actor),
+            cites: crate::model::cite::cites_in(
+                CITING
+                    .iter()
+                    .filter_map(|key| event.detail.get(*key).and_then(|value| value.as_str())),
+            ),
         })
         .collect()
 }

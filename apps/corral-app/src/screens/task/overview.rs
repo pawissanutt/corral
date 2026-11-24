@@ -6,10 +6,12 @@
 
 use nsh_core::prelude::*;
 
+use crate::model::cite;
 use crate::model::review::{ReadyLink, Rounds};
 use crate::model::tasks::{self, meta, page};
 use crate::model::work::Press;
 use crate::model::{Form, Hue, Id};
+use crate::screens::cites::rows;
 use crate::screens::markdown::{markdown, provide_styles};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
@@ -141,16 +143,37 @@ fn description(app: AppState, id: Id) -> AnyElement {
     });
     provide_styles(app);
     dynamic(move || {
-        let content = match body.get() {
-            Some(body) => view()
-                .when(app.form == Form::Desktop, |prose| {
-                    prose.max_w(px(MEASURE_PROSE))
-                })
-                .child(markdown(app, &body, false))
-                .into_element(),
-            None => quiet(app, page::NO_DESCRIPTION),
+        let Some(body) = body.get() else {
+            return block(
+                app,
+                page::DESCRIPTION,
+                None,
+                quiet(app, page::NO_DESCRIPTION),
+            );
         };
-        block(app, page::DESCRIPTION, None, content)
+        let cites = cite::cites(&body);
+        let content = view()
+            .when(app.form == Form::Desktop, |prose| {
+                prose.max_w(px(MEASURE_PROSE))
+            })
+            .child(markdown(app, &body, false))
+            .into_element();
+        // What the body cites, under it: the keyboard's and a narrow screen's way to each.
+        let cited = (!cites.is_empty()).then(|| {
+            view()
+                .test_id("task-cited")
+                .child(block(
+                    app,
+                    cite::CITED,
+                    Some(cites.len().to_string()),
+                    rows(app, cites),
+                ))
+                .into_element()
+        });
+        view()
+            .child(block(app, page::DESCRIPTION, None, content))
+            .children(cited)
+            .into_element()
     })
 }
 

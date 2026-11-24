@@ -148,7 +148,7 @@ pub(crate) fn plain_row(app: AppState, label: String, main: String, trail: Strin
 }
 
 /// An id, a time or a run's name in the mono font, never cut.
-fn mono_words(app: AppState, words: String) -> AnyElement {
+pub(crate) fn mono_words(app: AppState, words: String) -> AnyElement {
     let words = text(words)
         .number_of_lines(1u32)
         .flex_shrink_0()

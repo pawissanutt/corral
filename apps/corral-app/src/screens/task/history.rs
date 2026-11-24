@@ -14,6 +14,7 @@ use crate::ui::term;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
 use super::parts::{block, event, quiet};
+use crate::screens::cites::rows;
 
 /// The History tab of task `id`.
 pub(crate) fn history(app: AppState, id: Id) -> AnyElement {
@@ -34,7 +35,15 @@ pub(crate) fn history(app: AppState, id: Id) -> AnyElement {
                 .map_or_else(|| page::NO_EVENTS.to_owned(), |note| note.text);
             vec![quiet(app, words)]
         } else {
-            events.iter().map(|line| event(app, line)).collect()
+            events
+                .iter()
+                .map(|line| {
+                    view()
+                        .child(event(app, line))
+                        .children((!line.cites.is_empty()).then(|| rows(app, line.cites.clone())))
+                        .into_element()
+                })
+                .collect()
         };
         block(
             app,

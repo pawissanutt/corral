@@ -653,6 +653,12 @@ impl AppState {
                 Effect::Back => self.back(),
                 Effect::CloseAsk => self.close(Overlay::Ask),
                 Effect::FindArtifacts(task) => self.find_artifacts(task),
+                Effect::OpenArtifact { reference, section } => {
+                    self.artifacts_act(crate::model::artifacts::Action::Cite {
+                        reference,
+                        section,
+                    });
+                }
                 Effect::Focus(id) => {
                     let focus_to = self.focus_to;
                     focus_to.set(Some(id));

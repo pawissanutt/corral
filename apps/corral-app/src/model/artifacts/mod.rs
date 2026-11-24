@@ -14,7 +14,7 @@ pub use content::{Body, Content, Line, PREVIEW_LINES, content, target as content
 pub(crate) use content::{log_hue, plain_text, utf8_text};
 
 use corral_protocol::detail::{ArtifactNarrowing, DetailBody, DetailGet, DetailRef};
-use corral_types::{Artifact, ArtifactGroup, ArtifactKind};
+use corral_types::{Artifact, ArtifactGroup, ArtifactKind, Reference};
 
 use crate::model::daemon::{DetailCache, Feed};
 use crate::model::work::{stamp_at, when_at};
@@ -62,6 +62,8 @@ pub struct State {
     pub typing: bool,
     /// Ask corrald for submissions, records and replaced artifacts too.
     pub all: bool,
+    /// The cited section the full view shows of a Markdown artifact (`4-fact-model`).
+    pub section: Option<String>,
 }
 
 /// A move of the selection through the results.
@@ -91,6 +93,11 @@ pub enum Action {
     LoadMore,
     /// Show every artifact, or only the owner's.
     All(bool),
+    /// Open a cited artifact full size, at its section when the citation names one.
+    Cite {
+        reference: String,
+        section: Option<String>,
+    },
 }
 
 /// The filter, read into the fields it narrows and the words left over (all lower case; a task
@@ -346,6 +353,9 @@ pub fn more(state: &State, feed: &Feed) -> Option<DetailGet> {
 
 impl State {
     pub fn act(&mut self, action: Action, feed: &Feed) -> Vec<Effect> {
+        if !matches!(action, Action::Cite { .. }) {
+            self.section = None;
+        }
         match action {
             Action::Query(text) => {
                 self.query = text;
@@ -404,6 +414,16 @@ impl State {
                 self.all = all;
                 self.selected = None;
             }
+            Action::Cite { reference, section } => {
+                if let Some(task) = Reference::parse(&reference).map(Reference::task) {
+                    self.query = format!("task:{task} ");
+                }
+                self.selected = Some(reference.clone());
+                self.full = Some(reference);
+                self.section = section;
+                self.focus = self.focus.wrapping_add(1);
+                return vec![Effect::Go(Destination::Artifacts)];
+            }
             Action::LoadMore => {
                 return next_page(self, feed)
                     .map(Effect::Detail)
@@ -417,6 +437,7 @@ impl State {
     /// Escape: back from full size, else clear a typed filter; whether it did either.
     pub fn escape(&mut self) -> bool {
         if self.full.take().is_some() {
+            self.section = None;
             self.focus = self.focus.wrapping_add(1);
             true
         } else if !self.query.is_empty() {
@@ -514,7 +535,7 @@ fn source(artifact: &Artifact) -> String {
     }
 }
 
-fn display_kind(kind: ArtifactKind) -> String {
+pub fn display_kind(kind: ArtifactKind) -> String {
     match kind {
         ArtifactKind::Legacy => "artifact",
         kind => kind.as_str(),
@@ -647,11 +668,26 @@ pub fn page(state: &State, feed: &Feed, form: Form) -> Page {
     };
     let at = selected_at(state, &rows);
     let shown = at.map(|at| rows[at]);
-    let full = state
-        .full
-        .as_deref()
-        .and_then(|full| rows.iter().find(|row| row.reference() == full))
-        .map(|artifact| preview(feed, artifact, form, true));
+    // A cited artifact need not be among the filter's served rows: its task's detail holds it.
+    let full = state.full.as_deref().and_then(|full| {
+        let mut shown = match rows.iter().find(|row| row.reference() == full) {
+            Some(artifact) => preview(feed, artifact, form, true),
+            None => {
+                let task = Reference::parse(full)?.task();
+                preview(
+                    feed,
+                    &crate::model::cite::held(feed, full, task)?,
+                    form,
+                    true,
+                )
+            }
+        };
+        if let Some(section) = &state.section {
+            shown.content = content::at_section(shown.content, section);
+            shown.title = format!("{} § {section}", shown.title);
+        }
+        Some(shown)
+    });
     let count = match (rows.len(), more) {
         (0, _) => String::new(),
         (1, More::Done) => "1 artifact".into(),

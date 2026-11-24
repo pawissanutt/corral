@@ -129,10 +129,17 @@ fn blocked(app: AppState, model: Memo<Option<Band>>) -> AnyElement {
     let reply = computed(move || card.with(|card| card.as_ref()?.reply.clone()));
     let detail = dynamic(move || {
         card.with(|card| {
-            card.as_ref()?.detail.clone().map(|detail| {
+            let card = card.as_ref()?;
+            let cites = crate::model::cite::cites_in(
+                std::iter::once(card.reason.as_str()).chain(card.detail.as_deref()),
+            );
+            let cited =
+                (!cites.is_empty()).then(|| untracked(|| crate::screens::cites::rows(app, cites)));
+            (card.detail.is_some() || cited.is_some()).then(|| {
                 view()
                     .pb(space(app, 8.0))
-                    .child(plain(app, detail))
+                    .children(card.detail.clone().map(|detail| plain(app, detail)))
+                    .children(cited)
                     .into_element()
             })
         })

@@ -7,7 +7,7 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use corral_protocol::detail::{ArtifactEncoding, ArtifactPage, DetailBody, DetailRef};
-use corral_types::{Artifact, ArtifactKind};
+use corral_types::{Artifact, ArtifactKind, section_slug};
 
 use crate::model::assistant::sniff_image;
 use crate::model::daemon::Feed;
@@ -284,9 +284,91 @@ pub fn content(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Cont
     Content { body, cut }
 }
 
+/// The Markdown section whose heading's slug is `slug`: its heading and everything up to the
+/// next heading of its level or above, fenced code skipped. Slugs are corral-types'.
+fn section<'a>(text: &'a str, slug: &str) -> Option<&'a str> {
+    let mut fence: Option<&str> = None;
+    let mut found: Option<(usize, usize)> = None;
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        let start = at;
+        at += line.len();
+        let trimmed = line.trim_start();
+        if let Some(open) = fence {
+            if trimmed.starts_with(open) {
+                fence = None;
+            }
+            continue;
+        }
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            fence = Some(&trimmed[..3]);
+            continue;
+        }
+        let level = trimmed.bytes().take_while(|byte| *byte == b'#').count();
+        let words = &trimmed[level..];
+        if !(1..=6).contains(&level) || !(words.trim().is_empty() || words.starts_with([' ', '\t']))
+        {
+            continue;
+        }
+        match found {
+            Some((begin, open)) if level <= open => return Some(&text[begin..start]),
+            Some(_) => {}
+            None => {
+                let words = words.trim().trim_end_matches('#').trim_end();
+                if section_slug(words) == slug {
+                    found = Some((start, level));
+                }
+            }
+        }
+    }
+    found.map(|(begin, _)| &text[begin..])
+}
+
+/// `content` cut to the cited section when it is Markdown that has it; otherwise all of it,
+/// saying why.
+pub(crate) fn at_section(content: Content, slug: &str) -> Content {
+    match content.body {
+        Body::Markdown(text) => match section(&text, slug) {
+            Some(part) => Content {
+                body: Body::Markdown(part.to_owned()),
+                cut: Some(format!(
+                    "Only the cited section “{slug}” shows; open the artifact from the results for all of it."
+                )),
+            },
+            None => Content {
+                body: Body::Markdown(text),
+                cut: Some(format!(
+                    "No section “{slug}” in this artifact; all of it shows."
+                )),
+            },
+        },
+        Body::Loading | Body::Failed(_) => content,
+        body => Content {
+            body,
+            cut: Some(format!(
+                "Sections are only found in Markdown; all of this artifact shows, not “{slug}”."
+            )),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cited section must end at the next heading of its level, not at a deeper one or at a
+    /// heading-looking line inside fenced code.
+    #[test]
+    fn a_cited_section_runs_to_the_next_heading_of_its_level() {
+        let text =
+            "# Doc\n## Goal\nwhy\n### Detail\n```\n## not a heading\n```\n## Acceptance\nok\n";
+        assert_eq!(
+            section(text, "goal"),
+            Some("## Goal\nwhy\n### Detail\n```\n## not a heading\n```\n")
+        );
+        assert_eq!(section(text, "acceptance"), Some("## Acceptance\nok\n"));
+        assert_eq!(section(text, "not-a-heading"), None);
+    }
 
     #[test]
     fn terminal_control_sequences_never_reach_the_page() {

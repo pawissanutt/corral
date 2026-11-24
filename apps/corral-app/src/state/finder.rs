@@ -17,6 +17,15 @@ impl AppState {
         self.run(effects);
     }
 
+    /// Opens what a citation names, as spelled in the text (`T-12:3#goal`); one that does not
+    /// resolve says so.
+    pub fn open_cite(&self, text: &str) {
+        let effects = self
+            .feed
+            .with_untracked(|feed| crate::model::cite::press_text(feed, text));
+        self.run(effects);
+    }
+
     /// Opens the finder with `task`'s token filled in.
     pub(super) fn find_artifacts(&self, task: Id) {
         self.artifacts_act(Action::Find(task));

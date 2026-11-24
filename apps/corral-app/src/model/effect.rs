@@ -76,6 +76,11 @@ pub enum Effect {
     Detail(DetailGet),
     /// Open the artifact finder narrowed to one task's artifacts.
     FindArtifacts(Id),
+    /// Open an artifact full size in the finder, at a cited section when there is one.
+    OpenArtifact {
+        reference: String,
+        section: Option<String>,
+    },
     /// Open the Remove sheet of a build stopped here, from a menu that is not the agents'.
     RemoveBuild(Id),
     /// Resolve the complete recorded item behind a transcript preview.

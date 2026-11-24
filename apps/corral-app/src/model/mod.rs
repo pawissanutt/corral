@@ -12,6 +12,8 @@ pub mod artifacts;
 pub mod assistant;
 /// Shared board snapshot.
 pub mod board;
+/// Citations of tasks and artifacts in text, and what they open.
+pub mod cite;
 /// Palette commands and confirmation wording.
 pub mod commands;
 /// Owned snapshots received from the daemon.

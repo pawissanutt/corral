@@ -9,6 +9,7 @@ pub mod activity;
 pub mod agents;
 pub mod artifacts;
 pub mod assistant;
+pub(crate) mod cites;
 pub mod home;
 pub mod landing;
 pub(crate) mod markdown;

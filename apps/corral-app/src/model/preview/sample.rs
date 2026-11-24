@@ -17,7 +17,9 @@ pub(super) const DAY: u64 = 86_400;
 
 /// Every sample task record, in id order.
 pub(super) fn records(feed: &Feed) -> Vec<TaskDetail> {
-    SEEDS.iter().map(|seed| record(feed, seed)).collect()
+    let mut records: Vec<TaskDetail> = SEEDS.iter().map(|seed| record(feed, seed)).collect();
+    super::workspace::cite_brief(&mut records);
+    records
 }
 
 struct Seed {

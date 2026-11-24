@@ -6,12 +6,14 @@
 //! assistant's.
 
 use nsh_base::text_view::{
-    Block, CodeBlock, Document, Inline, MarkdownOptions, Parser, Table, TextViewPart as Part,
-    TextViewParts, text_view,
+    Block, CodeBlock, Document, Inline, MarkdownOptions, Parser, Table, TextViewLinkPressEvent,
+    TextViewPart as Part, TextViewParts, text_view,
 };
 use nsh_core::prelude::*;
 
 use crate::model::Form;
+use crate::model::cite;
+use crate::screens::cites::{keep_cited, link_blocks};
 use crate::state::AppState;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
@@ -284,18 +286,35 @@ fn code_block(app: AppState, code: &CodeBlock) -> AnyElement {
 /// `markdown` laid out; while `streaming`, syntax its end leaves open reads as closed. Text
 /// and HTML-looking words stay literal, as the terminal shows them: no formulas, no markup.
 pub(crate) fn markdown(app: AppState, markdown: &str, streaming: bool) -> AnyElement {
-    laid_out(app, markdown, streaming, true, false)
+    cited(app, markdown, streaming, true, false)
 }
 
 /// Chat messages use records at every width: their available width is not the page width.
 pub(crate) fn chat_markdown(app: AppState, markdown: &str, streaming: bool) -> AnyElement {
-    laid_out(app, markdown, streaming, true, true)
+    cited(app, markdown, streaming, true, true)
 }
 
 /// `markdown` laid out, every image as its alt text: for stored words someone else wrote (a
 /// reviewer's note), which must not make the device fetch a URL just by being shown.
 pub(crate) fn markdown_without_images(app: AppState, markdown: &str) -> AnyElement {
-    laid_out(app, markdown, false, false, false)
+    cited(app, markdown, false, false, false)
+}
+
+/// Laid out with every citation that resolves as a link to what it cites, drawn again when
+/// one starts or stops resolving.
+fn cited(app: AppState, markdown: &str, streaming: bool, images: bool, chat: bool) -> AnyElement {
+    let cites = cite::cites(markdown);
+    if cites.is_empty() {
+        return laid_out(app, markdown, streaming, images, chat, &[]);
+    }
+    keep_cited(app, &cites);
+    let open = computed(move || app.feed.with(|feed| cite::opening(feed, &cites)));
+    let markdown = markdown.to_owned();
+    dynamic(move || {
+        let open = open.get();
+        untracked(|| laid_out(app, &markdown, streaming, images, chat, &open))
+    })
+    .into_element()
 }
 
 fn laid_out(
@@ -304,6 +323,7 @@ fn laid_out(
     streaming: bool,
     images: bool,
     chat: bool,
+    open: &[String],
 ) -> AnyElement {
     let options = MarkdownOptions {
         math: false,
@@ -315,6 +335,9 @@ fn laid_out(
     let mut document = Parser::new().options(options).markdown(markdown);
     if !images {
         without_images(&mut document);
+    }
+    if !open.is_empty() {
+        link_blocks(&mut document.blocks, open);
     }
     if chat
         || app.form == Form::Phone
@@ -328,6 +351,11 @@ fn laid_out(
     let rendered = text_view()
         .document(document)
         .selectable(app.form == Form::Terminal)
+        .on_link_press(move |press: &TextViewLinkPressEvent| {
+            if let Some(spelled) = press.url.strip_prefix(cite::SCHEME) {
+                app.open_cite(spelled);
+            }
+        })
         .render_code_block(move |code: &CodeBlock| code_block(app, code))
         .into_element();
     if app.form == Form::Terminal {

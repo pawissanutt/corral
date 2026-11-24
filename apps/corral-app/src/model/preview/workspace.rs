@@ -9,7 +9,7 @@ use corral_protocol::rows::{
     EffectiveProjectSettings, ListenerInfo, PiChildProfile, PiConfigFacts, PiConfigStatus,
     SettingsSnapshot,
 };
-use corral_types::{Actor, CheckKind, CheckResult, EventKind, Outcome, Role, Status};
+use corral_types::{Actor, Artifact, CheckKind, CheckResult, EventKind, Outcome, Role, Status};
 use serde_json::{Map, Value, json};
 
 use super::sample::{self, DAY, HOUR, MINUTE};
@@ -253,6 +253,15 @@ fn history(feed: &mut Feed, records: &[TaskDetail]) {
                 json!({"fields": ["depends_on"]}),
             ));
         }
+        if task.id == CITING {
+            log.push((
+                task.updated,
+                None,
+                EventKind::Commented,
+                Actor::Owner,
+                json!({"text": UNKNOWN_CITE}),
+            ));
+        }
         if task.status == Status::Ready {
             log.push((
                 task.updated,
@@ -380,5 +389,32 @@ fn history(feed: &mut Feed, records: &[TaskDetail]) {
             .as_deref()
             .and_then(|id| records.iter().find(|record| record.task.id == id))
             .and_then(|record| record.task.project.clone());
+    }
+}
+
+/// The sample task whose body cites a section of another task's artifact; its history holds
+/// a comment citing one that does not exist.
+pub(super) const CITING: &str = "T-12";
+/// What that comment says.
+pub(super) const UNKNOWN_CITE: &str =
+    "The trace this replaces was T-2:99; corrald no longer has it.";
+
+/// `CITING`'s body cites the acceptance section of T-2's brief, and T-2 itself.
+pub(super) fn cite_brief(records: &mut [TaskDetail]) {
+    let brief = records
+        .iter()
+        .find(|record| record.task.id == "T-2")
+        .and_then(|record| {
+            record
+                .artifacts
+                .iter()
+                .find(|row| row.title == "actions-menu-brief.md")
+        })
+        .map(Artifact::reference);
+    let citing = records.iter_mut().find(|record| record.task.id == CITING);
+    if let (Some(brief), Some(record)) = (brief, citing) {
+        record.task.body.push_str(&format!(
+            "\n\n## References\n- Meet the bar of `{brief}#acceptance`, the brief T-2 worked from."
+        ));
     }
 }
