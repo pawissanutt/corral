@@ -168,7 +168,7 @@ pub(super) fn of_review(
                 files.push(Line {
                     main: name.clone(),
                     right: format!(
-                        "{} · {path}:{line}",
+                        "{} · :{line}",
                         match change {
                             ChangeKind::Added => "added",
                             ChangeKind::Removed => "removed",
