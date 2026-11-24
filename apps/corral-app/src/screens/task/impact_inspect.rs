@@ -9,16 +9,17 @@
 use corral_types::SystemAt;
 use nsh_core::prelude::*;
 
-use crate::model::Id;
 use crate::model::review::impact::Action;
 use crate::model::review::impact::this_task::{self, Line, ThisTask};
 use crate::model::system::inspect::inspect;
 use crate::model::system::marks::{Marks, drawn_pick};
 use crate::model::system::scene::Scene;
+use crate::model::{Form, Id};
 use crate::screens::system::{Host, inspected};
 use crate::state::AppState;
 use crate::ui::kit::rows::list_row;
 use crate::ui::kit::text::{h3, plain};
+use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
 use super::parts::quiet;
@@ -101,30 +102,26 @@ fn row(app: AppState, task: Memo<Id>, line: Line, id: String, stacked: bool) -> 
         target,
     } = line;
     // A file's churn is short and sits beside its path; a dependent's place is long and goes
-    // under its name.
-    let words = if stacked {
-        vec![
-            view()
-                .flex_1()
-                .min_w(px(0.0))
-                .child(plain(app, main.clone()).number_of_lines(1u32))
-                .child(quiet(app, right.clone()))
-                .into_element(),
-        ]
-    } else {
-        vec![
-            view()
-                .flex_1()
-                .min_w(px(0.0))
-                .child(plain(app, main.clone()).number_of_lines(1u32))
-                .into_element(),
-            view()
-                .flex_shrink_0()
-                .child(text(right.clone()).text_color(color(Token::Ink3)))
-                .into_element(),
-        ]
-    };
-    match target {
+    // on its own line under its name, outside the one-line row.
+    let words = vec![
+        view()
+            .flex_1()
+            .min_w(px(0.0))
+            .child(plain(app, main.clone()).number_of_lines(1u32))
+            .into_element(),
+        view()
+            .flex_shrink_0()
+            .children((!stacked).then(|| text(right.clone()).text_color(color(Token::Ink3))))
+            .into_element(),
+    ];
+    let under = stacked.then(|| {
+        view()
+            .when(app.form != Form::Terminal, |v| v.pl(px(12.0)))
+            .when(app.form == Form::Terminal, |v| v.pl(term::cells(2.0)))
+            .child(quiet(app, right.clone()))
+            .into_element()
+    });
+    let line = match target {
         Some(target) => list_row(
             app,
             format!("{main} {right}"),
@@ -142,5 +139,6 @@ fn row(app: AppState, task: Memo<Id>, line: Line, id: String, stacked: bool) -> 
             .gap(px(6.0))
             .children(words)
             .into_element(),
-    }
+    };
+    view().child(line).children(under).into_element()
 }
