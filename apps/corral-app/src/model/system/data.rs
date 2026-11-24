@@ -257,6 +257,7 @@ pub fn build(data: &SystemData, filter: &str) -> Scene {
                 basis: None,
                 pairs: Vec::new(),
                 sites: Vec::new(),
+                change: Vec::new(),
             });
         }
     }

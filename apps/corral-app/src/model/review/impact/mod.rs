@@ -7,6 +7,7 @@
 //! each with its items, an explicit "none" or "not provided" when nothing supplies it, and what
 //! was left out of the list. `reach` says where "Open in System" can take an item.
 
+mod changes;
 mod items;
 mod reach;
 
@@ -135,8 +136,8 @@ pub const NO_LEVELS: &str =
 pub const NO_MODULE: &str = "No module changed.";
 pub const STALE: &str = "Shown as last read; corrald has not confirmed it since.";
 /// The map's legend where it is drawn (rings) and where it is listed (figures).
-pub const LEGEND_DRAWN: &str = "Ringed: touched, with lines added and removed. Dashed ring: holds dependents. Dimmed: untouched. Select a node again to open it.";
-pub const LEGEND_LISTED: &str = "Each node shows its lines added and removed, the dependents it holds, or untouched (dimmed). Select a node again to open it.";
+pub const LEGEND_DRAWN: &str = "Ringed: touched, with lines added and removed. Dashed ring: holds dependents. Dimmed: untouched. A labelled line in the change colour: reference count changed, before → after; other lines are dimmed. Select a node again to open it.";
+pub const LEGEND_LISTED: &str = "Each node shows its lines added and removed, the dependents it holds, or untouched (dimmed). Under a node, each reference count the change moved, before → after. Select a node again to open it.";
 
 /// What a category's answer is: nothing supplies it, an answer still awaited from the
 /// configured extension, an empty answer, or rows.
@@ -277,6 +278,11 @@ pub fn shown(feed: &Feed, task: &str, trail: &[SystemAt], more: &BTreeSet<usize>
                 .collect();
             impact.marks = marks_of(review, &containers, Some(path));
         }
+        if let Some(scene) = impact.scene.as_mut() {
+            changes::edges(scene, review);
+            changes::more(&mut impact.marks, scene, review, at);
+            changes::figures(scene, &impact.marks);
+        }
     }
     impact.crumbs.extend(trail.iter().map(|at| {
         match at {
@@ -329,42 +335,54 @@ fn head_map(review: &SystemReview) -> SystemMap {
 /// shown.
 fn marks_of(review: &SystemReview, containers: &[String], file: Option<&str>) -> Marks {
     let mut marks = Marks::new();
-    let mut touch = |node: Node, added: u64, removed: u64| {
+    fn touch(marks: &mut Marks, node: Node, added: u64, removed: u64) {
         let mark = marks.entry(node).or_default();
         mark.touched = true;
         mark.added += added;
         mark.removed += removed;
-    };
+    }
     for row in &review.rows {
         match row {
             Row::Container {
                 path,
                 added,
                 removed,
-            } => touch(Node::Container(path.clone()), *added, *removed),
+            } => touch(&mut marks, Node::Container(path.clone()), *added, *removed),
             Row::Module {
                 module,
                 added,
                 removed,
-            } => touch(Node::Module(module.clone()), *added, *removed),
+            } => touch(&mut marks, Node::Module(module.clone()), *added, *removed),
             Row::File {
                 path,
+                container,
+                module,
                 added,
                 removed,
                 ..
-            } => touch(Node::File(path.clone()), *added, *removed),
+            } => {
+                touch(&mut marks, Node::File(path.clone()), *added, *removed);
+                for node in [
+                    Node::File(path.clone()),
+                    Node::Container(container.clone()),
+                    Node::Module(module.clone()),
+                ] {
+                    marks.entry(node).or_default().files += 1;
+                }
+            }
             Row::Definition {
                 change,
                 path,
                 name,
                 line,
             } if *change != ChangeKind::Removed => {
-                touch(Node::File(path.clone()), 0, 0);
+                touch(&mut marks, Node::File(path.clone()), 0, 0);
                 // A definition's node names no file: only the file shown gets its marks.
                 if file != Some(path.as_str()) {
                     continue;
                 }
                 touch(
+                    &mut marks,
                     Node::Definition {
                         line: *line,
                         name: name.clone(),
@@ -652,9 +670,12 @@ pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<us
             plural(review.omitted_rows as u64, "row", "rows")
         ));
     }
+    let mut scene = build(&map, None);
+    changes::edges(&mut scene, review);
+    changes::figures(&mut scene, &marks);
     Impact {
         project: review.project.clone(),
-        scene: Some(build(&map, None)),
+        scene: Some(scene),
         map_said: None,
         crumbs: vec![review.project.clone()],
         marks,

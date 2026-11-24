@@ -13,6 +13,7 @@ use corral_types::{
     WorkspaceStatus,
 };
 
+use super::marks::Delta;
 use super::{Node, base_name};
 
 /// How deep the map is.
@@ -161,6 +162,8 @@ pub struct Card {
     pub folded: Vec<RuntimeUnit>,
     /// A data type's declaration and links.
     pub data: Option<DataCard>,
+    /// Under a task's change: the figure its mark shows, which the card makes room for.
+    pub marked: Option<String>,
 }
 
 impl Card {
@@ -183,6 +186,7 @@ impl Card {
             detectors: None,
             folded: Vec::new(),
             data: None,
+            marked: None,
         }
     }
 
@@ -256,6 +260,8 @@ pub struct Edge {
     pub pairs: Vec<(ModuleId, ModuleId, u64)>,
     /// A runtime edge's sources: each one's kind, basis and the line establishing it.
     pub sites: Vec<Site>,
+    /// Under a task's change: the module pairs whose reference count it moved.
+    pub change: Vec<Delta>,
 }
 
 /// Where one runtime edge between two cards is established.
@@ -460,6 +466,7 @@ fn project(scene: &mut Scene, rows: &[SystemMapRow]) {
                 basis: None,
                 pairs: Vec::new(),
                 sites: Vec::new(),
+                change: Vec::new(),
             }),
             SystemMapRow::Spawn { container, spawn } => {
                 *spawns
@@ -530,6 +537,7 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
                         basis: Some(reference.basis),
                         pairs: Vec::new(),
                         sites: Vec::new(),
+                        change: Vec::new(),
                     });
                 } else if from.container == path {
                     let port = Node::Port {
@@ -573,6 +581,7 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
             basis: None,
             pairs,
             sites: Vec::new(),
+            change: Vec::new(),
         });
     }
     for (port, refs) in &port_refs {

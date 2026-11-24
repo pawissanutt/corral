@@ -107,6 +107,7 @@ fn unsupplied_category_is_not_zero_and_dependents_survive_a_touched_package() {
             touched: true,
             added: 3,
             removed: 1,
+            files: 0,
             dependents: 1,
         })
     );
@@ -585,4 +586,126 @@ fn data_changes_anchor_removals_at_the_base_with_their_own_excerpt() {
         Some(None),
         "an excerpt for line 5 is not line 6's"
     );
+}
+
+fn reference(from: &ModuleId, to: &ModuleId, count: u64) -> SystemMapRow {
+    SystemMapRow::ModuleReference {
+        reference: corral_types::facts::Reference {
+            from: from.clone(),
+            to: to.clone(),
+            kind: corral_types::ReferenceKind::Use,
+            basis: corral_types::ReferenceBasis::Syntax,
+            count,
+        },
+    }
+}
+
+/// The map drew no change on any edge and lost the change one level down: a moved reference
+/// count reaches its edge at the project level (pairs folded) and at the package level, an
+/// unchanged edge carries none, and a module level's "N more" card carries the changed file it
+/// hides.
+#[test]
+fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
+    use crate::model::system::scene::MAX_FILES;
+    use corral_types::{PackageEdge, PackageEdgeKind, ReadStatus};
+    let (x, z, y) = (module("a", "x"), module("a", "z"), module("b", "y"));
+    let edge = |to: &str, references| SystemMapRow::PackageEdge {
+        edge: PackageEdge {
+            from: "a".into(),
+            to: to.into(),
+            kind: PackageEdgeKind::DeclaredAndReferenced,
+            references,
+        },
+    };
+    let moved = |from: &ModuleId, to: &ModuleId, before, after| Row::ModuleReference {
+        from: from.clone(),
+        to: to.clone(),
+        before,
+        after,
+    };
+    let hidden = "a/src/x/hidden.rs";
+    let rows = vec![
+        container("a"),
+        container("b"),
+        container("c"),
+        Row::Map { row: edge("b", 10) },
+        Row::Map { row: edge("c", 5) },
+        moved(&x, &y, 4, 7),
+        moved(&z, &y, 1, 3),
+        Row::File {
+            path: hidden.into(),
+            container: "a".into(),
+            module: x.clone(),
+            added: 9,
+            removed: 2,
+            binary: false,
+            deleted: false,
+        },
+    ];
+    let review = review(Vec::new(), rows);
+    let project = impact(&review, None, &BTreeSet::new()).scene.unwrap();
+    let change = |scene: &Scene, from: &Node, to: &Node| {
+        let edge = scene.all_edges().find(|e| &e.from == from && &e.to == to);
+        edge.map(|e| {
+            e.change
+                .iter()
+                .map(|d| (d.before, d.after))
+                .collect::<Vec<_>>()
+        })
+    };
+    let (a, b, c) = (
+        Node::Container("a".into()),
+        Node::Container("b".into()),
+        Node::Container("c".into()),
+    );
+    assert_eq!(change(&project, &a, &b), Some(vec![(4, 7), (1, 3)]));
+    assert_eq!(change(&project, &a, &c), Some(Vec::new()));
+
+    let at = SystemAt::Container { path: "a".into() };
+    let package = SystemMap {
+        rows: vec![
+            SystemMapRow::Module {
+                module: x.clone(),
+                stats: SystemNodeStats::default(),
+            },
+            SystemMapRow::Module {
+                module: z.clone(),
+                stats: SystemNodeStats::default(),
+            },
+            reference(&x, &y, 7),
+            reference(&x, &z, 2),
+        ],
+        ..head_map(&review)
+    };
+    let mut scene = build(&package, Some(&at));
+    changes::edges(&mut scene, &review);
+    let port = Node::Port {
+        path: "b".into(),
+        into: false,
+    };
+    let from = Node::Module(x.clone());
+    assert_eq!(change(&scene, &from, &port), Some(vec![(4, 7)]));
+    assert_eq!(change(&scene, &from, &Node::Module(z)), Some(Vec::new()));
+
+    let at = SystemAt::Module { module: x };
+    let file = |path: String, lines| SystemMapRow::File {
+        path,
+        language: "Rust".into(),
+        lines,
+        test: false,
+        read_status: ReadStatus::Complete,
+    };
+    let files = (0..=MAX_FILES)
+        .map(|n| file(format!("a/src/x/f{n}.rs"), 100))
+        .chain([file(hidden.into(), 10)])
+        .collect();
+    let level = SystemMap {
+        rows: files,
+        ..head_map(&review)
+    };
+    let scene = build(&level, Some(&at));
+    let mut marks = impact(&review, None, &BTreeSet::new()).marks;
+    changes::more(&mut marks, &scene, &review, &at);
+    let more = marks.get(&Node::More).copied().unwrap();
+    assert_eq!((more.added, more.removed, more.files), (9, 2, 1));
 }

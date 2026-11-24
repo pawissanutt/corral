@@ -176,6 +176,8 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
         }
         Line::Edge(edge) => {
             let ink = match edge.kind {
+                // The change colour, as the canvas draws a changed edge.
+                _ if edge.changed => hue_ink(Hue::You),
                 Some(EdgeKind::ReferencedOnly) => hue_ink(Hue::Held),
                 Some(EdgeKind::DeclaredOnly) => color(Token::Ink3),
                 Some(EdgeKind::Starts) => hue_ink(Hue::Worker),

@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use super::layered::{LEdge, layered};
+use super::marks::change_words;
 use super::scene::{Card, EdgeKind, Kind, Level, Scene};
 use super::words::figure;
 use super::{Overlay, Window};
@@ -86,14 +87,16 @@ pub struct Route {
     pub points: Vec<(f32, f32)>,
 }
 
-/// Words on an edge (`0 refs`), centred at x.
+/// Words on an edge (`0 refs`, or a change's `before → after`), centred at x.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeLabel {
     pub edge: usize,
     pub x: f32,
     pub y: f32,
     pub w: f32,
-    pub text: &'static str,
+    pub text: String,
+    /// The label says what a task's change did to the edge's reference count.
+    pub changed: bool,
 }
 
 /// A caption over a part of the map, with a dashed rule above it when `rule`.
@@ -131,7 +134,10 @@ const MAX_CARD: f32 = 420.0;
 /// overlay, so switching overlays never moves the map; more lines make it a little wider.
 pub fn size(card: &Card, scene: &Scene, measure: Measure) -> (f32, f32) {
     if card.kind == Kind::Port {
-        let tag = figure(card, Overlay::Structure, Window::Days30);
+        let tag = card
+            .marked
+            .clone()
+            .unwrap_or_else(|| figure(card, Overlay::Structure, Window::Days30));
         let w = measure(Font::Name, &card.name) + measure(Font::Tag, &tag) + 36.0;
         return (w.ceil(), PORT_HEIGHT);
     }
@@ -154,6 +160,9 @@ pub fn size(card: &Card, scene: &Scene, measure: Measure) -> (f32, f32) {
         for window in Window::ALL {
             sub = sub.max(measure(Font::Sub, &figure(card, overlay, window)));
         }
+    }
+    if let Some(marked) = &card.marked {
+        sub = sub.max(measure(Font::Sub, marked));
     }
     let spawns = card.spawns.first().map_or(0.0, |(process, sites)| {
         measure(Font::Sub, "spawns")
@@ -327,9 +336,13 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
 fn labels(scene: &Scene, routes: &[Route], measure: Measure) -> Vec<EdgeLabel> {
     let mut out: Vec<EdgeLabel> = Vec::new();
     for route in routes {
-        let text = match scene.edges.get(route.edge).map(|e| e.kind) {
-            Some(EdgeKind::DeclaredOnly) => "0 refs",
-            _ => continue,
+        let Some(edge) = scene.edges.get(route.edge) else {
+            continue;
+        };
+        let (text, changed) = match change_words(&edge.change) {
+            Some(words) => (words, true),
+            None if edge.kind == EdgeKind::DeclaredOnly => ("0 refs".to_owned(), false),
+            None => continue,
         };
         let (Some(a), Some(b)) = (route.points.first(), route.points.get(1)) else {
             continue;
@@ -338,8 +351,9 @@ fn labels(scene: &Scene, routes: &[Route], measure: Measure) -> Vec<EdgeLabel> {
             edge: route.edge,
             x: (a.0 + b.0) / 2.0,
             y: (a.1 + b.1) / 2.0,
-            w: (measure(Font::Label, text) + 12.0).ceil(),
+            w: (measure(Font::Label, &text) + 12.0).ceil(),
             text,
+            changed,
         });
     }
     out.sort_by(|a, b| a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x)));

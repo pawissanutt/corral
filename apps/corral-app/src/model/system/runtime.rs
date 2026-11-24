@@ -362,6 +362,7 @@ pub fn build(runtime: &SystemRuntime, scripts: bool) -> Scene {
                     basis: None,
                     pairs: Vec::new(),
                     sites: vec![site],
+                    change: Vec::new(),
                 });
             }
         }

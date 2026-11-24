@@ -1,7 +1,10 @@
-//! What a task's change did to the map's nodes (a task page's Changes › Impact): a node it
-//! touched, with its lines added and removed, and the dependents it holds, code outside the
-//! change that references a changed definition. A package can be both. A node with no mark is
-//! untouched and drawn dimmed.
+//! What a task's change did to the map's nodes and edges (a task page's Changes › Impact): a
+//! node it touched, with its lines added and removed and the files they are in, and the
+//! dependents it holds, code outside the change that references a changed definition. A
+//! package can be both. A node with no mark is untouched and drawn dimmed. A node that stands
+//! for files the level does not list (a "N more" card, a neighbouring package) carries their
+//! total. An edge whose reference count the change moved carries each module pair it folds,
+//! before and after; every other edge is quiet.
 
 use std::collections::BTreeMap;
 
@@ -13,15 +16,72 @@ pub struct Mark {
     pub touched: bool,
     pub added: u64,
     pub removed: u64,
+    /// Changed files under the node.
+    pub files: u64,
     /// Definitions here, outside the change, that reference a changed one.
     pub dependents: u64,
 }
 
 pub type Marks = BTreeMap<Node, Mark>;
 
+/// One module pair's reference count, before and after the change; `from` and `to` as said.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Delta {
+    pub from: String,
+    pub to: String,
+    pub before: u64,
+    pub after: u64,
+}
+
+/// An edge's label under a change: `before → after` for one pair, `N changes` for several.
+pub fn change_words(deltas: &[Delta]) -> Option<String> {
+    match deltas {
+        [] => None,
+        [one] => Some(format!("{} → {}", count(one.before), count(one.after))),
+        many => Some(plural(many.len() as u64, "change", "changes")),
+    }
+}
+
+/// An edge's change as spoken: each pair with its before and after.
+pub fn change_spoken(deltas: &[Delta]) -> Option<String> {
+    match deltas {
+        [] => None,
+        [one] => Some(format!(
+            "changed: {} → {} from {} to {} references",
+            one.from,
+            one.to,
+            count(one.before),
+            count(one.after)
+        )),
+        many => Some(format!(
+            "{} changed: {}",
+            plural(many.len() as u64, "module pair", "module pairs"),
+            many.iter()
+                .map(|d| format!(
+                    "{} → {} from {} to {}",
+                    d.from,
+                    d.to,
+                    count(d.before),
+                    count(d.after)
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )),
+    }
+}
+
 impl Mark {
     pub fn churn(self) -> u64 {
         self.added + self.removed
+    }
+
+    fn dependent_words(self) -> Option<String> {
+        (self.dependents > 0).then(|| {
+            format!(
+                "{} dependent",
+                plural(self.dependents, "definition", "definitions")
+            )
+        })
     }
 
     /// The figure a marked card shows in place of its overlay's.
@@ -34,13 +94,39 @@ impl Mark {
                 "changed".to_owned()
             });
         }
-        if self.dependents > 0 {
+        said.extend(self.dependent_words());
+        said.join(" · ")
+    }
+
+    /// The figure of a node that stands for files the level does not list.
+    pub fn hidden_words(self) -> String {
+        if self.files == 0 {
+            return self.words();
+        }
+        let mut said = vec![format!(
+            "+{} −{} in {} not listed",
+            count(self.added),
+            count(self.removed),
+            plural(self.files, "file", "files")
+        )];
+        said.extend(self.dependent_words());
+        said.join(" · ")
+    }
+
+    /// The mark as a screen reader says it after the node's name.
+    pub fn spoken(self) -> String {
+        let mut said = Vec::new();
+        if self.touched {
             said.push(format!(
-                "{} dependent",
-                plural(self.dependents, "definition", "definitions")
+                "changed: {} added, {} deleted",
+                count(self.added),
+                count(self.removed)
             ));
         }
-        said.join(" · ")
+        if self.dependents > 0 {
+            said.push(plural(self.dependents, "dependent", "dependents"));
+        }
+        said.join(", ")
     }
 }
 
@@ -55,7 +141,30 @@ pub fn of<'a>(marks: &'a Marks, node: &Node) -> Option<&'a Mark> {
 /// An unmarked card's figure.
 pub const UNTOUCHED: &str = "untouched";
 
+/// The figure of `node` under `mark`: the hidden files' total where the node stands for files
+/// the level does not list.
+pub fn words_of(node: &Node, mark: Option<Mark>) -> String {
+    match (node, mark) {
+        (_, None) => UNTOUCHED.to_owned(),
+        (Node::More | Node::Port { .. }, Some(mark)) => mark.hidden_words(),
+        (_, Some(mark)) => mark.words(),
+    }
+}
+
 /// A card's figure under marks.
 pub fn figure(marks: &Marks, node: &Node) -> String {
-    of(marks, node).map_or_else(|| UNTOUCHED.to_owned(), |mark| mark.words())
+    words_of(node, of(marks, node).copied())
+}
+
+/// A card's mark as spoken.
+pub fn spoken(marks: &Marks, node: &Node) -> String {
+    match (node, of(marks, node)) {
+        (_, None) => UNTOUCHED.to_owned(),
+        (Node::More | Node::Port { .. }, Some(mark)) if mark.files > 0 => format!(
+            "{}, in {} not listed",
+            mark.spoken(),
+            plural(mark.files, "file", "files")
+        ),
+        (_, Some(mark)) => mark.spoken(),
+    }
 }

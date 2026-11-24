@@ -5,11 +5,13 @@
 
 use std::collections::BTreeMap;
 
+// The facts' module reference; the crate root's `Reference` is an artifact citation.
+use corral_types::facts::Reference;
 use corral_types::{
     ContainerFact, ContainerKind, Coverage, DefinitionFact, ModuleId, PackageEdge, PackageEdgeKind,
-    ProviderCoverage, ReadStatus, Reference, ReferenceBasis, ReferenceKind, SpawnFact,
-    SystemActivity, SystemAt, SystemMap, SystemMapRow, SystemNodeStats, SystemProvider, SystemRow,
-    SystemStatus, WorkspaceStatus,
+    ProviderCoverage, ReadStatus, ReferenceBasis, ReferenceKind, SpawnFact, SystemActivity,
+    SystemAt, SystemMap, SystemMapRow, SystemNodeStats, SystemProvider, SystemRow, SystemStatus,
+    WorkspaceStatus,
 };
 
 use crate::model::Id;
@@ -520,7 +522,11 @@ pub(super) fn detail(project: &str, at: Option<&SystemAt>) -> Result<SystemMap, 
                         references.push((module_id(i, 1), module_id(to, 0), count / 3));
                     }
                 } else if to == i {
-                    references.push((module_id(from, 0), module_id(i, 0), count));
+                    // The same pairs the referencing package's level lists.
+                    references.push((module_id(from, 0), module_id(i, 0), count * 2 / 3));
+                    if containers[from].modules.len() > 1 {
+                        references.push((module_id(from, 1), module_id(i, 0), count / 3));
+                    }
                 }
             }
             let mut neighbours: Vec<usize> = edges

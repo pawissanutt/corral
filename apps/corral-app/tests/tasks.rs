@@ -182,9 +182,9 @@ fn a_touched_module_opens_in_system_at_its_package_level() {
     app.press("id:seg-changes-1").unwrap();
     app.wait_for("id:node-c-apps-corral-app").unwrap();
     app.press("id:impact-item-row-1").unwrap();
-    app.wait_for("id:node-m-apps-corral-app-model").unwrap();
+    app.wait_for("id:node-m-apps-corral-app-shell").unwrap();
     app.press("id:btn-open-in-system").unwrap();
     app.wait_for("id:crumb-1").unwrap();
     app.wait_for("id:inspector-title").unwrap();
-    app.wait_for("text:/^model$/").unwrap();
+    app.wait_for("text:/^shell$/").unwrap();
 }

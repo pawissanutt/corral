@@ -3,7 +3,7 @@
 //! picked node its edges, each of which picks that edge. A list keeps every name whole and
 //! every edge readable where a drawing of thirty boxes could not (docs/plans/system-map.md §3.1).
 
-use super::marks::{self, Marks};
+use super::marks::{self, Marks, change_words};
 use super::runtime::{at, edge_words, entry_word, group};
 use super::scene::{Card, EdgeKind, Kind, Level, Scene};
 use super::words::{activity, busiest, figure, read_shares};
@@ -46,6 +46,8 @@ pub struct EdgeLine {
     pub words: String,
     pub pick: Option<Pick>,
     pub picked: bool,
+    /// A task's change moved its reference count; `words` end with before and after.
+    pub changed: bool,
 }
 
 /// Whether a card matches the filter: every word in its name or path, ignoring case.
@@ -213,6 +215,15 @@ pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
                 },
                 dim: marks.is_some_and(|marks| marks::of(marks, &card.node).is_none()),
             }));
+            if !picked && marks.is_some() {
+                // Under a task's change, what it moved on the edges out of a row shows under it
+                // at every level, picked or not.
+                out.extend(
+                    edges(scene, &card.node, picked_edge).into_iter().filter(
+                        |line| matches!(line, Line::Edge(e) if e.changed && e.arrow == "→"),
+                    ),
+                );
+            }
             if picked {
                 out.extend(edges(scene, &card.node, picked_edge));
                 out.extend(card.spawns.iter().map(|(process, sites)| {
@@ -224,6 +235,7 @@ pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
                         words: format!("spawns · {}", super::plural(*sites, "site", "sites")),
                         pick: None,
                         picked: false,
+                        changed: false,
                     })
                 }));
                 out.extend(card.entries.iter().map(|entry| {
@@ -239,6 +251,7 @@ pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
                         ),
                         pick: None,
                         picked: false,
+                        changed: false,
                     })
                 }));
             }
@@ -273,6 +286,10 @@ fn edges(scene: &Scene, node: &Node, picked: Option<(&Node, &Node)>) -> Vec<Line
                 EdgeKind::Has => has_words(scene, e),
                 _ => edge_words(e),
             };
+            let words = match change_words(&e.change) {
+                Some(change) => format!("{words} · changed {change}"),
+                None => words,
+            };
             Line::Edge(EdgeLine {
                 arrow,
                 other: other.clone(),
@@ -281,6 +298,7 @@ fn edges(scene: &Scene, node: &Node, picked: Option<(&Node, &Node)>) -> Vec<Line
                 words,
                 pick: Some(Pick::Edge(e.from.clone(), e.to.clone())),
                 picked: picked == Some((&e.from, &e.to)),
+                changed: !e.change.is_empty(),
             })
         })
         .collect()

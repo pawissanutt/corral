@@ -6,14 +6,16 @@
 //! screen reader, so every card and every edge also gets a transparent button over it that
 //! carries its label: a press picks it, a press on the picked card opens its level. A task
 //! page's Impact draws its map here too ([`Host::Impact`]): its marks replace the overlay's
-//! figure, ring the touched and dependent cards and dim the rest.
+//! figure, ring the touched and dependent cards and dim the rest; an edge whose reference count
+//! the change moved is drawn in the change colour with its before and after, and every other
+//! edge is dimmed.
 
 use nsh_core::canvas::CanvasTextAlign;
 use nsh_core::prelude::*;
 
 use crate::model::system::layout::{self, Font, Layout, Rect};
-use crate::model::system::marks::{self as marked, Mark, Marks};
-use crate::model::system::scene::{Card, EdgeKind, Kind, Scene};
+use crate::model::system::marks::{self as marked, Mark, Marks, change_spoken};
+use crate::model::system::scene::{Card, Edge, EdgeKind, Kind, Scene};
 use crate::model::system::tree::{passes, share};
 use crate::model::system::words::{
     activity, busiest, figure, language_slot, languages, read_shares, slot_hue,
@@ -53,13 +55,24 @@ pub fn map(app: AppState, scene: Memo<Option<Scene>>, host: Host) -> AnyElement 
         .on_layout(move |frame: &Bounds<Points>| width.set(frame.size.width.0))
         .child(dynamic(move || {
             let (layout, scene) = placed.get()?;
+            // The buttons speak each card's and edge's mark, so new marks place them again.
+            let marks = host.marks();
             let room = width.get_untracked();
-            Some(untracked(|| drawn(app, layout, scene, room, host)))
+            Some(untracked(|| {
+                drawn(app, layout, scene, room, host, marks.as_ref())
+            }))
         }))
         .into_element()
 }
 
-fn drawn(app: AppState, layout: Layout, scene: Scene, room: f32, host: Host) -> AnyElement {
+fn drawn(
+    app: AppState,
+    layout: Layout,
+    scene: Scene,
+    room: f32,
+    host: Host,
+    marks: Option<&Marks>,
+) -> AnyElement {
     let (w, h) = (layout.width.max(1.0), layout.height.max(1.0));
     let spoken = format!(
         "Map, {} level: {} cards, {} edges drawn",
@@ -67,7 +80,7 @@ fn drawn(app: AppState, layout: Layout, scene: Scene, room: f32, host: Host) -> 
         scene.cards.len(),
         scene.edges.len()
     );
-    let boxes = hit_boxes(app, &layout, &scene, host);
+    let boxes = hit_boxes(app, &layout, &scene, host, marks);
     let paint_layout = layout.clone();
     let paint_scene = scene.clone();
     let surface = view()
@@ -144,13 +157,16 @@ impl Lit<'_> {
         }
     }
 
-    fn edge(&self, from: &Node, to: &Node) -> bool {
+    /// Under a task's marks only an edge whose reference count the change moved is lit,
+    /// whatever its ends.
+    fn edge(&self, edge: &Edge) -> bool {
+        let (from, to) = (&edge.from, &edge.to);
         let matched = |node: &Node| {
             self.scene
                 .card(node)
                 .is_some_and(|c| passes(self.scene, c, &self.state.filter))
         };
-        if !matched(from) || !matched(to) || !(self.marked(from) || self.marked(to)) {
+        if !matched(from) || !matched(to) || (self.marks.is_some() && edge.change.is_empty()) {
             return false;
         }
         match &self.state.picked {
@@ -166,6 +182,9 @@ impl Lit<'_> {
 }
 
 const DIM: f32 = 0.28;
+
+/// The colour of what a task's change moved on an edge.
+const CHANGED: Hue = Hue::You;
 
 fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -> Painter {
     let lit = Lit {
@@ -203,7 +222,10 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
         let Some(edge) = scene.edges.get(route.edge) else {
             continue;
         };
-        let on = lit.edge(&edge.from, &edge.to);
+        let picked = lit.picked_edge(&edge.from, &edge.to);
+        let changed = marks.is_some() && !edge.change.is_empty();
+        // A task's pick may be an unchanged edge; it is shown whole all the same.
+        let on = lit.edge(edge) || (picked && marks.is_some());
         let strong = state.picked.is_some() && on;
         let base = 1.1 + 2.4 * (1.0 + edge.count as f32).log10() / (1.0 + most).log10();
         let (stroke, width, dash): (Hsla, f32, &[Points]) = match edge.kind {
@@ -217,8 +239,15 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
             EdgeKind::Builds => (now(hue_ink(Hue::Held)), base, &[px(4.0), px(3.0)]),
             EdgeKind::Has => (now(hue_ink(Hue::Worker)), base, &[]),
         };
-        let stroke = if lit.picked_edge(&edge.from, &edge.to) {
+        let (stroke, width) = if changed {
+            (now(hue_ink(CHANGED)), base.max(1.6) + 0.6)
+        } else {
+            (stroke, width)
+        };
+        let stroke = if picked {
             ink(Token::Focus)
+        } else if changed {
+            stroke
         } else if strong {
             ink(Token::Ink)
         } else {
@@ -246,23 +275,24 @@ fn paint(layout: &Layout, scene: &Scene, state: &State, marks: Option<&Marks>) -
             w: label.w,
             h: 18.0,
         };
+        let (rule, words) = if label.changed {
+            (now(hue_ink(CHANGED)), now(hue_ink(CHANGED)))
+        } else {
+            (ink(Token::Rule2), ink(Token::Ink3))
+        };
         p = p
-            .global_alpha(if lit.edge(&edge.from, &edge.to) {
-                1.0
-            } else {
-                DIM
-            })
+            .global_alpha(if lit.edge(edge) { 1.0 } else { DIM })
             .fill_color(ink(Token::Surface))
             .begin_path()
             .round_rect(bounds(r), px(4.0))
             .fill()
-            .stroke_color(ink(Token::Rule2))
+            .stroke_color(rule)
             .line_width(1.0)
             .stroke()
             .font(&css(Font::Label))
-            .fill_color(ink(Token::Ink3))
+            .fill_color(words)
             .text_align(CanvasTextAlign::Center)
-            .fill_text(label.text, label.x, label.y + 4.0);
+            .fill_text(&label.text, label.x, label.y + 4.0);
     }
     let view = Look {
         overlay: state.overlay,
@@ -463,11 +493,22 @@ fn paint_card(
         }
     }
     let figure = |card: &Card| match mark {
-        Some(mark) => mark.map_or_else(|| marked::UNTOUCHED.to_owned(), Mark::words),
+        Some(mark) => marked::words_of(&card.node, mark),
         None => figure(card, look.overlay, look.window),
     };
     if port {
-        let tag = figure(card);
+        // The name wins: a mark too long beside it gives way to its churn, then to nothing;
+        // the button over the card still says it whole.
+        let full = figure(card);
+        let short = match mark {
+            Some(Some(mark)) => mark.words(),
+            _ => full.clone(),
+        };
+        let name_w = measure(Font::Name, &card.name);
+        let tag = [full, short]
+            .into_iter()
+            .find(|tag| name_w + measure(Font::Tag, tag) + 36.0 <= r.w)
+            .unwrap_or_default();
         let tag_w = measure(Font::Tag, &tag);
         return p
             .font(&css(Font::Name))
@@ -657,7 +698,13 @@ fn chip(p: Painter, r: Rect) -> Painter {
 }
 
 /// The buttons over the canvas: one per card and one at the start of each drawn edge.
-fn hit_boxes(app: AppState, layout: &Layout, scene: &Scene, host: Host) -> Vec<AnyElement> {
+fn hit_boxes(
+    app: AppState,
+    layout: &Layout,
+    scene: &Scene,
+    host: Host,
+    marks: Option<&Marks>,
+) -> Vec<AnyElement> {
     let mut boxes = Vec::new();
     for placed in &layout.placed {
         let Some(card) = scene.cards.get(placed.card) else {
@@ -670,7 +717,10 @@ fn hit_boxes(app: AppState, layout: &Layout, scene: &Scene, host: Host) -> Vec<A
             .as_ref()
             .map(|tag| format!(", {tag}"))
             .unwrap_or_default();
-        let spoken = format!("{}, {}{tag}", card.name, card.kind.word());
+        let mark = marks
+            .map(|marks| format!(", {}", marked::spoken(marks, &card.node)))
+            .unwrap_or_default();
+        let spoken = format!("{}, {}{tag}{mark}", card.name, card.kind.word());
         let node = card.node.clone();
         boxes.push(hit(
             app,
@@ -690,13 +740,17 @@ fn hit_boxes(app: AppState, layout: &Layout, scene: &Scene, host: Host) -> Vec<A
             continue;
         };
         let (x, y) = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0);
-        let spoken = format!(
+        let mut spoken = format!(
             "{} → {}: {}, {} references",
             scene.name(&edge.from),
             scene.name(&edge.to),
             edge.kind.word(),
             edge.count
         );
+        if marks.is_some() {
+            spoken.push_str(", ");
+            spoken.push_str(&change_spoken(&edge.change).unwrap_or_else(|| "unchanged".into()));
+        }
         let pick = Pick::Edge(edge.from.clone(), edge.to.clone());
         let area = Rect {
             x: x - 9.0,

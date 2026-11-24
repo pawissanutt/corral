@@ -390,6 +390,13 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
                 PackageEdgeKind::ReferencedOnly => "used in code · no dependency match",
             };
             let right = match (before, after) {
+                // The same kind on both sides: what moved is its reference count.
+                (Some(b), Some(a)) if b.kind == a.kind => format!(
+                    "{} · {} → {} refs",
+                    kind(a.kind),
+                    count(b.references),
+                    count(a.references)
+                ),
                 (Some(b), Some(a)) => format!("{} → {}", kind(b.kind), kind(a.kind)),
                 _ => kind(edge.kind).to_owned(),
             };
