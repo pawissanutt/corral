@@ -15,6 +15,7 @@ pub(crate) mod candidate;
 mod changes;
 mod history;
 mod impact;
+mod impact_list;
 pub(crate) mod keep;
 pub(crate) mod overview;
 pub(crate) mod parts;
