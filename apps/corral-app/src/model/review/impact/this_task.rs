@@ -60,10 +60,11 @@ enum Under<'a> {
     File(&'a str),
     /// The files of `module` the level folds into its "N more" card.
     Folded(&'a ModuleId, &'a Scene),
-    /// The definition `name` of the file `path`, at its file's level.
+    /// The definition `name` at `line` of the file `path`, at its file's level.
     Definition {
         path: &'a str,
         name: &'a str,
+        line: u64,
     },
 }
 
@@ -109,9 +110,11 @@ pub(super) fn of_review(
         (Node::Module(m), _) => Under::Module(m),
         (Node::File(p), _) => Under::File(p),
         (Node::More, Some(SystemAt::Module { module })) => Under::Folded(module, scene),
-        (Node::Definition { name, .. }, Some(SystemAt::File { path })) => {
-            Under::Definition { path, name }
-        }
+        (Node::Definition { name, line }, Some(SystemAt::File { path })) => Under::Definition {
+            path,
+            name,
+            line: *line,
+        },
         _ => return None,
     };
     let containers: Vec<String> = head_map(review)
@@ -156,7 +159,9 @@ pub(super) fn of_review(
                 path,
                 name,
                 line,
-            } if matches!(under, Under::Definition { path: p, name: n } if p == path && n == name) =>
+            } if *change != ChangeKind::Removed
+                && matches!(under, Under::Definition { path: p, name: n, line: l }
+                    if p == path && n == name && l == *line) =>
             {
                 files.push(Line {
                     main: name.clone(),
@@ -173,8 +178,8 @@ pub(super) fn of_review(
             }
             Row::Dependent { dependent, module } => {
                 let held = match under {
-                    Under::Definition { path, name } => {
-                        dependent.path == path && dependent.name == name
+                    Under::Definition { path, name, line } => {
+                        dependent.path == path && dependent.name == name && dependent.line == line
                     }
                     _ => {
                         let container =
@@ -190,7 +195,7 @@ pub(super) fn of_review(
                 dependents.push(Line {
                     main: dependent.name.clone(),
                     right: format!(
-                        "{}:{} · uses {} · {}",
+                        "{}:{} · depends on {} · {}",
                         dependent.path,
                         dependent.line,
                         dependent.of,
@@ -220,10 +225,10 @@ pub(super) fn of_review(
     };
     let held = (!dependents.is_empty()).then(|| match under {
         Under::Definition { .. } => {
-            "A dependent: it references a changed definition outside it".to_owned()
+            "A dependent: it depends on a changed definition outside it".to_owned()
         }
         _ => format!(
-            "{}: code here that references a changed definition",
+            "{}: code here that depends on a changed definition",
             plural(dependents.len() as u64, "dependent", "dependents")
         ),
     });
