@@ -194,18 +194,23 @@ fn page_head(app: AppState, data: Memo<Shown>) -> AnyElement {
         })
     })
     .into_element();
-    // The phone's bar already names the page; its switches take the width, one under the
-    // other, rather than squeeze the title.
+    // On the phone the switches take the width under the head, one under the other, rather
+    // than squeeze its title; the head keeps the connection banner.
     if app.form == Form::Phone {
         return view()
             .flex_none()
             .flex_col()
-            .gap(px(8.0))
-            .px(px(16.0))
-            .py(px(8.0))
-            .child(view_seg)
-            .child(overlay)
-            .child(window)
+            .child(head(app, TITLE, None, Vec::new()))
+            .child(
+                view()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .px(px(16.0))
+                    .py(px(8.0))
+                    .child(view_seg)
+                    .child(overlay)
+                    .child(window),
+            )
             .into_element();
     }
     head(app, TITLE, None, vec![view_seg, overlay, window])
@@ -596,10 +601,17 @@ fn inspected(app: AppState, inspector: Inspector) -> AnyElement {
                                 row.swatch
                                     .map(|kind| swatch(app, Swatch::Edge(kind)))
                                     .unwrap_or_else(|| view().into_element()),
-                                // The name stays whole; the words after it give way.
+                                // The name stays whole: on its one terminal line, with the
+                                // words after it giving way; elsewhere it wraps.
                                 view()
-                                    .flex_shrink_0()
-                                    .child(plain(app, row.label).number_of_lines(1u32))
+                                    .when(app.form == Form::Terminal, |v| v.flex_shrink_0())
+                                    .when(app.form != Form::Terminal, |v| v.min_w(px(0.0)))
+                                    .child(
+                                        plain(app, row.label)
+                                            .when(app.form == Form::Terminal, |t| {
+                                                t.number_of_lines(1u32)
+                                            }),
+                                    )
                                     .into_element(),
                                 view()
                                     .flex_1()

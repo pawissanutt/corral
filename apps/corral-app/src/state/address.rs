@@ -103,17 +103,23 @@ impl AppState {
     fn open_place(&self, place: Place) {
         match place {
             Place::Destination(destination) => {
-                if destination == Destination::System {
-                    self.system_act(Action::View(View::Structure));
-                }
-                self.go(destination)
+                self.go(destination);
+                self.show_system_view(View::Structure);
             }
             Place::SystemRuntime => {
-                self.system_act(Action::View(View::Runtime));
-                self.go(Destination::System)
+                self.go(Destination::System);
+                self.show_system_view(View::Runtime);
             }
             Place::Project(id) => self.open_project(id),
             place => self.change(|nav| place.open(nav)),
+        }
+    }
+
+    /// The System page's view an address names, once the move there happened: a refused move
+    /// (unsaved Configuration edits ask first) leaves the view as it was.
+    fn show_system_view(&self, view: View) {
+        if self.nav.with_untracked(|nav| nav.destination) == Destination::System {
+            self.system_act(Action::View(view));
         }
     }
 }

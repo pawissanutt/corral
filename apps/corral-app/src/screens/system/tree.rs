@@ -194,12 +194,14 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                     .flex_shrink_0()
                     .child(text(format!("  {}", edge.arrow)).text_color(color(Token::Ink3)))
                     .into_element(),
-                // The other end's name stays whole; the words after it give way.
+                // The other end's name stays whole: a terminal row keeps it on its one line and
+                // the words after it give way; elsewhere a long name wraps rather than overflow.
                 view()
-                    .flex_shrink_0()
+                    .when(form == Form::Terminal, |v| v.flex_shrink_0())
+                    .when(form != Form::Terminal, |v| v.min_w(px(0.0)))
                     .child(
                         text(edge.name.clone())
-                            .number_of_lines(1u32)
+                            .when(form == Form::Terminal, |t| t.number_of_lines(1u32))
                             .text_color(color(Token::Ink))
                             .when(form != Form::Terminal, |t| {
                                 t.font_family(FONT_MONO).text_size(px(12.5))

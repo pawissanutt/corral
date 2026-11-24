@@ -130,7 +130,7 @@ fn node_inspector(scene: &Scene, card: &Card) -> Inspector {
     if !facts.is_empty() {
         sections.insert(0, section(None, facts));
     }
-    if card.kind != Kind::Scripts {
+    {
         let rows: Vec<Row> = card
             .entries
             .iter()

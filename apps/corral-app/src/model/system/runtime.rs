@@ -130,7 +130,8 @@ pub fn figure(card: &Card) -> String {
     match card.kind {
         Kind::Scripts => "folded · select again to list them".into(),
         Kind::Owner => match &card.detectors {
-            None => "entry points not reported".into(),
+            None if card.entries.is_empty() => "entry points not reported".into(),
+            None => plural(card.entries.len() as u64, "entry point", "entry points"),
             Some(set) if set.is_empty() => "no detector".into(),
             // An entry point whose package declares one binary is listed under that binary.
             Some(set) if card.entries.is_empty() && card.references > 0 => format!(
@@ -294,6 +295,11 @@ pub fn build(runtime: &SystemRuntime, scripts: bool) -> Scene {
     }
     let mut merged: BTreeMap<(Node, Node), usize> = BTreeMap::new();
     for edge in edges {
+        // A unit left out of the reply has no card to draw an edge to.
+        let to = b.node(&edge.to);
+        if !b.index.contains_key(&to) {
+            continue;
+        }
         let from = match &edge.from {
             RuntimeSource::Container { path } => {
                 b.owner(path);
@@ -301,8 +307,7 @@ pub fn build(runtime: &SystemRuntime, scripts: bool) -> Scene {
             }
             RuntimeSource::Unit { id } => b.node(id),
         };
-        let to = b.node(&edge.to);
-        if from == to || !b.index.contains_key(&from) || !b.index.contains_key(&to) {
+        if from == to || !b.index.contains_key(&from) {
             continue;
         }
         let site = Site {
