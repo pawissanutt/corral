@@ -1056,7 +1056,7 @@ export class HostSession {
         ...(thinkingLevel ? { thinkingLevel } : {}),
       });
       const { session } = result;
-      const switchForFallback = installModelSelection(session, models, interactive);
+      const switchForFallback = installModelSelection(session, models, interactive, host.modelFavorites);
       const parentFallback: FallbackCandidates | undefined = options.noFallback
         ? undefined
         : options.fallback?.length

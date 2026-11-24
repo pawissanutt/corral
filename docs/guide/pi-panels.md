@@ -223,7 +223,7 @@ The sidebar key is Ctrl+B, or Alt+B when the session runs in herdr and Ctrl+B is
 | Ctrl+T | Show or hide the agent's thinking |
 | Ctrl+O | Open or fold every tool row (a click opens or folds one row) |
 | End | Jump to the newest message, when the draft is empty |
-| Ctrl+P / Shift+Ctrl+P | Next / previous model in the cycle |
+| Ctrl+P / Shift+Ctrl+P | Next / previous available favorite model within the current billing kind |
 
 **Agents (F8)**
 

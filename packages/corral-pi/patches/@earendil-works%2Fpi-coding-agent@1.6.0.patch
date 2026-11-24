@@ -3306,9 +3306,10 @@ index cbd936501adcf0663f06ab29c1e5466207350f64..875ce674dfd49be5abcf5ef547da96a7
 @@ -3884,18 +4279,18 @@ export class InteractiveMode {
              const result = await this.session.cycleModel(direction);
              if (result === undefined) {
-                 const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
+-                const msg = this.session.scopedModels.length > 0 ? "Only one model in scope" : "Only one model available";
 -                this.showStatus(msg);
-+                this.showStatus(msg, { topic: "model" });
++                // Corral cycles workspace favorites, not Pi's model scope.
++                this.showStatus("No favorite model to switch to", { topic: "model" });
              }
              else {
                  this.footer.invalidate();

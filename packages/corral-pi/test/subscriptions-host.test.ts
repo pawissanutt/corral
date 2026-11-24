@@ -88,6 +88,7 @@ test("assistant switches subscription -> Anthropic API -> subscription with hist
       events, network, sessionManager: sdk.SessionManager.create(cwd, join(work, "sessions")),
     });
     await host.startLocal();
+    host.installRemoteParts();
     const session = host.session;
     const id = host.sessionId();
     const file = session.sessionFile;
@@ -97,8 +98,26 @@ test("assistant switches subscription -> Anthropic API -> subscription with hist
     const gpt = models.getModel("openai-codex", "gpt-6.1-sol")!;
     const claude = models.getModel("anthropic", "claude-opus-5-5")!;
     const apiModel = models.getModel("anthropic-api", "claude-opus-5-5")!;
-    await session.cycleModel();
-    expect(session.model?.provider).not.toBe("anthropic-api");
+    const markFavorite = host.remoteRegistry.get("model_favorite")!;
+    const favorite = (model: typeof gpt, value = true) => markFavorite({
+      model: `${model.provider}/${model.id}`, favorite: value,
+    });
+    expect(await session.cycleModel()).toBeUndefined();
+    await favorite(apiModel);
+    expect(await session.cycleModel()).toBeUndefined(); // A metered favorite isn't eligible on subscription.
+    await favorite(claude);
+    expect((await session.cycleModel())?.model).toEqual(claude); // Enter the cycle even with just one favorite.
+    expect(await session.cycleModel()).toBeUndefined();
+    const other = available.find(model => model.provider === gpt.provider && model.id !== gpt.id)!;
+    await favorite(gpt);
+    await favorite(other);
+    const ordered = available.filter(model => model === gpt || model === other || model === claude);
+    await session.setModel(ordered[0]!);
+    expect((await session.cycleModel("backward"))?.model).toEqual(ordered.at(-1));
+    expect((await session.cycleModel())?.model).toEqual(ordered[0]);
+    await favorite(claude, false);
+    await session.setModel(claude);
+    expect((await session.cycleModel("backward"))?.model).toEqual(ordered.filter(model => model !== claude).at(-1));
     await session.setModel(gpt);
     await session.prompt("Reply only FIRST.");
     const history = [...session.messages];
@@ -112,9 +131,8 @@ test("assistant switches subscription -> Anthropic API -> subscription with hist
     expect(restoreModelChoice(reopened, true)).toEqual({
       provider: "anthropic-api", model: apiModel.id,
     });
-    await session.cycleModel();
-    expect(session.model?.provider).toBe("anthropic-api");
-    await session.setModel(apiModel);
+    expect(await session.cycleModel()).toBeUndefined();
+    expect(session.model).toEqual(apiModel);
     await session.prompt("Reply only API.");
     expect(session.getLastAssistantText()).toBe("API");
     expect(api.requests).toBe(1);

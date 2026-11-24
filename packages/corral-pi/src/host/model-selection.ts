@@ -5,6 +5,7 @@ import { PROVIDERS, billingKind, isProviderId } from "../auth/providers.ts";
 import { resolveClaudeCode } from "../claude/sdk.ts";
 import { withSubscriptionFallback } from "./continuation.ts";
 import { hasProviderFallbacks, providerFallbackCandidates, type FallbackSettings } from "./fallback-settings.ts";
+import type { FavoriteModels } from "./model-favorites.ts";
 
 async function preflightModelSwitch(models: ModelRuntime, model: Model<Api>, signal?: AbortSignal): Promise<Model<Api>> {
   const canonical = models.getModel(model.provider, model.id);
@@ -21,7 +22,8 @@ async function preflightModelSwitch(models: ModelRuntime, model: Model<Api>, sig
 }
 
 /** Explicit selection and fallback share preflight and Pi's journaled commit. */
-export function installModelSelection(session: AgentSession, models: ModelRuntime, interactive: boolean) {
+export function installModelSelection(session: AgentSession, models: ModelRuntime, interactive: boolean,
+  favorites: Pick<FavoriteModels, "has">) {
   const setModel = session.setModel.bind(session);
   const switchModel = async (model: Model<Api>, options?: Parameters<AgentSession["setModel"]>[1],
     automatic = false, signal?: AbortSignal) => {
@@ -41,12 +43,15 @@ export function installModelSelection(session: AgentSession, models: ModelRuntim
     const current = session.model;
     if (!current || !isProviderId(current.provider)) return undefined;
     const kind = billingKind(current.provider);
-    const available = (await models.getAvailable(interactive ? undefined : current.provider))
-      .filter(model => isProviderId(model.provider) && billingKind(model.provider) === kind);
-    if (available.length <= 1 || session.model !== current) return undefined;
-    const index = available.findIndex(m => m.provider === current.provider && m.id === current.id);
-    const next = available[(Math.max(0, index) + (direction === "forward" ? 1 : available.length - 1)) % available.length];
-    if (!next) return undefined;
+    const eligible = (await models.getAvailable(interactive ? undefined : current.provider))
+      .filter(model => isProviderId(model.provider) && billingKind(model.provider) === kind && favorites.has(model));
+    if (!eligible.length || session.model !== current) return undefined;
+    const index = eligible.findIndex(m => m.provider === current.provider && m.id === current.id);
+    const step = direction === "forward" ? 1 : -1;
+    // From outside the favorites, enter at the first or last model depending on direction.
+    const nextIndex = index < 0 ? (step === 1 ? 0 : eligible.length - 1) : (index + step + eligible.length) % eligible.length;
+    const next = eligible[nextIndex];
+    if (!next || nextIndex === index) return undefined;
     await session.setModel(next, options);
     return { model: next, thinkingLevel: session.thinkingLevel, isScoped: false };
   };

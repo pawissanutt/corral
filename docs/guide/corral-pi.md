@@ -137,8 +137,12 @@ API login prompts for a hidden key, or you can pass `--key-file <path>` with an
 owner-only `0600` file. Existing API keys keep working. In Build and chat, `/model`
 lists the providers you signed in to and switches without starting a conversation.
 For example, `anthropic/claude-opus-5-5` uses the subscription, while
-`anthropic-api/claude-opus-5-5` spends on the API. Ctrl+P cycles within the current
-billing kind. Resuming a Build or restarting a chat restores its last selection.
+`anthropic-api/claude-opus-5-5` spends on the API. Ctrl+P and Shift+Ctrl+P cycle
+only through available workspace favorites within the current billing kind. In the
+model picker, use Alt+S to favorite or unfavorite a model without switching to it.
+If there is no eligible favorite to switch to, the current model stays selected.
+`/model` still lets you select models you haven't favorited. Resuming a Build or
+restarting a chat restores its last selection.
 
 On GPT-6.2, repeated top-level `instructions` are not cacheable. Pi 1.6.0's
 `openai-codex` adapter sends the session's instructions as a leading developer
