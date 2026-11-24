@@ -100,8 +100,10 @@ one; the reference shows each so it can be accepted or changed there.
 - **The More menu** lists the 15 operations in the engine's order, each with a short hint, all
   enabled. Drop, Stop, Approve, a fresh Retry, a move to Done or Dropped and anything forced ask
   once.
-- **A plan in the Tasks list** is a row in its own status group that unfolds its children in
-  place. Each child is also listed once in its own status group, with its parent's id.
+- **A plan in the Tasks list** is a row in its own status group that can unfold children
+  in that same group. Each child has its own row in its status group, with its parent's id;
+  a child in a different group is not repeated under the plan. The plan's task page lists
+  children across statuses.
 - **Home on a wide screen is a dashboard** (decision 20; what it holds is my reading, and it
   replaces decision 8's three sections there). A row of six numbers: needs you, working with the
   slots, ready, sessions by state, landed since the last visit, cost today. Under it, two halves.

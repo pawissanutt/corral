@@ -441,7 +441,7 @@ impl AppState {
                     self.tasks
                         .with_untracked(|state| list::order(&tasks::sections(feed, &scope, state)))
                 });
-                let selected = list::settled(&order, selection.task.as_ref());
+                let selected = tasks::settle_selection(&order, selection.task.as_ref());
                 Some(match list::key(key, &order, selected.as_ref())? {
                     ListKey::Select(id) => vec![Effect::Select(Live::Task(id))],
                     ListKey::Open(id) => vec![Effect::OpenLive(Live::Task(tasks::task_of(&id)))],

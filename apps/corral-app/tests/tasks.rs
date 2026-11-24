@@ -113,17 +113,23 @@ fn land_anyway_from_the_decide_bar_asks_once_and_lands() {
     app.wait_for("text:/^Land anyway T-10 · Done/").unwrap();
 }
 
-/// A child listed under its unfolded plan is its own row, keyed apart from the child's row in
-/// its status group; opening it must open the child, not a task named by that key.
+/// Only a child in its plan's own status section shows under the plan. T-1 is in Backlog and
+/// none of its children are, so its row has no caret, and its Ready child T-12 is reached from
+/// the Children section of T-1's page, which opens the child's own page.
 #[test]
-fn a_child_under_its_unfolded_plan_opens_the_childs_page() {
+fn a_child_in_another_status_opens_from_its_plans_page() {
     let mut app = preview("tasks");
-    app.wait_for("id:btn-unfold-T-1").unwrap();
-    app.press("id:btn-unfold-T-1").unwrap();
-    app.wait_for("id:task-T-12-in-T-1").unwrap();
-    app.press("id:task-T-12-in-T-1").unwrap();
-    app.press("id:task-T-12-in-T-1").unwrap();
+    app.wait_for("id:task-T-1").unwrap();
+    assert!(
+        app.wait_for_gone("id:btn-unfold-T-1", Duration::from_secs(1))
+            .is_ok()
+    );
+    select(&mut app, "T-1 Simple engine app");
     app.wait_for("id:task-page").unwrap();
+    app.press("id:open-task-T-12").unwrap();
+    // T-12 has no children, so its page has no link to itself: the plan's page is gone.
+    app.wait_for_gone("id:open-task-T-12", Duration::from_secs(5))
+        .unwrap();
     app.wait_for("text:Timeline zoom presets").unwrap();
 }
 

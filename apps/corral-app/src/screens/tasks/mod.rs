@@ -2,8 +2,8 @@
 //! selected one (`model::tasks`, `ui::kit::list`). A row shows the task's status, id, title
 //! with its tags, what is happening, its pipeline, size, difficulty, project, profile, cost,
 //! age and its one next step; More holds every other operation. A plan's caret unfolds its
-//! children under it; Done and Dropped fold at the bottom, read a page at a time with Load older
-//! under them. The head carries the filter field (words, and `size:`, `difficulty:` and `tag:`
+//! same-status children. Done and Dropped fold at the bottom, read a page at a time with Load
+//! older under them. The head carries the filter field (words, and `size:`, `difficulty:` and `tag:`
 //! met exactly), the open count with the running slots, the inspector's switch and New task;
 //! under it the board's health (`ui::kit::board_status`), and the page fades while the board is
 //! last known.
@@ -64,7 +64,7 @@ fn list(app: AppState) -> AnyElement {
     let selected = computed(move || {
         let order = sections.with(|sections| list::order(sections));
         app.nav
-            .with(|nav| list::settled(&order, nav.selection.task.as_ref()))
+            .with(|nav| tasks::settle_selection(&order, nav.selection.task.as_ref()))
     });
     // The first row is selected on arrival, and the palette and the keys read the selection
     // the list shows.
@@ -309,7 +309,7 @@ fn closed_foot(app: AppState) -> AnyElement {
 }
 
 /// One row, a cell per column, each following the task's line. A row under an unfolded plan
-/// stands for its child: set in from the edge, without the plan's tag.
+/// stands for its same-status child: set in from the edge, without the plan's tag.
 fn row(app: AppState, key: &Id, columns: &[list::Column]) -> Row {
     let form = app.form;
     let id = tasks::task_of(key);
@@ -344,7 +344,7 @@ fn row(app: AppState, key: &Id, columns: &[list::Column]) -> Row {
                     })
                 })
             }),
-            caret(app, &id, under, line),
+            caret(app, &id, under),
             icon(Icon::Chevron, 16.0, color(Token::Ink3)),
         ]
     } else {
@@ -361,10 +361,22 @@ fn row(app: AppState, key: &Id, columns: &[list::Column]) -> Row {
     }
 }
 
-/// A plan's caret (`btn-unfold-<id>`): pressed, its children show under its row or go.
-fn caret(app: AppState, id: &Id, under: bool, line: Memo<Option<tasks::TaskLine>>) -> AnyElement {
+/// The caret is shown only if expanding the plan would reveal children in this section.
+/// The plan's page and inspector show children across statuses.
+fn caret(app: AppState, id: &Id, under: bool) -> AnyElement {
     let form = app.form;
-    let plan = computed(move || !under && line.with(|line| line.as_ref().is_some_and(|l| l.plan)));
+    let plan = {
+        let id = id.clone();
+        computed(move || {
+            !under && {
+                let scope = app.project_scope();
+                app.feed.with(|feed| {
+                    app.tasks
+                        .with(|state| tasks::has_inline_children(feed, &scope, state, id.as_str()))
+                })
+            }
+        })
+    };
     let id = id.clone();
     dynamic(move || {
         if !plan.get() {
@@ -389,7 +401,7 @@ fn caret(app: AppState, id: &Id, under: bool, line: Memo<Option<tasks::TaskLine>
             view()
                 .test_id(&format!("btn-unfold-{id}"))
                 .role(AccessibilityRole::Button)
-                .label(format!("Children of {id}"))
+                .label(format!("Children of {id} in this status group"))
                 .accessibility_state(move || AccessibilityState {
                     expanded: Some(open.get()),
                     ..AccessibilityState::default()
@@ -465,7 +477,7 @@ fn cell(
                         px(18.0)
                     })
                 })
-                .child(caret(app, id, under, line))
+                .child(caret(app, id, under))
                 .child(title)
                 .into_element()
         }

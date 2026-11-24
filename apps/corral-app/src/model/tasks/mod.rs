@@ -1,8 +1,7 @@
 //! Tasks: one list of every task in scope, grouped by status in the order Blocked, Review,
 //! Running, Ready, Backlog, Idea, with Done and Dropped folded at the bottom and read a served
-//! page at a time; a plan unfolds its children in place under its row. What a task's row, its
-//! inspector and its page say about it, every word from the served row, the closed page that
-//! lists it, or its served detail.
+//! page at a time. A plan unfolds children in its own status group; children in other groups
+//! are not repeated under it. A task's row, inspector and page use its served row or detail.
 
 pub mod band;
 pub mod closed;
@@ -64,7 +63,7 @@ impl State {
         }
     }
 
-    /// Unfolds a plan's children under its row, or folds them away.
+    /// Unfolds a plan's children in the same status group, or folds them away.
     pub fn unfold(&mut self, plan: &Id) {
         if !self.plans.remove(plan) {
             self.plans.insert(plan.clone());
@@ -121,6 +120,20 @@ pub fn task_of(row: &Id) -> Id {
     }
 }
 
+/// Keep the task selected when its inline row disappears but its canonical row remains.
+pub fn settle_selection(order: &[Id], selected: Option<&Id>) -> Option<Id> {
+    selected
+        .and_then(|row| {
+            if order.contains(row) {
+                Some(row.clone())
+            } else {
+                let task = task_of(row);
+                order.contains(&task).then_some(task)
+            }
+        })
+        .or_else(|| order.first().cloned())
+}
+
 /// The task page's tab a key shows: `1` Overview, `2` Changes, `3` History.
 pub fn page_tab(key: &str) -> Option<TaskTab> {
     let at = key.parse::<usize>().ok()?.checked_sub(1)?;
@@ -134,24 +147,38 @@ fn in_scope<'a>(feed: &'a Feed, scope: &'a Scope) -> impl Iterator<Item = &'a Ta
         .filter(move |task| scope.matches(task.project()))
 }
 
-/// Whether a task is a plan: corrald lists it among the parents, or the board holds a child.
+/// Whether corrald lists the task as a plan or the board holds one of its children.
 fn is_plan(feed: &Feed, id: &str) -> bool {
     feed.plans.contains_key(id) || feed.board.children(id).next().is_some()
 }
 
-/// The open children of a plan in scope, in the list's status order.
-fn children<'a>(feed: &'a Feed, scope: &Scope, plan: &'a str) -> Vec<&'a Task> {
-    let mut children: Vec<&Task> = feed
-        .board
-        .children(plan)
-        .filter(|child| scope.matches(child.project()))
-        .collect();
-    children.sort_by_key(|child| OPEN.iter().position(|status| *status == child.status()));
-    children
+/// Only children in the plan's status group belong under its row. Children in other groups
+/// already have their own rows and remain linked from the plan's detail.
+fn inline_children<'a>(
+    feed: &'a Feed,
+    scope: &'a Scope,
+    filter: &'a Filter,
+    plan: &'a Task,
+) -> impl Iterator<Item = &'a Task> {
+    feed.board.children(plan.id.as_str()).filter(move |child| {
+        child.status() == plan.status()
+            && scope.matches(child.project())
+            && filter.matches(child.task())
+    })
+}
+
+/// Whether the plan's caret would reveal any children with the current scope and filter.
+pub fn has_inline_children(feed: &Feed, scope: &Scope, state: &State, plan: &str) -> bool {
+    feed.board.task(plan).is_some_and(|plan| {
+        !folds(plan.status())
+            && inline_children(feed, scope, &Filter::parse(&state.filter), plan)
+                .next()
+                .is_some()
+    })
 }
 
 /// The list's sections: a group per open status that has a task matching the filter, each
-/// unfolded plan followed by its children; then the Done and Dropped fold.
+/// unfolded plan followed by its same-status children; then the Done and Dropped fold.
 pub fn sections(feed: &Feed, scope: &Scope, state: &State) -> Vec<Section> {
     let filter = Filter::parse(&state.filter);
     let mut sections: Vec<Section> = OPEN
@@ -166,9 +193,7 @@ pub fn sections(feed: &Feed, scope: &Scope, state: &State) -> Vec<Section> {
                 rows.push(task.id.clone());
                 if state.plans.contains(&task.id) {
                     rows.extend(
-                        children(feed, scope, task.id.as_str())
-                            .into_iter()
-                            .filter(|child| filter.matches(child.task()))
+                        inline_children(feed, scope, &filter, task)
                             .map(|child| child_key(task.id.as_str(), child.id.as_str())),
                     );
                 }
@@ -248,8 +273,6 @@ pub struct TaskLine {
     pub priority: Option<&'static str>,
     /// The plan the task is a child of.
     pub parent: Option<String>,
-    /// Whether the task is a plan, which unfolds its children in the list.
-    pub plan: bool,
     /// What is happening, as one plain phrase.
     pub now: String,
     pub pipeline: [PipelineStep; 4],
@@ -321,7 +344,6 @@ fn line_of(task: &Task, feed: &Feed) -> TaskLine {
         title: task.title().to_owned(),
         priority: priority_tag(task.task().priority),
         parent: task.parent().map(str::to_owned),
-        plan: is_plan(feed, task.id.as_str()),
         now: phrase(task, feed),
         pipeline: pipeline(task),
         project: task.project().map(str::to_owned),
@@ -512,22 +534,57 @@ mod tests {
         assert_eq!(summary(&feed, &Scope::Project("site".into())), "3 open");
     }
 
-    /// An unfolded plan listed its child only in the child's own group, so the plan read as
-    /// empty: the child is listed under the plan as well, as its own row standing for the child.
     #[test]
-    fn an_unfolded_plan_lists_its_children_under_it_as_rows_of_their_own() {
-        let feed = feed();
+    fn a_dispatched_child_leaves_its_unfolded_plans_backlog_group() {
+        let mut feed = Feed::default();
+        feed.board.apply_batch(
+            1,
+            vec![
+                task("T-1", "site", Status::Backlog, None),
+                task("T-2", "site", Status::Running, None),
+                task("T-3", "site", Status::Backlog, Some("T-1")),
+            ],
+            &[],
+        );
         let mut state = State::default();
         state.unfold(&Id::from("T-1"));
-        let idea = sections(&feed, &Scope::All, &state)
-            .into_iter()
-            .find(|section| section.key == "idea")
-            .map(|section| section.rows);
-        let under = child_key("T-1", "T-2");
-        assert_eq!(idea, Some(vec![Id::from("T-1"), under.clone()]));
-        assert_eq!(task_of(&under), Id::from("T-2"));
-        assert_eq!(task_of(&Id::from("T-2")), Id::from("T-2"));
-        assert!(line(&feed, "T-1").is_some_and(|line| line.plan));
+        assert!(has_inline_children(&feed, &Scope::All, &state, "T-1"));
+        let under = child_key("T-1", "T-3");
+        let before = sections(&feed, &Scope::All, &state);
+        assert_eq!(
+            keys(&before),
+            [
+                ("running".into(), 1, vec!["T-2".into()]),
+                (
+                    "backlog".into(),
+                    2,
+                    vec!["T-1".into(), under.to_string(), "T-3".into()]
+                ),
+            ]
+        );
+        assert_eq!(
+            settle_selection(&crate::model::list::order(&before), Some(&under)),
+            Some(under.clone())
+        );
+
+        feed.board.apply_batch(
+            1,
+            vec![task("T-3", "site", Status::Running, Some("T-1"))],
+            &[],
+        );
+        let after = sections(&feed, &Scope::All, &state);
+        assert_eq!(
+            keys(&after),
+            [
+                ("running".into(), 2, vec!["T-2".into(), "T-3".into()]),
+                ("backlog".into(), 1, vec!["T-1".into()]),
+            ]
+        );
+        assert_eq!(
+            settle_selection(&crate::model::list::order(&after), Some(&under)),
+            Some(Id::from("T-3"))
+        );
+        assert!(!has_inline_children(&feed, &Scope::All, &state, "T-1"));
     }
 
     /// A tasks topic that failed before the first board left Tasks loading forever, with no
