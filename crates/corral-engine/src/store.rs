@@ -202,6 +202,27 @@ impl Store {
         )
     }
 
+    /// Find draft aliases without treating an already-retargeted repair as a draft.
+    pub(crate) fn open_draft_lens_task(
+        &self,
+        project: &str,
+        keys: &[String],
+    ) -> Result<Option<Task>> {
+        self.optional_document(
+            "SELECT t.document FROM tasks AS t
+             WHERE t.project=?1 AND t.status NOT IN ('done','dropped') AND EXISTS (
+                 SELECT 1 FROM events AS e, json_each(e.detail, '$.lens_task_keys') AS key
+                 WHERE e.task=t.id AND e.kind='created'
+                   AND key.value IN (SELECT value FROM json_each(?2))
+             ) AND NOT EXISTS (
+                 SELECT 1 FROM events AS e, json_each(e.detail, '$.lens_task_keys') AS key
+                 WHERE e.task=t.id AND e.kind IN ('created','edited')
+                   AND key.value LIKE 'repair-file:%'
+             ) ORDER BY t.rowid LIMIT 1",
+            params![project, encode(&keys)?],
+        )
+    }
+
     /// Lens keys are recorded on creation or explicit draft-to-repair retargeting,
     /// independent of later changes to titles or body text.
     /// Call under the same writer transaction as insertion.

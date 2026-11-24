@@ -179,11 +179,8 @@ impl Engine {
             )
         })?;
         let duplicate_id = shared_id(&identities, &lens.id);
-        let repair_key = if duplicate_id {
-            format!("repair-file:{:?}:{:?}", lens.id, result.file)
-        } else {
-            format!("repair:{}", lens.id)
-        };
+        // The file remains the same lens even if its ID changes or becomes duplicated.
+        let repair_key = format!("repair-file:{:?}", result.file);
         let mut draft_keys = Vec::new();
         // Link only exact, unambiguous IDs, paths, or titles, not free-form subjects.
         for alias in [
@@ -256,7 +253,7 @@ impl Engine {
             }
             write!(body, "{unchecked}\n\n{}", lens.kind.template())?;
             let new = new_lens_task(project, title, body, ready);
-            let draft = store.open_lens_task(project, &draft_keys)?;
+            let draft = store.open_draft_lens_task(project, &draft_keys)?;
             let keys = repair_keys.into_iter().chain(draft_keys).collect::<Vec<_>>();
             if let Some(task) = draft {
                 self.retarget_lens_draft(store, task, new, &keys)
@@ -317,18 +314,22 @@ fn select_lens(
     dir_prefix: &str,
     selector: &str,
 ) -> Option<usize> {
-    (!shared_id(identities, selector))
-        .then(|| {
-            identities
-                .iter()
-                .position(|lens| lens.as_ref().is_some_and(|lens| lens.id == selector))
-        })
-        .flatten()
-        .or_else(|| results.iter().position(|result| result.file == selector))
+    results
+        .iter()
+        .position(|result| result.file == selector)
         .or_else(|| {
             results
                 .iter()
                 .position(|result| result.file.strip_prefix(dir_prefix) == Some(selector))
+        })
+        .or_else(|| {
+            (!shared_id(identities, selector))
+                .then(|| {
+                    identities
+                        .iter()
+                        .position(|lens| lens.as_ref().is_some_and(|lens| lens.id == selector))
+                })
+                .flatten()
         })
 }
 

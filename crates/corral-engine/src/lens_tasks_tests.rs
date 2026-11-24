@@ -273,6 +273,50 @@ fn repairs_use_committed_diagnostics_and_dedup_with_lens_drafts() {
 }
 
 #[test]
+fn repair_dedup_survives_new_duplicate_lens_id() {
+    let root = tempdir();
+    configure(root.path());
+    let repo = root.path().join("repo");
+    commit_lenses(&repo);
+    let engine = Engine::open_with_runner(root.path(), Box::new(FakeRunner::new())).unwrap();
+    let original = apply(&engine, repair("job.toml", false));
+    fs::copy(
+        repo.join("docs/lenses/job.toml"),
+        repo.join("docs/lenses/duplicate.toml"),
+    )
+    .unwrap();
+    git(&repo, &["add", "docs/lenses/duplicate.toml"]);
+    git(&repo, &["commit", "-m", "duplicate ID"]);
+    assert_eq!(apply(&engine, repair("job.toml", false)), original);
+    assert_eq!(engine.store.next_task_number().unwrap(), 2);
+}
+
+#[test]
+fn repair_ignores_old_aliases_of_a_different_repair() {
+    let root = tempdir();
+    configure(root.path());
+    let repo = root.path().join("repo");
+    commit_lenses(&repo);
+    let engine = Engine::open_with_runner(root.path(), Box::new(FakeRunner::new())).unwrap();
+    let first = apply(&engine, repair("job.toml", false));
+    let original = fs::read_to_string(repo.join("docs/lenses/job.toml")).unwrap();
+    fs::write(
+        repo.join("docs/lenses/job.toml"),
+        original.replace("Lifecycle for jobs", "Renamed lifecycle"),
+    )
+    .unwrap();
+    fs::write(
+        repo.join("docs/lenses/other.toml"),
+        original.replace("job-lifecycle", "other-lifecycle"),
+    )
+    .unwrap();
+    git(&repo, &["add", "docs/lenses"]);
+    git(&repo, &["commit", "-m", "change lens identities"]);
+    let second = apply(&engine, repair("other.toml", false));
+    assert_ne!(first.id, second.id);
+}
+
+#[test]
 fn repair_does_not_retarget_a_draft_with_an_existing_run() {
     let root = tempdir();
     configure(root.path());
