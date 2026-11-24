@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use corral_types::{DataSource, DataTypeId, SystemData, SystemDataRow, SystemRow, SystemStatus};
 
-use super::scene::{Card, DataCard, Edge, EdgeKind, Kind, Level, Scene, data_kind_word};
+use super::scene::{
+    Card, DataCard, Edge, EdgeKind, Kind, Level, Scene, data_kind_word, keep_legible,
+};
 use super::tree::matches;
 use super::words::{Notice, Swatch};
 use super::{Node, count, plural};
@@ -18,6 +20,9 @@ use crate::model::Hue;
 
 /// Types the view draws before counting the rest.
 pub const MAX_TYPES: usize = 240;
+/// `has` edges the map draws beyond each type's strongest; the rest stay listed in the tree and
+/// the inspector.
+pub const MAX_DRAWN_EDGES: usize = 80;
 
 pub const fn source_word(source: DataSource) -> &'static str {
     match source {
@@ -81,6 +86,8 @@ pub struct Container {
     pub path: String,
     pub name: String,
     pub languages: BTreeSet<String>,
+    /// The sources that read its files, as corrald says.
+    pub sources: BTreeSet<DataSource>,
 }
 
 pub fn containers(data: &SystemData) -> Vec<Container> {
@@ -92,10 +99,12 @@ pub fn containers(data: &SystemData) -> Vec<Container> {
                 path,
                 name,
                 languages,
+                sources,
             } => Some(Container {
                 path: path.clone(),
                 name: name.clone(),
                 languages: languages.clone(),
+                sources: sources.clone(),
             }),
             _ => None,
         })
@@ -136,17 +145,11 @@ pub fn coverage(data: &SystemData) -> BTreeMap<&str, &BTreeSet<DataSource>> {
         .collect()
 }
 
-/// Whether some source reads a language of the container: a container none applies to has its
-/// data model not provided rather than empty.
-pub fn container_provided(
-    container: &Container,
-    coverage: &BTreeMap<&str, &BTreeSet<DataSource>>,
-) -> bool {
-    container.languages.iter().any(|language| {
-        coverage
-            .get(language.as_str())
-            .is_some_and(|s| !s.is_empty())
-    })
+/// Whether some source read the container's own files: a container none did has its data model
+/// not provided rather than empty. Another container's schema in the same language says nothing
+/// about this one.
+pub fn container_provided(container: &Container) -> bool {
+    !container.sources.is_empty()
 }
 
 fn card_tag(source: DataSource, kind: corral_types::DataKind) -> String {
@@ -234,6 +237,7 @@ pub fn build(data: &SystemData, filter: &str) -> Scene {
         });
     }
     let nodes: BTreeSet<Node> = cards.iter().map(|c| c.node.clone()).collect();
+    let mut all = Vec::new();
     for card in &cards {
         let Some(data) = &card.data else { continue };
         let mut pairs: BTreeMap<&DataTypeId, u64> = BTreeMap::new();
@@ -245,7 +249,7 @@ pub fn build(data: &SystemData, filter: &str) -> Scene {
             if to == card.node || !nodes.contains(&to) {
                 continue;
             }
-            scene.edges.push(Edge {
+            all.push(Edge {
                 from: card.node.clone(),
                 to,
                 kind: EdgeKind::Has,
@@ -258,6 +262,7 @@ pub fn build(data: &SystemData, filter: &str) -> Scene {
     }
     scene.graph = (0..cards.len()).collect();
     scene.cards = cards;
+    keep_legible(&mut scene, all, MAX_DRAWN_EDGES);
     scene.ranks = Some(ranks);
     if rest > 0 {
         let mut card = Card::new(
@@ -352,7 +357,7 @@ pub fn summary(data: &SystemData) -> Vec<String> {
     }
     let unprovided: Vec<String> = containers(data)
         .iter()
-        .filter(|c| !c.languages.is_empty() && !container_provided(c, &coverage))
+        .filter(|c| !c.languages.is_empty() && !container_provided(c))
         .map(|c| container_words(&c.path))
         .collect();
     if !unprovided.is_empty() {
@@ -437,6 +442,18 @@ pub fn notices(data: Option<&SystemData>, row: Option<&SystemRow>) -> Vec<Notice
         });
     }
     out
+}
+
+/// Says how many `has` edges the map leaves undrawn to stay legible.
+pub fn undrawn_notice(n: usize) -> Notice {
+    Notice {
+        hue: Hue::Neutral,
+        words: format!(
+            "{} left undrawn on the map to keep it legible; each type's inspector and the list \
+             name them all.",
+            plural(n as u64, "has edge", "has edges")
+        ),
+    }
 }
 
 /// The one provenance line, with what the view cannot see.

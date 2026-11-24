@@ -157,6 +157,8 @@ fn node_inspector(scene: &Scene, card: &Card) -> Option<Inspector> {
 }
 
 fn edge_inspector(scene: &Scene, from: &Node, to: &Node) -> Option<Inspector> {
+    // A picked edge the filter has since left out is not on the map.
+    scene.all_edges().find(|e| &e.from == from && &e.to == to)?;
     let card = scene.card(from)?;
     let data = card.data.as_ref()?;
     let Node::Type(target) = to else {

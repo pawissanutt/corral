@@ -253,7 +253,13 @@ fn data_shown(state: &State, feed: &Feed, project: String, row: Option<&SystemRo
         projects: Vec::new(),
         status,
         crumbs: vec![project.clone()],
-        notices: data::notices(served, row),
+        notices: {
+            let mut notices = data::notices(served, row);
+            if let Some(n) = scene.as_ref().map(|s| s.undrawn.len()).filter(|n| *n > 0) {
+                notices.push(data::undrawn_notice(n));
+            }
+            notices
+        },
         summary: served.map(data::summary).unwrap_or_default(),
         legend: data::legend(),
         inspector: scene

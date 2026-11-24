@@ -306,10 +306,11 @@ fn data_fixture() -> corral_types::SystemData {
                 .collect(),
         },
     };
-    let container = |path: &str, language: &str| SystemDataRow::Container {
+    let container = |path: &str, language: &str, sources: &[DataSource]| SystemDataRow::Container {
         path: path.into(),
         name: path.into(),
         languages: [language.to_owned()].into(),
+        sources: sources.iter().copied().collect(),
     };
     let has = |from: &str, to: &str, field: &str| SystemDataRow::Has {
         edge: DataEdge {
@@ -328,16 +329,17 @@ fn data_fixture() -> corral_types::SystemData {
         provider: None,
         omitted_rows: 0,
         rows: vec![
-            container("a", "rust"),
-            container("b", "rust"),
-            container("web", "typescript"),
+            container("a", "rust", &[DataSource::RustSerde]),
+            container("b", "rust", &[DataSource::RustSerde]),
+            container("ext", "typescript", &[DataSource::Extension]),
+            container("web", "typescript", &[]),
             SystemDataRow::Coverage {
                 language: "rust".into(),
                 sources: [DataSource::RustSerde].into(),
             },
             SystemDataRow::Coverage {
                 language: "typescript".into(),
-                sources: Default::default(),
+                sources: [DataSource::Extension].into(),
             },
             ty("a/src/Task", &["run", "id"]),
             ty("b/src/Run", &["check"]),
@@ -350,7 +352,8 @@ fn data_fixture() -> corral_types::SystemData {
 
 /// The Data view groups types in their containers' bands, draws a has edge only where both
 /// types are drawn (an edge to a filtered-out type has no card to reach) while the inspector
-/// still names the holder, and says a container no source reads is not provided, never empty.
+/// still names the holder, and says a container no source read is not provided, never empty,
+/// even when its language is read in another container.
 #[test]
 fn data_view_bands_by_container_and_keeps_links_past_the_filter() {
     let data = data_fixture();
@@ -377,7 +380,10 @@ fn data_view_bands_by_container_and_keeps_links_past_the_filter() {
         Some((1, true)),
         "Run holds Check though the filter hides Run"
     );
-    let summary = data::summary(&data).join(" | ");
-    assert!(summary.contains("Not provided for typescript"), "{summary}");
-    assert!(summary.contains("web"), "{summary}");
+    let unprovided: Vec<String> = data::containers(&data)
+        .into_iter()
+        .filter(|c| !data::container_provided(c))
+        .map(|c| c.path)
+        .collect();
+    assert_eq!(unprovided, ["web"]);
 }

@@ -8,8 +8,9 @@ use corral_facts::{
     provider::{ChangeKind, ChangedFact},
 };
 use corral_types::{
-    SystemActivity, SystemAt, SystemCategorySummary, SystemDataRow, SystemImpactCategory,
-    SystemMapRow, SystemNodeStats, SystemReviewRow, SystemRuntimeRow, lenses::LensImpact,
+    DataSource, SystemActivity, SystemAt, SystemCategorySummary, SystemDataRow,
+    SystemImpactCategory, SystemMapRow, SystemNodeStats, SystemReviewRow, SystemRuntimeRow,
+    lenses::LensImpact,
 };
 
 use super::SystemFeatures;
@@ -91,7 +92,10 @@ pub(crate) fn data(facts: &DataFacts, tree: Option<&TreeFacts>) -> Vec<SystemDat
                 .cloned()
                 .map(|path| Row::Unreadable { path }),
         )
-        .chain(tree.into_iter().flat_map(data_containers))
+        .chain(
+            tree.into_iter()
+                .flat_map(|tree| data_containers(tree, facts)),
+        )
         .chain(
             facts
                 .types
@@ -103,9 +107,14 @@ pub(crate) fn data(facts: &DataFacts, tree: Option<&TreeFacts>) -> Vec<SystemDat
         .collect()
 }
 
-fn data_containers(tree: &TreeFacts) -> impl Iterator<Item = SystemDataRow> {
+fn data_containers<'a>(
+    tree: &'a TreeFacts,
+    facts: &DataFacts,
+) -> impl Iterator<Item = SystemDataRow> + 'a {
     let paths: HashSet<_> = tree.containers.iter().map(|c| c.path.as_str()).collect();
     let mut languages = HashMap::<_, BTreeSet<_>>::new();
+    // Per container, as coverage is per language: a source that read one of its files.
+    let mut sources = HashMap::<_, BTreeSet<DataSource>>::new();
     for file in &tree.files {
         let path = file.path.as_str();
         if let Some(owner) = paths
@@ -117,6 +126,8 @@ fn data_containers(tree: &TreeFacts) -> impl Iterator<Item = SystemDataRow> {
                 .entry(owner)
                 .or_default()
                 .insert(file.language.as_str());
+            let read = sources.entry(owner).or_default();
+            read.extend(facts.source_at(path));
         }
     }
     tree.containers
@@ -130,6 +141,7 @@ fn data_containers(tree: &TreeFacts) -> impl Iterator<Item = SystemDataRow> {
                 .flatten()
                 .map(str::to_owned)
                 .collect(),
+            sources: sources.remove(container.path.as_str()).unwrap_or_default(),
         })
 }
 

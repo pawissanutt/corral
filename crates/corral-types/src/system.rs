@@ -155,6 +155,10 @@ pub enum SystemDataRow {
         name: String,
         /// Languages of this container's files, using the same names as Coverage rows.
         languages: BTreeSet<String>,
+        /// The data sources that read this container's files. An empty set means no source
+        /// supplied data facts here, not a measured zero, as for Coverage rows.
+        #[serde(default)]
+        sources: BTreeSet<DataSource>,
     },
     Type {
         #[serde(rename = "type")]

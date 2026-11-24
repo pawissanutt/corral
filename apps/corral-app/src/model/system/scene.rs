@@ -605,7 +605,7 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
             scene.cards.push(container_card(fact, None, node));
         }
     }
-    keep_legible(scene, all);
+    keep_legible(scene, all, MAX_MODULE_EDGES);
     let drawn =
         |node: &Node, edges: &[Edge]| edges.iter().any(|e| &e.from == node || &e.to == node);
     let mut modules = Vec::new();
@@ -632,8 +632,9 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
     scene.band_title = Some("No module reference found");
 }
 
-/// Keeps each node's strongest reference, then the strongest overall, up to the cap.
-fn keep_legible(scene: &mut Scene, mut all: Vec<Edge>) {
+/// Keeps each node's strongest reference, then the strongest overall, up to `cap`; the rest go
+/// undrawn, which bounds the layout's crossing work.
+pub(super) fn keep_legible(scene: &mut Scene, mut all: Vec<Edge>, cap: usize) {
     all.sort_by_key(|e| std::cmp::Reverse(e.count));
     let mut keep = vec![false; all.len()];
     let mut seen: Vec<&Node> = Vec::new();
@@ -646,7 +647,7 @@ fn keep_legible(scene: &mut Scene, mut all: Vec<Edge>) {
     }
     let mut kept = keep.iter().filter(|k| **k).count();
     for k in keep.iter_mut() {
-        if kept >= MAX_MODULE_EDGES {
+        if kept >= cap {
             break;
         }
         if !*k {

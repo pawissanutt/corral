@@ -66,6 +66,12 @@ pub fn matches(card: &Card, filter: &str) -> bool {
     filter.split_whitespace().all(|word| hay.contains(word))
 }
 
+/// Whether the filter leaves a card of this scene shown. The Data view's scene is built from the
+/// filter already, its counted rest included, so it is not filtered again.
+pub fn passes(scene: &Scene, card: &Card, filter: &str) -> bool {
+    scene.level == Level::Data || matches(card, filter)
+}
+
 /// How many of the level's cards the filter matches, of how many.
 pub fn matched(scene: &Scene, filter: &str) -> (usize, usize) {
     let total = scene.cards.len();
@@ -172,7 +178,7 @@ pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
         let cards: Vec<&Card> = part
             .iter()
             .filter_map(|i| scene.cards.get(*i))
-            .filter(|c| matches(c, &state.filter))
+            .filter(|c| passes(scene, c, &state.filter))
             .collect();
         if cards.is_empty() {
             continue;

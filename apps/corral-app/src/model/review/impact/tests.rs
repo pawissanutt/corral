@@ -565,7 +565,7 @@ fn data_changes_anchor_removals_at_the_base_with_their_own_excerpt() {
     let section = shown
         .sections
         .iter()
-        .find(|s| s.title == "Data model")
+        .find(|s| Category::ALL.get(s.index) == Some(&Category::DataModel))
         .unwrap_or_else(|| panic!("no Data model section"));
     let [removed, retyped] = section.items.as_slice() else {
         panic!("{:?}", section.items);

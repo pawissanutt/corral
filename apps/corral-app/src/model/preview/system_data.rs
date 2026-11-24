@@ -229,18 +229,6 @@ pub(super) fn detail(project: &str) -> Result<SystemData, String> {
     let (types, has) = samples(project)?;
     let served = map(project, None)?;
     let mut rows = Vec::new();
-    let mut languages: BTreeSet<String> = BTreeSet::new();
-    for row in &served.rows {
-        if let SystemMapRow::Container { container, stats } = row {
-            let langs: BTreeSet<String> = stats.languages.keys().cloned().collect();
-            languages.extend(langs.iter().cloned());
-            rows.push(SystemDataRow::Container {
-                path: container.path.clone(),
-                name: container.name.clone(),
-                languages: langs,
-            });
-        }
-    }
     let read: BTreeMap<&str, DataSource> = match project {
         "corral" => [
             ("Rust", DataSource::RustSerde),
@@ -249,6 +237,22 @@ pub(super) fn detail(project: &str) -> Result<SystemData, String> {
         .into(),
         _ => [("SQL", DataSource::Sql), ("JSON", DataSource::JsonSchema)].into(),
     };
+    let mut languages: BTreeSet<String> = BTreeSet::new();
+    for row in &served.rows {
+        if let SystemMapRow::Container { container, stats } = row {
+            let langs: BTreeSet<String> = stats.languages.keys().cloned().collect();
+            languages.extend(langs.iter().cloned());
+            rows.push(SystemDataRow::Container {
+                path: container.path.clone(),
+                name: container.name.clone(),
+                sources: langs
+                    .iter()
+                    .filter_map(|l| read.get(l.as_str()).copied())
+                    .collect(),
+                languages: langs,
+            });
+        }
+    }
     languages.extend(read.keys().map(|l| (*l).to_owned()));
     rows.extend(
         languages

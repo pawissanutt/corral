@@ -10,8 +10,9 @@ use corral_protocol::{
     detail::{DetailBody, DetailGet, DetailRef, DetailReply},
 };
 use corral_types::{
-    DataChangeKind, RuntimeEdgeKind, SourceExcerpt, SystemAt, SystemDataRow, SystemImpactCategory,
-    SystemMapRow, SystemReview, SystemReviewRow, SystemRow, SystemRuntimeRow, SystemStatus,
+    DataChangeKind, DataSource, RuntimeEdgeKind, SourceExcerpt, SystemAt, SystemDataRow,
+    SystemImpactCategory, SystemMapRow, SystemReview, SystemReviewRow, SystemRow, SystemRuntimeRow,
+    SystemStatus,
 };
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
@@ -227,8 +228,9 @@ struct Record {
         panic!("expected a system data detail: {data:?}");
     };
     assert!(data.rows.iter().any(|row| matches!(row,
-        SystemDataRow::Container { path, name, languages }
+        SystemDataRow::Container { path, name, languages, sources }
             if path == "app" && name == "app" && languages.iter().map(String::as_str).eq(["Rust", "TOML"])
+                && sources.contains(&DataSource::RustSerde)
     )));
 
     // Request the delta and wait for the provider to reach the barrier. It is

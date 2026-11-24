@@ -14,7 +14,7 @@ use nsh_core::prelude::*;
 use crate::model::system::layout::{self, Font, Layout, Rect};
 use crate::model::system::marks::{self as marked, Mark, Marks};
 use crate::model::system::scene::{Card, EdgeKind, Kind, Scene};
-use crate::model::system::tree::{matches, share};
+use crate::model::system::tree::{passes, share};
 use crate::model::system::words::{
     activity, busiest, figure, language_slot, languages, read_shares, slot_hue,
 };
@@ -128,7 +128,7 @@ impl Lit<'_> {
     }
 
     fn card(&self, card: &Card) -> bool {
-        if !matches(card, &self.state.filter) || !self.marked(&card.node) {
+        if !passes(self.scene, card, &self.state.filter) || !self.marked(&card.node) {
             return false;
         }
         match &self.state.picked {
@@ -148,7 +148,7 @@ impl Lit<'_> {
         let matched = |node: &Node| {
             self.scene
                 .card(node)
-                .is_some_and(|c| matches(c, &self.state.filter))
+                .is_some_and(|c| passes(self.scene, c, &self.state.filter))
         };
         if !matched(from) || !matched(to) || !(self.marked(from) || self.marked(to)) {
             return false;
