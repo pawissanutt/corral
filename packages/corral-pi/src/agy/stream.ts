@@ -1,12 +1,13 @@
-// Dormant, one-turn ACP transport. Do not register this as a selectable provider: T-2007
+// Dormant, one-prompt ACP transport. Do not register this as a selectable provider: T-2007
 // found that agy 1.5.14 can bypass host tool mediation. Role instructions are not isolation.
 import {
   createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEventStream,
-  type Model, type SimpleStreamOptions,
+  type Model, type SimpleStreamOptions, type Tool, type ToolCall,
 } from "@earendil-works/pi-ai";
-import { AcpFailure, AcpPeer, bounded, deadlineMs, executorWarning, record, rpcFailure, type AgyLaunch } from "./acp.ts";
+import { AcpFailure, AcpPeer, bounded, deadlineMs, executorWarning, record, rpcFailure, type AcpPermission, type AgyLaunch } from "./acp.ts";
+import { openAgyMcp, type AgyMcp } from "./mcp.ts";
 
-interface Turn {
+export interface AgyTurn {
   /** Trusted Corral role instructions; sent in the negotiated system-prompt extension. */
   instructions: string;
   prompt: string;
@@ -15,6 +16,14 @@ interface Turn {
 // ACP has no HTTP status/headers, and credentials and environment are not borrowed from Pi.
 type StreamOptions = Pick<SimpleStreamOptions, "signal" | "onPayload" | "onProviderStreamEvent">;
 type Wire = Record<string, unknown>;
+
+export interface ToolExchange {
+  tools: readonly Tool[];
+  activate(sessionId: string, serverName: string): void;
+  permit: AcpPermission;
+  call: Parameters<typeof openAgyMcp>[1];
+  stop(): void;
+}
 
 function exactSelection(configOptions: unknown, modelId: string, advertisedIds: ReadonlySet<string>): boolean | undefined {
   if (!Array.isArray(configOptions)) return;
@@ -59,7 +68,8 @@ function observableFrame(wire: Wire): Wire {
   } };
 }
 
-async function openSession(peer: AcpPeer, modelId: string, instructions: string, observe: (wire: Wire) => Promise<void>) {
+async function openSession(peer: AcpPeer, modelId: string, instructions: string, observe: (wire: Wire) => Promise<void>,
+  bridge?: AgyMcp["descriptor"]) {
   const init = await peer.request("initialize", {
     protocolVersion: 1, clientInfo: { name: "corral-pi", version: "1" },
     clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
@@ -69,7 +79,7 @@ async function openSession(peer: AcpPeer, modelId: string, instructions: string,
     throw new AcpFailure("protocol", "server does not support ACP v1 and role instructions");
   }
   const created = await peer.request("session/new", {
-    cwd: peer.cwd, mcpServers: [], _meta: { antigravity: { systemPrompt: { append: instructions } } },
+    cwd: peer.cwd, mcpServers: bridge ? [bridge] : [], _meta: { antigravity: { systemPrompt: { append: instructions } } },
   }, observe);
   const { sessionId } = created;
   if (typeof sessionId !== "string" || !sessionId) throw new AcpFailure("protocol", "missing session ID");
@@ -118,7 +128,24 @@ function initialMessage(model: Model<string>): AssistantMessage {
 
 class ContentEvents {
   private index = -1;
-  constructor(private readonly stream: AssistantMessageEventStream, private readonly message: AssistantMessage) {}
+  readonly stream = createAssistantMessageEventStream();
+  readonly message: AssistantMessage;
+
+  constructor(model: Model<string>) { this.message = initialMessage(model); }
+
+  start(): void { this.stream.push({ type: "start", partial: this.message }); }
+
+  tool(call: ToolCall): void {
+    this.end();
+    const partial = this.message;
+    const contentIndex = partial.content.push(call) - 1;
+    this.stream.push({ type: "toolcall_start", contentIndex, partial });
+    this.stream.push({ type: "toolcall_delta", contentIndex, delta: JSON.stringify(call.arguments), partial });
+    this.stream.push({ type: "toolcall_end", contentIndex, toolCall: call, partial });
+    partial.stopReason = "toolUse";
+    this.stream.push({ type: "done", reason: "toolUse", message: partial });
+    this.stream.end();
+  }
 
   update(update: Wire): void {
     const kind = update.sessionUpdate === "agent_message_chunk" ? "text" :
@@ -149,6 +176,19 @@ class ContentEvents {
     if (block?.type === "text") this.stream.push({ type: "text_end", contentIndex, content: block.text, partial });
     if (block?.type === "thinking") this.stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial });
     this.index = -1;
+  }
+}
+
+/** An ACP prompt is split at each MCP call: Pi finishes one assistant message and starts another. */
+export class AgyOutput {
+  current: ContentEvents;
+
+  constructor(private readonly model: Model<string>) { this.current = new ContentEvents(model); }
+
+  handoff(call: ToolCall): void {
+    this.current.tool(call);
+    this.current = new ContentEvents(this.model);
+    this.current.start();
   }
 }
 
@@ -189,87 +229,106 @@ function applyFailure(message: AssistantMessage, failure: AcpFailure): void {
 }
 
 /** Translate one text turn to Pi events without installing auth, model discovery or a worker route. */
-export function streamAgy(launch: AgyLaunch, model: Model<string>, turn: Turn, options?: StreamOptions): AssistantMessageEventStream {
-  const stream = createAssistantMessageEventStream();
-  const message = initialMessage(model);
-  const content = new ContentEvents(stream, message);
-  void (async () => {
-    let peer: AcpPeer | undefined;
-    let active = true;
-    let sessionId: string | undefined;
-    let prompt: Promise<Wire> | undefined;
-    let cancelMs = 0;
-    let failure: AcpFailure | undefined;
-    let warning: AcpFailure | undefined;
-    let result: Wire | undefined;
-    const signal = options?.signal;
-    const observe = async (wire: Wire) => {
-      if (active && options?.onProviderStreamEvent) await options.onProviderStreamEvent(observableFrame(wire), model);
-    };
-    try {
-      if (signal?.aborted) throw new AcpFailure("aborted", "turn cancelled");
-      const setupMs = deadlineMs(launch.setupTimeoutMs, 15_000, 60_000);
-      const turnMs = deadlineMs(launch.turnTimeoutMs, 300_000, 600_000);
-      cancelMs = deadlineMs(launch.cancelTimeoutMs, 250, 2000);
-      if (!turn.instructions.trim() || !model.id.trim()) throw new AcpFailure("protocol", "role instructions and exact model ID are required");
-      const connection = peer = new AcpPeer(launch);
-      const session = await bounded(() => openSession(connection, model.id, turn.instructions, observe), setupMs, "session setup", signal);
-      sessionId = session.sessionId;
-      result = await bounded(async () => {
-        const payload = { sessionId: session.sessionId, prompt: [{ type: "text", text: turn.prompt }] };
-        const replacement = await options?.onPayload?.(payload, model);
-        const edited = record(replacement === undefined ? payload : replacement);
-        if (!active || signal?.aborted) throw new AcpFailure("aborted", "turn cancelled");
-        if (edited?.sessionId !== session.sessionId || !Array.isArray(edited.prompt) || edited.prompt.length === 0) {
-          throw new AcpFailure("protocol", "invalid prompt payload");
-        }
-        const blocks = edited.prompt.map(block => {
-          const item = record(block);
-          if (item?.type !== "text" || typeof item.text !== "string") throw new AcpFailure("protocol", "expected text prompt content");
-          return { type: "text", text: item.text };
-        });
-        stream.push({ type: "start", partial: message });
-        prompt = connection.request("session/prompt", { sessionId: session.sessionId, prompt: blocks }, async wire => {
-          await observe(wire);
-          if (!active || signal?.aborted) return;
-          const update = session.updateForSession(wire);
-          if (update) {
-            session.checkUpdate(update);
-            // Retain the sanitized warning, but drain to the terminal reply for usage.
-            const executorFailure = warningFrom(update);
-            warning ??= executorFailure;
-            if (!executorFailure) content.update(update);
-          }
-        });
-        return await prompt;
-      }, turnMs, "prompt", signal);
-      applyStop(message, result.stopReason);
-      failure = warning;
-    } catch (error) {
-      failure = error instanceof AcpFailure ? error : new AcpFailure("protocol", "turn failed");
-    } finally {
-      active = false;
-      if (peer && sessionId && prompt && !result && (failure?.category === "aborted" || failure?.category === "timeout")) {
-        const connection = peer, id = sessionId, pending = prompt;
-        try {
-          result = await bounded(async () => {
-            await connection.notify("session/cancel", { sessionId: id });
-            return pending;
-          }, cancelMs, "cancellation");
-        } catch { /* process-group cleanup does not require a cooperative agent */ }
-      }
-      try { await peer?.close(); }
-      catch { failure = new AcpFailure("cleanup", "subprocess cleanup failed"); }
-    }
-    content.end();
-    applyUsage(message, record(result?.usage));
-    if (failure) applyFailure(message, failure);
-    switch (message.stopReason) {
-      case "aborted": case "error": stream.push({ type: "error", reason: message.stopReason, error: message }); break;
-      case "length": stream.push({ type: "done", reason: "length", message }); break;
-      default: stream.push({ type: "done", reason: "stop", message }); break;
-    }
-    stream.end();
-  })();
+export function streamAgy(launch: AgyLaunch, model: Model<string>, turn: AgyTurn, options?: StreamOptions): AssistantMessageEventStream {
+  const output = new AgyOutput(model);
+  const { stream } = output.current;
+  void driveAgy(launch, model, turn, output, options);
   return stream;
+}
+
+export async function driveAgy(launch: AgyLaunch, model: Model<string>, turn: AgyTurn, output: AgyOutput,
+  options?: StreamOptions, exchange?: ToolExchange): Promise<void> {
+  let peer: AcpPeer | undefined;
+  const host: { bridge?: AgyMcp } = {};
+  const lifetime = new AbortController();
+  let active = true;
+  let sessionId: string | undefined;
+  let prompt: Promise<Wire> | undefined;
+  let cancelMs = 0;
+  let failure: AcpFailure | undefined;
+  let warning: AcpFailure | undefined;
+  let result: Wire | undefined;
+  const signal = options?.signal;
+  const observe = async (wire: Wire) => {
+    if (active && options?.onProviderStreamEvent) await options.onProviderStreamEvent(observableFrame(wire), model);
+  };
+  try {
+    if (signal?.aborted) throw new AcpFailure("aborted", "turn cancelled");
+    const setupMs = deadlineMs(launch.setupTimeoutMs, 15_000, 60_000);
+    const turnMs = deadlineMs(launch.turnTimeoutMs, 300_000, 600_000);
+    cancelMs = deadlineMs(launch.cancelTimeoutMs, 250, 2000);
+    if (!turn.instructions.trim() || !model.id.trim()) throw new AcpFailure("protocol", "role instructions and exact model ID are required");
+    const connection = peer = new AcpPeer(launch);
+    if (exchange) void connection.exited.then(() => exchange.stop());
+    const session = await bounded(async () => {
+      if (exchange?.tools.length) {
+        const mcpSignal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
+        host.bridge = await openAgyMcp(exchange.tools, exchange.call, mcpSignal);
+      }
+      if (!active || signal?.aborted) throw new AcpFailure("aborted", "turn cancelled");
+      return openSession(connection, model.id, turn.instructions, observe, host.bridge?.descriptor);
+    }, setupMs, "session setup", signal);
+    sessionId = session.sessionId;
+    result = await bounded(async () => {
+      const payload = { sessionId: session.sessionId, prompt: [{ type: "text", text: turn.prompt }] };
+      const replacement = await options?.onPayload?.(payload, model);
+      const edited = record(replacement === undefined ? payload : replacement);
+      if (!active || signal?.aborted) throw new AcpFailure("aborted", "turn cancelled");
+      if (edited?.sessionId !== session.sessionId || !Array.isArray(edited.prompt) || edited.prompt.length === 0) {
+        throw new AcpFailure("protocol", "invalid prompt payload");
+      }
+      const blocks = edited.prompt.map(block => {
+        const item = record(block);
+        if (item?.type !== "text" || typeof item.text !== "string") throw new AcpFailure("protocol", "expected text prompt content");
+        return { type: "text", text: item.text };
+      });
+      output.current.start();
+      if (host.bridge) exchange?.activate(session.sessionId, host.bridge.descriptor.name);
+      prompt = connection.request("session/prompt", { sessionId: session.sessionId, prompt: blocks }, async wire => {
+        await observe(wire);
+        if (!active || signal?.aborted) return;
+        const update = session.updateForSession(wire);
+        if (update) {
+          session.checkUpdate(update);
+          // Retain the sanitized warning, but drain to the terminal reply for usage.
+          const executorFailure = warningFrom(update);
+          warning ??= executorFailure;
+          if (executorFailure) exchange?.stop();
+          else output.current.update(update);
+        }
+      }, host.bridge ? exchange?.permit : undefined);
+      return await prompt;
+    }, turnMs, "prompt", signal);
+    applyStop(output.current.message, result.stopReason);
+    failure = warning;
+  } catch (error) {
+    failure = error instanceof AcpFailure ? error : new AcpFailure("protocol", "turn failed");
+  } finally {
+    active = false;
+    exchange?.stop();
+    lifetime.abort();
+    if (peer && sessionId && prompt && !result && (failure?.category === "aborted" || failure?.category === "timeout")) {
+      const connection = peer, id = sessionId, pending = prompt;
+      try {
+        result = await bounded(async () => {
+          await connection.notify("session/cancel", { sessionId: id });
+          return pending;
+        }, cancelMs, "cancellation");
+      } catch { /* process-group cleanup does not require a cooperative agent */ }
+    }
+    try { await peer?.close(); }
+    catch { failure = new AcpFailure("cleanup", "subprocess cleanup failed"); }
+    await host.bridge?.close();
+  }
+  const segment = output.current;
+  const { message, stream } = segment;
+  segment.end();
+  applyUsage(message, record(result?.usage));
+  if (failure) applyFailure(message, failure);
+  switch (message.stopReason) {
+    case "aborted": case "error": stream.push({ type: "error", reason: message.stopReason, error: message }); break;
+    case "length": stream.push({ type: "done", reason: "length", message }); break;
+    default: stream.push({ type: "done", reason: "stop", message }); break;
+  }
+  stream.end();
 }

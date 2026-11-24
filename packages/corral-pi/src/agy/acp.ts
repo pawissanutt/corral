@@ -146,12 +146,13 @@ async function* frames(stdout: Readable): AsyncGenerator<Json> {
 
 type Child = ChildProcessByStdio<Writable, Readable, null>;
 type Observe = (message: Json) => void | Promise<void>;
+export type AcpPermission = (params: Json) => string | undefined;
 
 export class AcpPeer {
   readonly cwd: string;
   private readonly child: Child;
   private readonly input: AsyncGenerator<Json>;
-  private readonly exited: Promise<void>;
+  readonly exited: Promise<void>;
   private closed = false;
   private spawnFailed = false;
   private requestId = 0;
@@ -201,24 +202,26 @@ export class AcpPeer {
     return message;
   }
 
-  private async handleMethod(message: Json): Promise<void> {
+  private async handleMethod(message: Json, permit?: AcpPermission): Promise<void> {
     if (typeof message.method !== "string") throw new AcpFailure("protocol", "invalid JSON-RPC method");
     if (!("id" in message)) return; // notification
     const { id } = message;
     if (typeof id !== "string" && !Number.isSafeInteger(id)) throw new AcpFailure("protocol", "invalid JSON-RPC request ID");
     if (message.method === "session/request_permission") {
-      await this.send({ id, result: { outcome: { outcome: "cancelled" } } });
+      const optionId = permit?.(record(message.params) ?? {});
+      const outcome = optionId === undefined ? { outcome: "cancelled" } : { outcome: "selected", optionId };
+      await this.send({ id, result: { outcome } });
     } else {
       await this.send({ id, error: { code: -32601, message: "No ACP host capability for this method" } });
     }
   }
 
-  async request(method: string, params: Json, observe: Observe): Promise<Json> {
+  async request(method: string, params: Json, observe: Observe, permit?: AcpPermission): Promise<Json> {
     const id = ++this.requestId;
     await this.send({ id, method, params });
     for (;;) {
       const message = await this.receive(observe);
-      if ("method" in message) { await this.handleMethod(message); continue; }
+      if ("method" in message) { await this.handleMethod(message, permit); continue; }
       if (message.id !== id || ("error" in message) === ("result" in message)) {
         throw new AcpFailure("protocol", "unexpected JSON-RPC response");
       }
