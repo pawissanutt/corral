@@ -4,6 +4,23 @@ use super::*;
 fn commands_render_documented_flags_and_escape_shell_arguments() {
     let cases = [
         (
+            Next::run(Op::LensDraft {
+                project: "site".into(),
+                kind: "state".into(),
+                about: "What happens?".into(),
+                ready: true,
+            }),
+            "corral lens draft site --kind state --about 'What happens?' --ready",
+        ),
+        (
+            Next::run(Op::LensRepair {
+                project: "site".into(),
+                id: "my-lens".into(),
+                ready: false,
+            }),
+            "corral lens repair site my-lens",
+        ),
+        (
             Next::force(Op::Dispatch {
                 id: "T-042".into(),
                 profile: Some("fast profile".into()),

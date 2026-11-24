@@ -202,6 +202,20 @@ impl Store {
         )
     }
 
+    /// Lens identity belongs to creation, not editable titles or body text.
+    /// Call under the same writer transaction as insertion.
+    pub(crate) fn open_lens_task(&self, project: &str, keys: &[String]) -> Result<Option<Task>> {
+        self.optional_document(
+            "SELECT t.document FROM tasks AS t
+             WHERE t.project=?1 AND t.status NOT IN ('done','dropped') AND EXISTS (
+                 SELECT 1 FROM events AS e, json_each(e.detail, '$.lens_task_keys') AS key
+                 WHERE e.task=t.id AND e.kind='created'
+                   AND key.value IN (SELECT value FROM json_each(?2))
+             ) ORDER BY t.rowid LIMIT 1",
+            params![project, encode(&keys)?],
+        )
+    }
+
     /// Fetch status alone for a set of task IDs, including finished tasks.
     pub fn task_statuses(
         &self,

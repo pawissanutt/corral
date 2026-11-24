@@ -29,6 +29,12 @@ const DELTA_WANT: &[&str] = &["changes", "dependents", "tests"];
 const TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_STDOUT: usize = 64 * 1024 * 1024;
 
+#[derive(Clone, Copy)]
+enum ProviderMode {
+    AllowStart,
+    CachedOnly,
+}
+
 /// Built-in reads and provider enrichment are separate so the daemon can
 /// publish the built-in result before calling an extension.
 pub struct FactsReader<'a> {
@@ -132,12 +138,28 @@ impl<'a> FactsReader<'a> {
 
     /// Check only committed lenses and source, with optional definition and entry facts.
     pub fn check_lenses(&self, rev: &Revision) -> Result<(Vec<LensResult>, Option<FactsReport>)> {
+        self.check_lenses_with(rev, ProviderMode::AllowStart)
+    }
+
+    /// Engine operations may reuse a provider answer, but never start a provider.
+    pub(crate) fn check_lenses_cached(
+        &self,
+        rev: &Revision,
+    ) -> Result<(Vec<LensResult>, Option<FactsReport>)> {
+        self.check_lenses_with(rev, ProviderMode::CachedOnly)
+    }
+
+    fn check_lenses_with(
+        &self,
+        rev: &Revision,
+        mode: ProviderMode,
+    ) -> Result<(Vec<LensResult>, Option<FactsReport>)> {
         let sources = self.lens_sources(rev)?;
         if sources.is_empty() {
             return Ok((Vec::new(), None));
         }
         let mut tree = self.builtin_tree(rev)?;
-        let (report, unread_files) = self.enrich_lens_tree(rev, &mut tree);
+        let (report, unread_files) = self.enrich_lens_tree_with(rev, &mut tree, mode);
         let coverage = report.as_ref().map(|report| lenses::LensCoverage {
             provider: &report.coverage,
             unread_files: &unread_files,
@@ -172,9 +194,13 @@ impl<'a> FactsReader<'a> {
     }
 
     pub fn enrich_tree(&self, rev: &Revision, tree: &mut TreeFacts) -> Option<FactsReport> {
-        self.ask(rev, None, SNAPSHOT_WANT, |reply| {
-            Ok(reply.merge_snapshot(tree))
-        })
+        self.ask(
+            rev,
+            None,
+            SNAPSHOT_WANT,
+            ProviderMode::AllowStart,
+            |reply| Ok(reply.merge_snapshot(tree)),
+        )
     }
 
     /// Keep explicit file-read provenance for lens checks without treating
@@ -184,8 +210,17 @@ impl<'a> FactsReader<'a> {
         rev: &Revision,
         tree: &mut TreeFacts,
     ) -> (Option<FactsReport>, BTreeSet<String>) {
+        self.enrich_lens_tree_with(rev, tree, ProviderMode::AllowStart)
+    }
+
+    fn enrich_lens_tree_with(
+        &self,
+        rev: &Revision,
+        tree: &mut TreeFacts,
+        mode: ProviderMode,
+    ) -> (Option<FactsReport>, BTreeSet<String>) {
         let mut unread = BTreeSet::new();
-        let report = self.ask(rev, None, SNAPSHOT_WANT, |reply| {
+        let report = self.ask(rev, None, SNAPSHOT_WANT, mode, |reply| {
             unread = reply.unread_files();
             Ok(reply.merge_snapshot(tree))
         });
@@ -199,13 +234,19 @@ impl<'a> FactsReader<'a> {
         head: &Revision,
         delta: &mut ProjectDelta,
     ) -> Option<FactsReport> {
-        self.ask(head, Some(base), DELTA_WANT, |reply| {
-            let before = self.builtin_tree(base)?;
-            let after = (base.tree() != head.tree())
-                .then(|| self.builtin_tree(head))
-                .transpose()?;
-            Ok(reply.merge_delta(delta, &before, after.as_ref().unwrap_or(&before)))
-        })
+        self.ask(
+            head,
+            Some(base),
+            DELTA_WANT,
+            ProviderMode::AllowStart,
+            |reply| {
+                let before = self.builtin_tree(base)?;
+                let after = (base.tree() != head.tree())
+                    .then(|| self.builtin_tree(head))
+                    .transpose()?;
+                Ok(reply.merge_delta(delta, &before, after.as_ref().unwrap_or(&before)))
+            },
+        )
     }
 
     /// Compare provider-overlaid snapshots independently of the other delta categories.
@@ -233,15 +274,21 @@ impl<'a> FactsReader<'a> {
         validate: &impl Fn(&EntryPoint) -> Result<()>,
     ) -> Option<(EntryPoints, bool)> {
         let mut result = None;
-        self.ask(rev, None, SNAPSHOT_WANT, |reply| {
-            let (entries, coverage) = reply.snapshot_entries(tree);
-            let provided = coverage.provides("entries");
-            if provided {
-                entries.entries.iter().try_for_each(validate)?;
-            }
-            result = Some((entries, provided));
-            Ok(coverage)
-        })?;
+        self.ask(
+            rev,
+            None,
+            SNAPSHOT_WANT,
+            ProviderMode::AllowStart,
+            |reply| {
+                let (entries, coverage) = reply.snapshot_entries(tree);
+                let provided = coverage.provides("entries");
+                if provided {
+                    entries.entries.iter().try_for_each(validate)?;
+                }
+                result = Some((entries, provided));
+                Ok(coverage)
+            },
+        )?;
         result
     }
 
@@ -250,6 +297,7 @@ impl<'a> FactsReader<'a> {
         revision: &Revision,
         base: Option<&Revision>,
         want: &[&str],
+        mode: ProviderMode,
         merge: impl FnOnce(Reply) -> Result<ProviderCoverage>,
     ) -> Option<FactsReport> {
         let (name, line) = self.provider?;
@@ -266,6 +314,10 @@ impl<'a> FactsReader<'a> {
             ))
             .context("encode facts provider cache namespace")?;
             let reply = self.cache.provider_reply(&namespace, revision, base, || {
+                anyhow::ensure!(
+                    matches!(mode, ProviderMode::AllowStart),
+                    "no cached facts provider answer for this revision"
+                );
                 let mut request = Map::from_iter([
                     (
                         "repo".into(),

@@ -13,6 +13,7 @@ pub mod events;
 pub mod extension;
 pub mod facts;
 mod land;
+mod lens_tasks;
 pub mod model;
 #[cfg(unix)]
 pub mod pi_startup;
@@ -76,6 +77,15 @@ impl Engine {
         }
         let mut applied = match op {
             Op::New { task } => applied_task(self.new_task(task)?),
+            Op::LensDraft {
+                project,
+                kind,
+                about,
+                ready,
+            } => applied_task(self.draft_lens(&project, &kind, &about, ready)?),
+            Op::LensRepair { project, id, ready } => {
+                applied_task(self.repair_lens(&project, &id, ready)?)
+            }
             Op::Edit { id, edit } => applied_task(self.edit_task(&id, edit)?),
             Op::Comment { id, text } => applied_task(self.comment(&id, &text)?),
             Op::Move { id, status } => applied_task(self.move_task(&id, status, force)?),

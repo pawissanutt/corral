@@ -15,6 +15,17 @@ pub use corral_types::{NewTask, TaskEdit};
 
 impl Engine {
     pub fn new_task(&self, new: NewTask) -> Result<Task> {
+        self.store
+            .transaction(|store| self.insert_new_task(store, new, &[]))
+    }
+
+    /// The caller holds the creating transaction, including any dedup lookup.
+    pub(crate) fn insert_new_task(
+        &self,
+        store: &Store,
+        new: NewTask,
+        lens_keys: &[String],
+    ) -> Result<Task> {
         if !planning(new.status) {
             return Err(refuse(
                 "new tasks must start in idea, backlog, or ready",
@@ -28,37 +39,34 @@ impl Engine {
         }
         validate_size(new.size.as_deref())?;
         let tags = normalize_tags(new.tags).map_err(|reason| refuse(reason, vec![]))?;
-        self.store.transaction(|store| {
-            let now = Timestamp::now();
-            let task = Task {
-                id: store.next_task_id()?,
-                title: new.title,
-                body: new.body,
-                status: new.status,
-                project: new.project,
-                priority: new.priority,
-                kind: new.kind,
-                size: new.size,
-                difficulty: new.difficulty,
-                tags,
-                profile: new.profile,
-                base: new.base,
-                parent: new.parent,
-                depends_on: new.depends_on,
-                blocked: None,
-                round: 0,
-                created: now,
-                updated: now,
-            };
-            store.insert_task(&task)?;
-            self.task_event(
-                store,
-                &task.id,
-                EventKind::Created,
-                json!({"status":task.status,"title":task.title}),
-            )?;
-            Ok(task)
-        })
+        let now = Timestamp::now();
+        let task = Task {
+            id: store.next_task_id()?,
+            title: new.title,
+            body: new.body,
+            status: new.status,
+            project: new.project,
+            priority: new.priority,
+            kind: new.kind,
+            size: new.size,
+            difficulty: new.difficulty,
+            tags,
+            profile: new.profile,
+            base: new.base,
+            parent: new.parent,
+            depends_on: new.depends_on,
+            blocked: None,
+            round: 0,
+            created: now,
+            updated: now,
+        };
+        store.insert_task(&task)?;
+        let mut detail = json!({"status":task.status,"title":task.title});
+        if !lens_keys.is_empty() {
+            detail["lens_task_keys"] = json!(lens_keys);
+        }
+        self.task_event(store, &task.id, EventKind::Created, detail)?;
+        Ok(task)
     }
 
     pub fn edit_task(&self, id: &str, mut edit: TaskEdit) -> Result<Task> {

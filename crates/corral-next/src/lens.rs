@@ -17,6 +17,23 @@ pub(crate) enum LensCommand {
         #[arg(long, short)]
         project: Option<String>,
     },
+    /// File an ordinary task to draft a behaviour lens.
+    Draft {
+        project: String,
+        #[arg(long, value_parser = ["state", "sequence"])]
+        kind: String,
+        #[arg(long)]
+        about: String,
+        #[arg(long)]
+        ready: bool,
+    },
+    /// File an ordinary task to repair a committed lens.
+    Repair {
+        project: String,
+        id: String,
+        #[arg(long)]
+        ready: bool,
+    },
     /// Check lenses at the project base tip or a specified Git commit.
     Check {
         #[arg(long, short)]
@@ -45,6 +62,36 @@ pub(crate) fn run(
     let (check, project, at, file) = match command {
         LensCommand::List { project } => (false, project, None, None),
         LensCommand::Check { project, at, file } => (true, project, at, file),
+        LensCommand::Draft {
+            project,
+            kind,
+            about,
+            ready,
+        } => {
+            let engine = corral_engine::Engine::open(root.to_path_buf())?;
+            crate::apply(
+                &engine,
+                out,
+                corral_engine::Op::LensDraft {
+                    project,
+                    kind,
+                    about,
+                    ready,
+                },
+                false,
+            )?;
+            return Ok(0);
+        }
+        LensCommand::Repair { project, id, ready } => {
+            let engine = corral_engine::Engine::open(root.to_path_buf())?;
+            crate::apply(
+                &engine,
+                out,
+                corral_engine::Op::LensRepair { project, id, ready },
+                false,
+            )?;
+            return Ok(0);
+        }
     };
     let config = Config::load(&root.join(".corral-next/corral.toml"))?;
     let project = tool_project(

@@ -10,6 +10,19 @@ pub enum Op {
     New {
         task: NewTask,
     },
+    LensDraft {
+        project: String,
+        kind: String,
+        about: String,
+        #[serde(default)]
+        ready: bool,
+    },
+    LensRepair {
+        project: String,
+        id: String,
+        #[serde(default)]
+        ready: bool,
+    },
     Edit {
         id: String,
         edit: TaskEdit,
@@ -156,6 +169,21 @@ impl Next {
                 }
                 Ok(())
             }),
+            Op::LensDraft {
+                project,
+                kind,
+                about,
+                ready,
+            } => invocation(f, "lens draft", &[project], |f| {
+                option(f, "--kind", kind)?;
+                option(f, "--about", about)?;
+                flag(f, " --ready", *ready)
+            }),
+            Op::LensRepair { project, id, ready } => {
+                invocation(f, "lens repair", &[project, id], |f| {
+                    flag(f, " --ready", *ready)
+                })
+            }
             Op::Edit { id, edit } => invocation(f, "edit", &[id], |f| {
                 if let Some(size) = &edit.size {
                     option(f, "--size", size.as_deref().unwrap_or(""))?;
