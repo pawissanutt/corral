@@ -2,7 +2,7 @@
 //! unit the owner needs: a call row can account for several edges, and tests mix two units.
 
 use std::cmp::Reverse;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use corral_types::{ModuleId, ReadStatus, SystemImpactCategory as Category, SystemReview};
 
@@ -247,6 +247,17 @@ struct Figures {
     changes: Changes,
     groups: usize,
     omitted: u64,
+    /// The dependents' depths, none where the provider did not say.
+    depths: BTreeSet<Option<u32>>,
+}
+
+/// A dependent's depth as said beside it; the provider may not supply one, which is said
+/// rather than guessed.
+pub(super) fn depth_words(depth: Option<u32>) -> String {
+    match depth {
+        Some(depth) => format!("depth {depth}"),
+        None => "depth not supplied".into(),
+    }
 }
 
 impl Supply {
@@ -289,7 +300,16 @@ impl Figures {
     fn summary(&self, category: Category, answered_tests: bool) -> String {
         match category {
             Category::Dependents => {
-                format!("in {}", plural(self.groups as u64, "package", "packages"))
+                let known: Vec<String> = self.depths.iter().flatten().map(u32::to_string).collect();
+                let depth = match (known.is_empty(), self.depths.contains(&None)) {
+                    (true, _) => depth_words(None),
+                    (false, false) => format!("depth {}", known.join(", ")),
+                    (false, true) => format!("depth {}, some not supplied", known.join(", ")),
+                };
+                format!(
+                    "in {} · {depth}",
+                    plural(self.groups as u64, "package", "packages")
+                )
             }
             Category::Tests => format!(
                 "{} changed · {}",
@@ -347,6 +367,13 @@ pub(super) fn section(
     let mut grouped = BTreeMap::<_, Bucket>::new();
     let mut units = Units::default();
     let mut changes = Changes::default();
+    let depths = rows
+        .iter()
+        .filter_map(|(row, _)| match row {
+            Row::Dependent { dependent, .. } => Some(dependent.depth),
+            _ => None,
+        })
+        .collect();
     for (row, item) in rows {
         let bucket = grouped.entry(By::of(cx, row)).or_default();
         bucket.changes.see(row, item.sign);
@@ -374,6 +401,7 @@ pub(super) fn section(
             .filter(|by| **by != By::Package(None))
             .count(),
         omitted: omitted as u64,
+        depths,
     };
     let (figure, n) = supply.figure(category, &figures);
     let summary = (!grouped.is_empty()).then(|| {

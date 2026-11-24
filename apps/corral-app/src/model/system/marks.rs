@@ -36,6 +36,9 @@ pub struct Mark {
     pub files: u64,
     pub file_added: u64,
     pub file_removed: u64,
+    /// Every changed file under the node, deleted ones included: the files `added` and
+    /// `removed` count lines in, so a card's churn and its file count describe the same set.
+    pub changed: u64,
     /// Definitions here, outside the change, that reference a changed one.
     pub dependents: u64,
 }
@@ -119,8 +122,11 @@ impl Mark {
         }
         let mut said = churn(self.added, self.removed);
         // A file's count would only say "1 file".
-        if self.files > 0 && !matches!(node, Node::File(_)) {
-            said.push(span(format!(" · {}", plural(self.files, "file", "files"))));
+        if self.changed > 0 && !matches!(node, Node::File(_)) {
+            said.push(span(format!(
+                " · {}",
+                plural(self.changed, "file", "files")
+            )));
         }
         said
     }
@@ -278,7 +284,7 @@ mod tests {
             touched: true,
             added: 4,
             removed: 1,
-            files: 2,
+            changed: 2,
             ..held
         };
         let line = figure_line(&card, Some(both));

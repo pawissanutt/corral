@@ -165,7 +165,10 @@ impl Row {
                 }
             }
             Self::Change { change } => ensure!(change.line > 0, "zero change line"),
-            Self::Dependent { dependent } => ensure!(dependent.line > 0, "zero dependent line"),
+            Self::Dependent { dependent } => {
+                ensure!(dependent.line > 0, "zero dependent line");
+                ensure!(dependent.depth != Some(0), "zero dependent depth");
+            }
             _ => {}
         }
         Ok(())

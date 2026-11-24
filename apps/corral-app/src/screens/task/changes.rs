@@ -57,9 +57,8 @@ pub(super) fn desktop(app: AppState, id: Id, showing: View) -> AnyElement {
     }
 }
 
-/// The stacked Changes tab on a phone or in a terminal.
+/// The stacked Changes tab on a phone or in a terminal; its switch is in the tab row.
 pub(super) fn stacked(app: AppState, id: Id) -> AnyElement {
-    let switch = view_switch(app, id.clone());
     let showing = computed(move || app.impact.with(|state| state.view));
     let content = dynamic(move || {
         let showing = showing.get();
@@ -67,7 +66,6 @@ pub(super) fn stacked(app: AppState, id: Id) -> AnyElement {
     });
     if app.form == Form::Terminal {
         view()
-            .child(switch)
             .child(term::blank())
             .child(content)
             .child(term::blank())
@@ -76,8 +74,6 @@ pub(super) fn stacked(app: AppState, id: Id) -> AnyElement {
         view()
             .px(px(14.0))
             .py(px(14.0))
-            .gap(px(10.0))
-            .child(switch)
             .child(content)
             .into_element()
     }

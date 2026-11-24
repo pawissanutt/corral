@@ -18,7 +18,9 @@ impl State {
         } else if self.map.at().is_some() {
             Some("up")
         } else {
-            None
+            // Escape leaves the task page from here, as everywhere on it, but the hint says so
+            // in Impact's words rather than the page's.
+            Some("leave task")
         }
     }
 

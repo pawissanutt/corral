@@ -373,7 +373,16 @@ fn marks_of(review: &SystemReview, containers: &[String], file: Option<&str>) ->
                 ..
             } => {
                 touch(&mut marks, Node::File(path.clone()), *added, *removed);
-                // A deleted file is on no level of the head, so no card stands for it.
+                // The package's and module's churn counts a deleted file's lines, so their
+                // file count does too.
+                for node in [
+                    Node::Container(container.clone()),
+                    Node::Module(module.clone()),
+                ] {
+                    marks.entry(node).or_default().changed += 1;
+                }
+                // A deleted file is on no level of the head, so no card stands for it, nor for
+                // the files a port or a "N more" card stands for.
                 if *deleted {
                     continue;
                 }
@@ -634,3 +643,5 @@ fn impact(review: &SystemReview, extension: Option<&str>) -> Impact {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod this_task_tests;

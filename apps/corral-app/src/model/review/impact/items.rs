@@ -494,7 +494,12 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             )
         },
         Row::Dependent { dependent, .. } => Item {
-            sub: Some(format!("{} · via {}", dependent.path, dependent.of)),
+            sub: Some(format!(
+                "{} · via {} · {}",
+                dependent.path,
+                dependent.of,
+                super::groups::depth_words(dependent.depth)
+            )),
             anchor: cx.anchor(&dependent.path, Some(dependent.line), false),
             target: cx.file(&dependent.path),
             ..item(

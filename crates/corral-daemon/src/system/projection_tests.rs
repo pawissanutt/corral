@@ -575,6 +575,7 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
         name: "caller".into(),
         line: 2,
         of: "main".into(),
+        depth: Some(2),
     };
     delta.dependents = Some(vec![
         DependentFact {

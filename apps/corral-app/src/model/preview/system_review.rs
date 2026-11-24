@@ -280,6 +280,8 @@ pub(super) fn review(
                                 name: definition.name,
                                 line: definition.line,
                                 of: name.clone(),
+                                // The sample's dependents reference the change directly.
+                                depth: Some(1),
                             },
                             module: held.clone(),
                         },

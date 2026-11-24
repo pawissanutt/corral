@@ -46,7 +46,7 @@ pub(super) fn inspector(
             let inspector = inspect(scene, &pick, at.as_ref());
             let this = app
                 .feed
-                .with(|feed| this_task::this_task(feed, task.as_str(), &pick));
+                .with(|feed| this_task::this_task(feed, task.as_str(), &pick, scene, at.as_ref()));
             (this.is_some() || inspector.is_some()).then_some((this, inspector))
         })
     });

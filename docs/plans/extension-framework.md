@@ -109,7 +109,7 @@ available with the provider error.
 | `definition` | `path`, `name` (full name within the file), `line`, `end_line`, `kind` |
 | `reference` | `from`, `to` (file paths), `kind` (`import`, `use`, `call`), `count` |
 | `change` | `change` (`added`, `removed`, `changed`), `fact` (`definition`, `reference`), `path`, `name`, `line`; for a reference also `to_path`, `to_name` |
-| `dependent` | `path`, `name`, `line`, `of` (full name of the changed definition it depends on) |
+| `dependent` | `path`, `name`, `line`, `of` (full name of the changed definition it depends on), optional `depth` (steps from it, 1 for a direct reference) |
 | `test` | `path`, `name` |
 | `done` | `provided` (which `want` entries were answered), `skipped` (reason → count), `omitted` (limit → count) |
 

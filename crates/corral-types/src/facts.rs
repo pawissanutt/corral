@@ -342,6 +342,10 @@ pub struct DependentFact {
     pub line: u64,
     /// Full name of the changed definition that this definition depends on.
     pub of: String,
+    /// Steps from the changed definition: 1 references it directly. Absent when the
+    /// provider does not say.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

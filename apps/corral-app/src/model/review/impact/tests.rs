@@ -73,6 +73,7 @@ fn unsupplied_category_is_not_zero_and_dependents_survive_a_touched_package() {
             name: "x".into(),
             line: 4,
             of: "y".into(),
+            depth: None,
         },
         module,
     };
@@ -110,6 +111,7 @@ fn unsupplied_category_is_not_zero_and_dependents_survive_a_touched_package() {
             files: 0,
             file_added: 0,
             file_removed: 0,
+            changed: 0,
             dependents: 1,
         })
     );

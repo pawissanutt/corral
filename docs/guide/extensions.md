@@ -112,14 +112,15 @@ All rows must be valid, even for unrequested categories; malformed output, a mis
 | `entry` | `path`, `line`, `kind` (`command`, `route`, `operation`), `name` |
 | `type` | `path`, `name`, `line`, `kind` (`record`, `enum`, `table`, `message`), `fields` (array of `name`, `type`, `line`, optional boolean `optional`) |
 | `change` | `change` (`added`, `removed`, `changed`), `fact` (`definition` or `reference`), `path`, `name`, `line`; reference changes also need `to_path`, `to_name` |
-| `dependent` | `path`, `name`, `line`, `of` |
+| `dependent` | `path`, `name`, `line`, `of`, optional `depth` |
 | `test` | `path`, `name` |
 | `done` | `provided` (array), `skipped` and `omitted` (reason-to-count objects) |
 
 Lines are one-based, end lines cannot precede start lines, and reference counts are
 positive. Paths (including reference `from` and `to`) are exact repository-relative file
 paths in the snapshot, or the base for removed delta changes and the head otherwise;
-unknown paths are dropped. A dependent's `of` is the full name of the changed definition.
+unknown paths are dropped. A dependent's `of` is the full name of the changed definition; its optional `depth` counts the
+steps from it (1 references it directly, never 0), and without it the app says depth is not supplied.
 Providing references replaces built-in syntactic references, even when the provider returns
 none. For snapshots, `entry` rows such as
 `{"type":"entry","path":"src/routes.rs","line":12,"kind":"route","name":"GET /tasks"}`

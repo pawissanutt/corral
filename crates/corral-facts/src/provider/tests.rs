@@ -37,6 +37,7 @@ fn rejects_entire_reply_without_exactly_one_final_done_or_with_a_malformed_row()
         r#"{"type":"change","change":"removed","fact":"reference","path":"src.rs","name":"f","line":1,"to_path":"other.rs"}"#,
         r#"{"type":"change","change":"removed","fact":0,"path":"src.rs","name":"f","line":1}"#,
         r#"{"type":"dependent","path":"src.rs","name":"g","line":1}"#,
+        r#"{"type":"dependent","path":"src.rs","name":"g","line":1,"of":"f","depth":0}"#,
         r#"{"type":"test","path":"src.rs","name":1}"#,
         r#"{"type":"package","path":"src.rs"}"#,
         r#"{} {}"#,
