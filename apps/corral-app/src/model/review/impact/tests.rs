@@ -632,6 +632,7 @@ fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
         Row::Map { row: edge("c", 5) },
         moved(&x, &y, 4, 7),
         moved(&z, &y, 1, 3),
+        moved(&z, &x, 2, 0),
         Row::File {
             path: hidden.into(),
             container: "a".into(),
@@ -678,14 +679,19 @@ fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
         ..head_map(&review)
     };
     let mut scene = build(&package, Some(&at));
-    changes::edges(&mut scene, &review);
+    changes::edges(&mut scene, &review, Some(&at));
     let port = Node::Port {
         path: "b".into(),
         into: false,
     };
     let from = Node::Module(x.clone());
     assert_eq!(change(&scene, &from, &port), Some(vec![(4, 7)]));
-    assert_eq!(change(&scene, &from, &Node::Module(z)), Some(Vec::new()));
+    assert_eq!(
+        change(&scene, &from, &Node::Module(z.clone())),
+        Some(Vec::new())
+    );
+    // A pair the head no longer has keeps an edge for its change.
+    assert_eq!(change(&scene, &Node::Module(z), &from), Some(vec![(2, 0)]));
 
     let at = SystemAt::Module { module: x };
     let file = |path: String, lines| SystemMapRow::File {

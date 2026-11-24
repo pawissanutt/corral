@@ -4,21 +4,32 @@
 use std::collections::BTreeMap;
 
 use corral_types::{
-    ChangeKind, ModuleId, PackageEdge, SystemAt, SystemReview, SystemReviewRow as Row,
+    ChangeKind, ModuleId, PackageEdge, PackageEdgeKind, SystemAt, SystemReview,
+    SystemReviewRow as Row,
 };
 
 use super::items::module_words;
 use crate::model::system::Node;
 use crate::model::system::marks::{Delta, Mark, Marks, figure};
-use crate::model::system::scene::{EdgeKind, Scene};
+use crate::model::system::scene::{Edge, EdgeKind, Scene};
 
-/// Gives each edge of `scene` the module pairs whose reference count the change moved: a
-/// module reference its own pair, a boundary edge the pairs it sums, a package edge the pairs
-/// across it or, where none is listed, the package edge's own count.
-pub(super) fn edges(scene: &mut Scene, review: &SystemReview) {
-    let mut pairs: BTreeMap<(&ModuleId, &ModuleId), (u64, u64)> = BTreeMap::new();
-    let mut packages: BTreeMap<(&str, &str), (u64, u64)> = BTreeMap::new();
+/// Gives each edge of the level `at` shows the module pairs whose reference count the change
+/// moved: a module reference its own pair, a boundary edge the pairs it sums, a package edge
+/// the pairs across it or, where none is listed, the package edge's own count. A pair whose
+/// edge the head no longer has (its count fell to none) gets an edge of its own between the
+/// level's cards, and a changed edge the level left undrawn to stay legible is drawn, so no
+/// change is lost to either.
+pub(super) fn edges(scene: &mut Scene, review: &SystemReview, at: Option<&SystemAt>) {
+    let shown = match at {
+        None => None,
+        Some(SystemAt::Container { path }) => Some(path.as_str()),
+        Some(_) => return,
+    };
     let refs = |edge: &Option<PackageEdge>| edge.as_ref().map_or(0, |e| e.references);
+    // Each change by the two cards it joins, with the kind a new edge between them takes.
+    let mut joined: BTreeMap<(Node, Node), (EdgeKind, Vec<Delta>)> = BTreeMap::new();
+    let mut packages: BTreeMap<(Node, Node), (EdgeKind, Delta)> = BTreeMap::new();
+    let listed = |node: &Node| scene.card(node).is_some();
     for row in &review.rows {
         match row {
             Row::ModuleReference {
@@ -27,60 +38,113 @@ pub(super) fn edges(scene: &mut Scene, review: &SystemReview) {
                 before,
                 after,
             } if before != after => {
-                pairs.insert((from, to), (*before, *after));
+                let ends = match shown {
+                    None => (
+                        Node::Container(from.container.clone()),
+                        Node::Container(to.container.clone()),
+                    ),
+                    Some(path) => (end(from, path, true), end(to, path, false)),
+                };
+                let kind = match &ends {
+                    (Node::Module(_), Node::Module(_)) => EdgeKind::Module,
+                    (Node::Container(_), _) => EdgeKind::Declared,
+                    _ => EdgeKind::Boundary,
+                };
+                if ends.0 == ends.1 || !listed(&ends.0) || !listed(&ends.1) {
+                    continue;
+                }
+                joined
+                    .entry(ends)
+                    .or_insert((kind, Vec::new()))
+                    .1
+                    .push(Delta {
+                        from: module_words(from),
+                        to: module_words(to),
+                        before: *before,
+                        after: *after,
+                    });
             }
-            Row::PackageEdge { before, after } if refs(before) != refs(after) => {
-                if let Some(edge) = after.as_ref().or(before.as_ref()) {
-                    packages.insert(
-                        (edge.from.as_str(), edge.to.as_str()),
-                        (refs(before), refs(after)),
-                    );
+            Row::PackageEdge { before, after }
+                if shown.is_none() && refs(before) != refs(after) =>
+            {
+                let Some(edge) = after.as_ref().or(before.as_ref()) else {
+                    continue;
+                };
+                let ends = (
+                    Node::Container(edge.from.clone()),
+                    Node::Container(edge.to.clone()),
+                );
+                let kind = match edge.kind {
+                    PackageEdgeKind::DeclaredAndReferenced => EdgeKind::Declared,
+                    PackageEdgeKind::DeclaredOnly => EdgeKind::DeclaredOnly,
+                    PackageEdgeKind::ReferencedOnly => EdgeKind::ReferencedOnly,
+                };
+                let delta = Delta {
+                    from: edge.from.clone(),
+                    to: edge.to.clone(),
+                    before: refs(before),
+                    after: refs(after),
+                };
+                if listed(&ends.0) && listed(&ends.1) {
+                    packages.insert(ends, (kind, delta));
                 }
             }
             _ => {}
         }
     }
-    let delta = |from: &ModuleId, to: &ModuleId, (before, after): (u64, u64)| Delta {
-        from: module_words(from),
-        to: module_words(to),
-        before,
-        after,
-    };
+    // A package edge whose module pairs are not listed says its own count.
+    for (ends, (kind, delta)) in packages {
+        joined.entry(ends).or_insert_with(|| (kind, vec![delta]));
+    }
     for edge in scene.edges.iter_mut().chain(scene.undrawn.iter_mut()) {
-        edge.change = match (&edge.from, &edge.to, edge.kind) {
-            (Node::Module(a), Node::Module(b), _) => pairs
-                .get(&(a, b))
-                .map(|counts| delta(a, b, *counts))
-                .into_iter()
-                .collect(),
-            (_, _, EdgeKind::Boundary) => edge
-                .pairs
-                .iter()
-                .filter_map(|(a, b, _)| pairs.get(&(a, b)).map(|counts| delta(a, b, *counts)))
-                .collect(),
-            (Node::Container(a), Node::Container(b), _) => {
-                let across: Vec<Delta> = pairs
-                    .iter()
-                    .filter(|((from, to), _)| &from.container == a && &to.container == b)
-                    .map(|((from, to), counts)| delta(from, to, *counts))
-                    .collect();
-                if across.is_empty() {
-                    packages
-                        .get(&(a.as_str(), b.as_str()))
-                        .map(|(before, after)| Delta {
-                            from: a.clone(),
-                            to: b.clone(),
-                            before: *before,
-                            after: *after,
-                        })
-                        .into_iter()
-                        .collect()
-                } else {
-                    across
-                }
-            }
-            _ => Vec::new(),
-        };
+        let key = (edge.from.clone(), edge.to.clone());
+        edge.change = joined.remove(&key).map(|(_, d)| d).unwrap_or_default();
+    }
+    for ((from, to), (kind, change)) in joined {
+        scene.edges.push(Edge {
+            from,
+            to,
+            kind,
+            count: change.iter().map(|d| d.after).sum(),
+            basis: None,
+            pairs: Vec::new(),
+            sites: Vec::new(),
+            change,
+        });
+    }
+    let (changed, quiet): (Vec<Edge>, Vec<Edge>) = std::mem::take(&mut scene.undrawn)
+        .into_iter()
+        .partition(|e| !e.change.is_empty());
+    scene.undrawn = quiet;
+    scene.edges.extend(changed);
+    // A card an edge now joins leaves the band of unconnected cards for the graph.
+    let ends: Vec<&Node> = scene.edges.iter().flat_map(|e| [&e.from, &e.to]).collect();
+    let (joined, band): (Vec<usize>, Vec<usize>) = scene.band.iter().partition(|i| {
+        scene
+            .cards
+            .get(**i)
+            .is_some_and(|c| ends.contains(&&c.node))
+    });
+    for i in joined {
+        match scene.cards[i].node {
+            Node::Port { into: true, .. } => scene.top.push(i),
+            Node::Port { into: false, .. } => scene.bottom.push(i),
+            _ => scene.graph.push(i),
+        }
+    }
+    scene.band = band;
+}
+
+/// A module's card on the level of package `path`: the module itself inside it, else the
+/// neighbouring package's port on the side the reference crosses.
+fn end(module: &ModuleId, path: &str, into: bool) -> Node {
+    if module.container == path {
+        Node::Module(module.clone())
+    } else {
+        Node::Port {
+            path: module.container.clone(),
+            into,
+        }
     }
 }
 

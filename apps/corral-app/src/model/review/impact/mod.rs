@@ -279,7 +279,7 @@ pub fn shown(feed: &Feed, task: &str, trail: &[SystemAt], more: &BTreeSet<usize>
             impact.marks = marks_of(review, &containers, Some(path));
         }
         if let Some(scene) = impact.scene.as_mut() {
-            changes::edges(scene, review);
+            changes::edges(scene, review, Some(at));
             changes::more(&mut impact.marks, scene, review, at);
             changes::figures(scene, &impact.marks);
         }
@@ -359,15 +359,22 @@ fn marks_of(review: &SystemReview, containers: &[String], file: Option<&str>) ->
                 module,
                 added,
                 removed,
+                deleted,
                 ..
             } => {
                 touch(&mut marks, Node::File(path.clone()), *added, *removed);
+                // A deleted file is on no level of the head, so no card stands for it.
+                if *deleted {
+                    continue;
+                }
                 for node in [
                     Node::File(path.clone()),
                     Node::Container(container.clone()),
                     Node::Module(module.clone()),
                 ] {
-                    marks.entry(node).or_default().files += 1;
+                    let mark = marks.entry(node).or_default();
+                    mark.touched = true;
+                    mark.files += 1;
                 }
             }
             Row::Definition {
@@ -671,7 +678,7 @@ pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<us
         ));
     }
     let mut scene = build(&map, None);
-    changes::edges(&mut scene, review);
+    changes::edges(&mut scene, review, None);
     changes::figures(&mut scene, &marks);
     Impact {
         project: review.project.clone(),

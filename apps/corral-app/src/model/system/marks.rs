@@ -117,11 +117,15 @@ impl Mark {
     pub fn spoken(self) -> String {
         let mut said = Vec::new();
         if self.touched {
-            said.push(format!(
-                "changed: {} added, {} deleted",
-                count(self.added),
-                count(self.removed)
-            ));
+            said.push(if self.churn() > 0 {
+                format!(
+                    "changed: {} added, {} deleted",
+                    count(self.added),
+                    count(self.removed)
+                )
+            } else {
+                "changed".to_owned()
+            });
         }
         if self.dependents > 0 {
             said.push(plural(self.dependents, "dependent", "dependents"));
