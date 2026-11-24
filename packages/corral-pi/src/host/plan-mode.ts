@@ -271,6 +271,7 @@ export class PlanMode {
   refusal(tool: string, input: Readonly<Record<string, unknown>>): string | undefined {
     const phase = this.phase;
     if (phase === "off") return undefined;
+    if (tool === "corral_artifact") return "Plan mode: artifacts cannot be published; nothing was attached.";
     if (tool === "edit" || tool === "write") {
       if (!this.targetsPlan(input.path)) {
         return `Plan mode: the working tree is read-only. Write the plan to ${this.path}; nothing was written.`;

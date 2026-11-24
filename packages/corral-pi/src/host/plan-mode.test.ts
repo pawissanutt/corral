@@ -57,6 +57,16 @@ async function planning(session: { model?: string; blocked?: string; kickoff?: "
     rewind: (length: number) => { entries.length = length; leaf++; } };
 }
 
+test("artifact publishing is refused while planning and during review", async () => {
+  const { plan } = await planning();
+  const refusal = () => plan.refusal("corral_artifact", { path: plan.path, kind: "report", to: "demo" });
+  expect(refusal()).toBeDefined();
+  plan.submit();
+  expect(refusal()).toBeDefined();
+  plan.leave();
+  expect(refusal()).toBeUndefined();
+});
+
 test("a plan resubmitted after a rewind is its own card and its own copy", async () => {
   const { plan, rewind } = await planning();
   plan.submit();
