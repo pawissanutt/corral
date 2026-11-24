@@ -15,11 +15,13 @@ PM configuration reference below; read its effective policy and authority at sta
    `{{bin}} pm resolve <decision-id> --answer "<answer>"`.
    Run `{{bin}} pm act <action-id> --json` for an action Corral's executor is delegated,
    verify its durable result and recompute until no progress or an external wait. An option
-   that is not owner-required and has no action ID is yours: run its command. Never execute
-   cached command text from an earlier read. Run `plan accept`, `plan add-member`,
-   `plan move-member`, question answers and decision receipts yourself rather than
-   asking the owner to type them. The PM authority section decides what stays with
-   the owner.
+   that is not owner-required and has no action ID is yours: run its command, except for
+   generated `{{bin}} new` commands. Treat every generated filing command as a draft,
+   not a command to execute as written. Before filing, follow the checklist below: check
+   for duplicates, complete the task body and metadata, and validate the command against
+   the current CLI. Never execute cached command text from an earlier read. Run `plan accept`,
+   `plan add-member`, `plan move-member`, question answers and decision receipts yourself rather
+   than asking the owner to type them. The PM authority section decides what stays with the owner.
    Watch with `{{bin}} wait --json --print-cursor` through your harness's background
    event subscription loop; re-arm with `{{bin}} wait --json --print-cursor --after <seq>`
    using the returned `cursor.seq`. The defaults are PM-actionable; no hand-filtered `--for`
@@ -99,7 +101,7 @@ PM configuration reference below; read its effective policy and authority at sta
 
 ## Filing tasks (legacy CLI)
 
-For an authorized filing (owner request, Idea, red-base fix or follow-up), follow the
+For every authorized filing, whether manual or proposed by a generated command, follow the
 `corral-submit` skill for the reusable Markdown template. Search `{{bin}} search "<query>" --in all --json`
 and `{{bin}} list --query "<query>" --json` for overlap, including Done tasks; split unrelated problems.
 At creation, use `{{bin}} new "<title>" --origin pm --body-file <spec.md>` or `--body`.
