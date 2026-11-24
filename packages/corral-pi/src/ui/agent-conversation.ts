@@ -357,13 +357,17 @@ export class AgentConversation {
     if (mode === "follow" && !(this.pending?.following ?? this.following)) { if (arrived.settling) this.latestAvailable = true; return; }
     // A recording that changed under the reader is shown around their row, unless they are at its end by now.
     const held = mode === "place" && !this.atEnd();
+    const end = !saved && !held && (mode !== "open" || !this.moved || this.following);
+    // It was read back to the row the reader was on, past the resident limit, so its newest pages were given up,
+    // and the reader is at the end by now: the end is read instead.
+    if (end && arrived.history.newer) { this.ending = true; queueMicrotask(() => { if (this.ending) void this.reread("end"); }); return; }
     this.history = arrived.history; this.known = arrived.known; this.failed = false; this.latestAvailable = false;
     this.joining = undefined; this.trimming = undefined;
     if (mode === "open") this.reopen = undefined;
     if (mode === "end") this.ending = false;
     if (saved) this.pending = saved;
     else if (held) this.joining = { edge: "older", exact: false };
-    else if (mode !== "open" || !this.moved || this.following) { this.pending = undefined; this.jump = "end"; this.toward = "older"; this.pushed = false; }
+    else if (end) { this.pending = undefined; this.jump = "end"; this.toward = "older"; this.pushed = false; }
     this.host.rewrapped?.();
   }
 

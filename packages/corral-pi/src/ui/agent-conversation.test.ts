@@ -456,6 +456,26 @@ test("a jump to the end while the newest pages are not resident reads the record
   expect(view.following).toBeTrue();
 });
 
+test("the end asked for once a full window was read again around the reader's row is the recording's new end", async () => {
+  const row = recorded();
+  let count = 70, stamp = "one";
+  const { read, reads } = recording(() => count, () => stamp);
+  const { view, open, rest } = reader(() => row, read);
+  await open();
+  // Up until the resident pages fill the window and still hold the newest turn.
+  for (let step = 0; step < 400 && !reads.includes("one:8"); step++) { view.scroll.scrollBy(-10); await rest(); }
+  expect(reads).not.toContain("one:6");
+  // The agent wrote another turn. The read back to the reader's row is of more pages than stay resident: it gives
+  // up the newest ones.
+  count = 71; stamp = "two";
+  expect(view.navigate("older")).toBeTrue(); await settle();
+  expect(reads.filter(cursor => cursor.startsWith("two:")).length).toBeGreaterThanOrEqual(64);
+  // They ask for the end before a frame shows what was read.
+  view.scroll.scrollToEnd(); await rest();
+  expect(reading(view)).toContain("✓ read src/file-71.ts · 2 lines");
+  expect(view.following).toBeTrue();
+});
+
 test("reopening a reply that was read from its last rows returns to the same rows once its first rows are read", async () => {
   const row = recorded();
   const lines = (from: number, to: number) => Array.from({ length: to - from }, (_, index) => `REPLY_ROW_${from + index}`).join("\n\n");
