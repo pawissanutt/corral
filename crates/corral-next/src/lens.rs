@@ -68,7 +68,7 @@ pub(crate) fn run(
             about,
             ready,
         } => {
-            let engine = corral_engine::Engine::open(root.to_path_buf())?;
+            let engine = corral_engine::Engine::open(root)?;
             crate::apply(
                 &engine,
                 out,
@@ -83,7 +83,7 @@ pub(crate) fn run(
             return Ok(0);
         }
         LensCommand::Repair { project, id, ready } => {
-            let engine = corral_engine::Engine::open(root.to_path_buf())?;
+            let engine = corral_engine::Engine::open(root)?;
             crate::apply(
                 &engine,
                 out,
