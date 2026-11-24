@@ -151,7 +151,9 @@ pub(super) fn of_review(
                     } else {
                         format!("+{} −{}", count(*a), count(*r))
                     },
-                    target: (!deleted).then(|| file_target(module, path)),
+                    // A folded file has no card of its own to select at its module's level.
+                    target: (!deleted && !matches!(under, Under::Folded(..)))
+                        .then(|| file_target(module, path)),
                 });
             }
             Row::Definition {
@@ -201,7 +203,25 @@ pub(super) fn of_review(
                         dependent.of,
                         depth_words(dependent.depth)
                     ),
-                    target: module.as_ref().map(|m| file_target(m, &dependent.path)),
+                    target: module.as_ref().map(|m| {
+                        let target = file_target(m, &dependent.path);
+                        if !matches!(under, Under::Folded(..)) {
+                            return target;
+                        }
+                        // A file folded at its module's level opens at its own, with the
+                        // dependent definition selected there.
+                        let mut trail = target.trail;
+                        trail.push(SystemAt::File {
+                            path: dependent.path.clone(),
+                        });
+                        Target {
+                            trail,
+                            node: Node::Definition {
+                                line: dependent.line,
+                                name: dependent.name.clone(),
+                            },
+                        }
+                    }),
                 });
             }
             _ => {}
