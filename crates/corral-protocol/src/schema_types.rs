@@ -1,6 +1,6 @@
 //! OpenRPC catalog references for shared serde types. These descriptors are only used
 //! by the catalog, never serialized. The named `corral-types` definitions own the shape.
-use corral_types::TaskDifficulty as Difficulty;
+use corral_types::{ArtifactKind as Kind, TaskDifficulty as Difficulty};
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 
 macro_rules! shared {
@@ -25,7 +25,6 @@ macro_rules! shared {
 }
 
 shared! {
-    Artifact: "object",
     Check: "object",
     ConfigProblem: "object",
     Event: "object",
@@ -45,6 +44,29 @@ shared! {
     Task: "object",
     UsageBy: "string",
     UsageSummary: "object",
+}
+
+pub struct Artifact;
+
+impl JsonSchema for Artifact {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Artifact".into()
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": Kind::ALL.map(Kind::as_str),
+                    "x-rust-type": "corral_types::ArtifactKind",
+                },
+            },
+            "required": ["kind"],
+            "x-rust-type": "corral_types::Artifact",
+        })
+    }
 }
 
 pub struct TaskDifficulty;

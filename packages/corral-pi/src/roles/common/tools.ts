@@ -1,4 +1,5 @@
 // The worker and reviewer attach files to their bound task.
+import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
 import type { CorralToolSpec } from "../types.ts";
@@ -19,7 +20,7 @@ export const artifactTool: CorralToolSpec = {
   op: "artifact",
   parameters: Type.Object({
     path: Type.String({ description: "The file to attach" }),
-    kind: Type.Optional(Type.String({ description: "The artifact kind, such as evidence, report or log" })),
+    kind: StringEnum(["reference", "report", "evidence"] as const, { description: "The artifact kind" }),
     title: Type.Optional(Type.String({ description: "A title that names what the file contains" })),
   }, { additionalProperties: false }),
   payload: (params: Params) => pick(params, ["path", "kind", "title"]),

@@ -6,6 +6,7 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use corral_protocol::detail::{ArtifactEncoding, ArtifactPage, DetailBody};
+use corral_types::ArtifactKind;
 
 use crate::model::artifacts::{plain_text, utf8_text};
 use crate::model::assistant::sniff_image;
@@ -125,13 +126,13 @@ pub(super) fn artifacts(state: &State, feed: &Feed, shown: &Shown, env: Env) -> 
             .map(|artifact| {
                 let reference = artifact.reference();
                 let open = state.opened.contains(&(task.clone(), reference.clone()));
+                let kind = match artifact.kind {
+                    ArtifactKind::Legacy => "unknown kind",
+                    kind => kind.as_str(),
+                };
                 ArtifactView {
                     title: artifact.title.clone(),
-                    kind: format!(
-                        "{} · by {}",
-                        artifact.kind.as_deref().unwrap_or("unknown kind"),
-                        actor(artifact.by)
-                    ),
+                    kind: format!("{kind} · by {}", actor(artifact.by)),
                     content: if open {
                         content(feed, &reference, env)
                     } else {

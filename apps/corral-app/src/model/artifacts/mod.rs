@@ -14,7 +14,7 @@ pub use content::{Body, Content, Line, PREVIEW_LINES, content, target as content
 pub(crate) use content::{log_hue, plain_text, utf8_text};
 
 use corral_protocol::detail::{ArtifactNarrowing, DetailBody, DetailGet, DetailRef};
-use corral_types::Artifact;
+use corral_types::{Artifact, ArtifactKind};
 
 use crate::model::daemon::{DetailCache, Feed};
 use crate::model::work::{stamp_at, when_at};
@@ -152,7 +152,7 @@ impl Query {
 
     /// Whether the artifact, of a task in `project`, matches every token.
     pub fn matches(&self, artifact: &Artifact, project: Option<&str>) -> bool {
-        let kind = artifact.kind.as_deref().unwrap_or_default().to_lowercase();
+        let kind = artifact.kind.as_str();
         let title = artifact.title.to_lowercase();
         let reference = artifact.reference().to_lowercase();
         let project = project.map(str::to_lowercase);
@@ -435,8 +435,16 @@ fn source(artifact: &Artifact) -> String {
     }
 }
 
+fn display_kind(kind: ArtifactKind) -> String {
+    match kind {
+        ArtifactKind::Legacy => "artifact",
+        kind => kind.as_str(),
+    }
+    .to_owned()
+}
+
 fn row(feed: &Feed, artifact: &Artifact) -> Row {
-    let kind = artifact.kind.clone().unwrap_or_else(|| "artifact".into());
+    let kind = display_kind(artifact.kind);
     let project = project_of(feed, artifact);
     let at = stamp_at(artifact.at, feed);
     let label = format!(
@@ -467,7 +475,7 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
     } else {
         format!("{}…", artifact.sha256.chars().take(12).collect::<String>())
     };
-    let kind = artifact.kind.clone().unwrap_or_else(|| "artifact".into());
+    let kind = display_kind(artifact.kind);
     let size = crate::model::session::transcript::size(artifact.bytes);
     let project = project_of(feed, artifact);
     let added = format!(

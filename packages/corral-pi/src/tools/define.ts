@@ -54,7 +54,7 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
           case "artifact":
             if (!task) throw new Error("No task is attached to this session");
             result = await host.client.artifact(task, String(payload.path),
-              typeof payload.kind === "string" ? payload.kind : undefined,
+              String(payload.kind),
               typeof payload.title === "string" ? payload.title : undefined);
             break;
         }

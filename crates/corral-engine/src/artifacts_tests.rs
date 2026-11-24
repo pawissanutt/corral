@@ -1,6 +1,40 @@
 use std::fs;
 
-use crate::{Engine, artifacts::scan_globs, as_refusal, events::EventKind, tasks::NewTask};
+use crate::{
+    ArtifactKind, Engine, artifacts::scan_globs, as_refusal, events::EventKind, tasks::NewTask,
+};
+
+#[test]
+fn stored_artifacts_with_unclassified_kinds_decode_as_legacy() {
+    let root = crate::tests::tempdir();
+    let engine = Engine::init(root.path(), None).unwrap();
+    let task = "T-001";
+    engine.store.insert_task(&crate::tests::task(task)).unwrap();
+    for (id, stored_kind) in
+        (1u32..).zip([None, Some(serde_json::Value::Null), Some("design".into())])
+    {
+        let mut document = serde_json::json!({
+            "task": task, "id": id, "sha256": "unused", "bytes": 0,
+            "title": "Old artifact", "at": "2026-01-01T00:00:00Z", "by": "owner"
+        });
+        if let Some(kind) = stored_kind {
+            document["kind"] = kind;
+        }
+        engine
+            .store
+            .connection
+            .execute(
+                "INSERT INTO artifacts(task,ordinal,sha256,document) VALUES(?1,?2,'unused',?3)",
+                rusqlite::params![task, id, document.to_string()],
+            )
+            .unwrap();
+    }
+    let artifacts = engine.list_artifacts(Some(task)).unwrap();
+    assert_eq!(artifacts.len(), 3);
+    for artifact in artifacts {
+        assert_eq!(artifact.kind, ArtifactKind::Legacy);
+    }
+}
 
 #[test]
 fn tool_output_is_recorded_once_per_run_and_name() {
@@ -54,7 +88,7 @@ fn artifact_add_list_show_size_and_glob_scan() {
     let file = root.path().join("report.html");
     fs::write(&file, b"report").unwrap();
     let artifact = engine
-        .add_artifact(&task.id, &file, Some("report"), None)
+        .add_artifact(&task.id, &file, ArtifactKind::Report, None)
         .unwrap();
     assert_eq!(artifact.reference(), "T-001:1");
     assert_eq!(
@@ -76,7 +110,7 @@ fn artifact_add_list_show_size_and_glob_scan() {
         std::slice::from_ref(&artifact)
     );
     let second = engine
-        .add_artifact_bytes(&task.id, b"report", None, "same bytes")
+        .add_artifact_bytes(&task.id, b"report", ArtifactKind::Reference, "same bytes")
         .unwrap();
     assert_eq!(second.id, 2);
     assert_eq!(artifact.sha256, second.sha256);
@@ -94,7 +128,7 @@ fn artifact_add_list_show_size_and_glob_scan() {
     assert!(
         as_refusal(
             &engine
-                .add_artifact(&task.id, &file, None, None)
+                .add_artifact(&task.id, &file, ArtifactKind::Report, None)
                 .unwrap_err()
         )
         .is_some()
@@ -102,7 +136,7 @@ fn artifact_add_list_show_size_and_glob_scan() {
     assert!(
         as_refusal(
             &engine
-                .add_artifact_bytes(&task.id, b"four", None, "big")
+                .add_artifact_bytes(&task.id, b"four", ArtifactKind::Report, "big")
                 .unwrap_err()
         )
         .is_some()

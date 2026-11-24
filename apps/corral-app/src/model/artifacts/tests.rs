@@ -1,18 +1,18 @@
 use corral_protocol::detail::{
     ArtifactNarrowing, ArtifactsPage, DetailBody, DetailGet, DetailRef, DetailReply, TaskDetail,
 };
-use corral_types::{Actor, Artifact, Task};
+use corral_types::{Actor, Artifact, ArtifactKind, Task};
 
 use super::*;
 use crate::model::daemon::{DetailCache, Feed, detail_key};
 
-fn artifact(task: &str, id: u32, kind: &str, title: &str, minute: i64) -> Artifact {
+fn artifact(task: &str, id: u32, kind: ArtifactKind, title: &str, minute: i64) -> Artifact {
     Artifact {
         task: task.into(),
         id,
         sha256: "ab".repeat(32),
         bytes: 2048,
-        kind: Some(kind.into()),
+        kind,
         title: title.into(),
         at: jiff::Timestamp::from_second(1_800_000_000 + minute * 60).unwrap(),
         by: Actor::Agent,
@@ -131,7 +131,7 @@ fn tokens_go_into_the_narrowing_and_words_into_the_filter() {
     let mut feed = Feed::default();
     task(&mut feed, "T-6", "site");
     let state = State {
-        query: "kind:screenshot kind:screens".into(),
+        query: "kind:report kind:re".into(),
         ..State::default()
     };
     let target = Query::parse(&state.query).request();
@@ -139,12 +139,12 @@ fn tokens_go_into_the_narrowing_and_words_into_the_filter() {
         &mut feed,
         &target,
         vec![vec![
-            artifact("T-6", 1, "screenshot", "hero.png", 3),
-            artifact("T-6", 2, "screens", "notes.md", 1),
+            artifact("T-6", 1, ArtifactKind::Report, "copy.md", 3),
+            artifact("T-6", 2, ArtifactKind::Reference, "notes.md", 1),
         ]],
         false,
     );
-    assert_eq!(titles(&page(&state, &feed, Form::Terminal)), ["hero.png"]);
+    assert_eq!(titles(&page(&state, &feed, Form::Terminal)), ["copy.md"]);
 }
 
 /// Only the page corrald served is listed: unless reaching its end asks for the next, the owner
@@ -158,9 +158,9 @@ fn walking_to_the_last_result_asks_for_the_next_page() {
         &mut feed,
         &target,
         vec![vec![
-            artifact("T-2", 1, "log", "gate log", 3),
-            artifact("T-3", 1, "plan", "plan.md", 2),
-            artifact("T-1", 1, "diff", "diff", 1),
+            artifact("T-2", 1, ArtifactKind::Log, "gate log", 3),
+            artifact("T-3", 1, ArtifactKind::Reference, "plan.md", 2),
+            artifact("T-1", 1, ArtifactKind::Diff, "diff", 1),
         ]],
         true,
     );
@@ -184,11 +184,11 @@ fn walking_to_the_last_result_asks_for_the_next_page() {
         &target,
         vec![
             vec![
-                artifact("T-2", 1, "log", "gate log", 3),
-                artifact("T-3", 1, "plan", "plan.md", 2),
-                artifact("T-1", 1, "diff", "diff", 1),
+                artifact("T-2", 1, ArtifactKind::Log, "gate log", 3),
+                artifact("T-3", 1, ArtifactKind::Reference, "plan.md", 2),
+                artifact("T-1", 1, ArtifactKind::Diff, "diff", 1),
             ],
-            vec![artifact("T-4", 1, "summary", "summary.md", 0)],
+            vec![artifact("T-4", 1, ArtifactKind::Summary, "summary.md", 0)],
         ],
         false,
     );
@@ -207,7 +207,7 @@ fn a_result_opens_its_task_and_a_task_opens_the_finder_on_itself() {
     served(
         &mut feed,
         &target,
-        vec![vec![artifact("T-6", 1, "report", "copy.md", 1)]],
+        vec![vec![artifact("T-6", 1, ArtifactKind::Report, "copy.md", 1)]],
         false,
     );
     state.act(Action::Press("T-6:1".into()), &feed);

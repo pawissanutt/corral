@@ -10,8 +10,8 @@ use jiff::Timestamp;
 use serde_json::json;
 
 use crate::{
-    Actor, Blocked, Check, CheckKind, CheckResult, Engine, Next, Op, Origin, Outcome, Role, Run,
-    Runner, Status, Store, Task,
+    Actor, ArtifactKind, Blocked, Check, CheckKind, CheckResult, Engine, Next, Op, Origin, Outcome,
+    Role, Run, Runner, Status, Store, Task,
     artifacts::ArtifactTarget,
     as_refusal,
     checkout::Checkout,
@@ -59,12 +59,12 @@ impl Engine {
                     run: Some(&run.id),
                     actor: self.actor,
                 };
-                self.add_artifact_in(store, target(), diff.as_bytes(), Some("diff"), "diff.patch")?;
+                self.add_artifact_in(store, target(), diff.as_bytes(), ArtifactKind::Diff, "diff.patch")?;
                 self.add_artifact_in(
                     store,
                     target(),
                     summary.as_bytes(),
-                    Some("summary"),
+                    ArtifactKind::Summary,
                     "summary.md",
                 )?;
                 for path in self.scan_artifacts(&run.worktree, &run.base_sha, &head)? {
@@ -72,7 +72,7 @@ impl Engine {
                         store,
                         target(),
                         &path,
-                        None,
+                        ArtifactKind::Report,
                         None,
                         Some(self.config.artifacts.max_bytes),
                     );
@@ -230,7 +230,7 @@ impl Engine {
                     actor,
                 },
                 &log_path,
-                Some("gate"),
+                ArtifactKind::Gate,
                 None,
                 None,
             )?;

@@ -4,7 +4,7 @@
 //! detail or the task's detail; what none of them serves is left out.
 
 use corral_protocol::detail::{DetailBody, DetailRef, PlanDetail};
-use corral_types::{Op, Outcome, Role, Run, Status};
+use corral_types::{ArtifactKind, Op, Outcome, Role, Run, Status};
 
 use crate::model::act::Act;
 use crate::model::daemon::Feed;
@@ -245,7 +245,11 @@ pub fn artifacts(feed: &Feed, id: &str) -> Vec<ArtifactLine> {
     artifacts
         .into_iter()
         .map(|artifact| ArtifactLine {
-            kind: artifact.kind.clone().unwrap_or_else(|| "file".to_owned()),
+            kind: match artifact.kind {
+                ArtifactKind::Legacy => "file",
+                kind => kind.as_str(),
+            }
+            .to_owned(),
             title: artifact.title.clone(),
             at: work::when_at(artifact.at, feed),
         })

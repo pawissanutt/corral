@@ -69,6 +69,27 @@
         "type": "object"
       },
       "Artifact": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "reference",
+              "report",
+              "evidence",
+              "diff",
+              "summary",
+              "gate",
+              "log",
+              "usage",
+              "tool",
+              "legacy"
+            ],
+            "type": "string",
+            "x-rust-type": "corral_types::ArtifactKind"
+          }
+        },
+        "required": [
+          "kind"
+        ],
         "type": "object",
         "x-rust-type": "corral_types::Artifact"
       },

@@ -3,6 +3,7 @@
 //! and the task's artifacts.
 
 use corral_protocol::detail::{DetailBody, DetailRef, TaskDetail};
+use corral_types::ArtifactKind;
 
 use crate::model::Id;
 use crate::model::act;
@@ -188,9 +189,9 @@ pub fn live_evidence(feed: &Feed, id: &str) -> LiveEvidence {
                 .artifacts
                 .iter()
                 .map(|artifact| {
-                    let source = match &artifact.kind {
-                        Some(kind) => format!("{} · {kind}", artifact.reference()),
-                        None => artifact.reference(),
+                    let source = match artifact.kind {
+                        ArtifactKind::Legacy => artifact.reference(),
+                        kind => format!("{} · {}", artifact.reference(), kind.as_str()),
                     };
                     (artifact.title.clone(), source)
                 })

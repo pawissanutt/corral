@@ -76,7 +76,7 @@ fn ends_with(title: &str, endings: &[&str]) -> bool {
 
 /// What the text is, from corrald's media type, then the artifact's kind and title.
 fn shape(artifact: &Artifact, media: Option<&str>) -> Shape {
-    let kind = artifact.kind.as_deref().unwrap_or_default();
+    let kind = artifact.kind.as_str();
     let title = artifact.title.as_str();
     match media.unwrap_or_default() {
         "text/markdown" => return Shape::Markdown,

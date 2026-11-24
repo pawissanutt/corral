@@ -91,9 +91,9 @@ export class CorralClient {
     catch (cause) { throw new Error(`${argv[0]} returned invalid JSON`, { cause }); }
   }
 
-  artifact(task: string, path: string, kind?: string, title?: string): Promise<unknown> {
+  artifact(task: string, path: string, kind: string, title?: string): Promise<unknown> {
     return this.command(["artifact", "add", task, path.startsWith("-") ? resolve(this.options.cwd, path) : path,
-      ...(kind ? kind.startsWith("-") ? [`--kind=${kind}`] : ["--kind", kind] : []),
+      ...(kind.startsWith("-") ? [`--kind=${kind}`] : ["--kind", kind]),
       ...(title ? title.startsWith("-") ? [`--title=${title}`] : ["--title", title] : [])]);
   }
 

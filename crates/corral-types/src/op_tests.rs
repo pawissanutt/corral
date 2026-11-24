@@ -90,7 +90,7 @@ fn commands_render_documented_flags_and_escape_shell_arguments() {
             Next::run(Op::ArtifactAdd {
                 id: "T-042".into(),
                 path: "reports/diff report.html".into(),
-                kind: Some("diff".into()),
+                kind: crate::ArtifactKind::Diff,
                 title: Some("review notes".into()),
             }),
             "corral artifact add T-042 'reports/diff report.html' --kind diff --title 'review notes'",

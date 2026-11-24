@@ -18,6 +18,7 @@ or required tests. If LSP is disabled or unavailable, use the targeted check dir
 
 Use read, edit, write, bash, grep, find and ls. Use `corral_done` to report completion
 and `corral_artifact` to attach files to this task, rather than their shell equivalents.
+Each `corral_artifact` call requires a `kind`: `reference`, `report`, or `evidence`.
 When available, use `corral_todo` to track phases and steps. Use `corral_checkpoint` for a
 short resume note in the transcript; it does not snapshot the worktree.
 

@@ -38,7 +38,7 @@ export default {
     writeFileSync(join(work, "evidence.txt"), "fixture artifact\n");
     expect(spawnSync("mkfifo", [edit]).status).toBe(0);
     writeFileSync(steps, JSON.stringify([{ toolCalls: [{ callId: "interrupted", name: "codemode", arguments: { code: `
-      await tools.corral_artifact({path: "evidence.txt"});
+      await tools.corral_artifact({path: "evidence.txt", kind: "evidence"});
       await tools.edit({path: "edit.fifo", edits: [{oldText: "a", newText: "b"}]});
       await tools.write({path: "after.txt", content: "would mean the lost cell ran again"});
     ` } }] }]));
@@ -94,7 +94,7 @@ export default {
     expect(readFileSync(transcript, "utf8")).toContain("Recovered conversation");
     expect(journal()).toEqual(interrupted);
     expect(engine.calls().map(argv => argv.slice(3)).filter(argv => argv[0] === "artifact"))
-      .toEqual([["artifact", "add", "T-683", "evidence.txt"]]);
+      .toEqual([["artifact", "add", "T-683", "evidence.txt", "--kind", "evidence"]]);
     expect(existsSync(join(work, "after.txt"))).toBeFalse();
   } finally {
     writer?.kill("SIGKILL");

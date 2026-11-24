@@ -2,7 +2,7 @@ use std::{fmt, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{NewTask, Priority, Status, TaskEdit, Usage, UsageToken};
+use crate::{ArtifactKind, NewTask, Priority, Status, TaskEdit, Usage, UsageToken};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -86,7 +86,7 @@ pub enum Op {
     ArtifactAdd {
         id: String,
         path: PathBuf,
-        kind: Option<String>,
+        kind: ArtifactKind,
         title: Option<String>,
     },
     UsageAdd {
@@ -253,7 +253,7 @@ impl Next {
                 kind,
                 title,
             } => invocation(f, "artifact add", &[id, &path.to_string_lossy()], |f| {
-                optional(f, "--kind", kind.as_deref())?;
+                option(f, "--kind", kind.as_str())?;
                 optional(f, "--title", title.as_deref())
             }),
             Op::UsageAdd { usage } => {

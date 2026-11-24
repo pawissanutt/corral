@@ -1,7 +1,10 @@
 use std::{path::PathBuf, time::Duration};
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
-use corral_engine::{EventKind, Priority, Status, TaskDifficulty, UsageBy};
+use clap::{
+    Args, Parser, Subcommand, ValueEnum,
+    builder::{PossibleValuesParser, TypedValueParser},
+};
+use corral_engine::{ArtifactKind, EventKind, Priority, Status, TaskDifficulty, UsageBy};
 use serde::de::{DeserializeOwned, value::StrDeserializer};
 
 #[derive(Parser)]
@@ -275,8 +278,9 @@ pub(crate) enum ArtifactCommand {
     Add {
         id: String,
         path: PathBuf,
-        #[arg(long)]
-        kind: Option<String>,
+        /// Artifact kind (required except for the owner, who defaults to reference).
+        #[arg(long, value_parser = artifact_kind_parser())]
+        kind: Option<ArtifactKind>,
         #[arg(long)]
         title: Option<String>,
     },
@@ -288,6 +292,20 @@ pub(crate) enum ArtifactCommand {
         #[arg(value_name = "REF")]
         reference: String,
     },
+}
+
+pub(crate) fn artifact_kinds() -> impl Iterator<Item = ArtifactKind> {
+    ArtifactKind::ALL
+        .into_iter()
+        .filter(|&kind| kind != ArtifactKind::Legacy)
+}
+
+fn artifact_kind_parser() -> impl TypedValueParser<Value = ArtifactKind> {
+    PossibleValuesParser::new(artifact_kinds().map(ArtifactKind::as_str)).try_map(|name| {
+        artifact_kinds()
+            .find(|kind| kind.as_str() == name)
+            .ok_or_else(|| format!("unknown artifact kind {name}"))
+    })
 }
 
 #[derive(Subcommand)]

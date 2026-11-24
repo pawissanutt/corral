@@ -311,7 +311,7 @@ pub(crate) fn artifact_line(out: &mut impl Write, artifact: &Artifact) -> io::Re
         artifact.task,
         artifact.id,
         artifact.bytes,
-        artifact.kind.as_deref().unwrap_or("-"),
+        artifact.kind.as_str(),
         artifact.title
     )
 }

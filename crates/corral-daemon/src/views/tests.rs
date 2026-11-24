@@ -274,7 +274,12 @@ fn artifact_chunks_preserve_utf8_boundaries_and_are_selector_bound() {
     let engine = fixture.shared.engine().unwrap();
     let text = format!("{}🦀end", "a".repeat(8191));
     let artifact = engine
-        .add_artifact_bytes(&id, text.as_bytes(), None, "artifact.md")
+        .add_artifact_bytes(
+            &id,
+            text.as_bytes(),
+            corral_engine::ArtifactKind::Report,
+            "artifact.md",
+        )
         .unwrap();
     let get = |target, page, etag| detail(&fixture.shared, DetailGet { target, page, etag });
     let target = DetailRef::Artifact {
@@ -301,19 +306,19 @@ fn artifact_chunks_preserve_utf8_boundaries_and_are_selector_bound() {
 
 #[test]
 fn artifact_finder_orders_and_filters_before_stable_paging() {
-    use corral_engine::{Actor, Artifact, EventKind, events::NewEvent};
+    use corral_engine::{Actor, Artifact, ArtifactKind, EventKind, events::NewEvent};
     use corral_protocol::detail::ArtifactNarrowing;
 
     let fixture = Fixture::new();
     let site = fixture.named_task("site", Some("site-web"));
     let other = fixture.named_task("docs", Some("site-workers"));
     let engine = fixture.shared.engine().unwrap();
-    let insert = |task: &str, id, at: &str, kind: &str, title: String, run: Option<&str>| {
+    let insert = |task: &str, id, at: &str, kind, title: String, run: Option<&str>| {
         let artifact = Artifact {
             task: task.to_owned(),
             id,
             at: at.parse().unwrap(),
-            kind: Some(kind.to_owned()),
+            kind,
             title,
             sha256: "unused".into(),
             bytes: 0,
@@ -343,7 +348,7 @@ fn artifact_finder_orders_and_filters_before_stable_paging() {
         &site,
         1,
         "2026-04-01T00:00:00Z",
-        "nightly",
+        ArtifactKind::Report,
         large.clone(),
         Some("R1"),
     );
@@ -351,7 +356,7 @@ fn artifact_finder_orders_and_filters_before_stable_paging() {
         &site,
         2,
         "2026-04-01T00:00:00.1Z",
-        "Nightly",
+        ArtifactKind::Report,
         large,
         Some("R2"),
     );
@@ -359,7 +364,7 @@ fn artifact_finder_orders_and_filters_before_stable_paging() {
         &other,
         1,
         "2026-04-01T00:00:00.1Z",
-        "nightly",
+        ArtifactKind::Report,
         "Deploy".into(),
         None,
     );
@@ -367,15 +372,15 @@ fn artifact_finder_orders_and_filters_before_stable_paging() {
         &site,
         3,
         "2026-04-01T00:00:00.2Z",
-        "manual",
-        "Deploy nightly".into(),
+        ArtifactKind::Evidence,
+        "Deploy report".into(),
         None,
     );
     let wrong_word = insert(
         &site,
         4,
         "2026-04-01T00:00:00.3Z",
-        "nightly",
+        ArtifactKind::Report,
         "Review".into(),
         None,
     );
@@ -405,12 +410,12 @@ fn artifact_finder_orders_and_filters_before_stable_paging() {
     );
 
     let narrowing = ArtifactNarrowing {
-        kind: Some("nig".into()),
+        kind: Some("REP".into()),
         task: Some(site.clone()),
         project: Some("SITE-W".into()),
     };
     let search = DetailRef::Artifacts {
-        filter: Some("DEPLOY nightly".into()),
+        filter: Some("DEPLOY report".into()),
         narrowing: Some(narrowing.clone()),
     };
     let first = get(search.clone(), None, None);
@@ -424,7 +429,7 @@ fn artifact_finder_orders_and_filters_before_stable_paging() {
     assert!(second.next.is_none());
 
     let mismatched_project = DetailRef::Artifacts {
-        filter: Some("DEPLOY nightly".into()),
+        filter: Some("DEPLOY report".into()),
         narrowing: Some(ArtifactNarrowing {
             project: Some("docs".into()),
             ..narrowing
@@ -438,7 +443,7 @@ fn artifact_finder_orders_and_filters_before_stable_paging() {
         &site,
         5,
         "2026-04-01T00:00:01Z",
-        "nightly",
+        ArtifactKind::Report,
         "Deploy".into(),
         None,
     );

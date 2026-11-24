@@ -36,9 +36,9 @@ pub(crate) fn write_prompt(
             r#"
 ## Finish
 
-Attach any reports or evidence using:
+To attach a file, choose one kind (`--kind report|evidence`). For proof, use `--kind evidence` instead of `--kind report`.
 
-    {bin} artifact add {id} 'path/to/artifact'
+    {bin} artifact add {id} 'path/to/artifact' --kind report
 
 When the work is complete, run:
 
@@ -196,7 +196,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             fs::read_to_string(&file).unwrap(),
-            "# T-1 Title\n\nBody\n\n## Finish\n\nAttach any reports or evidence using:\n\n    'corral' artifact add T-1 'path/to/artifact'\n\nWhen the work is complete, run:\n\n    'corral' done T-1 --summary 'What changed and how you verified it'\n"
+            "# T-1 Title\n\nBody\n\n## Finish\n\nTo attach a file, choose one kind (`--kind report|evidence`). For proof, use `--kind evidence` instead of `--kind report`.\n\n    'corral' artifact add T-1 'path/to/artifact' --kind report\n\nWhen the work is complete, run:\n\n    'corral' done T-1 --summary 'What changed and how you verified it'\n"
         );
         write_prompt(
             &file,

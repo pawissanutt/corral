@@ -12,7 +12,8 @@ description: Complete one dispatched Corral task in its worktree. Use to impleme
 3. Run the smallest checks that prove acceptance, plus any verification required by the
    prompt. If asked to run an engine gate, use `"$CORRAL" gate <id>`. The engine runs
    any remaining required gate in its pipeline.
-4. Attach useful reports or logs with `corral_artifact`; keep scratch output out of the
+4. Attach useful files with `corral_artifact`, choosing the required kind `reference`,
+   `report`, or `evidence`; keep scratch output out of the
    change. Call `corral_done` with what changed, what was verified and any limits.
 5. If changes are sent back, read the new notes alongside the original task, address each
    finding and verify the revised candidate before calling `corral_done` again.

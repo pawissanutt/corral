@@ -1,7 +1,7 @@
 //! Details served from the sample records, shaped as corrald shapes them.
 
 use corral_protocol::detail::*;
-use corral_types::{EventKind, Outcome, Run, SessionRef};
+use corral_types::{ArtifactKind, EventKind, Outcome, Run, SessionRef};
 use jiff::Timestamp;
 
 use super::rollup::{all_runs, closed, last_worker, local_day, row, summarize, usage_rows};
@@ -300,7 +300,7 @@ fn review(feed: &Feed, task: &str) -> Result<ReviewDetail, String> {
             .artifacts
             .iter()
             .rev()
-            .find(|artifact| artifact.kind.as_deref() == Some("diff"))
+            .find(|artifact| artifact.kind == ArtifactKind::Diff)
             .cloned(),
         // Every stored check, earlier rounds included, in the order they were recorded.
         checks: record.checks.clone(),

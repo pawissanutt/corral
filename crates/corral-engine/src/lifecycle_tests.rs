@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-    Actor, Applied, CheckKind, CheckResult, Engine, NewTask, Op, Origin, Outcome, PipelineMode,
-    Priority, Role, Run, SessionStatus, Status, Task, as_refusal,
+    Actor, Applied, ArtifactKind, CheckKind, CheckResult, Engine, NewTask, Op, Origin, Outcome,
+    PipelineMode, Priority, Role, Run, SessionStatus, Status, Task, as_refusal,
     config::Project,
     events::{Event, EventKind},
     testing::FakeRunner,
@@ -331,7 +331,7 @@ fn done_skips_inherited_artifacts_and_unrelated_ignored_outputs() {
         .list_artifacts(Some(&id))
         .unwrap()
         .into_iter()
-        .filter(|artifact| artifact.kind.is_none())
+        .filter(|artifact| artifact.kind == ArtifactKind::Report)
         .map(|artifact| artifact.title)
         .collect();
     titles.sort();

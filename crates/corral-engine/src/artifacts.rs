@@ -14,7 +14,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Engine,
+    ArtifactKind, Engine,
     error::refuse,
     events::{EventKind, NewEvent},
     model::Actor,
@@ -139,13 +139,9 @@ impl Store {
                     .context("artifact metadata is not text")?,
             )
             .context("decode artifact metadata")?;
-            let kind = if kind_prefix.is_some() || !words.is_empty() {
-                artifact.kind.as_deref().map(str::to_lowercase)
-            } else {
-                None
-            };
+            let kind = artifact.kind.as_str();
             if let Some(prefix) = &kind_prefix
-                && !kind.as_ref().is_some_and(|name| name.starts_with(prefix))
+                && !kind.starts_with(prefix)
             {
                 continue;
             }
@@ -158,9 +154,7 @@ impl Store {
                 let title = artifact.title.to_lowercase();
                 let reference = reference.to_ascii_lowercase();
                 if !words.iter().all(|word| {
-                    title.contains(word)
-                        || kind.as_ref().is_some_and(|kind| kind.contains(word))
-                        || reference.contains(word)
+                    title.contains(word) || kind.contains(word) || reference.contains(word)
                 }) {
                     continue;
                 }
@@ -204,7 +198,7 @@ impl Engine {
         &self,
         task: &str,
         path: &Path,
-        kind: Option<&str>,
+        kind: ArtifactKind,
         title: Option<&str>,
     ) -> Result<Artifact> {
         self.store.transaction(|store| {
@@ -225,7 +219,7 @@ impl Engine {
         &self,
         task: &str,
         bytes: &[u8],
-        kind: Option<&str>,
+        kind: ArtifactKind,
         title: &str,
     ) -> Result<Artifact> {
         let max = self.config.artifacts.max_bytes;
@@ -269,7 +263,7 @@ impl Engine {
                 if bytes.len() as u64 > max {
                     return Err(size_refusal(task, bytes.len() as u64, max));
                 }
-                let artifact = self.add_artifact_in(store, self.artifact_target(task, Some(run)), bytes, Some("tool"), name)?;
+                let artifact = self.add_artifact_in(store, self.artifact_target(task, Some(run)), bytes, ArtifactKind::Tool, name)?;
                 store.connection.execute(
                     "UPDATE events SET detail=json_set(detail, '$.tool_record', ?1) WHERE kind='artifact' AND json_extract(detail, '$.reference')=?2",
                     params![name, artifact.reference()],
@@ -315,7 +309,7 @@ impl Engine {
         store: &Store,
         target: ArtifactTarget<'_>,
         path: &Path,
-        kind: Option<&str>,
+        kind: ArtifactKind,
         title: Option<&str>,
         max: Option<u64>,
     ) -> Result<Artifact> {
@@ -347,9 +341,12 @@ impl Engine {
         store: &Store,
         target: ArtifactTarget<'_>,
         bytes: &[u8],
-        kind: Option<&str>,
+        kind: ArtifactKind,
         title: &str,
     ) -> Result<Artifact> {
+        if kind == ArtifactKind::Legacy {
+            return Err(refuse("legacy is reserved for existing artifacts", vec![]));
+        }
         let hash = format!("{:x}", Sha256::digest(bytes));
         let path = self.blob_path(&hash);
         if !path.try_exists().context("inspect artifact blob")? {
@@ -360,7 +357,7 @@ impl Engine {
             id: store.next_artifact_id(target.task)?,
             sha256: hash,
             bytes: bytes.len() as u64,
-            kind: kind.map(str::to_owned),
+            kind,
             title: title.to_owned(),
             at: Timestamp::now(),
             by: target.actor,

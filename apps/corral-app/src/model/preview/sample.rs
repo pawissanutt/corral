@@ -3,8 +3,8 @@
 
 use corral_protocol::detail::TaskDetail;
 use corral_types::{
-    Actor, Artifact, Blocked, Check, CheckKind, CheckResult, Next, Op, Outcome, Priority, Role,
-    Run, SessionRef, Status, Task, TaskDifficulty,
+    Actor, Artifact, ArtifactKind, Blocked, Check, CheckKind, CheckResult, Next, Op, Outcome,
+    Priority, Role, Run, SessionRef, Status, Task, TaskDifficulty,
 };
 use std::path::PathBuf;
 
@@ -349,37 +349,61 @@ fn record(feed: &Feed, seed: &Seed) -> TaskDetail {
 /// Summaries, reports, a plan, evidence and screenshots beside the diffs and gate logs, so the
 /// artifact finder has every kind to show and pages to walk.
 fn papers(feed: &Feed, record: &mut TaskDetail) {
-    let papers: &[(&str, &str, u64)] = match record.task.id.as_str() {
-        "T-1" => &[("plan", "plan.md", 8 * DAY - 30 * MINUTE)],
+    let papers: &[(ArtifactKind, &str, u64)] = match record.task.id.as_str() {
+        "T-1" => &[(ArtifactKind::Reference, "plan.md", 8 * DAY - 30 * MINUTE)],
         "T-2" => &[
-            ("summary", "worker-summary.md", 2 * HOUR + 20 * MINUTE),
-            ("report", "actions-menu-report.md", 2 * HOUR + 10 * MINUTE),
+            (
+                ArtifactKind::Summary,
+                "worker-summary.md",
+                2 * HOUR + 20 * MINUTE,
+            ),
+            (
+                ArtifactKind::Report,
+                "actions-menu-report.md",
+                2 * HOUR + 10 * MINUTE,
+            ),
         ],
         "T-4" => &[(
-            "evidence",
+            ArtifactKind::Evidence,
             "refusal-sheet-trace.txt",
             26 * HOUR + 30 * MINUTE,
         )],
         "T-6" => &[
-            ("screenshot", "landing-hero-mobile.png", 3 * DAY - HOUR),
-            ("report", "landing-copy-report.md", 3 * DAY - 2 * HOUR),
+            (
+                ArtifactKind::Evidence,
+                "landing-hero-mobile.png",
+                3 * DAY - HOUR,
+            ),
+            (
+                ArtifactKind::Report,
+                "landing-copy-report.md",
+                3 * DAY - 2 * HOUR,
+            ),
         ],
         "T-9" => &[
-            ("evidence", "reload-trace.txt", 19 * HOUR),
+            (ArtifactKind::Evidence, "reload-trace.txt", 19 * HOUR),
             (
-                "screenshot",
+                ArtifactKind::Evidence,
                 "paired-after-reload.png",
                 18 * HOUR + 30 * MINUTE,
             ),
         ],
-        "T-10" => &[("report", "usage-coverage-report.md", 35 * MINUTE)],
-        "T-11" => &[("screenshot", "sidebar-80x24.png", 2 * HOUR + 40 * MINUTE)],
-        "T-13" => &[("summary", "worker-summary.md", 55 * MINUTE)],
-        "T-15" => &[("evidence", "lighthouse-scores.txt", HOUR)],
+        "T-10" => &[(
+            ArtifactKind::Report,
+            "usage-coverage-report.md",
+            35 * MINUTE,
+        )],
+        "T-11" => &[(
+            ArtifactKind::Evidence,
+            "sidebar-80x24.png",
+            2 * HOUR + 40 * MINUTE,
+        )],
+        "T-13" => &[(ArtifactKind::Summary, "worker-summary.md", 55 * MINUTE)],
+        "T-15" => &[(ArtifactKind::Evidence, "lighthouse-scores.txt", HOUR)],
         _ => &[],
     };
     for (kind, title, at) in papers {
-        let paper = artifact(feed, record, kind, title, *at);
+        let paper = artifact(feed, record, *kind, title, *at);
         record.artifacts.push(paper);
     }
 }
@@ -394,13 +418,17 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
         record
             .checks
             .push(gate(feed, record, true, None, landed + 40 * MINUTE));
-        record
-            .artifacts
-            .push(artifact(feed, record, "diff", "diff", landed + HOUR));
         record.artifacts.push(artifact(
             feed,
             record,
-            "log",
+            ArtifactKind::Diff,
+            "diff",
+            landed + HOUR,
+        ));
+        record.artifacts.push(artifact(
+            feed,
+            record,
+            ArtifactKind::Log,
             "gate log",
             landed + 40 * MINUTE,
         ));
@@ -466,9 +494,13 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
             record
                 .checks
                 .push(review(feed, record, false, Some(notes), 50 * MINUTE));
-            record
-                .artifacts
-                .push(artifact(feed, record, "diff", "diff", 20 * HOUR));
+            record.artifacts.push(artifact(
+                feed,
+                record,
+                ArtifactKind::Diff,
+                "diff",
+                20 * HOUR,
+            ));
             record.task.blocked = Some(Blocked {
                 reason: "automatic change rounds exhausted".into(),
                 detail: Some(notes.into()),
@@ -494,9 +526,13 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
             let mut run = run(feed, record, Role::Worker, "omp-sol", 7 * HOUR);
             finish(feed, &mut run, 40 * MINUTE, Outcome::Done);
             record.runs.push(run);
-            record
-                .artifacts
-                .push(artifact(feed, record, "diff", "diff", 40 * MINUTE));
+            record.artifacts.push(artifact(
+                feed,
+                record,
+                ArtifactKind::Diff,
+                "diff",
+                40 * MINUTE,
+            ));
             let mut red = gate(
                 feed,
                 record,
@@ -504,7 +540,7 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
                 Some("usage::coverage::uncovered_runs_are_named: left 3, right 2"),
                 30 * MINUTE,
             );
-            let log = artifact(feed, record, "log", "gate log", 30 * MINUTE);
+            let log = artifact(feed, record, ArtifactKind::Log, "gate log", 30 * MINUTE);
             red.log = Some(log.reference());
             record.artifacts.push(log);
             record.checks.push(red);
@@ -534,18 +570,18 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
             ));
             record
                 .artifacts
-                .push(artifact(feed, record, "diff", "diff", 3 * HOUR));
+                .push(artifact(feed, record, ArtifactKind::Diff, "diff", 3 * HOUR));
             record.artifacts.push(artifact(
                 feed,
                 record,
-                "log",
+                ArtifactKind::Log,
                 "gate log",
                 2 * HOUR + 50 * MINUTE,
             ));
             record.artifacts.push(artifact(
                 feed,
                 record,
-                "report",
+                ArtifactKind::Report,
                 "narrow-sidebar-report.html",
                 3 * HOUR,
             ));
@@ -593,7 +629,7 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
                 .push(gate(feed, record, true, None, 30 * MINUTE));
             record
                 .artifacts
-                .push(artifact(feed, record, "diff", "diff", HOUR));
+                .push(artifact(feed, record, ArtifactKind::Diff, "diff", HOUR));
         }
         "T-14" => record
             .runs
@@ -760,7 +796,7 @@ pub(super) fn review(
 pub(super) fn artifact(
     feed: &Feed,
     record: &TaskDetail,
-    kind: &str,
+    kind: ArtifactKind,
     title: &str,
     at: u64,
 ) -> Artifact {
@@ -770,10 +806,10 @@ pub(super) fn artifact(
         id,
         sha256: sha(&format!("{}:{id}", record.task.id), 64),
         bytes: 1_200 + u64::from(id) * 830,
-        kind: Some(kind.into()),
+        kind,
         title: title.into(),
         at: ago(feed, at),
-        by: if kind == "log" {
+        by: if kind == ArtifactKind::Log {
             Actor::Auto
         } else {
             Actor::Agent
@@ -784,7 +820,7 @@ pub(super) fn artifact(
         run: record
             .runs
             .last()
-            .filter(|_| kind != "log")
+            .filter(|_| kind != ArtifactKind::Log)
             .map(|run| run.id.clone()),
     }
 }

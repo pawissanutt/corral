@@ -21,8 +21,8 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, error::ErrorKind};
 use corral_engine::{
-    Config, Engine, NewTask, Op, Role, Status, Task, Usage, UsageToken, config::ExtensionTool,
-    events::EventFilter, extension, refuse, store::TaskFilter,
+    Actor, ArtifactKind, Config, Engine, NewTask, Op, Role, Status, Task, Usage, UsageToken,
+    config::ExtensionTool, events::EventFilter, extension, refuse, store::TaskFilter,
 };
 use jiff::Timestamp;
 use serde::Serialize;
@@ -629,17 +629,33 @@ fn artifact(engine: &Engine, out: &mut Output<'_>, command: ArtifactCommand) -> 
             path,
             kind,
             title,
-        } => apply(
-            engine,
-            out,
-            Op::ArtifactAdd {
-                id,
-                path,
-                kind,
-                title,
-            },
-            false,
-        ),
+        } => {
+            let kind = match kind {
+                Some(kind) => kind,
+                None if engine.actor == Actor::Owner => ArtifactKind::Reference,
+                None => {
+                    let allowed = args::artifact_kinds()
+                        .map(ArtifactKind::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    return Err(refuse(
+                        format!("--kind is required; allowed values: {allowed}"),
+                        vec![],
+                    ));
+                }
+            };
+            apply(
+                engine,
+                out,
+                Op::ArtifactAdd {
+                    id,
+                    path,
+                    kind,
+                    title,
+                },
+                false,
+            )
+        }
         ArtifactCommand::List { id } => {
             let artifacts = engine.list_artifacts(id.as_deref())?;
             out.value(&artifacts, |out, artifacts| {

@@ -144,8 +144,7 @@ impl Engine {
                 title,
             } => {
                 let mut applied = self.applied_for(&id, None)?;
-                applied.artifact =
-                    Some(self.add_artifact(&id, &path, kind.as_deref(), title.as_deref())?);
+                applied.artifact = Some(self.add_artifact(&id, &path, kind, title.as_deref())?);
                 applied
             }
             Op::UsageAdd { usage } => {

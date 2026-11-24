@@ -124,7 +124,7 @@ test("worker todo and resume notes stay local; artifact and completion use bound
     call("corral_todo", { op: "done", step: "fix" }, "todo-done"),
     call("corral_todo", { op: "drop", step: "extra", reason: "Covered by the focused test" }, "todo-drop"),
     call("corral_checkpoint", { note }),
-    call("corral_artifact", { path: ".evidence/test output.log" }),
+    call("corral_artifact", { path: ".evidence/test output.log", kind: "evidence" }),
     call("corral_done", { summary }),
   ]);
   const ended = nextEvent(events, (event) => event.kind === "turn_ended" && event.turn === 1);
@@ -135,7 +135,7 @@ test("worker todo and resume notes stay local; artifact and completion use bound
   expect(host.state().last_error).toBeNull();
   const calls = corral.calls().filter((argv) => ["artifact", "done"].includes(argv[3] ?? ""));
   expect(calls).toEqual([
-    ["--root", work, "--json", "artifact", "add", identity.task, ".evidence/test output.log"],
+    ["--root", work, "--json", "artifact", "add", identity.task, ".evidence/test output.log", "--kind", "evidence"],
     ["--root", work, "--json", "done", identity.task, "--summary", summary],
   ]);
   const todo = host.session.messages.findLast((message) => message.role === "toolResult" && message.toolName === "corral_todo");
@@ -285,7 +285,7 @@ test("worker done attaches fleet evidence before completing and attachment refus
       const result = await tool.execute("done-call", { summary: "Done.\nVerified: none\nNot verified: gate" }, undefined, undefined, {} as never);
       expect(calls.map(call => call.op)).toEqual(["artifact", "done"]);
       expect(calls[0]?.payload.title).toBe("Session record");
-      expect(calls[0]?.payload.kind).toBe("report");
+      expect(calls[0]?.payload.kind).toBe("log");
       const record = JSON.parse(readFileSync(String(calls[0]?.payload.path), "utf8"));
       expect(record.version).toBe(1);
       expect(record.slices.map((slice: { id: string }) => slice.id)).toEqual(artifact === "throw" ? [] : ["slice"]);

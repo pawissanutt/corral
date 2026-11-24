@@ -4,7 +4,7 @@
 //! reference.
 
 use corral_protocol::detail::*;
-use corral_types::{Artifact, CheckKind, CheckResult, Status};
+use corral_types::{Artifact, ArtifactKind, CheckKind, CheckResult, Status};
 
 use super::details::{files, patch};
 use super::{record, records, stamp};
@@ -48,14 +48,14 @@ fn kept(target: &DetailRef, row: &Artifact) -> bool {
         return false;
     };
     let lower = |text: &str| text.to_lowercase();
-    let kind = row.kind.as_deref().map(lower).unwrap_or_default();
+    let kind = row.kind.as_str();
     let prefix = |value: Option<&str>, wanted: &Option<String>| {
         wanted.as_deref().is_none_or(|wanted| {
             value.is_some_and(|value| lower(value).starts_with(&lower(wanted)))
         })
     };
     let narrowed = narrowing.as_ref().is_none_or(|narrowing| {
-        prefix(Some(&kind), &narrowing.kind)
+        prefix(Some(kind), &narrowing.kind)
             && prefix(row.project.as_deref(), &narrowing.project)
             && narrowing
                 .task
@@ -138,21 +138,21 @@ pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, Stri
         .find(|row| row.id.to_string() == key)
         .ok_or_else(|| format!("not_found: artifact {reference}"))?;
     let text = |media: &str, content: String| (media.to_owned(), ArtifactEncoding::Text, content);
-    let (media_type, encoding, content) = match row.kind.as_deref() {
-        Some("diff") => text(
+    let (media_type, encoding, content) = match row.kind {
+        ArtifactKind::Diff => text(
             "text/x-diff",
             files(task)
                 .iter()
                 .map(|(path, ..)| patch(task, path))
                 .collect(),
         ),
-        Some("log") => text("text/plain", gate_log(&record)),
-        Some("screenshot") => (
+        ArtifactKind::Log => text("text/plain", gate_log(&record)),
+        ArtifactKind::Evidence if row.title.ends_with(".png") => (
             "image/png".to_owned(),
             ArtifactEncoding::Base64,
             SCREENSHOT.to_owned(),
         ),
-        Some("evidence") => text("text/plain", evidence(&record, row)),
+        ArtifactKind::Evidence => text("text/plain", evidence(&record, row)),
         _ if row.title.ends_with(".md") => text("text/markdown", markdown(feed, &record, row)),
         _ => text(
             "text/html",
@@ -226,7 +226,7 @@ fn markdown(feed: &Feed, record: &TaskDetail, row: &Artifact) -> String {
         out.push_str(task.body.trim());
         out.push_str("\n\n");
     }
-    if row.kind.as_deref() == Some("plan") {
+    if row.kind == ArtifactKind::Reference && row.title == "plan.md" {
         out.push_str("## Members\n\n");
         for child in records(feed)
             .iter()

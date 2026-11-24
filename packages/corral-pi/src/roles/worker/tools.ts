@@ -58,7 +58,7 @@ export function workerDoneTool(tool: ToolDefinition, host: SessionRecordOptions 
         if (!existsSync(path)) {
           writeFileSync(path, `${JSON.stringify(sessionRecord(fleet, { task: host.task, run: host.run }))}\n`, { flag: "wx", mode: 0o600 });
         }
-        await host.attachArtifact({ path, kind: "report", title: "Session record" });
+        await host.attachArtifact({ path, kind: "log", title: "Session record" });
       } catch (error) {
         warning = `Session record attachment failed: ${error instanceof Error ? error.message : String(error)}`;
       }

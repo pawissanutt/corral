@@ -225,13 +225,92 @@ pub struct Check {
     pub run: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactKind {
+    Reference,
+    Report,
+    Evidence,
+    Diff,
+    Summary,
+    Gate,
+    Log,
+    Usage,
+    Tool,
+    #[default]
+    Legacy,
+}
+
+impl ArtifactKind {
+    pub const ALL: [Self; 10] = [
+        Self::Reference,
+        Self::Report,
+        Self::Evidence,
+        Self::Diff,
+        Self::Summary,
+        Self::Gate,
+        Self::Log,
+        Self::Usage,
+        Self::Tool,
+        Self::Legacy,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Reference => "reference",
+            Self::Report => "report",
+            Self::Evidence => "evidence",
+            Self::Diff => "diff",
+            Self::Summary => "summary",
+            Self::Gate => "gate",
+            Self::Log => "log",
+            Self::Usage => "usage",
+            Self::Tool => "tool",
+            Self::Legacy => "legacy",
+        }
+    }
+
+    pub const fn group(self) -> ArtifactGroup {
+        match self {
+            Self::Reference => ArtifactGroup::Reference,
+            Self::Report => ArtifactGroup::Deliverable,
+            Self::Evidence => ArtifactGroup::Proof,
+            Self::Diff | Self::Summary => ArtifactGroup::Submission,
+            Self::Gate | Self::Log | Self::Usage | Self::Tool | Self::Legacy => {
+                ArtifactGroup::Record
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactGroup {
+    Reference,
+    Deliverable,
+    Proof,
+    Submission,
+    Record,
+}
+
+// Existing artifact documents may have null, absent or arbitrary string kinds.
+// Keep this compatibility local to artifact rows; operations use the strict enum.
+fn deserialize_artifact_kind<'de, D: Deserializer<'de>>(de: D) -> Result<ArtifactKind, D::Error> {
+    let name = Option::<String>::deserialize(de)?;
+    Ok(ArtifactKind::ALL
+        .into_iter()
+        .find(|kind| name.as_deref() == Some(kind.as_str()))
+        .unwrap_or_default())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Artifact {
     pub task: String,
     pub id: u32,
     pub sha256: String,
     pub bytes: u64,
-    pub kind: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_artifact_kind")]
+    pub kind: ArtifactKind,
     pub title: String,
     pub at: Timestamp,
     pub by: Actor,

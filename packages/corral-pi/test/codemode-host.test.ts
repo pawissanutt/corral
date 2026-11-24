@@ -84,13 +84,13 @@ test("a disabled Code Mode leaves direct engine tools available across reload", 
       expect(fx.host.session.getAllTools().some(tool => tool.name === "codemode")).toBeFalse();
       await fx.turn([
         { toolCalls: [{ callId: `artifact-${stage}`, name: "corral_artifact",
-          arguments: { path: "one.txt", title: stage } }] },
+          arguments: { path: "one.txt", kind: "reference", title: stage } }] },
         { text: "Finished" },
       ]);
       expect(fx.result(`artifact-${stage}`).isError).toBeFalse();
     }
     expect(fx.engine.calls().map(argv => argv.slice(3)).filter(argv => argv[0] === "artifact")).toEqual(
-      ["startup", "reload"].map(stage => ["artifact", "add", "T-683", "one.txt", "--title", stage]),
+      ["startup", "reload"].map(stage => ["artifact", "add", "T-683", "one.txt", "--kind", "reference", "--title", stage]),
     );
     expect(fx.host.state().codemode).toBeNull();
   } finally {
