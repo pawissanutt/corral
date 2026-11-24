@@ -89,13 +89,9 @@ impl Engine {
                     })
             )
         {
-            return Err(refuse(
-                format!(
-                    "matching draft {} has been edited or started; resolve or explicitly drop it before retrying lens repair",
-                    task.id
-                ),
-                vec![],
-            ));
+            // An existing task satisfies deduplication, but owner edits and runs
+            // must never be overwritten by an automatic retarget.
+            return Ok(task);
         }
         task.title = repair.title;
         task.body = repair.body;

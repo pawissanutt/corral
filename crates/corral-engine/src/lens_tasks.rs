@@ -210,6 +210,14 @@ impl Engine {
             refuse(reason, vec![])
         })?;
         let result = &results[selected];
+        // A file-scoped repair remains the same task even if the file no longer parses.
+        let repair_key = format!("repair-file:{:?}", result.file);
+        if let Some(task) = self
+            .store
+            .transaction(|store| store.open_lens_task(project, std::slice::from_ref(&repair_key)))?
+        {
+            return Ok(task);
+        }
         let lens = identities[selected].as_ref().ok_or_else(|| {
             let diagnostic = result
                 .failures
@@ -224,8 +232,6 @@ impl Engine {
             )
         })?;
         let duplicate_id = shared_id(&identities, &lens.id);
-        // The file remains the same lens even if its ID changes or becomes duplicated.
-        let repair_key = format!("repair-file:{:?}", result.file);
         let mut draft_keys = Vec::new();
         // Link only exact, unambiguous IDs, paths, or titles, not free-form subjects.
         for alias in [

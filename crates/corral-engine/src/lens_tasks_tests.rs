@@ -329,17 +329,48 @@ fn repair_does_not_retarget_a_draft_with_an_existing_run() {
     let original = apply(&engine, draft("state", "job-lifecycle", true));
     let run = crate::tests::run(&original.id, "R1");
     engine.store.insert_run(&run).unwrap();
-    let error = engine
-        .apply(repair("job-lifecycle", true), false)
-        .unwrap_err();
-    let reason = &as_refusal(&error).unwrap().reason;
-    assert!(reason.contains(&original.id) && reason.contains("started"));
+    assert_eq!(apply(&engine, repair("job-lifecycle", true)), original);
     assert_eq!(engine.store.require_task(&original.id).unwrap(), original);
     assert_eq!(
         engine.store.live_runs_for_task(&original.id).unwrap(),
         vec![run]
     );
     assert_eq!(engine.store.list_events(&original.id).unwrap().len(), 1);
+    assert_eq!(engine.store.next_task_number().unwrap(), 2);
+}
+
+#[test]
+fn repair_returns_commented_draft_without_modification() {
+    let root = tempdir();
+    configure(root.path());
+    commit_lenses(&root.path().join("repo"));
+    let engine = Engine::open_with_runner(root.path(), Box::new(FakeRunner::new())).unwrap();
+    let draft = apply(&engine, draft("state", "job-lifecycle", false));
+    engine.comment(&draft.id, "owner note").unwrap();
+    let original = engine.store.require_task(&draft.id).unwrap();
+    let events = engine.store.list_events(&draft.id).unwrap();
+    assert_eq!(apply(&engine, repair("job-lifecycle", false)), original);
+    assert_eq!(engine.store.list_events(&draft.id).unwrap(), events);
+    assert_eq!(engine.store.next_task_number().unwrap(), 2);
+}
+
+#[test]
+fn repair_returns_open_task_when_file_becomes_syntax_invalid() {
+    let root = tempdir();
+    configure(root.path());
+    let repo = root.path().join("repo");
+    commit_lenses(&repo);
+    let engine = Engine::open_with_runner(root.path(), Box::new(FakeRunner::new())).unwrap();
+    let original = apply(&engine, repair("docs/lenses/job.toml", false));
+    fs::write(repo.join("docs/lenses/job.toml"), "[[states\n").unwrap();
+    git(&repo, &["add", "docs/lenses/job.toml"]);
+    git(&repo, &["commit", "-m", "break lens syntax"]);
+    let events = engine.store.list_events(&original.id).unwrap();
+    assert_eq!(
+        apply(&engine, repair("docs/lenses/job.toml", false)),
+        original
+    );
+    assert_eq!(engine.store.list_events(&original.id).unwrap(), events);
     assert_eq!(engine.store.next_task_number().unwrap(), 2);
 }
 
