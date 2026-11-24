@@ -103,9 +103,13 @@ pub struct Query {
     pub projects: Vec<String>,
 }
 
-/// `T-12` from `t-12`, `T-12` or `12`; anything else, such as a project owning a library, as
-/// typed.
-fn task_id(value: &str) -> String {
+/// `T-12` from `t-12`, `T-12` or `12`; anything else as typed. A known project's name is kept
+/// as typed even where it reads as a task (`t-42`, `42` are valid project names), because
+/// corrald matches an owner exactly and a project owning a library is an owner too.
+fn task_id(value: &str, project: &dyn Fn(&str) -> bool) -> String {
+    if project(value) {
+        return value.to_owned();
+    }
     let number = value
         .strip_prefix("t-")
         .or_else(|| value.strip_prefix("T-"))
@@ -153,8 +157,14 @@ pub fn library(artifact: &Artifact) -> bool {
 }
 
 impl Query {
-    /// A field token still being typed (`kind:`) narrows nothing yet.
+    /// A field token still being typed (`kind:`) narrows nothing yet; no name is known as a
+    /// project.
     pub fn parse(text: &str) -> Query {
+        Query::parse_with(text, &|_| false)
+    }
+
+    /// [`Query::parse`] where `project` says which `task:` values name a known project.
+    pub fn parse_with(text: &str, project: &dyn Fn(&str) -> bool) -> Query {
         let mut query = Query::default();
         for typed in text.split_whitespace() {
             let token = typed.to_lowercase();
@@ -172,7 +182,7 @@ impl Query {
                 into.push(if field == "task" {
                     // corrald matches an owner exactly, so a library's project keeps its case.
                     let (_, typed) = typed.split_once(':').unwrap_or_default();
-                    task_id(typed)
+                    task_id(typed, project)
                 } else {
                     value.to_owned()
                 });
@@ -208,10 +218,7 @@ impl Query {
         self.kinds
             .iter()
             .all(|wanted| kind.starts_with(wanted.as_str()))
-            && self
-                .tasks
-                .iter()
-                .all(|wanted| artifact.task.eq_ignore_ascii_case(wanted))
+            && self.tasks.iter().all(|wanted| artifact.task == *wanted)
             && self.projects.iter().all(|wanted| {
                 project
                     .as_deref()
@@ -261,9 +268,16 @@ fn task_title(feed: &Feed, task: &str) -> Option<String> {
 }
 
 impl State {
+    /// The filter, read with the projects corrald has named.
+    pub fn query(&self, feed: &Feed) -> Query {
+        Query::parse_with(&self.query, &|name| {
+            feed.projects.keys().any(|id| id.as_str() == name)
+        })
+    }
+
     /// The list request the filter and the All switch make.
-    pub fn request(&self) -> DetailRef {
-        Query::parse(&self.query).request(self.all)
+    pub fn request(&self, feed: &Feed) -> DetailRef {
+        self.query(feed).request(self.all)
     }
 }
 
@@ -292,8 +306,8 @@ fn served<'a>(feed: &'a Feed, target: &DetailRef) -> (Vec<&'a Artifact>, Option<
 
 /// The served rows the filter keeps, and the next page's token.
 fn visible<'a>(state: &State, feed: &'a Feed) -> (Vec<&'a Artifact>, Option<&'a str>) {
-    let query = Query::parse(&state.query);
-    let (rows, next) = served(feed, &state.request());
+    let query = state.query(feed);
+    let (rows, next) = served(feed, &query.request(state.all));
     let rows = rows
         .into_iter()
         .filter(|row| query.matches(row, project_of(feed, row).as_deref()))
@@ -313,7 +327,7 @@ fn selected_at(state: &State, rows: &[&Artifact]) -> Option<usize> {
 /// The request for the page after the last served one, while one exists and none is on its
 /// way.
 fn next_page(state: &State, feed: &Feed) -> Option<DetailGet> {
-    let target = state.request();
+    let target = state.request(feed);
     let (_, next) = served(feed, &target);
     Some(DetailGet {
         target,
@@ -612,7 +626,7 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
 
 /// The finder now.
 pub fn page(state: &State, feed: &Feed, form: Form) -> Page {
-    let target = state.request();
+    let target = state.request(feed);
     let (rows, next) = visible(state, feed);
     let cache = feed.detail(&target);
     let status = match cache {

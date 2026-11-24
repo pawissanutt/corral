@@ -234,27 +234,70 @@ fn a_result_opens_its_task_and_a_task_opens_the_finder_on_itself() {
     assert_eq!(Query::parse(&state.query).tasks, ["T-12"]);
 }
 
-/// A project's library is narrowed by its name as typed, which corrald matches exactly; All reaches the rows corrald hides; a library row has no task to open.
+/// A project's library is narrowed by its name as typed, which corrald matches exactly, even
+/// where the name reads as task shorthand (`t-42` is a valid project name, `T-42` a task); All
+/// reaches the rows corrald hides; a library row has no task to open.
 #[test]
 fn a_library_is_found_by_its_project_and_offers_no_task() {
-    let mut state = State {
-        query: "task:ClientDocs".into(),
-        ..State::default()
-    };
-    let narrowing = |state: &State| match state.request() {
+    let mut feed = Feed::default();
+    for name in ["ClientDocs", "t-42"] {
+        feed.projects.insert(
+            name.into(),
+            corral_protocol::rows::ProjectRow {
+                id: name.into(),
+                ..Default::default()
+            },
+        );
+    }
+    let narrowing = |state: &State, feed: &Feed| match state.request(feed) {
         DetailRef::Artifacts { narrowing, .. } => narrowing.unwrap_or_default(),
         _ => ArtifactNarrowing::default(),
     };
-    assert_eq!(narrowing(&state).task.as_deref(), Some("ClientDocs"));
-    assert!(!narrowing(&state).all);
-    let mut feed = Feed::default();
+    let typed = |query: &str| State {
+        query: query.into(),
+        ..State::default()
+    };
+    assert_eq!(
+        narrowing(&typed("task:t-42"), &feed).task.as_deref(),
+        Some("t-42"),
+        "a known project wins over task shorthand"
+    );
+    assert_eq!(
+        narrowing(&typed("task:t-43"), &feed).task.as_deref(),
+        Some("T-43"),
+        "an unknown name is still task shorthand"
+    );
+    let mut state = typed("task:ClientDocs");
+    assert_eq!(narrowing(&state, &feed).task.as_deref(), Some("ClientDocs"));
+    assert!(!narrowing(&state, &feed).all);
     state.act(Action::All(true), &feed);
-    assert!(narrowing(&state).all);
+    assert!(narrowing(&state, &feed).all);
     let mut row = artifact("ClientDocs", 3, ArtifactKind::Reference, "notes.md", 1);
     row.project = Some("ClientDocs".into());
-    served(&mut feed, &state.request(), vec![vec![row]], false);
+    let target = state.request(&feed);
+    served(&mut feed, &target, vec![vec![row]], false);
     let shown = page(&state, &feed, Form::Desktop);
     let preview = shown.preview.expect("the library row is selected");
     assert_eq!(preview.reference, "ClientDocs:3");
     assert_eq!(preview.open_task, None);
+
+    let mut state = typed("task:t-42");
+    state.act(Action::All(true), &feed);
+    let mut library = artifact("t-42", 1, ArtifactKind::Reference, "brief.md", 2);
+    library.project = Some("t-42".into());
+    let target = state.request(&feed);
+    served(
+        &mut feed,
+        &target,
+        vec![vec![
+            library,
+            artifact("T-42", 1, ArtifactKind::Report, "other.md", 1),
+        ]],
+        false,
+    );
+    assert_eq!(
+        titles(&page(&state, &feed, Form::Desktop)),
+        ["brief.md"],
+        "the task T-42's artifact is not the project t-42's"
+    );
 }

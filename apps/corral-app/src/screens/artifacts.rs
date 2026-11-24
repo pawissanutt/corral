@@ -71,8 +71,10 @@ pub fn screen(app: AppState) -> AnyElement {
 /// page requested.
 fn keep_loaded(app: AppState, page: Memo<Page>) {
     let list = computed(move || {
-        app.daemon()
-            .then(|| app.artifacts.with(|state| state.request()))
+        app.daemon().then(|| {
+            app.artifacts
+                .with(|state| app.feed.with(|feed| state.request(feed)))
+        })
     });
     effect(move || {
         if let Some(list) = list.get() {
@@ -375,7 +377,9 @@ fn below(app: AppState, status: Status, empty: Option<String>, more: More) -> An
                 ButtonKind::Ghost,
                 "btn-retry-artifacts",
                 move || {
-                    let list = app.artifacts.with_untracked(|state| state.request());
+                    let list = app.artifacts.with_untracked(|state| {
+                        app.feed.with_untracked(|feed| state.request(feed))
+                    });
                     app.refresh(list);
                 },
             );
