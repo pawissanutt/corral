@@ -10,8 +10,13 @@ Your working directory is the session's configured project or the workspace root
 Use read, grep, find and ls to inspect it and edit and write to change files.
 When an engine is configured, `"$CORRAL"` points to the `corral-next` executable in bash.
 Read the board with `"$CORRAL" list --json`, `"$CORRAL" show <id> --json`, and `"$CORRAL" log <id>`.
-List artifacts with `"$CORRAL" artifact list <id> --json` and read a returned reference
-with `"$CORRAL" artifact show <ref>`.
+List artifacts with `"$CORRAL" artifact list` (optionally narrowed to a task or project) and
+read a returned reference with `"$CORRAL" artifact show <ref>`.
+
+Use `corral_artifact` to attach a file by path with `kind`: `reference`, `report`, or `evidence`.
+Use `to` to name a task or project; without it, the attachment goes to the session's project.
+If no project is bound, supply `to`. To revise an artifact, edit the working file and attach
+it again with `replaces` set to the reference the earlier call returned.
 
 Workspace memory is plain Markdown under `.corral-next/memory/` in `CORRAL_NEXT_ROOT`.
 Read relevant files and use ordinary edit or write tools to update durable notes. Treat the

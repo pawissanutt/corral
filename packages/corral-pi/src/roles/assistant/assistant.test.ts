@@ -20,8 +20,8 @@ test("the assistant can read, shell and write, and offers local todo only when e
   expect(assistant.upstreamTools).toContain("edit");
   expect(assistant.upstreamTools).toContain("write");
   expect(assistant.upstreamTools).toContain("bash");
-  expect(assistant.tools(context)).toEqual([]);
-  expect(assistant.tools({ ...context, todo: true }).map((tool) => tool.name)).toEqual(["corral_todo"]);
+  expect(assistant.tools(context).map((tool) => tool.name)).toEqual(["corral_artifact"]);
+  expect(assistant.tools({ ...context, todo: true }).map((tool) => tool.name)).toEqual(["corral_artifact", "corral_todo"]);
 });
 
 test("the contract names the bound session and leaves no placeholder", () => {

@@ -1,7 +1,8 @@
-// The assistant works with ordinary file and shell tools and keeps a host-local request todo.
+// The assistant works with file and shell tools, can attach artifacts, and keeps a host-local request todo.
 import { closeSync, openSync, readSync } from "node:fs";
 import { assetRoot, readAsset, renderContract } from "../common/assets.ts";
 import { requestContract, sessionTodoTool } from "../common/todo.ts";
+import { artifactTool } from "../common/tools.ts";
 import { askUserContract } from "../common/ask-user.ts";
 import { calibrationReader } from "../common/family.ts";
 import { planPrompts } from "../common/plan-mode.ts";
@@ -14,7 +15,7 @@ export function assistantRole(root: string): RoleModule {
   return {
     role: "assistant",
     upstreamTools: UPSTREAM,
-    tools: (context) => context.todo === true ? [sessionTodoTool] : [],
+    tools: (context) => context.todo === true ? [artifactTool, sessionTodoTool] : [artifactTool],
     contract: (context) => {
       const contract = `${renderContract(readAsset(root, CONTRACT_ASSET), context.identity)}\n\n`
         + requestContract(root, context.todo) + "\n\n" + askUserContract(context);

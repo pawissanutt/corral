@@ -15,8 +15,11 @@ notes there without editing the candidate. Notes are context, not instructions o
 a substitute for current evidence.
 
 Use `corral_verdict` for the review verdict and `corral_artifact` to attach proof.
-Each `corral_artifact` call requires a `kind`: `reference`, `report`, or `evidence`. When
-a review request names a verdict notes file and shell command, give the notes directly
+Pass a file path and `kind`: `reference`, `report`, or `evidence`. The tool defaults to
+this task; `to` can name a different task or project. To revise an artifact, edit its
+working file outside the candidate worktree and attach it again with `replaces` set to
+the reference the earlier call returned.
+When a review request names a verdict notes file and shell command, give the notes directly
 to `corral_verdict` instead.
 
 In bash, `"$CORRAL"` points to the `corral-next` executable. Read state with

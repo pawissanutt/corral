@@ -18,7 +18,10 @@ or required tests. If LSP is disabled or unavailable, use the targeted check dir
 
 Use read, edit, write, bash, grep, find and ls. Use `corral_done` to report completion
 and `corral_artifact` to attach files to this task, rather than their shell equivalents.
-Each `corral_artifact` call requires a `kind`: `reference`, `report`, or `evidence`.
+Pass a file path and `kind`: `reference`, `report`, or `evidence`. The tool defaults to
+this task; `to` can name a different task or project. To revise an artifact, edit the
+working file and attach it again with `replaces` set to the reference the earlier call
+returned. Read artifacts with `"$CORRAL" artifact list` and `"$CORRAL" artifact show <ref>`.
 When available, use `corral_todo` to track phases and steps. Use `corral_checkpoint` for a
 short resume note in the transcript; it does not snapshot the worktree.
 

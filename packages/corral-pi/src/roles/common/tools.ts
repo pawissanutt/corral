@@ -1,4 +1,3 @@
-// The worker and reviewer attach files to their bound task.
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 
@@ -16,12 +15,14 @@ export function pick(params: Params, keys: readonly string[]): Params {
 export const artifactTool: CorralToolSpec = {
   name: "corral_artifact",
   label: "Attach an artifact",
-  description: "Attach a file to your task. Relative paths are resolved from your worktree.",
+  description: "Attach a file to a task or project. Relative paths are resolved from the session's working directory.",
   op: "artifact",
   parameters: Type.Object({
     path: Type.String({ description: "The file to attach" }),
     kind: StringEnum(["reference", "report", "evidence"] as const, { description: "The artifact kind" }),
     title: Type.Optional(Type.String({ description: "A title that names what the file contains" })),
+    to: Type.Optional(Type.String({ description: "Task ID or project name; defaults to the bound task, then the session's project" })),
+    replaces: Type.Optional(Type.String({ description: "Reference returned by the earlier attachment this file revises" })),
   }, { additionalProperties: false }),
-  payload: (params: Params) => pick(params, ["path", "kind", "title"]),
+  payload: (params: Params) => pick(params, ["path", "kind", "title", "to", "replaces"]),
 };

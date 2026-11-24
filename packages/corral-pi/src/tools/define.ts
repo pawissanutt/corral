@@ -51,12 +51,23 @@ export function defineCorralTool(spec: CorralToolSpec, host: ToolHost): ToolDefi
               ? ["done", task, ...option("--summary", String(payload.summary))]
               : ["verdict", task, String(payload.verdict), ...option("--notes", String(payload.notes))]);
             break;
-          case "artifact":
-            if (!task) throw new Error("No task is attached to this session");
-            result = await host.client.artifact(task, String(payload.path),
-              String(payload.kind),
-              typeof payload.title === "string" ? payload.title : undefined);
+          case "artifact": {
+            const owner = typeof payload.to === "string" ? payload.to : task || host.identity.project;
+            if (!owner) throw new Error("Specify `to` with a task ID or project name");
+            const applied = await host.client.artifact(owner, String(payload.path), String(payload.kind),
+              typeof payload.title === "string" ? payload.title : undefined,
+              typeof payload.replaces === "string" ? payload.replaces : undefined);
+            result = applied;
+            // The engine's JSON encodes the reference as the artifact's owner and ordinal.
+            if (applied && typeof applied === "object" && "artifact" in applied) {
+              const row = applied.artifact;
+              if (row && typeof row === "object" && "task" in row && typeof row.task === "string"
+                && "id" in row && typeof row.id === "number") {
+                result = { ...applied, reference: `${row.task}:${row.id}` };
+              }
+            }
             break;
+          }
         }
         return { content: [{ type: "text", text: JSON.stringify(result) }], details: result,
           structuredContent: result as JsonValue,

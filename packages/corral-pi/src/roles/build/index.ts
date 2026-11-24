@@ -4,6 +4,7 @@ import { askUserContract } from "../common/ask-user.ts";
 import { calibrationReader } from "../common/family.ts";
 import { planPrompts } from "../common/plan-mode.ts";
 import { requestContract, sessionTodoTool } from "../common/todo.ts";
+import { artifactTool } from "../common/tools.ts";
 import type { RoleContext, RoleModule, UpstreamTool } from "../types.ts";
 import { buildShellRefusal, installBuildGuard } from "./guard.ts";
 
@@ -66,13 +67,22 @@ function sessionFacts(context: RoleContext): string {
   ].join("\n");
 }
 
+function canAttachArtifact(context: RoleContext): boolean {
+  const session = context.build?.session;
+  return session?.trustedCode === true && !session.bare;
+}
 
 export function buildRole(root: string): RoleModule {
   return {
     role: "build",
     upstreamTools: UPSTREAM,
-    tools: (context) => context.todo === true ? [sessionTodoTool] : [],
+    tools: (context) => [
+      ...(canAttachArtifact(context) ? [artifactTool] : []),
+      ...(context.todo === true ? [sessionTodoTool] : []),
+    ],
     contract: (context) => `${renderContract(readAsset(root, CONTRACT_ASSET).replace(
+      /<!-- artifact-only -->([\s\S]*?)<!-- \/artifact-only -->/g,
+      (_match, text: string) => canAttachArtifact(context) ? text : "").replace(
       /<!-- (build|code)-only -->([\s\S]*?)<!-- \/\1-only -->/g,
       (_match, kind: string, text: string) => (kind === "code") === (context.build?.session.trustedCode === true) ? text : "").replace(
       /<!-- (bare|corral)-only -->([\s\S]*?)<!-- \/\1-only -->/g,

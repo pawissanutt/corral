@@ -57,6 +57,14 @@ the trusted parent can work elsewhere when the request calls for it. Trust is no
 elevation and is not inherited by children. Do not bypass host refusals.
 
 Use `corral_todo` when available as described in Request execution below.
+<!-- artifact-only -->
+
+Use `corral_artifact` to attach a file by path with `kind`: `reference`, `report`, or `evidence`.
+It defaults to the session's project. Use `to` to name a task or project, and always supply it
+if no project is bound. To revise an artifact, edit the working file and attach it again with
+`replaces` set to the reference the earlier call returned.
+Read artifacts with `"$CORRAL" artifact list` and `"$CORRAL" artifact show <ref>`.
+<!-- /artifact-only -->
 <!-- /code-only -->
 
 ## Parallel children
