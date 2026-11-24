@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 export type FakeAgyCase = "stream" | "cancel" | "timeout" | "unavailable" | "mismatch" | "current-mismatch"
-  | "auth" | "quota" | "warning" | "bad-error" | "oversize";
+  | "unchanged-variant" | "auth" | "quota" | "warning" | "bad-error" | "oversize";
 
 type Id = string | number;
 type Packet = { jsonrpc: "2.0"; id?: Id; method?: string };
@@ -79,7 +79,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         const category = scenario === "auth" ? "Authentication required" : "RESOURCE_EXHAUSTED";
         send({ id, error: { code: scenario === "auth" ? -32000 : 429,
           message: `${category}: FAKE_RPC_MESSAGE_DO_NOT_ECHO`, data: { privateDetail: "FAKE_RPC_DATA_DO_NOT_ECHO" } } });
-      } else if (scenario === "stream") {
+      } else if (scenario === "stream" || scenario === "unchanged-variant") {
         send(chunk("thought", "Plan "));
         send(chunk("thought", "ready"));
         send(update("tool_call", nativeTool));

@@ -16,16 +16,20 @@ interface Turn {
 type StreamOptions = Pick<SimpleStreamOptions, "signal" | "onPayload" | "onProviderStreamEvent">;
 type Wire = Record<string, unknown>;
 
-function exactSelection(configOptions: unknown, modelId: string): boolean | undefined {
+function exactSelection(configOptions: unknown, modelId: string, advertisedIds: ReadonlySet<string>): boolean | undefined {
   if (!Array.isArray(configOptions)) return;
   const value = (id: string) => record(configOptions.find(option => record(option)?.id === id))?.currentValue;
   const base = value("model"), effort = value("thought_level");
+  // A split model/effort pair names an advertised variant even if its base is also advertised.
+  if (typeof base === "string" && typeof effort === "string") {
+    const variant = `${base}-${effort}`;
+    if (advertisedIds.has(variant)) return variant === modelId;
+  }
   const suffix = /-(low|medium|high|xhigh|max|minimal|off)$/.exec(modelId)?.[1];
   if (suffix !== undefined && effort !== undefined && effort !== suffix) return false;
   if (typeof base !== "string") return;
   if (base === modelId) return true;
-  if (typeof effort === "string") return `${base}-${effort}` === modelId;
-  if (!modelId.startsWith(`${base}-`)) return false;
+  if (typeof effort === "string" || !modelId.startsWith(`${base}-`)) return false;
 }
 
 function updateFrom(wire: Wire): Wire | undefined {
@@ -71,12 +75,12 @@ async function openSession(peer: AcpPeer, modelId: string, instructions: string,
   if (typeof sessionId !== "string" || !sessionId) throw new AcpFailure("protocol", "missing session ID");
   const models = record(created.models);
   const unavailable = () => new AcpFailure("unavailable", "requested model is unavailable or not selected exactly");
-  if (!Array.isArray(models?.availableModels) || !models.availableModels.some(item => record(item)?.modelId === modelId)) {
-    throw unavailable();
-  }
+  if (!Array.isArray(models?.availableModels)) throw unavailable();
+  const advertisedIds = new Set(models.availableModels.map(item => record(item)?.modelId).filter(id => typeof id === "string"));
+  if (!advertisedIds.has(modelId)) throw unavailable();
   const updateForSession = (wire: Wire) => record(wire.params)?.sessionId === sessionId ? updateFrom(wire) : undefined;
   const checkSelection = (configOptions: unknown) => {
-    const exact = exactSelection(configOptions, modelId);
+    const exact = exactSelection(configOptions, modelId, advertisedIds);
     if (exact === false) throw unavailable();
     return exact === true;
   };

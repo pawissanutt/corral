@@ -30,7 +30,7 @@ function processExists(pid: number): boolean {
   }
 }
 
-async function runFake(scenario: FakeAgyCase) {
+async function runFake(scenario: FakeAgyCase, modelId = model.id) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "corral agy's test-")));
   const launchPath = join(root, "launch.json");
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -48,7 +48,7 @@ async function runFake(scenario: FakeAgyCase) {
     const observed: unknown[] = [];
     const stream = streamAgy({ executable, cwd, home, setupTimeoutMs: 1_500,
       turnTimeoutMs: scenario === "timeout" ? 100 : 1_500, cancelTimeoutMs: 250 },
-      model, turn, { signal: abort.signal, onProviderStreamEvent: packet => { observed.push(packet); } });
+      { ...model, id: modelId }, turn, { signal: abort.signal, onProviderStreamEvent: packet => { observed.push(packet); } });
     const collect = async () => {
       const events: AssistantMessageEvent[] = [];
       for await (const event of stream) {
@@ -136,6 +136,15 @@ posixTest("agy never prompts a near match or an explicitly mismatched model/effo
   const currentMismatch = await runFake("current-mismatch");
   expect(currentMismatch.message.stopReason).toBe("error");
   expect(currentMismatch.methods).toEqual(["initialize", "session/new"]);
+});
+
+posixTest("agy rejects a base model switch if the server still reports an advertised effort variant", async () => {
+  const baseId = "gemini-4-neon";
+  const { message, methods, requests } = await runFake("unchanged-variant", baseId);
+  expect(methods).toEqual(["initialize", "session/new", "session/set_model"]);
+  expect(requests[2]?.params).toEqual({ sessionId: "fake-session", modelId: baseId });
+  expect(message.stopReason).toBe("error");
+  expect(message.diagnostics?.find(diagnostic => diagnostic.type === "agy_acp_failure")?.details).toEqual({ category: "unavailable" });
 });
 
 posixTest("agy abort sends session/cancel and reaps even a TERM-resistant child", async () => {
