@@ -162,10 +162,10 @@ The `system_review` detail includes Runtime changes only when the client also ne
 Units come from Cargo bin declarations and conventional targets, npm bins and scripts, Python
 project scripts, Compose services, Dockerfiles and Containerfiles, systemd units and GitHub Actions jobs.
 A `starts` link originates at the binary entry file when known, otherwise its container. `runs` matches
-only a declaration's literal first command word. Names must exactly match a unique repository binary;
-paths, wrappers and expansions are not resolved. Ambiguous in-repository names produce neither a
-link nor an external process. Unmatched spawns still appear as external processes. Compose dependencies link to services in the same file; builds link a tracked image
-(or the container owning a local build context) to the service. Detectors do not run or expand config,
+only a declaration's literal first command word. Links go to every repository binary with the exact
+name; they do not predict which executable PATH selects. Paths, wrappers and expansions are not
+resolved. Unmatched spawns still appear as external processes. Compose dependencies link to services
+in the same file; builds link a tracked image (or the container owning a local build context) to the service. Detectors do not run or expand config,
 follow includes, or infer undeclared ports, inherited image commands or runtime-built process names.
 Moving an otherwise unchanged declaration or link to another line is not a Runtime Impact change.
 

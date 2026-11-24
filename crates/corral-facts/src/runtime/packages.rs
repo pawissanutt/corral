@@ -8,35 +8,47 @@ use regex::Regex;
 use serde_json::Value;
 use toml_edit::{Document, Item};
 
-use crate::model::*;
+use crate::{model::*, structure::owner};
 
-use super::{Declarations, basename, dirname, local_path, unit};
+use super::{Declarations, basename, dirname, literal_path, local_path, unit};
+
+type CargoDocuments<'a> = BTreeMap<&'a str, Document<&'a str>>;
 
 pub(super) fn read(
-    path: &str,
-    text: &str,
+    manifests: &BTreeMap<String, String>,
     files: &BTreeMap<&str, &FileFact>,
-    container: &str,
+    containers: &BTreeSet<&str>,
     output: &mut Declarations,
 ) {
-    match basename(path) {
-        "Cargo.toml" => cargo(path, text, files, container, output),
-        "package.json" => npm(path, text, container, output),
-        "pyproject.toml" => python(path, text, container, output),
-        _ => {}
+    // Keep spans and workspace inheritance data from the same committed manifests.
+    let cargo_docs: CargoDocuments<'_> = manifests
+        .iter()
+        .filter(|(path, _)| basename(path) == "Cargo.toml")
+        .filter_map(|(path, text)| Some((dirname(path), Document::parse(text.as_str()).ok()?)))
+        .collect();
+    for (path, text) in manifests {
+        let container = owner(path, containers);
+        match basename(path) {
+            "Cargo.toml" => {
+                if let Some(doc) = cargo_docs.get(dirname(path)) {
+                    cargo(path, doc, &cargo_docs, files, container, output);
+                }
+            }
+            "package.json" => npm(path, text, container, output),
+            "pyproject.toml" => python(path, text, container, output),
+            _ => {}
+        }
     }
 }
 
 fn cargo(
     path: &str,
-    text: &str,
+    doc: &Document<&str>,
+    cargo_docs: &CargoDocuments<'_>,
     files: &BTreeMap<&str, &FileFact>,
     container: &str,
     output: &mut Declarations,
 ) {
-    let Ok(doc) = Document::parse(text) else {
-        return;
-    };
     let Some(package) = doc.get("package").and_then(Item::as_table_like) else {
         return;
     };
@@ -64,7 +76,7 @@ fn cargo(
             candidates.entry(name).or_insert_with(|| file.to_owned());
         }
     }
-    let lines = Lines::new(text);
+    let lines = Lines::new(doc.raw());
     let mut declared_names = BTreeSet::new();
     let mut declared_paths = BTreeSet::new();
     if let Some(bins) = doc.get("bin").and_then(Item::as_array_of_tables) {
@@ -96,13 +108,13 @@ fn cargo(
     }
     // Edition 2015 (including the implicit edition) disables auto-discovery
     // for kinds that already have an explicit target. Later editions keep it on.
-    let legacy = package
-        .get("edition")
-        .is_none_or(|edition| edition.as_str() == Some("2015"));
     let autobins = package
         .get("autobins")
         .and_then(Item::as_bool)
-        .unwrap_or(!legacy || declared_names.is_empty());
+        .unwrap_or_else(|| {
+            declared_names.is_empty()
+                || cargo_edition(dir, doc, cargo_docs).is_some_and(|edition| edition != "2015")
+        });
     if autobins {
         for (name, entry) in candidates {
             if !declared_names.contains(name) && !declared_paths.contains(&entry) {
@@ -114,6 +126,36 @@ fn cargo(
             }
         }
     }
+}
+
+fn cargo_edition<'a>(
+    dir: &str,
+    doc: &'a Document<&str>,
+    docs: &'a CargoDocuments<'_>,
+) -> Option<&'a str> {
+    let package = doc.get("package")?;
+    let edition = package.get("edition")?;
+    if let Some(edition) = edition.as_str() {
+        return Some(edition);
+    }
+    if edition.get("workspace")?.as_bool() != Some(true) {
+        return None;
+    }
+    let workspace = if doc.get("workspace").is_some() {
+        doc
+    } else if let Some(path) = package.get("workspace").and_then(Item::as_str) {
+        // Cargo permits a non-ancestor workspace when a path is explicit.
+        docs.get(literal_path(dir, path)?.as_str())?
+    } else {
+        std::iter::successors(Some(dir), |dir| (!dir.is_empty()).then(|| dirname(dir)))
+            .filter_map(|ancestor| docs.get(ancestor))
+            .find(|doc| doc.get("workspace").is_some())?
+    };
+    workspace
+        .get("workspace")?
+        .get("package")?
+        .get("edition")?
+        .as_str()
 }
 
 fn npm(path: &str, text: &str, container: &str, output: &mut Declarations) {

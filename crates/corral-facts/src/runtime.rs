@@ -47,7 +47,7 @@ impl<'a> Configs<'a> {
 
 pub(crate) struct Runtime {
     facts: RuntimeFacts,
-    binaries: BTreeMap<String, Option<RuntimeUnitId>>,
+    binaries: BTreeMap<String, Vec<RuntimeUnitId>>,
     entries: BTreeMap<String, Vec<RuntimeUnitId>>,
 }
 
@@ -59,30 +59,32 @@ impl Runtime {
         containers: &BTreeSet<&str>,
     ) -> Self {
         let mut output = configs.declarations;
-        for (path, text) in manifests {
-            packages::read(path, text, files, owner(path, containers), &mut output);
-        }
+        packages::read(manifests, files, containers, &mut output);
         output.units.sort_by(|a, b| a.id.cmp(&b.id));
-        let mut binaries = BTreeMap::new();
+        let mut binaries = BTreeMap::<_, Vec<_>>::new();
         let mut units = BTreeSet::new();
         for unit in &output.units {
             units.insert(&unit.id);
             if unit.id.kind == RuntimeUnitKind::Binary {
                 binaries
                     .entry(unit.id.name.clone())
-                    .and_modify(|id| *id = None)
-                    .or_insert_with(|| Some(unit.id.clone()));
+                    .or_default()
+                    .push(unit.id.clone());
             }
         }
         let mut edges = Vec::new();
+        // These are literal name matches, not a prediction of which executable PATH selects.
         for (from, site, program) in output.runs {
-            if let Some(Some(to)) = binaries.get(&program) {
-                edges.push(declared(
-                    RuntimeEdgeKind::Runs,
-                    unit_source(from),
-                    to.clone(),
-                    site,
-                ));
+            if let Some(targets) = binaries.get(&program) {
+                let from = unit_source(from);
+                edges.extend(targets.iter().map(|to| {
+                    declared(
+                        RuntimeEdgeKind::Runs,
+                        from.clone(),
+                        to.clone(),
+                        site.clone(),
+                    )
+                }));
             }
         }
         for (from, site, name) in output.depends_on {
@@ -132,26 +134,26 @@ impl Runtime {
 
     /// Returns false when no binary declaration matches (an external process).
     pub(crate) fn spawn(&mut self, from: &FileFact, program: &str, line: u64) -> bool {
-        let Some(target) = self.binaries.get(program) else {
+        let Some(targets) = self.binaries.get(program) else {
             return false;
         };
-        // Never choose an arbitrary executable when multiple packages declare the same name.
-        if let Some(to) = target {
-            let source = match self.entries.get(&from.path).map(Vec::as_slice) {
-                Some([id]) => unit_source(id.clone()),
-                _ => container_source(&from.container),
-            };
-            self.facts.edges.push(RuntimeEdge {
+        let source = match self.entries.get(&from.path).map(Vec::as_slice) {
+            Some([id]) => unit_source(id.clone()),
+            _ => container_source(&from.container),
+        };
+        let site = RuntimeSite {
+            path: from.path.clone(),
+            line,
+        };
+        self.facts
+            .edges
+            .extend(targets.iter().map(|to| RuntimeEdge {
                 kind: RuntimeEdgeKind::Starts,
-                from: source,
+                from: source.clone(),
                 to: to.clone(),
                 basis: RuntimeBasis::Syntax,
-                site: RuntimeSite {
-                    path: from.path.clone(),
-                    line,
-                },
-            });
-        }
+                site: site.clone(),
+            }));
         true
     }
 
@@ -228,9 +230,17 @@ fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-/// Normalize within the committed tree, never resolving links or environment variables.
+/// A config path may refer to something outside Git or be interpolated at runtime.
 fn local_path(base: &str, path: &str) -> Option<String> {
-    if path.is_empty() || path.starts_with(['/', '~']) || path.contains([':', '\\', '$']) {
+    if path.starts_with('~') || path.contains([':', '\\', '$']) {
+        return None;
+    }
+    literal_path(base, path)
+}
+
+/// Normalize an uninterpolated path within the committed tree without following links.
+fn literal_path(base: &str, path: &str) -> Option<String> {
+    if path.is_empty() || path.starts_with('/') {
         return None;
     }
     let mut parts: Vec<_> = base.split('/').filter(|part| !part.is_empty()).collect();

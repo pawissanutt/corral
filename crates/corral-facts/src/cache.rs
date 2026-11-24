@@ -27,9 +27,9 @@ impl FactsCache {
     /// Read structural facts by full tree object id. A cache hit does not access the repository.
     pub fn tree_facts(&self, repo: &Path, tree: &str) -> Result<TreeFacts> {
         let tree = object_id(tree)?;
-        // The older cache has a different `spawns` meaning. Keep structural
-        // entries separate in both directions, including on daemon rollback.
-        self.get("trees-v3", &tree, || structure::collect(repo, &tree))
+        // Old snapshots omit some runtime links and can report different binary
+        // targets. Keep structural entries separate, including on daemon rollback.
+        self.get("trees-v4", &tree, || structure::collect(repo, &tree))
     }
 
     /// Read facts for a revision produced by [`crate::resolve_revision`].
@@ -70,7 +70,7 @@ impl FactsCache {
                 tests: None,
             });
         }
-        self.get("deltas-v3", &format!("{base_tree}-{head_tree}"), || {
+        self.get("deltas-v4", &format!("{base_tree}-{head_tree}"), || {
             let before = self.tree_facts(repo, &base_tree)?;
             let after = self.tree_facts(repo, &head_tree)?;
             let (files, skipped_non_utf8_paths) = git::changes(repo, &base_commit, &head_commit)?;
