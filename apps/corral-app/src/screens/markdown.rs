@@ -344,36 +344,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wide_tables_become_wrappable_records_without_losing_cells() {
-        let document = Parser::new().markdown(
-            "| Name | Description | Last |\n| --- | --- | --- |\n\
-             | alpha | a long **formatted** description | final value |\n\
-             | beta | second row | another value |\n",
-        );
-        assert!(matches!(document.blocks.first(), Some(Block::Table(_))));
-        let blocks = records(document.blocks);
-        assert_eq!(blocks.len(), 2);
-        assert!(
-            blocks
-                .iter()
-                .all(|block| matches!(block, Block::Paragraph { .. }))
-        );
-        let json = serde_json::to_string(&blocks).unwrap();
-        for word in [
-            "Name",
-            "Description",
-            "Last",
-            "alpha",
-            "formatted",
-            "final value",
-            "beta",
-            "another value",
-        ] {
-            assert!(json.contains(word), "missing {word}: {json}");
-        }
-    }
-
-    #[test]
     fn record_image_cells_remain_standalone() {
         let document = Parser::new()
             .markdown("| Picture | Caption |\n| --- | --- |\n| ![shot](image.png) | example |\n");

@@ -13,6 +13,10 @@ use crate::ui::tokens::{FONT_TEXT, Token, color};
 use super::PARAGRAPH;
 use super::parts::{disclosure, pressable, small, state};
 
+#[cfg(test)]
+#[path = "prose_tests.rs"]
+mod tests;
+
 /// One blink of the streaming caret, as the assistant thread's.
 const BLINK_MS: f32 = 1000.0;
 
