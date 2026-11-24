@@ -41,27 +41,34 @@ const idKey = (id: string) => createHash("sha256").update(id, "utf16le").digest(
 export type BranchPosition = { end: number; parent?: string; skip?: number; offset?: number };
 export type Position = number | BranchPosition;
 
-type Item = Pick<TranscriptRow, "text" | "kind" | "callId">;
+type Item = Pick<TranscriptRow, "text" | "kind" | "callId" | "tool" | "error" | "stop">;
+// Names sit outside the page's text budget, so they are bounded here.
+const toolName = (value: unknown) => typeof value === "string" && value ? value.slice(0, 200) : undefined;
 function project(entry: Record<string, unknown>): Item[] {
   const msg = entry.type === "message" ? entry.message as Record<string, unknown> | undefined : entry;
   if (entry.type === "compaction" || entry.type === "branch_summary") {
     return [{ kind: "note", text: `[${entry.type === "compaction" ? "Compaction" : "Branch summary"}] ${typeof entry.summary === "string" ? entry.summary : ""}` }];
   }
   if (!msg || (entry.type !== "message" && entry.type !== "custom_message" && entry.type !== "custom")) return [];
-  const kind = msg.role === "user" ? "user" : msg.role === "assistant" ? "assistant" : msg.role === "toolResult" || msg.role === "tool" ? "tool" : "note";
-  const callId = typeof msg.toolCallId === "string" ? msg.toolCallId : undefined;
+  // The system prompt is the session's setup, not a turn of its conversation; raw mode still reads it.
+  if (msg.role === "system") return [];
+  const result = msg.role === "toolResult" || msg.role === "tool";
+  const kind = msg.role === "user" ? "user" : msg.role === "assistant" ? "assistant" : result ? "tool" : "note";
+  const base: Omit<Item, "text"> = result
+    ? { kind, callId: typeof msg.toolCallId === "string" ? msg.toolCallId : undefined, tool: toolName(msg.toolName), ...(msg.isError === true ? { error: true } : {}) }
+    : { kind };
   const content = msg.content;
-  if (typeof content === "string") return [{ kind, text: content, callId }];
-  if (!Array.isArray(content)) return [];
-  return content.map((block): Item => {
-    if (block?.type === "text" && typeof block.text === "string") return { kind, text: block.text, callId };
+  const items = typeof content === "string" ? [{ ...base, text: content }] : !Array.isArray(content) ? [] : content.map((block): Item => {
+    if (block?.type === "text" && typeof block.text === "string") return { ...base, text: block.text };
     if (block?.type === "thinking" && typeof block.thinking === "string") return { kind: "thinking", text: block.thinking };
     if (block?.type === "toolCall") return {
-      kind: "tool", text: `${typeof block.name === "string" ? block.name : "Tool call"}: ${JSON.stringify(block.arguments ?? {})}`,
+      kind: "call", tool: toolName(block.name) ?? "tool", text: JSON.stringify(block.arguments ?? {}),
       callId: typeof block.id === "string" ? block.id : undefined,
     };
-    return { kind, text: `[${typeof block?.type === "string" ? block.type.slice(0, 80) : "non-text"} attachment]`, callId };
+    return { ...base, text: `[${typeof block?.type === "string" ? block.type.slice(0, 80) : "non-text"} attachment]` };
   });
+  const stop = msg.role === "assistant" && (msg.stopReason === "error" || msg.stopReason === "aborted" || msg.stopReason === "length") ? msg.stopReason : undefined;
+  return stop ? [...items, { kind: "stop", stop, text: typeof msg.errorMessage === "string" ? msg.errorMessage : "" }] : items;
 }
 
 export async function conversationPage(bytes: TranscriptBytes, floor: number, position: BranchPosition) {
@@ -103,7 +110,8 @@ export async function conversationPage(bytes: TranscriptBytes, floor: number, po
         cost += size;
       }
       if (begin < stop || stop === 0) {
-        rows.push({ ...item, id: `record:${start}:${index}:${begin}`, text: item.text.slice(begin, stop), at: Number.isFinite(date) ? date : undefined });
+        rows.push({ ...item, id: `record:${start}:${index}:${begin}`, text: item.text.slice(begin, stop), at: Number.isFinite(date) ? date : undefined,
+          record: start, item: index, ...(begin > 0 ? { from: begin } : {}), ...(stop < item.text.length ? { more: true } : {}) });
         remaining -= Math.max(1, cost);
       }
       if (begin > 0) return { rows: rows.reverse(), next: { end, parent, skip, offset: begin } };

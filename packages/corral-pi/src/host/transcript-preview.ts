@@ -5,7 +5,18 @@ import { BYTES, TranscriptBytes, conversationPage, rawPage, type BranchPosition,
 
 export type TranscriptRequest = { mode: "conversation" | "raw"; cursor?: string };
 export type TranscriptPage = { rows: readonly TranscriptRow[]; older?: string; newer?: string; stamp: string };
-export type TranscriptRow = { id: string; kind: "user" | "assistant" | "thinking" | "tool" | "note" | "raw"; text: string; at?: number; callId?: string };
+/**
+ * One slice of a recorded item. A conversation row names its record (`record`, the record's byte offset) and its
+ * item inside the record (`item`); `from` is where the slice starts in the item's text when the page budget split
+ * it, and `more` says the item continues on a newer page. `call` is a tool call: `tool` names it and `text` is its
+ * arguments as JSON. `tool` is a tool result, `error` when it failed. `stop` ends an assistant turn that failed, was
+ * stopped or hit the output limit; its text is the recorded error message.
+ */
+export type TranscriptRow = {
+  id: string; kind: "user" | "assistant" | "thinking" | "call" | "tool" | "stop" | "note" | "raw"; text: string; at?: number; callId?: string;
+  tool?: string; error?: boolean; stop?: "error" | "aborted" | "length";
+  record?: number; item?: number; from?: number; more?: boolean;
+};
 
 const FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 const snapshot = (stat: BigIntStats) => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");

@@ -34,6 +34,22 @@ export interface PromptBubble { readonly label: string; readonly notes?: readonl
 export interface Steer { readonly text: string; readonly at?: number; readonly label?: string; readonly notes?: readonly string[] }
 /** The bubbles placed among one conversation's replies and the label of those without their own (`you → picker-ui`). */
 export interface Steers { readonly label: string; readonly items: readonly Steer[] }
+/** One block of a reply as its recording has it: the agent's reasoning and its text, in their order. */
+export interface ReplyBlock { readonly type: "text" | "thinking"; readonly text: string }
+/** A reply or a tool call. A recorded reply carries `blocks`, which then replace `text` and `textBlocks`. */
+export interface ChatReply extends HelperMessage { readonly blocks?: readonly ReplyBlock[] }
+/**
+ * A recorded message that is neither: `user` is a message the agent received after its prompt (an owner's steer, a
+ * peer's message), drawn as a bubble under `label`; `note` is a host note (a summary, an unreadable record).
+ */
+export interface ChatAside { readonly id: string; readonly kind: "user" | "note"; readonly text: string; readonly label?: string; readonly at?: number }
+export type ChatMessage = ChatReply | ChatAside;
+const isAside = (message: ChatMessage): message is ChatAside => message.kind === "user" || message.kind === "note";
+/**
+ * What `renderHelper` draws: a live `ConversationSource`, or a recording. A recording has no prompt while the pages
+ * read so far do not reach its first message.
+ */
+export interface ChatSource extends Omit<ConversationSource, "prompt" | "messages"> { readonly prompt?: string; readonly messages: readonly ChatMessage[] }
 
 const RESET = "\x1b[0m";
 /** The widest a bubble grows, as the mock's `.msg`. */
@@ -187,10 +203,18 @@ function codeRow(call: CallInput): RowModel {
 
 interface Cached {
   readonly component: AssistantMessageComponent | ToolExecutionComponent; key: string;
+  /** The message the component was last given; a frozen message met again needs no comparison. */
+  readonly source: ChatReply;
   readonly mode?: "native" | "generic"; readonly argsComplete?: boolean;
 }
-/** A rendered stretch of rows: a native component, or the one-line form of the tool call `tool`. */
-interface Hit { readonly start: number; readonly end: number; readonly component?: Component; readonly tool?: string }
+/** A rendered stretch of rows: a native component, or the one-line form of the tool call `tool`. `id` is its message. */
+interface Hit { readonly start: number; readonly end: number; readonly component?: Component; readonly tool?: string; readonly id?: string }
+/** The rows one message drew in the last `renderHelper`. */
+export interface MessageSpan { readonly id: string; readonly from: number; readonly to: number }
+/** A settled tool row reads the same every frame: only `writing`, `running` and `needs-you` rows move. */
+function settledRow(model: RowModel): boolean {
+  return typeof model.duration !== "object" && (model.state === "ok" || model.state === "failed" || model.state === "waiting" || model.state === "unknown");
+}
 
 export class HelperChat {
   private request: string | undefined;
@@ -201,7 +225,10 @@ export class HelperChat {
   private hitsWidth = 0;
   private styleKey = "";
   private prompt: UserMessageComponent | undefined;
+  private promptText: string | undefined;
   private expanded = false;
+  // Rows kept per frozen message, so a frame costs one lookup per message however long its text is.
+  private lines = new WeakMap<ChatMessage, { readonly width: number; readonly live: boolean; readonly rows: readonly string[] }>();
   constructor(private readonly tui: () => TUI | undefined, private readonly cwd: string,
     private readonly style?: () => HelperChatStyle) {}
   /**
@@ -210,7 +237,7 @@ export class HelperChat {
    * blank row before each run of tool lines that follows the prompt or a reply. Each steer sits before the first
    * message that started after it was sent; steers sent after every message, and steers without a time, follow.
    */
-  renderHelper(helper: ConversationSource, width: number,
+  renderHelper(helper: ChatSource, width: number,
     options: { readonly bubble?: PromptBubble; readonly now?: number; readonly steers?: Steers } = {}): string[] {
     const style = this.style?.() ?? { outputPad: 1, markdownTheme: getMarkdownTheme(), markdownTransformers: [], renderers: () => undefined };
     const label = options.bubble?.label ?? "prompt", transformers = style.markdownTransformers;
@@ -218,18 +245,22 @@ export class HelperChat {
     const styleKey = `${style.outputPad}/${style.markdownTheme.codeBlockIndent ?? ""}/${transformers.length}/${label}`;
     if (this.request !== helper.request) { this.clear(); this.request = helper.request; }
     if (this.styleKey !== styleKey) {
-      this.prompt = undefined; this.cached.clear(); this.styleKey = styleKey;
+      this.prompt = undefined; this.cached.clear(); this.lines = new WeakMap(); this.styleKey = styleKey;
     }
-    // The prompt's label takes the place of the owner's `you` at the end of the same transformer chain.
-    this.prompt ??= new UserMessageComponent(helperText(helper.prompt), style.markdownTheme, style.outputPad, [...transformers, promptLabel(label)]);
+    if (this.promptText !== helper.prompt) { this.prompt = undefined; this.promptText = helper.prompt; }
     const rows: string[] = [];
     this.hits = []; this.hitsWidth = width;
-    const append = (component: Component, tool?: string) => {
+    const append = (component: Component, id?: string, tool?: string) => {
       const lines = component.render(width);
-      this.hits.push({ start: rows.length, end: rows.length + lines.length, component, ...(tool === undefined ? {} : { tool }) }); rows.push(...lines);
+      this.hits.push({ start: rows.length, end: rows.length + lines.length, component, ...(id === undefined ? {} : { id }), ...(tool === undefined ? {} : { tool }) });
+      rows.push(...lines);
     };
-    append(this.prompt);
-    rows.push(...bubbleRows((options.bubble?.notes ?? []).map(note => PANEL_MUTED + note), width, style.outputPad));
+    if (helper.prompt !== undefined) {
+      // The prompt's label takes the place of the owner's `you` at the end of the same transformer chain.
+      this.prompt ??= new UserMessageComponent(helperText(helper.prompt), style.markdownTheme, style.outputPad, [...transformers, promptLabel(label)]);
+      append(this.prompt);
+      rows.push(...bubbleRows((options.bubble?.notes ?? []).map(note => PANEL_MUTED + note), width, style.outputPad));
+    }
     // The note stands where the dropped messages were: right under the prompt, wrapped under its text, not its glyph.
     if (helper.truncated) rows.push("", ...wrapTextWithAnsi(retentionNote(helper), Math.max(1, width - 3))
       .map((line, index) => " " + PANEL_WARNING + (index === 0 ? "! " : "  ") + line + RESET));
@@ -242,29 +273,57 @@ export class HelperChat {
       lastLine = false;
     };
     const retained = new Set<string>();
-    const messages: readonly HelperMessage[] = helper.result !== undefined && !helper.messages.some(message => message.kind === "assistant" && (message.textBlocks?.join("") ?? message.text).trim() === helper.result)
+    const messages: readonly ChatMessage[] = helper.result !== undefined && !helper.messages.some(message => message.kind === "assistant" && (message.textBlocks?.join("") ?? message.text).trim() === helper.result)
       ? [...helper.messages, { id: "returned-result", kind: "assistant", text: helper.result, stopReason: "pending" }] : helper.messages;
     messages.forEach(message => {
       const started = message.at;
       if (started !== undefined) while (steered < timed.length && (timed[steered]!.at ?? 0) <= started) steer(timed[steered++]!);
       retained.add(message.id);
-      const key = JSON.stringify([message.text, message.textBlocks, message.arguments, message.argsComplete, message.partial, message.phase, message.stopReason, message.errorMessage, message.hasToolCalls]);
+      const frozen = Object.isFrozen(message), kept = frozen ? this.lines.get(message) : undefined;
+      if (isAside(message)) {
+        // A later message to the agent is a bubble as a steer is; a host note is muted words.
+        const drawn = kept?.width === width ? kept.rows : message.kind === "user"
+          ? bubble(message.label ?? "message", helperText(message.text), width)
+          : wrapTextWithAnsi(helperText(message.text), Math.max(1, width - 1)).map(line => " " + PANEL_MUTED + line + RESET);
+        if (frozen && drawn !== kept?.rows) this.lines.set(message, { width, live, rows: drawn });
+        rows.push("");
+        this.hits.push({ start: rows.length, end: rows.length + drawn.length, id: message.id }); rows.push(...drawn); lastLine = false;
+        return;
+      }
       let cached = this.cached.get(message.id);
+      // A frozen message cannot have changed since the component last took it.
+      const key = frozen && cached?.source === message ? cached.key
+        : JSON.stringify([message.text, message.textBlocks, message.blocks, message.arguments, message.argsComplete, message.partial, message.phase, message.stopReason, message.errorMessage, message.hasToolCalls]);
       if (message.kind === "assistant") {
+        // A recording has the agent's reasoning, drawn as the transcript draws it; a live projection never carries any.
         const component = cached?.component instanceof AssistantMessageComponent ? cached.component
-          : new AssistantMessageComponent(undefined, true, style.markdownTheme, "", style.outputPad, transformers);
-        if (!cached || cached.key !== key) component.updateContent({ content: (message.textBlocks ?? [message.text]).map(text => ({ type: "text", text: helperText(text) })),
+          : new AssistantMessageComponent(undefined, !message.blocks, style.markdownTheme, "", style.outputPad, transformers);
+        if (!cached || cached.key !== key) component.updateContent({
+          content: message.blocks ? message.blocks.map(block => block.type === "thinking"
+            ? { type: "thinking" as const, thinking: helperText(block.text) } : { type: "text" as const, text: helperText(block.text) })
+            : (message.textBlocks ?? [message.text]).map(text => ({ type: "text" as const, text: helperText(text) })),
           stopReason: message.stopReason ?? "pending", errorMessage: message.errorMessage === undefined ? undefined : helperText(message.errorMessage), hasToolCalls: message.hasToolCalls }, helper.phase === "running" && message.stopReason === undefined);
-        cached = { component, key };
-        this.cached.set(message.id, cached); append(component); lastLine = false;
+        cached = { component, key, source: message };
+        this.cached.set(message.id, cached); append(component, message.id); lastLine = false;
         return;
       }
       // A headless host has no interactive tool-renderer context, so its tools stay one line.
       const tui = this.expanded || this.opened.has(message.id) ? this.tui() : undefined;
       if (!tui) {
+        const room = Math.max(1, width - 1);
+        let line = kept?.width === room && kept.live === live ? kept.rows[0] : undefined;
+        if (line === undefined) {
+          const model = helperRow(message, live, this.cwd);
+          line = rowLine(model, room, now);
+          if (frozen && settledRow(model)) this.lines.set(message, { width: room, live, rows: [line] });
+        }
         if (!lastLine) rows.push("");
-        this.hits.push({ start: rows.length, end: rows.length + 1, tool: message.id });
-        rows.push(" " + rowLine(helperRow(message, live, this.cwd), Math.max(1, width - 1), now)); lastLine = true;
+        this.hits.push({ start: rows.length, end: rows.length + 1, tool: message.id, id: message.id });
+        rows.push(" " + line); lastLine = true;
+        return;
+      }
+      if (frozen && cached?.source === message && cached.component instanceof ToolExecutionComponent) {
+        append(cached.component, message.id, message.id); lastLine = false;
         return;
       }
       // One card per call id: it is rebuilt only when the arguments stop being readable, never because they completed.
@@ -283,14 +342,18 @@ export class HelperChat {
         });
         else if (message.partial === true && message.text !== "") component.updateResult({ content: [{ type: "text", text: helperText(message.text) }], isError: false }, true);
       }
-      cached = { component, key, mode: args.mode, argsComplete: args.complete };
-      this.cached.set(message.id, cached); append(component, message.id); lastLine = false;
+      cached = { component, key, source: message, mode: args.mode, argsComplete: args.complete };
+      this.cached.set(message.id, cached); append(component, message.id, message.id); lastLine = false;
     });
     while (steered < timed.length) steer(timed[steered++]!);
     for (const item of options.steers?.items ?? []) if (item.at === undefined) steer(item);
     for (const id of this.cached.keys()) if (!retained.has(id)) this.cached.delete(id);
     for (const id of this.opened) if (!retained.has(id)) this.opened.delete(id);
     return rows;
+  }
+  /** The rows each message drew in the last `renderHelper`, in order: what a reader's place is held against. */
+  spans(): MessageSpan[] {
+    return this.hits.flatMap(hit => hit.id === undefined ? [] : [{ id: hit.id, from: hit.start, to: hit.end }]);
   }
   /** A click on a tool line opens its native card; a click that the open card handles folds it back to its line. */
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
@@ -323,5 +386,8 @@ export class HelperChat {
     this.prompt?.invalidate();
     for (const item of this.cached.values()) item.component.invalidate();
   }
-  clear(): void { this.prompt = undefined; this.cached.clear(); this.opened.clear(); this.hits = []; this.request = undefined; this.styleKey = ""; }
+  clear(): void {
+    this.prompt = undefined; this.promptText = undefined; this.cached.clear(); this.opened.clear(); this.lines = new WeakMap();
+    this.hits = []; this.request = undefined; this.styleKey = "";
+  }
 }

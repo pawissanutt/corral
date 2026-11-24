@@ -807,6 +807,7 @@ export class NativeWorkbench {
       click: event => this.options.canInteract() && plainClick(event), focus: () => { this.focusMain(); this.options.changed(); },
       ...(this.options.readTranscript ? { read: this.options.readTranscript } : {}),
       lifetime: () => this.transcriptLifetime(), changed: this.options.changed, canInteract: this.options.canInteract,
+      rewrapped: () => this.childWatch?.rewrapped(),
       back: () => this.openAgents(), answer: (key: string) => this.agentAction("answer", key) });
     if (this.agentKey !== undefined) this.conversation.restore(this.agentKey);
     if (this.view === "agent") this.conversation.refresh();
@@ -1193,7 +1194,6 @@ export class NativeWorkbench {
     if (view === "agents" && this.agentsView.handleKey(data)) { this.options.changed(); return true; }
     if (view === "board" && this.boardView?.handleKey(data)) { this.options.changed(); return true; }
     if (view === "agent") {
-      if (data === "v" && this.conversation?.togglePreview()) return true;
       if (getKeybindings().matches(data, "app.tools.expand")) {
         this.toolsExpanded = !this.toolsExpanded; this.conversation?.expandTools(this.toolsExpanded); this.options.changed(); return true;
       }

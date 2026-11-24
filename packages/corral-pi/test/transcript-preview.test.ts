@@ -154,3 +154,36 @@ test("header-only sessions are empty; unfinished appends wait and changed reads 
     await expect(read(newer)).rejects.toThrow("Transcript changed");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("conversation rows name calls, results, stops and the slices of a split item; the system prompt is not a turn", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "transcript-rows-")), file = join(dir, "session.jsonl");
+  const output = "r".repeat(30000);
+  const entries = [
+    { type: "session", id: "existing" },
+    { type: "message", id: "s", parentId: null, message: { role: "system", content: "SYSTEM_PROMPT" } },
+    { type: "message", id: "u", parentId: "s", message: { role: "user", content: [{ type: "text", text: "ask" }] } },
+    { type: "message", id: "a", parentId: "u", message: { role: "assistant", stopReason: "toolUse", content: [
+      { type: "thinking", thinking: "plan" }, { type: "text", text: "reading" }, { type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } }] } },
+    { type: "message", id: "r", parentId: "a", message: { role: "toolResult", toolCallId: "c1", toolName: "read", isError: true, content: [{ type: "text", text: output }] } },
+    { type: "message", id: "e", parentId: "r", message: { role: "assistant", stopReason: "error", errorMessage: "overloaded", content: [] } },
+  ];
+  try {
+    writeFileSync(file, entries.map(entry => JSON.stringify(entry) + "\n").join(""));
+    let page = await readTranscriptPage(file, "existing", { mode: "conversation" });
+    let rows = [...page.rows];
+    while (page.older) {
+      page = await readTranscriptPage(file, "existing", { mode: "conversation", cursor: page.older });
+      rows = [...page.rows, ...rows];
+    }
+    const slices = rows.filter(row => row.kind === "tool");
+    expect(rows.map(row => row.kind)).toEqual(["user", "thinking", "assistant", "call", ...slices.map(() => "tool" as const), "stop"]);
+    expect(rows.find(row => row.kind === "call")).toMatchObject({ tool: "read", callId: "c1", text: '{"path":"a.ts"}' });
+    expect(rows.at(-1)).toMatchObject({ stop: "error", text: "overloaded" });
+    // One result over two pages: every slice names the same record and item, and says where it stands in it.
+    expect(slices.length).toBeGreaterThan(1);
+    expect(slices.map(row => row.text).join("")).toBe(output);
+    expect(new Set(slices.map(row => `${row.record}:${row.item}:${row.callId}:${row.tool}:${row.error}`)).size).toBe(1);
+    expect(slices.map(row => row.from ?? 0)).toEqual(slices.map((_, index) => slices.slice(0, index).reduce((sum, row) => sum + row.text.length, 0)));
+    expect(slices.map(row => row.more === true)).toEqual(slices.map((_, index) => index < slices.length - 1));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

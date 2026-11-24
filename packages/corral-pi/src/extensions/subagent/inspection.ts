@@ -43,6 +43,8 @@ type MutableMessage = { -readonly [K in keyof HelperMessage]: HelperMessage[K] }
 type Retained = Omit<{ -readonly [K in keyof HelperInspection]: HelperInspection[K] }, "messages"> & {
   messages: MutableMessage[]; sequence: number; size: number; assistant?: string; assistantLine?: string;
 };
+/** The id of a tool call's message, from the call's own id: a recording's call and its live projection share it. */
+export function toolMessageId(call: string): string { return `tool-${createHash("sha256").update(call).digest("hex")}`; }
 export const HELPER_HISTORY_LIMIT = 32;
 export const HELPER_TEXT_LIMIT = 4096;
 const TRANSCRIPT_LIMIT = 32768;
@@ -142,7 +144,7 @@ export class AuxiliaryHistory {
         break;
       }
       case "tool": {
-        const id = `tool-${createHash("sha256").update(event.id).digest("hex")}`;
+        const id = toolMessageId(event.id);
         let message = entry.messages.find(message => message.id === id);
         const before = message ? messageSize(message) : 0;
         const tool = event.name.slice(0, 80).replace(/[\r\n\u2028\u2029]/g, " ");

@@ -1,16 +1,21 @@
-import type { TranscriptPage, TranscriptRow } from "../host/transcript-preview.ts";
-import { AgentHistory, recordedText, type Direction, type TranscriptRead } from "./agent-history.ts";
+import type { TranscriptPage, TranscriptRequest } from "../host/transcript-preview.ts";
+import { AgentHistory, RESIDENT_PAGES, type Direction, type TranscriptRead } from "./agent-history.ts";
 // One agent's conversation in the reading area, as the mock's `childHTML`: a header line (back link, name,
 // profile and model, state and time, cost and context, and the activity sparkline while it runs), then the
-// prompt in a bubble, the retention note when earlier messages were dropped, the replies and one line per tool
-// call, then the agent's notes. A build child's prompt is its brief from the parent with what it owns inside the
-// bubble; the owner's steers and the messages it exchanged with other agents sit among the replies at the time they were sent, then its state (waiting, asking,
-// cancelled). A running agent's page follows its end until the owner scrolls up; the reading position is kept per agent key.
+// prompt in a bubble, the replies and one line per tool call, then the agent's notes. A build child's prompt is its
+// brief from the parent with what it owns inside the bubble; the owner's steers and the messages it exchanged with
+// other agents sit among the replies at the time they were sent, then its state (waiting, asking, cancelled).
+//
+// An agent with a saved session is read from its recording, drawn by the same HelperChat as its live projection, so
+// the two look alike. The recording is read a page at a time as the reader scrolls: the page beyond each edge of the
+// view is read before the reader reaches it, and a recording that changed is read again in place. Nothing is clicked.
+// A running agent's page follows its end until the owner scrolls up; the reading position is kept per agent key.
 import { ScrollView, truncateToWidth, visibleWidth, wrapTextWithAnsi, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { duration, isLive, money, sparkline, timeLabel, toneColor, type AgentRow } from "./agents-model.ts";
 import { spinner } from "./frame.ts";
-import { bubble, mailSteers, type HelperChat, type Steer } from "./helper-chat.ts";
-import { PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING, RESET } from "./panels-view.ts";
+import { helperText, mailSteers, type ChatSource, type HelperChat, type MessageSpan, type Steer } from "./helper-chat.ts";
+import { PANEL_BLUE, PANEL_ERROR, PANEL_MUTED, PANEL_TEXT, PANEL_WARNING, RESET, plainLabel } from "./panels-view.ts";
+import { assembleRecording, peerMessage, withLiveTail, type RecordedChat } from "./recorded-chat.ts";
 import { shiftRows } from "./selection.ts";
 
 export interface AgentConversationHost {
@@ -22,10 +27,22 @@ export interface AgentConversationHost {
   lifetime?(): () => boolean;
   changed?(): void;
   canInteract?(): boolean;
+  /** Recorded rows were read around the reader: the count of rows that arrived below them starts again. */
+  rewrapped?(): void;
 }
 
-type Position = { top: number; following: boolean; anchor?: { id: string; offset: number } };
-type Saved = { position: Position; pages: readonly TranscriptPage[] };
+/** Where the view's first row is in the message it shows: from that message's first row, and to its last. */
+type Anchor = { readonly id: string; readonly offset: number; readonly tail: number; readonly record?: number };
+type Position = { readonly top: number; readonly following: boolean; readonly anchor?: Anchor };
+/** The reader's row, held while pages are read around it: `edge` is the side that grew, `below` the rows from the view's first row to the end. */
+type Hold = { readonly edge: Direction; readonly anchor?: Anchor; readonly below?: number };
+
+/** Pages read again, off screen, each time a running agent's recording grows under a reader at its end. */
+const FOLLOW_PAGES = 8;
+/** The most pages one re-read walks back for the reader's row. */
+const REREAD_PAGES = 4 * RESIDENT_PAGES;
+/** Rows kept read past each edge of the view, at least; two views of rows when that is more. */
+const AHEAD_ROWS = 40;
 
 const BACK = "‹ Agents", BOLD = "\x1b[1m", UNBOLD = "\x1b[22m";
 
@@ -63,32 +80,37 @@ export function conversationHeader(row: AgentRow, width: number, now: number, co
 /** The scrollable one-agent page; the workbench mounts `scroll` in place of the reading area. */
 export class AgentConversation {
   readonly scroll: ScrollView;
-  /** Per agent key: where the owner was reading, and whether the page was following the agent's end. */
-  // An LRU of bounded resident page windows and their reading positions.
-  private readonly positions = new Map<string, Saved>();
+  /** Per agent key: where the owner was reading, and whether the page was following the agent's end. An LRU. */
+  private readonly positions = new Map<string, Position>();
+  /** The place the next frame takes; `null` is the agent's own: a running agent's end, a finished one's first row. */
   private pending: Position | null | undefined = null;
-  private checkpoint: Saved | undefined;
-  private preview = false;
-  private recordedPosition: Position | undefined;
-  private previewHit: { from: number; to: number } | undefined;
-  private history = new AgentHistory();
-  private ranges: { id: string; from: number; to: number }[] = [];
-  private hits: { direction: Direction; from: number; to: number }[] = [];
-  private anchor: { id: string; offset: number } | undefined;
+  /** The place kept for a recording that is not read yet. */
+  private reopen: Position | undefined;
+  private hold: Hold | undefined;
   private jump: "top" | "end" | undefined;
-  private attempted = false;
+  private history = new AgentHistory();
+  private recorded: { readonly pages: readonly TranscriptPage[]; readonly start: boolean; readonly key: string; readonly chat: RecordedChat } | undefined;
+  private spans: MessageSpan[] = [];
+  private height = 0;
+  /** The last read failed. The next tick or scroll reads again, never a frame. */
+  private failed = false;
+  /** The owner has scrolled since the agent opened: a first read that arrives late leaves them where they are. */
+  private moved = false;
   private wasLive = false;
+  /** The agent settled while the reader was above its end: the recording holds more than the resident pages. */
   private latestAvailable = false;
+  private scheduled = false;
   private back = { from: 1, to: 1 + visibleWidth(BACK) };
   private chatStart = 0; private chatRows = 0;
   /** Rows of the clickable `▲` question line, and the agent it answers. */
   private ask: { readonly from: number; readonly to: number; readonly key: string } | undefined;
   constructor(private readonly host: AgentConversationHost) {
-    const edge = (lines: number) => !this.preview && this.navigate(lines < 0 ? "older" : "newer");
+    const laid = () => this.ahead(), scrolled = () => { this.failed = false; this.moved = true; };
     this.scroll = new class extends ScrollView {
-      override scrollBy(lines: number): number {
-        if ((lines < 0 && this.scrollTop === 0 || lines > 0 && this.isFollowingEnd) && edge(lines)) return 0;
-        return super.scrollBy(lines);
+      override scrollBy(lines: number): number { scrolled(); return super.scrollBy(lines); }
+      override updateLayout(contentHeight: number, viewportHeight: number, requestRender: () => void): void {
+        super.updateLayout(contentHeight, viewportHeight, requestRender);
+        laid();
       }
     }({
       render: width => this.render(width),
@@ -99,122 +121,171 @@ export class AgentConversation {
     }, { primary: true, follow: "end", scrollbar: "auto" });
   }
   private position(): Position {
-    const top = this.scroll.scrollTop;
-    const span = this.ranges.find(row => top >= row.from && top < row.to);
-    return { top, following: this.following, ...(span ? { anchor: { id: span.id, offset: top - span.from } } : {}) };
+    const top = this.scroll.scrollTop, following = this.following;
+    const span = this.spans.find(item => item.to > top);
+    if (!span) return { top, following };
+    const record = this.recorded?.chat.records.get(span.id);
+    return { top, following, anchor: { id: span.id, offset: top - span.from, tail: span.to - top, ...(record === undefined ? {} : { record }) } };
+  }
+  /** The reader's row before pages join at `edge`; none while they follow the end. `exact`: the rows below it stay as they are. */
+  private grip(edge: Direction, exact: boolean): Hold | undefined {
+    if (this.following) return undefined;
+    const { anchor, top } = this.position();
+    return { edge, ...(anchor ? { anchor } : {}), ...(exact ? { below: this.height - top } : {}) };
   }
   remember(): void {
     const key = this.host.row()?.key;
     if (key === undefined) return;
-    const position = this.preview && this.recordedPosition ? this.recordedPosition : this.pending ?? this.position();
-    const saved = this.checkpoint ?? { position, pages: this.history.pages };
     this.positions.delete(key);
-    this.positions.set(key, saved);
+    this.positions.set(key, this.reopen ?? this.pending ?? this.position());
     if (this.positions.size > 8) this.positions.delete(this.positions.keys().next().value!);
   }
   restore(key: string): void {
-    this.history = new AgentHistory();
-    this.ranges = []; this.anchor = undefined; this.jump = undefined;
-    this.attempted = false; this.wasLive = false; this.latestAvailable = false;
-    this.preview = false; this.recordedPosition = undefined;
-    const saved = this.positions.get(key);
-    this.checkpoint = saved?.pages.length ? saved : undefined;
-    this.pending = saved?.position ?? null;
-  }
-  /** Switch sources so native inspection does not duplicate the recorded transcript. */
-  togglePreview(): boolean {
-    if (!this.history.pages.length || !this.host.row()?.conversation) return false;
-    if (!this.preview) this.recordedPosition = this.pending ?? this.position();
-    this.preview = !this.preview;
-    this.pending = this.preview ? { top: 0, following: false } : this.recordedPosition;
-    this.host.changed?.();
-    return true;
+    this.history = new AgentHistory(); this.recorded = undefined;
+    this.spans = []; this.hold = undefined; this.jump = undefined;
+    this.failed = false; this.moved = false; this.wasLive = false; this.latestAvailable = false;
+    this.reopen = this.positions.get(key);
+    this.pending = this.reopen ?? null;
   }
   get following(): boolean { return this.scroll.isFollowingEnd; }
-  expandTools(expanded: boolean): void {
-    if (!this.preview) this.togglePreview();
-    this.host.chat.expandTools(expanded);
-  }
+  expandTools(expanded: boolean): void { this.host.chat.expandTools(expanded); }
 
   /** Called on entry and on workbench ticks, never by render or snapshot publication. */
   refresh(): void {
-    const row = this.host.row();
-    if (!this.host.read || !row?.capabilities.transcript || this.history.busy || this.preview) return;
+    const row = this.host.row(), history = this.history;
+    if (!this.host.read || !row?.capabilities.transcript || history.busy) return;
+    this.failed = false;
     const live = isLive(row.state);
-    const following = (this.pending?.following ?? this.following) && !this.history.newer && !this.history.retry;
-    if (!this.attempted || (following && (live || this.wasLive || this.latestAvailable))) void this.load("latest", false, this.wasLive && !live);
-    else if (this.wasLive && !live && this.history.pages.length) this.latestAvailable = true;
+    const following = (this.pending?.following ?? this.following) && !history.newer;
+    if (!history.pages.length) void this.reread("open");
+    else if (following && (live || this.wasLive || this.latestAvailable)) void this.reread("follow", this.wasLive && !live);
+    else if (this.wasLive && !live) this.latestAvailable = true;
     this.wasLive = live;
   }
 
-  /** End jumps over evicted newer pages; it does not walk intermediate cursors. */
+  /** End: a recording whose newest pages are not resident is read again at its end. */
   jumpToRecordedEnd(): boolean {
-    return !this.preview && !!(this.history.newer || this.history.retry || this.latestAvailable) && this.navigate("latest");
-  }
-
-  navigate(direction: Direction): boolean {
-    if (this.preview || !this.host.read || !this.host.row()?.capabilities.transcript || this.host.canInteract?.() === false
-      || !this.history.request(direction)) return false;
-    void this.load(direction, true);
+    if (!(this.history.newer || this.latestAvailable) || this.history.busy || this.host.canInteract?.() === false || !this.session()) return false;
+    void this.reread("end");
     return true;
   }
 
-  private async load(direction: Direction, manual: boolean, settling = false): Promise<void> {
-    const row = this.host.row(), read = this.host.read, history = this.history, request = history.request(direction);
-    if (!row?.capabilities.transcript || !read || !request) return;
+  /** Reads the page beyond the resident ones on that side; false when there is none or one is being read. */
+  navigate(direction: Direction): boolean {
+    const request = this.history.cursor(direction);
+    if (!request || this.host.canInteract?.() === false || !this.session()) return false;
+    void this.page(direction, request);
+    return true;
+  }
+
+  /** After each layout: the page beyond an edge is read before the reader reaches that edge. */
+  private ahead(): void {
+    if (this.scheduled || this.failed || this.history.busy || !(this.history.older || this.history.newer)) return;
+    this.scheduled = true;
+    queueMicrotask(() => {
+      this.scheduled = false;
+      const history = this.history, top = this.scroll.scrollTop, view = this.scroll.viewportHeight, margin = Math.max(AHEAD_ROWS, 2 * view);
+      if (this.failed || history.busy) return;
+      if (history.older && top < margin) this.navigate("older");
+      else if (history.newer && this.height - top - view < margin) this.navigate("newer");
+    });
+  }
+
+  private session() {
+    const row = this.host.row(), read = this.host.read, history = this.history;
+    if (!row?.capabilities.transcript || !read) return undefined;
     const valid = this.host.lifetime?.() ?? (() => true);
     const current = () => valid() && this.history === history && this.host.row()?.key === row.key
       && this.host.row()?.capabilities.transcript === true;
-    const initial = !this.attempted;
-    this.attempted = true;
+    return { row, read, history, current };
+  }
+
+  private async page(direction: Direction, request: TranscriptRequest): Promise<void> {
+    const session = this.session();
+    if (!session) return;
+    const { row, read, history, current } = session;
+    let joined = false;
     history.busy = true;
     try {
       const page = await read(row.id, request);
-      if (!current()) { if (initial && this.history === history) this.attempted = false; return; }
-      if (!manual && !initial && (this.preview || !this.following)) {
-        if (settling) this.latestAvailable = true;
-        return;
+      if (!current()) return;
+      const hold = this.grip(direction, true);
+      joined = history.accept(direction, page);
+      if (joined) { this.hold = hold; this.failed = false; }
+    } catch { /* The recording changed or could not be read: it is read again below. */ }
+    finally { history.busy = false; }
+    if (!current()) return;
+    if (joined) { this.host.rewrapped?.(); this.host.changed?.(); }
+    else await this.reread("place");
+  }
+
+  /**
+   * Reads the recording again from its end, off screen, and shows it in one step, so no frame draws half of it.
+   * `open` is the first read, back to the place kept for the agent. `follow` keeps a reader at a running agent's end
+   * on its newest messages. `end` is the End key. `place` follows a recording that changed under the resident pages,
+   * whose cursors no longer read it, and keeps the reader's row: a record keeps its byte offset while a recording
+   * only grows, so the read walks back until that record is resident again.
+   */
+  private async reread(mode: "open" | "follow" | "end" | "place", settling = false): Promise<void> {
+    const session = this.session();
+    if (!session || session.history.busy) return;
+    const { row, read, history, current } = session;
+    const saved = mode === "open" ? this.reopen : undefined;
+    const hold = mode === "place" ? this.grip("older", false) : undefined;
+    const until = (saved && !saved.following ? saved.anchor : hold?.anchor)?.record;
+    const pages = until === undefined ? Math.min(Math.max(1, history.pages.length), FOLLOW_PAGES) : REREAD_PAGES;
+    let next: AgentHistory | undefined;
+    history.busy = true;
+    try {
+      const latest = await read(row.id, { mode: "conversation" });
+      if (!current()) return;
+      if (mode === "follow" && latest.stamp === history.stamp && !history.newer) { this.latestAvailable = false; return; }
+      const walk = new AgentHistory();
+      walk.open(latest);
+      // The reader's record is whole once the record before it is resident too.
+      for (let count = 1; count < pages && walk.older && !(until !== undefined && (walk.first ?? Infinity) < until); count++) {
+        const page = await read(row.id, { mode: "conversation", cursor: walk.older });
+        if (!current()) return;
+        // It changed again while it was read: the next tick or scroll reads it again.
+        if (!walk.accept("older", page)) throw new Error("recording changed");
       }
-      // A failed reopen keeps its checkpoint until a successful latest read can validate it.
-      if (direction === "latest" && this.checkpoint) {
-        const saved = this.checkpoint;
-        this.checkpoint = undefined;
-        if (history.resume(saved.pages, page)) {
-          this.pending = saved.position;
-          return;
-        }
-      }
-      if (direction === "latest") this.latestAvailable = false;
-      const top = this.scroll.scrollTop;
-      const range = this.ranges.find(span => top >= span.from && top < span.to);
-      if (history.accept(direction, page)) {
-        if (this.preview) {
-          if (direction === "latest") this.recordedPosition = { top: 0, following: true };
-          return;
-        }
-        this.anchor = direction !== "latest" && range ? { id: range.id, offset: top - range.from } : undefined;
-        this.jump = direction === "latest" ? (initial && !isLive(row.state) ? "top" : "end") : undefined;
-        this.pending = undefined;
-      }
-    } catch {
-      if (current()) history.retry = history.pages.length > 0 && (manual || !isLive(row.state));
-      else if (initial && this.history === history) this.attempted = false;
-    } finally {
-      history.busy = false;
-      if (current()) this.host.changed?.();
+      next = walk;
+    } catch { /* `next` stays undefined. */ }
+    finally { history.busy = false; }
+    if (!current()) return;
+    if (!next) { this.failed = true; this.host.changed?.(); return; }
+    // An automatic refresh never moves a reader who left the end while it was read.
+    if (mode === "follow" && !(this.pending?.following ?? this.following)) { if (settling) this.latestAvailable = true; return; }
+    this.history = next; this.failed = false; this.latestAvailable = false;
+    if (mode === "open") this.reopen = undefined;
+    if (saved) this.pending = saved;
+    else if (hold) this.hold = hold;
+    else if (mode !== "open" || !this.moved || this.following) { this.pending = undefined; this.jump = "end"; }
+    this.host.rewrapped?.(); this.host.changed?.();
+  }
+
+  private recording(history: AgentHistory, row: AgentRow): RecordedChat {
+    const start = !history.older, key = [row.key, row.name, row.hue].join("\n");
+    if (this.recorded?.pages !== history.pages || this.recorded.start !== start || this.recorded.key !== key) {
+      // Messages of the same snapshot that the new pages left alone stay the objects HelperChat has drawn.
+      const previous = this.recorded?.key === key && this.recorded.pages[0]?.stamp === history.stamp ? this.recorded.chat : undefined;
+      this.recorded = { pages: history.pages, start, key, chat: assembleRecording(history.pages, start, text => this.aside(row, text), previous) };
     }
+    return this.recorded.chat;
+  }
+  /** A message the agent received after its prompt: a peer's under `<from> → <agent>`, a build child's steer under `you → <agent>`. */
+  private aside(row: AgentRow, text: string): { readonly label: string; readonly text: string } {
+    const self = BOLD + this.host.color(row.hue) + row.name + UNBOLD, peer = peerMessage(text);
+    if (!peer) return { label: row.source === "child" ? "you → " + self : "message", text };
+    const from = plainLabel(helperText(peer.from));
+    const hue = row.mail?.find(message => message.from === peer.from)?.fromHue ?? row.mail?.find(message => message.to === peer.from)?.toHue;
+    return { label: (hue === undefined ? from : BOLD + this.host.color(hue) + from + UNBOLD) + PANEL_MUTED + " → " + self, text: peer.text };
   }
 
   private render(width: number): string[] {
     const row = this.host.row(), lines: string[] = [], now = this.host.now();
     const say = (text: string, color: string) => wrapTextWithAnsi(text, Math.max(1, width - 1)).map(line => " " + color + line + RESET);
-    this.ask = undefined;
-    this.ranges = []; this.hits = []; this.previewHit = undefined;
-    const link = (direction: Direction, label: string) => {
-      const from = lines.length;
-      lines.push(...say(label, PANEL_BLUE));
-      this.hits.push({ direction, from, to: lines.length });
-    };
+    this.ask = undefined; this.spans = [];
     if (!row) {
       this.back = { from: 1, to: 1 + visibleWidth(BACK) };
       lines.push(" " + PANEL_BLUE + BACK + RESET, " " + PANEL_WARNING + "This agent is no longer retained." + RESET);
@@ -224,63 +295,47 @@ export class AgentConversation {
       const header = conversationHeader(row, width, now, hue => this.host.color(hue));
       this.back = header.back;
       lines.push(...header.lines.map(line => line + RESET), "");
-      this.chatStart = lines.length;
       const prompt = child
         ? { label: "brief from parent", notes: [`Owns: ${row.owns?.length ? row.owns.join(", ") : "nothing (read-only)"} · no board access · no nested agents`] }
         : { label: "prompt from parent" };
-      // The owner's steers and the messages it exchanged with other agents sit among the replies by the time they were sent.
-      const steers: readonly Steer[] = [...(row.steers ?? []).map((text, index) => {
-        const at = row.steeredAt?.[index];
-        return at === undefined ? { text } : { text, at };
-      }), ...mailSteers(row.mail ?? [], (id, hue) => hue === undefined ? id : BOLD + this.host.color(hue) + id + UNBOLD)];
+      const name = (id: string, hue: number | undefined) => hue === undefined ? id : BOLD + this.host.color(hue) + id + UNBOLD;
       const history = row.capabilities.transcript && this.host.read ? this.history : undefined;
-      const recorded = !!history?.pages.length;
-      if (recorded && row.conversation) {
-        const from = lines.length;
-        lines.push(...say(this.preview ? "Show recorded messages · v" : "Show live preview · v", PANEL_BLUE));
-        this.previewHit = { from, to: lines.length };
-      }
-      if (!this.preview && history?.retry) link("latest", "Load latest messages · recording changed or unavailable");
-      else if (!this.preview && history?.older) link("older", "Show earlier messages");
-      else if (history?.busy && !history.pages.length) lines.push(...say("Loading recorded messages…", PANEL_MUTED));
-      if (history && recorded && !this.preview) {
-        if (!history.pages.some(page => page.rows.length)) lines.push(...say(history.older ? "No recorded messages on these pages." : "No recorded messages yet.", PANEL_MUTED));
-        let openingPrompt = !history.older && !history.retry;
-        const append = (item: TranscriptRow) => {
-          const from = lines.length;
-          const isPrompt = openingPrompt && item.kind === "user";
-          if (isPrompt) openingPrompt = false;
-          lines.push(...say(isPrompt ? prompt.label : item.kind, PANEL_BLUE), ...say(recordedText(item.text), PANEL_TEXT), "");
-          this.ranges.push({ id: item.id, from, to: lines.length });
-        };
-        if (child) lines.push(...say(recordedText(prompt.notes?.[0] ?? ""), PANEL_MUTED));
-        for (const page of history.pages) for (const item of page.rows) append(item);
-        if (!history.retry && history.newer) link("newer", "Show newer messages");
-        if (!history.retry && this.latestAvailable) link("latest", "Load latest messages");
-        if (!history.newer) {
-          const provisional = isLive(row.state) ? row.conversation?.messages.filter(message => message.kind === "assistant"
-            ? message.partial === true || message.stopReason === undefined
-            : message.partial || message.phase === "requested" || message.phase === "running") : undefined;
-          if (provisional?.length) {
-            lines.push(...say("Streaming · not yet recorded", PANEL_MUTED));
-            for (const message of provisional) lines.push(...say(recordedText(message.text), PANEL_TEXT));
-          }
-        }
-        for (const message of mailSteers(row.mail ?? [], id => id)) {
-          lines.push(...say((message.label ?? "") + " · " + message.text, PANEL_MUTED));
-          for (const note of message.notes ?? []) lines.push(...say(note, PANEL_MUTED));
-        }
-        this.chatRows = 0;
-      } else {
-        if (history && !recorded && this.attempted && !history.busy) link("latest", "Load latest messages");
+      const recorded = history?.pages.length ? this.recording(history, row) : undefined;
+      let chat: string[];
+      if (history && recorded) {
+        const end = !history.newer, running = isLive(row.state);
+        const messages = end && (running || this.latestAvailable) ? withLiveTail(recorded, row.conversation, { running, start: !history.older }) : recorded.messages;
+        // A message that never reached the agent is in no recording: it follows the replies, as in the live view.
+        const missed = end ? mailSteers((row.mail ?? []).filter(message => message.from !== row.id
+          && (message.delivery === "undeliverable" || message.delivery === "answered_from_report")), name) : [];
+        const opening = recorded.prompt ?? (history.older ? undefined : row.conversation?.prompt);
+        const source: ChatSource = { request: "recorded:" + row.key, phase: row.conversation?.phase ?? (running ? "running" : "completed"), messages,
+          ...(opening === undefined ? {} : { prompt: opening }) };
+        if (this.failed && history.older) lines.push(...say("Earlier messages could not be read · trying again", PANEL_MUTED), "");
         this.chatStart = lines.length;
-        const chat = row.conversation ? this.host.chat.renderHelper(row.conversation, width,
-          { bubble: prompt, now, ...(child || steers.length ? { steers: { label: "you → " + BOLD + this.host.color(row.hue) + row.name + UNBOLD, items: steers } } : {}) })
-          : [" " + PANEL_MUTED + "Conversation unavailable for this agent." + RESET];
-        this.chatRows = row.conversation ? chat.length : 0;
+        chat = this.host.chat.renderHelper(source, width, { bubble: prompt, now, ...(missed.length ? { steers: { label: "", items: missed } } : {}) });
+        this.chatRows = chat.length;
         lines.push(...chat);
-        if (!history?.busy) lines.push(...say(recorded ? "Live preview · switch back for recorded history" : "Live preview · full transcript unavailable", PANEL_MUTED));
+        if (!chat.length) lines.push(...say(history.older ? "Reading earlier messages…" : "No recorded messages yet.", PANEL_MUTED));
+        if (this.failed && history.newer) lines.push("", ...say("Newer messages could not be read · trying again", PANEL_MUTED));
+      } else {
+        // No saved session, or none read yet: what this session still holds of the agent, drawn the same way.
+        // The owner's steers and the messages it exchanged with other agents sit among the replies by the time they were sent.
+        const steers: readonly Steer[] = [...(row.steers ?? []).map((text, index) => {
+          const at = row.steeredAt?.[index];
+          return at === undefined ? { text } : { text, at };
+        }), ...mailSteers(row.mail ?? [], name)];
+        this.chatStart = lines.length;
+        chat = row.conversation ? this.host.chat.renderHelper(row.conversation, width,
+          { bubble: prompt, now, ...(child || steers.length ? { steers: { label: "you → " + BOLD + this.host.color(row.hue) + row.name + UNBOLD, items: steers } } : {}) })
+          : [];
+        this.chatRows = chat.length;
+        lines.push(...chat);
+        const waiting = !history ? "Conversation unavailable for this agent."
+          : this.failed ? "The saved conversation could not be read · trying again" : "Reading the saved conversation…";
+        if (!row.conversation || (history && this.failed)) lines.push(...(chat.length ? [""] : []), ...say(waiting, PANEL_MUTED));
       }
+      this.spans = this.chatRows ? this.host.chat.spans().map(span => ({ id: span.id, from: span.from + this.chatStart, to: span.to + this.chatStart })) : [];
       if (child) {
         if (row.state === "queued") lines.push("", ...say(`Not started: ${row.activity}.`, PANEL_MUTED));
         if (row.state === "needs" && row.question !== undefined) {
@@ -299,18 +354,22 @@ export class AgentConversation {
         lines.push("", ...say(mark + note.text, toneColor(note.tone)));
       }
     }
-    if (this.anchor || this.jump) {
+    this.height = lines.length;
+    if (this.hold || this.jump) {
       this.scroll.updateLayout(lines.length, this.scroll.viewportHeight, () => {});
-      const anchor = this.anchor, span = this.ranges.find(item => item.id === anchor?.id);
-      if (span && anchor) this.scroll.scrollTo(Math.min(span.to - 1, span.from + anchor.offset), { disableFollow: true });
-      else if (this.jump === "end") this.scroll.scrollToEnd();
-      else this.scroll.scrollTo(0, { disableFollow: true });
-      this.anchor = undefined; this.jump = undefined;
+      const hold = this.hold, anchor = hold?.anchor, span = anchor && this.spans.find(item => item.id === anchor.id);
+      // Pages read above leave the reader's row where it is from the end of its message, which may have grown at
+      // its head; pages read below, from its start.
+      if (hold && anchor && span) this.scroll.scrollTo(hold.edge === "older" ? span.to - anchor.tail : span.from + anchor.offset, { disableFollow: true });
+      else if (hold?.edge === "older" && hold.below !== undefined) this.scroll.scrollTo(lines.length - hold.below, { disableFollow: true });
+      else if (hold ? hold.edge === "older" : this.jump === "end") this.scroll.scrollToEnd();
+      else if (!hold) this.scroll.scrollTo(0, { disableFollow: true });
+      this.hold = undefined; this.jump = undefined;
     }
     if (this.pending !== undefined) {
       const saved = this.pending, live = row !== undefined && isLive(row.state);
       this.scroll.updateLayout(lines.length, this.scroll.viewportHeight, () => {});
-      const span = this.ranges.find(item => item.id === saved?.anchor?.id);
+      const span = this.spans.find(item => item.id === saved?.anchor?.id);
       if (saved?.following || (live && !saved)) this.scroll.scrollToEnd();
       else this.scroll.scrollTo(span && saved?.anchor ? Math.min(span.to - 1, span.from + saved.anchor.offset) : saved?.top ?? 0, { disableFollow: true });
       this.pending = undefined;
@@ -321,9 +380,6 @@ export class AgentConversation {
     if (!this.host.click(event)) return undefined;
     if (event.y === 0 && event.x >= this.back.from && event.x < this.back.to) { this.host.back(); return { handled: true }; }
     this.host.focus();
-    if (this.previewHit && event.y >= this.previewHit.from && event.y < this.previewHit.to && this.togglePreview()) return { handled: true };
-    const hit = this.hits.find(item => event.y >= item.from && event.y < item.to);
-    if (hit) { this.navigate(hit.direction); return { handled: true }; }
     const ask = this.ask;
     if (ask && event.y >= ask.from && event.y < ask.to && this.host.answer) { this.host.answer(ask.key); return { handled: true }; }
     if (event.y >= this.chatStart && event.y < this.chatStart + this.chatRows) {

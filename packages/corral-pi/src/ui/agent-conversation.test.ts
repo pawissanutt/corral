@@ -10,6 +10,8 @@ import type { PanelSnapshot } from "./panels-view.ts";
 import type { HelperInspection } from "../extensions/subagent/inspection.ts";
 import { RecordingTerminal } from "../../test/support/panel-terminal.ts";
 import type { ChildSnapshot } from "../build/types.ts";
+import { toolMessageId } from "../extensions/subagent/inspection.ts";
+import type { TranscriptPage, TranscriptRow } from "../host/transcript-preview.ts";
 import { childRow } from "./build/fleet-rows.ts";
 
 beforeAll(() => initTheme("dark", false));
@@ -195,93 +197,127 @@ test("a running agent's page follows its end until the owner scrolls up; a finis
   expect(view.scroll.scrollTop).toBe(0);
 });
 
-test("recorded history pages in both directions through an eight-page window without splicing snapshots", async () => {
+/** A recording of `count` turns after its prompt, one turn a page; `stamp` names its snapshot, and a cursor of another snapshot is stale. */
+function recording(count: () => number, stamp: () => string) {
+  const reads: string[] = [];
+  const page = (index: number): TranscriptPage => ({ stamp: stamp(), rows: index === 0
+    ? [{ id: "r0", kind: "user", text: "RECORDED_PROMPT", record: 0, item: 0 }]
+    : [{ id: `t${index}`, kind: "thinking", text: `THOUGHT_${index}`, record: index * 100, item: 0 },
+      { id: `a${index}`, kind: "assistant", text: `RECORDED_${index}_REPLY\n\n` + "More words here.\n\n".repeat(4), record: index * 100, item: 1 },
+      { id: `c${index}`, kind: "call", tool: "read", callId: `call-${index}`, text: `{"path":"src/file-${index}.ts"}`, record: index * 100, item: 2 },
+      { id: `o${index}`, kind: "tool", tool: "read", callId: `call-${index}`, text: "one\ntwo\n", record: index * 100 + 50, item: 0 }],
+    ...(index ? { older: `${stamp()}:${index - 1}` } : {}), ...(index < count() ? { newer: `${stamp()}:${index + 1}` } : {}) });
+  const read = async (_id: string, request: { cursor?: string }): Promise<TranscriptPage> => {
+    reads.push(request.cursor ?? "latest");
+    if (request.cursor === undefined) return page(count());
+    const [of, index] = request.cursor.split(":");
+    if (of !== stamp()) throw new Error("Transcript changed; load latest messages");
+    return page(Number(index));
+  };
+  return { read, reads };
+}
+function settle(): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  setImmediate(resolve);
+  return promise;
+}
+/** The view's rows without its scrollbar column, which moves whenever the content grows. */
+function reading(view: AgentConversation, rows = 12): string {
+  return renderLayoutFrame(view.scroll, 80, rows, () => {}).lines.map(line => stripTerminalSequences(line).slice(0, 78).trimEnd()).join("\n");
+}
+
+test("a recording is drawn as the live conversation and read by scrolling: no page that joins moves the reader", async () => {
   const live = rowOf(helper({ phase: "completed", truncated: true, dropped: 200 }));
   const row = { ...live, capabilities: { ...live.capabilities, transcript: true } };
-  let stamp = "original";
+  const { read, reads } = recording(() => 9, () => "same");
   const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
-    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {},
-    read: async (_id, request) => {
-      const index = request.cursor === undefined ? 9 : Number(request.cursor);
-      return { stamp, rows: [{ id: String(index), kind: "assistant", text: `RECORDED_${index}` }],
-        ...(index ? { older: String(index - 1) } : {}), ...(index < 9 ? { newer: String(index + 1) } : {}) };
-    },
-  });
-  const render = () => stripTerminalSequences(view.scroll.render(80).join("\n"));
-  async function go(direction: "older" | "newer" | "latest") {
-    expect(view.navigate(direction)).toBeTrue(); await Promise.resolve(); return render();
+    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {}, read });
+  view.restore(row.key);
+  view.refresh(); await settle();
+  // It opens at its latest turn: the reply as words, the call on one row with its result.
+  const opened = reading(view);
+  expect(opened).toContain("More words here.");
+  expect(opened).toContain("✓ read src/file-9.ts · 2 lines");
+  // Pages beyond the view are read ahead of the reader, who stays at the end.
+  for (let before = -1; before !== reads.length;) { before = reads.length; await settle(); expect(reading(view)).toBe(opened); }
+  expect(reads.length).toBeGreaterThan(1);
+  expect(reads).not.toContain("same:0");
+  expect(view.following).toBeTrue();
+  // Scrolling up reads each earlier page once, before the reader reaches it, and the rows on screen stay put.
+  for (let step = 0; step < 60 && view.scroll.scrollTop > 0; step++) {
+    view.scroll.scrollBy(-5);
+    const before = reading(view); await settle();
+    expect(reading(view)).toBe(before);
   }
-  view.restore(row.key);
-  view.refresh(); await Promise.resolve();
-  expect(render()).toContain("RECORDED_9");
-  expect(render()).not.toContain("Visible response");
-  expect(render()).toContain("Show earlier messages");
-  for (let i = 8; i >= 0; --i) expect(await go("older")).toContain(`RECORDED_${i}`);
-  expect(render()).not.toContain("RECORDED_8");
-  expect(render()).toContain("Show newer messages");
-  expect(await go("newer")).toContain("RECORDED_8");
-  expect(render()).not.toContain("RECORDED_0");
-  stamp = "different";
-  expect(await go("newer")).toContain("Load latest messages");
-  expect(render()).toContain("RECORDED_8");
-  expect(render()).not.toContain("RECORDED_9");
-  expect(await go("latest")).toContain("RECORDED_9");
-  expect(render()).not.toContain("RECORDED_8");
+  expect(reads).toEqual(["latest", ...Array.from({ length: 9 }, (_, index) => `same:${8 - index}`)]);
+  expect(reading(view)).toContain("prompt from parent RECORDED_PROMPT");
+  const whole = stripTerminalSequences(view.scroll.render(80).join("\n"));
+  for (let index = 1; index <= 9; index++) expect(whole.split(`RECORDED_${index}_REPLY`).length - 1).toBe(1);
+  expect(whole).toContain("THOUGHT_3");
+  // The recording stands for the live projection, and nothing asks to be clicked.
+  expect(whole).not.toContain("Visible response");
+  expect(whole).not.toMatch(/Show |Load /);
 });
 
-test("a following live reader refreshes on settlement without retaining its provisional reply", async () => {
-  const initial = rowOf(helper({ messages: [{ id: "a", kind: "assistant", text: "PROVISIONAL_REPLY" }] }));
-  let row = { ...initial, capabilities: { open: true, transcript: true } };
-  let latest = "FIRST_COMMITTED";
+test("a recording that grew is read again around the reader's row, and reopening returns to that row", async () => {
+  const live = rowOf(helper({ phase: "completed" }));
+  const row = { ...live, capabilities: { ...live.capabilities, transcript: true } };
+  let count = 9, stamp = "one";
+  const { read, reads } = recording(() => count, () => stamp);
+  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
+    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {}, read });
+  const rest = async () => { for (let before = -1; before !== reads.length;) { before = reads.length; reading(view); await settle(); } };
+  view.restore(row.key);
+  view.refresh(); await settle(); await rest();
+  view.scroll.scrollBy(-30); await rest();
+  const resident = reads.length;
+  expect(reads).not.toContain("one:2");
+  // The agent wrote another turn: the cursors of the pages on screen no longer read the file.
+  count = 10; stamp = "two";
+  view.scroll.scrollBy(-20);
+  const before = reading(view); await settle(); await rest();
+  expect(reads[resident]?.startsWith("one:")).toBeTrue();
+  expect(reads[resident + 1]).toBe("latest");
+  expect(reading(view)).toBe(before);
+  expect(stripTerminalSequences(view.scroll.render(80).join("\n"))).toContain("RECORDED_10_REPLY");
+  // Leaving and coming back after it grew again: the same row, read back from the new end.
+  view.remember();
+  count = 11; stamp = "three";
+  view.restore(row.key);
+  view.refresh(); await settle(); reading(view); await rest();
+  expect(reading(view)).toBe(before);
+});
+
+test("a running agent's unrecorded work follows its recording once, and the settled recording replaces it", async () => {
+  const call = toolMessageId("c1");
+  const running = rowOf(helper({ messages: [
+    { id: "assistant-1", kind: "assistant", text: "FIRST_REPLY", stopReason: "toolUse", hasToolCalls: true },
+    { id: call, kind: "tool", tool: "read", phase: "running", arguments: '{"path":"a.ts"}', text: "" },
+    { id: "assistant-2", kind: "assistant", text: "TYPING_NOW" }] }));
+  let row = { ...running, capabilities: { open: true, transcript: true } };
+  let rows: TranscriptRow[] = [
+    { id: "u", kind: "user", text: "Question", record: 0, item: 0 },
+    { id: "a", kind: "assistant", text: "FIRST_REPLY", record: 10, item: 0 },
+    { id: "c", kind: "call", tool: "read", callId: "c1", text: '{"path":"a.ts"}', record: 10, item: 1 }];
   const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
     color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {},
-    read: async () => ({ stamp: latest, rows: [{ id: "reply", kind: "assistant", text: latest }] }),
+    read: async () => ({ stamp: String(rows.length), rows }),
   });
   const render = () => stripTerminalSequences(view.scroll.render(80).join("\n"));
+  const times = (text: string, needle: string) => text.split(needle).length - 1;
   view.restore(row.key);
-  view.refresh(); await Promise.resolve();
-  expect(render()).toContain("Streaming · not yet recorded");
-  expect(render()).toContain("PROVISIONAL_REPLY");
-  latest = "FINAL_COMMITTED"; row = { ...row, state: "done" };
-  view.refresh(); await Promise.resolve();
+  view.refresh(); await settle();
+  const live = render();
+  expect(times(live, "FIRST_REPLY")).toBe(1);
+  expect(times(live, "read a.ts")).toBe(1);
+  expect(live).not.toContain("✓ read a.ts");
+  expect(times(live, "TYPING_NOW")).toBe(1);
+  rows = [...rows, { id: "o", kind: "tool", tool: "read", callId: "c1", text: "one\n", record: 20, item: 0 },
+    { id: "f", kind: "assistant", text: "FINAL_ANSWER", record: 30, item: 0 }];
+  row = { ...row, state: "done" };
+  view.refresh(); await settle();
   const final = render();
-  expect(final).toContain("FINAL_COMMITTED");
-  expect(final).not.toContain("PROVISIONAL_REPLY");
-  expect(final).not.toContain("Streaming · not yet recorded");
-});
-
-test("reopening a recording restores its row within the latest page or an earlier page", async () => {
-  const initial = rowOf(helper({ phase: "completed" }));
-  const row = { ...initial, capabilities: { open: true, transcript: true } };
-  let stamp = "same", failOnce = false;
-  const view = new AgentConversation({ row: () => row, chat: new HelperChat(() => undefined, "/tmp"),
-    color: agentColor, now: () => NOW, click: () => false, focus() {}, back() {},
-    read: async (_id, request) => {
-      if (failOnce) { failOnce = false; throw new Error("transient read failure"); }
-      const page = request.cursor === "older" ? "EARLY" : "CURRENT";
-      return { stamp, rows: Array.from({ length: 20 }, (_, i) => ({ id: `${page}-${i}`, kind: "assistant", text: `${page}_${i}_ROW` })),
-        ...(page === "CURRENT" ? { older: "older" } : { newer: "newer" }) };
-    },
-  });
-  const frame = () => stripTerminalSequences(renderLayoutFrame(view.scroll, 80, 8, () => {}).lines.join("\n"));
-  const reopen = async () => { view.restore(row.key); view.refresh(); await Promise.resolve(); return frame(); };
-  await reopen();
-  view.scroll.scrollTo(22, { disableFollow: true });
-  const latest = frame();
-  expect(latest).toContain("CURRENT_6_ROW");
-  view.remember();
-  expect(await reopen()).toBe(latest);
-  expect(view.navigate("older")).toBeTrue(); await Promise.resolve(); frame();
-  view.scroll.scrollTo(22, { disableFollow: true });
-  const older = frame();
-  expect(older).toContain("EARLY_6_ROW");
-  view.remember();
-  failOnce = true;
-  expect(await reopen()).not.toContain("EARLY_");
-  expect(view.navigate("latest")).toBeTrue(); await Promise.resolve();
-  expect(frame()).toBe(older);
-  view.remember();
-  expect(await reopen()).toBe(older);
-  stamp = "changed";
-  expect(await reopen()).not.toContain("EARLY_");
+  expect(times(final, "FINAL_ANSWER")).toBe(1);
+  expect(final).toContain("✓ read a.ts");
+  expect(final).not.toContain("TYPING_NOW");
 });

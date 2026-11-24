@@ -544,28 +544,30 @@ test("raw transcript n and p request opaque host cursors without replacing the d
   } finally { wb.dispose(); }
 });
 
-test("an empty recording keeps paging and opens settled native tool preview with Ctrl+O or v", async () => {
+test("a recorded conversation opens as native rows, and Ctrl+O or a click opens a recorded call into its card", async () => {
   const previous = getKeybindings();
   setKeybindings(new KeybindingsManager({ "app.tools.expand": "ctrl+o" }));
-  const state = snapshot({ helpers: [helper("first", { result: "UNRECORDED_RESULT", messages: [
-    { id: "tool", kind: "tool", tool: "read", phase: "completed", text: "NATIVE_TOOL_OUTPUT", arguments: '{"path":"native.txt"}' },
-  ] })], agents: [{ id: "first", session: "s-1", kind: "explore", state: "completed", model: null, transcript: true }] });
+  const state = snapshot({ helpers: [helper("first", { result: "UNRECORDED_RESULT", messages: [] })],
+    agents: [{ id: "first", session: "s-1", kind: "explore", state: "completed", model: null, transcript: true }] });
   const wb = new NativeWorkbench({ cwd: work, identity: assistant, snapshot: () => state, changed() {}, canInteract: () => true,
-    readTranscript: async () => ({ stamp: "same", rows: [], older: "opaque" }) });
+    readTranscript: async () => ({ stamp: "same", rows: [
+      { id: "u", kind: "user", text: "RECORDED_PROMPT", record: 0, item: 0 },
+      { id: "c", kind: "call", tool: "read", callId: "c1", text: '{"path":"native.txt"}', record: 10, item: 0 },
+      { id: "o", kind: "tool", tool: "read", callId: "c1", text: "NATIVE_TOOL_OUTPUT", record: 20, item: 0 },
+      { id: "a", kind: "assistant", text: "RECORDED_ANSWER", record: 30, item: 0 }] }) });
   const tui = new TuiAltScreen(new RecordingTerminal());
   const view = viewport(wb, undefined, () => ({ tui, markdownTheme: sdk.getMarkdownTheme(), markdownTransformers: [],
     outputPad: 1, renderers: () => undefined }));
   const screen = () => plain(renderLayoutFrame(view.root, 120, 40, () => {}).lines);
   try {
     wb.openAgents("helper:first"); wb.handleInput(KEY.enter); await settle();
-    expect(screen()).toContain("Show earlier messages");
-    expect(screen()).toContain("Show live preview");
-    expect(screen()).not.toContain("Find first callers");
+    // The recording stands for what this session still holds of the agent.
+    expect(screen()).toContain("RECORDED_PROMPT");
+    expect(screen()).toContain("RECORDED_ANSWER");
+    expect(screen()).not.toContain("UNRECORDED_RESULT");
+    expect(screen()).not.toContain("NATIVE_TOOL_OUTPUT");
     expect(wb.handleInput(KEY.ctrlO)).toBeTrue();
-    expect(screen()).toContain("Find first callers");
-    expect(screen()).toContain("UNRECORDED_RESULT");
     expect(screen()).toContain("NATIVE_TOOL_OUTPUT");
-    expect(screen()).not.toContain("Show earlier messages");
     expect(wb.handleInput(KEY.ctrlO)).toBeTrue();
     expect(screen()).not.toContain("NATIVE_TOOL_OUTPUT");
     const frame = renderLayoutFrame(view.root, 120, 40, () => {});
@@ -578,10 +580,5 @@ test("an empty recording keeps paging and opens settled native tool preview with
       if (result?.handled) break;
     }
     expect(screen()).toContain("NATIVE_TOOL_OUTPUT");
-    expect(wb.handleInput("v")).toBeTrue();
-    expect(screen()).toContain("Show earlier messages");
-    expect(screen()).not.toContain("UNRECORDED_RESULT");
-    expect(wb.handleInput("v")).toBeTrue();
-    expect(screen()).toContain("UNRECORDED_RESULT");
   } finally { setKeybindings(previous); wb.dispose(); }
 });
