@@ -1,5 +1,7 @@
 //! Etag-aware, bounded app details. Page tokens are opaque and selector-bound.
-use corral_types::{SystemAt, SystemMap, SystemReview, SystemRuntime, UsageBy};
+use corral_types::{
+    SystemAt, SystemLens, SystemLenses, SystemMap, SystemReview, SystemRuntime, UsageBy,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 pub mod artifact;
@@ -54,9 +56,21 @@ pub enum DetailRef {
     SystemRuntime {
         project: String,
     },
+    /// `system.v1`: saved lens summaries at the observed project head.
+    SystemLenses {
+        project: String,
+    },
+    /// `system.v1`: a checked lens at the observed head or the selected Git revision.
+    SystemLens {
+        project: String,
+        /// Lens ID, or its exact repository-relative file path (e.g. for a malformed file).
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<String>,
+    },
     /// `system.v1`: impact of the latest submitted worker change. Runtime rows
     /// and summaries require `system.runtime.v1`; entry point changes and
-    /// summaries require `system.entries.v1`.
+    /// summaries require `system.entries.v1`; lens impact requires `system.lenses.v1`.
     SystemReview {
         task: String,
         /// The head's map level and entry point scope; the project level when absent.
@@ -232,6 +246,8 @@ pub enum DetailBody {
     ReviewFile(PatchPage),
     SystemMap(#[schemars(with = "crate::schema_types::SystemMap")] SystemMap),
     SystemRuntime(#[schemars(with = "crate::schema_types::SystemRuntime")] SystemRuntime),
+    SystemLenses(#[schemars(with = "crate::schema_types::SystemLenses")] SystemLenses),
+    SystemLens(#[schemars(with = "crate::schema_types::SystemLens")] SystemLens),
     SystemReview(#[schemars(with = "crate::schema_types::SystemReview")] SystemReview),
     Session(SessionPage),
     SessionItem(SessionItemPage),

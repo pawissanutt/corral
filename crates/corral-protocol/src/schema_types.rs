@@ -36,6 +36,8 @@ shared! {
     SessionStatus: ["string", "object"],
     Status: "string",
     SystemAt: "object",
+    SystemLens: "object",
+    SystemLenses: "object",
     SystemMap: "object",
     SystemReview: "object",
     SystemRow: "object",

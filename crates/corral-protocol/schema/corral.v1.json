@@ -2176,6 +2176,38 @@
           {
             "properties": {
               "body": {
+                "$ref": "#/components/schemas/SystemLenses"
+              },
+              "kind": {
+                "const": "system_lenses",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
+                "$ref": "#/components/schemas/SystemLens"
+              },
+              "kind": {
+                "const": "system_lens",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "body"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "body": {
                 "$ref": "#/components/schemas/SystemReview"
               },
               "kind": {
@@ -2766,7 +2798,52 @@
             "type": "object"
           },
           {
-            "description": "`system.v1`: impact of the latest submitted worker change. Runtime rows\nand summaries require `system.runtime.v1`; entry point changes and\nsummaries require `system.entries.v1`.",
+            "description": "`system.v1`: saved lens summaries at the observed project head.",
+            "properties": {
+              "kind": {
+                "const": "system_lenses",
+                "type": "string"
+              },
+              "project": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "project"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "`system.v1`: a checked lens at the observed head or the selected Git revision.",
+            "properties": {
+              "at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "id": {
+                "description": "Lens ID, or its exact repository-relative file path (e.g. for a malformed file).",
+                "type": "string"
+              },
+              "kind": {
+                "const": "system_lens",
+                "type": "string"
+              },
+              "project": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "project",
+              "id"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "`system.v1`: impact of the latest submitted worker change. Runtime rows\nand summaries require `system.runtime.v1`; entry point changes and\nsummaries require `system.entries.v1`; lens impact requires `system.lenses.v1`.",
             "properties": {
               "at": {
                 "anyOf": [
@@ -9753,6 +9830,14 @@
         "type": "object",
         "x-rust-type": "corral_types::SystemAt"
       },
+      "SystemLens": {
+        "type": "object",
+        "x-rust-type": "corral_types::SystemLens"
+      },
+      "SystemLenses": {
+        "type": "object",
+        "x-rust-type": "corral_types::SystemLenses"
+      },
       "SystemMap": {
         "type": "object",
         "x-rust-type": "corral_types::SystemMap"
@@ -11861,6 +11946,12 @@
                 ]
               },
               {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              {
                 "anyOf": [
                   {
                     "$ref": "#/components/schemas/SystemAt"
@@ -11905,7 +11996,7 @@
             ]
           },
           "x-required-in": [
-            29
+            31
           ]
         },
         {
@@ -11915,7 +12006,7 @@
             "type": "string"
           },
           "x-required-in": [
-            22
+            24
           ]
         },
         {
@@ -11925,7 +12016,7 @@
             "type": "string"
           },
           "x-required-in": [
-            11
+            13
           ]
         },
         {
@@ -11935,8 +12026,8 @@
             "$ref": "#/components/schemas/ChangesComparison"
           },
           "x-required-in": [
-            14,
-            15
+            16,
+            17
           ]
         },
         {
@@ -11946,7 +12037,7 @@
             "type": "string"
           },
           "x-required-in": [
-            34
+            36
           ]
         },
         {
@@ -11986,21 +12077,28 @@
             ]
           },
           "x-required-in": [
-            29,
-            31
+            31,
+            33
           ]
         },
         {
           "name": "id",
           "required": false,
           "schema": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "description": "Lens ID, or its exact repository-relative file path (e.g. for a malformed file).",
+                "type": "string"
+              }
+            ]
           },
           "x-required-in": [
             0,
             1,
             7,
-            8,
             9,
             10,
             11,
@@ -12021,7 +12119,9 @@
             26,
             27,
             28,
-            34
+            29,
+            30,
+            36
           ]
         },
         {
@@ -12031,7 +12131,7 @@
             "type": "string"
           },
           "x-required-in": [
-            13
+            15
           ]
         },
         {
@@ -12041,7 +12141,7 @@
             "type": "string"
           },
           "x-required-in": [
-            26
+            28
           ]
         },
         {
@@ -12071,6 +12171,14 @@
               },
               {
                 "const": "system_runtime",
+                "type": "string"
+              },
+              {
+                "const": "system_lenses",
+                "type": "string"
+              },
+              {
+                "const": "system_lens",
                 "type": "string"
               },
               {
@@ -12224,7 +12332,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            18
+            20
           ]
         },
         {
@@ -12235,10 +12343,10 @@
           },
           "x-required-in": [
             3,
-            15,
-            16,
             17,
-            18
+            18,
+            19,
+            20
           ]
         },
         {
@@ -12249,7 +12357,9 @@
           },
           "x-required-in": [
             4,
-            5
+            5,
+            6,
+            7
           ]
         },
         {
@@ -12259,7 +12369,7 @@
             "type": "string"
           },
           "x-required-in": [
-            32
+            34
           ]
         },
         {
@@ -12290,7 +12400,7 @@
             ]
           },
           "x-required-in": [
-            30
+            32
           ]
         },
         {
@@ -12302,7 +12412,7 @@
           "x-required-in": [
             2,
             3,
-            6
+            8
           ]
         },
         {
@@ -12331,8 +12441,8 @@
             ]
           },
           "x-required-in": [
-            29,
-            31
+            31,
+            33
           ]
         },
         {
@@ -12342,7 +12452,7 @@
             "type": "string"
           },
           "x-required-in": [
-            8
+            10
           ]
         },
         {
@@ -12356,7 +12466,7 @@
             "type": "integer"
           },
           "x-required-in": [
-            31
+            33
           ]
         }
       ],

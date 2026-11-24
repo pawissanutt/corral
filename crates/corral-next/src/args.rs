@@ -199,6 +199,9 @@ pub(crate) enum Command {
     /// Work with configured extensions.
     #[command(subcommand)]
     Ext(ExtCommand),
+    /// List or check committed behaviour diagrams.
+    #[command(subcommand)]
+    Lens(crate::lens::LensCommand),
     /// List project tools or run one and print its stdout unchanged.
     Tool {
         /// Select the project before specifying a tool name.

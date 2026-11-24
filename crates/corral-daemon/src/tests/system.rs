@@ -20,6 +20,8 @@ use rustix::{
 
 use super::*;
 
+mod lenses;
+
 const WAIT: Duration = Duration::from_secs(8);
 const CHANGED: &str = "app/src/feature/mod.rs";
 const HELPER: &str = "app/src/bin/demo-helper.rs";

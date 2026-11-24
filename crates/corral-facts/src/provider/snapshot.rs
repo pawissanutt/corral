@@ -8,6 +8,24 @@ use crate::{
 use super::{ProviderCoverage, Reply, Row};
 
 impl Reply {
+    /// Paths the provider explicitly could not read, independent of built-in
+    /// read statuses for paths with no provider file row.
+    pub fn unread_files(&self) -> BTreeSet<String> {
+        let mut unread = BTreeSet::new();
+        if self.coverage.provides("files") {
+            for row in &self.rows {
+                if let Row::File { path, read } = row {
+                    if *read == ReadStatus::Complete {
+                        unread.remove(path);
+                    } else {
+                        unread.insert(path.clone());
+                    }
+                }
+            }
+        }
+        unread
+    }
+
     /// Overlay a validated snapshot on the built-in structure. Git still owns
     /// the file list and the hierarchy, even when the provider supplies files.
     pub fn merge_snapshot(self, tree: &mut TreeFacts) -> ProviderCoverage {

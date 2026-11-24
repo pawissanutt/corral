@@ -443,7 +443,7 @@ fn rust_enum(
     }
 }
 
-fn enum_body<'a, 't>(mut rest: &'t [&'a str]) -> Option<&'t [&'a str]> {
+pub(super) fn enum_body<'a, 't>(mut rest: &'t [&'a str]) -> Option<&'t [&'a str]> {
     if rest.starts_with(&["<"]) {
         skip_angles(&mut rest)?;
     }
@@ -463,7 +463,7 @@ fn enum_body<'a, 't>(mut rest: &'t [&'a str]) -> Option<&'t [&'a str]> {
     take_group(&mut rest, "{")
 }
 
-fn variant_tail(rest: &mut &[&str]) -> bool {
+pub(super) fn variant_tail(rest: &mut &[&str]) -> bool {
     if let Some(&token @ ("(" | "{")) = rest.first()
         && take_group(rest, token).is_none()
     {
@@ -482,7 +482,7 @@ fn variant_tail(rest: &mut &[&str]) -> bool {
 }
 
 // Take a token group without descending into nested field or expression syntax.
-fn take_group<'a, 't>(rest: &mut &'t [&'a str], opening: &str) -> Option<&'t [&'a str]> {
+pub(super) fn take_group<'a, 't>(rest: &mut &'t [&'a str], opening: &str) -> Option<&'t [&'a str]> {
     if rest.first() != Some(&opening) {
         return None;
     }

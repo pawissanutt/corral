@@ -1,5 +1,7 @@
 //! One worker per daemon. Pending built-ins go first; a running provider is
 //! never waited on by a read, engine operation, or daemon shutdown.
+mod lens_work;
+
 use std::{
     path::PathBuf,
     sync::{Arc, Weak},
@@ -13,7 +15,9 @@ use corral_types::{SystemReviewRow, SystemRuntimeRow, facts::ChangeKind};
 
 use super::{
     Cache, Configuration, Impact, ImpactFacts, Queue, Snapshot, Stage, Submission, bounded_error,
-    bounded_report, provider_row_fits, submitted,
+    bounded_report,
+    lenses::{LensKey, LensSnapshot},
+    provider_row_fits, submitted,
 };
 use crate::{state::Shared, views::NotFound};
 
@@ -68,6 +72,11 @@ enum Work {
         snapshot: Snapshot,
         branch: Option<String>,
     },
+    Lens {
+        key: LensKey,
+        snapshot: LensSnapshot,
+        enrich: Option<Revision>,
+    },
     Review {
         submission: Submission,
         stage: Stage,
@@ -83,6 +92,14 @@ impl Worker {
                 continue;
             }
             match &job.work {
+                Work::Lens {
+                    key,
+                    snapshot,
+                    enrich,
+                } => match enrich {
+                    Some(rev) => self.lens_enrich(&job, key, rev),
+                    None => self.lens_builtin(&job, key, snapshot),
+                },
                 Work::Map {
                     project,
                     stage: Stage::Builtin,
@@ -304,6 +321,15 @@ impl Worker {
                 Arc::new(reader.builtin_tree(&head)?)
             };
             let delta = reader.builtin_delta(&base, &head)?;
+            let lenses =
+                lens_work::review_lenses(&reader, (&base, &before), (&head, &after), false)
+                    .unwrap_or_else(|error| {
+                        eprintln!(
+                            "corrald lens impact: {}",
+                            bounded_error(format!("{error:#}"))
+                        );
+                        None
+                    });
             Ok::<_, anyhow::Error>((
                 base,
                 head,
@@ -311,6 +337,7 @@ impl Worker {
                     delta,
                     base: before,
                     head: after,
+                    lenses,
                 },
             ))
         })();
@@ -405,12 +432,33 @@ impl Worker {
         } else {
             report.coverage.not_provided.push("entries".into());
         }
+        let lenses = if facts.lenses.is_some() {
+            lens_work::review_lenses(&reader, (base, &facts.base), (head, &facts.head), true)
+                .unwrap_or_else(|error| {
+                    eprintln!(
+                        "corrald enriched lens impact: {}",
+                        bounded_error(format!("{error:#}"))
+                    );
+                    None
+                })
+        } else {
+            None
+        };
+        if !self.check_submission(job, submission) {
+            return;
+        }
         let report = Arc::new(report);
-        let enriched = if report.error.is_none() || entry_enriched {
+        let enriched = if report.error.is_none() || entry_enriched || lenses.is_some() {
             Arc::new(ImpactFacts {
-                delta,
+                // A failed delta must not be used even if the lens snapshot answered.
+                delta: if report.error.is_some() && !entry_enriched {
+                    facts.delta.clone()
+                } else {
+                    delta
+                },
                 base: Arc::clone(&facts.base),
                 head: Arc::clone(&facts.head),
+                lenses: lenses.or_else(|| facts.lenses.clone()),
             })
         } else {
             Arc::clone(facts)
@@ -480,23 +528,28 @@ impl Queue {
 
 impl Cache {
     fn next(&mut self) -> Option<Job> {
-        enum Kind {
-            Map,
-            Review,
+        enum Key<'a> {
+            Map(&'a String),
+            Lens(&'a LensKey),
+            Review(&'a String),
         }
         let maps = self.maps.iter().filter_map(|(id, entry)| {
-            Some((entry.pending?, entry.snapshot.revision, id, Kind::Map))
+            Some((entry.pending?, entry.snapshot.revision, Key::Map(id)))
         });
         let reviews = self.reviews.iter().filter_map(|(id, entry)| {
-            Some((entry.pending?, entry.impact.revision, id, Kind::Review))
+            Some((entry.pending?, entry.impact.revision, Key::Review(id)))
         });
-        let (stage, _, id, kind) = maps
+        let lenses = self.lenses.iter().filter_map(|(key, entry)| {
+            Some((entry.pending?, entry.snapshot.revision, Key::Lens(key)))
+        });
+        let (stage, _, key) = maps
             .chain(reviews)
-            .min_by_key(|(stage, revision, _, _)| (*stage, *revision))?;
-        let id = id.clone();
+            .chain(lenses)
+            .min_by_key(|(stage, revision, _)| (*stage, *revision))?;
         let config = Arc::clone(self.configuration.as_ref()?);
-        let work = match kind {
-            Kind::Map => {
+        let work = match key {
+            Key::Map(id) => {
+                let id = id.clone();
                 let entry = self.maps.get_mut(&id)?;
                 entry.pending = None;
                 Work::Map {
@@ -506,7 +559,18 @@ impl Cache {
                     branch: entry.branch.clone(),
                 }
             }
-            Kind::Review => {
+            Key::Lens(key) => {
+                let key = key.clone();
+                let entry = self.lenses.get_mut(&key)?;
+                entry.pending = None;
+                Work::Lens {
+                    key,
+                    snapshot: entry.snapshot.clone(),
+                    enrich: entry.enrich.take(),
+                }
+            }
+            Key::Review(id) => {
+                let id = id.clone();
                 let entry = self.reviews.get_mut(&id)?;
                 entry.pending = None;
                 Work::Review {
@@ -558,6 +622,10 @@ impl Job {
                 } => cache
                     .maps
                     .get(project)
+                    .is_some_and(|entry| entry.snapshot.revision == snapshot.revision),
+                Work::Lens { key, snapshot, .. } => cache
+                    .lenses
+                    .get(key)
                     .is_some_and(|entry| entry.snapshot.revision == snapshot.revision),
                 Work::Review {
                     submission, impact, ..

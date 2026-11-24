@@ -7,6 +7,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 pub mod facts;
+pub mod lenses;
 mod op;
 pub mod pricing;
 mod system;

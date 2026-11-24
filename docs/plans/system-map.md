@@ -171,40 +171,63 @@ Moving an otherwise unchanged declaration or link to another line is not a Runti
 
 ## 6. Lenses
 
-A lens is a small file committed in the project repository (proposed `.corral/lenses/<id>.toml`), so it
-travels with the code and is reviewed like code.
+A lens is a typed behaviour diagram committed in the project repository. Set `lenses` in
+`[projects.<project>]` in `corral.toml` to change the repository-relative directory (default
+`.corral/lenses`). Corral reads `.toml` files and their source anchors from the selected Git commit,
+never from the working tree. Each file has a unique `id`, a `title`, a `kind`, and `read_at` (the full
+commit ID where the author last confirmed the anchors). Unknown keys or kinds are errors for that
+file; they do not stop other lenses from loading.
+
+A **state** lens has `states_from = { path, name }`, `[[states]]` entries with `id`, `label` and
+`anchor`, and `[[transitions]]` with `from`, `to`, `label`, `anchor` and an optional plain-text
+`guard`. For example, after declaring both `running` and `review` states:
 
 ```toml
-id = "task-lifecycle"
-title = "Task lifecycle"
-kind = "state-machine"                 # "state-machine" | "flow"
-read_at = "85b8f9603"                  # commit the anchors were last confirmed at
-
-[[nodes]]
-id = "review"
-label = "Review"
-anchor = { path = "crates/corral-types/src/lib.rs", name = "Status::Review" }
-
-[[edges]]
+[[transitions]]
 from = "running"
 to = "review"
-label = "done"
-anchor = { path = "crates/corral-engine/src/review.rs", name = "Engine::done", text = "set_lifecycle(&mut task, Status::Review)" }
-
-[layout]                               # saved positions; optional
+label = "Submit work"
+anchor = { path = "crates/corral-engine/src/review.rs", text = "set_lifecycle(&mut task, Status::Review);" }
 ```
 
-- **Anchors** name a definition (`name`) and optionally a literal line (`text`). With a `facts`
-  extension the definition is looked up by name; without one, Corral checks that `path` exists and `text`
-  occurs in it.
-- **Staleness** is computed, not judged: a lens is `current` when every anchor resolves at HEAD, otherwise
-  `stale` with the failing anchors listed. A stale lens still renders, with those elements marked.
-- **In Review**, a lens element is "touched" when the task changes its anchor's definition or line. The
-  lens then appears in Model impact.
-- **Authoring** is the only step that needs an agent: drafting a lens, or repairing a stale one. Both are
-  explicit owner actions and each produces a normal reviewable change to the lens file.
+A **sequence** lens has `[[participants]]` entries with `id`, `label` and `anchor`. Its `[[messages]]`
+are in diagram order and have `from`, `to`, `label`, `anchor` and an optional plain-text `note`. An
+optional `entry = { kind = "command", name = "done" }` names an entry point (`command`, `route` or
+`operation`). In both kinds, `from` and `to` refer to IDs declared in the same file. See the checked
+examples [Task lifecycle](../../.corral/lenses/task-lifecycle.toml) and
+[Submit work](../../.corral/lenses/submit-work.toml) for complete files.
 
-Lens rendering is generic: nodes, edges, labels, anchors and saved layout come from the file.
+An anchor has a repository-relative `path`, an optional definition `name`, and optional literal
+`text`. A path-only anchor points to line 1. Text must occur in the committed file, within the named
+definition when known. Names are checked when a `facts` extension provides definitions; a missing
+name is not a failure when the provider could not read its file or reports an incomplete answer.
+When Corral knows the enum variants named by `states_from`, state IDs must match (exact spelling or
+snake case for Rust variants). A sequence entry is checked when facts cover its kind. An empty
+extension entry answer does not claim coverage for files or kinds that no detector covered.
+
+- **Current**: all checks that could run passed. Checks that could not run are listed separately.
+- **Stale**: a path, a name or text that could be checked, or a known entry-point check failed. The
+  result names the failing elements.
+- **Incomplete**: enum coverage differs; the result lists the missing and extra states. If other
+  checks fail too, the status is stale and the enum differences are still reported.
+- **Malformed**: the file could not be read as a valid lens.
+
+`corral-next lens list [--project p]` lists lenses at the configured base tip. Use
+`corral-next lens check [--project p] [--at rev] [file]` to check them all or select a path relative
+to the repository or to the lens directory. `check` exits nonzero for stale, incomplete or malformed
+files. The daemon serves `system_lenses {project}` and `system_lens {project, id, at?}` under
+`system.v1`. Full commit IDs pin historical results. Moving refs are rechecked in the background on
+subsequent reads, and Corral landings invalidate the moving snapshots.
+
+Lens checks have per-file and per-revision scan budgets. Anchor checks outside the budget are
+reported as not checked; Review does not claim complete lens impact if changed source could not
+be compared.
+
+In Review, the **Lenses** category lists elements whose anchor line or named definition the task
+edits, and elements added or removed by changes to lens files. Clients opt into those new review
+rows with `system.lenses.v1`. Neither checks nor review runs an agent. Drafting or repairing a lens
+is an ordinary task that produces a reviewable change to the lens file; drawing the diagram is a
+separate feature.
 
 ## 7. Freshness and cost
 
@@ -251,7 +274,7 @@ Known gaps in the mockup, to fix in implementation:
 - Large projects scroll at the project level. A grouped-by-folder default is worth testing against the
   dependency-layered one.
 - The `syntax` scan matches text, so a name in a comment counts as a reference.
-- Lens staleness is not computed.
+- The prototype does not render the results of the committed lens checks.
 
 ## 9. Non-goals
 
@@ -265,8 +288,8 @@ Known gaps in the mockup, to fix in implementation:
 
 1. Where the owner's "seen" mark lives, if Activity should also answer "since I last looked": the device
    record already holds a seen cursor for Changes.
-2. Whether lenses belong in the project repository (proposed) or in Corral's state, for projects whose owner
-   does not want Corral files committed.
+2. Decided: lenses live in the project repository, in the per-project `lenses` directory
+   (default `.corral/lenses`). Drafting and repair are ordinary tasks.
 3. The default project-level layout for repositories with more than about 30 containers.
 4. Whether the built-in provider should grow a real parser for its `syntax` basis, or leave precision to
    extensions.

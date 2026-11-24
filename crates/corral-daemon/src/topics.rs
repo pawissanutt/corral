@@ -49,6 +49,7 @@ impl<'a> Subscriptions<'a> {
         self.system_features = SystemFeatures {
             runtime: self.system && caps.iter().any(|cap| cap == wire::app::SYSTEM_RUNTIME_V1),
             entries: self.system && caps.iter().any(|cap| cap == wire::app::SYSTEM_ENTRIES_V1),
+            lenses: self.system && caps.iter().any(|cap| cap == wire::app::SYSTEM_LENSES_V1),
         };
         if !self.system {
             self.rows.retain(|sub| sub.topic != Topic::System);

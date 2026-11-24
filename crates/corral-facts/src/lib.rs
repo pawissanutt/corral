@@ -10,6 +10,7 @@ mod cache;
 mod delta;
 mod entries;
 mod git;
+pub mod lenses;
 mod manifests;
 mod model;
 pub mod provider;

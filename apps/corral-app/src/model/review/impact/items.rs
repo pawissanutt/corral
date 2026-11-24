@@ -144,6 +144,7 @@ pub(super) const fn title(category: Category) -> &'static str {
         Category::Tests => "Tests",
         Category::NotRead => "Not read",
         Category::EntryPoints => "Entry points",
+        Category::Lenses => "Lenses",
     }
 }
 
@@ -159,6 +160,7 @@ pub(super) const fn zero(category: Category) -> &'static str {
         Category::Tests => "No test file changed and no test selected.",
         Category::NotRead => "Every changed file was read.",
         Category::EntryPoints => "No entry point added or removed.",
+        Category::Lenses => "No lens element touched, added or removed.",
     }
 }
 
@@ -206,7 +208,11 @@ pub(super) const fn category_of(row: &Row) -> Option<Category> {
         Row::NotRead { .. } => Category::NotRead,
         Row::RuntimeUnit { .. } | Row::RuntimeEdge { .. } => Category::Runtime,
         Row::Entry { .. } => Category::EntryPoints,
-        Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
+        Row::Map { .. }
+        | Row::Container { .. }
+        | Row::Module { .. }
+        | Row::File { .. }
+        | Row::Lens { .. } => {
             return None;
         }
     })
@@ -543,7 +549,11 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
                 )
             }
         }
-        Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
+        Row::Map { .. }
+        | Row::Container { .. }
+        | Row::Module { .. }
+        | Row::File { .. }
+        | Row::Lens { .. } => {
             return None;
         }
     })

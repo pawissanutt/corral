@@ -9,7 +9,7 @@ use corral_facts::{
 };
 use corral_types::{
     SystemActivity, SystemAt, SystemCategorySummary, SystemImpactCategory, SystemMapRow,
-    SystemNodeStats, SystemReviewRow, SystemRuntimeRow,
+    SystemNodeStats, SystemReviewRow, SystemRuntimeRow, lenses::LensImpact,
 };
 
 use super::SystemFeatures;
@@ -323,6 +323,7 @@ pub(crate) fn review(
     delta: &ProjectDelta,
     before: &TreeFacts,
     after: &TreeFacts,
+    lenses: Option<&[LensImpact]>,
     enriched_head: Option<&TreeFacts>,
     at: Option<&SystemAt>,
     features: SystemFeatures,
@@ -505,6 +506,19 @@ pub(crate) fn review(
             || entry_detectors_applied(before, &base_files, at, extension_containers)
             || entry_detectors_applied(after, &head_files, at, extension_containers);
         review.finish_category(Category::EntryPoints, provided);
+    }
+
+    if features.lenses {
+        // Lens elements can be anchored outside the container holding the lens file, so
+        // report their impact task-wide even at a drilled map level.
+        review.rows.extend(
+            lenses
+                .into_iter()
+                .flatten()
+                .cloned()
+                .map(|impact| Row::Lens { impact }),
+        );
+        review.finish_category(Category::Lenses, lenses.is_some());
     }
 
     // The Review map is structural, at the submitted head and the level asked for. History

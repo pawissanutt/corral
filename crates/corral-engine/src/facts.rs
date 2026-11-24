@@ -1,6 +1,7 @@
 //! Project facts for background readers. No engine operation calls a provider.
 
 use std::{
+    collections::BTreeSet,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -8,10 +9,12 @@ use std::{
 use anyhow::{Context, Result};
 use corral_facts::{
     EntryPoint, EntryPointDelta, EntryPoints, FactsCache, ProjectDelta, ProjectFacts, Revision,
-    TreeFacts, compare_entry_points,
+    TreeFacts, compare_entry_points, lenses,
     provider::{ProviderCoverage, Reply},
     resolve_revision,
 };
+use corral_types::lenses::LensImpact;
+pub use corral_types::lenses::{LensResult, LensStatus};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -119,12 +122,74 @@ impl<'a> FactsReader<'a> {
         self.cache.delta(&self.repo, base, head)
     }
 
+    pub fn lens_dir(&self) -> &str {
+        self.settings.lens_dir()
+    }
+
+    pub fn lens_sources(&self, rev: &Revision) -> Result<lenses::LensSources> {
+        lenses::load(&self.repo, rev, self.lens_dir())
+    }
+
+    /// Check only committed lenses and source, with optional definition and entry facts.
+    pub fn check_lenses(&self, rev: &Revision) -> Result<(Vec<LensResult>, Option<FactsReport>)> {
+        let sources = self.lens_sources(rev)?;
+        if sources.is_empty() {
+            return Ok((Vec::new(), None));
+        }
+        let mut tree = self.builtin_tree(rev)?;
+        let (report, unread_files) = self.enrich_lens_tree(rev, &mut tree);
+        let coverage = report.as_ref().map(|report| lenses::LensCoverage {
+            provider: &report.coverage,
+            unread_files: &unread_files,
+        });
+        Ok((lenses::check(&sources, &tree, coverage), report))
+    }
+
+    pub fn lens_impact(
+        &self,
+        base: &Revision,
+        head: &Revision,
+        before: &lenses::LensSources,
+        after: &lenses::LensSources,
+        before_tree: &TreeFacts,
+        after_tree: &TreeFacts,
+    ) -> Result<Vec<LensImpact>> {
+        lenses::impact(
+            &self.repo,
+            base,
+            head,
+            before,
+            after,
+            before_tree,
+            after_tree,
+        )
+    }
+
     /// Apply the optional provider to a fresh built-in snapshot. None means no
     /// provider was configured; a failed reply leaves the snapshot untouched.
     pub fn enrich_snapshot(&self, snapshot: &mut ProjectFacts) -> Option<FactsReport> {
-        self.ask(&snapshot.revision, None, SNAPSHOT_WANT, |reply| {
-            Ok(reply.merge_snapshot(&mut snapshot.structure))
+        self.enrich_tree(&snapshot.revision, &mut snapshot.structure)
+    }
+
+    pub fn enrich_tree(&self, rev: &Revision, tree: &mut TreeFacts) -> Option<FactsReport> {
+        self.ask(rev, None, SNAPSHOT_WANT, |reply| {
+            Ok(reply.merge_snapshot(tree))
         })
+    }
+
+    /// Keep explicit file-read provenance for lens checks without treating
+    /// the built-in fallback statuses as extension answers.
+    pub fn enrich_lens_tree(
+        &self,
+        rev: &Revision,
+        tree: &mut TreeFacts,
+    ) -> (Option<FactsReport>, BTreeSet<String>) {
+        let mut unread = BTreeSet::new();
+        let report = self.ask(rev, None, SNAPSHOT_WANT, |reply| {
+            unread = reply.unread_files();
+            Ok(reply.merge_snapshot(tree))
+        });
+        (report, unread)
     }
 
     /// Apply the optional provider to a fresh built-in delta for base and head.

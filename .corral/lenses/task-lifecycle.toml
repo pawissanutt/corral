@@ -1,0 +1,71 @@
+id = "task-lifecycle"
+title = "Task lifecycle"
+kind = "state"
+read_at = "3aafaafe81b35478a0e731955241f0d9caf1277a"
+states_from = { path = "crates/corral-types/src/lib.rs", name = "Status" }
+
+[[states]]
+id = "idea"
+label = "Idea"
+anchor = { path = "crates/corral-types/src/lib.rs", text = 'Self::Idea => "idea",' }
+
+[[states]]
+id = "backlog"
+label = "Backlog"
+anchor = { path = "crates/corral-types/src/lib.rs", text = 'Self::Backlog => "backlog",' }
+
+[[states]]
+id = "ready"
+label = "Ready"
+anchor = { path = "crates/corral-types/src/lib.rs", text = "Self::Ready => \"ready\",\n            Self::Running" }
+
+[[states]]
+id = "running"
+label = "Running"
+anchor = { path = "crates/corral-types/src/lib.rs", text = 'Self::Running => "running",' }
+
+[[states]]
+id = "blocked"
+label = "Blocked"
+anchor = { path = "crates/corral-types/src/lib.rs", text = "Self::Blocked => \"blocked\",\n            Self::Review" }
+
+[[states]]
+id = "review"
+label = "Review"
+anchor = { path = "crates/corral-types/src/lib.rs", text = "Self::Review => \"review\",\n            Self::Done" }
+
+[[states]]
+id = "done"
+label = "Done"
+anchor = { path = "crates/corral-types/src/lib.rs", text = "Self::Done => \"done\",\n            Self::Dropped" }
+
+[[states]]
+id = "dropped"
+label = "Dropped"
+anchor = { path = "crates/corral-types/src/lib.rs", text = "Self::Dropped => \"dropped\",\n        }" }
+
+[[transitions]]
+from = "ready"
+to = "running"
+label = "Dispatch"
+guard = "A worker run starts successfully"
+anchor = { path = "crates/corral-engine/src/dispatch.rs", text = "set_lifecycle(&mut task, Status::Running);\n            if actor == Actor::Owner" }
+
+[[transitions]]
+from = "running"
+to = "review"
+label = "Submit work"
+anchor = { path = "crates/corral-engine/src/review.rs", text = "set_lifecycle(&mut task, Status::Review);" }
+
+[[transitions]]
+from = "review"
+to = "done"
+label = "Land"
+guard = "The merge succeeds"
+anchor = { path = "crates/corral-engine/src/land.rs", text = "set_lifecycle(&mut task, Status::Done);" }
+
+[[transitions]]
+from = "dropped"
+to = "backlog"
+label = "Reopen"
+anchor = { path = "crates/corral-engine/src/tasks.rs", text = "self.set_status(store, &mut task, Status::Backlog)?;" }

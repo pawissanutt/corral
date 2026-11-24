@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::facts::*;
+use crate::{
+    facts::*,
+    lenses::{LensImpact, LensResult, LensStatus},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemRow {
@@ -121,6 +124,35 @@ pub enum SystemRuntimeRow {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemLenses {
+    pub project: String,
+    pub head: Option<String>,
+    pub status: SystemStatus,
+    pub error: Option<String>,
+    /// Rows omitted to stay within the wire budget.
+    pub omitted_rows: usize,
+    pub rows: Vec<SystemLensSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemLensSummary {
+    pub file: String,
+    pub id: Option<String>,
+    pub title: Option<String>,
+    pub status: LensStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemLens {
+    pub project: String,
+    /// The resolved commit, at the project head by default.
+    pub commit: Option<String>,
+    pub status: SystemStatus,
+    pub error: Option<String>,
+    pub lens: Option<LensResult>,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemNodeStats {
     pub lines: u64,
@@ -187,10 +219,11 @@ pub enum SystemImpactCategory {
     Tests,
     NotRead,
     EntryPoints,
+    Lenses,
 }
 
 impl SystemImpactCategory {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::PackageDependencies,
         Self::ModuleReferences,
         Self::Definitions,
@@ -201,6 +234,7 @@ impl SystemImpactCategory {
         Self::Tests,
         Self::NotRead,
         Self::EntryPoints,
+        Self::Lenses,
     ];
 }
 
@@ -284,6 +318,9 @@ pub enum SystemReviewRow {
     Entry {
         change: ChangeKind,
         entry: EntryPoint,
+    },
+    Lens {
+        impact: LensImpact,
     },
     Dependent {
         dependent: DependentFact,

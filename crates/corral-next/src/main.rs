@@ -3,6 +3,7 @@ mod editor;
 mod ext;
 mod hook;
 mod import;
+mod lens;
 mod output;
 #[cfg(unix)]
 mod pi_startup_cmd;
@@ -109,6 +110,9 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
     {
         tool(&root, &cwd, project.as_deref(), &invocation, out)?;
         return Ok(0);
+    }
+    if let Command::Lens(command) = command {
+        return lens::run(&root, &cwd, command, out);
     }
     if let Command::Ext(ExtCommand::Deliver) = command {
         return ext::deliver(&root, &checked_config(&root)?, out);
@@ -348,6 +352,7 @@ fn run(command: Command, out: &mut Output<'_>) -> Result<u8> {
         | Command::Config(_)
         | Command::Ext(_)
         | Command::Tool { .. }
+        | Command::Lens(_)
         | Command::Import { .. } => unreachable!("handled before opening the engine"),
     }
     Ok(0)
@@ -386,14 +391,7 @@ fn tool(
     invocation: &[String],
     out: &mut Output<'_>,
 ) -> Result<()> {
-    // Run context belongs only to the workspace that launched the session.
-    let same_root = env::var_os("CORRAL_NEXT_ROOT").is_none_or(|value| {
-        let inherited = Path::new(&value);
-        inherited
-            .canonicalize()
-            .unwrap_or_else(|_| inherited.to_path_buf())
-            == root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
-    });
+    let same_root = launch_workspace_matches(root);
     let task_id = same_root.then(|| tool_env("CORRAL_TASK")).flatten();
     let engine = task_id.as_ref().map(|_| Engine::open(root)).transpose()?;
     let owner_config;
@@ -538,6 +536,17 @@ fn tool(
     // A tool's stdout is its interface, even under --json. Do not annotate it.
     out.stdout.write_all(&bytes).context("write tool stdout")?;
     recorded.with_context(|| format!("record output of tool {name:?}"))
+}
+
+// Run context belongs only to the workspace that launched the session.
+fn launch_workspace_matches(root: &Path) -> bool {
+    env::var_os("CORRAL_NEXT_ROOT").is_none_or(|value| {
+        let inherited = Path::new(&value);
+        inherited
+            .canonicalize()
+            .unwrap_or_else(|_| inherited.to_path_buf())
+            == root.canonicalize().unwrap_or_else(|_| root.to_path_buf())
+    })
 }
 
 fn tool_env(key: &str) -> Option<String> {

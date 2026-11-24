@@ -68,7 +68,7 @@ fn run(mut command: Command, repo: &Path, args: &[&str]) -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
-fn check_oid(oid: &str) -> Result<()> {
+pub(crate) fn check_oid(oid: &str) -> Result<()> {
     ensure!(
         matches!(oid.len(), 40 | 64) && oid.bytes().all(|b| b.is_ascii_hexdigit()),
         "expected a full Git object ID, got {oid:?}"
@@ -198,6 +198,7 @@ pub(crate) struct TreeFile<'a> {
     pub path: &'a str,
     pub text: Option<&'a str>,
     pub lines: u64,
+    pub regular_blob: Option<&'a str>,
 }
 
 fn records(bytes: &[u8]) -> Result<impl Iterator<Item = &[u8]>> {
@@ -212,6 +213,17 @@ fn records(bytes: &[u8]) -> Result<impl Iterator<Item = &[u8]>> {
 pub(crate) fn tree(
     repo: &Path,
     tree: &str,
+    visit: impl FnMut(TreeFile<'_>) -> Result<()>,
+) -> Result<u64> {
+    tree_selected(repo, tree, |_| true, visit)
+}
+
+/// Visit selected paths with the same bounded blob reader as the structure scanner.
+/// Paths that do not pass the predicate never have their blobs opened.
+pub(crate) fn tree_selected(
+    repo: &Path,
+    tree: &str,
+    mut select: impl FnMut(&str) -> bool,
     mut visit: impl FnMut(TreeFile<'_>) -> Result<()>,
 ) -> Result<u64> {
     check_oid(tree)?;
@@ -240,13 +252,18 @@ pub(crate) fn tree(
                 skipped += 1;
                 continue;
             };
+            if !select(path) {
+                continue;
+            }
             let mut meta = std::str::from_utf8(meta)
                 .context("Git tree metadata is not UTF-8")?
                 .split_ascii_whitespace();
             let mode = meta.next().context("missing Git tree mode")?;
             let kind = meta.next().context("missing Git tree kind")?;
             let oid = meta.next().context("missing Git tree object ID")?;
-            let (text, lines) = if matches!(mode, "100644" | "100755") && kind == "blob" {
+            let regular_blob =
+                (matches!(mode, "100644" | "100755") && kind == "blob").then_some(oid);
+            let (text, lines) = if let Some(oid) = regular_blob {
                 check_oid(oid)?;
                 // At most one request is in flight: never fill stdin while the child
                 // is waiting for us to drain stdout. Paths never enter this protocol.
@@ -294,7 +311,12 @@ pub(crate) fn tree(
             } else {
                 (None, 0)
             };
-            visit(TreeFile { path, text, lines })?;
+            visit(TreeFile {
+                path,
+                text,
+                lines,
+                regular_blob,
+            })?;
         }
         Ok(skipped)
     })();
@@ -538,4 +560,66 @@ pub(crate) fn changes(repo: &Path, base: &str, head: &str) -> Result<(Vec<FileCh
     }
     changes.sort_unstable_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
     Ok((changes, skipped))
+}
+
+/// Both ranges describe actual edited lines, not surrounding context. A pure
+/// insertion has an empty old range; a pure deletion has an empty new range.
+pub(crate) struct LineHunk {
+    pub old: std::ops::Range<u64>,
+    pub new: std::ops::Range<u64>,
+}
+
+pub(crate) struct LineDiff(DiffContext);
+
+impl LineDiff {
+    pub(crate) fn new(repo: &Path, commit: &str) -> Result<Self> {
+        Ok(Self(DiffContext::new(repo, commit, &[])?))
+    }
+
+    /// Compare regular text blobs whose size was already bounded by the scanner.
+    pub(crate) fn hunks(&self, old: &str, new: &str) -> Result<Vec<LineHunk>> {
+        check_oid(old)?;
+        check_oid(new)?;
+        let patch = self.0.output(&[
+            "diff",
+            "--unified=0",
+            "--inter-hunk-context=0",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-indent-heuristic",
+            "--diff-algorithm=myers",
+            "--text",
+            old,
+            new,
+            "--",
+        ])?;
+        std::str::from_utf8(&patch)
+            .context("Git line diff is not UTF-8")?
+            .lines()
+            .filter_map(|line| line.strip_prefix("@@ "))
+            .map(|header| {
+                let mut fields = header.split_ascii_whitespace();
+                Ok(LineHunk {
+                    old: line_range(fields.next(), '-')?,
+                    new: line_range(fields.next(), '+')?,
+                })
+            })
+            .collect()
+    }
+}
+
+fn line_range(field: Option<&str>, sign: char) -> Result<std::ops::Range<u64>> {
+    let span = field
+        .and_then(|s| s.strip_prefix(sign))
+        .context("missing Git hunk line range")?;
+    let (start, count) = span.split_once(',').unwrap_or((span, "1"));
+    let start = start.parse::<u64>().context("invalid Git hunk start")?;
+    let count = count.parse::<u64>().context("invalid Git hunk length")?;
+    // Git denotes an empty span by the preceding line (0 at the beginning).
+    let start = start
+        .checked_add(u64::from(count == 0))
+        .context("Git hunk start overflow")?;
+    let end = start.checked_add(count).context("Git hunk end overflow")?;
+    Ok(start..end)
 }

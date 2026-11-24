@@ -1,6 +1,9 @@
 //! Best-effort use/import and process-site facts from committed source, without a compiler.
 
 mod entries;
+mod variants;
+
+pub(crate) use variants::{RustEnum, rust_enums};
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 

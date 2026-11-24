@@ -1,0 +1,50 @@
+id = "submit-work"
+title = "What happens when a worker submits work"
+kind = "sequence"
+read_at = "3aafaafe81b35478a0e731955241f0d9caf1277a"
+entry = { kind = "command", name = "done" }
+
+[[participants]]
+id = "cli"
+label = "corral-next"
+anchor = { path = "crates/corral-next/src/main.rs", text = "Command::Done { id, summary }" }
+
+[[participants]]
+id = "engine"
+label = "Submission engine"
+anchor = { path = "crates/corral-engine/src/review.rs", text = "pub fn done(" }
+
+[[participants]]
+id = "store"
+label = "Task store"
+anchor = { path = "crates/corral-engine/src/review.rs", text = "let (run, submitted) =" }
+
+[[participants]]
+id = "pipeline"
+label = "Review pipeline"
+anchor = { path = "crates/corral-engine/src/pipeline.rs", text = "fn kick_pipeline(" }
+
+[[messages]]
+from = "cli"
+to = "engine"
+label = "Submit with Op::Done"
+anchor = { path = "crates/corral-next/src/main.rs", text = "apply(&engine, out, Op::Done { id, summary }, false)?" }
+
+[[messages]]
+from = "engine"
+to = "store"
+label = "Record the submitted worker run"
+anchor = { path = "crates/corral-engine/src/review.rs", text = "store.update_run(&run)?;" }
+
+[[messages]]
+from = "engine"
+to = "store"
+label = "Save the transition to Review"
+anchor = { path = "crates/corral-engine/src/review.rs", text = "set_lifecycle(&mut task, Status::Review);" }
+
+[[messages]]
+from = "engine"
+to = "pipeline"
+label = "Kick the pipeline after the transaction"
+note = "Only a new submission kicks the pipeline."
+anchor = { path = "crates/corral-engine/src/review.rs", text = "            self.kick_pipeline(id)?;" }

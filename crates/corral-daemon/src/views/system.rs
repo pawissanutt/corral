@@ -1,22 +1,22 @@
 //! Read and page an immutable observation; Git and providers stay on the system worker.
 use std::sync::atomic::Ordering;
 
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use corral_engine::facts::FactsReport;
 use corral_protocol::{
     app::APP_CONTROL_MAX,
     detail::{DetailBody, DetailGet, DetailRef, DetailReply},
 };
 use corral_types::{
-    SystemCategorySummary, SystemImpactCategory, SystemMap, SystemProvider, SystemReview,
-    SystemRuntime, SystemStatus,
+    SystemCategorySummary, SystemImpactCategory, SystemLens, SystemLensSummary, SystemLenses,
+    SystemMap, SystemProvider, SystemReview, SystemRuntime, SystemStatus,
 };
 
 use serde::Serialize;
 
 use crate::state::Shared;
 
-use super::{details, fingerprint, json_len};
+use super::{NotFound, REPLY_MAX, details, fingerprint, json_len};
 
 #[path = "../system/projection.rs"]
 mod projection;
@@ -25,6 +25,7 @@ mod projection;
 pub(crate) struct SystemFeatures {
     pub runtime: bool,
     pub entries: bool,
+    pub lenses: bool,
 }
 
 impl SystemFeatures {
@@ -32,6 +33,7 @@ impl SystemFeatures {
         match category {
             SystemImpactCategory::Runtime => self.runtime,
             SystemImpactCategory::EntryPoints => self.entries,
+            SystemImpactCategory::Lenses => self.lenses,
             _ => true,
         }
     }
@@ -83,6 +85,69 @@ pub(super) fn read(
             });
             (etag, offset, body)
         }
+        DetailRef::SystemLenses { project } => {
+            let snapshot = shared.system.lenses(shared, project, None)?;
+            let (etag, offset) = selection(shared, query, snapshot.revision, &())?;
+            let rows = if offset.is_some() {
+                snapshot
+                    .results
+                    .as_deref()
+                    .into_iter()
+                    .flatten()
+                    .map(|result| SystemLensSummary {
+                        file: result.file.clone(),
+                        id: result.lens.as_ref().map(|lens| lens.id().to_owned()),
+                        title: result.lens.as_ref().map(|lens| lens.title().to_owned()),
+                        status: result.status,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let (rows, omitted_rows) = bounded_rows(rows)?;
+            let body = DetailBody::SystemLenses(SystemLenses {
+                project: project.clone(),
+                head: snapshot.commit,
+                status: status(snapshot.building),
+                error: snapshot.error,
+                omitted_rows,
+                rows,
+            });
+            (etag, offset, body)
+        }
+        DetailRef::SystemLens { project, id, at } => {
+            let snapshot = shared.system.lenses(shared, project, at.as_deref())?;
+            let (etag, offset) = selection(shared, query, snapshot.revision, &())?;
+            let lens = match (offset, snapshot.results.as_deref()) {
+                (Some(_), Some(results)) => Some(
+                    results
+                        .iter()
+                        .find(|result| {
+                            result
+                                .lens
+                                .as_ref()
+                                .is_some_and(|lens| lens.id() == id.as_str())
+                        })
+                        .or_else(|| results.iter().find(|result| result.file == *id))
+                        .context(NotFound("lens not found"))?
+                        .clone(),
+                ),
+                _ => None,
+            };
+            // Keep the checked diagram atomic; do not serve a partial lens as valid.
+            ensure!(
+                json_len(&lens)? <= REPLY_MAX - 1024,
+                "too_large: checked lens exceeds CONTROL budget"
+            );
+            let body = DetailBody::SystemLens(SystemLens {
+                project: project.clone(),
+                commit: snapshot.commit,
+                status: status(snapshot.building),
+                error: snapshot.error,
+                lens,
+            });
+            (etag, offset, body)
+        }
         DetailRef::SystemReview { task, at } => {
             let impact = shared.system.review(shared, task)?;
             let (etag, offset) = selection(shared, query, impact.revision, &features)?;
@@ -91,6 +156,7 @@ pub(super) fn read(
                     &facts.delta,
                     &facts.base,
                     &facts.head,
+                    facts.lenses.as_deref(),
                     impact
                         .head_snapshot
                         .as_ref()

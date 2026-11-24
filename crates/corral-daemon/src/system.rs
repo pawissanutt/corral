@@ -1,5 +1,6 @@
 //! Immutable observations for System and Review. Reads may schedule work, but
 //! the worker alone reads Git and calls providers.
+mod lenses;
 mod worker;
 
 use std::{
@@ -14,7 +15,8 @@ use anyhow::{Context, Result, bail, ensure};
 use corral_engine::{Config, Store, config::Slot, facts::FactsReport};
 use corral_facts::{ProjectDelta, ProjectFacts, Revision, TreeFacts};
 use corral_protocol::app::APP_CONTROL_MAX;
-use corral_types::{Event, EventKind, Role, SystemRow, SystemStatus};
+use corral_types::{Event, EventKind, Role, SystemRow, SystemStatus, lenses::LensImpact};
+use lenses::{LensEntry, LensKey};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -59,6 +61,7 @@ pub(crate) struct ImpactFacts {
     pub delta: ProjectDelta,
     pub base: Arc<TreeFacts>,
     pub head: Arc<TreeFacts>,
+    pub lenses: Option<Arc<[LensImpact]>>,
 }
 
 #[derive(Default)]
@@ -85,6 +88,7 @@ struct Cache {
     reload_required: bool,
     maps: BTreeMap<String, MapEntry>,
     reviews: BTreeMap<String, ReviewEntry>,
+    lenses: BTreeMap<LensKey, LensEntry>,
     // Keep the latest answer even if a review was the project's first request
     // or that particular review was later evicted from the detail cache.
     extension_answers: BTreeMap<String, ExtensionAnswers>,
@@ -143,6 +147,7 @@ impl System {
             (
                 std::mem::take(&mut cache.maps),
                 std::mem::take(&mut cache.reviews),
+                std::mem::take(&mut cache.lenses),
             )
         };
         drop(retired);
@@ -224,6 +229,7 @@ impl System {
 
     pub(crate) fn observe(&self, events: &[Event]) {
         let mut retired = Vec::new();
+        let mut retired_lenses = Vec::new();
         let mut cache = self.queue.lock();
         for event in events
             .iter()
@@ -232,6 +238,24 @@ impl System {
             let Some(project) = event.project.as_deref() else {
                 continue;
             };
+            // Like the map, moving selectors are observed again on a Corral
+            // landing or config change, without resolving Git on the read path.
+            let keys: Vec<_> = cache
+                .lenses
+                .iter()
+                .filter(|(key, entry)| {
+                    key.project == project
+                        && !entry
+                            .snapshot
+                            .commit
+                            .as_deref()
+                            .is_some_and(|commit| key.pinned(commit))
+                })
+                .map(|(key, _)| key.clone())
+                .collect();
+            for key in keys {
+                retired_lenses.extend(cache.requeue_lenses(&key));
+            }
             let Some(entry) = cache.maps.get(project) else {
                 continue;
             };
@@ -257,7 +281,7 @@ impl System {
             }
             retired.extend(cache.requeue_map(project));
         }
-        if !retired.is_empty() {
+        if !retired.is_empty() || !retired_lenses.is_empty() {
             self.queue.ready.notify_one();
         }
     }
@@ -408,12 +432,10 @@ impl Cache {
         self.revision
     }
 
-    fn configure(
-        &mut self,
-        config: Configuration,
-    ) -> (BTreeMap<String, MapEntry>, BTreeMap<String, ReviewEntry>) {
+    fn configure(&mut self, config: Configuration) -> impl Sized + use<> {
         let maps = std::mem::take(&mut self.maps);
         let reviews = std::mem::take(&mut self.reviews);
+        let lenses = std::mem::take(&mut self.lenses);
         for project in config.source.projects.keys() {
             if self.all || maps.contains_key(project) {
                 self.activate(project);
@@ -422,7 +444,7 @@ impl Cache {
         self.configuration = Some(Arc::new(config));
         self.extension_answers.clear();
         self.reload_required = false;
-        (maps, reviews)
+        (maps, reviews, lenses)
     }
 
     /// Return whether a request was newly queued.
