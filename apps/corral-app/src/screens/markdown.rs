@@ -1,7 +1,7 @@
 //! Words as the terminal UI renders them, laid out by NSH's Markdown `TextView` in the app's
 //! type: headings, paragraphs, lists, block quotes, inline bold, italic, code and links, tables,
-//! and code blocks with a muted language label and no fence characters. Narrow widths turn a
-//! table into one block per record (`header  cell` rows), as the terminal does below 50 Cells.
+//! and code blocks with a muted language label and no fence characters. Chat tables and
+//! narrow tables become records (`header  cell` rows), so their contents can wrap.
 //! Shared by every transcript that shows written Markdown: a watched session's and the
 //! assistant's.
 
@@ -16,8 +16,7 @@ use crate::state::AppState;
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
-/// Cells of transcript width below which a table becomes record blocks (the terminal UI's 50,
-/// plus the message's indent).
+/// Below this page width the existing non-chat table layout uses records.
 const TABLE_CELLS: f32 = 54.0;
 
 /// The app's type for every text view drawn under the calling view: body text in ink at the
@@ -61,17 +60,6 @@ pub(crate) fn provide_styles(app: AppState) {
     );
 }
 
-/// Whether the transcript is too narrow for a table's grid: the phone, or a terminal whose
-/// page (after the sidebar and a docked Ask) is under the terminal UI's 50 Cells (tracked:
-/// follows the size).
-fn narrow(app: AppState) -> bool {
-    match app.form {
-        Form::Phone => true,
-        Form::Desktop => false,
-        Form::Terminal => term::page_columns(app) < TABLE_CELLS,
-    }
-}
-
 /// Each table among `blocks` (and inside quotes and list items) as one paragraph per record:
 /// every field on its own line, the header bold before the cell.
 fn records(blocks: Vec<Block>) -> Vec<Block> {
@@ -82,6 +70,15 @@ fn records(blocks: Vec<Block>) -> Vec<Block> {
             Block::Blockquote { children, alert } => vec![Block::Blockquote {
                 children: records(children),
                 alert,
+            }],
+            Block::Details {
+                summary,
+                children,
+                open,
+            } => vec![Block::Details {
+                summary,
+                children: records(children),
+                open,
             }],
             Block::List {
                 ordered,
@@ -163,25 +160,72 @@ fn inlines_without_images(inlines: &mut [Inline]) {
     }
 }
 
+// Match NSH's standalone-image paragraph rule, including linked groups of images.
+fn only_images(content: &[Inline]) -> bool {
+    fn walk(content: &[Inline], found: &mut bool) -> bool {
+        content.iter().all(|inline| match inline {
+            Inline::Image(_) => {
+                *found = true;
+                true
+            }
+            Inline::Link { content, .. } => walk(content, found),
+            _ => false,
+        })
+    }
+    let mut found = false;
+    walk(content, &mut found) && found
+}
+
 fn record_blocks(table: &Table) -> Vec<Block> {
+    if table.rows.is_empty() {
+        return table
+            .head
+            .iter()
+            .map(|cell| Block::paragraph(cell.content.clone()))
+            .collect();
+    }
     table
         .rows
         .iter()
-        .map(|row| {
+        .flat_map(|row| {
             let mut content = Vec::new();
+            let mut blocks = Vec::new();
             for (at, cell) in row.iter().enumerate() {
-                if at > 0 {
+                if !content.is_empty()
+                    && !table
+                        .head
+                        .get(at)
+                        .is_some_and(|head| only_images(&head.content))
+                {
                     content.push(Inline::Break);
                 }
                 if let Some(head) = table.head.get(at) {
-                    content.push(Inline::Strong {
-                        content: head.content.clone(),
-                    });
-                    content.push(Inline::Text { text: "  ".into() });
+                    if only_images(&head.content) {
+                        if !content.is_empty() {
+                            blocks.push(Block::paragraph(std::mem::take(&mut content)));
+                        }
+                        blocks.push(Block::paragraph(head.content.clone()));
+                    } else {
+                        content.push(Inline::Strong {
+                            content: head.content.clone(),
+                        });
+                        content.push(Inline::Text { text: "  ".into() });
+                    }
                 }
-                content.extend(cell.content.iter().cloned());
+                // Standalone image paragraphs retain NSH's natural sizing.
+                if only_images(&cell.content) {
+                    if !content.is_empty() {
+                        blocks.push(Block::paragraph(std::mem::take(&mut content)));
+                    }
+                    blocks.push(Block::paragraph(cell.content.clone()));
+                } else {
+                    content.extend(cell.content.iter().cloned());
+                }
             }
-            Block::paragraph(content)
+            if !content.is_empty() {
+                blocks.push(Block::paragraph(content));
+            }
+            blocks
         })
         .collect()
 }
@@ -240,16 +284,27 @@ fn code_block(app: AppState, code: &CodeBlock) -> AnyElement {
 /// `markdown` laid out; while `streaming`, syntax its end leaves open reads as closed. Text
 /// and HTML-looking words stay literal, as the terminal shows them: no formulas, no markup.
 pub(crate) fn markdown(app: AppState, markdown: &str, streaming: bool) -> AnyElement {
-    laid_out(app, markdown, streaming, true)
+    laid_out(app, markdown, streaming, true, false)
+}
+
+/// Chat messages use records at every width: their available width is not the page width.
+pub(crate) fn chat_markdown(app: AppState, markdown: &str, streaming: bool) -> AnyElement {
+    laid_out(app, markdown, streaming, true, true)
 }
 
 /// `markdown` laid out, every image as its alt text: for stored words someone else wrote (a
 /// reviewer's note), which must not make the device fetch a URL just by being shown.
 pub(crate) fn markdown_without_images(app: AppState, markdown: &str) -> AnyElement {
-    laid_out(app, markdown, false, false)
+    laid_out(app, markdown, false, false, false)
 }
 
-fn laid_out(app: AppState, markdown: &str, streaming: bool, images: bool) -> AnyElement {
+fn laid_out(
+    app: AppState,
+    markdown: &str,
+    streaming: bool,
+    images: bool,
+    chat: bool,
+) -> AnyElement {
     let options = MarkdownOptions {
         math: false,
         html: false,
@@ -261,8 +316,14 @@ fn laid_out(app: AppState, markdown: &str, streaming: bool, images: bool) -> Any
     if !images {
         without_images(&mut document);
     }
-    if narrow(app) {
+    if chat
+        || app.form == Form::Phone
+        || (app.form == Form::Terminal && term::page_columns(app) < TABLE_CELLS)
+    {
         document.blocks = records(std::mem::take(&mut document.blocks));
+        for note in &mut document.footnotes {
+            note.children = records(std::mem::take(&mut note.children));
+        }
     }
     let rendered = text_view()
         .document(document)
@@ -281,6 +342,45 @@ fn laid_out(app: AppState, markdown: &str, streaming: bool, images: bool) -> Any
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wide_tables_become_wrappable_records_without_losing_cells() {
+        let document = Parser::new().markdown(
+            "| Name | Description | Last |\n| --- | --- | --- |\n\
+             | alpha | a long **formatted** description | final value |\n\
+             | beta | second row | another value |\n",
+        );
+        assert!(matches!(document.blocks.first(), Some(Block::Table(_))));
+        let blocks = records(document.blocks);
+        assert_eq!(blocks.len(), 2);
+        assert!(
+            blocks
+                .iter()
+                .all(|block| matches!(block, Block::Paragraph { .. }))
+        );
+        let json = serde_json::to_string(&blocks).unwrap();
+        for word in [
+            "Name",
+            "Description",
+            "Last",
+            "alpha",
+            "formatted",
+            "final value",
+            "beta",
+            "another value",
+        ] {
+            assert!(json.contains(word), "missing {word}: {json}");
+        }
+    }
+
+    #[test]
+    fn record_image_cells_remain_standalone() {
+        let document = Parser::new()
+            .markdown("| Picture | Caption |\n| --- | --- |\n| ![shot](image.png) | example |\n");
+        let blocks = records(document.blocks);
+        assert!(blocks.iter().any(|block| matches!(block, Block::Paragraph { content } if matches!(content.as_slice(), [Inline::Image(_)]))));
+        assert!(serde_json::to_string(&blocks).unwrap().contains("example"));
+    }
 
     /// A stored note must not fetch a URL when shown: an image anywhere, a footnote's
     /// included, is drawn as its alt text.

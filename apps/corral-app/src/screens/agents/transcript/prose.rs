@@ -6,7 +6,7 @@ use nsh_core::prelude::*;
 
 use crate::model::Form;
 use crate::model::session::transcript::{Prose, Thinking};
-use crate::screens::markdown::markdown;
+use crate::screens::markdown::chat_markdown;
 use crate::state::AppState;
 use crate::ui::tokens::{FONT_TEXT, Token, color};
 
@@ -46,7 +46,7 @@ pub(super) fn prose(app: AppState, words: &Prose, id: &str) -> AnyElement {
             block.max_w(px(PARAGRAPH))
         })
         .when(app.form != Form::Terminal, |block| block.mb(px(6.0)))
-        .child(markdown(app, &words.markdown, words.streaming))
+        .child(chat_markdown(app, &words.markdown, words.streaming))
         .children(state(app, &words.more, id, true))
         .into_element()
 }
