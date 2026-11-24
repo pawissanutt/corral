@@ -11,7 +11,7 @@ use crate::model::review::{Body, LoopContent, Tab};
 use crate::model::tasks::page;
 use crate::model::{Form, Id, TaskTab};
 use crate::state::AppState;
-use crate::ui::kit::button::seg;
+use crate::ui::kit::button::seg_compact;
 use crate::ui::kit::text::plain;
 use crate::ui::term;
 
@@ -27,7 +27,8 @@ enum Shown {
 
 /// Diff or Impact (`seg-changes-<n>`), in the desktop tab row or above the stacked body.
 pub(super) fn view_switch(app: AppState, id: Id) -> AnyElement {
-    seg(
+    // It shares the tab row, so on the phone it keeps to its words' width.
+    seg_compact(
         app,
         &View::ALL,
         move || app.impact.with(|state| state.view),

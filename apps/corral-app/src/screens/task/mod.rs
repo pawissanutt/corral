@@ -344,11 +344,15 @@ fn tabs(app: AppState, id: Id) -> AnyElement {
         (tab.get() == TaskTab::Changes).then(|| untracked(|| changes::view_switch(app, id.clone())))
     });
     let form = app.form;
-    // A phone is too narrow for both: the switch goes under the tabs, across the width.
+    // On the phone the tabs keep their width and the compact switch ends the row.
     if form == Form::Phone {
         return view()
-            .child(strip)
-            .child(view().px(px(10.0)).pb(px(6.0)).child(switch))
+            .flex_row()
+            .items_center()
+            .gap(px(4.0))
+            .child(view().flex_shrink_0().child(strip))
+            .child(view().flex_1().min_w(px(0.0)))
+            .child(switch)
             .into_element();
     }
     view()

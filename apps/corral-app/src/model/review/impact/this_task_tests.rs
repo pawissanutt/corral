@@ -86,9 +86,23 @@ fn a_folded_card_and_a_definition_say_what_the_task_did_there() {
     // A level that lists no file card folds every file into its "N more" card.
     let scene = build(&head_map(&review), Some(&at));
     let folded = of_review(&review, &Node::More, &scene, Some(&at));
+    // The folded live file opens its own level; the deleted one stays off the card.
     assert_eq!(
-        folded.map(|t| (t.files.len(), t.dependents.len())),
-        Some((1, 1))
+        folded.as_ref().map(|t| (
+            t.files.len(),
+            t.dependents.len(),
+            t.files[0]
+                .target
+                .as_ref()
+                .and_then(|t| t.trail.last().cloned())
+        )),
+        Some((
+            1,
+            1,
+            Some(SystemAt::File {
+                path: "a/m/kept.rs".into()
+            })
+        ))
     );
     let at = SystemAt::File {
         path: "a/m/kept.rs".into(),
@@ -97,6 +111,24 @@ fn a_folded_card_and_a_definition_say_what_the_task_did_there() {
         line: 2,
         name: "f".into(),
     };
-    let changed = of_review(&review, &definition, &scene, Some(&at));
+    let file_scene = build(&head_map(&review), Some(&at));
+    let changed = of_review(&review, &definition, &file_scene, Some(&at));
     assert_eq!(changed.map(|t| t.files.len()), Some(1));
+    // A file level listing none of its definitions folds the changed one into "N more".
+    let more = of_review(&review, &Node::More, &file_scene, Some(&at));
+    assert_eq!(more.map(|t| t.files.len()), Some(1));
+}
+
+/// A folded file's row opened its own level with a pick naming no card there, which left the
+/// inspector with nothing to show.
+#[test]
+fn focusing_a_file_at_its_own_level_picks_nothing() {
+    let path = "a/m/kept.rs".to_owned();
+    let mut state = State::default();
+    state.act(Action::Focus(Target {
+        trail: vec![SystemAt::File { path: path.clone() }],
+        node: Node::File(path.clone()),
+    }));
+    assert_eq!(state.map.trail, vec![SystemAt::File { path }]);
+    assert_eq!(state.map.picked, None);
 }

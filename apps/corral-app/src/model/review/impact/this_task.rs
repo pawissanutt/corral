@@ -60,6 +60,8 @@ enum Under<'a> {
     File(&'a str),
     /// The files of `module` the level folds into its "N more" card.
     Folded(&'a ModuleId, &'a Scene),
+    /// The definitions of the file `path` its level folds into its "N more" card.
+    FoldedDefinitions(&'a str, &'a Scene),
     /// The definition `name` at `line` of the file `path`, at its file's level.
     Definition {
         path: &'a str,
@@ -77,10 +79,40 @@ impl Under<'_> {
             Under::Folded(m, scene) => {
                 module == Some(*m) && scene.card(&Node::File(path.to_owned())).is_none()
             }
-            // A definition holds a change or a dependent only by its own name: see `of_review`.
-            Under::Definition { .. } => false,
+            // A definition holds a change or a dependent only by its own name: see `defines`.
+            Under::Definition { .. } | Under::FoldedDefinitions(..) => false,
         }
     }
+
+    /// Whether the definition `name` at `line` of `path` is, or is folded into, the card.
+    fn defines(&self, path: &str, name: &str, line: u64) -> bool {
+        match self {
+            Under::Definition {
+                path: p,
+                name: n,
+                line: l,
+            } => *p == path && *n == name && *l == line,
+            Under::FoldedDefinitions(file, scene) => {
+                *file == path
+                    && scene
+                        .card(&Node::Definition {
+                            line,
+                            name: name.to_owned(),
+                        })
+                        .is_none()
+            }
+            _ => false,
+        }
+    }
+}
+
+/// `target` drilled one level further, into the file `path`, selecting `node` there.
+fn at_file(target: Target, path: &str, node: Node) -> Target {
+    let mut trail = target.trail;
+    trail.push(SystemAt::File {
+        path: path.to_owned(),
+    });
+    Target { trail, node }
 }
 
 /// "This task" for the node picked on task `task`'s map at `at`, the level `scene` draws;
@@ -110,6 +142,7 @@ pub(super) fn of_review(
         (Node::Module(m), _) => Under::Module(m),
         (Node::File(p), _) => Under::File(p),
         (Node::More, Some(SystemAt::Module { module })) => Under::Folded(module, scene),
+        (Node::More, Some(SystemAt::File { path })) => Under::FoldedDefinitions(path, scene),
         (Node::Definition { name, line }, Some(SystemAt::File { path })) => Under::Definition {
             path,
             name,
@@ -151,9 +184,15 @@ pub(super) fn of_review(
                     } else {
                         format!("+{} −{}", count(*a), count(*r))
                     },
-                    // A folded file has no card of its own to select at its module's level.
-                    target: (!deleted && !matches!(under, Under::Folded(..)))
-                        .then(|| file_target(module, path)),
+                    // A folded file has no card at its module's level, so it opens its own.
+                    target: (!deleted).then(|| {
+                        let target = file_target(module, path);
+                        if matches!(under, Under::Folded(..)) {
+                            at_file(target, path, Node::File(path.clone()))
+                        } else {
+                            target
+                        }
+                    }),
                 });
             }
             Row::Definition {
@@ -161,10 +200,7 @@ pub(super) fn of_review(
                 path,
                 name,
                 line,
-            } if *change != ChangeKind::Removed
-                && matches!(under, Under::Definition { path: p, name: n, line: l }
-                    if p == path && n == name && l == *line) =>
-            {
+            } if *change != ChangeKind::Removed && under.defines(path, name, *line) => {
                 files.push(Line {
                     main: name.clone(),
                     right: format!(
@@ -180,8 +216,8 @@ pub(super) fn of_review(
             }
             Row::Dependent { dependent, module } => {
                 let held = match under {
-                    Under::Definition { path, name, line } => {
-                        dependent.path == path && dependent.name == name && dependent.line == line
+                    Under::Definition { .. } | Under::FoldedDefinitions(..) => {
+                        under.defines(&dependent.path, &dependent.name, dependent.line)
                     }
                     _ => {
                         let container =
@@ -203,25 +239,23 @@ pub(super) fn of_review(
                         dependent.of,
                         depth_words(dependent.depth)
                     ),
-                    target: module.as_ref().map(|m| {
-                        let target = file_target(m, &dependent.path);
-                        if !matches!(under, Under::Folded(..)) {
-                            return target;
-                        }
-                        // A file folded at its module's level opens at its own, with the
-                        // dependent definition selected there.
-                        let mut trail = target.trail;
-                        trail.push(SystemAt::File {
-                            path: dependent.path.clone(),
-                        });
-                        Target {
-                            trail,
-                            node: Node::Definition {
+                    // At its file's level a folded definition has no card to select.
+                    target: module
+                        .as_ref()
+                        .filter(|_| !matches!(under, Under::FoldedDefinitions(..)))
+                        .map(|m| {
+                            let target = file_target(m, &dependent.path);
+                            if !matches!(under, Under::Folded(..)) {
+                                return target;
+                            }
+                            // A file folded at its module's level opens at its own, with the
+                            // dependent definition selected there.
+                            let node = Node::Definition {
                                 line: dependent.line,
                                 name: dependent.name.clone(),
-                            },
-                        }
-                    }),
+                            };
+                            at_file(target, &dependent.path, node)
+                        }),
                 });
             }
             _ => {}
@@ -230,6 +264,14 @@ pub(super) fn of_review(
     let lines = match &under {
         _ if files.is_empty() => UNTOUCHED.to_owned(),
         Under::Definition { .. } => "This definition is part of the change.".to_owned(),
+        Under::FoldedDefinitions(..) => format!(
+            "{} not listed on the map",
+            plural(
+                files.len() as u64,
+                "changed definition",
+                "changed definitions"
+            )
+        ),
         Under::Folded(..) => format!(
             "+{} −{} in {} not listed on the map",
             count(added),

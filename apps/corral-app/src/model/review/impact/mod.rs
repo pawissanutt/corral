@@ -126,8 +126,13 @@ impl State {
     }
 
     fn focus(&mut self, target: Target) {
+        // A file opened at its own level is the level itself, with no card to select.
+        let own_level = matches!(
+            (target.trail.last(), &target.node),
+            (Some(SystemAt::File { path }), Node::File(file)) if path == file
+        );
         self.map.trail = target.trail;
-        self.map.picked = Some(Pick::Node(target.node));
+        self.map.picked = (!own_level).then_some(Pick::Node(target.node));
     }
 }
 

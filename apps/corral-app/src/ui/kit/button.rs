@@ -327,6 +327,28 @@ pub fn seg<T: Copy + PartialEq + 'static>(
     on_pick: impl Fn(T) + 'static,
     test_id: &str,
 ) -> AnyElement {
+    seg_fitted(app, options, selected, on_pick, test_id, false)
+}
+
+/// [`seg`] at its words' width on the phone too, for a row it shares, such as a tab row.
+pub fn seg_compact<T: Copy + PartialEq + 'static>(
+    app: AppState,
+    options: &[(T, &'static str)],
+    selected: impl Fn() -> T + 'static,
+    on_pick: impl Fn(T) + 'static,
+    test_id: &str,
+) -> AnyElement {
+    seg_fitted(app, options, selected, on_pick, test_id, true)
+}
+
+fn seg_fitted<T: Copy + PartialEq + 'static>(
+    app: AppState,
+    options: &[(T, &'static str)],
+    selected: impl Fn() -> T + 'static,
+    on_pick: impl Fn(T) + 'static,
+    test_id: &str,
+    compact: bool,
+) -> AnyElement {
     let form = app.form;
     let current = computed(selected);
     let pick: Rc<dyn Fn(T)> = Rc::new(on_pick);
@@ -338,6 +360,14 @@ pub fn seg<T: Copy + PartialEq + 'static>(
             .gap(px(2.0))
             .p(px(2.0))
             .rounded(px(7.0))
+            .bg(color(Token::BgSunk))
+            .border_1()
+            .border_color(color(Token::Rule)),
+        Form::Phone if compact => group
+            .flex_shrink_0()
+            .gap(px(2.0))
+            .p(px(2.0))
+            .rounded(px(8.0))
             .bg(color(Token::BgSunk))
             .border_1()
             .border_color(color(Token::Rule)),
@@ -354,15 +384,21 @@ pub fn seg<T: Copy + PartialEq + 'static>(
         .children(options.iter().enumerate().map(|(index, &(value, label))| {
             let pick = Rc::clone(&pick);
             let on = move || current.get() == value;
-            seg_option(form, label, format!("{test_id}-{index}"), on, move || {
-                pick(value)
-            })
+            seg_option(
+                form,
+                compact,
+                label,
+                format!("{test_id}-{index}"),
+                on,
+                move || pick(value),
+            )
         }))
         .into_element()
 }
 
 fn seg_option(
     form: Form,
+    compact: bool,
     label: &'static str,
     test_id: String,
     on: impl Fn() -> bool + Copy + 'static,
@@ -370,6 +406,7 @@ fn seg_option(
 ) -> AnyElement {
     let (height, size, radius, pad) = match form {
         Form::Desktop => (24.0, 12.0, 5.0, 10.0),
+        Form::Phone if compact => (32.0, 12.5, 6.0, 7.0),
         Form::Phone => (32.0, 13.5, 7.0, 12.0),
         Form::Terminal => (16.0, text_size(form), 0.0, 8.0),
     };
@@ -401,12 +438,13 @@ fn seg_option(
         // The 32 pt option reaches the 44 pt target above and below, never into its neighbours.
         .when(form == Form::Phone, |t| {
             let slop = px((TARGET - height) / 2.0);
-            t.flex_1().min_w(px(0.0)).hit_slop(EdgeInsets {
-                top: slop,
-                right: px(0.0),
-                bottom: slop,
-                left: px(0.0),
-            })
+            t.when(!compact, |t| t.flex_1().min_w(px(0.0)))
+                .hit_slop(EdgeInsets {
+                    top: slop,
+                    right: px(0.0),
+                    bottom: slop,
+                    left: px(0.0),
+                })
         })
         // In a terminal NSH bands a pressed toggle itself; a fill of the app's would be a second.
         .when(form != Form::Terminal, |t| {
