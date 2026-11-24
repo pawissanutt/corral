@@ -23,6 +23,9 @@ pub(super) struct Layered {
     pub height: f32,
     /// Where the first row of ports below the package starts.
     pub bottom_top: Option<f32>,
+    /// With fixed bands: each band's rank and where its first row starts, room for its
+    /// caption left above it.
+    pub band_tops: Vec<(i32, f32)>,
 }
 
 #[derive(Clone, Copy)]
@@ -117,6 +120,7 @@ pub(super) fn layered(
     bottom: &[bool],
     max_row_w: f32,
     (has_top, has_bottom): (bool, bool),
+    bands: Option<&[i32]>,
 ) -> Layered {
     let n = sizes.len();
     let edges: Vec<&LEdge> = edges
@@ -164,6 +168,9 @@ pub(super) fn layered(
         }
     }
     let rank: Vec<i32> = rank.into_iter().map(|r| r.unwrap_or(0)).collect();
+    // Fixed bands (the Runtime view's kinds) replace the ranks references give; an edge within
+    // a band is drawn under its row, one against the bands runs upward.
+    let rank: Vec<i32> = bands.filter(|b| b.len() == n).map_or(rank, <[i32]>::to_vec);
     let max_r = rank.iter().copied().max().unwrap_or(0);
     let min_r = rank.iter().copied().min().unwrap_or(0);
     // A rank wider than the room wraps onto more rows; one rank never references itself.
@@ -173,7 +180,12 @@ pub(super) fn layered(
     }
     let mut row_of = vec![0usize; n];
     let mut next = 0;
-    for list in by_rank.iter().filter(|l| !l.is_empty()) {
+    // The first row of each band, with its rank.
+    let mut band_first: BTreeMap<usize, i32> = BTreeMap::new();
+    for (i, list) in by_rank.iter().enumerate().filter(|(_, l)| !l.is_empty()) {
+        if bands.is_some() {
+            band_first.insert(next, max_r - i as i32);
+        }
         let total: f32 = list.iter().map(|x| sizes[*x].0 + GAP).sum();
         // Edges crossing a row take room the cards alone do not; leave them some.
         let parts = ((total / (max_row_w * ROOM_FOR_EDGES)).ceil() as usize).max(1);
@@ -524,6 +536,7 @@ pub(super) fn layered(
     let first_free = (0..n).filter(|x| free[*x]).map(|x| row_of[x]).min();
     let first_bottom = (0..n).filter(|x| bottom[*x]).map(|x| row_of[x]).min();
     let mut row_top = vec![0.0_f32; n_rows];
+    let mut band_tops = Vec::new();
     let mut y = 0.0;
     for r in 0..n_rows {
         if r > 0 {
@@ -535,6 +548,10 @@ pub(super) fn layered(
             if has_bottom && Some(r) == first_bottom {
                 y += CAPTION_GAP;
             }
+        }
+        if let Some(rank) = band_first.get(&r) {
+            y += CAPTION_GAP;
+            band_tops.push((*rank, y));
         }
         row_top[r] = y;
         y += if row_h[r] > 0.0 { row_h[r] } else { 8.0 };
@@ -629,5 +646,6 @@ pub(super) fn layered(
         width: if max_x.is_finite() { max_x } else { 0.0 },
         height: y,
         bottom_top: first_bottom.filter(|_| has_bottom).map(|r| row_top[r]),
+        band_tops,
     }
 }

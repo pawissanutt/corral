@@ -11,7 +11,7 @@ use crate::model::system::tree::{Line, lines};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::marks::hue_ink;
-use crate::ui::kit::rows::{list_row, list_row_tall};
+use crate::ui::kit::rows::{list_row_tall, list_row_wrap};
 use crate::ui::term;
 use crate::ui::tokens::{FONT_MONO, FONT_TEXT, Token, color, text_size};
 
@@ -101,25 +101,24 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
             let pick = Pick::Node(node.node.clone());
             let picked = node.picked;
             let label = format!("{}, {}", node.name, node.figure);
-            // A terminal row keeps the name whole on one line; the phone wraps a long one.
+            // The name is never cut: a long one wraps at the row's width on every form.
             let name = text(node.name.clone())
-                .when(form == Form::Terminal, |t| t.number_of_lines(1u32))
                 .text_color(color(if node.dim { Token::Ink3 } else { Token::Ink }))
                 .font_weight(FontWeight::SEMIBOLD);
             let opens = if node.opens { " ›" } else { "" };
             let tag = node.tag.clone().unwrap_or_default();
             let press = move || host.pick(app, pick.clone());
             match form {
-                Form::Terminal => list_row(
+                Form::Terminal => list_row_wrap(
                     app,
                     label,
                     node.node.test_id(),
                     move || picked,
                     press,
-                    // A terminal row is one line: the name keeps its whole width and everything
-                    // after it gives way, the tag first, so a long name is never cut.
+                    // The name takes the width it needs and everything after it gives way, the
+                    // tag first; a name wider than the pane wraps onto more lines.
                     vec![
-                        fixed(name.into_element()),
+                        view().min_w(px(0.0)).child(name).into_element(),
                         view()
                             .flex_1()
                             .min_w(px(0.0))
@@ -194,14 +193,12 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                     .flex_shrink_0()
                     .child(text(format!("  {}", edge.arrow)).text_color(color(Token::Ink3)))
                     .into_element(),
-                // The other end's name stays whole: a terminal row keeps it on its one line and
-                // the words after it give way; elsewhere a long name wraps rather than overflow.
+                // The other end's name stays whole: the words after it give way first, and a
+                // name wider than the row wraps rather than being cut.
                 view()
-                    .when(form == Form::Terminal, |v| v.flex_shrink_0())
-                    .when(form != Form::Terminal, |v| v.min_w(px(0.0)))
+                    .min_w(px(0.0))
                     .child(
                         text(edge.name.clone())
-                            .when(form == Form::Terminal, |t| t.number_of_lines(1u32))
                             .text_color(color(Token::Ink))
                             .when(form != Form::Terminal, |t| {
                                 t.font_family(FONT_MONO).text_size(px(12.5))
@@ -209,12 +206,15 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                     )
                     .into_element(),
                 view()
-                    .flex_1()
                     .min_w(px(0.0))
-                    .items_end()
+                    .flex_grow(1.0)
+                    // Shrinks long before the name does, which only wraps once these are gone.
+                    .flex_shrink(1000.0)
                     .child(
+                        // Stretched to its cell and set to its right, so it is cut inside it.
                         text(edge.words.clone())
                             .number_of_lines(1u32)
+                            .text_right()
                             .text_color(ink)
                             .when(form != Form::Terminal, |t| {
                                 t.font_family(FONT_TEXT).text_size(px(12.0))
@@ -223,7 +223,7 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                     .into_element(),
             ];
             match edge.pick {
-                Some(pick) => list_row(
+                Some(pick) => list_row_wrap(
                     app,
                     label,
                     format!("edge-line-{index}"),
@@ -233,7 +233,7 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                 ),
                 None => view()
                     .flex_row()
-                    .items_center()
+                    .items_start()
                     .gap(px(8.0))
                     .when(form == Form::Terminal, |v| v.px(term::cells(1.0)))
                     .when(form != Form::Terminal, |v| v.px(px(16.0)).py(px(4.0)))

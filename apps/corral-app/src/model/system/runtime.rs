@@ -43,6 +43,35 @@ pub fn group(kind: Kind) -> (usize, &'static str) {
     }
 }
 
+/// The map's bands, top to bottom: what starts, runs or builds sits above what it starts, runs
+/// or builds.
+const BANDS: [Kind; 7] = [
+    Kind::Owner,
+    Kind::Unit(RuntimeUnitKind::Job),
+    Kind::Unit(RuntimeUnitKind::Unit),
+    Kind::Unit(RuntimeUnitKind::Image),
+    Kind::Unit(RuntimeUnitKind::Service),
+    Kind::Unit(RuntimeUnitKind::Binary),
+    Kind::Scripts,
+];
+
+/// A card's band as the layered layout ranks it: the higher, the nearer the top.
+pub fn band(kind: Kind) -> i32 {
+    let kind = match kind {
+        Kind::Unit(RuntimeUnitKind::Script) => Kind::Scripts,
+        Kind::Unit(_) | Kind::Scripts => kind,
+        _ => Kind::Owner,
+    };
+    let at = BANDS.iter().position(|k| *k == kind).unwrap_or(0);
+    (BANDS.len() - 1 - at) as i32
+}
+
+/// The caption of a band.
+pub fn band_title(band: i32) -> &'static str {
+    let at = usize::try_from(BANDS.len() as i32 - 1 - band).unwrap_or(0);
+    BANDS.get(at).map_or("", |kind| group(*kind).1)
+}
+
 pub const fn detector_word(detector: EntryDetector) -> &'static str {
     match detector {
         EntryDetector::Clap => "clap",
@@ -228,7 +257,6 @@ pub fn build(runtime: &SystemRuntime, scripts: bool) -> Scene {
             bottom: Vec::new(),
             band: Vec::new(),
             band_title: None,
-            groups: Vec::new(),
             edges: Vec::new(),
             undrawn: Vec::new(),
             max_lines: 1,
@@ -348,29 +376,13 @@ pub fn build(runtime: &SystemRuntime, scripts: bool) -> Scene {
             card.references = held.get(path).copied().unwrap_or(0);
         }
     }
-    let scene = &mut b.scene;
-    let order = |cards: &[Card], list: &mut Vec<usize>| {
-        list.sort_by(|a, c| {
-            (group(cards[*a].kind).0, &cards[*a].name)
-                .cmp(&(group(cards[*c].kind).0, &cards[*c].name))
-        });
-    };
-    let (mut graph, mut rest): (Vec<usize>, Vec<usize>) = (0..scene.cards.len()).partition(|i| {
-        let node = &scene.cards[*i].node;
-        scene.edges.iter().any(|e| &e.from == node || &e.to == node)
+    // Every card is in the graph, connected or not: the layout lays each in its kind's band.
+    let cards = &b.scene.cards;
+    let mut graph: Vec<usize> = (0..cards.len()).collect();
+    graph.sort_by(|a, c| {
+        (group(cards[*a].kind).0, &cards[*a].name).cmp(&(group(cards[*c].kind).0, &cards[*c].name))
     });
-    order(&scene.cards, &mut graph);
-    order(&scene.cards, &mut rest);
-    let mut groups: Vec<(&'static str, Vec<usize>)> = Vec::new();
-    for i in rest {
-        let title = group(scene.cards[i].kind).1;
-        match groups.last_mut() {
-            Some((last, list)) if *last == title => list.push(i),
-            _ => groups.push((title, vec![i])),
-        }
-    }
-    scene.graph = graph;
-    scene.groups = groups;
+    b.scene.graph = graph;
     b.scene
 }
 

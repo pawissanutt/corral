@@ -245,8 +245,6 @@ pub struct Scene {
     /// Unconnected cards, packed under the graph.
     pub band: Vec<usize>,
     pub band_title: Option<&'static str>,
-    /// Unconnected cards by kind, each part under its title, after the band.
-    pub groups: Vec<(&'static str, Vec<usize>)>,
     /// Edges the map draws.
     pub edges: Vec<Edge>,
     /// Edges left undrawn to stay legible; the inspector lists them.
@@ -277,7 +275,6 @@ impl Scene {
             .chain(self.graph.iter())
             .chain(self.bottom.iter())
             .chain(self.band.iter())
-            .chain(self.groups.iter().flat_map(|(_, group)| group.iter()))
             .filter_map(|i| self.cards.get(*i))
     }
 }
@@ -299,7 +296,6 @@ pub fn build(map: &SystemMap, at: Option<&SystemAt>) -> Scene {
         bottom: Vec::new(),
         band: Vec::new(),
         band_title: None,
-        groups: Vec::new(),
         edges: Vec::new(),
         undrawn: Vec::new(),
         max_lines: 1,

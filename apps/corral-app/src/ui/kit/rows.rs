@@ -25,6 +25,8 @@ enum Height {
     /// One line that Tab passes over: a row of a list walked from a field that keeps the
     /// keyboard focus.
     Walked,
+    /// As `Tall`, and in a terminal at least one line that grows when its content wraps.
+    Wrap,
 }
 
 /// The terminal title's least room beside a project chip: the chip shows only while it leaves
@@ -155,6 +157,27 @@ pub fn list_row_tall(
     )
 }
 
+/// [`list_row_tall`] whose content may wrap in a terminal too: the row is one line at least and
+/// grows with it, so a name wider than the pane is wrapped there, never cut or run off the row.
+pub fn list_row_wrap(
+    app: AppState,
+    label: impl Into<SharedString>,
+    test_id: impl Into<String>,
+    selected: impl Fn() -> bool + 'static,
+    on_press: impl Fn() + 'static,
+    content: Vec<AnyElement>,
+) -> AnyElement {
+    shell(
+        app,
+        label.into(),
+        test_id.into(),
+        selected,
+        on_press,
+        content,
+        Height::Wrap,
+    )
+}
+
 /// [`list_row`] that Tab passes over, for a list the arrow keys walk from a field that keeps
 /// the keyboard focus (the artifact finder's filter): Tab goes from the field to the actions
 /// on the selected row instead of through every row. A press still selects it.
@@ -189,7 +212,8 @@ fn shell(
 ) -> AnyElement {
     let form = app.form;
     let selected = computed(selected);
-    let tall = matches!(height, Height::Tall);
+    let tall = matches!(height, Height::Tall | Height::Wrap);
+    let wrap = matches!(height, Height::Wrap);
     let row = view()
         .relative()
         .flex_row()
@@ -249,7 +273,8 @@ fn shell(
             let handle = element_ref();
             let focused = term::focus_of(handle);
             row.element_ref(&handle)
-                .h(px(row_height(form)))
+                .when(!wrap, |row| row.h(px(row_height(form))))
+                .when(wrap, |row| row.min_h(px(row_height(form))).items_start())
                 .gap(px(8.0))
                 .child(
                     view()

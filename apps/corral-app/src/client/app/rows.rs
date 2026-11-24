@@ -293,7 +293,9 @@ fn affected(target: &DetailRef, topic: Topic, changed: &BTreeSet<String>) -> boo
         }
         DetailRef::UsageSeries { .. } => matches!(topic, Topic::Usage | Topic::Settings),
         // A project's row moves its revision whenever any of its map's details changes.
-        DetailRef::SystemMap { project, .. } => topic == Topic::System && changed.contains(project),
+        DetailRef::SystemMap { project, .. } | DetailRef::SystemRuntime { project } => {
+            topic == Topic::System && changed.contains(project)
+        }
         // The impact's facts land on the project's row, which this target does not name.
         DetailRef::SystemReview { task, .. } => {
             topic == Topic::System || (topic == Topic::Tasks && changed.contains(task))
@@ -316,7 +318,7 @@ pub(super) fn topic_affects(target: &DetailRef, topic: Topic) -> bool {
             matches!(topic, Topic::Tasks | Topic::Plans | Topic::Agents)
         }
         DetailRef::UsageSeries { .. } => matches!(topic, Topic::Usage | Topic::Settings),
-        DetailRef::SystemMap { .. } => topic == Topic::System,
+        DetailRef::SystemMap { .. } | DetailRef::SystemRuntime { .. } => topic == Topic::System,
         DetailRef::SystemReview { .. } => matches!(topic, Topic::System | Topic::Tasks),
         _ => false,
     }
@@ -337,6 +339,24 @@ mod usage_invalidation_tests {
         };
         assert!(topic_affects(&target, Topic::Settings));
         assert!(affected(&target, Topic::Settings, &BTreeSet::new()));
+    }
+
+    /// A Runtime view first read while its project's facts were building kept that answer:
+    /// the project's System row moving (building to ready, a new head) must read it again, and
+    /// so must a stale copy after a reconnect.
+    #[test]
+    fn a_project_system_update_rereads_its_runtime() {
+        let target = DetailRef::SystemRuntime {
+            project: "corral".into(),
+        };
+        let changed = BTreeSet::from(["corral".to_owned()]);
+        assert!(affected(&target, Topic::System, &changed));
+        assert!(!affected(
+            &target,
+            Topic::System,
+            &BTreeSet::from(["site".to_owned()])
+        ));
+        assert!(topic_affects(&target, Topic::System));
     }
 }
 

@@ -226,9 +226,10 @@ fn runtime_fixture() -> corral_types::SystemRuntime {
 
 /// The Runtime view on the map's own code: scripts fold until the fold is selected again, two
 /// sites of one pair are one edge with both lines, an entry point sits under its unit, a
-/// package no detector applies to says so, and the kind groups are placed without overlap.
+/// package no detector applies to says so, and connected units are banded by kind like the
+/// rest (a connected binary was left in an unbanded graph), without overlap.
 #[test]
-fn runtime_folds_scripts_merges_sites_and_places_groups() {
+fn runtime_folds_scripts_merges_sites_and_bands_every_kind() {
     let runtime = runtime_fixture();
     let mut state = State {
         view: View::Runtime,
@@ -255,6 +256,19 @@ fn runtime_folds_scripts_merges_sites_and_places_groups() {
             );
         }
     }
+    let top_of = |name: &str| {
+        let card = scene.cards.iter().position(|c| c.name == name);
+        card.and_then(|c| placed.rect(c)).map(|r| r.y)
+    };
+    let captions: Vec<&str> = placed.captions.iter().map(|c| c.text).collect();
+    for title in ["Packages and folders", "CI jobs", "Binaries", "npm scripts"] {
+        assert!(captions.contains(&title), "{title} in {captions:?}");
+    }
+    assert!(
+        top_of("ci") < top_of("tool"),
+        "the job's band sits above the binaries'"
+    );
+    assert!(top_of("b") < top_of("ci"), "the packages' band sits on top");
     state.act(Action::Pick(Pick::Node(Node::Scripts)));
     state.act(Action::Pick(Pick::Node(Node::Scripts)));
     assert!(state.scripts && state.trail.is_empty());

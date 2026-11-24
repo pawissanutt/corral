@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use super::layered::{LEdge, layered};
+use super::runtime;
 use super::scene::{Card, EdgeKind, Kind, Level, Scene};
 use super::words::figure;
 use super::{Overlay, Window};
@@ -224,6 +225,13 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
         let has_bottom = bottom.iter().any(|b| *b);
         let caption_room = if has_top { 26.0 } else { 0.0 };
         let local_sizes: Vec<_> = graph.iter().map(|c| sizes[*c]).collect();
+        // The Runtime view lays every card in its kind's band.
+        let bands: Option<Vec<i32>> = (scene.level == Level::Runtime).then(|| {
+            graph
+                .iter()
+                .map(|c| runtime::band(scene.cards[*c].kind))
+                .collect()
+        });
         let g = layered(
             &local_sizes,
             &edges,
@@ -231,6 +239,7 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
             &bottom,
             inner,
             (has_top, has_bottom),
+            bands.as_deref(),
         );
         y += caption_room;
         for (i, rect) in g.pos.iter().enumerate() {
@@ -268,41 +277,36 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
                 rule: None,
             });
         }
+        for (i, (rank, top)) in g.band_tops.iter().enumerate() {
+            out.captions.push(Caption {
+                x: PAD,
+                y: y + top - 10.0,
+                text: runtime::band_title(*rank),
+                rule: (i > 0).then_some(y + top - 32.0),
+            });
+        }
         width = width.max(g.width + 2.0 * PAD);
         y += g.height;
     }
-    // The band, then each kind's group: packed rows, each under its caption once anything is
-    // above it; a group says its kind even when it is the first thing drawn.
-    let parts = std::iter::once((scene.band_title, &scene.band, false)).chain(
-        scene
-            .groups
-            .iter()
-            .map(|(title, group)| (Some(*title), group, true)),
-    );
-    let mut above = !graph.is_empty();
-    for (title, part, group) in parts {
-        if part.is_empty() {
-            continue;
-        }
-        let titled = title.filter(|_| above || group);
-        if above {
+    if !scene.band.is_empty() {
+        if !graph.is_empty() {
             y += 50.0;
-        } else if titled.is_some() {
-            y += 26.0;
         }
-        let part_sizes: Vec<_> = part.iter().map(|c| sizes[*c]).collect();
-        let (pos, w, h) = flow_pack(&part_sizes, inner.max(width - 2.0 * PAD), 14.0);
-        if let Some(text) = titled {
+        let band_sizes: Vec<_> = scene.band.iter().map(|c| sizes[*c]).collect();
+        let (pos, w, h) = flow_pack(&band_sizes, inner.max(width - 2.0 * PAD), 14.0);
+        if !graph.is_empty()
+            && let Some(text) = scene.band_title
+        {
             out.captions.push(Caption {
                 x: PAD,
-                y: y - if above { 14.0 } else { 10.0 },
+                y: y - 14.0,
                 text,
-                rule: above.then_some(y - 34.0),
+                rule: Some(y - 34.0),
             });
         }
         for (i, rect) in pos.into_iter().enumerate() {
             out.placed.push(Placed {
-                card: part[i],
+                card: scene.band[i],
                 rect: Rect {
                     x: rect.x + PAD,
                     y: rect.y + y,
@@ -311,10 +315,8 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
             });
         }
         width = width.max(w + 2.0 * PAD);
-        y += h;
-        above = true;
-    }
-    if above {
+        y += h + PAD;
+    } else if !graph.is_empty() {
         y += PAD;
     }
     out.width = width.ceil();
