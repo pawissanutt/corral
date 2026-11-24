@@ -106,7 +106,10 @@ pub struct Query {
 /// `T-12` from `t-12`, `T-12` or `12`; anything else, such as a project owning a library, as
 /// typed.
 fn task_id(value: &str) -> String {
-    let number = value.strip_prefix("t-").unwrap_or(value);
+    let number = value
+        .strip_prefix("t-")
+        .or_else(|| value.strip_prefix("T-"))
+        .unwrap_or(value);
     if !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()) {
         format!("T-{number}")
     } else {
@@ -153,8 +156,8 @@ impl Query {
     /// A field token still being typed (`kind:`) narrows nothing yet.
     pub fn parse(text: &str) -> Query {
         let mut query = Query::default();
-        for token in text.split_whitespace() {
-            let token = token.to_lowercase();
+        for typed in text.split_whitespace() {
+            let token = typed.to_lowercase();
             let (field, value) = token.split_once(':').unwrap_or_default();
             let into = match field {
                 "kind" => &mut query.kinds,
@@ -167,7 +170,9 @@ impl Query {
             };
             if !value.is_empty() {
                 into.push(if field == "task" {
-                    task_id(value)
+                    // corrald matches an owner exactly, so a library's project keeps its case.
+                    let (_, typed) = typed.split_once(':').unwrap_or_default();
+                    task_id(typed)
                 } else {
                     value.to_owned()
                 });
@@ -420,8 +425,9 @@ pub struct Row {
     pub project: Option<String>,
     /// The run that recorded it, when a run did (`R2`).
     pub run: Option<String>,
-    /// What replaced it, when a newer artifact did: `replaced by T-12:4`.
-    pub replaced: Option<String>,
+    /// The title as the row shows it: led by what replaced it, when a newer artifact did
+    /// (`→ T-12:4 · draft.md`), so a cut title still names its successor.
+    pub shown_title: String,
     /// When it was added: the clock today, else the day.
     pub at: String,
     /// What a screen reader hears for the row.
@@ -534,7 +540,10 @@ fn row(feed: &Feed, artifact: &Artifact) -> Row {
         title: artifact.title.clone(),
         project,
         run: artifact.run.clone(),
-        replaced,
+        shown_title: match &artifact.replaced_by {
+            Some(by) => format!("→ {by} · {}", artifact.title),
+            None => artifact.title.clone(),
+        },
         at,
         label,
     }

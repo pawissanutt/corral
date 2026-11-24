@@ -430,7 +430,7 @@ fn result(app: AppState, row: &Row, selected: Memo<Option<String>>) -> AnyElemen
                 .flex_1()
                 .min_w(px(0.0))
                 .gap(px(2.0))
-                .child(plain(app, title_of(row)).truncate())
+                .child(plain(app, row.shown_title.clone()).truncate())
                 .child(dim(app, facts).truncate())
                 .into_element(),
         ];
@@ -454,7 +454,7 @@ fn result(app: AppState, row: &Row, selected: Memo<Option<String>>) -> AnyElemen
     };
     let content = vec![
         fixed(dim(app, row.kind.clone()), KIND_CELLS, 74.0),
-        titled(app, plain(app, title_of(row)).truncate(), None),
+        titled(app, plain(app, row.shown_title.clone()).truncate(), None),
         fixed(
             mono(app, row.task.to_string()).text_color(color(Token::Ink2)),
             TASK_CELLS,
@@ -483,12 +483,4 @@ fn result(app: AppState, row: &Row, selected: Memo<Option<String>>) -> AnyElemen
             content,
         ),
     )
-}
-
-/// A result's title, led by what replaced it when something did, so a cut title still says so.
-fn title_of(row: &Row) -> String {
-    match &row.replaced {
-        Some(replaced) => format!("{replaced} · {}", row.title),
-        None => row.title.clone(),
-    }
 }

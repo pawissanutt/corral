@@ -234,28 +234,27 @@ fn a_result_opens_its_task_and_a_task_opens_the_finder_on_itself() {
     assert_eq!(Query::parse(&state.query).tasks, ["T-12"]);
 }
 
-/// A project's library is narrowed by its own name, not an upper-cased one corrald never
-/// matches; All reaches the rows corrald hides; a library row has no task to open.
+/// A project's library is narrowed by its name as typed, which corrald matches exactly; All reaches the rows corrald hides; a library row has no task to open.
 #[test]
 fn a_library_is_found_by_its_project_and_offers_no_task() {
     let mut state = State {
-        query: "task:corral".into(),
+        query: "task:ClientDocs".into(),
         ..State::default()
     };
     let narrowing = |state: &State| match state.request() {
         DetailRef::Artifacts { narrowing, .. } => narrowing.unwrap_or_default(),
         _ => ArtifactNarrowing::default(),
     };
-    assert_eq!(narrowing(&state).task.as_deref(), Some("corral"));
+    assert_eq!(narrowing(&state).task.as_deref(), Some("ClientDocs"));
     assert!(!narrowing(&state).all);
     let mut feed = Feed::default();
     state.act(Action::All(true), &feed);
     assert!(narrowing(&state).all);
-    let mut row = artifact("corral", 3, ArtifactKind::Reference, "notes.md", 1);
-    row.project = Some("corral".into());
+    let mut row = artifact("ClientDocs", 3, ArtifactKind::Reference, "notes.md", 1);
+    row.project = Some("ClientDocs".into());
     served(&mut feed, &state.request(), vec![vec![row]], false);
     let shown = page(&state, &feed, Form::Desktop);
     let preview = shown.preview.expect("the library row is selected");
-    assert_eq!(preview.reference, "corral:3");
+    assert_eq!(preview.reference, "ClientDocs:3");
     assert_eq!(preview.open_task, None);
 }
