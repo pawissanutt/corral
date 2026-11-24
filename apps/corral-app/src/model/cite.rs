@@ -1,14 +1,15 @@
 //! Citations in text the app shows: `T-12` names a task, `T-12:3` one of its artifacts and
 //! `T-12:3#section` a section of it. They are found with corral-types' grammar
 //! (`references_in`), never a parser of the app's, and resolved against the task details the
-//! app reads: a task resolves when corrald serves it, an artifact when that task's detail lists
-//! it. Until then a citation is being looked up; once corrald says no, it is not found, stays
-//! plain text and opens nothing.
+//! app reads: a task resolves when corrald serves its detail, an artifact (or a section of one)
+//! when corrald serves its content under the citation, which the engine resolves by its own
+//! rules. Until then a citation is being looked up; once corrald answers `not_found` it is not
+//! found, stays plain text and opens nothing; any other failure leaves it unknown.
 
 use corral_protocol::detail::DetailRef;
 use corral_types::{Artifact, references_in};
 
-use crate::model::artifacts::{SectionIs, content_target, display_kind, section_is};
+use crate::model::artifacts::{content_target, display_kind};
 use crate::model::daemon::Feed;
 use crate::model::work::{loaded_task, task_ref};
 use crate::model::{Effect, Id, Live};
@@ -27,12 +28,35 @@ pub const SCHEME: &str = "cite:";
 /// One citation as written.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Cite {
-    /// As spelled in the text: `T-12:3#4-fact-model`.
+    /// As spelled in the text, the label it keeps: `T-12:03#4-fact-model`.
     pub text: String,
     pub task: Id,
-    /// `T-12:3` for an artifact citation.
+    /// The artifact it names, canonically (`T-12:3`), as the engine reads the ordinal.
     pub artifact: Option<String>,
     pub section: Option<String>,
+}
+
+impl Cite {
+    /// What corrald is asked for to resolve an artifact citation: the artifact, or its section.
+    pub fn read(&self) -> Option<String> {
+        let artifact = self.artifact.as_deref()?;
+        Some(match &self.section {
+            Some(section) => format!("{artifact}#{section}"),
+            None => artifact.to_owned(),
+        })
+    }
+}
+
+/// `T-12:3` from the grammar's `T-12:03`: the engine reads the ordinal as a positive number.
+/// One it cannot read stays as written, and corrald answers that it is not found.
+fn canonical(address: &str) -> String {
+    address
+        .rsplit_once(':')
+        .and_then(|(task, ordinal)| {
+            let ordinal = ordinal.parse::<u32>().ok().filter(|ordinal| *ordinal > 0)?;
+            Some(format!("{task}:{ordinal}"))
+        })
+        .unwrap_or_else(|| address.to_owned())
 }
 
 /// The distinct citations of `text`, in order of first appearance.
@@ -42,7 +66,7 @@ pub fn cites(text: &str) -> Vec<Cite> {
         .map(|reference| Cite {
             text: reference.as_str().to_owned(),
             task: Id::from(reference.task()),
-            artifact: reference.artifact().map(str::to_owned),
+            artifact: reference.artifact().map(canonical),
             section: reference.section().map(str::to_owned),
         })
         .collect()
@@ -59,17 +83,12 @@ pub fn cites_in<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<Cite> {
     all
 }
 
-/// The details that resolve `cites`, each once: every cited task's, and the content of each
-/// held artifact a citation names a section of, which says whether the section exists.
-pub fn targets(feed: &Feed, cites: &[Cite]) -> Vec<DetailRef> {
+/// The details that resolve `cites`, each once: every cited task's, and for an artifact
+/// citation the content corrald serves under it, which says whether it opens.
+pub fn targets(cites: &[Cite]) -> Vec<DetailRef> {
     let mut targets: Vec<DetailRef> = Vec::new();
     for cite in cites {
-        let content = match (&cite.artifact, &cite.section) {
-            (Some(reference), Some(_)) => held(feed, reference, &cite.task)
-                .is_some()
-                .then(|| content_target(reference)),
-            _ => None,
-        };
+        let content = cite.read().map(|read| content_target(&read));
         for target in std::iter::once(task_ref(&cite.task)).chain(content) {
             if !targets.contains(&target) {
                 targets.push(target);
@@ -89,25 +108,25 @@ pub enum Found {
     Missing,
 }
 
-/// The cited task's title as the app holds it, or where its lookup stands: only corrald's
-/// `not_found` makes it missing.
+/// The cited task's title as the app holds it, or where its lookup stands. Only corrald's
+/// `not_found` makes it missing, and it does even over an older cached detail.
 fn task(feed: &Feed, id: &str) -> Result<Option<String>, Found> {
+    let error = feed
+        .detail(&task_ref(id))
+        .and_then(|cache| cache.error.as_ref());
+    if error.is_some_and(|error| error.code == "not_found") {
+        return Err(Found::Missing);
+    }
     if let Some(row) = feed.board.task(id) {
         return Ok(Some(row.title().to_owned()));
     }
     if let Some(detail) = loaded_task(feed, id) {
         return Ok(Some(detail.task.title.clone()));
     }
-    Err(
-        match feed
-            .detail(&task_ref(id))
-            .and_then(|cache| cache.error.as_ref())
-        {
-            Some(error) if error.code == "not_found" => Found::Missing,
-            Some(_) => Found::Unavailable,
-            None => Found::Looking,
-        },
-    )
+    Err(match error {
+        Some(_) => Found::Unavailable,
+        None => Found::Looking,
+    })
 }
 
 /// The cited artifact among every artifact row the app holds: the task's detail first, then
@@ -133,34 +152,39 @@ pub fn held(feed: &Feed, reference: &str, task: &str) -> Option<Artifact> {
         })
 }
 
-/// Where `cite` stands in what the app holds.
+/// Where `cite` stands. An artifact citation opens only once corrald has served its content
+/// (or the cited section) under it: the engine, not the app, decides that it resolves.
 pub fn resolve(feed: &Feed, cite: &Cite) -> Found {
-    let Some(reference) = cite.artifact.as_deref() else {
-        return match task(feed, &cite.task) {
+    let task = task(feed, &cite.task);
+    let (Some(address), Some(read)) = (cite.artifact.as_deref(), cite.read()) else {
+        return match task {
             Ok(title) => Found::Task { title },
             Err(found) => found,
         };
     };
-    if let Some(artifact) = held(feed, reference, &cite.task) {
-        // A cited section resolves only when the artifact has it, as the engine decides.
-        return match cite
-            .section
-            .as_deref()
-            .map(|slug| section_is(feed, &artifact, slug))
-        {
-            None | Some(SectionIs::Present) => Found::Artifact(Box::new(artifact)),
-            Some(SectionIs::Absent) => Found::Missing,
-            Some(SectionIs::Unknown) => Found::Unavailable,
-            Some(SectionIs::Loading) => Found::Looking,
-        };
-    }
-    // The task's detail lists every artifact it has: once it is here, an absent row is absent.
-    if loaded_task(feed, &cite.task).is_some() {
+    if task == Err(Found::Missing) {
         return Found::Missing;
     }
-    match task(feed, &cite.task) {
-        Err(found) => found,
-        Ok(_) => Found::Looking,
+    let content = feed.detail(&content_target(&read));
+    let error = content.and_then(|cache| cache.error.as_ref());
+    if error.is_some_and(|error| error.code == "not_found") {
+        return Found::Missing;
+    }
+    if !content.is_some_and(|cache| cache.body().is_some()) {
+        return if error.is_some() || task == Err(Found::Unavailable) {
+            Found::Unavailable
+        } else {
+            Found::Looking
+        };
+    }
+    match held(feed, address, &cite.task) {
+        Some(artifact) => Found::Artifact(Box::new(artifact)),
+        // The task's detail lists every artifact it has: once it is here, an absent row is absent.
+        None if loaded_task(feed, &cite.task).is_some() => Found::Missing,
+        None => match task {
+            Err(found) => found,
+            Ok(_) => Found::Looking,
+        },
     }
 }
 
@@ -251,14 +275,9 @@ mod tests {
     use super::*;
     use crate::model::daemon::Feed;
 
-    /// A citation whose task corrald does not serve must never open anything: an empty viewer
-    /// or a task page with nothing behind it.
-    #[test]
-    fn a_citation_corrald_does_not_serve_opens_nothing() {
+    fn failed(feed: &mut Feed, target: DetailRef, code: &str) {
         use crate::model::daemon::{ClientError, DetailCache, detail_key};
 
-        let mut feed = Feed::default();
-        let target = task_ref("T-404");
         feed.details.insert(
             detail_key(&target),
             DetailCache {
@@ -268,18 +287,38 @@ mod tests {
                 loading: false,
                 stale: false,
                 error: Some(ClientError {
-                    code: "not_found".into(),
-                    message: "task T-404".into(),
+                    code: code.into(),
+                    message: "corrald's answer".into(),
                 }),
                 merged: None,
             },
         );
-        let cite = cites("see T-404:1#goal").remove(0);
-        assert_eq!(cite.artifact.as_deref(), Some("T-404:1"));
-        assert_eq!(cite.section.as_deref(), Some("goal"));
-        assert!(matches!(
-            press(&feed, &cite).as_slice(),
-            [Effect::Toast(said)] if said.contains(NOT_FOUND)
-        ));
+    }
+
+    /// Only corrald's `not_found` (for the task, or for the content served under the citation,
+    /// which is where the engine decides a section or a blob is missing) makes a citation not
+    /// found; any other failure leaves it unknown. Either way nothing opens. A zero-padded
+    /// ordinal names the artifact the engine reads, under the label as written.
+    #[test]
+    fn only_corralds_not_found_makes_a_citation_not_found_and_neither_opens() {
+        let mut feed = Feed::default();
+        let [missing, failing, padded] =
+            ["T-404", "T-5:2#goal", "T-6:03#goal"].map(|text| cites(text).remove(0));
+        failed(&mut feed, task_ref("T-404"), "not_found");
+        failed(&mut feed, content_target("T-5:2#goal"), "unavailable");
+        failed(&mut feed, content_target("T-6:3#goal"), "not_found");
+        assert_eq!(padded.text, "T-6:03#goal");
+        assert_eq!(padded.read().as_deref(), Some("T-6:3#goal"));
+        for (cite, said) in [
+            (missing, NOT_FOUND),
+            (failing, UNAVAILABLE),
+            (padded, NOT_FOUND),
+        ] {
+            assert!(
+                matches!(press(&feed, &cite).as_slice(), [Effect::Toast(toast)] if toast.ends_with(said)),
+                "{}",
+                cite.text
+            );
+        }
     }
 }

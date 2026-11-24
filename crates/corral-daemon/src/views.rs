@@ -11,6 +11,8 @@ mod transcript;
 
 #[cfg(test)]
 mod board_wire_tests;
+#[cfg(test)]
+mod cite_tests;
 
 use std::{
     hash::{DefaultHasher, Hasher},

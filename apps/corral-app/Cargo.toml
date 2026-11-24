@@ -32,7 +32,7 @@ sha2 = "0.10"
 unicode-width = "0.2"
 # Settings edits `corral.toml` in place so its comments, order and unknown tables survive a save.
 toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
-# A cited artifact section is found by the headings the engine's own Markdown parser sees.
+# The sample engine cuts a cited section by the headings corrald's Markdown parser sees.
 pulldown-cmark = { version = "0.13", default-features = false }
 
 [dev-dependencies]

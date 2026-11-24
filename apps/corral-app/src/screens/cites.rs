@@ -19,8 +19,8 @@ use super::task::parts::{link_row, mono_words};
 
 /// Keeps the details that resolve `cites` loaded while the calling view shows.
 pub(crate) fn keep_cited(app: AppState, cites: &[Cite]) {
-    let cites = cites.to_vec();
-    let targets = computed(move || app.feed.with(|feed| cite::targets(feed, &cites)));
+    let targets = cite::targets(cites);
+    let targets = computed(move || targets.clone());
     keep_details(app, targets, None);
 }
 

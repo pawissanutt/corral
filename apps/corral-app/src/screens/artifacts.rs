@@ -99,7 +99,7 @@ fn keep_loaded(app: AppState, page: Memo<Page>) {
             page.full
                 .as_ref()
                 .or(page.preview.as_ref())
-                .map(|shown| shown.reference.clone())
+                .map(|shown| shown.read.clone())
         })
     });
     effect(move || {

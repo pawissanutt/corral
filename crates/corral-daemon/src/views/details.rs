@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeSet,
-    fs::File,
-    io::{Read, Seek, SeekFrom},
+    io::{Cursor, Read, Seek, SeekFrom},
     mem,
 };
 
@@ -11,10 +10,11 @@ use corral_engine::{
     Engine, EventKind, artifacts::ArtifactFilter, events::EventFilter, store::TaskFilter,
 };
 use corral_protocol::detail::*;
+use corral_types::{Reference, Refusal};
 use jiff::Timestamp;
 use serde::Serialize;
 
-use super::{REPLY_MAX, fingerprint, json_len, review, rows, task_number, terminal};
+use super::{NotFound, REPLY_MAX, fingerprint, json_len, review, rows, task_number, terminal};
 
 const ROW_LIMIT: usize = 100;
 const TEXT_BYTES: usize = 8 * 1024; // Worst-case JSON escaping still fits CONTROL.
@@ -69,7 +69,9 @@ fn body(engine: &Engine, target: &DetailRef) -> Result<DetailBody> {
     let store = &engine.store;
     Ok(match target {
         DetailRef::Task { id } => {
-            let task = store.require_task(id)?;
+            // `not_found`, not a refusal: a client tells a cited task that does not exist from
+            // a read that failed.
+            let task = store.get_task(id)?.ok_or(NotFound("task not found"))?;
             let mut events = store.event_page(Some(id), None, None, true, 50)?;
             events.reverse();
             DetailBody::Task(TaskDetail {
@@ -421,20 +423,58 @@ pub(super) fn paginate(body: &mut DetailBody, offset: usize) -> Result<Option<us
     Ok(page.more.then_some(offset + page.emitted))
 }
 
+/// An artifact's content, or for a citation naming a section (`T-12:3#goal`) that section's
+/// source as the engine cuts it. Whatever the engine would not resolve (no such artifact, its
+/// blob gone, no such section, not Markdown) is `not_found`, so a client can tell a citation
+/// that does not resolve from a read that failed.
 fn artifact(engine: &Engine, query: &DetailGet, seq: u64, reference: &str) -> Result<DetailReply> {
-    let artifact = engine
-        .store
-        .get_artifact(reference)?
-        .context("artifact reference not found")?;
-    let file = engine.open_artifact_blob(&artifact)?;
-    let content = ArtifactSource {
-        media_type: media_type(&artifact.title),
-        fingerprint: fingerprint(&(&query.target, &artifact))?,
-        bytes: artifact.bytes,
-        task: artifact.task,
-        key: artifact.id.to_string(),
+    let cited = Reference::parse(reference);
+    let address = cited.and_then(Reference::artifact).unwrap_or(reference);
+    let section = cited.and_then(Reference::section);
+    let artifact = match engine.store.get_artifact(address) {
+        Ok(Some(artifact)) => artifact,
+        Ok(None) => return Err(NotFound("artifact not found").into()),
+        Err(error) if error.is::<Refusal>() => return Err(NotFound("artifact not found").into()),
+        Err(error) => return Err(error),
     };
-    artifact_page(query, seq, file, content)
+    let file = engine.open_artifact_blob(&artifact).map_err(|error| {
+        let gone = error
+            .root_cause()
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+        if gone {
+            NotFound("artifact content not found").into()
+        } else {
+            error
+        }
+    })?;
+    let fingerprint = fingerprint(&(&query.target, &artifact))?;
+    let (task, key) = (artifact.task.clone(), artifact.id.to_string());
+    let Some(_) = section else {
+        let content = ArtifactSource {
+            media_type: media_type(&artifact.title),
+            fingerprint,
+            bytes: artifact.bytes,
+            task,
+            key,
+        };
+        return artifact_page(query, seq, file, content);
+    };
+    let bytes = engine.show_artifact(reference).map_err(|error| {
+        if error.is::<Refusal>() {
+            NotFound("artifact section not found").into()
+        } else {
+            error
+        }
+    })?;
+    let content = ArtifactSource {
+        media_type: Some("text/markdown"),
+        fingerprint,
+        bytes: bytes.len() as u64,
+        task,
+        key,
+    };
+    artifact_page(query, seq, Cursor::new(bytes), content)
 }
 
 pub(super) struct ArtifactSource<'a> {
@@ -448,7 +488,7 @@ pub(super) struct ArtifactSource<'a> {
 pub(super) fn artifact_page(
     query: &DetailGet,
     seq: u64,
-    mut file: File,
+    mut file: impl Read + Seek,
     source: ArtifactSource<'_>,
 ) -> Result<DetailReply> {
     let ArtifactSource {

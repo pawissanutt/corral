@@ -10,8 +10,10 @@ mod content;
 #[cfg(test)]
 mod tests;
 
-pub use content::{Body, Content, Line, PREVIEW_LINES, content, target as content_target};
-pub(crate) use content::{SectionIs, log_hue, plain_text, section_is, utf8_text};
+pub use content::{
+    Body, Content, Line, PREVIEW_LINES, content, content_of, target as content_target,
+};
+pub(crate) use content::{log_hue, plain_text, utf8_text};
 
 use corral_protocol::detail::{ArtifactNarrowing, DetailBody, DetailGet, DetailRef};
 use corral_types::{Artifact, ArtifactGroup, ArtifactKind, Reference};
@@ -505,6 +507,8 @@ pub struct Results {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Preview {
     pub reference: String,
+    /// What corrald is asked for to show it: its reference, or a cited section's.
+    pub read: String,
     pub title: String,
     pub task: Id,
     /// Labelled facts in display order: kind, size, task, run, project, added, hash.
@@ -636,6 +640,7 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
     }
     Preview {
         reference: artifact.reference(),
+        read: artifact.reference(),
         title: artifact.title.clone(),
         open_task: (!library).then(|| format!("Open {task}")),
         task,
@@ -670,20 +675,25 @@ pub fn page(state: &State, feed: &Feed, form: Form) -> Page {
     let shown = at.map(|at| rows[at]);
     // A cited artifact need not be among the filter's served rows: its task's detail holds it.
     let full = state.full.as_deref().and_then(|full| {
-        let mut shown = match rows.iter().find(|row| row.reference() == full) {
-            Some(artifact) => preview(feed, artifact, form, true),
-            None => {
-                let task = Reference::parse(full)?.task();
-                preview(
-                    feed,
-                    &crate::model::cite::held(feed, full, task)?,
-                    form,
-                    true,
-                )
-            }
+        let artifact = match rows.iter().find(|row| row.reference() == full) {
+            Some(artifact) => (*artifact).clone(),
+            None => crate::model::cite::held(feed, full, Reference::parse(full)?.task())?,
         };
+        let mut shown = preview(feed, &artifact, form, true);
+        // corrald cuts a cited section by the engine's rules; the app shows what it serves.
         if let Some(section) = &state.section {
-            shown.content = content::at_section(shown.content, section);
+            shown.read = format!("{full}#{section}");
+            let cited = content_of(feed, &artifact, &shown.read, form, true);
+            let note = format!(
+                "Only the cited section “{section}” shows; open the artifact from the results for all of it."
+            );
+            shown.content = Content {
+                cut: Some(match cited.cut {
+                    Some(cut) => format!("{note} {cut}"),
+                    None => note,
+                }),
+                body: cited.body,
+            };
             shown.title = format!("{} § {section}", shown.title);
         }
         Some(shown)

@@ -33,12 +33,49 @@ fn preview(destination: &str) -> Headless {
 
 /// Runs a palette row: opens a sample task's page by its id and title.
 fn select(app: &mut Headless, row: &str) {
-    app.press("id:palette-open").unwrap();
+    select_from(app, "id:palette-open", row);
+}
+
+/// [`select`] from the control that opens the palette on this form (the phone's search).
+fn select_from(app: &mut Headless, opener: &str, row: &str) {
+    app.press(opener).unwrap();
     app.wait_for("id:palette-input").unwrap();
     app.type_text("id:palette-input", row).unwrap();
     app.press(&format!("text:{row}")).unwrap();
     app.wait_for_gone("id:palette-input", Duration::from_secs(5))
         .unwrap();
+}
+
+/// On a phone a citation is one tap away: T-12's body cites a section of T-2's brief, which
+/// opens in the artifact viewer cut to that section as corrald serves it; the History comment
+/// citing an artifact T-2 does not have opens nothing and says "not found".
+#[test]
+fn a_phone_tap_on_a_citation_opens_its_section_or_says_not_found() {
+    let mut config = EngineConfig::new(Root::of::<nsh_app_corral::App>());
+    config.environment.os = Os::Web;
+    config.environment.idiom = Idiom::Phone;
+    config.storage = Some(MemoryStorage::new([(
+        "corral.destination".to_owned(),
+        "tasks".to_owned(),
+    )]));
+    let mut app = Headless::start(config).unwrap();
+    app.wait_for("id:nav-settings").unwrap();
+    select_from(&mut app, "id:btn-search", "Data: fixture");
+    select_from(&mut app, "id:btn-search", "T-12 Timeline zoom presets");
+    app.wait_for("id:task-cited").unwrap();
+    app.press("id:cite-T-2:3#acceptance").unwrap();
+    app.wait_for("id:artifact-full").unwrap();
+    app.wait_for("text:/Only the cited section “acceptance” shows/")
+        .unwrap();
+    app.press("id:tab-tasks").unwrap();
+    select_from(&mut app, "id:btn-search", "T-12 Timeline zoom presets");
+    app.press("id:tab-task-2").unwrap();
+    app.press("id:cite-T-2:99").unwrap();
+    app.wait_for("text:/T-2:99: not found/").unwrap();
+    assert!(
+        app.wait_for_gone("id:artifact-full", Duration::from_secs(1))
+            .is_ok()
+    );
 }
 
 /// T-13's reviewer stays with the task across rounds; its run on the task page opens the

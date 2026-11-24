@@ -4,7 +4,10 @@
 //! reference.
 
 use corral_protocol::detail::*;
-use corral_types::{Actor, Artifact, ArtifactKind, CheckKind, CheckResult, Status};
+use corral_types::{
+    Actor, Artifact, ArtifactKind, CheckKind, CheckResult, Reference, Status, section_slug,
+};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 use super::details::{files, patch};
 
@@ -159,17 +162,37 @@ fn library(feed: &Feed) -> Vec<Artifact> {
 
 /// The artifact `reference` names, its content made from the sample's own facts.
 pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, String> {
+    // A cited section, as corrald serves one: the Markdown source of that section, else
+    // not found.
+    let cited = Reference::parse(reference);
+    if let Some(slug) = cited.and_then(Reference::section) {
+        let address = cited.and_then(Reference::artifact).unwrap_or(reference);
+        let page = content(feed, address)?;
+        let markdown = page.media_type.as_deref() == Some("text/markdown")
+            && matches!(page.encoding, ArtifactEncoding::Text);
+        let part = markdown
+            .then(|| section(&page.content, slug))
+            .flatten()
+            .ok_or_else(|| format!("not_found: section {slug} of {address}"))?
+            .to_owned();
+        return Ok(ArtifactPage {
+            content: part,
+            ..page
+        });
+    }
     let (task, key) = reference
         .rsplit_once(':')
         .ok_or_else(|| format!("invalid: artifact reference {reference}"))?;
+    // The ordinal is a number, as the engine reads it: `T-2:03` is `T-2:3`.
+    let key = key.parse::<u32>().ok().filter(|key| *key > 0);
     if task == LIBRARY {
         library(feed)
             .iter()
-            .find(|row| row.id.to_string() == key)
+            .find(|row| Some(row.id) == key)
             .ok_or_else(|| format!("not_found: artifact {reference}"))?;
         return Ok(ArtifactPage {
             task: task.into(),
-            key: key.into(),
+            key: key.unwrap_or_default().to_string(),
             media_type: Some("text/markdown".into()),
             encoding: ArtifactEncoding::Text,
             content: LIBRARY_NOTES.into(),
@@ -180,7 +203,7 @@ pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, Stri
     let row = record
         .artifacts
         .iter()
-        .find(|row| row.id.to_string() == key)
+        .find(|row| Some(row.id) == key)
         .ok_or_else(|| format!("not_found: artifact {reference}"))?;
     let text = |media: &str, content: String| (media.to_owned(), ArtifactEncoding::Text, content);
     let (media_type, encoding, content) = match row.kind {
@@ -209,7 +232,7 @@ pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, Stri
     };
     Ok(ArtifactPage {
         task: task.into(),
-        key: key.into(),
+        key: key.unwrap_or_default().to_string(),
         media_type: Some(media_type),
         encoding,
         content,
@@ -315,4 +338,74 @@ fn markdown(feed: &Feed, record: &TaskDetail, row: &Artifact) -> String {
         ));
     }
     out
+}
+
+/// A Markdown heading: its slug, level and the start of its source line.
+struct Heading {
+    slug: String,
+    level: u8,
+    start: usize,
+}
+
+/// The headings of `text` as the engine finds them when it serves a cited section.
+fn headings(text: &str) -> Vec<Heading> {
+    let mut events = Parser::new(text).into_offset_iter();
+    let mut headings = Vec::new();
+    while let Some((event, range)) = events.next() {
+        let Event::Start(Tag::Heading { level, .. }) = event else {
+            continue;
+        };
+        let mut words = String::new();
+        for (event, _) in events.by_ref() {
+            match event {
+                Event::End(TagEnd::Heading(_)) => break,
+                Event::Text(text) | Event::Code(text) => words.push_str(&text),
+                Event::SoftBreak | Event::HardBreak => words.push(' '),
+                _ => {}
+            }
+        }
+        headings.push(Heading {
+            slug: section_slug(&words),
+            level: level as u8,
+            start: text[..range.start].rfind(['\n', '\r']).map_or(0, |i| i + 1),
+        });
+    }
+    headings
+}
+
+/// The Markdown section whose heading's slug is `slug`: its heading and everything up to the
+/// next heading of its level or above, as the engine cuts it.
+fn section<'a>(text: &'a str, slug: &str) -> Option<&'a str> {
+    let headings = headings(text);
+    let (at, hit) = headings
+        .iter()
+        .enumerate()
+        .find(|(_, heading)| heading.slug == slug)?;
+    let end = headings[at + 1..]
+        .iter()
+        .find(|heading| heading.level <= hit.level)
+        .map_or(text.len(), |heading| heading.start);
+    Some(&text[hit.start..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cited section must end at the next heading of its level, not at a deeper one or at a
+    /// heading-looking line inside code, and a setext heading is a heading.
+    #[test]
+    fn a_cited_section_runs_to_the_next_heading_of_its_level() {
+        let text = "# Doc\n## Goal\nwhy\n### Detail\n```\n## not a heading\n```\n\n    # code\n\nAcceptance\n----------\nok\n";
+        assert_eq!(
+            section(text, "goal"),
+            Some("## Goal\nwhy\n### Detail\n```\n## not a heading\n```\n\n    # code\n\n")
+        );
+        assert_eq!(
+            section(text, "acceptance"),
+            Some("Acceptance\n----------\nok\n")
+        );
+        assert_eq!(section(text, "not-a-heading"), None);
+        assert_eq!(section(text, "code"), None);
+    }
 }
