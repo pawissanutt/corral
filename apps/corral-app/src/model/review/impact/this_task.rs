@@ -135,7 +135,10 @@ pub(super) fn of_review(
                 removed: r,
                 deleted,
                 ..
-            } if under.holds(path, Some(container), Some(module)) => {
+            } if under.holds(path, Some(container), Some(module))
+                // A "N more" card folds files the head has; a deleted one is on no level.
+                && !(*deleted && matches!(under, Under::Folded(..))) =>
+            {
                 added += a;
                 removed += r;
                 files.push(Line {

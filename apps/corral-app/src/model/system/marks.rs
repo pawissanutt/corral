@@ -134,7 +134,8 @@ impl Mark {
     /// The change of a node that stands for files the level does not list.
     fn hidden(self, node: &Node) -> Rich {
         if self.files == 0 {
-            return self.change(node);
+            // The node stands for head files only; a count of deleted ones would not be its.
+            return Mark { changed: 0, ..self }.change(node);
         }
         let mut said = churn(self.file_added, self.file_removed);
         said.push(span(format!(

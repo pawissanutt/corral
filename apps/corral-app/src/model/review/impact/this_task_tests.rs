@@ -61,6 +61,7 @@ fn a_package_counts_its_deleted_files_beside_their_churn() {
 fn a_folded_card_and_a_definition_say_what_the_task_did_there() {
     let rows = vec![
         file("a/m/kept.rs", 3, 1, false),
+        file("a/m/gone.rs", 0, 5, true),
         Row::Definition {
             change: ChangeKind::Changed,
             path: "a/m/kept.rs".into(),
