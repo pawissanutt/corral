@@ -4,22 +4,26 @@
 //! or says why it cannot. Every word is `model::review::impact`'s.
 //!
 //! Test ids: "impact-item-<key>", "btn-open-in-system", "impact-unreachable",
-//! "btn-impact-more-<n>", "impact-lens", "impact-source".
+//! "impact-cat-<n>", "btn-impact-more-<n>-<group>", "btn-impact-focus", "impact-lens",
+//! "impact-source".
+
+use std::rc::Rc;
 
 use nsh_core::prelude::*;
 
 use crate::model::review::impact::{
-    self, Action, CHECKING, HEADING, Item, LEAD, NO_ANCHOR, NO_MODULE, Reach, Section, Sign,
-    TOUCHED,
+    self, Action, CHECKING, FOCUS_ON_MAP, Group, HEADING, Item, LEAD, LIMIT, NO_ANCHOR, NO_MODULE,
+    Reach, Section, Sign, TOUCHED,
 };
+use crate::model::system::count;
 use crate::model::system::lens::{self, Touch};
 use crate::model::{Form, Hue, Id};
 use crate::screens::system::{lens_impact, lenses};
 use crate::state::AppState;
 use crate::ui::kit::button::{ButtonKind, button};
 use crate::ui::kit::marks::hue_ink;
-use crate::ui::kit::rows::list_row;
-use crate::ui::kit::text::plain;
+use crate::ui::kit::rows::list_row_wrap;
+use crate::ui::kit::text::{dim, mono, plain};
 use crate::ui::term;
 use crate::ui::tokens::{Token, color};
 
@@ -80,35 +84,172 @@ pub(super) fn list(
 }
 
 fn category(app: AppState, at: &At, section: Section) -> AnyElement {
-    let task = at.task.clone();
-    let shown = section.items.len() - section.hidden;
+    let section = Rc::new(section);
+    let open = {
+        let (section, task) = (section.clone(), at.task.clone());
+        computed(move || {
+            app.impact.with(|state| {
+                let state = (state.task.as_deref() == Some(task.as_str())).then_some(state);
+                section.open(state)
+            })
+        })
+    };
     let index = section.index;
-    let content = view()
-        .children(section.empty.map(|words| quiet(app, words)))
-        .children(section.notes.into_iter().map(|note| quiet(app, note)))
-        .child(items(
-            app,
-            at,
-            section.items.into_iter().take(shown).collect(),
-        ))
-        .children((section.hidden > 0).then(|| {
-            button(
-                app,
-                format!("Show {} more", section.hidden),
-                ButtonKind::Quiet,
-                format!("btn-impact-more-{index}"),
-                move || app.impact_act(task.as_str(), Action::More(index)),
-            )
-        }))
-        .into_element();
+    let foldable = section.foldable();
+    let heading = category_heading(app, at.task.clone(), &section, open);
+    let at = at.clone();
     view()
-        .when(app.form != Form::Terminal, |v| v.pt(px(8.0)))
-        .child(block(
-            app,
-            section.title,
-            Some(section.supply.figure()),
-            content,
-        ))
+        .when(app.form != Form::Terminal, |v| {
+            v.border_t_1().border_t_color(color(Token::Rule))
+        })
+        .child(heading)
+        .child(
+            view()
+                .when(app.form != Form::Terminal, |v| v.px(px(16.0)).pb(px(4.0)))
+                .children(section.summary.clone().map(|words| quiet(app, words)))
+                .children(section.empty.clone().map(|words| quiet(app, words)))
+                .children(section.notes.iter().cloned().map(|note| quiet(app, note)))
+                .into_element(),
+        )
+        .child(dynamic(move || {
+            if !foldable || !open.get() {
+                return None;
+            }
+            Some(untracked(|| {
+                view()
+                    .children(
+                        section
+                            .groups
+                            .iter()
+                            .cloned()
+                            .enumerate()
+                            .map(|(n, group)| grouped(app, &at, index, n, group)),
+                    )
+                    .into_element()
+            }))
+        }))
+        .into_element()
+}
+
+fn category_heading(app: AppState, task: Id, section: &Section, open: Memo<bool>) -> AnyElement {
+    let form = app.form;
+    let handle = element_ref();
+    let index = section.index;
+    let foldable = section.foldable();
+    let header = view()
+        .element_ref(&handle)
+        .test_id(&format!("impact-cat-{index}"))
+        .label(format!("{}, {}", section.title, section.figure))
+        .flex_row()
+        .items_center()
+        .gap(if form == Form::Terminal {
+            term::cells(1.0)
+        } else {
+            px(8.0)
+        })
+        .when(form != Form::Terminal, |v| {
+            v.px(px(16.0))
+                .py(px(4.0))
+                .min_h(px(if form == Form::Phone { 44.0 } else { 30.0 }))
+        })
+        .when(!foldable, |v| v.role(AccessibilityRole::Header))
+        .when(foldable, |v| {
+            v.role(AccessibilityRole::Button)
+                .accessibility_state(move || AccessibilityState {
+                    expanded: Some(open.get()),
+                    ..AccessibilityState::default()
+                })
+                .cursor_pointer()
+                .on_press(move || {
+                    app.impact_act(
+                        task.as_str(),
+                        Action::Category {
+                            index,
+                            open: !open.get(),
+                        },
+                    )
+                })
+                .when(form != Form::Terminal, |v| {
+                    v.hover(|s| s.bg(color(Token::Hover))).focus_visible(|s| {
+                        s.outline(px(2.0))
+                            .outline_color(color(Token::Focus))
+                            .outline_offset(px(-2.0))
+                    })
+                })
+        });
+    header
+        .children((form == Form::Terminal).then(|| term::focus_cell(term::focus_of(handle))))
+        .child(
+            plain(app, section.title)
+                .font_weight(FontWeight::BOLD)
+                .flex_1()
+                .min_w(px(0.0)),
+        )
+        .child(
+            mono(app, section.figure.clone())
+                .text_color(color(Token::Ink3))
+                .max_w(relative(0.55))
+                .min_w(px(0.0)),
+        )
+        .children(foldable.then(|| {
+            text(move || if open.get() { "▾" } else { "▸" })
+                .flex_shrink_0()
+                .text_color(color(Token::Ink3))
+        }))
+        .into_element()
+}
+
+fn grouped(app: AppState, at: &At, category: usize, index: usize, group: Group) -> AnyElement {
+    let hidden = group.items.len().saturating_sub(LIMIT);
+    let heading = group.heading.clone().map(|(title, figure)| {
+        view()
+            .flex_row()
+            .items_start()
+            .gap(if app.form == Form::Terminal {
+                term::cells(1.0)
+            } else {
+                px(8.0)
+            })
+            .when(app.form != Form::Terminal, |v| v.px(px(16.0)).pt(px(4.0)))
+            .child(mono(app, title).min_w(px(0.0)))
+            .child(dim(app, figure).flex_shrink_0())
+            .into_element()
+    });
+    let first = items(app, at, group.items.iter().take(LIMIT).cloned().collect());
+    if hidden == 0 {
+        return view().children(heading).child(first).into_element();
+    }
+    let group = Rc::new(group);
+    let all = {
+        let (group, task) = (group.clone(), at.task.clone());
+        computed(move || {
+            app.impact.with(|state| {
+                let state = (state.task.as_deref() == Some(task.as_str())).then_some(state);
+                group.show_all(state, category, index)
+            })
+        })
+    };
+    let at = at.clone();
+    view()
+        .children(heading)
+        .child(first)
+        .child(dynamic(move || {
+            let all = all.get();
+            untracked(|| {
+                if all {
+                    items(app, &at, group.items.iter().skip(LIMIT).cloned().collect())
+                } else {
+                    let task = at.task.clone();
+                    button(
+                        app,
+                        format!("Show {} more", count(hidden as u64)),
+                        ButtonKind::Quiet,
+                        format!("btn-impact-more-{category}-{index}"),
+                        move || app.impact_act(task.as_str(), Action::More(category, index)),
+                    )
+                }
+            })
+        }))
         .into_element()
 }
 
@@ -116,8 +257,8 @@ fn sign_hue(sign: Sign) -> Hue {
     match sign {
         Sign::Added => Hue::Ok,
         Sign::Removed => Hue::Fail,
-        Sign::Changed => Hue::Worker,
-        Sign::Dependent => Hue::Held,
+        Sign::Changed => Hue::You,
+        Sign::Dependent => Hue::Corral,
         Sign::Neutral => Hue::Neutral,
     }
 }
@@ -139,10 +280,16 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
             })
         })
     };
-    let label = format!("{} {} {}", item.sign.word(), item.main, item.right);
+    let label = format!(
+        "{} {} {} {}",
+        item.sign.word(),
+        item.main,
+        item.right,
+        item.sub.as_deref().unwrap_or_default()
+    );
     let (key, target) = (item.key.clone(), item.target.clone());
     let press_task = task.clone();
-    let line = list_row(
+    let line = list_row_wrap(
         app,
         label,
         format!("impact-item-{}", item.key),
@@ -157,9 +304,7 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
             );
             // Where the map is not beside the list, it comes into view to show the move.
             if target.is_some() {
-                let mut options = RevealOptions::default();
-                options.vertical = ScrollAlignment::Nearest;
-                map.reveal(options);
+                reveal(map);
             }
         },
         vec![
@@ -175,11 +320,22 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
             view()
                 .flex_1()
                 .min_w(px(0.0))
-                .child(plain(app, item.main.clone()).number_of_lines(1u32))
-                .into_element(),
-            view()
-                .flex_shrink_0()
-                .child(text(item.right.clone()).text_color(color(Token::Ink3)))
+                .child(
+                    view()
+                        .flex_row()
+                        .items_start()
+                        .gap(if form == Form::Terminal {
+                            term::cells(1.0)
+                        } else {
+                            px(8.0)
+                        })
+                        .child(plain(app, item.main.clone()).flex_1().min_w(px(0.0)))
+                        .children(
+                            (!item.right.is_empty())
+                                .then(|| dim(app, item.right.clone()).max_w(relative(0.48))),
+                        ),
+                )
+                .children(item.sub.clone().map(|sub| quiet(app, sub)))
                 .into_element(),
         ],
     );
@@ -187,7 +343,7 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
         if !selected.get() {
             return None;
         }
-        let (sub, anchor, note) = (item.sub.clone(), item.anchor.clone(), item.note.clone());
+        let (anchor, note) = (item.anchor.clone(), item.note.clone());
         let lined = matches!(item.source, Some(Some(_)));
         let excerpt = item.source.clone().map(|lines| {
             untracked(|| lenses::source(app, lines, "impact-source", impact::SOURCE_UNAVAILABLE))
@@ -214,13 +370,25 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
         } else {
             to_system(app, project.clone(), item.target.clone())
         };
+        let focus = item.target.clone().map(|target| {
+            let task = task.clone();
+            button(
+                app,
+                FOCUS_ON_MAP,
+                ButtonKind::Quiet,
+                "btn-impact-focus",
+                move || {
+                    app.impact_act(task.as_str(), Action::Focus(target.clone()));
+                    reveal(map);
+                },
+            )
+        });
         Some(untracked(|| {
             view()
                 .when(form == Form::Terminal, |v| v.pl(term::cells(3.0)))
                 .when(form != Form::Terminal, |v| {
                     v.pl(px(28.0)).py(px(4.0)).gap(px(4.0)).items_start()
                 })
-                .children(sub.map(|sub| quiet(app, sub)))
                 // Served lines carry the anchor as their heading.
                 .children((!lined).then(|| {
                     plain(
@@ -231,11 +399,18 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
                 .children(note.map(|note| quiet(app, note)))
                 .children(excerpt)
                 .children(drawn)
+                .children(focus)
                 .child(to_system)
                 .into_element()
         }))
     });
     view().child(line).child(detail).into_element()
+}
+
+fn reveal(map: ElementRef) {
+    let mut options = RevealOptions::default();
+    options.vertical = ScrollAlignment::Nearest;
+    map.reveal(options);
 }
 
 /// "Open in System" where Activity › System's own map has the item's node (or the level that
@@ -261,7 +436,7 @@ fn to_system(app: AppState, project: Id, target: Option<impact::Target>) -> AnyE
                 label,
                 note,
             }) => view()
-                .gap(px(4.0))
+                .when(app.form != Form::Terminal, |v| v.gap(px(4.0)))
                 .children(note.map(|note| quiet(app, note)))
                 .child(button(
                     app,

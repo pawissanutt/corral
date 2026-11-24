@@ -9,7 +9,7 @@ use nsh_core::prelude::*;
 use crate::model::review::impact::{Action, View};
 use crate::model::review::{Body, LoopContent, Tab};
 use crate::model::tasks::page;
-use crate::model::{Form, Id};
+use crate::model::{Form, Id, TaskTab};
 use crate::state::AppState;
 use crate::ui::kit::button::seg;
 use crate::ui::kit::text::plain;
@@ -25,38 +25,61 @@ enum Shown {
     Line(String),
 }
 
-/// The Changes tab of task `id`: Diff or Impact (`seg-changes-<n>`).
-pub(crate) fn changes(app: AppState, id: Id) -> AnyElement {
-    let form = app.form;
-    let switch = seg(
+/// Diff or Impact (`seg-changes-<n>`), in the desktop tab row or above the stacked body.
+pub(super) fn view_switch(app: AppState, id: Id) -> AnyElement {
+    seg(
         app,
         &View::ALL,
         move || app.impact.with(|state| state.view),
-        {
-            let id = id.clone();
-            move |view| app.impact_act(id.as_str(), Action::View(view))
-        },
+        move |view| app.impact_act(id.as_str(), Action::View(view)),
         "seg-changes",
-    );
+    )
+}
+
+fn content(app: AppState, id: Id, showing: View) -> AnyElement {
+    match showing {
+        View::Diff => diff_view(app, id),
+        View::Impact => super::impact::impact(app, id),
+    }
+}
+
+/// The desktop map and its panes need the remaining page height, unlike the flowing Diff.
+pub(super) fn desktop(app: AppState, id: Id, showing: View) -> AnyElement {
+    let body = view().child(content(app, id, showing));
+    match showing {
+        View::Diff => body.py(px(16.0)).into_element(),
+        View::Impact => body
+            .flex_1()
+            .min_h(px(0.0))
+            .flex_col()
+            .py(px(8.0))
+            .into_element(),
+    }
+}
+
+/// The stacked Changes tab on a phone or in a terminal.
+pub(super) fn stacked(app: AppState, id: Id) -> AnyElement {
+    let switch = view_switch(app, id.clone());
     let showing = computed(move || app.impact.with(|state| state.view));
     let content = dynamic(move || {
-        let id = id.clone();
-        match showing.get() {
-            View::Diff => untracked(|| diff_view(app, id)),
-            View::Impact => untracked(|| super::impact::impact(app, id)),
-        }
+        let showing = showing.get();
+        untracked(|| content(app, id.clone(), showing))
     });
-    let body = view()
-        .child(switch)
-        .child(match form {
-            Form::Terminal => term::blank(),
-            _ => view().h(px(10.0)).into_element(),
-        })
-        .child(content);
-    match form {
-        Form::Terminal => body.child(term::blank()).into_element(),
-        Form::Desktop => body.py(px(16.0)).into_element(),
-        Form::Phone => body.px(px(14.0)).py(px(14.0)).into_element(),
+    if app.form == Form::Terminal {
+        view()
+            .child(switch)
+            .child(term::blank())
+            .child(content)
+            .child(term::blank())
+            .into_element()
+    } else {
+        view()
+            .px(px(14.0))
+            .py(px(14.0))
+            .gap(px(10.0))
+            .child(switch)
+            .child(content)
+            .into_element()
     }
 }
 
@@ -111,27 +134,43 @@ fn diff_view(app: AppState, id: Id) -> AnyElement {
         .into_element()
 }
 
-/// Open tasks already have a candidate keeper. Closed tasks load their saved diff only here.
-fn keep_closed_diff(app: AppState, id: Id) {
+/// Open tasks already have a candidate keeper. For a closed task either Changes view needs
+/// the candidate to show the tab's file count.
+pub(super) fn keep_closed_review(app: AppState, id: Id) {
     let targets = computed(move || {
-        if app
-            .feed
-            .with(|feed| !feed.board.complete || feed.board.task(id.as_str()).is_some())
-        {
-            return Vec::new();
+        if app.nav.with(|nav| nav.task_tab) == TaskTab::Changes && closed(app, &id) {
+            vec![DetailRef::Review {
+                task: id.to_string(),
+            }]
+        } else {
+            Vec::new()
         }
-        let mut targets = vec![DetailRef::Review {
-            task: id.to_string(),
-        }];
-        app.review.with(|state| {
-            targets.extend(state.expanded.iter().filter(|(task, _)| task == &id).map(
-                |(_, path)| DetailRef::ReviewFile {
-                    task: id.to_string(),
-                    path: path.clone(),
-                },
-            ));
-        });
-        targets
     });
     super::keep::keep_details(app, targets, None);
+}
+
+/// Only the Diff needs patches, and then only for its expanded files.
+fn keep_closed_diff(app: AppState, id: Id) {
+    let targets = computed(move || {
+        if !closed(app, &id) {
+            return Vec::new();
+        }
+        app.review.with(|state| {
+            state
+                .expanded
+                .iter()
+                .filter(|(task, _)| task == &id)
+                .map(|(_, path)| DetailRef::ReviewFile {
+                    task: id.to_string(),
+                    path: path.clone(),
+                })
+                .collect()
+        })
+    });
+    super::keep::keep_details(app, targets, None);
+}
+
+fn closed(app: AppState, id: &Id) -> bool {
+    app.feed
+        .with(|feed| feed.board.complete && feed.board.task(id.as_str()).is_none())
 }

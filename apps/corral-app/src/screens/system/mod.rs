@@ -11,6 +11,7 @@
 //! "inspect-row-<n>", and those of `canvas.rs` and `tree.rs`.
 
 pub(crate) mod canvas;
+mod card;
 pub(crate) mod lens_canvas;
 mod lens_draft;
 pub(crate) mod lens_impact;
@@ -24,13 +25,13 @@ use crate::model::list::inspector_width;
 use crate::model::projects::Scope;
 use crate::model::review::impact;
 use crate::model::system::inspect::Inspector;
-use crate::model::system::marks::{Marks, drawn_pick};
+use crate::model::system::marks::{self, Marks, drawn_pick};
 use crate::model::system::scene::EdgeKind;
 use crate::model::system::scene::Scene;
 use crate::model::system::shown::{ASK_HEADING, ASK_WORDS, Shown, Status, TITLE, shown};
 use crate::model::system::words::{Swatch, slot_hue};
 use crate::model::system::{
-    Action, FILTER_FIELD, Overlay, Pick, State, View, Window, view_request,
+    Action, FILTER_FIELD, Node, Overlay, Pick, State, View, Window, view_request,
 };
 use crate::model::text::span;
 use crate::model::{Form, Hue, Id};
@@ -84,6 +85,17 @@ impl Host {
         match self {
             Host::System => None,
             Host::Impact(marks, ..) => Some(marks.get()),
+        }
+    }
+
+    /// Opens the level of `node`, as pressing the picked card again does.
+    fn open(self, app: AppState, node: Node) {
+        match self {
+            Host::System => app.system_act(Action::Open(node)),
+            Host::Impact(_, task, _) => {
+                let task = untracked(|| task.get());
+                app.impact_act(task.as_str(), impact::Action::Map(Action::Open(node)));
+            }
         }
     }
 
@@ -536,11 +548,29 @@ fn swatch(app: AppState, swatch: Swatch) -> AnyElement {
         Swatch::Excluded => ("┆", color(Token::Ink4), true),
         Swatch::Folder => ("┆", color(Token::Rule2), true),
         Swatch::Spawn => ("◖", color(Token::Ink3), false),
+        Swatch::Touched => ("■", hue_ink(marks::TOUCHED), false),
+        Swatch::Dependents => ("┆", hue_ink(marks::DEPENDENT), true),
+        Swatch::Untouched => ("■", color(Token::Ink4), false),
+        Swatch::ChangedEdge => ("━", hue_ink(marks::CHANGED), false),
     };
     if app.form == Form::Terminal {
         return text(glyph).text_color(ink).into_element();
     }
-    let line = matches!(swatch, Swatch::Edge(_));
+    let line = matches!(swatch, Swatch::Edge(_) | Swatch::ChangedEdge);
+    // A card's mark is its outline, as the map draws it: solid for a change, dashed for
+    // dependents, dimmed for the rest.
+    if matches!(swatch, Swatch::Touched | Swatch::Untouched) {
+        return view()
+            .flex_shrink_0()
+            .accessibility_elements_hidden(true)
+            .w(px(14.0))
+            .h(px(10.0))
+            .rounded(px(3.0))
+            .border(px(2.0))
+            .border_color(ink)
+            .when(swatch == Swatch::Untouched, |v| v.opacity(0.5))
+            .into_element();
+    }
     let sample = view().flex_shrink_0().accessibility_elements_hidden(true);
     if line {
         sample
@@ -552,10 +582,19 @@ fn swatch(app: AppState, swatch: Swatch) -> AnyElement {
             .into_element()
     } else {
         sample
-            .w(px(10.0))
+            .w(px(if swatch == Swatch::Dependents {
+                14.0
+            } else {
+                10.0
+            }))
             .h(px(10.0))
             .rounded(px(2.0))
-            .when(dashed, |v| v.border_1().border_dashed().border_color(ink))
+            .when(swatch == Swatch::Dependents, |v| {
+                v.border(px(2.0)).border_dashed().border_color(ink)
+            })
+            .when(dashed && swatch != Swatch::Dependents, |v| {
+                v.border_1().border_dashed().border_color(ink)
+            })
             .when(!dashed, |v| v.bg(ink))
             .into_element()
     }
@@ -565,25 +604,28 @@ fn legend(app: AppState, data: Memo<Shown>) -> AnyElement {
     let items = computed(move || data.with(|shown| shown.legend.clone()));
     dynamic(move || {
         let items = items.get();
-        untracked(|| {
-            view()
-                .test_id("system-legend")
-                .flex_row()
-                .flex_wrap()
-                .gap(px(12.0))
-                .children(items.into_iter().map(|(s, words)| {
-                    view()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(if app.form == Form::Terminal { 8.0 } else { 6.0 }))
-                        .child(swatch(app, s))
-                        .child(quiet(app, words))
-                        .into_element()
-                }))
-                .into_element()
-        })
+        untracked(|| legend_of(app, items))
     })
     .into_element()
+}
+
+/// A legend: each entry's sample and words, wrapping.
+pub(crate) fn legend_of(app: AppState, items: Vec<(Swatch, String)>) -> AnyElement {
+    view()
+        .test_id("system-legend")
+        .flex_row()
+        .flex_wrap()
+        .gap(px(12.0))
+        .children(items.into_iter().map(|(s, words)| {
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(if app.form == Form::Terminal { 8.0 } else { 6.0 }))
+                .child(swatch(app, s))
+                .child(quiet(app, words))
+                .into_element()
+        }))
+        .into_element()
 }
 
 fn inspector(app: AppState, data: Memo<Shown>) -> AnyElement {
@@ -592,13 +634,14 @@ fn inspector(app: AppState, data: Memo<Shown>) -> AnyElement {
         let (inspector, hint) = shown.get();
         untracked(|| match inspector {
             None => quiet(app, hint).into_element(),
-            Some(inspector) => inspected(app, inspector),
+            Some(inspector) => inspected(app, inspector, Host::System),
         })
     })
     .into_element()
 }
 
-fn inspected(app: AppState, inspector: Inspector) -> AnyElement {
+/// The inspector's sections for `inspector`, its rows and Open acting on `host`'s map.
+pub(crate) fn inspected(app: AppState, inspector: Inspector, host: Host) -> AnyElement {
     let form = app.form;
     let title = text(inspector.title.clone())
         .test_id("inspector-title")
@@ -624,7 +667,7 @@ fn inspected(app: AppState, inspector: Inspector) -> AnyElement {
                             format!("{} {}", row.label, row.value),
                             format!("inspect-row-{n}"),
                             || false,
-                            move || app.system_act(Action::Pick(pick.clone())),
+                            move || host.pick(app, pick.clone()),
                             vec![
                                 row.swatch
                                     .map(|kind| swatch(app, Swatch::Edge(kind)))
@@ -666,7 +709,7 @@ fn inspected(app: AppState, inspector: Inspector) -> AnyElement {
             words,
             ButtonKind::Primary,
             "btn-system-open",
-            move || app.system_act(Action::Open(node.clone())),
+            move || host.open(app, node.clone()),
         )
     });
     view()

@@ -8,11 +8,12 @@
 //! was left out of the list. `reach` says where "Open in System" can take an item.
 
 mod changes;
-mod foot;
+pub mod foot;
+mod groups;
 mod items;
 mod place;
 mod reach;
-mod this_task;
+pub mod this_task;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,18 +23,19 @@ use corral_types::{
     SystemReview, SystemReviewRow as Row, SystemStatus,
 };
 
+pub use groups::Group;
 pub use items::{Anchor, Item, LensItem, Sign, Target};
+pub use place::Address;
 pub use reach::{CHECKING, Reach, reach, wanted};
 
 use items::{
-    Ctx, category_of, churn, container_of, item, item_of, module_target, module_words,
-    provider_omissions, provider_supplied, short, title, zero,
+    Ctx, category_of, churn, container_of, item, item_of, module_target, module_words, short,
 };
 
 use crate::model::daemon::Feed;
 use crate::model::system::marks::Marks;
 use crate::model::system::scene::{Scene, build, module_name};
-use crate::model::system::{self as map, Node, Pick, base_name, count, plural};
+use crate::model::system::{self as map, Node, Pick, base_name, plural};
 
 /// The Changes tab's two views.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -57,8 +59,10 @@ pub struct State {
     pub item: Option<String>,
     /// The map's trail and pick, with Activity › System's rules for both.
     pub map: map::State,
-    /// Categories listed in full, by their place in `Category::ALL`.
-    pub more: BTreeSet<usize>,
+    /// Explicit fold choices, by their place in `Category::ALL`.
+    pub category_open: BTreeMap<usize, bool>,
+    /// Groups listed in full, by category and group index.
+    pub more: BTreeSet<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -70,9 +74,15 @@ pub enum Action {
         key: String,
         target: Option<Target>,
     },
+    /// Restore an item's map target without toggling its selection.
+    Focus(Target),
     /// The owner on the map: a pick, opening a level, a breadcrumb.
     Map(map::Action),
-    More(usize),
+    Category {
+        index: usize,
+        open: bool,
+    },
+    More(usize, usize),
 }
 
 impl State {
@@ -97,19 +107,27 @@ impl State {
                 } else {
                     self.item = Some(key);
                     if let Some(target) = target {
-                        self.map.trail = target.trail;
-                        self.map.picked = Some(Pick::Node(target.node));
+                        self.focus(target);
                     }
                 }
             }
+            Action::Focus(target) => self.focus(target),
             Action::Map(action) => {
                 self.item = None;
                 self.map.act(action);
             }
-            Action::More(index) => {
-                self.more.insert(index);
+            Action::Category { index, open } => {
+                self.category_open.insert(index, open);
+            }
+            Action::More(index, group) => {
+                self.more.insert((index, group));
             }
         }
+    }
+
+    fn focus(&mut self, target: Target) {
+        self.map.trail = target.trail;
+        self.map.picked = Some(Pick::Node(target.node));
     }
 }
 
@@ -121,8 +139,9 @@ pub fn request(task: &str, at: Option<&SystemAt>) -> DetailRef {
     }
 }
 
-/// Items a category lists before "Show more".
-pub const LIMIT: usize = 8;
+/// Items a group lists before "Show more".
+pub const LIMIT: usize = 6;
+pub const FOCUS_ON_MAP: &str = "Focus on the map";
 
 pub const HEADING: &str = "Model impact";
 pub const SOURCE_UNAVAILABLE: &str =
@@ -152,30 +171,20 @@ pub enum Supply {
     Rows(usize),
 }
 
-impl Supply {
-    pub fn figure(self) -> String {
-        match self {
-            Supply::NotProvided => "not provided".into(),
-            Supply::Unanswered => "not answered".into(),
-            Supply::None => "none".into(),
-            Supply::Rows(n) => plural(n as u64, "item", "items"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct Section {
     /// Its place in `Category::ALL`.
     pub index: usize,
     pub title: &'static str,
     pub supply: Supply,
+    pub figure: String,
+    pub summary: Option<String>,
     /// Said when the list is empty.
     pub empty: Option<String>,
     /// What the list leaves out and why.
     pub notes: Vec<String>,
-    pub items: Vec<Item>,
-    /// Items behind "Show more".
-    pub hidden: usize,
+    pub groups: Vec<Group>,
+    pub default_open: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -216,9 +225,8 @@ fn review_of<'a>(feed: &'a Feed, target: &DetailRef) -> Option<(&'a SystemReview
     }
 }
 
-/// The impact of task `task` with its map at the end of `trail`; `more`: the categories listed
-/// in full.
-pub fn shown(feed: &Feed, task: &str, trail: &[SystemAt], more: &BTreeSet<usize>) -> Shown {
+/// The impact of task `task` with its map at the end of `trail`.
+pub fn shown(feed: &Feed, task: &str, trail: &[SystemAt]) -> Shown {
     let root = request(task, None);
     let Some((review, stale)) = review_of(feed, &root) else {
         return match feed.detail(&root).and_then(|cache| cache.error.as_ref()) {
@@ -237,7 +245,7 @@ pub fn shown(feed: &Feed, task: &str, trail: &[SystemAt], more: &BTreeSet<usize>
         .systems
         .get(review.project.as_str())
         .and_then(|row| row.extension.as_deref());
-    let mut impact = impact(review, extension, more);
+    let mut impact = impact(review, extension);
     if stale {
         impact.notices.insert(0, STALE.into());
     }
@@ -464,7 +472,7 @@ const NOTHING_SUPPLIES: &str = "Not provided: nothing in this project supplies t
 
 /// `extension`: the facts extension the project's `system` row names, whose answer the
 /// provider categories wait for while the review carries none.
-pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<usize>) -> Impact {
+fn impact(review: &SystemReview, extension: Option<&str>) -> Impact {
     let map = head_map(review);
     let containers: Vec<String> = map
         .rows
@@ -486,9 +494,8 @@ pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<us
             } => {
                 if *gone {
                     deleted.insert(path.clone());
-                } else {
-                    files.insert(path.clone(), module.clone());
                 }
+                files.insert(path.clone(), module.clone());
             }
             Row::Dependent {
                 dependent,
@@ -509,7 +516,7 @@ pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<us
     };
 
     let mut touched = Vec::new();
-    let mut listed: BTreeMap<usize, Vec<Item>> = BTreeMap::new();
+    let mut listed: BTreeMap<usize, Vec<(&Row, Item)>> = BTreeMap::new();
     for (n, row) in review.rows.iter().enumerate() {
         if let Row::Module {
             module,
@@ -532,7 +539,7 @@ pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<us
             && let Some(index) = Category::ALL.iter().position(|c| *c == category)
             && let Some(item) = item_of(&cx, n, row)
         {
-            listed.entry(index).or_default().push(item);
+            listed.entry(index).or_default().push((row, item));
         }
     }
     let count_of = |kind: fn(&Node) -> bool,
@@ -567,92 +574,20 @@ pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<us
         ),
     );
 
-    let mut sections = Vec::new();
-    for (index, category) in Category::ALL.into_iter().enumerate() {
-        // Continuation pages repeat the summaries; the first is the answer.
-        let summary = review.categories.iter().find(|c| c.category == category);
-        let provided = summary.is_some_and(|s| s.provided);
-        let total = summary.map_or(0, |s| s.total);
-        let items: Vec<Item> = listed.remove(&index).unwrap_or_default();
-        let mut notes = Vec::new();
-        if provided && total > items.len() {
-            notes.push(format!(
-                "{} not listed: left out to stay within the reply's size.",
-                count((total - items.len()) as u64)
-            ));
-        }
-        if provider_supplied(category)
-            && let Some(provider) = &review.provider
-        {
-            notes.extend(provider_omissions(provider));
-        }
-        let answered_tests = review
-            .provider
-            .as_ref()
-            .filter(|p| p.error.is_none() && p.coverage.provides("tests"));
-        let candidates = items.iter().any(|i| i.sign == Sign::Neutral);
-        if category == Category::Tests
-            && !candidates
-            && let Some(p) = answered_tests
-        {
-            // Changed test files are built in and share the category, so they must not hide an
-            // empty answer; rows left out of the reply or by the extension might be candidates.
-            notes.push(
-                if total > items.len() {
-                    format!("No test candidate among the items listed from {}.", p.extension)
-                } else if p.coverage.omitted.values().any(|n| *n > 0) {
-                    format!(
-                        "No test candidate listed: {} answered with none, but left out what is counted above.",
-                        p.extension
-                    )
-                } else {
-                    format!("No test candidate: {} answered with none for this change.", p.extension)
-                },
-            );
-        }
-        if category == Category::Tests && !candidates && answered_tests.is_none() {
-            notes.push(match (&review.provider, extension) {
-                (Some(p), _) if p.error.is_some() => format!(
-                    "Test candidates not provided: {} failed on this change.",
-                    p.extension
-                ),
-                (Some(p), _) => format!(
-                    "Test candidates not provided: {} did not supply them.",
-                    p.extension
-                ),
-                (None, Some(name)) if review.error.is_some() => format!(
-                    "Test candidates not provided: corrald could not read the change, so {name} was not asked."
-                ),
-                (None, Some(name)) => {
-                    format!("Test candidates: {name} has not answered for this change yet.")
-                }
-                (None, None) => "Test candidates not provided: no extension supplies them.".into(),
-            });
-        }
-        let hidden = if more.contains(&index) {
-            0
-        } else {
-            items.len().saturating_sub(LIMIT)
-        };
-        let (supply, empty) = if !provided && provider_supplied(category) {
-            unprovided(review, extension)
-        } else if !provided {
-            (Supply::NotProvided, Some(NOTHING_SUPPLIES.to_owned()))
-        } else if total == 0 {
-            (Supply::None, Some(zero(category).to_owned()))
-        } else {
-            (Supply::Rows(total), None)
-        };
-        sections.push(Section {
-            index,
-            title: title(category),
-            supply,
-            empty,
-            notes,
-            items,
-            hidden,
-        });
-    }
+    let sections = Category::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(index, category)| {
+            groups::section(
+                review,
+                extension,
+                &cx,
+                index,
+                category,
+                listed.remove(&index).unwrap_or_default(),
+            )
+        })
+        .collect();
 
     let mut notices = Vec::new();
     if let Some(error) = &review.error {

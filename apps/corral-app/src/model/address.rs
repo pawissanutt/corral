@@ -4,6 +4,7 @@
 //! former destinations and of the Project page still parse, each to its new home.
 
 use crate::model::nav::{Area, TaskTab};
+use crate::model::review::impact;
 use crate::model::system::View;
 use crate::model::{Destination, Form, Id, Live, NavState, Route, SettingsSection};
 
@@ -25,6 +26,8 @@ pub enum Place {
     Settings(SettingsSection),
     /// A task's page at one of its tabs.
     Task(Id, TaskTab),
+    /// A task's Changes tab showing Impact, at a particular place on its map.
+    TaskImpact(Id, impact::Address),
     /// A session's page.
     Session(Id),
     /// Home scoped to a project: where the former Project page went. Only an old address
@@ -64,7 +67,27 @@ impl Place {
         }
     }
 
-    /// The place as path segments, without a leading slash.
+    /// The Changes tab's address includes Impact's place only while that view shows.
+    pub fn with_impact(self, state: &impact::State) -> Self {
+        match self {
+            Place::Task(id, TaskTab::Changes) if state.view == impact::View::Impact => {
+                let address = state.address(id.as_str());
+                Place::TaskImpact(id, address)
+            }
+            place => place,
+        }
+    }
+
+    /// Sets the Changes view an address names; addresses of other tabs leave it alone.
+    pub fn restore_impact(&self, state: &mut impact::State) {
+        match self {
+            Place::TaskImpact(id, address) => state.open_address(id.as_str(), address),
+            Place::Task(_, TaskTab::Changes) => state.view = impact::View::Diff,
+            _ => {}
+        }
+    }
+
+    /// The place as path segments and optional query, without a leading slash.
     pub fn path(&self) -> String {
         match self {
             Place::Destination(destination) if destination.area() == Area::Activity => {
@@ -79,6 +102,15 @@ impl Place {
             }
             Place::Task(id, TaskTab::Overview) => format!("{TASK}/{}", escape(id.as_str())),
             Place::Task(id, tab) => format!("{TASK}/{}/{}", escape(id.as_str()), tab.slug()),
+            Place::TaskImpact(id, address) => {
+                let mut path = format!("{TASK}/{}/changes/impact", escape_part(id.as_str()));
+                let query = address.query();
+                if !query.is_empty() {
+                    path.push('?');
+                    path.push_str(&query);
+                }
+                path
+            }
             Place::Session(id) => format!("{SESSION}/{}", escape(id.as_str())),
             Place::Project(id) => format!("{PROJECTS}/{}", escape(id.as_str())),
         }
@@ -86,11 +118,18 @@ impl Place {
 
     /// The place a path names; none for the site's root or a path that names nothing here.
     pub fn parse(path: &str) -> Option<Place> {
+        let (path, query) = path.split_once('?').unwrap_or((path, ""));
         let path = path.trim_matches('/');
         let (first, rest) = path.split_once('/').unwrap_or((path, ""));
         let id = |rest: &str| unescape(rest).filter(|id| !id.is_empty()).map(Id::from);
         match first {
             TASK => {
+                if let Some(name) = rest.strip_suffix("/changes/impact") {
+                    return Some(Place::TaskImpact(
+                        id(name)?,
+                        impact::Address::from_query(query)?,
+                    ));
+                }
                 // A task's id has no slash, so a last segment naming a tab is the tab.
                 let (name, tab) = rest
                     .rsplit_once('/')
@@ -136,11 +175,8 @@ impl Place {
             // The view itself is the System page's state, which the caller sets.
             Place::SystemView(_) => nav.go(Destination::System),
             Place::Settings(section) => nav.go_settings(section),
-            Place::Task(id, tab) => {
-                nav.pages.clear();
-                nav.open_live(Live::Task(id));
-                nav.task_tab = tab;
-            }
+            Place::Task(id, tab) => open_task(nav, id, tab),
+            Place::TaskImpact(id, _) => open_task(nav, id, TaskTab::Changes),
             Place::Session(id) => {
                 nav.pages.clear();
                 nav.open_live(Live::Session(id));
@@ -149,28 +185,60 @@ impl Place {
         }
     }
 
-    /// Whether moving between the two only changes the tab of one task's page: not a step the
-    /// browser's Back returns to.
+    /// Whether moving between the two only changes the tab or view of one task's page: not a
+    /// step the browser's Back returns to.
     pub fn same_page(&self, other: &Place) -> bool {
-        matches!((self, other), (Place::Task(a, _), Place::Task(b, _)) if a == b)
+        matches!((self.task(), other.task()), (Some(a), Some(b)) if a == b)
+    }
+
+    fn task(&self) -> Option<&Id> {
+        match self {
+            Place::Task(id, _) | Place::TaskImpact(id, _) => Some(id),
+            _ => None,
+        }
     }
 }
 
-/// The path of an absolute URL, without its query and fragment.
+fn open_task(nav: &mut NavState, id: Id, tab: TaskTab) {
+    nav.pages.clear();
+    nav.open_live(Live::Task(id));
+    nav.task_tab = tab;
+}
+
+/// The path and query of an absolute URL, without its fragment.
 pub fn url_path(url: &str) -> &str {
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let path = rest.find('/').map_or("", |at| &rest[at..]);
-    path.split(['?', '#']).next().unwrap_or(path)
+    let rest = if url.starts_with('/') {
+        url
+    } else {
+        url.split_once("://").map_or(url, |(_, rest)| rest)
+    };
+    match rest.find(['/', '?', '#']) {
+        Some(at) if rest.as_bytes()[at] == b'/' => {
+            let path = &rest[at..];
+            path.split_once('#').map_or(path, |(path, _)| path)
+        }
+        _ => "",
+    }
 }
 
 /// An id as path segments: its own slashes stay (a child's `B-1/child/c2` reads as it is),
 /// everything else outside letters, digits, `-`, `_` and `~` is percent-encoded. A dot is too:
 /// a web host answers a path with the page only when its last segment has no file extension.
 fn escape(id: &str) -> String {
+    percent_encode(id, true)
+}
+
+/// One component of the address, with slashes escaped as well.
+pub(crate) fn escape_part(id: &str) -> String {
+    percent_encode(id, false)
+}
+
+fn percent_encode(id: &str, keep_slash: bool) -> String {
     let mut out = String::with_capacity(id.len());
     for byte in id.bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'~' | b'/' => {
+            b'/' if keep_slash => out.push('/'),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'~' => {
                 out.push(char::from(byte));
             }
             _ => out.push_str(&format!("%{byte:02X}")),
@@ -180,7 +248,7 @@ fn escape(id: &str) -> String {
 }
 
 /// The id [`escape`] wrote; none when the escapes are not UTF-8 text.
-fn unescape(path: &str) -> Option<String> {
+pub(crate) fn unescape(path: &str) -> Option<String> {
     let mut bytes = Vec::with_capacity(path.len());
     let mut rest = path.as_bytes();
     while let Some((&byte, after)) = rest.split_first() {
@@ -320,6 +388,51 @@ mod tests {
         assert_eq!(
             Place::parse(url_path("https://corral.test:8790/task/T-7/history?x=1#y")),
             Some(Place::Task(Id::from("T-7"), TaskTab::History))
+        );
+    }
+
+    #[test]
+    fn an_impact_link_reopens_the_tasks_drilled_map_and_selection() {
+        use crate::model::system::{Node, Pick};
+        use corral_types::{ModuleId, SystemAt};
+
+        let id = Id::from("T-7.1");
+        let mut state = impact::State::default();
+        state.follow(id.as_str());
+        state.view = impact::View::Impact;
+        state.map.trail = vec![
+            SystemAt::Container { path: "".into() },
+            SystemAt::Module {
+                module: ModuleId {
+                    container: "".into(),
+                    path: "a/λ:!".into(),
+                },
+            },
+            SystemAt::File {
+                path: "a/λ:!/file.rs".into(),
+            },
+        ];
+        state.item = Some("item/ref?part#tag &x=%2F".into());
+        state.map.picked = Some(Pick::Node(Node::Definition {
+            line: 1,
+            name: "fn: 'λ'!".into(),
+        }));
+
+        let diff = Place::Task(id.clone(), TaskTab::Changes);
+        let current = diff.clone().with_impact(&state);
+        let url = format!("https://corral.test/{}#other", current.path());
+        let opened = Place::parse(url_path(&url)).expect("Impact address names a task and its map");
+        let mut nav = NavState::new(Form::Desktop);
+        let mut restored = impact::State::default();
+        opened.restore_impact(&mut restored);
+        assert_eq!(restored, state);
+        assert!(opened.same_page(&diff));
+        opened.open(&mut nav);
+        assert_eq!(nav.live(), Some(&Live::Task(id)));
+        assert_eq!(nav.task_tab, TaskTab::Changes);
+        assert_eq!(
+            Place::of(&nav, Form::Desktop, SHOWN).with_impact(&restored),
+            current
         );
     }
 

@@ -12,15 +12,15 @@ use nsh_core::url_scheme::HistoryBehavior;
 use super::AppState;
 use crate::model::address::{Place, Shown, url_path};
 use crate::model::system::{Action, View};
-use crate::model::{Destination, Form};
+use crate::model::{Destination, Form, Live, TaskTab};
 
 /// The place the page was opened at, read before the first screen is built so a reload never
 /// shows another one first.
 pub(super) fn launched() -> Option<Place> {
     #[cfg(target_arch = "wasm32")]
     {
-        let path = web_sys::window()?.location().pathname().ok()?;
-        Place::parse(&path)
+        let url = web_sys::window()?.location().href().ok()?;
+        Place::parse(url_path(&url))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -45,7 +45,12 @@ impl AppState {
                 phone_section: self.phone_section.get(),
                 system_view: self.system.with(|s| s.view),
             };
-            self.nav.with(|nav| Place::of(nav, form, shown))
+            let place = self.nav.with(|nav| Place::of(nav, form, shown));
+            if matches!(place, Place::Task(_, TaskTab::Changes)) {
+                self.impact.with(|state| place.with_impact(state))
+            } else {
+                place
+            }
         });
         // The place the address already names: what the page was opened at, the last one
         // written, or the one the browser moved to.
@@ -111,6 +116,18 @@ impl AppState {
                 self.show_system_view(view);
             }
             Place::Project(id) => self.open_project(id),
+            Place::TaskImpact(ref id, _) | Place::Task(ref id, TaskTab::Changes) => {
+                // The address must not see a Changes tab with its previous view or pick.
+                batch(|| {
+                    self.change(|nav| place.clone().open(nav));
+                    if self.nav.with_untracked(|nav| {
+                        nav.task_tab == TaskTab::Changes
+                            && matches!(nav.live(), Some(Live::Task(open)) if open == id)
+                    }) {
+                        self.impact.update(|state| place.restore_impact(state));
+                    }
+                });
+            }
             place => self.change(|nav| place.open(nav)),
         }
     }

@@ -119,10 +119,35 @@ pub(super) fn layered(
     top: &[bool],
     bottom: &[bool],
     max_row_w: f32,
-    (has_top, has_bottom): (bool, bool),
+    ports: (bool, bool),
     bands: Option<&[i32]>,
 ) -> Layered {
+    draw(sizes, edges, top, bottom, max_row_w, ports, bands, false)
+}
+
+pub(super) fn package_layered(
+    sizes: &[(f32, f32)],
+    edges: &[LEdge],
+    top: &[bool],
+    bottom: &[bool],
+    max_row_w: f32,
+    ports: (bool, bool),
+) -> Layered {
+    draw(sizes, edges, top, bottom, max_row_w, ports, None, true)
+}
+
+fn draw(
+    sizes: &[(f32, f32)],
+    edges: &[LEdge],
+    top: &[bool],
+    bottom: &[bool],
+    max_row_w: f32,
+    (has_top, has_bottom): (bool, bool),
+    bands: Option<&[i32]>,
+    compact: bool,
+) -> Layered {
     let n = sizes.len();
+    let bands = bands.filter(|b| b.len() == n);
     let edges: Vec<&LEdge> = edges
         .iter()
         .filter(|e| e.a != e.b && e.a < n && e.b < n)
@@ -170,7 +195,7 @@ pub(super) fn layered(
     let rank: Vec<i32> = rank.into_iter().map(|r| r.unwrap_or(0)).collect();
     // Fixed bands (the Runtime view's kinds) replace the ranks references give; an edge within
     // a band is drawn under its row, one against the bands runs upward.
-    let rank: Vec<i32> = bands.filter(|b| b.len() == n).map_or(rank, <[i32]>::to_vec);
+    let rank: Vec<i32> = bands.map_or(rank, <[i32]>::to_vec);
     let max_r = rank.iter().copied().max().unwrap_or(0);
     let min_r = rank.iter().copied().min().unwrap_or(0);
     // A rank wider than the room wraps onto more rows. Ranked by references, one rank never
@@ -183,24 +208,42 @@ pub(super) fn layered(
     let mut next = 0;
     // The first row of each band, with its rank.
     let mut band_first: BTreeMap<usize, i32> = BTreeMap::new();
-    for (i, list) in by_rank.iter().enumerate().filter(|(_, l)| !l.is_empty()) {
-        if bands.is_some() {
-            band_first.insert(next, max_r - i as i32);
-        }
-        let total: f32 = list.iter().map(|x| sizes[*x].0 + GAP).sum();
-        // Edges crossing a row take room the cards alone do not; leave them some.
-        let parts = ((total / (max_row_w * ROOM_FOR_EDGES)).ceil() as usize).max(1);
-        let target = total / parts as f32;
-        let (mut part, mut acc) = (0, 0.0);
-        for &x in list {
-            let sw = sizes[x].0 + GAP;
-            if acc > 0.0 && acc + sw / 2.0 > target * (part + 1) as f32 && part < parts - 1 {
-                part += 1;
+    if compact {
+        // A dependency chain would give each module an entire row. Keep rank order but let
+        // adjacent ranks share the lane when their measured widths fit; ports stay outside.
+        for zone in [top, &free, bottom] {
+            let mut used = 0.0;
+            for &x in by_rank.iter().flatten().filter(|&&x| zone[x]) {
+                let w = sizes[x].0;
+                if used > 0.0 && used + GAP + w > max_row_w * ROOM_FOR_EDGES {
+                    next += 1;
+                    used = 0.0;
+                }
+                row_of[x] = next;
+                used += if used == 0.0 { w } else { GAP + w };
             }
-            row_of[x] = next + part;
-            acc += sw;
+            next += usize::from(used > 0.0);
         }
-        next += parts;
+    } else {
+        for (i, list) in by_rank.iter().enumerate().filter(|(_, l)| !l.is_empty()) {
+            if bands.is_some() {
+                band_first.insert(next, max_r - i as i32);
+            }
+            let total: f32 = list.iter().map(|x| sizes[*x].0 + GAP).sum();
+            // Edges crossing a row take room the cards alone do not; leave them some.
+            let parts = ((total / (max_row_w * ROOM_FOR_EDGES)).ceil() as usize).max(1);
+            let target = total / parts as f32;
+            let (mut part, mut acc) = (0, 0.0);
+            for &x in list {
+                let sw = sizes[x].0 + GAP;
+                if acc > 0.0 && acc + sw / 2.0 > target * (part + 1) as f32 && part < parts - 1 {
+                    part += 1;
+                }
+                row_of[x] = next + part;
+                acc += sw;
+            }
+            next += parts;
+        }
     }
     let n_rows = next.max(1);
     // 3. Rows, with a dummy vertex wherever an edge crosses a row; long edges leaving the same
@@ -214,7 +257,7 @@ pub(super) fn layered(
         })
         .collect();
     let mut rows: Vec<Vec<usize>> = vec![Vec::new(); n_rows];
-    for i in 0..n {
+    for &i in by_rank.iter().flatten() {
         rows[row_of[i]].push(i);
     }
     let mut dummies: BTreeMap<(usize, usize, bool), usize> = BTreeMap::new();
@@ -529,6 +572,35 @@ pub(super) fn layered(
         }
     }
     let (_, max_x) = bounds(&xs);
+    // Compact rows can have several module edges in the same gap. Re-use lanes only
+    // for disjoint spans so a long reference does not paint over a shorter one.
+    let mut lanes = vec![Vec::<f32>::new(); n_rows];
+    let mut lane_of = vec![0; chains.len()];
+    if compact {
+        let mut spans = Vec::new();
+        for (i, (chain, _, same)) in chains.iter().enumerate() {
+            if *same {
+                let (a, b) = (chain[0], chain[1]);
+                let left = (xs[a] - verts[a].w / 2.0).min(xs[b] - verts[b].w / 2.0);
+                let right = (xs[a] + verts[a].w / 2.0).max(xs[b] + verts[b].w / 2.0);
+                spans.push((i, row_of[a], left, right));
+            }
+        }
+        spans.sort_by(|a, b| a.2.total_cmp(&b.2));
+        for (i, row, left, right) in spans {
+            let ends = &mut lanes[row];
+            if let Some(lane) = ends.iter().position(|&end| end < left) {
+                ends[lane] = right;
+                lane_of[i] = lane;
+            } else {
+                lane_of[i] = ends.len();
+                ends.push(right);
+            }
+        }
+    }
+    const FIRST_LANE: f32 = 20.0;
+    const LANE_STEP: f32 = 14.0;
+    let lane_depth = |r: usize| FIRST_LANE + lanes[r].len().saturating_sub(1) as f32 * LANE_STEP;
     // 6. y: rows top to bottom; busier gaps get a little more room.
     let row_h: Vec<f32> = rows
         .iter()
@@ -542,7 +614,8 @@ pub(super) fn layered(
     for r in 0..n_rows {
         if r > 0 {
             let nseg: usize = rows[r - 1].iter().map(|x| down[*x].len()).sum();
-            y += 56.0 + (nseg as f32 * 1.2).min(30.0);
+            let gap = 56.0 + (nseg as f32 * 1.2).min(30.0);
+            y += gap.max(lane_depth(r - 1) + 20.0);
             if has_top && Some(r) == first_free {
                 y += CAPTION_GAP;
             }
@@ -556,6 +629,9 @@ pub(super) fn layered(
         }
         row_top[r] = y;
         y += if row_h[r] > 0.0 { row_h[r] } else { 8.0 };
+    }
+    if !lanes[n_rows - 1].is_empty() {
+        y += lane_depth(n_rows - 1) + 8.0;
     }
     let pos: Vec<Rect> = (0..n)
         .map(|i| {
@@ -577,6 +653,15 @@ pub(super) fn layered(
         }
         if !verts[b].dummy {
             tops.entry(b).or_default().push(((b, a), xs[a]));
+        }
+    }
+    if compact {
+        for (chain, _, same) in &chains {
+            if *same {
+                let (a, b) = (chain[0], chain[1]);
+                bot.entry(a).or_default().push(((a, b), xs[b]));
+                bot.entry(b).or_default().push(((b, a), xs[a]));
+            }
         }
     }
     let mut port_x: BTreeMap<(usize, usize), f32> = BTreeMap::new();
@@ -603,17 +688,15 @@ pub(super) fn layered(
         }
     }
     let mut routes = Vec::new();
-    for (e, (chain, flip, same)) in edges.iter().zip(chains) {
+    for (i, (e, (chain, flip, same))) in edges.iter().zip(chains).enumerate() {
         let (first, last) = (chain[0], chain[chain.len() - 1]);
         let (a, b) = (pos[first], pos[last]);
         let mut pts = if same {
-            let yb = (a.y + a.h).max(b.y + b.h) + 20.0;
-            vec![
-                (a.x + a.w / 2.0, a.y + a.h),
-                (a.x + a.w / 2.0, yb),
-                (b.x + b.w / 2.0, yb),
-                (b.x + b.w / 2.0, b.y + b.h),
-            ]
+            let row = row_of[first];
+            let yb = row_top[row] + row_h[row] + FIRST_LANE + lane_of[i] as f32 * LANE_STEP;
+            let ax = port_x.get(&(first, last)).copied().unwrap_or(xs[first]);
+            let bx = port_x.get(&(last, first)).copied().unwrap_or(xs[last]);
+            vec![(ax, a.y + a.h), (ax, yb), (bx, yb), (bx, b.y + b.h)]
         } else {
             let mut pts = vec![(
                 port_x

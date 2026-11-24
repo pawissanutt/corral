@@ -164,7 +164,9 @@ impl AppState {
         // A project's address is Home scoped to it; the scope waits for the daemon's store.
         let mut launch_scope = None;
         let mut launch_system = system::State::default();
+        let mut launch_impact = review::impact::State::default();
         if let Some(place) = address::launched() {
+            place.restore_impact(&mut launch_impact);
             if let crate::model::address::Place::SystemView(view) = place {
                 launch_system.view = view;
             }
@@ -223,7 +225,7 @@ impl AppState {
             usage: signal(usage::State::default()),
             artifacts: signal(artifacts::State::default()),
             system: signal(launch_system),
-            impact: signal(review::impact::State::default()),
+            impact: signal(launch_impact),
             agents: source::StateSource::new(
                 data,
                 agents::State {

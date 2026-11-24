@@ -15,7 +15,7 @@ use crate::model::system::lens::{Source, excerpt_source};
 use crate::model::system::runtime::{at, basis_word, entry_word};
 use crate::model::system::scene::data_kind_word;
 use crate::model::system::scene::{module_name, unit_word};
-use crate::model::system::{Node, count};
+use crate::model::system::{Node, base_name, count};
 
 /// How an item changed, by shape as well as colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -317,6 +317,19 @@ pub(super) fn item(key: String, sign: Sign, main: String, right: String) -> Item
     }
 }
 
+fn pair_packages(from: &ModuleId, to: &ModuleId) -> String {
+    let prefix = if from.container != to.container {
+        "across packages · "
+    } else {
+        ""
+    };
+    format!(
+        "{prefix}{} → {}",
+        name_or_root(&from.container),
+        name_or_root(&to.container)
+    )
+}
+
 fn grew(before: u64, after: u64) -> Sign {
     if after > before {
         Sign::Added
@@ -339,7 +352,7 @@ pub(super) fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
     anchor.commit = cx.base.to_owned();
     let path = anchor.path.clone();
     item.target = cx.container(&path);
-    item.note = Some(match &item.target {
+    let fallback = match &item.target {
         Some(Target {
             node: Node::Container(owner),
             ..
@@ -349,7 +362,11 @@ pub(super) fn item_of(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             if owner.is_empty() { "(root)" } else { owner }
         ),
         _ => "Deleted by this change, and no package that held it is on the head's map.".into(),
-    });
+    };
+    item.note = Some(
+        item.note
+            .map_or_else(|| fallback.clone(), |note| format!("{fallback} {note}")),
+    );
     Some(item)
 }
 
@@ -417,6 +434,7 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             before,
             after,
         } => Item {
+            sub: Some(pair_packages(from, to)),
             target: Some(module_target(from)),
             ..item(
                 key,
@@ -445,27 +463,18 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             path,
             line,
         } => {
-            let sign = match (added, removed) {
-                (a, 0) if *a > 0 => Sign::Added,
-                (0, r) if *r > 0 => Sign::Removed,
+            let sign = match (added, removed, changed) {
+                (a, 0, 0) if *a > 0 => Sign::Added,
+                (0, r, 0) if *r > 0 => Sign::Removed,
                 _ => Sign::Changed,
             };
-            let mut right = churn(*added, *removed);
-            if *changed > 0 {
-                right.push_str(&format!(" Δ{}", count(*changed)));
-            }
             // corrald anchors a group at the base only when every call in it was removed.
             let base = *added == 0 && *changed == 0 && *removed > 0;
             Item {
-                sub: Some(path.clone()),
+                sub: Some(format!("{path} · {}", pair_packages(from, to))),
                 anchor: cx.anchor(path, Some(*line), base),
                 target: Some(module_target(from)),
-                ..item(
-                    key,
-                    sign,
-                    format!("{} → {}", module_words(from), module_words(to)),
-                    right,
-                )
+                ..item(key, sign, base_name(path).to_owned(), format!(":{line}"))
             }
         }
         Row::Spawn {
@@ -511,7 +520,8 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
             sub: Some(
                 match read_status {
                     ReadStatus::Failed => "read failed",
-                    _ => "not understood by Corral or an extension",
+                    ReadStatus::Unsupported => "not understood by Corral or an extension",
+                    ReadStatus::Complete => "read, but no fact moved",
                 }
                 .into(),
             ),
@@ -654,7 +664,7 @@ fn data_item(
         C::TypeAdded | C::TypeRemoved => "type",
         _ => "field",
     };
-    let mut sub = vec![format!("{kind} {what} {}", sign.word())];
+    let mut sub = vec![format!("{} · {kind} {what} {}", change.path, sign.word())];
     match (change.contract, mark(change.source)) {
         (true, Some(mark)) => sub.push(mark.to_owned()),
         _ => sub.push(source_word(change.source).to_owned()),
@@ -722,7 +732,8 @@ fn lens_item(cx: &Ctx, key: String, impact: &corral_types::lenses::LensImpact) -
     .collect::<Vec<_>>()
     .join(" · ");
     Item {
-        sub: (!sub.is_empty()).then_some(sub),
+        sub: Some(impact.path.clone()),
+        note: (!sub.is_empty()).then_some(sub),
         anchor: cx.anchor(&impact.path, None, only_removed),
         lens: Some(LensItem {
             file: impact.path.clone(),

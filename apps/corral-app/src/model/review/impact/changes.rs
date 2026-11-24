@@ -10,8 +10,9 @@ use corral_types::{
 
 use super::items::module_words;
 use crate::model::system::Node;
-use crate::model::system::marks::{Delta, Mark, Marks, figure};
-use crate::model::system::scene::{Edge, EdgeKind, Scene, port_card};
+use crate::model::system::marks::{self, Delta, Mark, Marks, figure, port_line};
+use crate::model::system::scene::{Edge, EdgeKind, Kind, Scene, port_card};
+use crate::model::text::flat;
 
 /// Gives each edge of the level `at` shows the module pairs whose reference count the change
 /// moved: a module reference its own pair, a boundary edge the pairs it sums, a package edge
@@ -187,10 +188,18 @@ fn end(module: &ModuleId, path: &str, into: bool) -> Node {
     }
 }
 
-/// Gives each card the figure its mark shows, so the level is laid out with room for it.
+/// Gives each card the figure and the dependents chip its mark shows, so the level is laid out
+/// with room for them. A card the change did not touch keeps its own figure, already measured.
 pub(super) fn figures(scene: &mut Scene, marks: &Marks) {
     for card in &mut scene.cards {
-        card.marked = Some(figure(marks, &card.node));
+        let mark = marks::of(marks, &card.node).copied();
+        if card.kind == Kind::Port {
+            card.marked = Some(flat(&port_line(card, mark)));
+            continue;
+        }
+        let change = figure(marks, &card.node);
+        card.marked = (!change.is_empty()).then_some(change);
+        card.chip = mark.and_then(Mark::dependent_words);
     }
 }
 

@@ -3,11 +3,12 @@
 //! picked node its edges, each of which picks that edge. A list keeps every name whole and
 //! every edge readable where a drawing of thirty boxes could not (docs/plans/system-map.md §3.1).
 
-use super::marks::{self, Marks, change_words};
+use super::marks::{self, Mark, Marks, change_words};
 use super::runtime::{at, edge_words, entry_word, group};
 use super::scene::{Card, EdgeKind, Kind, Level, Scene};
 use super::words::{activity, busiest, figure, read_shares};
 use super::{Node, Overlay, Pick, State, Window};
+use crate::model::text::{Rich, flat, span};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Line {
@@ -24,12 +25,18 @@ pub struct NodeLine {
     pub node: Node,
     pub name: String,
     pub tag: Option<String>,
-    pub figure: String,
+    /// The overlay's figure; under a task's change what it did here, each run in its colour.
+    pub figure: Rich,
+    /// Under a task's change, the dependents the node holds, said apart from the figure.
+    pub dependents: Option<String>,
+    /// The row as a screen reader says it.
+    pub label: String,
     /// The overlay's share, 0 to 1, drawn as a bar.
     pub share: f32,
     pub picked: bool,
     pub opens: bool,
-    /// Whether the row draws the overlay's bar; the Runtime view has none.
+    /// Whether the row draws the overlay's bar: the Runtime view has none, and neither has a
+    /// task's Impact, where a bar would read as a measure of the change.
     pub bar: bool,
     /// Untouched by the change a task page's Impact shows.
     pub dim: bool,
@@ -93,21 +100,9 @@ pub fn share(scene: &Scene, card: &Card, overlay: Overlay, window: Window) -> f3
     }
 }
 
-/// The level's rows. Under `marks` (a task's Impact) each node's figure is what the change did
-/// to it, its bar its share of the most churned, and an unmarked node is dimmed.
+/// The level's rows. Under `marks` (a task's Impact) a node's figure is what the change did to
+/// it, else its size, with the dependents it holds apart; an unmarked node is dimmed.
 pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
-    let churn = |node: &Node| {
-        marks
-            .and_then(|marks| marks::of(marks, node))
-            .map_or(0, |mark| mark.churn())
-    };
-    let most = scene
-        .cards
-        .iter()
-        .map(|card| churn(&card.node))
-        .max()
-        .unwrap_or(0)
-        .max(1);
     let mut out = Vec::new();
     let picked_node = match &state.picked {
         Some(Pick::Node(node)) => Some(node),
@@ -168,10 +163,9 @@ pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
                 scene.bottom.clone(),
             ),
             (
-                (!scene.graph.is_empty())
-                    .then_some(scene.band_title)
-                    .flatten()
-                    .map(str::to_owned),
+                (!scene.graph.is_empty() || scene.level == Level::Module)
+                    .then(|| scene.band_title.clone())
+                    .flatten(),
                 scene.band.clone(),
             ),
         ]
@@ -191,21 +185,34 @@ pub fn lines(scene: &Scene, state: &State, marks: Option<&Marks>) -> Vec<Line> {
         for card in cards {
             let picked = picked_node == Some(&card.node)
                 || picked_edge.is_some_and(|(a, b)| a == &card.node || b == &card.node);
+            let mark = marks.and_then(|marks| marks::of(marks, &card.node).copied());
+            let figure = match marks {
+                Some(_) => marks::figure_line(card, mark),
+                None => vec![span(figure(card, state.overlay, state.window))],
+            };
+            // A change figure says the mark already; a size figure is followed by it.
+            let label = match marks {
+                Some(marks) if !marks::change_of(&card.node, mark).is_empty() => {
+                    format!("{}, {}", card.name, marks::spoken(marks, &card.node))
+                }
+                Some(marks) => format!(
+                    "{}, {}, {}",
+                    card.name,
+                    flat(&figure),
+                    marks::spoken(marks, &card.node)
+                ),
+                None => format!("{}, {}", card.name, flat(&figure)),
+            };
             out.push(Line::Node(NodeLine {
                 node: card.node.clone(),
                 name: card.name.clone(),
                 tag: card.tag.clone(),
-                figure: match marks {
-                    Some(marks) => marks::figure(marks, &card.node),
-                    None => figure(card, state.overlay, state.window),
-                },
-                share: match marks {
-                    Some(_) => churn(&card.node) as f32 / most as f32,
-                    None => share(scene, card, state.overlay, state.window),
-                }
-                .clamp(0.0, 1.0),
+                figure,
+                dependents: mark.and_then(Mark::dependent_words),
+                label,
+                share: share(scene, card, state.overlay, state.window).clamp(0.0, 1.0),
                 picked: picked_node == Some(&card.node),
-                bar: !card.kind.barless(),
+                bar: !card.kind.barless() && marks.is_none(),
                 opens: if scene.level == Level::Runtime {
                     card.kind == Kind::Scripts
                 } else if scene.level == Level::Data {

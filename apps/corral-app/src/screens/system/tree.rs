@@ -6,8 +6,9 @@
 use nsh_core::prelude::*;
 
 use crate::model::system::Pick;
+use crate::model::system::marks::{CHANGED, DEPENDENT};
 use crate::model::system::scene::{EdgeKind, Scene};
-use crate::model::system::tree::{Line, lines};
+use crate::model::system::tree::{Line, NodeLine, lines};
 use crate::model::{Form, Hue};
 use crate::state::AppState;
 use crate::ui::kit::marks::hue_ink;
@@ -71,6 +72,36 @@ fn small(app: AppState, words: String, token: Token) -> AnyElement {
     }
 }
 
+/// A node's figure on one line in ink-2: a change's runs in their colours, the dependents in
+/// the dependents' colour apart from them, then `after` (a terminal's bar and tag).
+fn figure(app: AppState, node: &NodeLine, before: &str, after: String) -> AnyElement {
+    let mut runs = vec![text(before.to_owned())];
+    runs.extend(node.figure.iter().map(|run| {
+        let piece = text(run.text.clone());
+        if run.hue == Hue::Neutral {
+            piece
+        } else {
+            piece.text_color(hue_ink(run.hue))
+        }
+    }));
+    if let Some(dependents) = &node.dependents {
+        runs.push(text("  "));
+        runs.push(text(dependents.clone()).text_color(hue_ink(DEPENDENT)));
+    }
+    runs.push(text(after));
+    let line = text("")
+        .number_of_lines(1u32)
+        .text_color(color(Token::Ink2))
+        .children(runs);
+    match app.form {
+        Form::Terminal => line.into_element(),
+        _ => line
+            .font_family(FONT_TEXT)
+            .text_size(px(text_size(app.form) - 1.5))
+            .into_element(),
+    }
+}
+
 fn fixed(element: AnyElement) -> AnyElement {
     view().flex_shrink_0().child(element).into_element()
 }
@@ -100,7 +131,7 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
         Line::Node(node) => {
             let pick = Pick::Node(node.node.clone());
             let picked = node.picked;
-            let label = format!("{}, {}", node.name, node.figure);
+            let label = node.label.clone();
             // The name is never cut: a long one wraps at the row's width on every form.
             let name = text(node.name.clone())
                 .text_color(color(if node.dim { Token::Ink3 } else { Token::Ink }))
@@ -122,14 +153,15 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                         view()
                             .flex_1()
                             .min_w(px(0.0))
-                            .child(small(
+                            .child(figure(
                                 app,
+                                &node,
+                                " ",
                                 if node.bar {
-                                    format!(" {}  {}  {tag}", node.figure, bar_cells(node.share))
+                                    format!("  {}  {tag}", bar_cells(node.share))
                                 } else {
-                                    format!(" {}  {tag}", node.figure)
+                                    format!("  {tag}")
                                 },
-                                Token::Ink2,
                             ))
                             .into_element(),
                         fixed(small(app, opens.trim().to_owned(), Token::Ink3)),
@@ -166,7 +198,7 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
                                 .min_w(px(0.0))
                                 .gap(px(3.0))
                                 .child(head)
-                                .child(small(app, node.figure, Token::Ink2))
+                                .child(figure(app, &node, "", String::new()))
                                 .children(node.bar.then_some(bar))
                                 .into_element(),
                         ],
@@ -177,7 +209,7 @@ fn row(app: AppState, index: usize, line: Line, host: Host) -> AnyElement {
         Line::Edge(edge) => {
             let ink = match edge.kind {
                 // The change colour, as the canvas draws a changed edge.
-                _ if edge.changed => hue_ink(Hue::You),
+                _ if edge.changed => hue_ink(CHANGED),
                 Some(EdgeKind::ReferencedOnly) => hue_ink(Hue::Held),
                 Some(EdgeKind::DeclaredOnly) => color(Token::Ink3),
                 Some(EdgeKind::Starts) => hue_ink(Hue::Worker),

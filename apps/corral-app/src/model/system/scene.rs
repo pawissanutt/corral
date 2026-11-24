@@ -14,7 +14,7 @@ use corral_types::{
 };
 
 use super::marks::Delta;
-use super::{Node, base_name};
+use super::{Node, base_name, plural};
 
 /// How deep the map is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,6 +164,8 @@ pub struct Card {
     pub data: Option<DataCard>,
     /// Under a task's change: the figure its mark shows, which the card makes room for.
     pub marked: Option<String>,
+    /// The dependents chip's words, so its card makes room for them.
+    pub chip: Option<String>,
 }
 
 impl Card {
@@ -187,6 +189,7 @@ impl Card {
             folded: Vec::new(),
             data: None,
             marked: None,
+            chip: None,
         }
     }
 
@@ -287,7 +290,7 @@ pub struct Scene {
     pub bottom: Vec<usize>,
     /// Unconnected cards, packed under the graph.
     pub band: Vec<usize>,
-    pub band_title: Option<&'static str>,
+    pub band_title: Option<String>,
     /// Fixed bands, one rank per card (the higher, the nearer the top), which replace the
     /// ranks references give; with each band's caption.
     pub ranks: Option<Vec<i32>>,
@@ -352,7 +355,7 @@ pub fn build(map: &SystemMap, at: Option<&SystemAt>) -> Scene {
     match at {
         None => project(&mut scene, &map.rows),
         Some(SystemAt::Container { path }) => package(&mut scene, &map.rows, path),
-        Some(SystemAt::Module { .. }) => module(&mut scene, &map.rows),
+        Some(SystemAt::Module { module: id }) => module(&mut scene, &map.rows, id),
         Some(SystemAt::File { .. }) => file(&mut scene, &map.rows),
     }
     scene.max_lines = scene
@@ -509,7 +512,7 @@ fn project(scene: &mut Scene, rows: &[SystemMapRow]) {
     by_lines_desc(&scene.cards, &mut band);
     scene.graph = graph;
     scene.band = band;
-    scene.band_title = Some("No package reference found");
+    scene.band_title = Some("No package reference found".into());
 }
 
 fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
@@ -647,7 +650,7 @@ fn package(scene: &mut Scene, rows: &[SystemMapRow], path: &str) {
     }
     scene.graph = modules;
     scene.band = band;
-    scene.band_title = Some("No module reference found");
+    scene.band_title = Some("No module reference found".into());
 }
 
 /// Keeps each node's strongest reference, then the strongest overall, up to `cap`; the rest go
@@ -693,8 +696,8 @@ fn more_card(scene: &mut Scene, count: u64, lines: u64, noun: &'static str) {
     scene.cards.push(card);
 }
 
-fn module(scene: &mut Scene, rows: &[SystemMapRow]) {
-    let (mut rest, mut rest_lines) = (0, 0);
+fn module(scene: &mut Scene, rows: &[SystemMapRow], id: &ModuleId) {
+    let (mut rest, mut rest_lines, mut total_lines) = (0, 0, 0);
     for row in rows {
         if let SystemMapRow::File {
             path,
@@ -704,6 +707,7 @@ fn module(scene: &mut Scene, rows: &[SystemMapRow]) {
             read_status,
         } = row
         {
+            total_lines += lines;
             if scene.cards.len() >= MAX_FILES {
                 rest += 1;
                 rest_lines += lines;
@@ -721,6 +725,17 @@ fn module(scene: &mut Scene, rows: &[SystemMapRow]) {
             scene.cards.push(card);
         }
     }
+    let container = if id.container.is_empty() {
+        "(root)"
+    } else {
+        &id.container
+    };
+    scene.band_title = Some(format!(
+        "{container} · {}   {} · {} · largest first",
+        module_name(id),
+        plural(scene.cards.len() as u64 + rest, "file", "files"),
+        plural(total_lines, "line", "lines"),
+    ));
     more_card(scene, rest, rest_lines, "files");
 }
 

@@ -1,15 +1,29 @@
 //! What a task's change did to the map's nodes and edges (a task page's Changes › Impact): a
 //! node it touched, with its lines added and removed and the files they are in, and the
 //! dependents it holds, code outside the change that references a changed definition. A
-//! package can be both. A node with no mark is untouched and drawn dimmed. A node that stands
-//! for files the level does not list (a "N more" card, a neighbouring package) carries their
-//! total. An edge whose reference count the change moved carries each module pair it folds,
-//! before and after; every other edge is quiet.
+//! package can be both. A node with no mark is untouched and drawn dimmed with its own figure.
+//! A node that stands for files the level does not list (a "N more" card, a neighbouring
+//! package) carries their total. An edge whose reference count the change moved carries each
+//! module pair it folds, before and after; every other edge is quiet.
 
 use std::collections::BTreeMap;
 
-use super::scene::Scene;
-use super::{Node, Pick, count, plural};
+use super::scene::{Card, Scene};
+use super::words;
+use super::{Node, Overlay, Pick, Window, count, plural};
+use crate::model::hue::Hue;
+use crate::model::text::{Rich, flat, span};
+
+/// A touched node's solid ring: the owner's colour, as the changed edges.
+pub const TOUCHED: Hue = Hue::You;
+/// A node holding dependents: a dashed ring and a chip in Corral's colour, so it differs from a
+/// touched one in shape and in colour. The map's other colours mean other things (a running
+/// worker, a reference no dependency declares), so neither mark borrows them.
+pub const DEPENDENT: Hue = Hue::Corral;
+/// An edge whose reference count the change moved.
+pub const CHANGED: Hue = Hue::You;
+pub const ADDED: Hue = Hue::Ok;
+pub const REMOVED: Hue = Hue::Fail;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Mark {
@@ -74,47 +88,54 @@ pub fn change_spoken(deltas: &[Delta]) -> Option<String> {
     }
 }
 
+/// Lines added and removed, each in its colour.
+fn churn(added: u64, removed: u64) -> Rich {
+    vec![
+        span(format!("+{}", count(added))).hue(ADDED),
+        span(" "),
+        span(format!("−{}", count(removed))).hue(REMOVED),
+    ]
+}
+
 impl Mark {
     pub fn churn(self) -> u64 {
         self.added + self.removed
     }
 
-    fn dependent_words(self) -> Option<String> {
-        (self.dependents > 0).then(|| {
-            format!(
-                "{} dependent",
-                plural(self.dependents, "definition", "definitions")
-            )
-        })
+    /// The dependents the node holds, said apart from its figure (a card's chip), so neither
+    /// crowds the other off its line.
+    pub fn dependent_words(self) -> Option<String> {
+        (self.dependents > 0).then(|| plural(self.dependents, "dependent", "dependents"))
     }
 
-    /// The figure a marked card shows in place of its overlay's.
-    pub fn words(self) -> String {
-        let mut said = Vec::new();
-        if self.touched {
-            said.push(if self.churn() > 0 {
-                format!("+{} −{}", count(self.added), count(self.removed))
-            } else {
-                "changed".to_owned()
-            });
+    /// What the change did to the node itself: its lines added and removed and, for a node
+    /// holding files, how many changed; nothing where it touched none.
+    fn change(self, node: &Node) -> Rich {
+        if !self.touched {
+            return Vec::new();
         }
-        said.extend(self.dependent_words());
-        said.join(" · ")
+        if self.churn() == 0 {
+            return vec![span("changed")];
+        }
+        let mut said = churn(self.added, self.removed);
+        // A file's count would only say "1 file".
+        if self.files > 0 && !matches!(node, Node::File(_)) {
+            said.push(span(format!(" · {}", plural(self.files, "file", "files"))));
+        }
+        said
     }
 
-    /// The figure of a node that stands for files the level does not list.
-    pub fn hidden_words(self) -> String {
+    /// The change of a node that stands for files the level does not list.
+    fn hidden(self, node: &Node) -> Rich {
         if self.files == 0 {
-            return self.words();
+            return self.change(node);
         }
-        let mut said = vec![format!(
-            "+{} −{} in {} not listed",
-            count(self.file_added),
-            count(self.file_removed),
+        let mut said = churn(self.file_added, self.file_removed);
+        said.push(span(format!(
+            " in {} not listed",
             plural(self.files, "file", "files")
-        )];
-        said.extend(self.dependent_words());
-        said.join(" · ")
+        )));
+        said
     }
 
     /// The mark as a screen reader says it after the node's name.
@@ -146,22 +167,49 @@ pub fn of<'a>(marks: &'a Marks, node: &Node) -> Option<&'a Mark> {
     }
 }
 
-/// An unmarked card's figure.
+/// An unmarked card as spoken; its figure stays its own.
 pub const UNTOUCHED: &str = "untouched";
 
-/// The figure of `node` under `mark`: the hidden files' total where the node stands for files
-/// the level does not list.
-pub fn words_of(node: &Node, mark: Option<Mark>) -> String {
+/// What the change did to `node` under `mark`, each run in its colour: the hidden files' total
+/// where the node stands for files the level does not list. Empty where the change touched
+/// nothing of it (untouched, or only holding dependents).
+pub fn change_of(node: &Node, mark: Option<Mark>) -> Rich {
     match (node, mark) {
-        (_, None) => UNTOUCHED.to_owned(),
-        (Node::More | Node::Port { .. }, Some(mark)) => mark.hidden_words(),
-        (_, Some(mark)) => mark.words(),
+        (_, None) => Vec::new(),
+        (Node::More | Node::Port { .. }, Some(mark)) => mark.hidden(node),
+        (_, Some(mark)) => mark.change(node),
     }
 }
 
-/// A card's figure under marks.
+/// A card's change figure as words; empty where the card keeps its own.
 pub fn figure(marks: &Marks, node: &Node) -> String {
-    words_of(node, of(marks, node).copied())
+    flat(&change_of(node, of(marks, node).copied()))
+}
+
+/// A card's figure line under marks: the change, else its size (the Structure overlay's
+/// figure), which helps judge how far an untouched or depending node reaches.
+pub fn figure_line(card: &Card, mark: Option<Mark>) -> Rich {
+    let change = change_of(&card.node, mark);
+    if change.is_empty() {
+        vec![span(words::figure(
+            card,
+            Overlay::Structure,
+            Window::Days30,
+        ))]
+    } else {
+        change
+    }
+}
+
+/// A port's one line under marks: its figure, then the dependents its package holds, since a
+/// pill has no room for a chip.
+pub fn port_line(card: &Card, mark: Option<Mark>) -> Rich {
+    let mut line = figure_line(card, mark);
+    if let Some(words) = mark.and_then(Mark::dependent_words) {
+        line.push(span(" · "));
+        line.push(span(words).hue(DEPENDENT));
+    }
+    line
 }
 
 /// A card's mark as spoken.
@@ -200,5 +248,43 @@ pub fn drawn_pick(scene: &Scene, marks: &Marks, picked: Option<Pick>) -> Option<
             Some(Pick::Node(Node::More))
         }
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::system::scene::Kind;
+
+    /// Impact put the word "untouched" on every unmarked card in place of its size, drew a
+    /// touched card's churn in plain ink, and set a node's dependents on its figure line, where
+    /// they were cut.
+    #[test]
+    fn untouched_cards_keep_their_size_and_churn_is_coloured_apart_from_dependents() {
+        let mut card = Card::new(Node::Container("a".into()), "a".into(), Kind::Package);
+        card.lines = 120;
+        let size = vec![span(words::figure(
+            &card,
+            Overlay::Structure,
+            Window::Days30,
+        ))];
+        assert_eq!(figure_line(&card, None), size);
+        let held = Mark {
+            dependents: 3,
+            ..Mark::default()
+        };
+        assert_eq!(figure_line(&card, Some(held)), size);
+        let both = Mark {
+            touched: true,
+            added: 4,
+            removed: 1,
+            files: 2,
+            ..held
+        };
+        let line = figure_line(&card, Some(both));
+        assert!(line.iter().any(|run| run.hue == ADDED));
+        assert!(line.iter().any(|run| run.hue == REMOVED));
+        assert!(line.iter().all(|run| run.hue != DEPENDENT));
+        assert!(both.dependent_words().is_some());
     }
 }

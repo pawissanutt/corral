@@ -3,9 +3,9 @@
 //! to Tasks and names the task (status, id, title, Ask about this, More); a meta line gives
 //! its project, priority, kind, size, base, profile and round; the decision band (`band.rs`)
 //! holds what the owner decides; then the tabs Overview, Changes and History (`NavState::task_tab`, keys `1`
-//! `2` `3`, in the address as `/task/<id>/<tab>`). Escape returns to Tasks. On a wide desktop
-//! window the content keeps to `MEASURE_RECORD`, centred, while the rules and the band's ground
-//! run edge to edge. The phone shows the same page in one column, the band first.
+//! `2` `3`, in the address as `/task/<id>/<tab>`). Escape returns to Tasks once Impact has no
+//! pick or level to leave. On desktop, Impact uses the whole page below the tabs; the other tab
+//! bodies keep to `MEASURE_RECORD`. The phone shows the same page in one column, the band first.
 //!
 //! While the page shows, it keeps the task's detail (and a plan's detail, and a candidate's
 //! review detail) loaded and current.
@@ -15,6 +15,7 @@ pub(crate) mod candidate;
 mod changes;
 mod history;
 mod impact;
+mod impact_inspect;
 mod impact_list;
 pub(crate) mod keep;
 pub(crate) mod overview;
@@ -22,6 +23,7 @@ pub(crate) mod parts;
 
 use nsh_core::prelude::*;
 
+use crate::model::review::impact::View as ChangesView;
 use crate::model::tasks::{self, page as task_page};
 use crate::model::work::Record;
 use crate::model::{Destination, Form, Id, Live, TaskTab};
@@ -29,7 +31,7 @@ use crate::screens::PhonePage;
 use crate::screens::task::keep::{keep_loaded, wanted_id};
 use crate::state::AppState;
 use crate::ui::icons::Icon;
-use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with, tab_strip};
+use crate::ui::kit::button::{ButtonKind, ButtonOptions, button, button_with, tab_strip_with};
 use crate::ui::kit::next::more_button;
 use crate::ui::kit::page::measure;
 use crate::ui::kit::status::status_word_mark;
@@ -129,24 +131,24 @@ pub fn page(app: AppState, id: Id) -> AnyElement {
                 scroll().flex_1().min_h(px(0.0)).child(
                     view()
                         .child(decision(app, id.clone(), false))
-                        .child(view().px(term::cells(1.0)).child(tabs(app)))
+                        .child(view().px(term::cells(1.0)).child(tabs(app, id.clone())))
                         .child(view().px(term::cells(1.0)).child(tab_body(app, id))),
                 ),
             )
             .into_element(),
-        // The scroll spans the window, so its bar stays at the edge; what it scrolls is measured.
         Form::Desktop | Form::Phone => page
             .child(band(app, id.clone()))
-            .child(view().flex_none().child(measure(
-                app,
-                MEASURE_RECORD,
-                view().px(px(18.0)).child(tabs(app)).into_element(),
-            )))
-            .child(scroll().flex_1().min_h(px(0.0)).child(measure(
-                app,
-                MEASURE_RECORD,
-                view().px(px(18.0)).child(tab_body(app, id)).into_element(),
-            )))
+            .child(
+                view().flex_none().child(measure(
+                    app,
+                    MEASURE_RECORD,
+                    view()
+                        .px(px(18.0))
+                        .child(tabs(app, id.clone()))
+                        .into_element(),
+                )),
+            )
+            .child(tab_body(app, id))
             .into_element(),
     }
 }
@@ -195,7 +197,7 @@ pub fn phone(app: AppState, id: Id) -> PhonePage {
                 .child(view().flex_row().child(ask_about(app, &id))),
         )
         .child(decision(app, id.clone(), false))
-        .child(view().px(px(8.0)).child(tabs(app)))
+        .child(view().px(px(8.0)).child(tabs(app, id.clone())))
         .child(tab_body(app, id.clone()))
         .into_element();
     PhonePage {
@@ -307,29 +309,89 @@ fn meta(app: AppState, id: &Id) -> AnyElement {
     })
 }
 
-/// Overview, Changes and History (`tab-task-<n>`).
-fn tabs(app: AppState) -> AnyElement {
-    let options: Vec<(TaskTab, &'static str)> =
-        TaskTab::ALL.iter().map(|tab| (*tab, tab.label())).collect();
-    tab_strip(
+/// Overview, Changes and History (`tab-task-<n>`), with the Changes view switch on desktop.
+fn tabs(app: AppState, id: Id) -> AnyElement {
+    changes::keep_closed_review(app, id.clone());
+    let count = {
+        let id = id.clone();
+        computed(move || {
+            app.feed
+                .with(|feed| task_page::changed_file_count(feed, id.as_str()))
+        })
+    };
+    let options = TaskTab::ALL.map(|tab| {
+        (tab, move || {
+            let label = tab.label();
+            if tab == TaskTab::Changes
+                && let Some(count) = count.get()
+            {
+                format!("{label} {count}")
+            } else {
+                label.to_owned()
+            }
+        })
+    });
+    let tab = computed(move || app.nav.with(|nav| nav.task_tab));
+    let strip = tab_strip_with(
         app,
         &options,
-        move || app.nav.with(|nav| nav.task_tab),
+        move || tab.get(),
         move |tab| app.set_task_tab(tab),
         "tab-task",
-    )
+    );
+    if app.form != Form::Desktop {
+        return strip;
+    }
+    let switch = dynamic(move || {
+        (tab.get() == TaskTab::Changes).then(|| untracked(|| changes::view_switch(app, id.clone())))
+    });
+    view()
+        .flex_row()
+        .items_end()
+        .gap(px(8.0))
+        .child(view().flex_1().child(strip))
+        .child(switch)
+        .into_element()
 }
 
-/// The tab's body, made again when the tab changes.
+/// The tab's body. Desktop Impact owns its panes' scrolling; the other desktop bodies scroll
+/// across the window with their content measured inside, so the bar stays at the edge.
 fn tab_body(app: AppState, id: Id) -> AnyElement {
-    let tab = computed(move || app.nav.with(|nav| nav.task_tab));
+    let shown = computed(move || {
+        let tab = app.nav.with(|nav| nav.task_tab);
+        let desktop_changes = (app.form == Form::Desktop && tab == TaskTab::Changes)
+            .then(|| app.impact.with(|state| state.view));
+        (tab, desktop_changes)
+    });
     dynamic(move || {
-        let tab = tab.get();
+        let (tab, desktop_changes) = shown.get();
         let id = id.clone();
-        untracked(move || match tab {
-            TaskTab::Overview => overview::overview(app, id),
-            TaskTab::Changes => changes::changes(app, id),
-            TaskTab::History => history::history(app, id),
+        untracked(move || {
+            let body = match (tab, desktop_changes) {
+                (TaskTab::Overview, _) => overview::overview(app, id),
+                (TaskTab::Changes, Some(view)) => changes::desktop(app, id, view),
+                (TaskTab::Changes, None) => changes::stacked(app, id),
+                (TaskTab::History, _) => history::history(app, id),
+            };
+            match app.form {
+                Form::Desktop if desktop_changes == Some(ChangesView::Impact) => view()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .flex_col()
+                    .px(px(18.0))
+                    .child(body)
+                    .into_element(),
+                Form::Desktop => scroll()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .child(measure(
+                        app,
+                        MEASURE_RECORD,
+                        view().px(px(18.0)).child(body).into_element(),
+                    ))
+                    .into_element(),
+                Form::Phone | Form::Terminal => body,
+            }
         })
     })
 }

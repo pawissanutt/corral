@@ -451,6 +451,17 @@ pub fn tab_strip<T: Copy + PartialEq + 'static>(
     on_pick: impl Fn(T) + 'static,
     test_id: &str,
 ) -> AnyElement {
+    tab_strip_with(app, options, selected, on_pick, test_id)
+}
+
+/// A tab strip whose labels can update without replacing focused tabs.
+pub fn tab_strip_with<T: Copy + PartialEq + 'static>(
+    app: AppState,
+    options: &[(T, impl Clone + IntoReactive<SharedString>)],
+    selected: impl Fn() -> T + 'static,
+    on_pick: impl Fn(T) + 'static,
+    test_id: &str,
+) -> AnyElement {
     let form = app.form;
     let current = computed(selected);
     let pick: Rc<dyn Fn(T)> = Rc::new(on_pick);
@@ -471,19 +482,24 @@ pub fn tab_strip<T: Copy + PartialEq + 'static>(
             }),
     };
     strip
-        .children(options.iter().enumerate().map(|(index, &(value, label))| {
+        .children(options.iter().enumerate().map(|(index, (value, label))| {
+            let value = *value;
             let pick = Rc::clone(&pick);
             let on = move || current.get() == value;
-            strip_tab(form, label, format!("{test_id}-{index}"), on, move || {
-                pick(value)
-            })
+            strip_tab(
+                form,
+                label.clone(),
+                format!("{test_id}-{index}"),
+                on,
+                move || pick(value),
+            )
         }))
         .into_element()
 }
 
 fn strip_tab(
     form: Form,
-    label: &'static str,
+    label: impl IntoReactive<SharedString>,
     test_id: String,
     on: impl Fn() -> bool + Copy + 'static,
     pick: impl Fn() + 'static,

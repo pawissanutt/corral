@@ -232,3 +232,38 @@ fn a_touched_module_opens_in_system_at_its_package_level() {
     app.wait_for("id:inspector-title").unwrap();
     app.wait_for("text:/^shell$/").unwrap();
 }
+
+#[test]
+fn escape_in_impact_clears_the_pick_and_goes_up_before_leaving_the_task_page() {
+    let mut app = preview("tasks");
+    let task = "T-11 Collapse the sidebar on narrow screens";
+    select(&mut app, task);
+    app.press("id:tab-task-1").unwrap();
+    app.press("id:seg-changes-1").unwrap();
+    app.press("id:impact-item-row-1").unwrap();
+    app.wait_for("id:impact-crumb-1").unwrap();
+    app.wait_for("id:node-m-apps-corral-app-shell").unwrap();
+
+    app.press("id:btn-back").unwrap();
+    select(&mut app, task);
+    app.press("id:tab-task-1").unwrap();
+    app.wait_for("id:impact-crumb-1").unwrap();
+    app.wait_for("id:btn-open-in-system").unwrap();
+
+    let gone = Duration::from_secs(5);
+    app.press_key("escape").unwrap();
+    app.wait_for_gone("id:inspector", gone).unwrap();
+    app.wait_for("id:impact-crumb-1").unwrap();
+
+    app.press_key("escape").unwrap();
+    app.wait_for_gone("id:impact-crumb-1", gone).unwrap();
+    app.wait_for("id:node-c-apps-corral-app").unwrap();
+    app.wait_for("id:inspector").unwrap();
+
+    app.press_key("escape").unwrap();
+    app.wait_for_gone("id:inspector", gone).unwrap();
+    app.wait_for("id:task-impact").unwrap();
+
+    app.press_key("escape").unwrap();
+    app.wait_for_gone("id:task-page", gone).unwrap();
+}

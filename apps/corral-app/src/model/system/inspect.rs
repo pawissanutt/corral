@@ -331,6 +331,20 @@ fn edge_inspector(scene: &Scene, edge: &Edge) -> Inspector {
             rows,
         ));
     }
+    // A task's change on this edge, each module pair it moved with its before and after.
+    if !edge.change.is_empty() {
+        let rows = edge
+            .change
+            .iter()
+            .map(|d| {
+                Row::fact(
+                    &format!("{} → {}", d.from, d.to),
+                    format!("{} → {}", count(d.before), count(d.after)),
+                )
+            })
+            .collect();
+        sections.insert(0, Section::facts(Some("This task"), rows));
+    }
     let ends = [&edge.from, &edge.to]
         .into_iter()
         .map(|node| Row {

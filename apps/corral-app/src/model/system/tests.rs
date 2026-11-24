@@ -98,6 +98,106 @@ fn thirty_containers_fit_without_overlap() {
     }
 }
 
+fn sample_level(at: SystemAt) -> SystemMap {
+    use crate::model::{daemon::Feed, preview};
+    use corral_protocol::detail::{DetailBody, DetailRef};
+
+    let target = DetailRef::SystemMap {
+        project: "corral".into(),
+        at: Some(at),
+    };
+    let mut feed = Feed::default();
+    preview::detail(&mut feed, &target, None).unwrap();
+    match feed.detail(&target).and_then(|cache| cache.body()) {
+        Some(DetailBody::SystemMap(map)) => map.clone(),
+        _ => panic!("sample map not served"),
+    }
+}
+
+/// The sample's package is a chain of ranks one module wide; when several fit beside
+/// one another, the chain should not take a whole screen of height and leave most width empty.
+#[test]
+fn package_chain_uses_width_without_losing_routes() {
+    let at = SystemAt::Container {
+        path: "apps/corral-app".into(),
+    };
+    let scene = build(&sample_level(at.clone()), Some(&at));
+    for room in [540.0, 1200.0] {
+        let placed = layout(&scene, room, &estimate);
+        let modules: Vec<_> = scene
+            .graph
+            .iter()
+            .map(|&i| placed.rect(i).unwrap())
+            .collect();
+        let left = modules.iter().map(|r| r.x).fold(f32::INFINITY, f32::min);
+        let right = modules.iter().map(|r| r.x + r.w).fold(0.0, f32::max);
+        assert!(right - left > room / 2.0, "{modules:?}");
+        assert!(placed.width <= room + 0.5);
+        assert_eq!(placed.routes.len(), scene.edges.len());
+        for (i, p) in placed.placed.iter().enumerate() {
+            assert!(
+                placed.placed[i + 1..]
+                    .iter()
+                    .all(|q| !p.rect.overlaps(&q.rect))
+            );
+        }
+        for route in &placed.routes {
+            let edge = &scene.edges[route.edge];
+            for (node, &(x, y)) in [
+                (&edge.from, route.points.first().unwrap()),
+                (&edge.to, route.points.last().unwrap()),
+            ] {
+                let i = scene.cards.iter().position(|c| &c.node == node).unwrap();
+                let r = placed.rect(i).unwrap();
+                assert!(x >= r.x && x <= r.x + r.w);
+                assert!((y - r.y).abs() < 0.01 || (y - r.y - r.h).abs() < 0.01);
+            }
+            assert!(route.points.iter().all(|&(x, y)| {
+                x >= 0.0 && x <= placed.width && y >= 0.0 && y <= placed.height
+            }));
+        }
+    }
+}
+
+/// The standalone file band had no caption, and its count must include the files it folds.
+#[test]
+fn file_grid_caption_counts_folded_files() {
+    let module = ModuleId {
+        container: "apps/corral-app".into(),
+        path: "model".into(),
+    };
+    let at = SystemAt::Module {
+        module: module.clone(),
+    };
+    let map = sample_level(at.clone());
+    let scene = build(&map, Some(&at));
+    let placed = layout(&scene, 800.0, &estimate);
+    let [caption] = placed.captions.as_slice() else {
+        panic!("file band missing its caption");
+    };
+    let file_count = map.rows.len() as u64;
+    let lines = map
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            SystemMapRow::File { lines, .. } => Some(lines),
+            _ => None,
+        })
+        .sum();
+    assert!(caption.text.contains(&module.container) && caption.text.contains(&module.path));
+    let numbers: Vec<&str> = caption
+        .text
+        .split_whitespace()
+        .filter(|word| word.starts_with(|c: char| c.is_ascii_digit()))
+        .collect();
+    assert_eq!(numbers, [count(file_count), count(lines)]);
+    assert!(placed.placed.iter().all(|p| p.rect.y > caption.y));
+    assert_eq!(
+        scene.card(&Node::More).unwrap().more.unwrap().0,
+        file_count - scene::MAX_FILES as u64
+    );
+}
+
 /// A name the card cut would break the "no clipped names" promise on the map.
 #[test]
 fn cards_are_wide_enough_for_their_names() {

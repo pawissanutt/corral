@@ -27,7 +27,7 @@ fn container(path: &str) -> Row {
     }
 }
 
-fn review(categories: Vec<SystemCategorySummary>, rows: Vec<Row>) -> SystemReview {
+pub(super) fn review(categories: Vec<SystemCategorySummary>, rows: Vec<Row>) -> SystemReview {
     SystemReview {
         task: "T-1".into(),
         project: "p".into(),
@@ -44,7 +44,7 @@ fn review(categories: Vec<SystemCategorySummary>, rows: Vec<Row>) -> SystemRevie
     }
 }
 
-fn module(container: &str, path: &str) -> ModuleId {
+pub(super) fn module(container: &str, path: &str) -> ModuleId {
     ModuleId {
         container: container.into(),
         path: path.into(),
@@ -88,7 +88,7 @@ fn unsupplied_category_is_not_zero_and_dependents_survive_a_touched_package() {
         dependent("a/src/other.rs", Some(module("a", "other"))),
         dependent("a/b/src/x.rs", None),
     ];
-    let impact = impact(&review(categories, rows), None, &BTreeSet::new());
+    let impact = impact(&review(categories, rows), None);
     let supply = |category: Category| {
         let index = Category::ALL.iter().position(|c| *c == category);
         impact
@@ -176,12 +176,12 @@ fn runtime_and_entry_point_changes_are_listed_in_their_categories() {
             },
         },
     ];
-    let impact = impact(&review(categories, rows), None, &BTreeSet::new());
+    let impact = impact(&review(categories, rows), None);
     let section = |category: Category| {
         let index = Category::ALL.iter().position(|c| *c == category);
         impact.sections.iter().find(|s| Some(s.index) == index)
     };
-    let runtime = section(Category::Runtime).map(|s| (s.supply, s.items.clone()));
+    let runtime = section(Category::Runtime).map(|s| (s.supply, s.groups[0].items.clone()));
     let Some((Supply::Rows(1), items)) = runtime else {
         panic!("runtime section: {runtime:?}");
     };
@@ -189,7 +189,7 @@ fn runtime_and_entry_point_changes_are_listed_in_their_categories() {
         (items[0].sign, items[0].right.as_str()),
         (Sign::Changed, "ports 80 → 8080")
     );
-    let entries = section(Category::EntryPoints).map(|s| s.items.clone());
+    let entries = section(Category::EntryPoints).map(|s| s.groups[0].items.clone());
     let anchor = entries
         .as_ref()
         .and_then(|items| items.first())
@@ -212,7 +212,9 @@ fn an_extension_category_waits_for_its_answer_then_reads_none() {
             .into_iter()
             .map(|category| SystemCategorySummary {
                 category,
-                provided: provided || !provider_supplied(category) || category == Category::Tests,
+                provided: provided
+                    || !items::provider_supplied(category)
+                    || category == Category::Tests,
                 total: usize::from(provided && category == Category::Tests),
             })
             .collect()
@@ -225,11 +227,7 @@ fn an_extension_category_waits_for_its_answer_then_reads_none() {
             .find(|s| Some(s.index) == index)
             .map(|s| s.supply)
     };
-    let waiting = impact(
-        &review(categories(false), Vec::new()),
-        Some("ext"),
-        &BTreeSet::new(),
-    );
+    let waiting = impact(&review(categories(false), Vec::new()), Some("ext"));
     assert_eq!(
         supply(&waiting, Category::Dependents),
         Some(Supply::Unanswered)
@@ -251,7 +249,7 @@ fn an_extension_category_waits_for_its_answer_then_reads_none() {
         },
         error: None,
     });
-    let answered = impact(&answered, Some("ext"), &BTreeSet::new());
+    let answered = impact(&answered, Some("ext"));
     assert_eq!(supply(&answered, Category::Definitions), Some(Supply::None));
     assert_eq!(supply(&answered, Category::Dependents), Some(Supply::None));
     let tests = Category::ALL
@@ -281,19 +279,16 @@ fn a_removal_only_call_group_is_anchored_at_the_base() {
         path: "a/src/x.rs".into(),
         line: 9,
     };
-    let impact = impact(
-        &review(Vec::new(), vec![call(0, 2), call(1, 1)]),
-        None,
-        &BTreeSet::new(),
-    );
+    let impact = impact(&review(Vec::new(), vec![call(0, 2), call(1, 1)]), None);
     let calls = Category::ALL
         .iter()
         .position(|c| *c == Category::CallEdges)
         .and_then(|index| impact.sections.get(index))
         .map(|section| {
             section
-                .items
+                .groups
                 .iter()
+                .flat_map(|g| &g.items)
                 .map(|item| item.anchor.as_ref().map(|a| (a.base, a.commit.clone())))
                 .collect::<Vec<_>>()
         });
@@ -338,7 +333,7 @@ fn a_retained_impact_after_a_failed_read_is_marked_stale() {
             detail_key(&target),
             cached(target.clone(), Some(body.clone()), stale, failed),
         );
-        let Shown::Ready(impact) = shown(&feed, "T-1", &[], &BTreeSet::new()) else {
+        let Shown::Ready(impact) = shown(&feed, "T-1", &[]) else {
             panic!("the retained impact is not shown");
         };
         assert!(impact.scene.is_some());
@@ -406,11 +401,12 @@ fn a_deleted_file_is_anchored_at_the_base_and_selects_its_surviving_package() {
             path: "a/tests/gone.rs".into(),
         },
     ];
-    let impact = impact(&review(Vec::new(), rows), None, &BTreeSet::new());
+    let impact = impact(&review(Vec::new(), rows), None);
     let item = impact
         .sections
         .iter()
-        .flat_map(|s| s.items.iter())
+        .flat_map(|s| &s.groups)
+        .flat_map(|g| &g.items)
         .find(|item| item.main == "a/tests/gone.rs");
     assert_eq!(
         item.map(|i| (
@@ -564,14 +560,14 @@ fn data_changes_anchor_removals_at_the_base_with_their_own_excerpt() {
         provided: true,
         total: 2,
     }];
-    let shown = impact(&review(categories, rows), None, &BTreeSet::new());
+    let shown = impact(&review(categories, rows), None);
     let section = shown
         .sections
         .iter()
         .find(|s| Category::ALL.get(s.index) == Some(&Category::DataModel))
         .unwrap_or_else(|| panic!("no Data model section"));
-    let [removed, retyped] = section.items.as_slice() else {
-        panic!("{:?}", section.items);
+    let [removed, retyped] = section.groups[0].items.as_slice() else {
+        panic!("{:?}", section.groups);
     };
     let anchor = removed
         .anchor
@@ -668,7 +664,7 @@ fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
         },
     ];
     let review = review(Vec::new(), rows);
-    let project = impact(&review, None, &BTreeSet::new()).scene.unwrap();
+    let project = impact(&review, None).scene.unwrap();
     let change = |scene: &Scene, from: &Node, to: &Node| {
         let edge = scene.all_edges().find(|e| &e.from == from && &e.to == to);
         edge.map(|e| {
@@ -749,7 +745,7 @@ fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
         ..head_map(&review)
     };
     let scene = build(&level, Some(&at));
-    let mut marks = impact(&review, None, &BTreeSet::new()).marks;
+    let mut marks = impact(&review, None).marks;
     changes::more(&mut marks, &scene, &review, &at);
     let more = marks.get(&Node::More).copied().unwrap();
     assert_eq!((more.added, more.removed, more.files), (9, 2, 1));
@@ -765,4 +761,17 @@ fn moved_reference_counts_reach_their_edges_and_hidden_files_their_more_card() {
         drawn_pick(&scene, &marks, picked),
         Some(Pick::Node(Node::More))
     );
+}
+
+#[test]
+fn focus_restores_the_map_without_toggling_off_the_item() {
+    let target = module_target(&module("a", "one"));
+    let mut state = State {
+        item: Some("row-42".into()),
+        ..State::default()
+    };
+    state.act(Action::Focus(target.clone()));
+    assert_eq!(state.item.as_deref(), Some("row-42"));
+    assert_eq!(state.map.trail, target.trail);
+    assert_eq!(state.map.picked, Some(Pick::Node(target.node)));
 }

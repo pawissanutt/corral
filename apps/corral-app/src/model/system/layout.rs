@@ -1,13 +1,14 @@
 //! Places a scene for the canvas, computed from the data alone: nothing is placed by hand per
 //! project. Connected cards are layered by reference rank (a package above what it uses), a
-//! rank wider than the room wraps onto more rows, rows are ordered to reduce crossings and
-//! each card is pulled toward its neighbours without overlapping another. Unconnected cards
-//! are packed in rows under the graph. Text is measured by the caller's text engine, so names
+//! rank wider than the room wraps onto more rows, and adjacent module ranks can share a row.
+//! Rows are ordered to reduce crossings and each card is pulled toward its neighbours without
+//! overlapping another. Unconnected cards are packed in rows under the graph. Text is measured
+//! by the caller's text engine, so names
 //! keep their whole width.
 
 use std::collections::BTreeMap;
 
-use super::layered::{LEdge, layered};
+use super::layered::{LEdge, layered, package_layered};
 use super::marks::change_words;
 use super::scene::{Card, EdgeKind, Kind, Level, Scene};
 use super::words::figure;
@@ -154,7 +155,7 @@ pub fn size(card: &Card, scene: &Scene, measure: Measure) -> (f32, f32) {
         .tag
         .as_deref()
         .map_or(0.0, |tag| measure(Font::Tag, tag) + 14.0);
-    let name = measure(Font::Name, &card.name) + tag + 26.0;
+    let name = measure(if plain { Font::Sub } else { Font::Name }, &card.name) + 26.0;
     let mut sub: f32 = 0.0;
     for overlay in Overlay::ALL {
         for window in Window::ALL {
@@ -164,17 +165,22 @@ pub fn size(card: &Card, scene: &Scene, measure: Measure) -> (f32, f32) {
     if let Some(marked) = &card.marked {
         sub = sub.max(measure(Font::Sub, marked));
     }
+    if let Some(chip) = &card.chip {
+        sub = sub.max(measure(Font::Label, chip) + 14.0);
+    }
     let spawns = card.spawns.first().map_or(0.0, |(process, sites)| {
         measure(Font::Sub, "spawns")
             + 32.0
             + chip_width(measure, process, *sites)
             + if card.spawns.len() > 1 { 40.0 } else { 0.0 }
     });
+    // Cap ancillary text, not the name: even a card wider than the room stays readable.
     let w = by_lines
-        .max(name)
+        .max(name + tag)
         .max(sub + 26.0)
         .max(spawns)
-        .clamp(min, MAX_CARD);
+        .clamp(min, MAX_CARD)
+        .max(name);
     let h = CARD_HEIGHT
         + if card.spawns.is_empty() {
             0.0
@@ -240,15 +246,20 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
                 .map(|c| ranks.get(*c).copied().unwrap_or(0))
                 .collect()
         });
-        let g = layered(
-            &local_sizes,
-            &edges,
-            &top,
-            &bottom,
-            inner,
-            (has_top, has_bottom),
-            bands.as_deref(),
-        );
+        let ports = (has_top, has_bottom);
+        let g = if scene.level == Level::Package {
+            package_layered(&local_sizes, &edges, &top, &bottom, inner, ports)
+        } else {
+            layered(
+                &local_sizes,
+                &edges,
+                &top,
+                &bottom,
+                inner,
+                ports,
+                bands.as_deref(),
+            )
+        };
         y += caption_room;
         for (i, rect) in g.pos.iter().enumerate() {
             out.placed.push(Placed {
@@ -300,18 +311,21 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
         if !graph.is_empty() {
             y += 50.0;
         }
-        let band_sizes: Vec<_> = scene.band.iter().map(|c| sizes[*c]).collect();
-        let (pos, w, h) = flow_pack(&band_sizes, inner.max(width - 2.0 * PAD), 14.0);
-        if !graph.is_empty()
-            && let Some(text) = scene.band_title
+        if (!graph.is_empty() || scene.level == Level::Module)
+            && let Some(text) = &scene.band_title
         {
+            if graph.is_empty() {
+                y += 30.0;
+            }
             out.captions.push(Caption {
                 x: PAD,
                 y: y - 14.0,
-                text: text.into(),
-                rule: Some(y - 34.0),
+                text: text.clone(),
+                rule: (!graph.is_empty()).then_some(y - 34.0),
             });
         }
+        let band_sizes: Vec<_> = scene.band.iter().map(|c| sizes[*c]).collect();
+        let (pos, w, h) = flow_pack(&band_sizes, inner.max(width - 2.0 * PAD), 14.0);
         for (i, rect) in pos.into_iter().enumerate() {
             out.placed.push(Placed {
                 card: scene.band[i],
@@ -326,6 +340,9 @@ pub fn layout(scene: &Scene, room: f32, measure: Measure) -> Layout {
         y += h + PAD;
     } else if !graph.is_empty() {
         y += PAD;
+    }
+    for caption in &out.captions {
+        width = width.max(caption.x + measure(Font::Sub, &caption.text) + PAD);
     }
     out.width = width.ceil();
     out.height = y.ceil();

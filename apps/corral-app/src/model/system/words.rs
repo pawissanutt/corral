@@ -313,6 +313,12 @@ pub enum Swatch {
     Excluded,
     Folder,
     Spawn,
+    /// Impact's marks: a card the task changed, one holding dependents, one untouched, and a
+    /// reference count the change moved.
+    Touched,
+    Dependents,
+    Untouched,
+    ChangedEdge,
 }
 
 /// The legend for this level and overlay.

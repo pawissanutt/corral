@@ -62,10 +62,15 @@ pub fn with_focus(
 pub fn key_legend_live(
     destination: Destination,
     top: Option<&Live>,
+    impact_escape: Option<&'static str>,
 ) -> Vec<(&'static str, &'static str)> {
     match (destination, top) {
         (_, Some(Live::Session(_))) => vec![(".", "more")],
-        (_, Some(_)) => vec![("Esc", "tasks"), ("1 2 3", "tabs"), (".", "more")],
+        (_, Some(_)) => vec![
+            ("Esc", impact_escape.unwrap_or("tasks")),
+            ("1 2 3", "tabs"),
+            (".", "more"),
+        ],
         (Destination::Home, None) => vec![("j k", "move"), ("Enter", "open"), (".", "more")],
         (Destination::Tasks, None) => vec![
             ("j k", "move"),

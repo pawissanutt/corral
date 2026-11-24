@@ -54,6 +54,17 @@ pub fn file_count(files: usize) -> String {
     }
 }
 
+/// The stored candidate's changed files; absence of a diff is not a known empty diff.
+pub fn changed_file_count(feed: &Feed, id: &str) -> Option<usize> {
+    let target = DetailRef::Review {
+        task: id.to_owned(),
+    };
+    let DetailBody::Review(review) = feed.detail(&target)?.body()? else {
+        return None;
+    };
+    (review.diff.is_some() || !review.files.is_empty()).then_some(review.files.len())
+}
+
 /// The plan detail of a task with children.
 pub fn plan_ref(id: &str) -> DetailRef {
     DetailRef::Plan { id: id.to_owned() }

@@ -94,6 +94,7 @@ fn line(
     typing: bool,
     surface: Option<Surface>,
     shown: &[Area],
+    impact_escape: Option<&'static str>,
 ) -> Line {
     let go_to = Entry::new(PALETTE_CHORD, PALETTE_LABEL);
     if typing {
@@ -124,7 +125,7 @@ fn line(
         };
     }
     let legend = if served {
-        key_legend_live(destination, live.as_ref())
+        key_legend_live(destination, live.as_ref(), impact_escape)
     } else {
         Vec::new()
     };
@@ -305,7 +306,15 @@ pub(super) fn key_line(app: AppState, typing: Memo<bool>, shown: Memo<Vec<Area>>
         let served = data != DataState::Disconnected
             && !landing
             && app.available(destination) == crate::model::Availability::Ready;
-        let line = line(destination, live, served, typing.get(), surface, &shown);
+        let line = line(
+            destination,
+            live,
+            served,
+            typing.get(),
+            surface,
+            &shown,
+            app.impact_escape_hint(),
+        );
         let fit = line.layout(room);
         let mut row = view()
             .h(term::rows(1.0))
@@ -357,7 +366,15 @@ mod tests {
         ];
         for (destination, live) in views {
             for typing in [false, true] {
-                let line = line(destination, live.clone(), true, typing, None, &Area::PLACES);
+                let line = line(
+                    destination,
+                    live.clone(),
+                    true,
+                    typing,
+                    None,
+                    &Area::PLACES,
+                    None,
+                );
                 for room in 20..=240 {
                     let fit = line.layout(room);
                     assert!(
@@ -390,7 +407,15 @@ mod tests {
     /// has the rest.
     #[test]
     fn a_crowded_key_line_keeps_whole_pairs_and_never_a_bare_key() {
-        let mut line = line(Destination::Tasks, None, true, false, None, &Area::PLACES);
+        let mut line = line(
+            Destination::Tasks,
+            None,
+            true,
+            false,
+            None,
+            &Area::PLACES,
+            None,
+        );
         line.own = [
             ("esc", "chat"),
             ("j", "next task"),
@@ -451,6 +476,7 @@ mod tests {
             false,
             Some(Surface::Menu),
             &Area::PLACES,
+            None,
         );
         let keys: Vec<&str> = line.own.iter().map(|entry| entry.keys.as_str()).collect();
         let menu: Vec<&str> = Surface::Menu.keys().iter().map(|(keys, _)| *keys).collect();

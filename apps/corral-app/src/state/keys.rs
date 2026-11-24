@@ -250,8 +250,8 @@ impl AppState {
         moves.into_iter().collect()
     }
 
-    /// The phone form with a hardware keyboard: Ctrl+K (⌘K) opens and closes the palette, as the
-    /// magnifier does, and Ctrl+G (⌘G) the Agents switcher, as its trigger does. Its letter and list keys stay unbound; a phone has no key line naming them.
+    /// The phone's hardware keyboard has the palette and Agents chords, and Escape in Impact.
+    /// Letter and list keys stay unbound; the phone has no key line naming them.
     pub(super) fn bind_phone_keys(self) {
         let anywhere = KeyOptions {
             when: When::Always,
@@ -259,6 +259,11 @@ impl AppState {
         };
         on_key_with("mod+k", anywhere, move |_| self.toggle_palette());
         on_key_with(AGENTS_CHORD, anywhere, move |_| self.toggle_agents());
+        on_key_with("escape", anywhere, move |_| {
+            if self.on_impact_view() {
+                self.close_newest();
+            }
+        });
     }
 
     fn toggle_palette(self) {
