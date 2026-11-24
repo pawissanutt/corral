@@ -12,7 +12,8 @@ import { installChildFallback } from "../../host/model-selection.ts";
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
 import { closeResidentSession, residentLifecycle } from "../../claude/resident.ts";
 import { classifyBuildWrite } from "../../roles/build/guard.ts";
-import { exploreLoadout } from "../../roles/common/execution.ts";
+import { executionRefusal, exploreLoadout } from "../../roles/common/execution.ts";
+import { researchCode } from "../codemode/research.ts";
 import type { HelperEvent } from "../subagent/inspection.ts";
 import { observeHelperEvent } from "../subagent/session.ts";
 import { researchBudget, researchPrompt, researchResult, type ResearchOptions, type ResearchReport } from "../subagent/research.ts";
@@ -264,12 +265,14 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
     const parent = options.parentLoadout ?? [];
     const loadout = options.bound
       ? kind === "slice" ? BASE_TOOLS.filter(name => parent.includes(name))
-        : kind === "explore" ? exploreLoadout(parent).filter(name => execution?.research?.profile !== "docs" || ["web_fetch", "web_read", "web_search"].includes(name))
+        : kind === "explore" ? exploreLoadout(parent).filter(name => execution?.research?.profile !== "docs" || ["web_fetch", "web_read", "web_search", "codemode"].includes(name))
         : ["read", "grep", "find", "ls", "bash"].filter(name => parent.includes(name))
       : kind === "slice" ? [...BASE_TOOLS, ...options.localTools.filter(tool => !DELEGATION[tool.name]).map(tool => tool.name)]
         : ["read", "grep", "find", "ls", ...(kind === "review" ? ["bash"] : [])];
     const allowed = new Set([...loadout, ...(kind === "review" ? ["review_verdict"] : []),
       ...(kind === "slice" ? ["ask_owner"] : []), ...communication.map(tool => tool.name)]);
+    const nestedAllowed = new Set(loadout);
+    const code = research && allowed.has("codemode") ? researchCode(nestedAllowed) : undefined;
     let session: Sdk.AgentSession | undefined;
     let pending: ResolvedModel | undefined;
     let profileTier = initialModel.serviceTier;
@@ -331,9 +334,10 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         const extension = (pi: ExtensionAPI) => {
           residentLifecycle(pi);
           for (const tool of options.localTools) {
-            if (allowed.has(tool.name) && (!options.bound || (research && !BASE_TOOLS.includes(tool.name)))
+            if (tool.name !== "codemode" && allowed.has(tool.name) && (!options.bound || (research && !BASE_TOOLS.includes(tool.name)))
               && !["ask_owner", "agent_message", "agent_roster", "review_verdict"].includes(tool.name)) pi.registerTool(tool);
           }
+          if (code) pi.registerTool(code.tool);
           for (const tool of communication) pi.registerTool(tool);
           if (kind === "review") pi.registerTool({
             name: "review_verdict", label: "Record review verdict", description: "Record your independent review verdict and concrete findings before finishing.",
@@ -354,7 +358,9 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
             } });
           pi.on("tool_call", event => {
             let reason: string | undefined;
-            if (!allowed.has(event.toolName) || DELEGATION[event.toolName] || event.parentToolCallId !== undefined) reason = "Build children cannot delegate or invoke tools outside their loadout";
+            if (research) reason = executionRefusal(event.toolName, event.parentToolCallId !== undefined,
+              event.parentToolCallId !== undefined ? nestedAllowed : allowed);
+            else if (!allowed.has(event.toolName) || DELEGATION[event.toolName] || event.parentToolCallId !== undefined) reason = "Build children cannot delegate or invoke tools outside their loadout";
             else if (event.toolName === "edit" || event.toolName === "write") {
               const path = event.input.path;
               if (typeof path !== "string") reason = "Build writes require a path";
@@ -381,6 +387,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
             if (nextTurn === maxTurns || nearDeadline) {
               synthesis = nextTurn === maxTurns ? "turn_limit" : "time_reserve";
               allowed.clear();
+              nestedAllowed.clear();
               pi.setActiveTools([]);
             }
           };
@@ -455,7 +462,7 @@ export function createSdkRunner(options: SdkRunnerOptions): ChildRunner {
         finally {
           complete = true;
           try { if (session) closeResidentSession(session.sessionId); }
-          finally { session?.dispose(); }
+          finally { session?.dispose(); await code?.runtime.close(); }
         }
       }
     })();

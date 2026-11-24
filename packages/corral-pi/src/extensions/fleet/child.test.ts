@@ -202,6 +202,29 @@ test("bound slices intersect SDK base tools and honor the supplied write refusal
   } finally { f.cleanup(); }
 });
 
+test("explore Code Mode is isolated and nested calls obey the read-only child ceiling", async () => {
+  const f = fixture();
+  f.body(async () => {
+    expect(f.tools).toContain("codemode");
+    expect(f.registered.has("codemode")).toBe(true);
+    expect(await f.emit("tool_call", { toolName: "read", input: {}, parentToolCallId: "cell" })).toBeUndefined();
+    for (const name of ["write", "bash", "task", "agent_message", "codemode", "mcp_read"]) {
+      expect(await f.emit("tool_call", { toolName: name, input: {}, parentToolCallId: "cell" })).toMatchObject({ block: true });
+    }
+    await f.emit("before_agent_start");
+    for (let turn = 1; turn < 10; turn++) { await f.emit("turn_start"); await f.emit("turn_end"); }
+    expect(await f.emit("tool_call", { toolName: "read", input: {}, parentToolCallId: "cell" })).toMatchObject({ block: true });
+    f.messages.push(answer("Evidence"));
+  });
+  try {
+    const handle = createSdkRunner({ ...f.options, bound: true,
+      parentLoadout: ["read", "codemode", "write", "bash", "task", "mcp_read"] })
+      .run({ id: "explore", title: "Explore", brief: "Trace", owns: [], kind: "explore" },
+        { profile: "fixture", provider: "fixture", model: "fixture" }, f.hooks, new AbortController().signal);
+    expect((await handle.done).failed).toBeUndefined();
+  } finally { f.cleanup(); }
+});
+
 test("research reserves a tool-free synthesis request at the deadline", async () => {
   const f = fixture();
   f.hooks.execution!.deadlineAt = 5000;

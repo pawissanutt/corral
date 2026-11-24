@@ -9,6 +9,7 @@ import { installChildFallback } from "../../host/model-selection.ts";
 import { resourceLoaderOptions, restrictedSettings } from "../../host/restrict.ts";
 import { closeResidentSession, residentLifecycle } from "../../claude/resident.ts";
 import { executionRefusal, exploreLoadout } from "../../roles/common/execution.ts";
+import { researchCode } from "../codemode/research.ts";
 import type { AuxiliaryResult, Invocation } from "./runtime.ts";
 import { HELPER_TEXT_LIMIT, type HelperEvent } from "./inspection.ts";
 import { researchBudget, researchPrompt, researchResult, type ResearchReport } from "./research.ts";
@@ -157,6 +158,7 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
   const loadout = invocation.kind === "explore" ? exploreLoadout(options.parentLoadout)
     : invocation.kind === "expert" ? expertLoadout(options.localTools) : [];
   const allowed = new Set(loadout);
+  const code = invocation.kind === "explore" && allowed.has("codemode") ? researchCode(allowed) : undefined;
   let turns = 0;
   let synthesis: "turn_limit" | "time_reserve" | undefined;
   let synthesisUsed: typeof synthesis;
@@ -165,7 +167,8 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
     ? researchBudget(invocation.research ?? {}, invocation.maxTurns).thinkingLevel : "off";
   const extension = (pi: ExtensionAPI) => {
     residentLifecycle(pi);
-    for (const tool of options.localTools.filter((tool) => allowed.has(tool.name))) pi.registerTool(tool);
+    for (const tool of options.localTools.filter((tool) => allowed.has(tool.name) && tool.name !== "codemode")) pi.registerTool(tool);
+    if (code) pi.registerTool(code.tool);
     pi.on("tool_call", (event) => {
       const reason = executionRefusal(event.toolName, event.parentToolCallId !== undefined, allowed);
       return reason ? { block: true, reason } : undefined;
@@ -257,7 +260,7 @@ export async function runAuxiliarySession(options: AuxiliarySessionOptions, invo
     try { unsubscribe(); }
     finally {
       try { closeResidentSession(session.sessionId); }
-      finally { session.dispose(); }
+      finally { session.dispose(); await code?.runtime.close(); }
     }
   }
 }
