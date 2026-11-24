@@ -3,7 +3,10 @@ use std::{
     process::{Command, Stdio},
 };
 
-use corral_facts::{PackageEdgeKind, ReadStatus, ReferenceBasis, ReferenceKind};
+use corral_facts::{
+    EntryDetector, EntryKind, EntryPoint, PackageEdgeKind, ReadStatus, ReferenceBasis,
+    ReferenceKind, RuntimeSource, RuntimeUnitId, RuntimeUnitKind,
+};
 use serde_json::json;
 
 use super::*;
@@ -164,7 +167,10 @@ ROWS
     assert_eq!(report.extension, "fixture");
     assert_eq!(report.error, None);
     assert_eq!(report.coverage.provided, ["definitions"]);
-    assert_eq!(report.coverage.not_provided, ["files", "references"]);
+    assert_eq!(
+        report.coverage.not_provided,
+        ["files", "references", "entries"]
+    );
     assert_eq!(report.coverage.dropped_unknown_files, 1);
     assert_eq!(report.coverage.skipped["unsupported"], 1);
     assert_eq!(report.coverage.omitted["limit"], 2);
@@ -195,6 +201,87 @@ ROWS
             .definitions,
         definitions
     );
+}
+
+#[test]
+fn extension_entries_replace_only_covered_files() {
+    let fixture = Fixture::new();
+    let reader = fixture.reader();
+    fs::write(
+        reader.repo.join("app/package.json"),
+        r#"{"name":"app","bin":{"serve":"index.ts"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        reader.repo.join("app/index.ts"),
+        "const app = express();\napp.get(\"/first\", handler);\napp.post(\"/second\", handler);\n",
+    )
+    .unwrap();
+    fs::write(
+        reader.repo.join("app/other.ts"),
+        "const app = express();\napp.get(\"/untouched\", handler);\n",
+    )
+    .unwrap();
+    fixture.git(&["add", "."]);
+    fixture.git(&["commit", "-m", "entry fixture"]);
+    let revision = reader.resolve_revision("HEAD").unwrap();
+    let mut facts = reader.builtin_snapshot(&revision).unwrap();
+    let builtin = facts.structure.entry_points.clone();
+    assert_eq!(
+        builtin
+            .entries
+            .iter()
+            .filter(|entry| entry.path == "app/index.ts")
+            .count(),
+        2
+    );
+    assert!(
+        builtin
+            .entries
+            .iter()
+            .any(|entry| entry.path == "app/other.ts")
+    );
+    fixture.script(
+        r#"
+cat <<'ROWS'
+{"type":"entry","path":"app/index.ts","line":3,"kind":"operation","name":"Serve"}
+{"type":"entry","path":"missing.ts","line":1,"kind":"command","name":"ghost"}
+{"type":"done","provided":["entries"],"skipped":{},"omitted":{}}
+ROWS
+"#,
+    );
+    let report = reader.enrich_snapshot(&mut facts).unwrap();
+    assert_eq!(
+        fixture.request()["want"],
+        json!(["files", "definitions", "references", "entries"])
+    );
+    assert_eq!(report.error, None);
+    assert_eq!(report.coverage.provided, ["entries"]);
+    assert_eq!(report.coverage.dropped_unknown_files, 1);
+    let mut expected = builtin;
+    expected
+        .entries
+        .retain(|entry| entry.path != "app/index.ts");
+    expected.entries.push(EntryPoint {
+        kind: EntryKind::Operation,
+        name: "Serve".into(),
+        path: "app/index.ts".into(),
+        line: 3,
+        owner: RuntimeSource::Unit {
+            id: RuntimeUnitId {
+                kind: RuntimeUnitKind::Binary,
+                name: "serve".into(),
+                path: "app/package.json".into(),
+            },
+        },
+    });
+    expected.entries.sort();
+    expected
+        .coverage
+        .get_mut("app")
+        .unwrap()
+        .insert(EntryDetector::Extension);
+    assert_eq!(facts.structure.entry_points, expected);
 }
 
 #[test]

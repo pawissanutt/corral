@@ -67,7 +67,11 @@ pub(crate) fn welcome(shared: &Shared, hello: wire::Hello) -> wire::Welcome {
                         | wire::CLOSED_V1
                         | device::DEVICE_V1
                         | device::PUSH_V1
-                ) || system && cap == app::SYSTEM_RUNTIME_V1
+                ) || system
+                    && matches!(
+                        cap.as_str(),
+                        app::SYSTEM_RUNTIME_V1 | app::SYSTEM_ENTRIES_V1
+                    )
                     || cfg!(target_os = "linux")
                         && matches!(cap.as_str(), app::SESSION_FILES_V1 | app::SESSION_HTML_V1)
                     || chat
@@ -242,11 +246,11 @@ pub(crate) fn serve(
             {
                 device_id()?;
             }
-            if topics.has_runtime_review() {
-                Ok(views::detail_for_client(shared, query, true)?)
-            } else {
-                Ok(views::detail(shared, query)?)
-            }
+            Ok(views::detail_for_client(
+                shared,
+                query,
+                topics.system_features(),
+            )?)
         }),
         app::CHANGES_PAGE => answer!({
             let seen = match session {

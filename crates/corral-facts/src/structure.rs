@@ -3,9 +3,9 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::{git, manifests, model::*, runtime, syntax::Scanner};
+use crate::{entries, git, manifests, model::*, runtime, syntax::Scanner};
 
-pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
+pub(crate) fn collect(repo: &Path, tree: &str, operation_enums: &[String]) -> Result<TreeFacts> {
     let mut paths = Vec::new();
     let mut line_counts = Vec::new();
     let mut manifest_text = BTreeMap::new();
@@ -80,9 +80,33 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
         runtime::Runtime::collect(&manifest_text, configs, &by_path, &container_paths);
     let mut refs = BTreeMap::new();
     let mut spawn_counts = BTreeMap::new();
+    let mut entry_coverage = BTreeMap::<_, BTreeSet<_>>::new();
+    for path in parsed
+        .iter()
+        .filter(|path| path.rsplit('/').next() == Some("package.json"))
+    {
+        entry_coverage
+            .entry(by_path[path.as_str()].container.clone())
+            .or_default()
+            .insert(EntryDetector::NpmBin);
+    }
+    let mut entry_sites = Vec::new();
     for (path, text) in source_text {
         let from = by_path[path.as_str()];
-        let scan = scanner.scan(from, &text);
+        let mut scan = scanner.scan(from, &text, operation_enums);
+        if !scan.entry_detectors.is_empty() {
+            entry_coverage
+                .entry(from.container.clone())
+                .or_default()
+                .extend(scan.entry_detectors);
+        }
+        scan.entries.sort_unstable_by_key(|(_, _, offset)| *offset);
+        let (mut previous, mut line) = (0, 1);
+        for (kind, name, offset) in scan.entries {
+            line += newlines(&text, previous, offset);
+            previous = offset;
+            entry_sites.push((from, kind, name, line));
+        }
         coverage.unresolved_references += scan.unresolved;
         for (target, kind) in scan.references {
             let Some(to) = by_path.get(target.as_str()) else {
@@ -94,10 +118,7 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
         }
         let (mut previous, mut line) = (0, 1);
         for (process, offset) in scan.spawns {
-            line += text.as_bytes()[previous..offset]
-                .iter()
-                .filter(|&&b| b == b'\n')
-                .count() as u64;
+            line += newlines(&text, previous, offset);
             previous = offset;
             if !runtime.spawn(from, &process, line) {
                 *spawn_counts.entry((&from.path, process)).or_default() += 1;
@@ -111,6 +132,8 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
         &by_path,
         &dependencies,
     );
+    let runtime = runtime.finish();
+    let entry_points = entries::finish(&containers, &runtime, entry_coverage, entry_sites);
     Ok(TreeFacts {
         file_references,
         module_references,
@@ -123,13 +146,21 @@ pub(crate) fn collect(repo: &Path, tree: &str) -> Result<TreeFacts> {
                 count,
             })
             .collect(),
-        runtime: runtime.finish(),
+        runtime,
+        entry_points,
         files,
         containers: directory_nodes(containers),
         modules: modules.into_iter().collect(),
         dependencies,
         coverage,
     })
+}
+
+fn newlines(text: &str, from: usize, to: usize) -> u64 {
+    text.as_bytes()[from..to]
+        .iter()
+        .filter(|&&b| b == b'\n')
+        .count() as u64
 }
 
 // The scanner sees every manifest identity, but the map has exactly one node per directory.

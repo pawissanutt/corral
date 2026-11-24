@@ -213,6 +213,47 @@ pub struct RuntimeFacts {
     pub edges: Vec<RuntimeEdge>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    Command,
+    Route,
+    Operation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryDetector {
+    Clap,
+    Axum,
+    Express,
+    NpmBin,
+    OperationEnum,
+    Extension,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct EntryPoint {
+    pub kind: EntryKind,
+    pub name: String,
+    pub path: String,
+    pub line: u64,
+    pub owner: RuntimeSource,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryPoints {
+    pub entries: Vec<EntryPoint>,
+    /// One row per container. An empty set means no detector applied, not zero entry points.
+    pub coverage: BTreeMap<String, std::collections::BTreeSet<EntryDetector>>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryPointDelta {
+    pub added: Vec<EntryPoint>,
+    pub removed: Vec<EntryPoint>,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeDelta {
     pub units: Vec<RuntimeUnitChange>,

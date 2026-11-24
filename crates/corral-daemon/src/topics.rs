@@ -12,7 +12,7 @@ use corral_protocol::{
 };
 use serde::Serialize;
 
-use crate::{conn::Conn, state::Shared};
+use crate::{conn::Conn, state::Shared, views::SystemFeatures};
 
 pub(crate) struct Subscriptions<'a> {
     shared: &'a Shared,
@@ -23,7 +23,7 @@ pub(crate) struct Subscriptions<'a> {
     session_state: bool,
     build_rows: bool,
     system: bool,
-    runtime_review: bool,
+    system_features: SystemFeatures,
 }
 
 impl<'a> Subscriptions<'a> {
@@ -37,7 +37,7 @@ impl<'a> Subscriptions<'a> {
             session_state: false,
             build_rows: false,
             system: false,
-            runtime_review: false,
+            system_features: SystemFeatures::default(),
         }
     }
 
@@ -46,8 +46,10 @@ impl<'a> Subscriptions<'a> {
         self.session_state = caps.iter().any(|cap| cap == wire::app::SESSION_STATE_V1);
         self.build_rows = caps.iter().any(|cap| cap == wire::app::BUILD_V1);
         self.system = caps.iter().any(|cap| cap == wire::app::SYSTEM_V1);
-        self.runtime_review =
-            self.system && caps.iter().any(|cap| cap == wire::app::SYSTEM_RUNTIME_V1);
+        self.system_features = SystemFeatures {
+            runtime: self.system && caps.iter().any(|cap| cap == wire::app::SYSTEM_RUNTIME_V1),
+            entries: self.system && caps.iter().any(|cap| cap == wire::app::SYSTEM_ENTRIES_V1),
+        };
         if !self.system {
             self.rows.retain(|sub| sub.topic != Topic::System);
         }
@@ -57,8 +59,8 @@ impl<'a> Subscriptions<'a> {
         self.system
     }
 
-    pub(crate) fn has_runtime_review(&self) -> bool {
-        self.runtime_review
+    pub(crate) fn system_features(&self) -> SystemFeatures {
+        self.system_features
     }
 
     pub fn open(&mut self, open: SubOpen) -> Result<()> {

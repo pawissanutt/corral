@@ -2749,7 +2749,7 @@
             "type": "object"
           },
           {
-            "description": "`system.v1`: project runtime units and edges at its observed head.",
+            "description": "`system.v1`: project runtime units and edges at its observed head.\nEntry rows and per-container detector coverage require both\n`system.runtime.v1` and `system.entries.v1`. Empty `detectors` means no detector applied.",
             "properties": {
               "kind": {
                 "const": "system_runtime",
@@ -2766,7 +2766,7 @@
             "type": "object"
           },
           {
-            "description": "`system.v1`: impact of the latest submitted worker change. Runtime rows\nand summaries require the negotiated `system.runtime.v1` capability.",
+            "description": "`system.v1`: impact of the latest submitted worker change. Runtime rows\nand summaries require `system.runtime.v1`; entry point changes and\nsummaries require `system.entries.v1`.",
             "properties": {
               "at": {
                 "anyOf": [
@@ -2777,7 +2777,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "The head's map level to serve with the impact; the project level when absent."
+                "description": "The head's map level and entry point scope; the project level when absent."
               },
               "kind": {
                 "const": "system_review",
@@ -11869,7 +11869,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "The head's map level to serve with the impact; the project level when absent."
+                "description": "The head's map level and entry point scope; the project level when absent."
               }
             ]
           }

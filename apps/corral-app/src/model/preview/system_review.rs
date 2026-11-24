@@ -161,7 +161,10 @@ pub(super) fn review(
     );
     out.extend(rows);
     let mut categories = Vec::new();
-    for category in Category::ALL {
+    for category in Category::ALL
+        .into_iter()
+        .filter(|c| *c != Category::EntryPoints)
+    {
         let listed: Vec<Row> = facts
             .iter()
             .filter(|(c, _)| *c == category)

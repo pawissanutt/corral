@@ -9,6 +9,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use corral_engine::{config::Slot, facts::FactsReader};
 use corral_facts::Revision;
+use corral_types::SystemRuntimeRow;
 
 use super::{
     Cache, Configuration, Impact, ImpactFacts, Queue, Snapshot, Stage, Submission, bounded_error,
@@ -200,13 +201,22 @@ impl Worker {
         let Some(report) = reader.enrich_snapshot(&mut enriched) else {
             return;
         };
+        let provided_entries = report.coverage.provides("entries");
         let report = bounded_report(report, || {
             enriched
                 .structure
                 .files
                 .iter()
                 .flat_map(|file| &file.definitions)
-                .try_for_each(provider_row_fits)
+                .try_for_each(provider_row_fits)?;
+            if provided_entries {
+                for entry in &enriched.structure.entry_points.entries {
+                    provider_row_fits(&SystemRuntimeRow::Entry {
+                        entry: entry.clone(),
+                    })?;
+                }
+            }
+            Ok(())
         });
         if self.requeue_if_tip_moved(job, project, branch, head) {
             return;

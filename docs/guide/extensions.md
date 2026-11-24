@@ -69,13 +69,32 @@ there is nothing to search. It needs Python 3 and Git, not an index service.
 
 ## Ask: facts
 
-`facts` is an optional slot for enriching built-in system facts. The facts reader supports
-provider calls, but normal daemon/CLI system-map integration is not yet wired here. It
-keeps built-in facts when the provider fails. A call runs from the project repository and
-has a 10-minute deadline and 64 MiB stdout limit. Requests are:
+Built-in entry points use committed source. The detectors recognize Clap `Subcommand`
+variants (including literal `rename_all` and `name` overrides), npm `bin` names,
+literal Axum `.route("/path", get(handler))` and Express `app.get("/path", handler)`
+shapes (also for other HTTP methods), and variants of configured Rust enums. To count
+Corral's `Op` variants as operations, for example, add to `.corral-next/corral.toml`:
+
+```toml
+[projects.corral]
+path = "corral"
+operation_enums = ["Op"]
+```
+
+Selectors match exact Rust enum names, not qualified paths. These are source heuristics:
+no macro expansion, conditional compilation, command hierarchy, generated commands (such
+as Clap's `help`), dynamic routes, chained Axum handlers or handler resolution. The runtime
+detail lists applicable detectors by container; an empty list means **no detector**, not
+zero entry points. Review compares built-in entry points at the submitted base and head;
+line-only moves are not additions or removals.
+
+`facts` is an optional slot for enriching built-in system facts. The daemon publishes
+built-in facts first and runs providers in the background. If a provider fails, built-in
+facts remain available. A call runs from the project repository and has a 10-minute
+deadline and 64 MiB stdout limit. Requests are:
 
 ```json
-{"v":1,"query":"snapshot","repo":"/absolute/repo","rev":"commit","want":["files","definitions","references"]}
+{"v":1,"query":"snapshot","repo":"/absolute/repo","rev":"commit","want":["files","definitions","references","entries"]}
 {"v":1,"query":"delta","repo":"/absolute/repo","base":"commit","head":"commit","want":["changes","dependents","tests"]}
 ```
 
@@ -89,6 +108,7 @@ All rows must be valid, even for unrequested categories; malformed output, a mis
 | `file` | `path`, `read` (`complete`, `unsupported`, `failed`) |
 | `definition` | `path`, `name`, `line`, `end_line`, `kind` |
 | `reference` | `from`, `to`, `kind` (`import`, `use`, `call`), `count` |
+| `entry` | `path`, `line`, `kind` (`command`, `route`, `operation`), `name` |
 | `change` | `change` (`added`, `removed`, `changed`), `fact` (`definition` or `reference`), `path`, `name`, `line`; reference changes also need `to_path`, `to_name` |
 | `dependent` | `path`, `name`, `line`, `of` |
 | `test` | `path`, `name` |
@@ -99,7 +119,15 @@ positive. Paths (including reference `from` and `to`) are exact repository-relat
 paths in the snapshot, or the base for removed delta changes and the head otherwise;
 unknown paths are dropped. A dependent's `of` is the full name of the changed definition.
 Providing references replaces built-in syntactic references, even when the provider returns
-none. Results are cached by tree and provider configuration; inputs should correspond to the
+none. For snapshots, `entry` rows such as
+`{"type":"entry","path":"src/routes.rs","line":12,"kind":"route","name":"GET /tasks"}`
+replace all built-in entry points only for files with at least one accepted `entry` row.
+An empty `entries` answer leaves built-in entry points unchanged. Corral assigns each entry
+point to its container's only binary, or to the container itself if it does not have exactly
+one binary, and records extension coverage for the affected containers. Delta requests still
+ask for `changes`, `dependents`, and `tests`, not `entries`.
+
+Results are cached by tree and provider configuration; inputs should correspond to the
 requested revision.
 
 `examples/extensions/facts.py` reads a tracked ctags-format file at the requested Git

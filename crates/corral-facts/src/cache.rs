@@ -15,21 +15,43 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct FactsCache {
     directory: PathBuf,
+    operation_enums: Vec<String>,
+    operation_key: Option<String>,
 }
 
 impl FactsCache {
     pub fn new(workspace: &Path) -> Self {
         Self {
             directory: workspace.join(".corral-next/cache/system-map/v2"),
+            operation_enums: Vec::new(),
+            operation_key: None,
         }
     }
 
-    /// Read structural facts by full tree object id. A cache hit does not access the repository.
+    /// Configure enum selectors for built-in operation facts. Other cached facts
+    /// (activity and provider replies) are independent of the selectors.
+    pub fn with_operation_enums(mut self, names: &[String]) -> Self {
+        self.operation_enums = names.to_vec();
+        self.operation_enums.sort_unstable();
+        self.operation_enums.dedup();
+        self.operation_key = (!self.operation_enums.is_empty()).then(|| {
+            let mut hash = Sha256::new();
+            for name in &self.operation_enums {
+                hash.update((name.len() as u64).to_le_bytes());
+                hash.update(name.as_bytes());
+            }
+            format!("{:x}", hash.finalize())
+        });
+        self
+    }
+
+    /// Read structural facts by validated tree ID and the active enum selectors.
+    /// A cache hit does not access the repository.
     pub fn tree_facts(&self, repo: &Path, tree: &str) -> Result<TreeFacts> {
         let tree = object_id(tree)?;
-        // Old snapshots omit some runtime links and can report different binary
-        // targets. Keep structural entries separate, including on daemon rollback.
-        self.get("trees-v4", &tree, || structure::collect(repo, &tree))
+        self.get("trees-v5", &self.entry_key(&tree), || {
+            structure::collect(repo, &tree, &self.operation_enums)
+        })
     }
 
     /// Read facts for a revision produced by [`crate::resolve_revision`].
@@ -65,12 +87,14 @@ impl FactsCache {
                 dependencies: vec![],
                 module_references: vec![],
                 runtime: Default::default(),
+                entry_points: Default::default(),
                 changes: None,
                 dependents: None,
                 tests: None,
             });
         }
-        self.get("deltas-v4", &format!("{base_tree}-{head_tree}"), || {
+        let key = self.entry_key(&format!("{base_tree}-{head_tree}"));
+        self.get("deltas-v5", &key, || {
             let before = self.tree_facts(repo, &base_tree)?;
             let after = self.tree_facts(repo, &head_tree)?;
             let (files, skipped_non_utf8_paths) = git::changes(repo, &base_commit, &head_commit)?;
@@ -101,6 +125,13 @@ impl FactsCache {
         };
         let namespace = Sha256::digest(namespace);
         self.get("provider-v1", &format!("{namespace:x}-{trees}"), load)
+    }
+
+    fn entry_key(&self, key: &str) -> String {
+        match &self.operation_key {
+            Some(enums) => format!("{key}-{enums}"),
+            None => key.to_owned(),
+        }
     }
 
     fn get<T: Serialize + DeserializeOwned>(

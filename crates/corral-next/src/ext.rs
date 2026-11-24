@@ -140,7 +140,10 @@ pub(crate) fn check(
                 ("query".into(), json!("snapshot")),
                 ("repo".into(), json!(cwd.to_string_lossy())),
                 ("rev".into(), json!("HEAD")),
-                ("want".into(), json!(["files", "definitions", "references"])),
+                (
+                    "want".into(),
+                    json!(["files", "definitions", "references", "entries"]),
+                ),
             ]),
         );
     }

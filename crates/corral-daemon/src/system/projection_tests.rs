@@ -7,10 +7,23 @@ use corral_facts::{
     provider::{ChangeFact, DefinitionFact, DependentFact, TestCandidate},
 };
 
+use corral_types::{
+    EntryDetector, EntryKind, EntryPoint, RuntimeSource, RuntimeUnitId, RuntimeUnitKind,
+};
+
 use super::*;
 use SystemImpactCategory as Category;
 use SystemMapRow as Map;
 use SystemReviewRow as Review;
+
+const LEGACY_SYSTEM: SystemFeatures = SystemFeatures {
+    runtime: false,
+    entries: false,
+};
+const ENTRIES: SystemFeatures = SystemFeatures {
+    runtime: false,
+    entries: true,
+};
 
 fn container(path: &str) -> ContainerFact {
     ContainerFact {
@@ -58,6 +71,7 @@ fn tree(files: Vec<FileFact>, containers: &[&str]) -> TreeFacts {
         package_edges: vec![],
         spawns: vec![],
         runtime: Default::default(),
+        entry_points: Default::default(),
         coverage: Coverage::default(),
     }
 }
@@ -282,6 +296,7 @@ fn delta(files: Vec<FileChange>) -> ProjectDelta {
         dependencies: vec![],
         module_references: vec![],
         runtime: Default::default(),
+        entry_points: Default::default(),
         changes: None,
         dependents: None,
         tests: None,
@@ -349,7 +364,18 @@ fn review_uses_head_ownership_base_for_deletes_and_builtin_edge_changes() {
         before: 2,
         after: 5,
     });
-    let (categories, rows) = review(&delta, &before, &after, None, None, true).unwrap();
+    let (categories, rows) = review(
+        &delta,
+        &before,
+        &after,
+        None,
+        None,
+        SystemFeatures {
+            runtime: true,
+            entries: true,
+        },
+    )
+    .unwrap();
     assert_eq!(
         categories
             .iter()
@@ -412,7 +438,7 @@ fn review_reports_a_manifest_edit_with_no_dependency_or_edge_delta() {
     let before = tree(vec![file("app/Cargo.toml", &code, 4)], &["app"]);
     let delta = delta(vec![change("app/Cargo.toml", 1, 1)]);
     // The manifest's package version changed, not its dependency declarations.
-    let (categories, rows) = review(&delta, &before, &before, None, None, false).unwrap();
+    let (categories, rows) = review(&delta, &before, &before, None, None, LEGACY_SYSTEM).unwrap();
     assert_eq!(
         summary(&categories, Category::PackageDependencies),
         (true, 1)
@@ -430,7 +456,7 @@ fn review_serves_the_heads_package_level_when_asked() {
     let head = tree(vec![file("app/src/feature/mod.rs", &code, 4)], &["app"]);
     let delta = delta(vec![change("app/src/feature/mod.rs", 1, 1)]);
     let at = SystemAt::Container { path: "app".into() };
-    let (_, rows) = review(&delta, &head, &head, None, Some(&at), false).unwrap();
+    let (_, rows) = review(&delta, &head, &head, None, Some(&at), LEGACY_SYSTEM).unwrap();
     assert!(rows.iter().any(|row| matches!(row,
         Review::Map { row: Map::Module { module, .. } } if *module == code)));
     assert!(!rows.iter().any(|row| matches!(
@@ -453,7 +479,7 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
     );
     let after = tree(vec![src, file("b/lib.rs", &b, 3)], &["a", "b"]);
     let mut delta = delta(vec![change("a/deleted.rs", 0, 3), change("a/new.rs", 3, 0)]);
-    let (categories, builtin) = review(&delta, &before, &after, None, None, false).unwrap();
+    let (categories, builtin) = review(&delta, &before, &after, None, None, LEGACY_SYSTEM).unwrap();
     assert!(builtin.contains(&Review::NotRead {
         path: "a/new.rs".into(),
         read_status: ReadStatus::Unsupported,
@@ -467,7 +493,7 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
     }
     delta.changes = Some(vec![]);
     delta.dependents = Some(vec![]);
-    let (categories, _) = review(&delta, &before, &after, None, None, false).unwrap();
+    let (categories, _) = review(&delta, &before, &after, None, None, LEGACY_SYSTEM).unwrap();
     for cat in [
         Category::Definitions,
         Category::CallEdges,
@@ -516,7 +542,7 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
     };
     delta.tests = Some(vec![candidate.clone()]);
     // The delta's semantic row is evidence even without a snapshot at this head.
-    let (categories, rows) = review(&delta, &before, &after, None, None, false).unwrap();
+    let (categories, rows) = review(&delta, &before, &after, None, None, LEGACY_SYSTEM).unwrap();
     assert_eq!(summary(&categories, Category::Definitions), (true, 1));
     assert_eq!(summary(&categories, Category::CallEdges), (true, 1));
     assert_eq!(summary(&categories, Category::Dependents), (true, 1));
@@ -542,4 +568,102 @@ fn review_distinguishes_empty_provider_answers_and_groups_calls_with_anchors() {
             .any(|row| matches!(row, Review::Dependent { dependent: d, .. } if *d == dependent))
     );
     assert!(rows.contains(&Review::TestCandidate { candidate }));
+}
+
+#[test]
+fn review_entry_changes_use_their_side_of_the_diff_and_scoped_coverage() {
+    let (old, new) = (module("old", "api"), module("old/api", ""));
+    let path = "old/api/src/lib.rs";
+    let mut base = tree(vec![file(path, &old, 10)], &["old", "other"]);
+    let mut head = tree(vec![file(path, &new, 11)], &["old", "old/api", "other"]);
+    base.entry_points
+        .coverage
+        .insert("old".into(), BTreeSet::from([EntryDetector::Axum]));
+    head.entry_points
+        .coverage
+        .insert("old/api".into(), BTreeSet::from([EntryDetector::Axum]));
+    head.entry_points
+        .coverage
+        .insert("other".into(), BTreeSet::new());
+    let removed = EntryPoint {
+        kind: EntryKind::Route,
+        name: "GET /old".into(),
+        path: path.into(),
+        line: 5,
+        owner: RuntimeSource::Container { path: "old".into() },
+    };
+    let added = EntryPoint {
+        name: "GET /new".into(),
+        line: 8,
+        owner: RuntimeSource::Unit {
+            id: RuntimeUnitId {
+                kind: RuntimeUnitKind::Binary,
+                name: "server".into(),
+                path: "old/api/src/main.rs".into(),
+            },
+        },
+        ..removed.clone()
+    };
+    head.entry_points.entries.push(added.clone());
+    let mut delta = delta(vec![change(path, 3, 2)]);
+    delta.entry_points.added.push(added.clone());
+    delta.entry_points.removed.push(removed.clone());
+    let scoped = |at: Option<&SystemAt>| {
+        let (categories, rows) = review(&delta, &base, &head, None, at, ENTRIES).unwrap();
+        (
+            summary(&categories, Category::EntryPoints),
+            rows.into_iter()
+                .filter(|row| matches!(row, Review::Entry { .. }))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let removed = Review::Entry {
+        change: ChangeKind::Removed,
+        entry: removed,
+    };
+    let added_row = Review::Entry {
+        change: ChangeKind::Added,
+        entry: added.clone(),
+    };
+    assert_eq!(
+        scoped(None),
+        ((true, 2), vec![removed.clone(), added_row.clone()])
+    );
+    assert_eq!(
+        scoped(Some(&SystemAt::Container { path: "old".into() })),
+        ((true, 1), vec![removed])
+    );
+    assert_eq!(
+        scoped(Some(&SystemAt::Module { module: new })),
+        ((true, 1), vec![added_row])
+    );
+    assert_eq!(
+        scoped(Some(&SystemAt::Container {
+            path: "other".into()
+        })),
+        ((false, 0), vec![])
+    );
+    let (categories, _) = review(
+        &ProjectDelta {
+            entry_points: Default::default(),
+            ..delta
+        },
+        &base,
+        &head,
+        None,
+        None,
+        ENTRIES,
+    )
+    .unwrap();
+    assert_eq!(summary(&categories, Category::EntryPoints), (true, 0));
+
+    let runtime_rows = runtime(&head, true);
+    assert!(runtime_rows.contains(&SystemRuntimeRow::Entry { entry: added }));
+    assert!(
+        runtime_rows
+            .iter()
+            .any(|row| serde_json::to_value(row).unwrap()
+                == serde_json::json!({"kind":"entry_coverage","container":"other","detectors":[]}))
+    );
+    assert!(runtime(&head, false).is_empty());
 }

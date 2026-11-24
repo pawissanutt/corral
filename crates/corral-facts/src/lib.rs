@@ -8,6 +8,7 @@
 
 mod cache;
 mod delta;
+mod entries;
 mod git;
 mod manifests;
 mod model;

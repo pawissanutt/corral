@@ -48,6 +48,7 @@ pub struct TreeFacts {
     /// Unmatched process names, grouped by file and name.
     pub spawns: Vec<SpawnFact>,
     pub runtime: RuntimeFacts,
+    pub entry_points: EntryPoints,
     pub coverage: Coverage,
 }
 
@@ -102,6 +103,7 @@ pub struct ProjectDelta {
     pub dependencies: Vec<DependencyChange>,
     pub module_references: Vec<ModuleReferenceChange>,
     pub runtime: RuntimeDelta,
+    pub entry_points: EntryPointDelta,
     /// None means not provided; Some(empty) means the provider found no rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<Vec<ChangeFact>>,

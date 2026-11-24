@@ -1,6 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{ReadStatus, Reference, ReferenceBasis, TreeFacts, structure};
+use crate::{
+    EntryDetector, EntryPoint, ReadStatus, Reference, ReferenceBasis, TreeFacts, entries::Owners,
+    structure,
+};
 
 use super::{ProviderCoverage, Reply, Row};
 
@@ -15,6 +18,8 @@ impl Reply {
             .map(|file| (file.path.clone(), file))
             .collect();
         let mut refs = BTreeMap::<_, u64>::new();
+        let mut entries = Vec::new();
+        let mut owners = None;
         for row in rows {
             if !row.has_known_paths(|path| by_path.contains_key(path)) {
                 coverage.dropped_unknown_files += 1;
@@ -40,8 +45,41 @@ impl Reply {
                     let total = refs.entry((from, to, kind)).or_default();
                     *total = total.saturating_add(count);
                 }
+                Row::Entry {
+                    path,
+                    line,
+                    kind,
+                    name,
+                } if coverage.provides("entries") => {
+                    if let Some(file) = by_path.get(&path) {
+                        let container = &file.container;
+                        let owners = owners.get_or_insert_with(|| Owners::new(&tree.runtime.units));
+                        entries.push(EntryPoint {
+                            kind,
+                            name,
+                            path,
+                            line,
+                            owner: owners.of(container),
+                        });
+                        tree.entry_points
+                            .coverage
+                            .entry(container.clone())
+                            .or_default()
+                            .insert(EntryDetector::Extension);
+                    }
+                }
                 _ => {} // Don't apply rows for categories the provider did not answer.
             }
+        }
+        if !entries.is_empty() {
+            let covered = entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<BTreeSet<_>>();
+            let existing = &mut tree.entry_points.entries;
+            existing.retain(|entry| !covered.contains(entry.path.as_str()));
+            existing.extend(entries);
+            existing.sort_unstable();
         }
         if coverage.provides("files") {
             tree.coverage.complete = 0;

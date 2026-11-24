@@ -557,6 +557,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "corral-types",
+ "heck",
  "regex",
  "saphyr-parser",
  "serde",

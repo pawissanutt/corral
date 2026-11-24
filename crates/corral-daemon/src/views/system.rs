@@ -21,15 +21,31 @@ use super::{details, fingerprint, json_len};
 #[path = "../system/projection.rs"]
 mod projection;
 
+#[derive(Clone, Copy, Default, Serialize)]
+pub(crate) struct SystemFeatures {
+    pub runtime: bool,
+    pub entries: bool,
+}
+
+impl SystemFeatures {
+    fn includes(self, category: SystemImpactCategory) -> bool {
+        match category {
+            SystemImpactCategory::Runtime => self.runtime,
+            SystemImpactCategory::EntryPoints => self.entries,
+            _ => true,
+        }
+    }
+}
+
 pub(super) fn read(
     shared: &Shared,
     query: &DetailGet,
-    runtime_review: bool,
+    features: SystemFeatures,
 ) -> Result<Option<DetailReply>> {
     let (etag, offset, mut body) = match &query.target {
         DetailRef::SystemMap { project, at } => {
             let snapshot = shared.system.map(shared, project)?;
-            let (etag, offset) = selection(shared, query, snapshot.revision, false)?;
+            let (etag, offset) = selection(shared, query, snapshot.revision, &())?;
             let facts = snapshot.facts.as_deref();
             let rows = match (offset, facts) {
                 (Some(_), Some(facts)) => projection::map(facts, at.as_ref())?,
@@ -50,9 +66,10 @@ pub(super) fn read(
         }
         DetailRef::SystemRuntime { project } => {
             let snapshot = shared.system.map(shared, project)?;
-            let (etag, offset) = selection(shared, query, snapshot.revision, false)?;
+            let entries = features.runtime && features.entries;
+            let (etag, offset) = selection(shared, query, snapshot.revision, &entries)?;
             let rows = match (offset, snapshot.facts.as_deref()) {
-                (Some(_), Some(facts)) => projection::runtime(&facts.structure.runtime),
+                (Some(_), Some(facts)) => projection::runtime(&facts.structure, entries),
                 _ => Vec::new(),
             };
             let (rows, omitted_rows) = bounded_rows(rows)?;
@@ -68,7 +85,7 @@ pub(super) fn read(
         }
         DetailRef::SystemReview { task, at } => {
             let impact = shared.system.review(shared, task)?;
-            let (etag, offset) = selection(shared, query, impact.revision, runtime_review)?;
+            let (etag, offset) = selection(shared, query, impact.revision, &features)?;
             let (categories, rows) = match (offset, impact.facts.as_deref()) {
                 (Some(_), Some(facts)) => projection::review(
                     &facts.delta,
@@ -79,14 +96,12 @@ pub(super) fn read(
                         .as_ref()
                         .map(|snapshot| &snapshot.structure),
                     at.as_ref(),
-                    runtime_review,
+                    features,
                 )?,
                 _ => (
                     SystemImpactCategory::ALL
                         .into_iter()
-                        .filter(|category| {
-                            runtime_review || *category != SystemImpactCategory::Runtime
-                        })
+                        .filter(|category| features.includes(*category))
                         .map(|category| SystemCategorySummary {
                             category,
                             provided: false,
@@ -154,10 +169,10 @@ fn selection(
     shared: &Shared,
     query: &DetailGet,
     revision: u64,
-    runtime_review: bool,
+    shape: &impl Serialize,
 ) -> Result<(String, Option<usize>)> {
-    // An older client cannot read Runtime variants, and its cursor can't page the opt-in shape.
-    let etag = fingerprint(&(shared.epoch(), &query.target, revision, runtime_review))?;
+    // A continuation must not cross projections negotiated with different capabilities.
+    let etag = fingerprint(&(shared.epoch(), &query.target, revision, shape))?;
     let offset = if query.page.is_none() && query.etag.as_ref() == Some(&etag) {
         None
     } else {

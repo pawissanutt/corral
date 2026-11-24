@@ -6,6 +6,8 @@ use serde::Serialize;
 
 use super::*;
 
+#[path = "entry_tests.rs"]
+mod entry_tests;
 #[path = "runtime_tests.rs"]
 mod runtime_tests;
 

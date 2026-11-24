@@ -24,6 +24,9 @@ pub const SESSION_HTML_V1: &str = "session.html.v1";
 pub const SYSTEM_V1: &str = "system.v1";
 /// Opt into Runtime rows and category summaries in `system_review`.
 pub const SYSTEM_RUNTIME_V1: &str = "system.runtime.v1";
+/// Opt into entry point changes in `system_review`. With `system.runtime.v1`,
+/// also opt into entries and per-container detector coverage in `system_runtime`.
+pub const SYSTEM_ENTRIES_V1: &str = "system.entries.v1";
 pub const REVIEW_V1: &str = "review.v1";
 pub const TIMELINE_V1: &str = "timeline.v1";
 pub const USAGE_V1: &str = "usage.v1";

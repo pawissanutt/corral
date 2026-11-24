@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use corral_facts::{
     Activity, ActivityCommit, FileFact, ModuleId, ProjectDelta, ProjectFacts, ReadStatus,
-    RuntimeFacts, TreeFacts, is_manifest,
+    TreeFacts, is_manifest,
     provider::{ChangeKind, ChangedFact},
 };
 use corral_types::{
@@ -12,6 +12,7 @@ use corral_types::{
     SystemNodeStats, SystemReviewRow, SystemRuntimeRow,
 };
 
+use super::SystemFeatures;
 use crate::views::NotFound;
 
 const WEEK_SECONDS: i64 = 7 * 24 * 60 * 60;
@@ -37,20 +38,41 @@ pub(crate) fn map(
     )
 }
 
-pub(crate) fn runtime(facts: &RuntimeFacts) -> Vec<SystemRuntimeRow> {
-    facts
+pub(crate) fn runtime(tree: &TreeFacts, entries: bool) -> Vec<SystemRuntimeRow> {
+    use SystemRuntimeRow as Row;
+    let mut rows: Vec<_> = tree
+        .runtime
         .units
         .iter()
         .cloned()
-        .map(|unit| SystemRuntimeRow::Unit { unit })
+        .map(|unit| Row::Unit { unit })
         .chain(
-            facts
+            tree.runtime
                 .edges
                 .iter()
                 .cloned()
-                .map(|edge| SystemRuntimeRow::Edge { edge }),
+                .map(|edge| Row::Edge { edge }),
         )
-        .collect()
+        .collect();
+    if entries {
+        rows.extend(
+            tree.entry_points
+                .coverage
+                .iter()
+                .map(|(container, detectors)| Row::EntryCoverage {
+                    container: container.clone(),
+                    detectors: detectors.clone(),
+                }),
+        );
+        rows.extend(
+            tree.entry_points
+                .entries
+                .iter()
+                .cloned()
+                .map(|entry| Row::Entry { entry }),
+        );
+    }
+    rows
 }
 
 fn map_rows(
@@ -303,7 +325,7 @@ pub(crate) fn review(
     after: &TreeFacts,
     enriched_head: Option<&TreeFacts>,
     at: Option<&SystemAt>,
-    runtime_review: bool,
+    features: SystemFeatures,
 ) -> anyhow::Result<(Vec<SystemCategorySummary>, Vec<SystemReviewRow>)> {
     use SystemImpactCategory as Category;
     use SystemReviewRow as Row;
@@ -404,7 +426,7 @@ pub(crate) fn review(
     review.rows.extend(spawn_changes(before, after));
     review.finish_category(Category::ExternalProcesses, true);
 
-    if runtime_review {
+    if features.runtime {
         review
             .rows
             .extend(delta.runtime.units.iter().map(|change| Row::RuntimeUnit {
@@ -449,6 +471,41 @@ pub(crate) fn review(
     review.rows.extend(unread);
     review.finish_category(Category::NotRead, true);
 
+    if features.entries {
+        let start = review.rows.len();
+        for (change, entries, files) in [
+            (
+                ChangeKind::Removed,
+                &delta.entry_points.removed,
+                &base_files,
+            ),
+            (ChangeKind::Added, &delta.entry_points.added, &head_files),
+        ] {
+            // Use the ownership at the entry's anchor, not the other tree's file.
+            review.rows.extend(
+                entries
+                    .iter()
+                    .filter(|entry| {
+                        at.is_none_or(|at| {
+                            files.get(entry.path.as_str()).is_some_and(|file| match at {
+                                SystemAt::Container { path } => file.container == *path,
+                                SystemAt::Module { module } => file.module == *module,
+                                SystemAt::File { path } => file.path == *path,
+                            })
+                        })
+                    })
+                    .map(|entry| Row::Entry {
+                        change,
+                        entry: entry.clone(),
+                    }),
+            );
+        }
+        let provided = review.rows.len() > start
+            || entry_detectors_applied(before, &base_files, at)
+            || entry_detectors_applied(after, &head_files, at);
+        review.finish_category(Category::EntryPoints, provided);
+    }
+
     // The Review map is structural, at the submitted head and the level asked for. History
     // overlays are not collected for Review and its map rows are not impact categories.
     let tree = enriched_head.unwrap_or(after);
@@ -460,6 +517,24 @@ pub(crate) fn review(
         .rows
         .extend(map.into_iter().map(|row| Row::Map { row }));
     Ok((review.categories, review.rows))
+}
+
+fn entry_detectors_applied(tree: &TreeFacts, files: &Files<'_>, at: Option<&SystemAt>) -> bool {
+    let coverage = &tree.entry_points.coverage;
+    let container = match at {
+        None => return coverage.values().any(|detectors| !detectors.is_empty()),
+        Some(SystemAt::Container { path }) => path,
+        Some(SystemAt::Module { module }) => &module.container,
+        Some(SystemAt::File { path }) => {
+            let Some(file) = files.get(path.as_str()) else {
+                return false;
+            };
+            &file.container
+        }
+    };
+    coverage
+        .get(container)
+        .is_some_and(|detectors| !detectors.is_empty())
 }
 
 /// A review's map carries no history: its activity windows stay empty.

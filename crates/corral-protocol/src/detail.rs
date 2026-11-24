@@ -49,14 +49,17 @@ pub enum DetailRef {
         at: Option<SystemAt>,
     },
     /// `system.v1`: project runtime units and edges at its observed head.
+    /// Entry rows and per-container detector coverage require both
+    /// `system.runtime.v1` and `system.entries.v1`. Empty `detectors` means no detector applied.
     SystemRuntime {
         project: String,
     },
     /// `system.v1`: impact of the latest submitted worker change. Runtime rows
-    /// and summaries require the negotiated `system.runtime.v1` capability.
+    /// and summaries require `system.runtime.v1`; entry point changes and
+    /// summaries require `system.entries.v1`.
     SystemReview {
         task: String,
-        /// The head's map level to serve with the impact; the project level when absent.
+        /// The head's map level and entry point scope; the project level when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(with = "Option<crate::schema_types::SystemAt>")]
         at: Option<SystemAt>,

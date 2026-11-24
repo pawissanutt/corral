@@ -1,5 +1,5 @@
 //! Shared projections of immutable repository facts. The daemon owns their assembly.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -104,8 +104,21 @@ pub struct SystemRuntime {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SystemRuntimeRow {
-    Unit { unit: RuntimeUnit },
-    Edge { edge: RuntimeEdge },
+    Unit {
+        unit: RuntimeUnit,
+    },
+    Edge {
+        edge: RuntimeEdge,
+    },
+    Entry {
+        entry: EntryPoint,
+    },
+    EntryCoverage {
+        /// Repository-relative container path, empty for root.
+        container: String,
+        /// An empty set means no detector applied, not a measured zero.
+        detectors: BTreeSet<EntryDetector>,
+    },
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,10 +186,11 @@ pub enum SystemImpactCategory {
     Dependents,
     Tests,
     NotRead,
+    EntryPoints,
 }
 
 impl SystemImpactCategory {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::PackageDependencies,
         Self::ModuleReferences,
         Self::Definitions,
@@ -186,6 +200,7 @@ impl SystemImpactCategory {
         Self::Dependents,
         Self::Tests,
         Self::NotRead,
+        Self::EntryPoints,
     ];
 }
 
@@ -264,6 +279,11 @@ pub enum SystemReviewRow {
     RuntimeEdge {
         before: Option<RuntimeEdge>,
         after: Option<RuntimeEdge>,
+    },
+    /// Removed entries are anchored at the base, added entries at the head.
+    Entry {
+        change: ChangeKind,
+        entry: EntryPoint,
     },
     Dependent {
         dependent: DependentFact,

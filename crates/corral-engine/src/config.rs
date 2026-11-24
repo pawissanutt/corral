@@ -184,6 +184,9 @@ pub struct Project {
     pub auto_land: Option<bool>,
     pub max_rounds: Option<u32>,
     pub branch_prefix: Option<String>,
+    /// Rust enum names whose variants are system-map operations.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub operation_enums: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

@@ -6,7 +6,7 @@ use std::{
 };
 
 use corral_protocol::{
-    app::{DETAIL_GET, SYSTEM_RUNTIME_V1, SYSTEM_V1},
+    app::{DETAIL_GET, SYSTEM_ENTRIES_V1, SYSTEM_RUNTIME_V1, SYSTEM_V1},
     detail::{DetailBody, DetailGet, DetailRef, DetailReply},
 };
 use corral_types::{
@@ -134,8 +134,10 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
         since: None,
         scope: None,
     };
-    let (mut legacy, welcome) = connect(&path, vec![wire::TASKS_V1.into()]);
+    let (mut legacy, welcome) =
+        connect(&path, vec![wire::TASKS_V1.into(), SYSTEM_ENTRIES_V1.into()]);
     assert!(!welcome.caps.iter().any(|cap| cap == SYSTEM_V1));
+    assert!(!welcome.caps.iter().any(|cap| cap == SYSTEM_ENTRIES_V1));
     for detail in [&map, &runtime, &review] {
         let error = legacy.call(DETAIL_GET, detail).unwrap_err();
         assert_eq!(error.code, rpc::ErrorCode::InvalidParams, "{error:?}");
@@ -147,9 +149,10 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
     let (mut previous_system_client, welcome) = connect(&path, caps.clone());
     assert!(welcome.caps.iter().any(|cap| cap == SYSTEM_V1));
     assert!(!welcome.caps.iter().any(|cap| cap == SYSTEM_RUNTIME_V1));
-    caps.push(SYSTEM_RUNTIME_V1.into());
+    caps.extend([SYSTEM_RUNTIME_V1.into(), SYSTEM_ENTRIES_V1.into()]);
     let (mut client, welcome) = connect(&path, caps.clone());
     assert!(welcome.caps.iter().any(|cap| cap == SYSTEM_RUNTIME_V1));
+    assert!(welcome.caps.iter().any(|cap| cap == SYSTEM_ENTRIES_V1));
     // A separate connection for the topic avoids unsolicited deltas interleaving
     // with detail replies (the lightweight test Client only reads RPC responses).
     let mut topic = Client::connect_with(&path, caps);
@@ -211,17 +214,21 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
     };
     assert_eq!(changed_files(&built_in.rows), [HELPER, CHANGED]);
     assert_runtime_review(&built_in);
+    assert!(
+        built_in
+            .categories
+            .iter()
+            .any(|entry| entry.category == SystemImpactCategory::EntryPoints)
+    );
     let previous = previous_system_client.ok::<DetailReply>(DETAIL_GET, &review);
     assert_ne!(previous.etag, before.etag);
     let Some(DetailBody::SystemReview(previous)) = previous.body else {
         panic!("expected legacy System review: {previous:?}");
     };
-    assert!(
-        previous
-            .categories
-            .iter()
-            .all(|entry| entry.category != SystemImpactCategory::Runtime)
-    );
+    assert!(previous.categories.iter().all(|entry| !matches!(
+        entry.category,
+        SystemImpactCategory::Runtime | SystemImpactCategory::EntryPoints
+    )));
     assert!(!previous.rows.iter().any(|row| matches!(
         row,
         SystemReviewRow::RuntimeUnit { .. } | SystemReviewRow::RuntimeEdge { .. }
@@ -350,7 +357,13 @@ fn socket_system_map_and_review_refresh_from_background_facts() {
             .provider
             .is_some_and(|provider| provider.error.is_some())
     );
-    assert_runtime_pages(&mut previous_system_client, runtime, map, candidate_head);
+    assert_runtime_pages(
+        &mut previous_system_client,
+        &mut client,
+        runtime,
+        map,
+        candidate_head,
+    );
 }
 
 fn assert_runtime_review(review: &SystemReview) {
@@ -378,7 +391,13 @@ fn assert_runtime_review(review: &SystemReview) {
     )));
 }
 
-fn assert_runtime_pages(client: &mut Client, query: DetailGet, map: DetailGet, head: &str) {
+fn assert_runtime_pages(
+    client: &mut Client,
+    opted_in: &mut Client,
+    query: DetailGet,
+    map: DetailGet,
+    head: &str,
+) {
     let first = client.ok::<DetailReply>(DETAIL_GET, &query);
     let Some(DetailBody::SystemRuntime(first_body)) = first.body else {
         panic!("expected a runtime detail: {first:?}");
@@ -388,6 +407,18 @@ fn assert_runtime_pages(client: &mut Client, query: DetailGet, map: DetailGet, h
     assert_eq!(first_body.error, None);
     assert_eq!(first_body.omitted_rows, 0);
     let token = first.next.expect("expected runtime continuation");
+    let error = opted_in
+        .call(
+            DETAIL_GET,
+            DetailGet {
+                page: Some(token.clone()),
+                ..query.clone()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.code, rpc::ErrorCode::InvalidParams);
+    let expanded = opted_in.ok::<DetailReply>(DETAIL_GET, &query);
+    assert_ne!(expanded.etag, first.etag);
     let error = client
         .call(
             DETAIL_GET,

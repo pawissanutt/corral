@@ -28,6 +28,7 @@ use serde::Serialize;
 use crate::state::Shared;
 pub(crate) use rows::{RowCache, Rows};
 pub(crate) use session_files::StaleWorktreeFile;
+pub(crate) use system::SystemFeatures;
 pub(crate) use transcript::StaleTranscriptCursor;
 
 // The transport reserves room for the response envelope and bounded request id.
@@ -44,16 +45,17 @@ impl std::fmt::Display for NotFound {
 
 impl std::error::Error for NotFound {}
 
-pub(crate) fn detail(shared: &Shared, query: DetailGet) -> Result<DetailReply> {
-    detail_for_client(shared, query, false)
+#[cfg(test)]
+fn detail(shared: &Shared, query: DetailGet) -> Result<DetailReply> {
+    detail_for_client(shared, query, SystemFeatures::default())
 }
 
 pub(crate) fn detail_for_client(
     shared: &Shared,
     query: DetailGet,
-    runtime_review: bool,
+    system_features: SystemFeatures,
 ) -> Result<DetailReply> {
-    if let Some(reply) = system::read(shared, &query, runtime_review)? {
+    if let Some(reply) = system::read(shared, &query, system_features)? {
         return Ok(reply);
     }
     let engine = shared.engine()?;

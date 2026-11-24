@@ -51,6 +51,7 @@ pub(crate) fn compare(
         dependencies,
         module_references,
         runtime: runtime(&before.runtime, &after.runtime),
+        entry_points: crate::entries::compare(&before.entry_points, &after.entry_points),
         changes: None,
         dependents: None,
         tests: None,

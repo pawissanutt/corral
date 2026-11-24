@@ -1,13 +1,15 @@
 //! Best-effort use/import and process-site facts from committed source, without a compiler.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::LazyLock;
+mod entries;
 
-use regex::Regex;
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+use entries::{Lexer, literal, literal_arg, tokens};
 
 use crate::manifests::EntryPoints;
 use crate::model::{
-    ContainerFact, ContainerKind, DependencyFact, FileFact, ReferenceKind, WorkspaceStatus,
+    ContainerFact, ContainerKind, DependencyFact, EntryDetector, EntryKind, FileFact,
+    ReferenceKind, WorkspaceStatus,
 };
 
 type Aliases<'a> = HashMap<&'a str, HashMap<String, Option<&'a str>>>;
@@ -27,6 +29,8 @@ pub(crate) struct Scan {
     pub references: Vec<(String, ReferenceKind)>,
     pub unresolved: u64,
     pub spawns: Vec<(String, usize)>,
+    pub entries: Vec<(EntryKind, String, usize)>,
+    pub entry_detectors: BTreeSet<EntryDetector>,
 }
 
 impl Scan {
@@ -105,19 +109,34 @@ impl<'a> Scanner<'a> {
         scanner
     }
 
-    pub(crate) fn scan(&self, file: &FileFact, text: &str) -> Scan {
+    pub(crate) fn scan(&self, file: &FileFact, text: &str, operation_enums: &[String]) -> Scan {
         let mut scan = Scan::default();
         let start = text.as_ptr() as usize;
         match file.language.as_str() {
-            "Rust" => self.scan_rust(file, &tokens(&RUST, text), start, &mut scan),
-            "TypeScript" | "JavaScript" => self.scan_js(file, &tokens(&JS, text), start, &mut scan),
-            "Python" => scan_python(&tokens(&PYTHON, text), start, &mut scan),
+            "Rust" => self.scan_rust(
+                file,
+                &tokens(Lexer::Rust, text),
+                start,
+                operation_enums,
+                &mut scan,
+            ),
+            "TypeScript" | "JavaScript" => {
+                self.scan_js(file, &tokens(Lexer::JavaScript, text), start, &mut scan)
+            }
+            "Python" => scan_python(&tokens(Lexer::Python, text), start, &mut scan),
             _ => {}
         }
         scan
     }
 
-    fn scan_rust(&self, file: &FileFact, tokens: &[&str], start: usize, scan: &mut Scan) {
+    fn scan_rust(
+        &self,
+        file: &FileFact,
+        tokens: &[&str],
+        start: usize,
+        operation_enums: &[String],
+        scan: &mut Scan,
+    ) {
         let (root, entry) = self.rust_scope(file);
         let stem = file.path.strip_suffix(".rs").unwrap_or(&file.path);
         let current = if entry == Some(file.path.as_str()) || basename(stem) == "mod" {
@@ -154,6 +173,7 @@ impl<'a> Scanner<'a> {
             }
         }
         for (i, token) in tokens.iter().enumerate() {
+            entries::rust(tokens, i, start, operation_enums, scan);
             if *token != "new" {
                 continue;
             }
@@ -337,6 +357,7 @@ impl<'a> Scanner<'a> {
             }
         }
         for (i, token) in tokens.iter().enumerate() {
+            entries::express(tokens, i, start, scan);
             let before = &tokens[..i];
             let api = if !js_member(before) {
                 bindings.functions.get(token).copied()
@@ -496,64 +517,6 @@ fn insert_unique<'a, K: Eq + std::hash::Hash>(
         .or_insert(target);
 }
 
-// Separate string and comment tokens so that a keyword in a quoted string is not treated as code.
-const ID: &str = r"(?:\p{XID_Start}|[_$])(?:\p{XID_Continue}|[$])*";
-const DOUBLE: &str = r#""(?:\\.|[^"\\\r\n])*""#;
-const SINGLE: &str = r"'(?:\\.|[^'\\\r\n])*'";
-const C_COMMENTS: &str = r"//[^\r\n]*|/\*.*?\*/";
-const PY_COMMENTS: &str = r"\#[^\r\n]*";
-
-static RUST: LazyLock<Regex> = LazyLock::new(|| {
-    lexer(&[
-        C_COMMENTS,
-        r###"r##".*?"##|r#".*?"#|r"[^"]*""###,
-        DOUBLE,
-        r"'(?:\\.|[^'\\\r\n])'",
-        r"r#\p{XID_Continue}+",
-        ID,
-        "::",
-    ])
-});
-static JS: LazyLock<Regex> = LazyLock::new(|| {
-    lexer(&[
-        C_COMMENTS,
-        DOUBLE,
-        SINGLE,
-        r"`(?:\\.|[^`\\])*`",
-        ID,
-        r"\?\.",
-    ])
-});
-static PYTHON: LazyLock<Regex> = LazyLock::new(|| {
-    lexer(&[
-        PY_COMMENTS,
-        r#"\x22{3}.*?\x22{3}|'{3}.*?'{3}"#,
-        DOUBLE,
-        SINGLE,
-        ID,
-    ])
-});
-
-fn lexer(alternatives: &[&str]) -> Regex {
-    match Regex::new(&format!(r"(?s)(?:{}|\s+|.)", alternatives.join("|"))) {
-        Ok(regex) => regex,
-        Err(error) => panic!("invalid built-in syntax scanner expression: {error}"),
-    }
-}
-
-fn tokens<'a>(regex: &Regex, text: &'a str) -> Vec<&'a str> {
-    regex
-        .find_iter(text)
-        .map(|m| m.as_str())
-        .filter(|token| {
-            !["//", "/*", "#"]
-                .iter()
-                .any(|prefix| token.starts_with(prefix))
-                && !token.trim().is_empty()
-        })
-        .collect()
-}
-
 fn eat(tokens: &mut &[&str], token: &str) -> bool {
     if tokens.first() != Some(&token) {
         return false;
@@ -643,27 +606,6 @@ fn rust_tree<'a>(
     }
     prefix.truncate(len);
     true
-}
-
-fn literal(token: &str, template: bool) -> Option<&str> {
-    let quote = token.chars().next()?;
-    let content = match quote {
-        '"' | '\'' => token.strip_prefix(quote)?.strip_suffix(quote)?,
-        '`' if template && !token.contains("${") => token.strip_prefix('`')?.strip_suffix('`')?,
-        'r' => token
-            .strip_prefix("r#\"")
-            .and_then(|s| s.strip_suffix("\"#"))
-            .or_else(|| token.strip_prefix("r\"").and_then(|s| s.strip_suffix('"')))?,
-        _ => return None,
-    };
-    (!content.is_empty() && !content.contains(['\\', '\n', '\r', '\0'])).then_some(content)
-}
-
-fn literal_arg<'a>(tokens: &[&'a str], template: bool) -> Option<&'a str> {
-    match tokens {
-        ["(", source, ")" | ",", ..] => literal(source, template),
-        _ => None,
-    }
 }
 
 fn js_member(before: &[&str]) -> bool {

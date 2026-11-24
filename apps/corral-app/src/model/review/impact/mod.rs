@@ -536,10 +536,10 @@ pub fn impact(review: &SystemReview, extension: Option<&str>, more: &BTreeSet<us
     );
 
     let mut sections = Vec::new();
-    // Until the app renders runtime rows, don't present them as wire omissions.
+    // Don't present categories the app doesn't render as wire omissions.
     for (index, category) in Category::ALL
         .into_iter()
-        .filter(|category| *category != Category::Runtime)
+        .filter(|category| !matches!(category, Category::Runtime | Category::EntryPoints))
         .enumerate()
     {
         // Continuation pages repeat the summaries; the first is the answer.

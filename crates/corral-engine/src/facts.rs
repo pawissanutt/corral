@@ -20,7 +20,7 @@ use crate::{
     extension::{self, CommandContext},
 };
 
-const SNAPSHOT_WANT: &[&str] = &["files", "definitions", "references"];
+const SNAPSHOT_WANT: &[&str] = &["files", "definitions", "references", "entries"];
 const DELTA_WANT: &[&str] = &["changes", "dependents", "tests"];
 const TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_STDOUT: usize = 64 * 1024 * 1024;
@@ -57,7 +57,7 @@ impl<'a> FactsReader<'a> {
         let root = std::path::absolute(root).context("resolve workspace path for facts")?;
         Ok(Self {
             repo: root.join(&settings.path),
-            cache: FactsCache::new(&root),
+            cache: FactsCache::new(&root).with_operation_enums(&settings.operation_enums),
             root,
             project,
             settings,

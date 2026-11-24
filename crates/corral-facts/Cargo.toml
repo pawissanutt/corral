@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 corral-types.workspace = true
+heck = "0.5"
 regex.workspace = true
 saphyr-parser.workspace = true
 serde.workspace = true

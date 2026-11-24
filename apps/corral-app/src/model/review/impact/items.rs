@@ -141,6 +141,7 @@ pub(super) const fn title(category: Category) -> &'static str {
         Category::Dependents => "Dependents",
         Category::Tests => "Tests",
         Category::NotRead => "Not read",
+        Category::EntryPoints => "Entry points",
     }
 }
 
@@ -155,6 +156,7 @@ pub(super) const fn zero(category: Category) -> &'static str {
         Category::Dependents => "No code outside the change references a changed definition.",
         Category::Tests => "No test file changed and no test selected.",
         Category::NotRead => "Every changed file was read.",
+        Category::EntryPoints => "No entry point added or removed.",
     }
 }
 
@@ -201,9 +203,11 @@ pub(super) const fn category_of(row: &Row) -> Option<Category> {
         Row::TestFile { .. } | Row::TestCandidate { .. } => Category::Tests,
         Row::NotRead { .. } => Category::NotRead,
         Row::RuntimeUnit { .. } | Row::RuntimeEdge { .. } => Category::Runtime,
-        Row::Map { .. } | Row::Container { .. } | Row::Module { .. } | Row::File { .. } => {
-            return None;
-        }
+        Row::Map { .. }
+        | Row::Container { .. }
+        | Row::Module { .. }
+        | Row::File { .. }
+        | Row::Entry { .. } => return None,
     })
 }
 
@@ -480,6 +484,7 @@ fn row_item(cx: &Ctx, n: usize, row: &Row) -> Option<Item> {
         | Row::Module { .. }
         | Row::File { .. }
         | Row::RuntimeUnit { .. }
-        | Row::RuntimeEdge { .. } => return None,
+        | Row::RuntimeEdge { .. }
+        | Row::Entry { .. } => return None,
     })
 }

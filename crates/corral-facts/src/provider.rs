@@ -12,7 +12,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize, de::value::StringDeserializer};
 
 pub use self::delta::{ChangeFact, ChangeKind, ChangedFact, DependentFact, TestCandidate};
-use crate::{ReadStatus, ReferenceKind};
+use crate::{EntryKind, ReadStatus, ReferenceKind};
 
 /// An entire validated reply, stored separately from the built-in facts.
 #[derive(Debug, Serialize, Deserialize)]
@@ -87,6 +87,13 @@ enum Row {
         kind: ReferenceKind,
         count: u64,
     },
+    Entry {
+        path: String,
+        line: u64,
+        #[serde(deserialize_with = "enum_name")]
+        kind: EntryKind,
+        name: String,
+    },
     Change {
         #[serde(flatten)]
         change: ChangeFact,
@@ -114,6 +121,7 @@ impl Row {
                 "invalid definition line range"
             ),
             Self::Reference { count, .. } => ensure!(*count > 0, "zero reference count"),
+            Self::Entry { line, .. } => ensure!(*line > 0, "zero entry line"),
             Self::Change { change } => ensure!(change.line > 0, "zero change line"),
             Self::Dependent { dependent } => ensure!(dependent.line > 0, "zero dependent line"),
             _ => {}
@@ -123,7 +131,9 @@ impl Row {
 
     fn has_known_paths(&self, contains: impl Fn(&str) -> bool) -> bool {
         match self {
-            Self::File { path, .. } | Self::Definition { path, .. } => contains(path),
+            Self::File { path, .. } | Self::Definition { path, .. } | Self::Entry { path, .. } => {
+                contains(path)
+            }
             Self::Reference { from, to, .. } => contains(from) && contains(to),
             Self::Change { change } => {
                 contains(&change.path)

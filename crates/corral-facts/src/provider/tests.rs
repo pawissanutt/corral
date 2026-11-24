@@ -29,6 +29,10 @@ fn rejects_entire_reply_without_exactly_one_final_done_or_with_a_malformed_row()
         r#"{"type":0,"path":"src.rs","read":"complete"}"#,
         r#"{"type":"definition","path":"src.rs","name":"f","line":2,"end_line":1,"kind":"fn"}"#,
         r#"{"type":"reference","from":"src.rs","to":"other.rs","kind":"call","count":0}"#,
+        r#"{"type":"entry","path":"src.rs","line":0,"kind":"command","name":"serve"}"#,
+        r#"{"type":"entry","path":"src.rs","line":1,"kind":"handler","name":"serve"}"#,
+        r#"{"type":"entry","path":"src.rs","line":1,"kind":{"command":null},"name":"serve"}"#,
+        r#"{"type":"entry","path":"src.rs","line":1,"kind":"command"}"#,
         r#"{"type":"change","change":"removed","fact":"reference","path":"src.rs","name":"f","line":1,"to_path":"other.rs"}"#,
         r#"{"type":"change","change":"removed","fact":0,"path":"src.rs","name":"f","line":1}"#,
         r#"{"type":"dependent","path":"src.rs","name":"g","line":1}"#,
@@ -116,6 +120,7 @@ fn tree(paths: &[&str]) -> TreeFacts {
         package_edges: vec![],
         spawns: vec![],
         runtime: Default::default(),
+        entry_points: Default::default(),
         coverage: Coverage::default(),
     }
 }
