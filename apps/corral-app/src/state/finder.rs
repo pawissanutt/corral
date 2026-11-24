@@ -23,6 +23,13 @@ impl AppState {
         let effects = self
             .feed
             .with_untracked(|feed| crate::model::cite::press_text(feed, text));
+        // Ask draws the same transcript over the page; what a citation opens shows beneath it.
+        let opens = effects
+            .iter()
+            .any(|effect| !matches!(effect, crate::model::Effect::Toast(_)));
+        if opens && self.is_open(crate::model::Overlay::Ask) {
+            self.close(crate::model::Overlay::Ask);
+        }
         self.run(effects);
     }
 

@@ -19,8 +19,9 @@ use super::task::parts::{link_row, mono_words};
 
 /// Keeps the details that resolve `cites` loaded while the calling view shows.
 pub(crate) fn keep_cited(app: AppState, cites: &[Cite]) {
-    let targets = cite::targets(cites);
-    keep_details(app, computed(move || targets.clone()), None);
+    let cites = cites.to_vec();
+    let targets = computed(move || app.feed.with(|feed| cite::targets(feed, &cites)));
+    keep_details(app, targets, None);
 }
 
 /// Every citation of `blocks` among `open` as a link to it; inside an existing link nothing

@@ -3,6 +3,9 @@
 //! wants it. A failed read waits for the owner's Retry; nothing loops. Requests and pins go to
 //! the source the view mounted on (`AppState::scope`).
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use corral_protocol::detail::DetailRef;
 use nsh_core::prelude::*;
 
@@ -18,10 +21,13 @@ pub(crate) fn keep_details(
     capability: Option<&'static str>,
 ) {
     let app = untracked(|| app.scope());
-    let pinned = stored(Vec::<DetailRef>::new());
+    // Not an owned signal: NSH disposes what the owner holds before its cleanups run, and the
+    // cleanup must still know what to let go.
+    let pinned = Rc::new(RefCell::new(Vec::<DetailRef>::new()));
+    let kept = pinned.clone();
     effect(move || {
         let wanted = targets.get();
-        let was = pinned.replace(wanted.clone());
+        let was = kept.replace(wanted.clone());
         untracked(|| {
             for gone in was.iter().filter(|target| !wanted.contains(target)) {
                 app.watch_detail(gone.clone(), false);
@@ -42,9 +48,8 @@ pub(crate) fn keep_details(
             }
         }
     });
-    // The owner may already be letting go of its values when this runs.
     cleanup(move || {
-        for gone in pinned.try_with(std::mem::take).unwrap_or_default() {
+        for gone in pinned.take() {
             app.watch_detail(gone, false);
         }
     });
@@ -62,12 +67,14 @@ pub(crate) type Wanted = Option<(Id, bool, bool)>;
 pub(crate) fn keep_loaded(app: AppState, target: Memo<Wanted>) {
     let app = untracked(|| app.scope());
     let seen = stored(None::<(Id, bool)>);
-    let pinned = stored(None::<Id>);
+    // Outlives the owner's signals, which go before its cleanup runs.
+    let pinned = Rc::new(RefCell::new(None::<Id>));
+    let kept = pinned.clone();
     effect(move || {
         let wanted = target.get();
         let shown = wanted.as_ref().map(|(id, _, _)| id.clone());
-        if pinned.with(|pinned| *pinned != shown) {
-            let was = pinned.replace(shown.clone());
+        if *kept.borrow() != shown {
+            let was = kept.replace(shown.clone());
             untracked(|| {
                 if let Some(gone) = was {
                     app.watch_detail(work::task_ref(&gone), false);
@@ -91,9 +98,8 @@ pub(crate) fn keep_loaded(app: AppState, target: Memo<Wanted>) {
             }
         });
     });
-    // The owner may already be letting go of its values when this runs.
     cleanup(move || {
-        if let Some(gone) = pinned.try_with(Option::take).flatten() {
+        if let Some(gone) = pinned.take() {
             app.watch_detail(work::task_ref(&gone), false);
         }
     });

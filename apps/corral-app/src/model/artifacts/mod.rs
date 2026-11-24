@@ -11,7 +11,7 @@ mod content;
 mod tests;
 
 pub use content::{Body, Content, Line, PREVIEW_LINES, content, target as content_target};
-pub(crate) use content::{log_hue, plain_text, utf8_text};
+pub(crate) use content::{SectionIs, log_hue, plain_text, section_is, utf8_text};
 
 use corral_protocol::detail::{ArtifactNarrowing, DetailBody, DetailGet, DetailRef};
 use corral_types::{Artifact, ArtifactGroup, ArtifactKind, Reference};

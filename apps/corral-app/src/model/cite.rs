@@ -8,7 +8,7 @@
 use corral_protocol::detail::DetailRef;
 use corral_types::{Artifact, references_in};
 
-use crate::model::artifacts::display_kind;
+use crate::model::artifacts::{SectionIs, content_target, display_kind, section_is};
 use crate::model::daemon::Feed;
 use crate::model::work::{loaded_task, task_ref};
 use crate::model::{Effect, Id, Live};
@@ -17,6 +17,8 @@ use crate::model::{Effect, Id, Live};
 pub const NOT_FOUND: &str = "not found";
 /// What a citation says while its task's detail is on its way.
 pub const LOOKING: &str = "looking up…";
+/// What a citation says while corrald cannot say whether it resolves (offline, an error).
+pub const UNAVAILABLE: &str = "cannot be looked up now";
 /// The heading over the artifacts a task's body cites.
 pub const CITED: &str = "Cited";
 /// The URL scheme a citation's inline link carries; it never leaves the app.
@@ -57,13 +59,21 @@ pub fn cites_in<'a>(texts: impl IntoIterator<Item = &'a str>) -> Vec<Cite> {
     all
 }
 
-/// The task details that resolve `cites`, each once.
-pub fn targets(cites: &[Cite]) -> Vec<DetailRef> {
+/// The details that resolve `cites`, each once: every cited task's, and the content of each
+/// held artifact a citation names a section of, which says whether the section exists.
+pub fn targets(feed: &Feed, cites: &[Cite]) -> Vec<DetailRef> {
     let mut targets: Vec<DetailRef> = Vec::new();
     for cite in cites {
-        let target = task_ref(&cite.task);
-        if !targets.contains(&target) {
-            targets.push(target);
+        let content = match (&cite.artifact, &cite.section) {
+            (Some(reference), Some(_)) => held(feed, reference, &cite.task)
+                .is_some()
+                .then(|| content_target(reference)),
+            _ => None,
+        };
+        for target in std::iter::once(task_ref(&cite.task)).chain(content) {
+            if !targets.contains(&target) {
+                targets.push(target);
+            }
         }
     }
     targets
@@ -75,21 +85,29 @@ pub enum Found {
     Task { title: Option<String> },
     Artifact(Box<Artifact>),
     Looking,
+    Unavailable,
     Missing,
 }
 
-/// The cited task's title as the app holds it, or whether corrald said it has none.
-fn task(feed: &Feed, id: &str) -> Result<Option<String>, bool> {
+/// The cited task's title as the app holds it, or where its lookup stands: only corrald's
+/// `not_found` makes it missing.
+fn task(feed: &Feed, id: &str) -> Result<Option<String>, Found> {
     if let Some(row) = feed.board.task(id) {
         return Ok(Some(row.title().to_owned()));
     }
     if let Some(detail) = loaded_task(feed, id) {
         return Ok(Some(detail.task.title.clone()));
     }
-    let missing = feed
-        .detail(&task_ref(id))
-        .is_some_and(|cache| cache.body().is_none() && cache.error.is_some());
-    Err(missing)
+    Err(
+        match feed
+            .detail(&task_ref(id))
+            .and_then(|cache| cache.error.as_ref())
+        {
+            Some(error) if error.code == "not_found" => Found::Missing,
+            Some(_) => Found::Unavailable,
+            None => Found::Looking,
+        },
+    )
 }
 
 /// The cited artifact among every artifact row the app holds: the task's detail first, then
@@ -120,20 +138,29 @@ pub fn resolve(feed: &Feed, cite: &Cite) -> Found {
     let Some(reference) = cite.artifact.as_deref() else {
         return match task(feed, &cite.task) {
             Ok(title) => Found::Task { title },
-            Err(true) => Found::Missing,
-            Err(false) => Found::Looking,
+            Err(found) => found,
         };
     };
     if let Some(artifact) = held(feed, reference, &cite.task) {
-        return Found::Artifact(Box::new(artifact));
+        // A cited section resolves only when the artifact has it, as the engine decides.
+        return match cite
+            .section
+            .as_deref()
+            .map(|slug| section_is(feed, &artifact, slug))
+        {
+            None | Some(SectionIs::Present) => Found::Artifact(Box::new(artifact)),
+            Some(SectionIs::Absent) => Found::Missing,
+            Some(SectionIs::Unknown) => Found::Unavailable,
+            Some(SectionIs::Loading) => Found::Looking,
+        };
     }
     // The task's detail lists every artifact it has: once it is here, an absent row is absent.
     if loaded_task(feed, &cite.task).is_some() {
         return Found::Missing;
     }
     match task(feed, &cite.task) {
-        Err(true) => Found::Missing,
-        _ => Found::Looking,
+        Err(found) => found,
+        Ok(_) => Found::Looking,
     }
 }
 
@@ -156,6 +183,7 @@ pub fn press(feed: &Feed, cite: &Cite) -> Vec<Effect> {
             section: cite.section.clone(),
         }],
         Found::Looking => vec![Effect::Toast(format!("{}: {LOOKING}", cite.text))],
+        Found::Unavailable => vec![Effect::Toast(format!("{}: {UNAVAILABLE}", cite.text))],
         Found::Missing => vec![Effect::Toast(format!("{}: {NOT_FOUND}", cite.text))],
     }
 }
@@ -198,6 +226,7 @@ pub fn lines(feed: &Feed, cites: &[Cite]) -> Vec<Line> {
                     (title, display_kind(artifact.kind), true)
                 }
                 Found::Looking => (LOOKING.to_owned(), String::new(), false),
+                Found::Unavailable => (UNAVAILABLE.to_owned(), String::new(), false),
                 Found::Missing => (NOT_FOUND.to_owned(), String::new(), false),
             };
             let label = if opens {

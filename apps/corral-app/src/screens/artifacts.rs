@@ -81,6 +81,19 @@ fn keep_loaded(app: AppState, page: Memo<Page>) {
             untracked(|| app.load(list));
         }
     });
+    // A cited artifact shown full size may be outside the filter's rows: its task's detail,
+    // which lists it, stays loaded while it shows.
+    let owner = computed(move || {
+        app.artifacts.with(|state| {
+            state
+                .full
+                .as_deref()
+                .and_then(corral_types::Reference::parse)
+                .map(|cited| vec![crate::model::work::task_ref(cited.task())])
+                .unwrap_or_default()
+        })
+    });
+    crate::screens::task::keep::keep_details(app, owner, None);
     let shown = computed(move || {
         page.with(|page| {
             page.full

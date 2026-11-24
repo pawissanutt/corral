@@ -8,6 +8,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use corral_protocol::detail::{ArtifactEncoding, ArtifactPage, DetailBody, DetailRef};
 use corral_types::{Artifact, ArtifactKind, section_slug};
+use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
 use crate::model::assistant::sniff_image;
 use crate::model::daemon::Feed;
@@ -284,70 +285,103 @@ pub fn content(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Cont
     Content { body, cut }
 }
 
-/// The Markdown section whose heading's slug is `slug`: its heading and everything up to the
-/// next heading of its level or above, fenced code skipped. Slugs are corral-types'.
-fn section<'a>(text: &'a str, slug: &str) -> Option<&'a str> {
-    let mut fence: Option<&str> = None;
-    let mut found: Option<(usize, usize)> = None;
-    let mut at = 0;
-    for line in text.split_inclusive('\n') {
-        let start = at;
-        at += line.len();
-        let trimmed = line.trim_start();
-        if let Some(open) = fence {
-            if trimmed.starts_with(open) {
-                fence = None;
-            }
-            continue;
-        }
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            fence = Some(&trimmed[..3]);
-            continue;
-        }
-        let level = trimmed.bytes().take_while(|byte| *byte == b'#').count();
-        let words = &trimmed[level..];
-        if !(1..=6).contains(&level) || !(words.trim().is_empty() || words.starts_with([' ', '\t']))
-        {
-            continue;
-        }
-        match found {
-            Some((begin, open)) if level <= open => return Some(&text[begin..start]),
-            Some(_) => {}
-            None => {
-                let words = words.trim().trim_end_matches('#').trim_end();
-                if section_slug(words) == slug {
-                    found = Some((start, level));
-                }
-            }
-        }
-    }
-    found.map(|(begin, _)| &text[begin..])
+/// A Markdown heading: its slug, level and the start of its source line.
+struct Heading {
+    slug: String,
+    level: u8,
+    start: usize,
 }
 
-/// `content` cut to the cited section when it is Markdown that has it; otherwise all of it,
-/// saying why.
+/// The headings of `text` as the engine finds them when it serves a cited section.
+fn headings(text: &str) -> Vec<Heading> {
+    let mut events = Parser::new(text).into_offset_iter();
+    let mut headings = Vec::new();
+    while let Some((event, range)) = events.next() {
+        let Event::Start(Tag::Heading { level, .. }) = event else {
+            continue;
+        };
+        let mut words = String::new();
+        for (event, _) in events.by_ref() {
+            match event {
+                Event::End(TagEnd::Heading(_)) => break,
+                Event::Text(text) | Event::Code(text) => words.push_str(&text),
+                Event::SoftBreak | Event::HardBreak => words.push(' '),
+                _ => {}
+            }
+        }
+        headings.push(Heading {
+            slug: section_slug(&words),
+            level: level as u8,
+            start: text[..range.start].rfind(['\n', '\r']).map_or(0, |i| i + 1),
+        });
+    }
+    headings
+}
+
+/// The Markdown section whose heading's slug is `slug`: its heading and everything up to the
+/// next heading of its level or above, as the engine cuts it.
+fn section<'a>(text: &'a str, slug: &str) -> Option<&'a str> {
+    let headings = headings(text);
+    let (at, hit) = headings
+        .iter()
+        .enumerate()
+        .find(|(_, heading)| heading.slug == slug)?;
+    let end = headings[at + 1..]
+        .iter()
+        .find(|heading| heading.level <= hit.level)
+        .map_or(text.len(), |heading| heading.start);
+    Some(&text[hit.start..end])
+}
+
+/// Whether a cited section is in the artifact's served content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SectionIs {
+    Loading,
+    /// corrald could not serve the content, so whether the section exists is unknown.
+    Unknown,
+    Present,
+    Absent,
+}
+
+/// Whether the artifact's served content is Markdown holding section `slug`.
+pub(crate) fn section_is(feed: &Feed, artifact: &Artifact, slug: &str) -> SectionIs {
+    match content(feed, artifact, Form::Desktop, true).body {
+        Body::Loading => SectionIs::Loading,
+        Body::Failed(_) => SectionIs::Unknown,
+        Body::Markdown(text) if section(&text, slug).is_some() => SectionIs::Present,
+        _ => SectionIs::Absent,
+    }
+}
+
+/// `content` cut to the cited section when it is Markdown that has it; otherwise all that was
+/// served, saying why. What corrald left out is still said.
 pub(crate) fn at_section(content: Content, slug: &str) -> Content {
-    match content.body {
+    let Content { body, cut } = content;
+    let said = |words: String| {
+        Some(match &cut {
+            Some(cut) => format!("{words} {cut}"),
+            None => words,
+        })
+    };
+    match body {
         Body::Markdown(text) => match section(&text, slug) {
             Some(part) => Content {
                 body: Body::Markdown(part.to_owned()),
-                cut: Some(format!(
+                cut: said(format!(
                     "Only the cited section “{slug}” shows; open the artifact from the results for all of it."
                 )),
             },
             None => Content {
+                cut: said(format!("No section “{slug}” in what corrald served.")),
                 body: Body::Markdown(text),
-                cut: Some(format!(
-                    "No section “{slug}” in this artifact; all of it shows."
-                )),
             },
         },
-        Body::Loading | Body::Failed(_) => content,
+        body @ (Body::Loading | Body::Failed(_)) => Content { body, cut },
         body => Content {
-            body,
-            cut: Some(format!(
-                "Sections are only found in Markdown; all of this artifact shows, not “{slug}”."
+            cut: said(format!(
+                "Sections are only found in Markdown; this artifact has no “{slug}”."
             )),
+            body,
         },
     }
 }
@@ -357,17 +391,20 @@ mod tests {
     use super::*;
 
     /// A cited section must end at the next heading of its level, not at a deeper one or at a
-    /// heading-looking line inside fenced code.
+    /// heading-looking line inside code, and a setext heading is a heading.
     #[test]
     fn a_cited_section_runs_to_the_next_heading_of_its_level() {
-        let text =
-            "# Doc\n## Goal\nwhy\n### Detail\n```\n## not a heading\n```\n## Acceptance\nok\n";
+        let text = "# Doc\n## Goal\nwhy\n### Detail\n```\n## not a heading\n```\n\n    # code\n\nAcceptance\n----------\nok\n";
         assert_eq!(
             section(text, "goal"),
-            Some("## Goal\nwhy\n### Detail\n```\n## not a heading\n```\n")
+            Some("## Goal\nwhy\n### Detail\n```\n## not a heading\n```\n\n    # code\n\n")
         );
-        assert_eq!(section(text, "acceptance"), Some("## Acceptance\nok\n"));
+        assert_eq!(
+            section(text, "acceptance"),
+            Some("Acceptance\n----------\nok\n")
+        );
         assert_eq!(section(text, "not-a-heading"), None);
+        assert_eq!(section(text, "code"), None);
     }
 
     #[test]
