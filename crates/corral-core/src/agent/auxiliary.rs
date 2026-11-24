@@ -1,4 +1,4 @@
-//! Generation-bound explore/oracle settings. Provider credentials remain the parent's.
+//! Generation-bound explore settings and validation of retired oracle configuration.
 use super::CapabilitySettings;
 use serde::{Deserialize, Serialize};
 
@@ -208,9 +208,8 @@ mod tests {
                 let explore =
                     preset == "full" || (preset == "standard" && role != AgentRole::Reviewer);
                 assert_eq!(snapshot.enabled("subagents"), explore, "{preset}/{role:?}");
-                assert_eq!(
-                    snapshot.enabled("oracle"),
-                    preset == "full",
+                assert!(
+                    !snapshot.features.contains_key("oracle"),
                     "{preset}/{role:?}"
                 );
                 if explore {
@@ -220,18 +219,76 @@ mod tests {
         }
         let enabled: AgentCapabilities = toml::from_str("preset = 'strict'\n[worker.subagents]\nenabled = true\nmax_parallel = 2\n[worker.oracle]\nenabled = true\nmodel = 'stronger'\n").unwrap();
         let snapshot = enabled.resolve(AgentRole::Worker, None);
-        assert!(snapshot.enabled("subagents") && snapshot.enabled("oracle"));
+        assert!(snapshot.enabled("subagents"));
+        assert!(!snapshot.features.contains_key("oracle"));
         assert_eq!(snapshot.features["subagents"].settings["max_parallel"], 2);
-        assert_eq!(snapshot.features["oracle"].settings["model"], "stronger");
         let disabled: AgentCapabilities = toml::from_str("preset = 'full'\n[worker.subagents]\nenabled = false\n[worker.oracle]\nenabled = false\n").unwrap();
         assert!(
             !disabled
                 .resolve(AgentRole::Worker, None)
                 .enabled("subagents")
         );
-        assert!(!disabled.resolve(AgentRole::Worker, None).enabled("oracle"));
+        assert!(
+            !disabled
+                .resolve(AgentRole::Worker, None)
+                .features
+                .contains_key("oracle")
+        );
         assert!(toml::from_str::<AgentCapabilities>("[pm.subagents]\nenabled = true").is_ok());
     }
+    #[test]
+    fn legacy_oracle_config_and_snapshots_remain_readable() {
+        use crate::{
+            agent::{AgentRole, CapabilitySnapshot},
+            agent_capabilities::AgentCapabilities,
+        };
+        for role in [
+            "worker",
+            "reviewer",
+            "pm",
+            "planner",
+            "plan_reviewer",
+            "assistant",
+        ] {
+            for value in [
+                "oracle = true".to_string(),
+                "[ROLE.oracle]\nenabled = true\nmodel = 'stronger'\ntimeout_secs = 120"
+                    .replace("ROLE", role),
+            ] {
+                let text = if value.starts_with("oracle") {
+                    format!("[{role}]\n{value}")
+                } else {
+                    value
+                };
+                let config: AgentCapabilities = toml::from_str(&text).unwrap();
+                for agent_role in [
+                    AgentRole::Worker,
+                    AgentRole::Reviewer,
+                    AgentRole::Pm,
+                    AgentRole::Planner,
+                    AgentRole::PlanReviewer,
+                    AgentRole::Assistant,
+                ] {
+                    assert!(
+                        !config
+                            .resolve(agent_role, None)
+                            .features
+                            .contains_key("oracle")
+                    );
+                }
+            }
+        }
+        assert!(toml::from_str::<AgentCapabilities>("[worker.oracle]\nmodel = ''").is_err());
+        assert!(toml::from_str::<AgentCapabilities>("[worker.oracle]\nenabled = 'yes'").is_err());
+        let config: AgentCapabilities = toml::from_str("preset = 'full'").unwrap();
+        let mut old = serde_json::to_value(config.resolve(AgentRole::Worker, None)).unwrap();
+        old["catalog"] = 11.into();
+        old["features"]["oracle"] = serde_json::json!({"enabled": true, "source": "preset", "settings": {"model": "stronger", "timeout_secs": 120}});
+        let restored: CapabilitySnapshot = serde_json::from_value(old).unwrap();
+        assert!(restored.enabled("oracle"));
+        assert_eq!(restored.features["oracle"].settings["model"], "stronger");
+    }
+
     #[test]
     fn explore_service_tier_is_explicit_validated_and_absent_from_legacy_defaults() {
         let defaults = explore_settings(&CapabilitySettings::new()).unwrap();

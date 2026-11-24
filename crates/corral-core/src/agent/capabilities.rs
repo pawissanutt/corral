@@ -27,7 +27,7 @@ pub type CapabilitySettings = BTreeMap<String, Value>;
 pub type SettingsFn = fn(&CapabilitySettings) -> Result<CapabilitySettings, String>;
 
 /// Bumped when a catalog entry's meaning or the snapshot's canonical form changes.
-pub const CAPABILITY_CATALOG_VERSION: u32 = 11;
+pub const CAPABILITY_CATALOG_VERSION: u32 = 12;
 
 /// One catalog entry. `defaults` returns `[strict, standard, full]` for a role, or `None` where
 /// the role's ceiling disallows the capability; a configured override can never cross it.
@@ -226,13 +226,6 @@ pub const CATALOG: &[CapabilityDef] = &[
         },
         host: true,
         settings: Some(super::auxiliary::fleet_settings),
-    },
-    CapabilityDef {
-        key: "oracle",
-        summary: "tool-free consultation using a configured model",
-        defaults: |_| Some([false, false, true]),
-        host: true,
-        settings: Some(super::auxiliary::oracle_settings),
     },
     pm_aux::SHADOW,
     pm_aux::EXPERT,

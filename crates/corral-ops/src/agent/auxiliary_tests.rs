@@ -145,6 +145,111 @@ fn subscription_search_needs_its_snapshot_and_records_usage_without_oracle() {
 }
 
 #[test]
+fn retired_oracle_rejects_stale_enabled_prepare_but_settles_existing_records() {
+    use corral_core::agent::{UsageSession, UsageSessionKind};
+
+    let fx = fx();
+    let task = worker_task(&fx, "p1");
+    let target = BindTarget::Worker {
+        task: task.clone(),
+        run: "R1".into(),
+    };
+    let host = bind(&fx, &target, "p1", "s1");
+    committed(&hello(&fx, &host));
+    let mut snapshot = fx
+        .ctx
+        .store
+        .config
+        .agent
+        .capabilities
+        .resolve(AgentRole::Worker, None);
+    let mut stale_feature = snapshot.features.get("subagents").unwrap().clone();
+    stale_feature.enabled = true;
+    snapshot.features.insert("oracle".into(), stale_feature);
+    assert!(snapshot.enabled("oracle"));
+    fx.ctx
+        .store
+        .update(&task, |task| {
+            let state = task.runs[0].agent_host.as_mut().unwrap();
+            state.generations[0].capabilities = Some(snapshot.clone());
+            for (request, outcome) in [
+                ("prepared", AuxiliaryOutcome::Prepared),
+                ("running", AuxiliaryOutcome::Running),
+                ("cancel", AuxiliaryOutcome::Prepared),
+            ] {
+                state.usage_sessions.push(UsageSession {
+                    generation: 1,
+                    kind: UsageSessionKind::Oracle,
+                    session_id: request.into(),
+                    session_file: paths::usage_session_file(
+                        &fx.ctx.store,
+                        &target.container(),
+                        request,
+                    ),
+                    model: Some("historical-model".into()),
+                    request: Some(request.into()),
+                    outcome: Some(outcome),
+                });
+            }
+            Ok(())
+        })
+        .unwrap();
+    let call = |seq, action: &str, request: &str, outcome: Option<&str>| {
+        let mut payload = json!({"kind":"auxiliary", "action":action, "request":request,
+            "usage_kind":"oracle"});
+        if action == "prepare" {
+            payload["model"] = json!("model");
+        }
+        if let Some(outcome) = outcome {
+            payload["outcome"] = json!(outcome);
+        }
+        send(
+            &fx,
+            &envelope(&host, "event", &format!("ev-1-{seq}"), payload, false),
+            "event",
+        )
+    };
+    assert_eq!(
+        code(&call(1, "prepare", "new", None)),
+        Some("op_not_allowed")
+    );
+    fx.ctx
+        .store
+        .update(&task, |task| {
+            task.runs[0].agent_host.as_mut().unwrap().generations[0].capabilities = None;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        code(&call(2, "started", "missing", None)),
+        Some("bad_request")
+    );
+    // Another historical invocation is already running; a missing snapshot must not
+    // impose a new default parallel limit on work that was previously admitted.
+    committed(&call(3, "started", "prepared", None));
+    committed(&call(4, "finish", "prepared", Some("completed")));
+    committed(&call(5, "finish", "running", Some("uncertain")));
+    committed(&call(6, "finish", "cancel", Some("not_started")));
+    assert!(matches!(
+        call(6, "finish", "cancel", Some("not_started")),
+        CallResponse::Receipt { replayed: true, .. }
+    ));
+    let saved = state(&fx, &target.container());
+    assert_eq!(saved.usage_sessions.len(), 3);
+    let saved: corral_core::agent::AgentRunState =
+        serde_json::from_value(serde_json::to_value(saved).unwrap()).unwrap();
+    for (record, outcome) in saved.usage_sessions.iter().zip([
+        AuxiliaryOutcome::Completed,
+        AuxiliaryOutcome::Uncertain,
+        AuxiliaryOutcome::NotStarted,
+    ]) {
+        assert_eq!(record.kind, UsageSessionKind::Oracle);
+        assert_eq!(record.model.as_deref(), Some("historical-model"));
+        assert_eq!(record.outcome.as_ref(), Some(&outcome));
+    }
+}
+
+#[test]
 fn auxiliary_prepare_refuses_disabled_feature_and_path_injection() {
     let fx = fx();
     let task = worker_task(&fx, "p1");

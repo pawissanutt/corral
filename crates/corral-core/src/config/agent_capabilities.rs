@@ -266,7 +266,7 @@ impl Default for RawCapabilities {
     }
 }
 
-/// Validated `[agent.capabilities]`: every override names a catalog key its role may use.
+/// Validated `[agent.capabilities]`: overrides name usable catalog keys or retired legacy keys.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawCapabilities", into = "RawCapabilities")]
 pub struct AgentCapabilities(RawCapabilities);
@@ -324,6 +324,21 @@ impl TryFrom<RawCapabilities> for AgentCapabilities {
                         .map(|_| ("llama_cpp.enabled", None)),
                 );
             for (key, setting) in entries {
+                // Retired oracle configuration remains loadable, but is never resolved.
+                if key == "oracle" {
+                    if let Some(RoleSetting::Table(table)) = setting {
+                        let table_name = format!("[agent.capabilities.{}.oracle]", role.as_str());
+                        if table
+                            .get("enabled")
+                            .is_some_and(|value| !value.is_boolean())
+                        {
+                            return Err(format!("{table_name} enabled must be a boolean"));
+                        }
+                        crate::agent::oracle_settings(&settings.settings(key))
+                            .map_err(|reason| format!("{table_name} {reason}"))?;
+                    }
+                    continue;
+                }
                 let def = CATALOG.iter().find(|def| def.key == key).ok_or_else(|| {
                     let known: Vec<&str> = CATALOG.iter().map(|def| def.key).collect();
                     format!(

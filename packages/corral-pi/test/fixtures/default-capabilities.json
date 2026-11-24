@@ -1,7 +1,7 @@
 {
   "assistant": {
-    "catalog": 11,
-    "digest": "b597bd8f9258e1c0ad34c7469cc9bd54640041555afa5efd7c93f9ddfd6c3728",
+    "catalog": 12,
+    "digest": "4b2e4a0ce476d84cd49235154d852c25498e5765aaeee8948c76633efff1df96",
     "features": {
       "ask_user": {
         "enabled": true,
@@ -60,10 +60,6 @@
       },
       "mcp.enabled": {
         "enabled": true,
-        "source": "preset"
-      },
-      "oracle": {
-        "enabled": false,
         "source": "preset"
       },
       "prompt_templates": {
@@ -135,8 +131,8 @@
     }
   },
   "pm": {
-    "catalog": 11,
-    "digest": "36c1ead3e0e7f4ab45e92388b7abbbec349288029eda065c79523853f0f73825",
+    "catalog": 12,
+    "digest": "2ca81682d018b7f94fe5338858c6cdc29705ec12db174704ad657821b054aa96",
     "features": {
       "ask_user": {
         "enabled": true,
@@ -186,10 +182,6 @@
       },
       "mcp.enabled": {
         "enabled": true,
-        "source": "preset"
-      },
-      "oracle": {
-        "enabled": false,
         "source": "preset"
       },
       "prompt_templates": {

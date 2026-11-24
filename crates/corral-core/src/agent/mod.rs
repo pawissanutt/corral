@@ -32,6 +32,7 @@ mod usage;
 mod web;
 pub mod write_permissions;
 
+pub(crate) use auxiliary::oracle_settings;
 pub use auxiliary::{ExploreSettings, OracleSettings};
 pub use browser::canonical_origin;
 pub use budget::*;

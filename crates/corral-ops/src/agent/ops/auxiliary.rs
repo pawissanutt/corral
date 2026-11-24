@@ -168,6 +168,12 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
             .into());
         }
     }
+    // Oracle has been retired: stale generation snapshots cannot authorize new spend.
+    // Existing prepared invocations must still be settled against their durable records.
+    let oracle = payload.usage_kind == Some(UsageSessionKind::Oracle);
+    if oracle && payload.action == "prepare" {
+        return Err(Rejection::new(RejectCode::OpNotAllowed, "oracle is retired").into());
+    }
     let feature = match payload.usage_kind {
         Some(UsageSessionKind::Explore) => "subagents",
         Some(UsageSessionKind::Slice | UsageSessionKind::Review) => "fleet",
@@ -189,7 +195,7 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
             ));
         }
     };
-    if !fleet && !snapshot.as_ref().is_some_and(|g| g.capability(feature)) {
+    if !fleet && !oracle && !snapshot.as_ref().is_some_and(|g| g.capability(feature)) {
         return Err(
             Rejection::new(RejectCode::OpNotAllowed, "auxiliary capability is disabled").into(),
         );
@@ -273,7 +279,9 @@ pub(super) fn auxiliary(ctx: &Ctx, envelope: &Envelope) -> Result<CallResponse> 
                         return Err(bad("auxiliary belongs to another generation/kind"));
                     }
                     if payload.action == "started" {
-                        if record.outcome != Some(AuxiliaryOutcome::Prepared) || live >= max {
+                        if record.outcome != Some(AuxiliaryOutcome::Prepared)
+                            || (!oracle && live >= max)
+                        {
                             return Err(bad("auxiliary parallel limit or invalid start"));
                         }
                         record.outcome = Some(AuxiliaryOutcome::Running);
