@@ -396,7 +396,7 @@ impl Feed {
             },
         );
         if let Some(live) = self.live.get_mut(quick) {
-            live.reset();
+            live.clear_host();
         }
     }
 }

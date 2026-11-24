@@ -341,6 +341,40 @@ fn sending_from_ask_appends_to_the_quick_thread_and_clears_the_draft() {
     app.wait_for(&format!("text:{message}")).unwrap();
 }
 
+#[test]
+fn ending_ask_clears_the_thread_before_the_next_send() {
+    let mut app = preview(desktop(), &[("corral.destination", "tasks")]);
+    app.wait_for("id:list-tasks").unwrap();
+    app.press_key("/").unwrap();
+    app.wait_for("id:ask-transcript").unwrap();
+    let previous = "A message in the old thread";
+    app.type_text("id:ask-input", previous).unwrap();
+    app.press("id:btn-send").unwrap();
+    app.wait_for(&format!("text:{previous}")).unwrap();
+    let thread = |app: &Headless| {
+        app.screen()
+            .texts()
+            .iter()
+            .find_map(|text| text.strip_prefix("Ask · A-").map(str::to_owned))
+            .expect("a concrete assistant thread")
+    };
+    let original = thread(&app);
+    app.press("id:btn-stop").unwrap();
+    app.wait_for("id:btn-send").unwrap();
+    app.press("id:btn-end-thread").unwrap();
+    app.wait_for("id:confirm").unwrap();
+    app.press("id:confirm-confirm").unwrap();
+    app.wait_for_gone("id:btn-end-thread", Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(app.screen().count(&format!("text:{previous}")).unwrap(), 0);
+    let next = "A message in the fresh thread";
+    app.type_text("id:ask-input", next).unwrap();
+    app.press("id:btn-send").unwrap();
+    app.wait_for(&format!("text:{next}")).unwrap();
+    assert_ne!(thread(&app), original);
+    assert_eq!(app.screen().count(&format!("text:{previous}")).unwrap(), 0);
+}
+
 /// A restart shows the place stored, and a slug the nine-destination app stored opens the
 /// place that took its content over.
 #[test]

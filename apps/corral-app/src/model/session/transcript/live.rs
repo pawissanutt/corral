@@ -117,6 +117,15 @@ impl LiveSession {
         self.reread = self.reread.saturating_add(1);
     }
 
+    /// `quick` no longer names a host. Drop its state as well as the turn, without
+    /// going backwards on the transcript read counter for this scope.
+    pub fn clear_host(&mut self) {
+        *self = Self {
+            reread: self.reread.saturating_add(1),
+            ..Self::default()
+        };
+    }
+
     /// A page's fleet is the session's whole current fleet, and a page without one says the
     /// session has no children or messages: it replaces what was held, never adds to it. The
     /// turn overlay's resets leave it alone, so a stale fleet stays shown as stale.

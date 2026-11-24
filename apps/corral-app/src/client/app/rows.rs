@@ -146,9 +146,14 @@ impl AppState {
                     let live = feed.live.entry(Id::from(&scope)).or_default();
                     let before = live.parts.clone();
                     let generation_changed = live.generation != generation;
-                    live.apply_page(generation, events, reset);
-                    live.replace_fleet(fleet);
-                    live.replace_state(state);
+                    if scope == QUICK_THREAD && generation.is_none() && !reset {
+                        // Empty quick scope, not an unchanged state on an existing host.
+                        live.clear_host();
+                    } else {
+                        live.apply_page(generation, events, reset);
+                        live.replace_fleet(fleet);
+                        live.replace_state(state);
+                    }
                     // After a gap or a new generation no part event can be trusted to have
                     // arrived, so every part is read again.
                     parts = if reset || generation_changed {
