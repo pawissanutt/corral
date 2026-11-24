@@ -432,7 +432,11 @@ fn stage_head(app: AppState, parts: Parts) -> AnyElement {
                     view()
                         .flex_row()
                         .items_center()
-                        .gap(px(if form == Form::Terminal { 0.0 } else { 8.0 }))
+                        .gap(if form == Form::Terminal {
+                            term::cells(2.0)
+                        } else {
+                            px(8.0)
+                        })
                         .child(crumbs)
                         .child(hint),
                 )

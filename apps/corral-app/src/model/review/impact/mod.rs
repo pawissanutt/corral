@@ -158,7 +158,7 @@ pub const NO_LEVELS: &str =
 pub const NO_MODULE: &str = "No module changed.";
 pub const STALE: &str = "Shown as last read; corrald has not confirmed it since.";
 /// The map's legend where it is listed (figures); where it is drawn, `foot::legend`.
-pub const LEGEND_LISTED: &str = "Each node shows its lines added and removed, the dependents it holds, or untouched (dimmed). Under a node, each reference count the change moved, before → after. Select a node again to open it.";
+pub const LEGEND_LISTED: &str = "Each node shows the lines this task added and removed there and the files they are in, the dependents of a changed definition it holds, or, dimmed, its size when untouched. Under a node, each reference count the change moved, before → after. Select a node again to open it.";
 
 /// What a category's answer is: nothing supplies it, an answer still awaited from the
 /// configured extension, an empty answer, or rows.
