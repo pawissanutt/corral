@@ -213,6 +213,8 @@ async function runThroughPi(scenario: BridgeCase) {
   const writes: string[] = [], commands: string[] = [];
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
+  const terminalObserved = Promise.withResolvers<void>();
+  const releaseObserver = Promise.withResolvers<void>();
   let lane: AgyToolLane | undefined;
   let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
   try {
@@ -262,14 +264,23 @@ async function runThroughPi(scenario: BridgeCase) {
     const agent = session.agent;
     lane = new AgyToolLane({ cwd, home, executable, setupTimeoutMs: 1500, turnTimeoutMs: 2000 }, agent);
     agent.streamFunction = lane.stream;
+    if (scenario === "mcp-terminal") agent.onProviderStreamEvent = async wire => {
+      if ((wire as { result?: { stopReason?: string } }).result?.stopReason !== "end_turn") return;
+      terminalObserved.resolve();
+      await releaseObserver.promise;
+    };
     const run = session.prompt(turn.prompt);
-    if (scenario === "mcp-stale" || scenario === "mcp-cancel") {
+    if (scenario === "mcp-stale" || scenario === "mcp-cancel" || scenario === "mcp-terminal") {
       await Promise.race([entered.promise, run.then(() => { throw new Error(`ACP ended before the approval barrier: ${JSON.stringify(agent.state.errorMessage)}`); })]);
       const signal = agent.signal!;
       const cancelled = new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
       if (scenario === "mcp-cancel") agent.abort();
-      else writeFileSync(join(root, "mcp-disconnect"), "disconnect");
-      if (!signal.aborted) await cancelled;
+      else writeFileSync(join(root, "mcp-revoke"), "revoke pending call");
+      if (scenario === "mcp-terminal") {
+        await terminalObserved.promise;
+        // A diagnostic consumer may still be waiting, but no approval may execute now.
+        expect(signal.aborted).toBe(true);
+      } else if (!signal.aborted) await cancelled;
       release.resolve();
     }
     await run;
@@ -291,6 +302,7 @@ async function runThroughPi(scenario: BridgeCase) {
       reviewerDenied: existsSync(join(cwd, "reviewer-denied.txt")) };
   } finally {
     release.resolve();
+    releaseObserver.resolve();
     await lane?.close();
     session?.dispose();
     rmSync(root, { recursive: true, force: true });
@@ -331,7 +343,7 @@ posixTest("agy MCP advertises only the reviewer's active tools, never write", as
   expect(reviewerDenied).toBe(false);
 });
 
-for (const scenario of ["mcp-cancel", "mcp-stale"] as const) {
+for (const scenario of ["mcp-cancel", "mcp-stale", "mcp-terminal"] as const) {
   posixTest(`agy revocation prevents a still-pending Pi tool effect (${scenario})`, async () => {
     const { calls, results, writes, pending } = await runThroughPi(scenario);
     expect(calls.map(call => call.name)).toEqual(["write"]);

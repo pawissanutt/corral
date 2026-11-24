@@ -284,19 +284,22 @@ export async function driveAgy(launch: AgyLaunch, model: Model<string>, turn: Ag
       });
       output.current.start();
       if (host.bridge) exchange?.activate(session.sessionId, host.bridge.descriptor.name);
+      const controls = host.bridge && exchange ? { permit: exchange.permit, beforeResponse: () => exchange.stop() } : undefined;
       prompt = connection.request("session/prompt", { sessionId: session.sessionId, prompt: blocks }, async wire => {
-        await observe(wire);
-        if (!active || signal?.aborted) return;
-        const update = session.updateForSession(wire);
+        if (!controls) await observe(wire);
+        const update = active && !signal?.aborted ? session.updateForSession(wire) : undefined;
         if (update) {
-          session.checkUpdate(update);
+          try { session.checkUpdate(update); }
+          catch (error) { exchange?.stop(); throw error; }
           // Retain the sanitized warning, but drain to the terminal reply for usage.
           const executorFailure = warningFrom(update);
           warning ??= executorFailure;
           if (executorFailure) exchange?.stop();
           else output.current.update(update);
         }
-      }, host.bridge ? exchange?.permit : undefined);
+        // Diagnostic consumers must not block later authority frames while Pi awaits approval.
+        if (controls) void observe(wire).catch(() => undefined);
+      }, controls);
       return await prompt;
     }, turnMs, "prompt", signal);
     applyStop(output.current.message, result.stopReason);

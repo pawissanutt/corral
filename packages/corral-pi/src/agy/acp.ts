@@ -147,6 +147,11 @@ async function* frames(stdout: Readable): AsyncGenerator<Json> {
 type Child = ChildProcessByStdio<Writable, Readable, null>;
 type Observe = (message: Json) => void | Promise<void>;
 export type AcpPermission = (params: Json) => string | undefined;
+interface RequestControls {
+  permit: AcpPermission;
+  /** A reply ends this single-flight request even if it later fails validation. */
+  beforeResponse(): void;
+}
 
 export class AcpPeer {
   readonly cwd: string;
@@ -216,12 +221,15 @@ export class AcpPeer {
     }
   }
 
-  async request(method: string, params: Json, observe: Observe, permit?: AcpPermission): Promise<Json> {
+  async request(method: string, params: Json, observe: Observe, controls?: RequestControls): Promise<Json> {
     const id = ++this.requestId;
     await this.send({ id, method, params });
     for (;;) {
-      const message = await this.receive(observe);
-      if ("method" in message) { await this.handleMethod(message, permit); continue; }
+      const message = await this.receive(wire => {
+        if (!("method" in wire)) controls?.beforeResponse();
+        return observe(wire);
+      });
+      if ("method" in message) { await this.handleMethod(message, controls?.permit); continue; }
       if (message.id !== id || ("error" in message) === ("result" in message)) {
         throw new AcpFailure("protocol", "unexpected JSON-RPC response");
       }

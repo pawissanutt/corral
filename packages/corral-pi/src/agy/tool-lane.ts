@@ -26,6 +26,7 @@ class Exchange implements ToolExchange {
   private readonly grants = new Map<string, ToolCall>();
   private readonly proposed = new Set<string>();
   private readonly requests = new Set<string | number>();
+  private readonly dispatched: ToolCall[] = [];
   private scope: { sessionId: string; mcpPrefix: string } | undefined;
   private stopped = false;
   private pending: Pending | undefined;
@@ -90,8 +91,15 @@ class Exchange implements ToolExchange {
     if (this.pending) return denied("Another Corral tool is pending; retry after its result.");
     const tool = this.tools.find(tool => tool.name === call.name);
     if (!tool || !this.owner.state.tools.some(active => declarationsEqual(active, tool))) return stale();
+    // Agy does not carry the ACP call ID in MCP. Even a fresh MCP ID could be a retry
+    // that stole a later identical grant, so this prompt can hand off each tuple only once.
+    if (this.dispatched.some(prior => prior.name === name && isDeepStrictEqual(prior.arguments, args))) {
+      return denied("An identical Corral tool request already ran or was denied in this prompt.");
+    }
+    const expected = structuredClone(call);
+    this.dispatched.push(expected);
     const reply = await new Promise<McpResult>(resolve => {
-      this.pending = { call, reply: resolve };
+      this.pending = { call: expected, reply: resolve };
       signal.addEventListener("abort", this.revoke, { once: true });
       this.output.handoff(call);
     });

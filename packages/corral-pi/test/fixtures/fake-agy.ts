@@ -5,7 +5,7 @@ import { createInterface } from "node:readline";
 
 export type FakeAgyCase = "stream" | "cancel" | "timeout" | "unavailable" | "mismatch" | "current-mismatch"
   | "unchanged-variant" | "auth" | "quota" | "warning" | "bad-error" | "oversize"
-  | "mcp-build" | "mcp-reviewer" | "mcp-stale" | "mcp-cancel";
+  | "mcp-build" | "mcp-reviewer" | "mcp-stale" | "mcp-terminal" | "mcp-cancel";
 
 type Id = string | number;
 type Packet = { jsonrpc: "2.0"; id?: Id; method?: string; params?: any; result?: any };
@@ -84,6 +84,7 @@ async function runBridge() {
     recordMcp(label, await post(packet));
     return packet;
   }
+  let terminalSent = false;
   if (scenario === "mcp-build") {
     const nativeId = "permission-native-write";
     const nativeResponse = new Promise<unknown>(resolve => permissions.set(nativeId, resolve));
@@ -100,6 +101,7 @@ async function runBridge() {
     const original = callPacket(nextId++, "write", args);
     recordMcp("write", await post(original));
     recordMcp("duplicate", await post(original));
+    await requestPermission(descriptor.name, "write", args, "write-identical-second-grant");
     recordMcp("replayed-grant", await post(callPacket(nextId++, "write", args)));
     await call("blocked-write", "write", { path: "../denied.txt", content: "no" }, "write-blocked");
     await call("blocked-bash", "bash", { command: "git branch -D discard-me" }, "bash-blocked");
@@ -112,9 +114,17 @@ async function runBridge() {
     pendingFetch = new AbortController();
     send(chunk("message", "mcp pending write"));
     let timer: ReturnType<typeof setInterval> | undefined;
-    if (scenario === "mcp-stale") {
-      const disconnect = join(root!, "mcp-disconnect");
-      timer = setInterval(() => { if (existsSync(disconnect)) pendingFetch?.abort(); }, 10);
+    if (scenario === "mcp-stale" || scenario === "mcp-terminal") {
+      const revoke = join(root!, "mcp-revoke");
+      timer = setInterval(() => {
+        if (!existsSync(revoke)) return;
+        clearInterval(timer);
+        if (scenario === "mcp-stale") pendingFetch?.abort();
+        else {
+          terminalSent = true;
+          ack(promptId, { stopReason: "end_turn" });
+        }
+      }, 10);
     }
     try {
       recordMcp("pending-write", await post(callPacket(nextId++, "write", args), pendingFetch.signal));
@@ -125,7 +135,7 @@ async function runBridge() {
       pendingFetch = undefined;
     }
   }
-  ack(promptId, { stopReason: "end_turn" });
+  if (!terminalSent) ack(promptId, { stopReason: "end_turn" });
 }
 
 for await (const line of createInterface({ input: process.stdin })) {
