@@ -210,7 +210,11 @@ pub fn target(op: &Op) -> Option<&str> {
         | Op::Drop { id }
         | Op::Reopen { id }
         | Op::ArtifactAdd { id, .. } => Some(id),
-        Op::New { .. } | Op::UsageAdd { .. } | Op::Sync => None,
+        Op::New { .. }
+        | Op::LensDraft { .. }
+        | Op::LensRepair { .. }
+        | Op::UsageAdd { .. }
+        | Op::Sync => None,
     }
 }
 
@@ -244,6 +248,8 @@ pub fn label(op: &Op, force: bool) -> String {
     }
     match op {
         Op::New { .. } => "New task".into(),
+        Op::LensDraft { .. } => "Draft lens".into(),
+        Op::LensRepair { .. } => "Repair lens".into(),
         Op::Edit { .. } => "Edit".into(),
         Op::Comment { .. } => "Comment".into(),
         Op::Move { status, .. } => format!("Move to {}", status.as_str()),

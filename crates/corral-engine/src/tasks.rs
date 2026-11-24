@@ -69,6 +69,47 @@ impl Engine {
         Ok(task)
     }
 
+    /// Retarget an untouched lens draft without creating a second open task.
+    /// The caller holds the writer transaction across both lookup and retargeting.
+    pub(crate) fn retarget_lens_draft(
+        &self,
+        store: &Store,
+        mut task: Task,
+        repair: NewTask,
+        lens_keys: &[String],
+    ) -> Result<Task> {
+        if !planning(task.status)
+            || task.created != task.updated
+            || !store.list_runs(&task.id)?.is_empty()
+            || !matches!(
+                store.event_page(Some(&task.id), None, None, true, 2)?.as_slice(),
+                [event] if event.kind == EventKind::Created
+                    && event.detail["lens_task_keys"].as_array().is_some_and(|keys| {
+                        matches!(keys.as_slice(), [key] if key.as_str().is_some_and(|key| key.starts_with("draft:")))
+                    })
+            )
+        {
+            return Err(refuse(
+                format!(
+                    "matching draft {} has been edited or started; resolve or explicitly drop it before retrying lens repair",
+                    task.id
+                ),
+                vec![],
+            ));
+        }
+        task.title = repair.title;
+        task.body = repair.body;
+        self.touch(&mut task);
+        store.update_task(&task)?;
+        self.task_event(
+            store,
+            &task.id,
+            EventKind::Edited,
+            json!({"title":task.title, "body":task.body, "lens_task_keys":lens_keys}),
+        )?;
+        Ok(task)
+    }
+
     pub fn edit_task(&self, id: &str, mut edit: TaskEdit) -> Result<Task> {
         self.store.transaction(|store| {
             let mut task = store.require_task(id)?;

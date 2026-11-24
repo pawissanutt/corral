@@ -190,6 +190,11 @@ id = "current"
 title = "Current sequence"
 kind = "sequence"
 read_at = "{read_at}"
+
+[[participants]]
+id = "worker"
+label = "Worker"
+anchor = {{ path = "code.rs", name = "missing_definition" }}
 "#
         ),
     )
@@ -212,11 +217,17 @@ fn repairs_use_committed_diagnostics_and_dedup_with_lens_drafts() {
     let engine = Engine::open_with_runner(root.path(), Box::new(fake.clone())).unwrap();
 
     let drafted = apply(&engine, draft("state", "job-lifecycle", false));
-    assert_eq!(apply(&engine, repair("job-lifecycle", true)).id, drafted.id);
-    engine.drop_task(&drafted.id).unwrap();
-
     let task = apply(&engine, repair("job-lifecycle", true));
-    assert_eq!(task.status, Status::Ready);
+    assert_eq!(task.id, drafted.id);
+    assert_eq!(task.status, drafted.status);
+    assert!(task.title.starts_with("Repair lens:"));
+    assert!(task.body.contains("Repair the existing state lens"));
+    assert!(!task.body.contains("Choose a new ID and path"));
+    assert_eq!(engine.store.next_task_number().unwrap(), 2);
+    assert_eq!(
+        engine.store.list_events(&task.id).unwrap()[1].kind,
+        EventKind::Edited
+    );
     for expected in [
         checked_at.as_str(),
         "docs/lenses/job.toml",
@@ -230,7 +241,7 @@ fn repairs_use_committed_diagnostics_and_dedup_with_lens_drafts() {
     ] {
         assert!(task.body.contains(expected), "missing {expected}");
     }
-    engine
+    let edited = engine
         .edit_task(
             &task.id,
             crate::tasks::TaskEdit {
@@ -240,11 +251,15 @@ fn repairs_use_committed_diagnostics_and_dedup_with_lens_drafts() {
             },
         )
         .unwrap();
-    assert_eq!(apply(&engine, repair("job.toml", false)).id, task.id);
+    assert_eq!(apply(&engine, repair("job.toml", false)), edited);
     assert_eq!(
-        apply(&engine, draft("state", "Lifecycle for jobs", false)).id,
-        task.id
+        apply(&engine, draft("state", "Lifecycle for jobs", false)),
+        edited
     );
+    engine.drop_task(&task.id).unwrap();
+    let fresh = apply(&engine, repair("job-lifecycle", true));
+    assert_ne!(fresh.id, task.id);
+    assert_eq!(fresh.status, Status::Ready);
     assert!(fake.starts().is_empty());
 
     for (selector, expected) in [
@@ -255,6 +270,69 @@ fn repairs_use_committed_diagnostics_and_dedup_with_lens_drafts() {
         assert!(as_refusal(&error).unwrap().to_string().contains(expected));
     }
     assert_eq!(engine.store.next_task_number().unwrap(), 3);
+}
+
+#[test]
+fn repair_does_not_retarget_a_draft_with_an_existing_run() {
+    let root = tempdir();
+    configure(root.path());
+    commit_lenses(&root.path().join("repo"));
+    let engine = Engine::open_with_runner(root.path(), Box::new(FakeRunner::new())).unwrap();
+    let original = apply(&engine, draft("state", "job-lifecycle", true));
+    let run = crate::tests::run(&original.id, "R1");
+    engine.store.insert_run(&run).unwrap();
+    let error = engine
+        .apply(repair("job-lifecycle", true), false)
+        .unwrap_err();
+    let reason = &as_refusal(&error).unwrap().reason;
+    assert!(reason.contains(&original.id) && reason.contains("started"));
+    assert_eq!(engine.store.require_task(&original.id).unwrap(), original);
+    assert_eq!(
+        engine.store.live_runs_for_task(&original.id).unwrap(),
+        vec![run]
+    );
+    assert_eq!(engine.store.list_events(&original.id).unwrap().len(), 1);
+    assert_eq!(engine.store.next_task_number().unwrap(), 2);
+}
+
+#[test]
+fn repair_recovers_identity_from_schema_invalid_committed_toml() {
+    let root = tempdir();
+    configure(root.path());
+    let repo = root.path().join("repo");
+    let read_at = commit_lenses(&repo);
+    let file = repo.join("docs/lenses/bad-schema.toml");
+    fs::write(
+        &file,
+        format!(
+            r#"
+id = "bad-schema"
+kind = "state"
+title = false
+read_at = "{read_at}"
+"#
+        ),
+    )
+    .unwrap();
+    git(&repo, &["add", "docs/lenses/bad-schema.toml"]);
+    git(&repo, &["commit", "-m", "malformed lens"]);
+    let checked_at = git(&repo, &["rev-parse", "HEAD"]);
+    fs::write(file, "id = 'checkout-only'").unwrap();
+    let engine = Engine::open_with_runner(root.path(), Box::new(FakeRunner::new())).unwrap();
+    let task = apply(&engine, repair("bad-schema", false));
+    assert_eq!(
+        apply(&engine, repair("docs/lenses/bad-schema.toml", false)),
+        task
+    );
+    for expected in [
+        "Repair the existing state lens",
+        "bad-schema.toml",
+        &checked_at,
+        "(malformed)",
+        "file: invalid lens TOML",
+    ] {
+        assert!(task.body.contains(expected), "missing {expected}");
+    }
 }
 
 #[test]
@@ -276,6 +354,12 @@ printf '%s\n' '{"type":"done","provided":["definitions"],"skipped":{},"omitted":
 "#,
     )
     .unwrap();
+    let error = engine.apply(repair("current", false), false).unwrap_err();
+    let reason = &as_refusal(&error).unwrap().reason;
+    assert!(reason.contains(&format!(
+        "corral-next lens check --project sample --at {checked_at} docs/lenses/current.toml"
+    )));
+    assert!(reason.contains("before retrying lens repair"));
     let task = apply(&engine, repair("job-lifecycle", false));
     assert!(!marker.exists());
     assert!(task.body.contains("Not checked"));
@@ -292,5 +376,10 @@ printf '%s\n' '{"type":"done","provided":["definitions"],"skipped":{},"omitted":
             .contains("unknown definition \"removed_definition\"")
     );
     assert!(!task.body.contains("No cached facts provider answer"));
+    let task = apply(&engine, repair("current", false));
+    assert!(
+        task.body
+            .contains("unknown definition \"missing_definition\"")
+    );
     assert!(!marker.exists());
 }

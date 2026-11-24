@@ -160,7 +160,12 @@ fn op_verb(op: &Op) -> Option<Verb> {
         Op::Stop { .. } => Verb::Stop,
         Op::Drop { .. } => Verb::Drop,
         Op::Reopen { .. } => Verb::Reopen,
-        Op::New { .. } | Op::ArtifactAdd { .. } | Op::UsageAdd { .. } | Op::Sync => return None,
+        Op::New { .. }
+        | Op::LensDraft { .. }
+        | Op::LensRepair { .. }
+        | Op::ArtifactAdd { .. }
+        | Op::UsageAdd { .. }
+        | Op::Sync => return None,
     })
 }
 

@@ -136,6 +136,31 @@ impl<'a> FactsReader<'a> {
         lenses::load(&self.repo, rev, self.lens_dir())
     }
 
+    /// Recover a malformed lens header from a blob already reported by the checker.
+    pub(crate) fn lens_header(&self, rev: &Revision, file: &str) -> Result<Option<toml::Table>> {
+        // Match the checker's per-file budget; the caller skips files rejected
+        // by the checker for budget or non-regular file reasons.
+        const MAX_LENS_BYTES: u64 = 256 * 1024;
+        if !lenses::valid_path(file) {
+            return Ok(None);
+        }
+        let Some(blob) = corral_git::committed_blob(&self.repo, rev.commit(), file)? else {
+            return Ok(None);
+        };
+        let size = corral_git::blob_size(&self.repo, &blob)?;
+        if size > MAX_LENS_BYTES {
+            return Ok(None);
+        }
+        let mut bytes = Vec::with_capacity(size as usize);
+        corral_git::stream_blob(&self.repo, &blob, |chunk| {
+            bytes.extend_from_slice(chunk);
+            Ok(())
+        })?;
+        Ok(std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(|text| toml::from_str(text).ok()))
+    }
+
     /// Check only committed lenses and source, with optional definition and entry facts.
     pub fn check_lenses(&self, rev: &Revision) -> Result<(Vec<LensResult>, Option<FactsReport>)> {
         self.check_lenses_with(rev, ProviderMode::AllowStart)

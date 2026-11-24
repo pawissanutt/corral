@@ -3,9 +3,12 @@
 use std::fmt::Write;
 
 use anyhow::Result;
+use corral_facts::Revision;
 use corral_types::lenses::{Lens, LensResult, LensStatus};
 
-use crate::{Engine, Status, Task, facts::FactsReader, refuse, tasks::NewTask};
+use crate::{
+    Engine, Status, Task, config::shell_quote, facts::FactsReader, refuse, tasks::NewTask,
+};
 
 const FORMAT: &str = "Use a unique `id`, a descriptive `title`, and the full Git commit ID of the code you inspected as `read_at`. Every state, transition, participant and message must have a source anchor verified against that code. An `anchor` has a repository-relative `path` and may include a definition `name` and/or literal `text` from that file (within the named definition when known). All `from` and `to` values must refer to nodes declared in the same file.";
 
@@ -68,6 +71,14 @@ enum LensKind {
 }
 
 impl LensKind {
+    fn parse(kind: &str) -> Option<Self> {
+        match kind {
+            "state" => Some(Self::State),
+            "sequence" => Some(Self::Sequence),
+            _ => None,
+        }
+    }
+
     fn from_lens(lens: &Lens) -> Self {
         match lens {
             Lens::State { .. } => Self::State,
@@ -109,11 +120,8 @@ impl Engine {
         about: &str,
         ready: bool,
     ) -> Result<Task> {
-        let kind = match kind {
-            "state" => LensKind::State,
-            "sequence" => LensKind::Sequence,
-            _ => return Err(refuse("lens kind must be state or sequence", vec![])),
-        };
+        let kind = LensKind::parse(kind)
+            .ok_or_else(|| refuse("lens kind must be state or sequence", vec![]))?;
         let about = about.trim();
         if about.is_empty() {
             return Err(refuse("lens draft requires a nonempty subject", vec![]));
@@ -144,15 +152,20 @@ impl Engine {
         let rev = reader.resolve_revision(&tip)?;
         let (results, provider) = reader.check_lenses_cached(&rev)?;
         let dir_prefix = format!("{}/", reader.lens_dir());
-        let result = select_lens(&results, &dir_prefix, id).ok_or_else(|| {
-            refuse(
-                format!(
-                    "no lens {id:?} at {tip}; use corral-next lens list to find its ID or file"
-                ),
-                vec![],
-            )
+        let identities = results
+            .iter()
+            .map(|result| LensIdentity::read(&reader, &rev, result))
+            .collect::<Result<Vec<_>>>()?;
+        let selected = select_lens(&results, &identities, &dir_prefix, id).ok_or_else(|| {
+            let reason = if shared_id(&identities, id) {
+                format!("lens ID {id:?} is ambiguous at {tip}; use the lens file path")
+            } else {
+                format!("no lens {id:?} at {tip}; use corral-next lens list to find its ID or file")
+            };
+            refuse(reason, vec![])
         })?;
-        let lens = result.lens.as_ref().ok_or_else(|| {
+        let result = &results[selected];
+        let lens = identities[selected].as_ref().ok_or_else(|| {
             let diagnostic = result
                 .failures
                 .first()
@@ -165,54 +178,70 @@ impl Engine {
                 vec![],
             )
         })?;
-        let kind = LensKind::from_lens(lens);
-        let mut keys = vec![format!("repair:{}", lens.id())];
-        // A draft about this exact ID, path, or unambiguous title is already
-        // lens work. Don't guess links from free-form descriptions.
+        let duplicate_id = shared_id(&identities, &lens.id);
+        let repair_key = if duplicate_id {
+            format!("repair-file:{:?}:{:?}", lens.id, result.file)
+        } else {
+            format!("repair:{}", lens.id)
+        };
+        let mut draft_keys = Vec::new();
+        // Link only exact, unambiguous IDs, paths, or titles, not free-form subjects.
         for alias in [
-            lens.id(),
+            lens.id.as_str(),
             &result.file,
             result
                 .file
                 .strip_prefix(&dir_prefix)
                 .unwrap_or(&result.file),
-            lens.title().trim(),
+            lens.title.trim(),
         ] {
-            let points_to_result = match select_lens(&results, &dir_prefix, alias) {
-                Some(found) => found.file == result.file,
-                None => !results.iter().any(|other| {
-                    other.file != result.file
-                        && other.lens.as_ref().is_some_and(|other| {
-                            LensKind::from_lens(other) == kind && other.title().trim() == alias
+            if alias.is_empty() || shared_id(&identities, alias) {
+                continue;
+            }
+            let points_to_result = match select_lens(&results, &identities, &dir_prefix, alias) {
+                Some(found) => found == selected,
+                None => !identities.iter().enumerate().any(|(index, other)| {
+                    index != selected
+                        && other.as_ref().is_some_and(|other| {
+                            other.kind == lens.kind && other.title.trim() == alias
                         })
                 }),
             };
             if points_to_result {
-                keys.push(kind.draft_key(alias));
+                draft_keys.push(lens.kind.draft_key(alias));
             }
         }
         let provider_unavailable = provider.is_some_and(|report| report.error.is_some());
         let unchecked = unchecked_diagnostics(result, provider_unavailable)?;
         self.store.transaction(|store| {
-            if let Some(task) = store.open_lens_task(project, &keys)? {
+            let repair_keys = [repair_key];
+            if let Some(task) = store.open_lens_task(project, &repair_keys)? {
                 return Ok(task);
             }
             if result.status == LensStatus::Current {
-                return Err(refuse(
-                    format!(
-                        "lens {:?} has no failed checks at {tip}{unchecked}",
-                        lens.id()
-                    ),
-                    vec![],
-                ));
+                let mut reason = format!("lens {:?} has no failed checks at {tip}{unchecked}", lens.id);
+                if provider_unavailable {
+                    let check = check_command(project, &tip, &result.file)?;
+                    write!(reason, "\nRun `{check}` to prime the facts provider cache before retrying lens repair.")?;
+                }
+                return Err(refuse(reason, vec![]));
             }
-            let title = format!("Repair lens: {} ({})", lens.title(), lens.id());
+            let title = if lens.title.trim().is_empty() {
+                format!("Repair lens: {}", lens.id)
+            } else {
+                format!("Repair lens: {} ({})", lens.title, lens.id)
+            };
+            let id_instruction = if duplicate_id || lens.id.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                "Correct its invalid or duplicate ID in place."
+            } else {
+                "Keep its ID."
+            };
             let mut body = format!(
-                "Repair the existing {} lens {:?} in {:?}. Keep its ID and update its anchors \
-                 or elements to match the code; do not add a replacement lens.\n\n\
+                "Repair the existing {} lens {:?} in {:?}. {id_instruction} Fix the failed checks \
+                 and verify its anchors and elements against the code; do not add a replacement lens.\n\n\
                  ## Failed checks at {tip} ({})\n",
-                kind.name(),
-                lens.id(),
+                lens.kind.name(),
+                lens.id,
                 result.file,
                 result.status.as_str(),
             );
@@ -225,31 +254,106 @@ impl Engine {
             for state in &result.extra_states {
                 writeln!(body, "- Extra state: {state}")?;
             }
-            write!(body, "{unchecked}\n\n{}", kind.template())?;
-            self.insert_new_task(store, new_lens_task(project, title, body, ready), &keys)
+            write!(body, "{unchecked}\n\n{}", lens.kind.template())?;
+            let new = new_lens_task(project, title, body, ready);
+            let draft = store.open_lens_task(project, &draft_keys)?;
+            let keys = repair_keys.into_iter().chain(draft_keys).collect::<Vec<_>>();
+            if let Some(task) = draft {
+                self.retarget_lens_draft(store, task, new, &keys)
+            } else {
+                self.insert_new_task(store, new, &keys)
+            }
         })
     }
 }
 
-fn select_lens<'a>(
-    results: &'a [LensResult],
+struct LensIdentity {
+    id: String,
+    title: String,
+    kind: LensKind,
+}
+
+impl LensIdentity {
+    fn read(reader: &FactsReader<'_>, rev: &Revision, result: &LensResult) -> Result<Option<Self>> {
+        if let Some(lens) = &result.lens {
+            return Ok(Some(Self {
+                id: lens.id().to_owned(),
+                title: lens.title().to_owned(),
+                kind: LensKind::from_lens(lens),
+            }));
+        }
+        if result.failures.iter().any(|failure| {
+            matches!(
+                failure.message.as_str(),
+                "lens file exceeded the lens scan budget" | "expected a regular UTF-8 TOML file"
+            )
+        }) {
+            return Ok(None);
+        }
+        Ok(reader.lens_header(rev, &result.file)?.and_then(|table| {
+            let get = |key| table.get(key).and_then(toml::Value::as_str);
+            let id = get("id").filter(|id| !id.trim().is_empty())?;
+            Some(Self {
+                id: id.to_owned(),
+                title: get("title").unwrap_or_default().to_owned(),
+                kind: LensKind::parse(get("kind")?)?,
+            })
+        }))
+    }
+}
+
+fn shared_id(identities: &[Option<LensIdentity>], id: &str) -> bool {
+    identities
+        .iter()
+        .flatten()
+        .filter(|lens| lens.id == id)
+        .nth(1)
+        .is_some()
+}
+
+fn select_lens(
+    results: &[LensResult],
+    identities: &[Option<LensIdentity>],
     dir_prefix: &str,
     selector: &str,
-) -> Option<&'a LensResult> {
-    results
-        .iter()
-        .find(|result| {
-            result
-                .lens
-                .as_ref()
-                .is_some_and(|lens| lens.id() == selector)
+) -> Option<usize> {
+    (!shared_id(identities, selector))
+        .then(|| {
+            identities
+                .iter()
+                .position(|lens| lens.as_ref().is_some_and(|lens| lens.id == selector))
         })
-        .or_else(|| results.iter().find(|result| result.file == selector))
+        .flatten()
+        .or_else(|| results.iter().position(|result| result.file == selector))
         .or_else(|| {
             results
                 .iter()
-                .find(|result| result.file.strip_prefix(dir_prefix) == Some(selector))
+                .position(|result| result.file.strip_prefix(dir_prefix) == Some(selector))
         })
+}
+
+fn check_command(project: &str, tip: &str, file: &str) -> Result<String> {
+    let word = |value: &str| {
+        if value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'/'))
+        {
+            Ok(value.to_owned())
+        } else {
+            shell_quote(value)
+        }
+    };
+    let project_flag = if project.starts_with('-') {
+        "--project="
+    } else {
+        "--project "
+    };
+    let separator = if file.starts_with('-') { "-- " } else { "" };
+    Ok(format!(
+        "corral-next lens check {project_flag}{} --at {tip} {separator}{}",
+        word(project)?,
+        word(file)?
+    ))
 }
 
 fn unchecked_diagnostics(result: &LensResult, provider_unavailable: bool) -> Result<String> {

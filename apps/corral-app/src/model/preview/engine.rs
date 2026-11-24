@@ -82,6 +82,11 @@ fn apply(feed: &mut Feed, op: &Op, force: bool) -> Applied {
     let id = match op {
         Op::New { task } => return new(feed, task),
         Op::Sync => return Ok(None),
+        Op::LensDraft { .. } | Op::LensRepair { .. } => {
+            return Err(Fail::Unsupported(
+                "Preview cannot inspect project lenses; no task was created".into(),
+            ));
+        }
         Op::ArtifactAdd { .. } => {
             return Err(Fail::Unsupported(
                 "Preview cannot read files on this device; nothing was attached".into(),
@@ -138,7 +143,12 @@ fn apply(feed: &mut Feed, op: &Op, force: bool) -> Applied {
             set_status(feed, &mut rec, Status::Backlog);
             commit(feed, rec, EventKind::Reopened, None, json!({"from": from}));
         }
-        Op::New { .. } | Op::Sync | Op::ArtifactAdd { .. } | Op::UsageAdd { .. } => {}
+        Op::New { .. }
+        | Op::LensDraft { .. }
+        | Op::LensRepair { .. }
+        | Op::Sync
+        | Op::ArtifactAdd { .. }
+        | Op::UsageAdd { .. } => {}
     }
     Ok(Some(id))
 }

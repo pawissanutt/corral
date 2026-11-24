@@ -35,6 +35,17 @@ fn op_submit_round_trips_with_both_force_values_and_defaults_to_false() {
 }
 
 #[test]
+fn lens_operations_round_trip_through_op_submit() {
+    for wire in [
+        json!({"op": {"lens_draft": {"project": "site", "kind": "state", "about": "Lifecycle", "ready": true}}, "force": false}),
+        json!({"op": {"lens_repair": {"project": "site", "id": "lifecycle", "ready": false}}, "force": false}),
+    ] {
+        let submit: OpSubmit = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(submit).unwrap(), wire);
+    }
+}
+
+#[test]
 fn op_submit_round_trips_known_zeros_without_serializing_unknown_counters() {
     // The CLI represents a supplied zero with a marker, and an omitted
     // count as an unmarked zero in the shared Usage model.
