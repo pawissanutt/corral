@@ -387,3 +387,50 @@ fn data_view_bands_by_container_and_keeps_links_past_the_filter() {
         .collect();
     assert_eq!(unprovided, ["web"]);
 }
+
+/// No types read is three different answers: nothing reads the project's languages (not
+/// provided), a scan that read them found none (empty), and a reply still building or without
+/// coverage (not known). Only the second may say the project has no data types.
+#[test]
+fn no_types_is_empty_only_after_a_covered_scan() {
+    use corral_types::{DataSource, SystemDataRow};
+    use data::Outcome;
+    let served = |status, rows: Vec<SystemDataRow>| corral_types::SystemData {
+        project: "p".into(),
+        commit: Some("abc".into()),
+        status,
+        error: None,
+        provider: None,
+        omitted_rows: 0,
+        rows,
+    };
+    let coverage = |language: &str, sources: &[DataSource]| SystemDataRow::Coverage {
+        language: language.into(),
+        sources: sources.iter().copied().collect(),
+    };
+    let typescript_only = served(SystemStatus::Ready, vec![coverage("TypeScript", &[])]);
+    assert_eq!(data::outcome(&typescript_only), Outcome::NotProvided);
+    let rust_without_serde = served(
+        SystemStatus::Ready,
+        vec![coverage("Rust", &[DataSource::RustSerde])],
+    );
+    assert_eq!(data::outcome(&rust_without_serde), Outcome::Empty);
+    assert_eq!(
+        data::outcome(&served(SystemStatus::Building, Vec::new())),
+        Outcome::Pending
+    );
+    assert_eq!(
+        data::outcome(&served(SystemStatus::Ready, Vec::new())),
+        Outcome::Pending
+    );
+    let unread = served(
+        SystemStatus::Ready,
+        vec![
+            coverage("Rust", &[DataSource::RustSerde]),
+            SystemDataRow::Unreadable {
+                path: "a.rs".into(),
+            },
+        ],
+    );
+    assert_eq!(data::outcome(&unread), Outcome::Incomplete);
+}

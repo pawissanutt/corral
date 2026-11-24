@@ -324,7 +324,15 @@ pub fn summary(data: &SystemData) -> Vec<String> {
     let total: u64 = by_source.values().sum();
     let mut out = Vec::new();
     if total == 0 {
-        out.push("No data types".into());
+        out.push(
+            match outcome(data) {
+                Outcome::Pending => "Data facts not read yet",
+                Outcome::NotProvided => "Data model not provided",
+                Outcome::Incomplete => "No data types read; the answer is incomplete",
+                Outcome::Empty | Outcome::Types => "No data types",
+            }
+            .into(),
+        );
     } else {
         let sources: Vec<String> = by_source
             .iter()
@@ -482,6 +490,63 @@ pub fn provenance(data: Option<&SystemData>, row: Option<&SystemRow>) -> String 
     )
 }
 
-pub const EMPTY: &str = "No data types at this commit: no JSON Schema or SQL file, and no Rust \
-                         type that derives Serialize or Deserialize, was found.";
+/// What a served `system_data` says about the project's types as a whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// Still building, or served without facts yet: nothing is known.
+    Pending,
+    /// No source read any of the project's files: the data model is not provided, not empty.
+    NotProvided,
+    /// No type was read, but files could not be read or rows were left out.
+    Incomplete,
+    /// A completed scan whose sources read the project's files and found no type.
+    Empty,
+    /// Types were read.
+    Types,
+}
+
+pub fn outcome(data: &SystemData) -> Outcome {
+    let mut types = false;
+    let (mut covered, mut unreadable, mut rows) = (false, false, false);
+    for row in &data.rows {
+        rows = true;
+        match row {
+            SystemDataRow::Type { .. } => types = true,
+            SystemDataRow::Coverage { sources, .. } => covered |= !sources.is_empty(),
+            SystemDataRow::Unreadable { .. } => unreadable = true,
+            _ => {}
+        }
+    }
+    if types {
+        Outcome::Types
+    } else if data.status == SystemStatus::Building || data.error.is_some() || !rows {
+        // A rowless reply carries no coverage: it cannot say the project has no types.
+        Outcome::Pending
+    } else if unreadable || data.omitted_rows > 0 {
+        Outcome::Incomplete
+    } else if covered {
+        Outcome::Empty
+    } else {
+        Outcome::NotProvided
+    }
+}
+
+/// Said in the map's place when nothing is drawn and no filter hides anything.
+pub fn said(outcome: Outcome) -> Option<&'static str> {
+    match outcome {
+        Outcome::Pending | Outcome::Types => None,
+        Outcome::NotProvided => Some(NOT_PROVIDED),
+        Outcome::Incomplete => Some(INCOMPLETE),
+        Outcome::Empty => Some(EMPTY),
+    }
+}
+
+pub const EMPTY: &str = "No data types at this commit: the built-in sources read this project's \
+                         files and found no JSON Schema definition, SQL table or Rust type that \
+                         derives Serialize or Deserialize.";
+pub const NOT_PROVIDED: &str = "Data model not provided: no source reads this project's \
+                                languages. JSON Schema, SQL and serialized Rust are built in; an \
+                                extension can supply others.";
+pub const INCOMPLETE: &str = "No data types were read, but some files could not be read or rows \
+                              were left out, so this does not show the project has none.";
 pub const FILTERED: &str = "No data type matches the filter.";

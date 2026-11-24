@@ -230,13 +230,10 @@ fn data_shown(state: &State, feed: &Feed, project: String, row: Option<&SystemRo
     });
     let filtering = !state.filter.trim().is_empty();
     let empty = match (&scene, served) {
-        (Some(scene), Some(served)) if scene.cards.is_empty() && served.error.is_none() => {
-            Some(if total > 0 && filtering {
-                data::FILTERED
-            } else {
-                data::EMPTY
-            })
+        (Some(scene), Some(_)) if scene.cards.is_empty() && total > 0 && filtering => {
+            Some(data::FILTERED)
         }
+        (Some(scene), Some(served)) if scene.cards.is_empty() => data::said(data::outcome(served)),
         _ => None,
     };
     let matched = scene.as_ref().filter(|_| filtering).map(|scene| {

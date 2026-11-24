@@ -142,6 +142,11 @@ impl AppState {
             }
         });
         on_key_with("mod+b", typing, move |_| self.toggle_sidebar());
+        // The System map's filter is no Tab stop in a terminal: F3 brings the keyboard to it from
+        // any control of the page, as it does to a session's path filter. The browser keeps F3.
+        if !cfg!(target_arch = "wasm32") {
+            on_key_with("f3", typing, move |_| self.focus_system_filter());
+        }
         // Save the configuration draft from any of its fields, as the save bar's Save does.
         on_key_with("mod+s", anywhere, move |_| {
             if self.nav.with_untracked(super::config::on_config) {
@@ -162,6 +167,27 @@ impl AppState {
                 state.cycle_model_live(top.as_ref(), ask_open, feed, env)
             });
         });
+    }
+
+    /// F3: a session page's own filter, or the System map's while that page is in view with
+    /// nothing standing over it.
+    fn focus_system_filter(&self) {
+        if self.press_session("f3") {
+            return;
+        }
+        let clear = !untracked(|| self.sheet_open())
+            && self
+                .nav
+                .with_untracked(|nav| nav.newest().is_none() && nav.live().is_none())
+            && self.work.with_untracked(|state| state.menu.is_none())
+            && self.menus.get_untracked() == 0
+            && self.nav.with_untracked(|nav| nav.destination) == Destination::System
+            && self
+                .system
+                .with_untracked(|state| state.view != crate::model::system::View::Lenses);
+        if clear {
+            self.run(vec![Effect::Focus(crate::model::system::FILTER_FIELD)]);
+        }
     }
 
     /// Runs `key` on the session page on top, when one is and the key does something there

@@ -7,7 +7,7 @@ focus can be read. The emulator is `pyte`, from a scratch virtual environment un
 created when missing; nothing else is written outside /tmp.
 
 Steps (arguments, or lines of a --steps file; `#` starts a comment line):
-  key:NAME[*N]  a key: enter tab stab esc up down left right home end pgup pgdn bs del space,
+  key:NAME[*N]  a key: enter tab stab esc up down left right home end pgup pgdn bs del space f3,
                 ctrl+X, alt+X, or a single character; `*N` repeats it
   type:TEXT     typed text
   wait:TEXT     wait until TEXT is on screen (fails after --wait seconds)
@@ -54,6 +54,7 @@ KEYS = {
     "enter": "\r", "tab": "\t", "stab": "\x1b[Z", "esc": "\x1b", "up": "\x1b[A",
     "down": "\x1b[B", "right": "\x1b[C", "left": "\x1b[D", "home": "\x1b[H", "end": "\x1b[F",
     "pgup": "\x1b[5~", "pgdn": "\x1b[6~", "bs": "\x7f", "del": "\x1b[3~", "space": " ",
+    "f3": "\x1bOR",
 }
 
 

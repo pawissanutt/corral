@@ -73,6 +73,7 @@ pub fn key_legend_live(
             ("i", "inspector"),
             (".", "more"),
         ],
+        (Destination::System, None) => vec![("F3", "filter")],
         (Destination::Sessions, None) => vec![
             ("j k", "move"),
             ("Enter", "open"),

@@ -390,6 +390,9 @@ pub fn runtime_request(project: &str) -> DetailRef {
     }
 }
 
+/// The map's name filter; F3 brings the keyboard to it outside the web, where it is no Tab stop.
+pub const FILTER_FIELD: &str = "field-system";
+
 /// The `system_data` detail at the project head: types, has edges, containers and coverage.
 pub fn data_request(project: &str) -> DetailRef {
     DetailRef::SystemData {

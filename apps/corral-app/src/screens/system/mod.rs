@@ -28,7 +28,9 @@ use crate::model::system::marks::Marks;
 use crate::model::system::scene::EdgeKind;
 use crate::model::system::shown::{ASK_HEADING, ASK_WORDS, Shown, Status, TITLE, shown};
 use crate::model::system::words::{Swatch, slot_hue};
-use crate::model::system::{Action, Overlay, Pick, State, View, Window, view_request};
+use crate::model::system::{
+    Action, FILTER_FIELD, Overlay, Pick, State, View, Window, view_request,
+};
 use crate::model::text::span;
 use crate::model::{Form, Hue, Id};
 use crate::screens::activity::subnav;
@@ -372,21 +374,25 @@ fn bar(app: AppState, data: Memo<Shown>) -> AnyElement {
     })
     .number_of_lines(1u32)
     .text_color(color(Token::Ink3));
-    let entry = copyable_input(app, None, move || app.system.with(|s| s.filter.clone()))
-        .test_id("field-system")
-        .label("Filter the map")
-        .placeholder("Filter by name or path")
-        .on_change(move |typed: &str| app.system_act(Action::Filter(typed.to_owned())))
-        .flex_1()
-        .min_w(px(0.0))
-        .text_color(color(Token::Ink))
-        .caret_color(move || for_appearance(color(Token::Ink)))
-        .bg(AdaptiveColor::TRANSPARENT);
+    let handle = element_ref();
+    app.focus_when_asked(FILTER_FIELD, handle);
+    let entry = copyable_input(app, Some(handle), move || {
+        app.system.with(|s| s.filter.clone())
+    })
+    .test_id(FILTER_FIELD)
+    .label("Filter the map")
+    .placeholder("Filter by name or path")
+    .on_change(move |typed: &str| app.system_act(Action::Filter(typed.to_owned())))
+    .flex_1()
+    .min_w(px(0.0))
+    .text_color(color(Token::Ink))
+    .caret_color(move || for_appearance(color(Token::Ink)))
+    .bg(AdaptiveColor::TRANSPARENT);
     let filter = match form {
         Form::Terminal => view()
             .flex_row()
             .w(term::cells(36.0))
-            .child(text("/ ").text_color(color(Token::Ink3)))
+            .child(text("F3 ").text_color(color(Token::Ink3)))
             .child(entry.h(term::rows(1.0)))
             .into_element(),
         Form::Desktop | Form::Phone => view()
