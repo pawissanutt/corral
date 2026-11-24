@@ -359,8 +359,6 @@ fn ending_ask_clears_the_thread_before_the_next_send() {
             .expect("a concrete assistant thread")
     };
     let original = thread(&app);
-    app.press("id:btn-stop").unwrap();
-    app.wait_for("id:btn-send").unwrap();
     app.press("id:btn-end-thread").unwrap();
     app.wait_for("id:confirm").unwrap();
     app.press("id:confirm-confirm").unwrap();
