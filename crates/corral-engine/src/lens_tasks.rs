@@ -140,24 +140,29 @@ impl Engine {
                 .map(|result| LensIdentity::read(&reader, &rev, result))
                 .collect::<Result<Vec<_>>>()?;
             let prefix = format!("{}/", reader.lens_dir());
-            let matches = identities
-                .iter()
-                .enumerate()
-                .filter(|(index, identity)| {
-                    identity.as_ref().is_some_and(|lens| {
-                        lens.kind == kind
-                            && (lens.id == about
-                                || lens.title.trim() == about
-                                || results[*index].file == about
-                                || results[*index].file.strip_prefix(&prefix) == Some(about))
+            let selected = select_lens(&results, &identities, &prefix, about).or_else(|| {
+                let matches = identities
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, identity)| {
+                        identity
+                            .as_ref()
+                            .is_some_and(|lens| lens.kind == kind && lens.title.trim() == about)
                     })
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                match matches.as_slice() {
+                    [index] => Some(*index),
+                    _ => None,
+                }
+            });
+            Ok(selected
+                .filter(|index| {
+                    identities[*index]
+                        .as_ref()
+                        .is_some_and(|lens| lens.kind == kind)
                 })
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-            Ok(match matches.as_slice() {
-                [index] => Some(format!("repair-file:{:?}", results[*index].file)),
-                _ => None,
-            })
+                .map(|index| format!("repair-file:{:?}", results[index].file)))
         })()
         .ok()
         .flatten();
