@@ -10,31 +10,48 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{Attribute, Fields, GenericArgument, Item, Path, PathArguments, Token, Type};
 
-use super::{Declaration, MAX_FIELDS, MAX_NAME_BYTES, MAX_TYPES, Target};
+use super::{Declaration, MAX_FIELDS, MAX_NAME_BYTES, MAX_TYPES, Source, Target};
+
+mod modules;
 use crate::{DataField, DataKind, DataSource, DataType};
+use modules::Anchor;
+pub(super) use modules::{Layout, ModulePath};
 
 const MAX_BYTES: usize = 1024 * 1024;
 
-pub(super) fn read(path: &str, text: &str) -> Option<Vec<Declaration>> {
+pub(super) fn read(path: &str, text: &str) -> Option<Source> {
     if !path.ends_with(".rs") || text.len() > MAX_BYTES {
         return None;
     }
-    if !text.contains("derive") || !(text.contains("Serialize") || text.contains("Deserialize")) {
-        return Some(Vec::new());
+    let derives =
+        text.contains("derive") && (text.contains("Serialize") || text.contains("Deserialize"));
+    let modules = text.contains("mod")
+        && text
+            .split(|c: char| !c.is_alphanumeric() && c != '_')
+            .any(|word| word == "mod");
+    if !derives && !modules {
+        return Some(Source::default());
     }
     // proc-macro2's span map retains the entire source in thread-local storage. Keep
     // the tokens, AST and span map on a short-lived thread with a known stack size.
-    thread::scope(|scope| {
+    let parsed = thread::scope(|scope| {
         thread::Builder::new()
             .stack_size(8 * 1024 * 1024)
             .spawn_scoped(scope, || parse(path, text))
             .ok()?
             .join()
             .ok()?
-    })
+    });
+    // Parsing a module-only file can improve path resolution. Failure there
+    // does not make our existing scan for Serde derives incomplete.
+    if derives {
+        parsed
+    } else {
+        Some(parsed.unwrap_or_default())
+    }
 }
 
-fn parse(path: &str, text: &str) -> Option<Vec<Declaration>> {
+fn parse(path: &str, text: &str) -> Option<Source> {
     let mut text = text.strip_prefix('\u{feff}').unwrap_or(text);
     if let Some(shebang) = text.strip_prefix("#!")
         && !shebang.trim_start().starts_with('[')
@@ -45,9 +62,12 @@ fn parse(path: &str, text: &str) -> Option<Vec<Declaration>> {
     let tokens = text.parse::<TokenStream>().ok()?;
     bounded(tokens.clone(), 0, &mut 96_000)?;
     let file: syn::File = syn::parse2(tokens).ok()?;
-    let mut declarations = Vec::new();
-    read_items(path, "", file.items, &mut declarations)?;
-    Some(declarations)
+    let mut source = Source {
+        external_modules: Some(Vec::new()),
+        ..Source::default()
+    };
+    read_items(path, "", file.items, &mut source, true)?;
+    Some(source)
 }
 
 /// proc-macro2's fallback lexer and token destructor are iterative, but syn's parser
@@ -127,17 +147,29 @@ fn read_items(
     path: &str,
     module: &str,
     items: Vec<Item>,
-    declarations: &mut Vec<Declaration>,
+    source: &mut Source,
+    conventional: bool,
 ) -> Option<()> {
     for item in items {
         let (ident, kind, fields, links) = match item {
             Item::Mod(item) => {
+                let module = qualified(module, &item.ident.unraw().to_string());
+                let conventional = conventional
+                    && !item.attrs.iter().any(|attr| {
+                        attr.path().is_ident("path") || attr.path().is_ident("cfg_attr")
+                    });
                 if let Some((_, items)) = item.content {
-                    let module = qualified(module, &item.ident.unraw().to_string());
                     if module.len() > MAX_NAME_BYTES {
                         return None;
                     }
-                    read_items(path, &module, items, declarations)?;
+                    read_items(path, &module, items, source, conventional)?;
+                } else if conventional && let Some(modules) = &mut source.external_modules {
+                    if modules.len() == MAX_TYPES || module.len() > MAX_NAME_BYTES {
+                        source.external_modules = None;
+                        source.layout_truncated = true;
+                    } else {
+                        modules.push(module);
+                    }
                 }
                 continue;
             }
@@ -155,7 +187,7 @@ fn read_items(
                             || (index.to_string(), field.ty.span().start().line),
                             |ident| (ident.unraw().to_string(), ident.span().start().line),
                         );
-                        add_links(&mut links, &name, module, [&field.ty]);
+                        add_links(&mut links, &name, [&field.ty]);
                         DataField {
                             name,
                             ty: type_text(&field.ty),
@@ -179,7 +211,6 @@ fn read_items(
                         add_links(
                             &mut links,
                             &name,
-                            module,
                             variant.fields.iter().map(|field| &field.ty),
                         );
                         DataField {
@@ -195,10 +226,10 @@ fn read_items(
             _ => continue,
         };
         let name = qualified(module, &ident.unraw().to_string());
-        if name.len() > MAX_NAME_BYTES || declarations.len() == MAX_TYPES {
+        if name.len() > MAX_NAME_BYTES || source.types.len() == MAX_TYPES {
             return None;
         }
-        declarations.push(Declaration {
+        source.types.push(Declaration {
             fact: DataType {
                 path: path.to_owned(),
                 name,
@@ -288,21 +319,16 @@ fn is_option(ty: &Type) -> bool {
 fn add_links<'a>(
     links: &mut Vec<(String, Target)>,
     field: &str,
-    module: &str,
     types: impl IntoIterator<Item = &'a Type>,
 ) {
     let mut names = BTreeSet::new();
     for ty in types {
-        collect_names(&mut names, module, ty);
+        collect_names(&mut names, ty);
     }
-    links.extend(
-        names
-            .into_iter()
-            .map(|name| (field.to_owned(), Target::Name(name))),
-    );
+    links.extend(names.into_iter().map(|target| (field.to_owned(), target)));
 }
 
-fn collect_names(names: &mut BTreeSet<String>, module: &str, ty: &Type) {
+fn collect_names(names: &mut BTreeSet<Target>, ty: &Type) {
     match ty {
         Type::Path(ty) if ty.qself.is_none() => {
             let path = &ty.path;
@@ -324,28 +350,30 @@ fn collect_names(names: &mut BTreeSet<String>, module: &str, ty: &Type) {
                         | "BTreeSet"
                         | "VecDeque"
                 );
-                if !wrapper || path.segments.len() > 1 && !standard_path(path) {
-                    names.insert(type_name(module, path));
+                if (!wrapper || path.segments.len() > 1 && !standard_path(path))
+                    && let Some(target) = type_target(path)
+                {
+                    names.insert(target);
                 }
                 for segment in &path.segments {
                     if let PathArguments::AngleBracketed(args) = &segment.arguments {
                         for arg in &args.args {
                             if let GenericArgument::Type(ty) = arg {
-                                collect_names(names, module, ty);
+                                collect_names(names, ty);
                             }
                         }
                     }
                 }
             }
         }
-        Type::Array(ty) => collect_names(names, module, &ty.elem),
-        Type::Group(ty) => collect_names(names, module, &ty.elem),
-        Type::Paren(ty) => collect_names(names, module, &ty.elem),
-        Type::Reference(ty) => collect_names(names, module, &ty.elem),
-        Type::Slice(ty) => collect_names(names, module, &ty.elem),
+        Type::Array(ty) => collect_names(names, &ty.elem),
+        Type::Group(ty) => collect_names(names, &ty.elem),
+        Type::Paren(ty) => collect_names(names, &ty.elem),
+        Type::Reference(ty) => collect_names(names, &ty.elem),
+        Type::Slice(ty) => collect_names(names, &ty.elem),
         Type::Tuple(ty) => {
             for ty in &ty.elems {
-                collect_names(names, module, ty);
+                collect_names(names, ty);
             }
         }
         _ => {}
@@ -358,35 +386,46 @@ fn standard_path(path: &Path) -> bool {
     })
 }
 
-fn type_name(module: &str, path: &Path) -> String {
+fn type_target(path: &Path) -> Option<Target> {
+    if path.leading_colon.is_some()
+        || path
+            .segments
+            .iter()
+            .take(path.segments.len().saturating_sub(1))
+            .any(|segment| !segment.arguments.is_empty())
+    {
+        return None;
+    }
+    if path.segments.len() == 1 {
+        return Some(Target::Name(
+            path.segments.first()?.ident.unraw().to_string(),
+        ));
+    }
     let mut parts = path
         .segments
         .iter()
         .map(|part| part.ident.unraw().to_string())
         .peekable();
-    let mut module = module;
-    let relative = match parts.peek().map(String::as_str) {
+    let anchor = match parts.peek().map(String::as_str) {
         Some("crate") => {
             parts.next();
-            false
+            Anchor::Crate
         }
         Some("self") => {
             parts.next();
-            true
+            Anchor::Relative
         }
         Some("super") => {
+            let mut levels = 0;
             while parts.peek().is_some_and(|part| part == "super") {
                 parts.next();
-                module = module.rsplit_once("::").map_or("", |(parent, _)| parent);
+                levels += 1;
             }
-            true
+            Anchor::Super(levels)
         }
-        _ => false,
+        _ => Anchor::Relative,
     };
     let name = parts.collect::<Vec<_>>().join("::");
-    if relative {
-        qualified(module, &name)
-    } else {
-        name
-    }
+    (!name.is_empty() && name.len() <= MAX_NAME_BYTES)
+        .then_some(Target::Rust(ModulePath { anchor, name }))
 }

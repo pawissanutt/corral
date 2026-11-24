@@ -5,7 +5,32 @@ use super::Builder;
 #[test]
 fn built_in_data_facts_match_golden() {
     let inputs = [
-        ("wire/model.rs", "Rust", include_str!("fixtures/golden.rs")),
+        (
+            "other/src/lib.rs",
+            "Rust",
+            "mod child { #[derive(Serialize)] struct Address; }",
+        ),
+        (
+            "wire/src/lib.rs",
+            "Rust",
+            include_str!("fixtures/golden.rs"),
+        ),
+        (
+            "wire/src/child.rs",
+            "Rust",
+            include_str!("fixtures/golden-child.rs"),
+        ),
+        (
+            "wire/src/nested/src/lib.rs",
+            "Rust",
+            "mod child { #[derive(Serialize)] struct Address; } #[derive(Serialize)] struct Nested { wire: crate::child::Address }",
+        ),
+        // Similar-looking files do not enter the crate without a `mod` declaration.
+        (
+            "wire/src/orphan.rs",
+            "Rust",
+            include_str!("fixtures/golden-child.rs"),
+        ),
         ("sql/model.sql", "SQL", include_str!("fixtures/golden.sql")),
         (
             "schema/model.schema.json",
@@ -101,8 +126,8 @@ fn json_delta_distinguishes_a_root_from_a_definition_with_the_same_name() {
 #[test]
 fn tree_expansion_budget_records_remaining_sources_as_unreadable() {
     let mut builder = Builder {
-        facts: Default::default(),
         remaining: 200,
+        ..Builder::default()
     };
     let source = r#"{"title":"User","type":"object"}"#;
     builder.read("a.schema.json", Some(source));
@@ -111,6 +136,28 @@ fn tree_expansion_budget_records_remaining_sources_as_unreadable() {
     assert_eq!(data.types.len(), 1);
     assert_eq!(data.types[0].path, "a.schema.json");
     assert!(data.unreadable_paths().contains("b.schema.json"));
+
+    // Only the library mount fits. Its partial layout must not turn a path
+    // that is ambiguous between the library and binary into a false edge.
+    let mut builder = Builder {
+        layout_remaining: 200,
+        ..Builder::default()
+    };
+    let roots = "mod shared; mod target { #[derive(Serialize)] struct Wire; }";
+    builder.read("src/lib.rs", Some(roots));
+    builder.read("src/main.rs", Some(roots));
+    builder.read(
+        "src/shared.rs",
+        Some("#[derive(Serialize)] struct Shared { field: crate::target::Wire }"),
+    );
+    let data = builder.finish([
+        ("src/lib.rs", "Rust"),
+        ("src/main.rs", "Rust"),
+        ("src/shared.rs", "Rust"),
+    ]);
+    assert_eq!(data.types.len(), 3);
+    assert!(data.unreadable_paths().is_empty());
+    assert!(data.edges.is_empty(), "{:?}", data.edges);
 }
 
 #[test]

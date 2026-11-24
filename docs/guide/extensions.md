@@ -147,8 +147,11 @@ ignoring line shifts. It falls back to built-ins if either provider snapshot lac
 covered on only one side. Do not send `type` rows in a `delta` reply.
 
 Built-in data sources read committed JSON Schema and OpenRPC components, SQL `CREATE TABLE`
-statements, and Rust structs and enums with a Serde derive. JSON links use local pointers;
-colliding declaration names in a file are qualified by pointer. These are source shapes, not
+statements, and Rust structs and enums with a Serde derive. JSON links use local pointers,
+including alternatives in `oneOf` and `anyOf`; colliding names in a file are qualified by
+pointer. Qualified Rust paths follow conventional `mod` declarations from `src/lib.rs` and
+`src/main.rs` when the committed Cargo target permits them. Imports, custom roots, and
+custom module paths are not resolved. These are source shapes, not
 compatibility verdicts: there is no macro expansion, Serde execution, type checking, SQL
 migration replay, or remote schema resolution. Data readers cap both per-file and whole-tree
 expansion; provider `type` rows also have a reply-wide budget. Unreadable sources do not count

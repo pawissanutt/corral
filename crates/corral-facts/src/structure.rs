@@ -141,10 +141,12 @@ pub(crate) fn collect(repo: &Path, tree: &str, operation_enums: &[String]) -> Re
     );
     let runtime = runtime.finish();
     let entry_points = entries::finish(&containers, &runtime, entry_coverage, entry_sites);
-    let data = data.finish(
+    let data = data.finish_project(
         files
             .iter()
             .map(|file| (file.path.as_str(), file.language.as_str())),
+        &manifest_text,
+        &runtime,
     );
     Ok(TreeFacts {
         file_references,

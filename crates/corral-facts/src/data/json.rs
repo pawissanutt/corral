@@ -4,7 +4,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
-use super::{Declaration, MAX_FIELDS, MAX_NAME_BYTES, MAX_TYPES, Target};
+use super::{
+    Declaration, LINK_COST, MAX_FIELDS, MAX_LINKS, MAX_NAME_BYTES, MAX_TYPE_BYTES, MAX_TYPES,
+    SOURCE_BUDGET, Target, shape_cost,
+};
 use crate::{DataField, DataKind, DataSource, DataType};
 
 const MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -78,6 +81,7 @@ pub(super) fn read(path: &str, text: &str) -> Option<Vec<Declaration>> {
         path,
         doc,
         declarations: &mut declarations,
+        remaining: SOURCE_BUDGET,
     };
     if let Some(name) = root_name {
         reader.declaration(name, String::new(), &root, root_offset, root_offset)?;
@@ -115,6 +119,7 @@ struct Reader<'a, 'b> {
     path: &'a str,
     doc: Document<'a>,
     declarations: &'b mut Vec<Declaration>,
+    remaining: usize,
 }
 
 impl Reader<'_, '_> {
@@ -166,18 +171,32 @@ impl Reader<'_, '_> {
                 .collect();
             if let Some(property_location) = entries.get("properties") {
                 let locations = self.doc.members(property_location.value);
+                let header = shape_cost(self.path, name, &[], 0)?;
+                let mut available = self.remaining.checked_sub(header)?;
                 for (field, property) in properties {
-                    let (ty, target) = self.property_type(property);
-                    if let Some(target) = target {
-                        links.push((field.clone(), target));
-                    }
                     if let Some(location) = locations.get(field) {
-                        fields.push(DataField {
+                        if field.len() > MAX_NAME_BYTES {
+                            return None;
+                        }
+                        // Reserve the worst-case expanded link cost before building
+                        // targets and repeated field names.
+                        let remaining_links = (available / LINK_COST).min(MAX_LINKS - links.len());
+                        let (ty, targets) = self.property_type(property, remaining_links)?;
+                        let data_field = DataField {
                             name: field.clone(),
                             ty,
                             line: self.doc.line(location.key),
                             optional: !required.contains(field.as_str()),
-                        });
+                        };
+                        let cost = shape_cost(
+                            self.path,
+                            name,
+                            std::slice::from_ref(&data_field),
+                            targets.len(),
+                        )? - header;
+                        available = available.checked_sub(cost)?;
+                        fields.push(data_field);
+                        links.extend(targets.into_iter().map(|target| (field.clone(), target)));
                     }
                 }
             }
@@ -203,6 +222,9 @@ impl Reader<'_, '_> {
         } else {
             DataKind::Record
         };
+        self.remaining =
+            self.remaining
+                .checked_sub(shape_cost(self.path, name, &fields, links.len())?)?;
         fields.sort_by_key(|field| field.line);
         self.declarations.push(Declaration {
             fact: DataType {
@@ -219,61 +241,126 @@ impl Reader<'_, '_> {
         Some(())
     }
 
-    fn property_type(&self, mut schema: &Value) -> (String, Option<Target>) {
-        let mut arrays = 0;
-        let (ty, target) = loop {
-            if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-                let target = reference_target(self.path, reference);
-                break (reference.to_owned(), target);
-            }
-            if let Some(reference) = nullable_reference(schema) {
-                let target = reference_target(self.path, reference);
-                break (format!("{reference} | null"), target);
-            }
-            let ty = schema.get("type");
-            if ty.and_then(Value::as_str) == Some("array")
-                && let Some(items) = schema.get("items").filter(|items| items.is_object())
-            {
-                arrays += 1;
-                schema = items;
-                continue;
-            }
-            let display = match ty {
-                Some(Value::String(ty)) => ty.clone(),
-                Some(Value::Array(types)) => types
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join(" | "),
-                _ if schema.get("properties").is_some() => "object".to_owned(),
-                _ if schema.get("enum").is_some() => "enum".to_owned(),
-                _ => "any".to_owned(),
-            };
-            break (display, None);
-        };
-        (
-            format!("{}{ty}{}", "array<".repeat(arrays), ">".repeat(arrays)),
-            target,
-        )
+    fn property_type(&self, schema: &Value, max_links: usize) -> Option<(String, Vec<Target>)> {
+        let mut display = String::new();
+        let mut targets = Vec::new();
+        render_type(
+            self.path,
+            schema,
+            &mut display,
+            &mut targets,
+            max_links,
+            false,
+        )?;
+        Some((display, targets))
     }
 }
 
-fn nullable_reference(schema: &Value) -> Option<&str> {
-    let alternatives = schema
-        .get("anyOf")
-        .or_else(|| schema.get("oneOf"))?
-        .as_array()?;
-    let [first, second] = alternatives.as_slice() else {
-        return None;
-    };
-    let reference = if first.get("type").and_then(Value::as_str) == Some("null") {
-        second
-    } else if second.get("type").and_then(Value::as_str) == Some("null") {
-        first
-    } else {
-        return None;
-    };
-    reference.get("$ref")?.as_str()
+// Render only the supported syntactic subset, without evaluating schemas. The
+// parser's nesting limit bounds recursion; output and link budgets are checked
+// before appending/cloning, including for repeated alternatives.
+fn render_type(
+    path: &str,
+    schema: &Value,
+    display: &mut String,
+    targets: &mut Vec<Target>,
+    max_links: usize,
+    nested: bool,
+) -> Option<()> {
+    fn append(out: &mut String, text: &str) -> Option<()> {
+        if out.len().checked_add(text.len())? > MAX_TYPE_BYTES {
+            return None;
+        }
+        out.push_str(text);
+        Some(())
+    }
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        append(display, reference)?;
+        if let Some(target) = reference_target(path, reference) {
+            if targets.len() == max_links {
+                return None;
+            }
+            targets.push(target);
+        }
+        return Some(());
+    }
+    let groups = ["anyOf", "oneOf"].map(|key| schema.get(key).and_then(Value::as_array));
+    if groups.iter().any(Option::is_some) {
+        let combined = groups.iter().all(Option::is_some);
+        if nested && combined {
+            append(display, "(")?;
+        }
+        for (index, alternatives) in groups.into_iter().flatten().enumerate() {
+            if index > 0 {
+                append(display, " & ")?;
+            }
+            if nested || combined {
+                append(display, "(")?;
+            }
+            let plain_null_first = alternatives.first().is_some_and(|first| {
+                first.get("type").and_then(Value::as_str) == Some("null")
+                    && ["$ref", "oneOf", "anyOf"]
+                        .into_iter()
+                        .all(|key| first.get(key).is_none())
+            });
+            // Preserve nullable-ref display order without discarding any branch.
+            let swap = alternatives.len() == 2
+                && plain_null_first
+                && alternatives[1]
+                    .get("$ref")
+                    .and_then(Value::as_str)
+                    .is_some();
+            if alternatives.is_empty() {
+                append(display, "any")?;
+            }
+            for n in 0..alternatives.len() {
+                if n > 0 {
+                    append(display, " | ")?;
+                }
+                let branch = if swap { 1 - n } else { n };
+                render_type(
+                    path,
+                    &alternatives[branch],
+                    display,
+                    targets,
+                    max_links,
+                    true,
+                )?;
+            }
+            if nested || combined {
+                append(display, ")")?;
+            }
+        }
+        if nested && combined {
+            append(display, ")")?;
+        }
+        return Some(());
+    }
+    let ty = schema.get("type");
+    if ty.and_then(Value::as_str) == Some("array")
+        && let Some(items) = schema.get("items").filter(|items| items.is_object())
+    {
+        append(display, "array<")?;
+        render_type(path, items, display, targets, max_links, true)?;
+        return append(display, ">");
+    }
+    match ty {
+        Some(Value::String(ty)) => append(display, ty),
+        Some(Value::Array(types)) => {
+            let mut first = true;
+            for ty in types.iter().filter_map(Value::as_str) {
+                if !first {
+                    append(display, " | ")?;
+                }
+                append(display, ty)?;
+                first = false;
+            }
+            Some(())
+        }
+        _ if schema.get("properties").is_some() => append(display, "object"),
+        _ if schema.get("enum").is_some() => append(display, "enum"),
+        _ => append(display, "any"),
+    }
 }
 
 fn value_type(value: &Value) -> &'static str {

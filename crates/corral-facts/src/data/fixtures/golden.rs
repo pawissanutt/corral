@@ -1,13 +1,10 @@
 const NOT_SOURCE: &str = r#"#[derive(Serialize)] struct Fake;"#;
+pub mod child;
 mod wire {
-    #[derive(::serde::Deserialize)]
-    struct Address {
-        zip: String,
-    }
-
     #[derive(serde::Serialize)]
     struct Customer {
-        address: Option< /* trivia */ Address >,
+        address: Option< /* trivia */ crate::child::Address >,
+        missing: crate::orphan::Address,
     }
 
     #[derive(Deserialize)]
@@ -16,3 +13,4 @@ mod wire {
         Missing,
     }
 }
+mod nested { mod src { mod lib; } }

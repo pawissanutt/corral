@@ -191,7 +191,7 @@ fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
 }
 
-fn local_path(dir: &str, path: &str) -> Option<String> {
+pub(crate) fn local_path(dir: &str, path: &str) -> Option<String> {
     if path.is_empty() || path.starts_with('/') || path.contains([':', '\\']) {
         return None;
     }

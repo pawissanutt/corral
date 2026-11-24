@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DataEdge, DataEdgeKind, DataKind, DataSource, DataType, DataTypeId, ReadStatus};
+use crate::{
+    DataEdge, DataEdgeKind, DataKind, DataSource, DataType, DataTypeId, ReadStatus, RuntimeFacts,
+};
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataFacts {
@@ -25,6 +27,9 @@ pub struct DataFacts {
 pub(crate) struct Builder {
     facts: DataFacts,
     remaining: usize,
+    rust_modules: BTreeMap<String, Vec<String>>,
+    layout_remaining: usize,
+    layout_truncated: bool,
 }
 
 impl Default for Builder {
@@ -32,6 +37,9 @@ impl Default for Builder {
         Self {
             facts: DataFacts::default(),
             remaining: TREE_BUDGET,
+            rust_modules: BTreeMap::new(),
+            layout_remaining: SOURCE_BUDGET,
+            layout_truncated: false,
         }
     }
 }
@@ -42,7 +50,21 @@ pub(super) struct Declaration {
     schema_pointer: Option<String>,
 }
 
-type Reader = fn(&str, &str) -> Option<Vec<Declaration>>;
+#[derive(Default)]
+struct Source {
+    types: Vec<Declaration>,
+    external_modules: Option<Vec<String>>,
+    layout_truncated: bool,
+}
+
+impl From<Vec<Declaration>> for Source {
+    fn from(types: Vec<Declaration>) -> Self {
+        Self {
+            types,
+            ..Self::default()
+        }
+    }
+}
 
 const MAX_PATH_BYTES: usize = 1024;
 const MAX_NAME_BYTES: usize = 256;
@@ -53,6 +75,7 @@ const MAX_TYPE_BYTES: usize = 16 * 1024;
 const SOURCE_BUDGET: usize = 8 * 1024 * 1024;
 const TREE_BUDGET: usize = 64 * 1024 * 1024;
 pub(crate) const REPLY_BUDGET: usize = 32 * 1024 * 1024;
+const LINK_COST: usize = 2 * (MAX_PATH_BYTES + MAX_NAME_BYTES) + MAX_NAME_BYTES + 128;
 
 // A name/path is repeated in every link and field delta. Bound the expanded
 // shape, not only the input blob/reply, before materializing those rows.
@@ -64,8 +87,7 @@ fn shape_cost(path: &str, name: &str, fields: &[crate::DataField], links: usize)
     {
         return None;
     }
-    let mut bytes = (path.len() + name.len() + 128) * (1 + fields.len())
-        + (2 * (MAX_PATH_BYTES + MAX_NAME_BYTES) + MAX_NAME_BYTES + 128) * links;
+    let mut bytes = (path.len() + name.len() + 128) * (1 + fields.len()) + LINK_COST * links;
     for field in fields {
         if field.name.len() > MAX_NAME_BYTES || field.ty.len() > MAX_TYPE_BYTES {
             return None;
@@ -112,10 +134,12 @@ struct SchemaAnchor {
     pointer: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 enum Target {
     Schema { path: String, pointer: String },
     Name(String),
+    Rust(rust::ModulePath),
+    Exact(DataTypeId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,26 +151,52 @@ struct Link {
 
 impl Builder {
     pub(crate) fn read(&mut self, path: &str, text: Option<&str>) {
-        let Some(ext) = path.rsplit_once('.').map(|(_, ext)| ext) else {
-            return;
-        };
-        let (source, read): (DataSource, Reader) = match ext {
-            "rs" => (DataSource::RustSerde, rust::read),
-            "sql" => (DataSource::Sql, sql::read),
-            "json" => (DataSource::JsonSchema, json::read),
+        let bounded = text.filter(|_| path.len() <= MAX_PATH_BYTES);
+        let (source, rows) = match extension(path) {
+            Some("rs") => (
+                DataSource::RustSerde,
+                bounded.and_then(|text| rust::read(path, text)),
+            ),
+            Some("sql") => (
+                DataSource::Sql,
+                bounded
+                    .and_then(|text| sql::read(path, text))
+                    .map(Source::from),
+            ),
+            Some("json") => (
+                DataSource::JsonSchema,
+                bounded
+                    .and_then(|text| json::read(path, text))
+                    .map(Source::from),
+            ),
             _ => return,
         };
         let facts = &mut self.facts;
-        if let Some(rows) = text
-            .filter(|_| path.len() <= MAX_PATH_BYTES)
-            .and_then(|text| read(path, text))
-            .and_then(|rows| {
-                self.remaining = self.remaining.checked_sub(source_cost(&rows)?)?;
-                Some(rows)
-            })
-        {
+        if let Some(rows) = rows.and_then(|mut rows| {
+            // Path layout is optional evidence, independently bounded. Large
+            // module graphs must not crowd out otherwise readable type shapes.
+            self.layout_truncated |= rows.layout_truncated;
+            if let Some(modules) = rows
+                .external_modules
+                .take()
+                .filter(|modules| !modules.is_empty())
+            {
+                let bytes = modules
+                    .iter()
+                    .map(|name| name.len() + path.len() + 128)
+                    .sum();
+                if let Some(remaining) = self.layout_remaining.checked_sub(bytes) {
+                    self.layout_remaining = remaining;
+                    self.rust_modules.insert(path.to_owned(), modules);
+                } else {
+                    self.layout_truncated = true;
+                }
+            }
+            self.remaining = self.remaining.checked_sub(source_cost(&rows.types)?)?;
+            Some(rows)
+        }) {
             facts.sources.insert(path.to_owned(), source);
-            for row in rows {
+            for row in rows.types {
                 if let Some(pointer) = row.schema_pointer {
                     facts.schema_anchors.push(SchemaAnchor {
                         id: row.fact.id(),
@@ -155,7 +205,9 @@ impl Builder {
                 }
                 facts.add(row.fact, row.links);
             }
-        } else if ext != "json" || text.is_none_or(|text| json::is_candidate(path, text)) {
+        } else if source != DataSource::JsonSchema
+            || text.is_none_or(|text| json::is_candidate(path, text))
+        {
             // Ordinary JSON is not a schema. Oversized/non-text blobs, or an
             // unreadable file in a detected language, are not evidence of removal.
             facts.unreadable.insert(path.to_owned());
@@ -172,10 +224,49 @@ impl Builder {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn finish<'a>(
-        mut self,
+        self,
         files: impl IntoIterator<Item = (&'a str, &'a str)>,
     ) -> DataFacts {
+        self.finish_project(files, &BTreeMap::new(), &RuntimeFacts::default())
+    }
+
+    pub(crate) fn finish_project<'a>(
+        mut self,
+        files: impl IntoIterator<Item = (&'a str, &'a str)>,
+        manifests: &BTreeMap<String, String>,
+        runtime: &RuntimeFacts,
+    ) -> DataFacts {
+        let files: Vec<_> = files.into_iter().collect();
+        if self
+            .facts
+            .links
+            .iter()
+            .any(|link| matches!(link.to, Target::Rust(_)))
+        {
+            // An incomplete tree could hide a second mount of a shared file.
+            // Fall back to file-local inline scopes, never a partial crate graph.
+            let layout = if self.layout_truncated {
+                rust::Layout::default()
+            } else {
+                rust::Layout::collect(
+                    files.iter().map(|&(path, _)| path),
+                    &self.rust_modules,
+                    manifests,
+                    runtime,
+                )
+            };
+            self.facts.links.retain_mut(|link| {
+                if let Target::Rust(path) = &link.to {
+                    let Some(target) = layout.resolve(&link.from, path) else {
+                        return false;
+                    };
+                    link.to = Target::Exact(target);
+                }
+                true
+            });
+        }
         self.facts.finish(files);
         self.facts
     }
@@ -306,6 +397,8 @@ fn edges(types: &[DataType], links: &[Link], anchors: &[SchemaAnchor]) -> Vec<Da
                     .get(&(path.as_str(), pointer.as_str()))
                     .and_then(|id| by_id.get(*id).copied()),
                 Target::Name(name) => resolve_name(&names, from, name),
+                Target::Exact(id) => by_id.get(id).copied(),
+                Target::Rust(_) => None,
             }?;
             Some(DataEdge {
                 kind: DataEdgeKind::Has,

@@ -1,5 +1,6 @@
 {
   "types": [
+    {"path": "other/src/lib.rs", "name": "child::Address", "line": 1, "kind": "record", "source": "rust_serde", "fields": []},
     {"path": "schema/model.schema.json", "name": "Address/Local", "line": 3, "kind": "record", "source": "json_schema", "fields": [
       {"name": "zip", "type": "string", "line": 5, "optional": true}
     ]},
@@ -16,15 +17,23 @@
       {"name": "customer_id", "type": "BIGINT", "line": 7, "optional": true},
       {"name": "reviewed_by", "type": "BIGINT", "line": 8, "optional": true}
     ]},
-    {"path": "wire/model.rs", "name": "wire::Address", "line": 4, "kind": "record", "source": "rust_serde", "fields": [
-      {"name": "zip", "type": "String", "line": 5, "optional": false}
+    {"path": "wire/src/child.rs", "name": "Address", "line": 2, "kind": "record", "source": "rust_serde", "fields": [
+      {"name": "zip", "type": "String", "line": 3, "optional": false}
     ]},
-    {"path": "wire/model.rs", "name": "wire::Customer", "line": 9, "kind": "record", "source": "rust_serde", "fields": [
-      {"name": "address", "type": "Option < Address >", "line": 10, "optional": true}
+    {"path": "wire/src/lib.rs", "name": "wire::Customer", "line": 5, "kind": "record", "source": "rust_serde", "fields": [
+      {"name": "address", "type": "Option < crate :: child :: Address >", "line": 6, "optional": true},
+      {"name": "missing", "type": "crate :: orphan :: Address", "line": 7, "optional": false}
     ]},
-    {"path": "wire/model.rs", "name": "wire::Lookup", "line": 14, "kind": "enum", "source": "rust_serde", "fields": [
-      {"name": "Found", "type": "(Customer)", "line": 15, "optional": false},
-      {"name": "Missing", "type": "()", "line": 16, "optional": false}
+    {"path": "wire/src/lib.rs", "name": "wire::Lookup", "line": 11, "kind": "enum", "source": "rust_serde", "fields": [
+      {"name": "Found", "type": "(Customer)", "line": 12, "optional": false},
+      {"name": "Missing", "type": "()", "line": 13, "optional": false}
+    ]},
+    {"path": "wire/src/nested/src/lib.rs", "name": "Nested", "line": 1, "kind": "record", "source": "rust_serde", "fields": [
+      {"name": "wire", "type": "crate :: child :: Address", "line": 1, "optional": false}
+    ]},
+    {"path": "wire/src/nested/src/lib.rs", "name": "child::Address", "line": 1, "kind": "record", "source": "rust_serde", "fields": []},
+    {"path": "wire/src/orphan.rs", "name": "Address", "line": 2, "kind": "record", "source": "rust_serde", "fields": [
+      {"name": "zip", "type": "String", "line": 3, "optional": false}
     ]}
   ],
   "edges": [
@@ -32,8 +41,9 @@
     {"kind": "has", "from": {"path": "schema/model.schema.json", "name": "Customer"}, "to": {"path": "schema/model.schema.json", "name": "Address/Local"}, "field": "previous", "line": 13},
     {"kind": "has", "from": {"path": "sql/model.sql", "name": "app.orders"}, "to": {"path": "sql/model.sql", "name": "app.Customers"}, "field": "customer_id", "line": 7},
     {"kind": "has", "from": {"path": "sql/model.sql", "name": "app.orders"}, "to": {"path": "sql/model.sql", "name": "app.Customers"}, "field": "reviewed_by", "line": 8},
-    {"kind": "has", "from": {"path": "wire/model.rs", "name": "wire::Customer"}, "to": {"path": "wire/model.rs", "name": "wire::Address"}, "field": "address", "line": 10},
-    {"kind": "has", "from": {"path": "wire/model.rs", "name": "wire::Lookup"}, "to": {"path": "wire/model.rs", "name": "wire::Customer"}, "field": "Found", "line": 15}
+    {"kind": "has", "from": {"path": "wire/src/lib.rs", "name": "wire::Customer"}, "to": {"path": "wire/src/child.rs", "name": "Address"}, "field": "address", "line": 6},
+    {"kind": "has", "from": {"path": "wire/src/lib.rs", "name": "wire::Lookup"}, "to": {"path": "wire/src/lib.rs", "name": "wire::Customer"}, "field": "Found", "line": 12},
+    {"kind": "has", "from": {"path": "wire/src/nested/src/lib.rs", "name": "Nested"}, "to": {"path": "wire/src/child.rs", "name": "Address"}, "field": "wire", "line": 1}
   ],
   "coverage": {"JSON": ["json_schema"], "Rust": ["rust_serde"], "SQL": ["sql"]}
 }
