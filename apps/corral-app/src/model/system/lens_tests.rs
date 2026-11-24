@@ -62,7 +62,7 @@ fn a_failure_on_a_repeated_transition_marks_that_repeat() {
         touched: vec!["state a".into()],
         added: Vec::new(),
     };
-    let Some(d) = diagram(&result, None, &touch) else {
+    let Some(d) = diagram(&result, None, &[], &touch) else {
         panic!("a readable lens draws");
     };
     assert!(d.edges[0].marks.is_empty());

@@ -26,24 +26,27 @@ impl Worker {
             commit = Some(rev.commit().to_owned());
             let sources = reader.lens_sources(&rev)?;
             if sources.is_empty() {
-                return Ok(Some((Vec::new(), None)));
+                return Ok(Some((Vec::new(), Vec::new(), None)));
             }
             let tree = reader.builtin_tree(&rev)?;
             let results = check(&sources, &tree, None);
+            let excerpts = reader.lens_excerpts(&rev, &results);
             let enrich = (job.has_provider(&key.project)
                 && results.iter().any(|result| result.lens.is_some()))
             .then_some(rev);
-            Ok(Some((results, enrich)))
+            Ok(Some((results, excerpts, enrich)))
         })();
         if let Some(commit) = commit.as_deref()
             && self.requeue_if_lens_moved(job, key, commit)
         {
             return;
         }
-        let (results, enrich, error) = match result {
-            Ok(Some((results, enrich))) => (Some(results.into()), enrich, None),
+        let (results, excerpts, enrich, error) = match result {
+            Ok(Some((results, excerpts, enrich))) => {
+                (Some(results.into()), Some(excerpts.into()), enrich, None)
+            }
             Ok(None) => return,
-            Err(error) => (None, None, Some(bounded_error(format!("{error:#}")))),
+            Err(error) => (None, None, None, Some(bounded_error(format!("{error:#}")))),
         };
         if error.is_some() && prior.error == error && prior.commit == commit {
             return;
@@ -58,6 +61,7 @@ impl Worker {
                 building: false,
                 revision,
                 results,
+                excerpts,
                 error,
             };
             entry.pending = enrich.as_ref().map(|_| Stage::Enrich);
@@ -94,10 +98,13 @@ impl Worker {
             unread_files: &unread_files,
         };
         let results = check(&sources, &tree, Some(coverage));
+        // Definitions from the provider can locate elements the built-in check could not.
+        let excerpts = reader.lens_excerpts(rev, &results);
         self.publish(job, move |cache| {
             let revision = cache.stamp();
             let entry = cache.lenses.get_mut(key)?;
             entry.snapshot.revision = revision;
+            entry.snapshot.excerpts = Some(excerpts.into());
             let old = entry.snapshot.results.replace(results.into());
             cache.lens_row(&key.project, revision);
             old

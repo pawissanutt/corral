@@ -131,9 +131,17 @@ anchor = {anchor}
         .unwrap_err();
     assert_eq!(error.code, rpc::ErrorCode::TooLarge);
     let malformed = lens_detail(&mut system, lens(MALFORMED, None));
+    assert!(malformed.excerpts.is_empty());
     assert_eq!(malformed.lens.unwrap().file, MALFORMED);
     let historical = lens_detail(&mut system, lens("run", Some(base.commit())));
     assert_eq!(historical.commit.as_deref(), Some(base.commit()));
+    // The anchored line comes from the selected commit's object, not the working tree.
+    assert!(historical.excerpts.iter().any(|e| {
+        e.element == "participant worker"
+            && e.lines
+                .get((e.line - e.first) as usize)
+                .is_some_and(|line| line.contains("base"))
+    }));
     assert_eq!(historical.lens.unwrap().status, LensStatus::Current);
 
     // A symbolic selector that failed must recover after a Git change with

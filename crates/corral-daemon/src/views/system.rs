@@ -119,33 +119,46 @@ pub(super) fn read(
         DetailRef::SystemLens { project, id, at } => {
             let snapshot = shared.system.lenses(shared, project, at.as_deref())?;
             let (etag, offset) = selection(shared, query, snapshot.revision, &())?;
-            let lens = match (offset, snapshot.results.as_deref()) {
+            let found = match (offset, snapshot.results.as_deref()) {
                 (Some(_), Some(results)) => Some(
                     results
                         .iter()
-                        .find(|result| {
+                        .position(|result| {
                             result
                                 .lens
                                 .as_ref()
                                 .is_some_and(|lens| lens.id() == id.as_str())
                         })
-                        .or_else(|| results.iter().find(|result| result.file == *id))
-                        .context(NotFound("lens not found"))?
-                        .clone(),
+                        .or_else(|| results.iter().position(|result| result.file == *id))
+                        .context(NotFound("lens not found"))?,
                 ),
                 _ => None,
             };
+            let lens = found
+                .and_then(|n| snapshot.results.as_deref()?.get(n))
+                .cloned();
             // Keep the checked diagram atomic; do not serve a partial lens as valid.
             ensure!(
                 json_len(&lens)? <= REPLY_MAX - 1024,
                 "too_large: checked lens exceeds CONTROL budget"
             );
+            // Source excerpts are extra: a lens that fits only without them goes without them.
+            let excerpts = found
+                .and_then(|n| snapshot.excerpts.as_deref()?.get(n))
+                .cloned()
+                .unwrap_or_default();
+            let excerpts = if json_len(&lens)? + json_len(&excerpts)? <= REPLY_MAX - 1024 {
+                excerpts
+            } else {
+                Vec::new()
+            };
             let body = DetailBody::SystemLens(SystemLens {
                 project: project.clone(),
                 commit: snapshot.commit,
                 status: status(snapshot.building),
                 error: snapshot.error,
                 lens,
+                excerpts,
             });
             (etag, offset, body)
         }

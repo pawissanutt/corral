@@ -181,12 +181,14 @@ pub(crate) fn read_of(
     ) {
         (Some(served), _) => match (&served.lens, &served.error) {
             (_, Some(error)) => Read::Failed(error.clone()),
-            (Some(result), None) => match lens::diagram(result, served.commit.as_deref(), touch) {
-                Some(d) => Read::Ready(Box::new(d), stale),
-                None => {
-                    Read::Malformed(result.failures.iter().map(|f| f.message.clone()).collect())
+            (Some(result), None) => {
+                match lens::diagram(result, served.commit.as_deref(), &served.excerpts, touch) {
+                    Some(d) => Read::Ready(Box::new(d), stale),
+                    None => {
+                        Read::Malformed(result.failures.iter().map(|f| f.message.clone()).collect())
+                    }
                 }
-            },
+            }
             (None, None) => Read::Loading,
         },
         (None, Some(error)) => Read::Failed(error.message.clone()),
@@ -599,6 +601,8 @@ pub(crate) fn inspector(
                 .children(i.rows.into_iter().map(|(label, value)| {
                     label_value(app, label, plain(app, value).into_element())
                 }))
+                .child(h3(app, "Source", None))
+                .child(source(app, i.source))
                 .child(h3(app, "Checks", None))
                 .children(
                     i.checks
@@ -651,5 +655,34 @@ pub(crate) fn touched_lens(
         .child(said)
         .child(picture)
         .child(inspector(app, shown, picked))
+        .into_element()
+}
+
+/// The committed lines around the picked element, its anchored line marked, or why there are
+/// none.
+fn source(app: AppState, source: Option<lens::Source>) -> AnyElement {
+    let form = app.form;
+    let Some(source) = source else {
+        return quiet(app, lens::SOURCE_UNAVAILABLE).into_element();
+    };
+    let width = source
+        .lines
+        .last()
+        .map_or(1, |(n, _, _)| n.to_string().len());
+    let lines = source.lines.into_iter().map(move |(n, words, anchored)| {
+        let row = format!("{}{n:>width$}  {words}", if anchored { "▸" } else { " " });
+        text(row)
+            .number_of_lines(1u32)
+            .text_color(color(if anchored { Token::Ink } else { Token::Ink3 }))
+            .when(anchored, |t| t.font_weight(FontWeight::BOLD))
+            .when(form != Form::Terminal, |t| {
+                t.font_family(FONT_MONO).text_size(px(11.5))
+            })
+            .into_element()
+    });
+    view()
+        .test_id("lens-source")
+        .child(quiet(app, source.heading))
+        .children(lines)
         .into_element()
 }

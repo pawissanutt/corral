@@ -162,6 +162,19 @@ pub struct LensLocation {
     pub line: u64,
 }
 
+/// A few committed source lines around a located element, read from the Git object at the
+/// checked commit. Lines are clipped; an element without one has no readable source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LensExcerpt {
+    pub element: String,
+    pub path: String,
+    /// One-based line of the anchor.
+    pub line: u64,
+    /// One-based line of `lines[0]`.
+    pub first: u64,
+    pub lines: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LensResult {
     pub file: String,

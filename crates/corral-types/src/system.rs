@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     facts::*,
-    lenses::{LensImpact, LensKind, LensResult, LensStatus},
+    lenses::{LensExcerpt, LensImpact, LensKind, LensResult, LensStatus},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +154,10 @@ pub struct SystemLens {
     pub status: SystemStatus,
     pub error: Option<String>,
     pub lens: Option<LensResult>,
+    /// Committed source around the lens's located elements; absent from older daemons and
+    /// for elements whose source could not be read within bounds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excerpts: Vec<LensExcerpt>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]

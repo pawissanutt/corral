@@ -1,8 +1,8 @@
 //! Fixed checked lenses for the explicit preview, including a stale anchor and a missing state.
 
 use corral_types::lenses::{
-    Lens, LensAnchor, LensDiagnostic, LensEntry, LensImpact, LensLocation, LensMessage, LensNode,
-    LensResult, LensStatus, LensTransition, StatesFrom,
+    Lens, LensAnchor, LensDiagnostic, LensEntry, LensExcerpt, LensImpact, LensLocation,
+    LensMessage, LensNode, LensResult, LensStatus, LensTransition, StatesFrom,
 };
 use corral_types::{
     EntryKind, NewTask, Status, SystemLens, SystemLensSummary, SystemLenses, SystemStatus,
@@ -348,14 +348,40 @@ pub(super) fn list(project: &str) -> Result<SystemLenses, String> {
 }
 
 pub(super) fn lens(project: &str, id: &str, at: Option<&str>) -> Result<SystemLens, String> {
+    let lens = find(project, id)?;
     Ok(SystemLens {
         project: project.into(),
         // The preview uses the same checked diagram when opened from a sample review's head.
         commit: Some(at.unwrap_or(HEAD).into()),
         status: SystemStatus::Ready,
         error: None,
-        lens: Some(find(project, id)?),
+        excerpts: excerpts(&lens),
+        lens: Some(lens),
     })
+}
+
+/// The sample has no files: an element's excerpt is its anchor text's lines at its located
+/// line, and one anchored without text has none, as a source corrald could not read.
+fn excerpts(result: &LensResult) -> Vec<LensExcerpt> {
+    let touch = crate::model::system::lens::Touch::default();
+    let Some(d) = crate::model::system::lens::diagram(result, None, &[], &touch) else {
+        return Vec::new();
+    };
+    d.nodes
+        .iter()
+        .chain(&d.edges)
+        .filter_map(|e| {
+            let text = e.anchor.as_ref()?.text.as_ref()?;
+            let (path, line) = e.location.clone()?;
+            Some(LensExcerpt {
+                element: e.name.clone(),
+                path,
+                line,
+                first: line,
+                lines: text.lines().map(str::to_owned).collect(),
+            })
+        })
+        .collect()
 }
 
 pub(super) fn impact(result: LensResult, files: &[(String, u64, u64)]) -> Option<LensImpact> {

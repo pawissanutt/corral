@@ -15,6 +15,8 @@ use corral_facts::{
 };
 use corral_types::lenses::LensImpact;
 pub use corral_types::lenses::{LensResult, LensStatus};
+
+mod excerpts;
 use serde::Serialize;
 use serde_json::{Map, Value};
 

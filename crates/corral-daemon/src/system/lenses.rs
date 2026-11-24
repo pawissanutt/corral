@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use corral_engine::facts::FactsReader;
 use corral_facts::Revision;
-use corral_types::lenses::LensResult;
+use corral_types::lenses::{LensExcerpt, LensResult};
 
 use super::{Cache, Stage, System};
 use crate::{ops::WorkerBusy, state::Shared, views::NotFound};
@@ -36,6 +36,8 @@ pub(crate) struct LensSnapshot {
     pub building: bool,
     pub revision: u64,
     pub results: Option<Arc<[LensResult]>>,
+    /// Committed source around each result's located elements, in the results' order.
+    pub excerpts: Option<Arc<[Vec<LensExcerpt>]>>,
     pub error: Option<String>,
 }
 
@@ -124,6 +126,7 @@ impl LensEntry {
                 building: true,
                 revision,
                 results: None,
+                excerpts: None,
                 error: None,
             },
             pending: Some(Stage::Builtin),

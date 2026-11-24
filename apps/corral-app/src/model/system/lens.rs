@@ -6,7 +6,9 @@
 //! on the element it names), its anchor, its committed line and its marks.
 
 use corral_protocol::detail::{DetailBody, DetailRef};
-use corral_types::lenses::{Lens, LensAnchor, LensDiagnostic, LensKind, LensResult, LensStatus};
+use corral_types::lenses::{
+    Lens, LensAnchor, LensDiagnostic, LensExcerpt, LensKind, LensResult, LensStatus,
+};
 use corral_types::{SystemLens, SystemLenses, SystemRow, SystemStatus};
 
 use super::words::Notice;
@@ -194,6 +196,8 @@ pub struct Diagram {
     pub missing: Vec<String>,
     /// States the enum has no variant for.
     pub extra: Vec<String>,
+    /// Committed source around located elements, as corrald served it.
+    pub excerpts: Vec<LensExcerpt>,
 }
 
 /// The marks a review puts on a lens's elements, by the checker's names.
@@ -240,7 +244,12 @@ fn edge_names<'a>(
 }
 
 /// A served, readable lens as a diagram, with `touch`'s marks; none for a malformed file.
-pub fn diagram(result: &LensResult, commit: Option<&str>, touch: &Touch) -> Option<Diagram> {
+pub fn diagram(
+    result: &LensResult,
+    commit: Option<&str>,
+    excerpts: &[LensExcerpt],
+    touch: &Touch,
+) -> Option<Diagram> {
     let lens = result.lens.as_ref()?;
     let kind = lens.kind();
     let (nodes, raw_edges, node_word) = match lens {
@@ -387,6 +396,7 @@ pub fn diagram(result: &LensResult, commit: Option<&str>, touch: &Touch) -> Opti
         not_checked: Vec::new(),
         missing: result.missing_states.clone(),
         extra: result.extra_states.clone(),
+        excerpts: excerpts.to_vec(),
     };
     diagram.failures = issues(&diagram, &result.failures);
     diagram.not_checked = issues(&diagram, &result.not_checked);
@@ -569,6 +579,41 @@ pub struct Inspect {
     pub checks: Vec<(Hue, String)>,
     /// Its committed source line.
     pub line: Option<(String, u64)>,
+    /// The committed lines around it; none when corrald could not read them.
+    pub source: Option<Source>,
+}
+
+/// A committed excerpt as the inspector shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Source {
+    /// `path:line @ commit`.
+    pub heading: String,
+    /// Line number, text, and whether it is the anchored line.
+    pub lines: Vec<(u64, String, bool)>,
+}
+
+pub const SOURCE_UNAVAILABLE: &str =
+    "Source unavailable: corrald served no committed lines for this element.";
+
+fn source(diagram: &Diagram, name: &str) -> Option<Source> {
+    let excerpt = diagram.excerpts.iter().find(|e| e.element == name)?;
+    let at = diagram
+        .commit
+        .as_deref()
+        .map(|c| format!(" @ {}", short(c)))
+        .unwrap_or_default();
+    Some(Source {
+        heading: format!("{}:{}{at}", excerpt.path, excerpt.line),
+        lines: excerpt
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(n, text)| {
+                let number = excerpt.first + n as u64;
+                (number, text.clone(), number == excerpt.line)
+            })
+            .collect(),
+    })
 }
 
 pub fn inspect(diagram: &Diagram, name: &str) -> Option<Inspect> {
@@ -634,6 +679,7 @@ pub fn inspect(diagram: &Diagram, name: &str) -> Option<Inspect> {
         rows,
         checks,
         line: element.location.clone(),
+        source: source(diagram, name),
     })
 }
 
