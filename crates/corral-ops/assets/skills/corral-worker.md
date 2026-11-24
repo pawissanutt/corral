@@ -123,7 +123,8 @@ and "Previous run" sections naming the earlier branch.
 
 ## Out-of-scope findings
 
-Do not widen the diff for a bug, cleanup or idea outside the task. File it with the `corral-submit`
-skill, for example `corral new "<title>" -p <project> --origin agent --body-file <spec.md>`, and name the
-new task ID in your summary. Report pre-existing failures that your change did not cause; do not fix
-them here.
+Do not widen the diff for a bug, cleanup or idea outside the task. Report pre-existing failures; do
+not fix them here. When authorized to file a follow-up, use `corral-submit`: check for duplicates
+(including Done), write and classify the spec, and include the parent task ID in the body. Create
+it with `corral new "<title>" -p <project> --origin agent --body-file <spec.md>` and assessed metadata,
+including for an Idea. Name the follow-up ID in your summary; do not promote, dispatch or wait on it.

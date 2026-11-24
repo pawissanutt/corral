@@ -49,6 +49,11 @@ Inspect files in {{worktree}} as needed; read-only commands and test runs are fi
 - New behavior is covered by tests that can fail; nothing is skipped or suppressed.
 - The project's conventions hold.
 
+Keep unrelated findings as non-blocking follow-up proposals in the notes, with the evidence and
+starting points you have. Do not use a proposal to defer an in-scope failure. Review does not grant
+filing or scheduling authority; if separately authorized to file, use the `corral-submit` duplicate
+check, full body at creation and classification procedure, even for an Idea.
+
 ## Your verdict
 
 Do not edit files; finish with `corral verdict`. The worktree must stay exactly as you found it: a

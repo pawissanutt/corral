@@ -81,9 +81,10 @@ PM configuration reference below; read its effective policy and authority at sta
    send-back names that tier and `{{bin}} gate <id> --wait`. The worker fixes a mechanical
    failure inherited from the base in a separate `baseline:` commit and reports other
    out-of-scope and expected failures rather than fixing them. Never ask a reduced-tier
-   worker for full-gate evidence; corral runs the landing tier itself. A red Plan checkpoint
-   card names its failing step, log and prepared `corral new` command: file and dispatch
-   that fix, and never treat a green checkpoint as aggregate acceptance.
+   worker for full-gate evidence; corral runs the landing tier itself. For a red Plan checkpoint,
+   use the card's failing step, log and prepared fix draft as evidence. Reuse an existing fix or
+   complete the spec and validate the flags below before filing. Dispatch the fix under existing
+   PM authority. Never treat a green checkpoint as aggregate acceptance.
 7. For reinstall, inspect `{{bin}} hooks list --json` and active gate/run state first.
    Prefer configured post-land receipts; do not run a competing install or replace a binary
    while gates using it run. Manual installs use the configured project's base checkout:
@@ -96,22 +97,38 @@ PM configuration reference below; read its effective policy and authority at sta
    first and resume saved answers; don't re-ask them. Setup never dispatches or accepts work.
    Recommend only from fresh evidence and the owner's real access, never from memory.
 
+## Filing tasks (legacy CLI)
+
+For an authorized filing (owner request, Idea, red-base fix or follow-up), follow the
+`corral-submit` skill for the reusable Markdown template. Search `{{bin}} search "<query>" --in all --json`
+and `{{bin}} list --query "<query>" --json` for overlap, including Done tasks; split unrelated problems.
+At creation, use `{{bin}} new "<title>" --origin pm --body-file <spec.md>` or `--body`.
+The body must record the problem/goal, observed vs. expected behavior, repro for bugs, checkable
+acceptance criteria, relevant starting points and open questions. Label assumptions and unknowns;
+do not invent evidence or save the spec only in a comment. Set an applicable `--kind` and estimate
+`--size` and `--difficulty` separately. Leave a classification field unset only if it cannot be
+assessed, and explain why in the body. Use `--label` for relevant built-in or exact existing labels.
+Honor explicit owner values and explain any omitted labels in the body. Verify with
+`{{bin}} show <id> --json`. This procedure does not change filing, scheduling, independent
+review or acceptance authority.
+
 ## Profile selector procedure (v1)
 
-This is the authoritative selector procedure shared by task proposers and the PM.
-It is embedded unchanged in the installed task-filing skill and new PM instructions.
-It selects configured profiles, not new models; model setup/research is separate.
+This is the authoritative selector procedure for task proposers and the PM, shared by the
+installed `corral` skill and PM instructions. It selects configured profiles, not new models;
+model setup/research is separate.
 
-1. After filing or revising the task specification, assess and persist difficulty
+1. Assess and persist difficulty at creation or when revising the task specification,
    separately from size. Size is work volume; difficulty is reasoning: `routine`
    means a known pattern or repetition, `standard` means bounded reasoning, and
    `hard` means uncertainty, algorithmic optimization or correctness argued from
    invariants. Read the actual task and repository evidence, never classify from
    title keywords, kind or size alone. Use `{{bin}} new --difficulty <value>`
    (including `--idea`), imported task-entry `difficulty`, or `{{bin}} edit <id>`
-   for an existing task. Unset means not assessed and retains legacy routing;
-   do not silently call it routine. Keep Agent: Auto, with no new mandatory owner
-   choice. Save the assessment before loading the catalog or generating a receipt:
+   for an existing task. Preserve the owner's explicit assessment. Unset means not assessed
+   and retains legacy routing; explain why in the body rather than silently calling it routine.
+   Keep Agent: Auto unless explicitly pinned, with no new mandatory owner choice. Save the
+   assessment before loading the catalog or generating a receipt:
    difficulty changes the selection revision independently of plan identity.
    Then load
    `{{bin}} selection catalog <id> --role implementation --json`

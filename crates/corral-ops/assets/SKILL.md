@@ -71,17 +71,15 @@ Use the task specification, not only a comment, to change acceptance criteria.
   every change.
 - In Assist, obtain explicit owner action before starting work. For scoped automatic work,
   use the current `pm act` identity, not the explicit-owner `dispatch` command.
-- Write a task body as a spec: goal, acceptance criteria, relevant files. One task is one reviewable change
-  in one project; split bigger asks and link them with `--depends`.
+- For authorized filings, use the legacy `corral-submit` template and filing procedure above. Search for
+  duplicates across all statuses, including Done. One task is one reviewable change in one project;
+  split unrelated work and use `--depends` for actual prerequisites. Pass the spec to `corral new` with
+  `--body` or `--body-file` at creation, including for Ideas and follow-ups.
 - Follow the configured review policy (`[review]` in `.corral/corral.toml`); with `accept = "owner"`,
   approval stays the user's decision, made on the board. Request changes and discard are the user's too.
-- Set `--kind`, `--size` and assessed `--difficulty` when filing a task, including `--idea`,
-  and explain them in the body. Size is work volume; difficulty is reasoning: `routine` for a
-  known pattern or repetition, `standard` for bounded reasoning, `hard` for uncertainty,
-  algorithmic optimization or correctness argued from invariants. Never classify by title
-  keywords or size alone. Unset difficulty means not assessed; legacy routing applies.
-  Persist difficulty before loading a selection catalog or generating a receipt; use
-  `corral edit <id>` to revise it. Keep Agent: Auto; do not ask the owner for a new mandatory choice.
+- Preserve explicit owner values. Set `--kind` and estimate work volume (`--size`) separately from
+  reasoning (`--difficulty`). Explain any unassessed field in the body. Use `--label` for relevant
+  built-in or exact existing labels. Persist assessed difficulty before profile selection.
 - Follow the shared "Profile selector procedure (v1)" above after filing/revising work:
   load `corral selection catalog <id> --role implementation|planning`, then save a structured
   proposer/PM receipt with `corral selection save --file <json>`. Leave `--profile` unset for
@@ -115,6 +113,8 @@ use `.evidence/` for worktree scratch.
   run's artifacts. Judge the code, not the agent's summary.
 - Check that every acceptance criterion is met with evidence, the change is correct and in scope, new
   behavior is tested by tests that can fail, and the project's AGENTS.md conventions hold.
+- Put unrelated findings in follow-up proposals in the review notes, not required changes. Review
+  does not authorize filing or scheduling; any authorized filing uses the same `corral-submit` template.
 - Do not edit files in the worktree. A modified worktree turns your verdict into an escalation.
 - Write your notes outside the worktree (the prompt names a notes file), then finish with exactly one of
   `corral verdict <id> approve|changes|escalate --notes-file <path>`: approve when it can land as is,

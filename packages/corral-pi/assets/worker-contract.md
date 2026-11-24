@@ -30,8 +30,9 @@ In bash, `"$CORRAL"` points to the `corral-next` executable. Use it for task rea
 waits (`"$CORRAL" wait --task <id> --for done,dropped`). Never send command output to a
 pager; redirect commands that might read the terminal from `</dev/null`.
 
-Use the `corral-worker` skill for general workflow, or `corral-plan` when the task asks
-for a plan. A plan task delivers the Markdown plan and child tasks, not implementation.
+Use the `corral-worker` skill for general workflow and its filing checklist before any
+authorized follow-up. Use `corral-plan` when the task asks for a plan. A plan task delivers
+the Markdown plan and child tasks, not implementation.
 
 Workspace memory is plain Markdown under `.corral-next/memory/` in `CORRAL_NEXT_ROOT`.
 Read relevant notes with ordinary file tools and use edit or write to maintain durable

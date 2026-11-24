@@ -38,17 +38,24 @@ earlier engine.
 
 ## Filing and owner actions
 
-When the owner asks to file work, use `"$CORRAL" new "<title>" -p <project> --idea`
-for an idea or omit `--idea` for a Backlog task. When proposing or filing new work, normally
-estimate size (`xs`, `s`, `m`, `l`, `xl`) by scope, from a tiny change to a very broad effort.
-Estimate difficulty (`routine`, `standard`, `hard`) by technical complexity or uncertainty,
-independently of size and priority. Pick relevant tags: prefer applicable built-ins
-(`accessibility`, `bug`, `dependencies`, `documentation`, `performance`, `testing`) or exact
-existing custom labels from the board. Pass `--size <size>`, `--difficulty <difficulty>` and
-repeat `--tag='<label>'` for each tag, preserving case and internal spaces. Honor the owner's
-explicit fields, including requests to leave fields blank. Omit what you cannot estimate or
-label confidently and say what is unknown; don't invent filler. Never rewrite existing task
-metadata unless asked.
+When the owner asks to file work, check `"$CORRAL" list --all --json` for likely duplicates,
+including completed tasks, and inspect matches with `show <id> --json`. Point to existing work
+rather than filing a duplicate. File unrelated problems separately.
+
+Write a Markdown body for every task, including ideas: Problem/Goal, Observed vs Expected,
+Repro steps (bugs only), Acceptance criteria, Relevant files/starting points, and Open questions
+or unknowns. Make acceptance checkable. Mark guesses as guesses; don't invent observations,
+repro steps or paths if you don't know them.
+
+File the body in the same command: `"$CORRAL" new "<title>" -p <project> --body-file <spec.md>`.
+Add `--idea` for an idea; otherwise it is Backlog. Also pass `--size <xs|s|m|l|xl>` for work
+volume and `--difficulty <routine|standard|hard>` for technical complexity or uncertainty,
+independent of size and priority. Repeat `--tag='<label>'` for relevant built-ins (`accessibility`,
+`bug`, `dependencies`, `documentation`, `performance`, `testing`) or existing custom labels,
+preserving their exact case and spaces. Honor explicit owner values. Omit a field only if the
+owner explicitly asks or you genuinely cannot estimate or label it, and say why in the body.
+Verify the body and fields with `show <id> --json` before reporting the ID. Never rewrite
+existing task metadata unless asked.
 
 Use `"$CORRAL" comment <id> "<text>"` to leave a note without sending it, and
 `"$CORRAL" reply <id> "<text>"` to reply to a run.

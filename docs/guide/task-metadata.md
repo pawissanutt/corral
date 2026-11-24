@@ -21,8 +21,8 @@ In the Tasks filter, use
 match. Use `size:unset` or `difficulty:unset` to find tasks missing an estimate.
 
 ```sh
-corral-next new 'Investigate a slow EU checkout' --size s --difficulty hard \
-  --tag performance --tag 'Payments, EU'
+corral-next new 'Investigate a slow EU checkout' --body-file checkout.md \
+  --size s --difficulty hard --tag performance --tag 'Payments, EU'
 corral-next edit T-042 --size m --difficulty standard --tag 'Payments, EU'
 corral-next edit T-042 --size= --difficulty= --clear-tags
 corral-next list
@@ -45,9 +45,35 @@ takes precedence.
 
 ## Agent filing
 
-When proposing or filing actionable work, estimate from the actual scope, not from title or
-priority alone. Normally include a best-effort size, a separate difficulty, and relevant tags.
-Honor the owner's values; prefer applicable built-ins or a custom label already used for the
-same subject. If there isn't enough context to estimate something, leave it unset and say
-what is unknown rather than adding filler. Previewed plan fields carry into confirmed filing;
-filing follow-on work is not permission to rewrite metadata on existing tasks.
+Before filing, check `corral-next list --all --json` for likely duplicates (including Done and
+Dropped tasks) and inspect matches with `corral-next show <id> --json`. Reuse existing work
+where appropriate and file unrelated problems separately.
+
+Use this Markdown outline for every new task, including Ideas and follow-ups:
+
+```markdown
+## Problem / Goal
+What needs to change and why.
+
+## Observed vs Expected
+What you observed and what should happen instead.
+
+## Repro steps (bugs only)
+The smallest known sequence, or what has yet to be reproduced.
+
+## Acceptance criteria
+- An observable check that would show the work is complete.
+
+## Relevant files / starting points
+Paths, symbols, logs or related tasks to inspect first.
+
+## Open questions / unknowns
+What still needs confirmation. Label guesses and explain any omitted fields.
+```
+
+Pass the body with `new --body-file <spec.md>` so it is present from creation, not a later
+comment. Include a best-effort size from actual scope, a separate difficulty, and relevant tags.
+Use applicable built-ins or exact existing custom labels. Omit a field only if the owner asks
+or it genuinely cannot be assessed; say why in the body. Verify the result with `show <id> --json`.
+Previewed plan fields carry into confirmed filing; filing follow-on work does not authorize
+rewriting metadata on existing tasks.

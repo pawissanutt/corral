@@ -149,8 +149,8 @@ pub const VERBS: &[(&str, &str)] = &[
         "wait for an actionable board event without polling; re-arm after each wake",
     ),
     (
-        "new \"<title>\" -p <project> --origin pm --kind <kind> --size <size> [--idea | --ready] [--design] [--body \"<markdown spec>\"] [--depends T-001,T-002]",
-        "file a task (backlog by default); prints its id",
+        "new \"<title>\" -p <project> --origin pm <--body-file <spec.md> | --body \"<markdown spec>\"> [--kind <kind>] [--size <size>] [--difficulty <difficulty>] [--label <label>] [--idea | --ready] [--design] [--depends T-001,T-002]",
+        "file a spec and include assessed metadata and relevant labels; explain omissions in the spec (backlog by default); prints its id",
     ),
     (
         "import <file> [--dry-run] [--json] [--origin owner|pm|agent]",

@@ -40,5 +40,20 @@ your notes. For `changes`, list the required fixes and the evidence for each. If
 an owner decision, use `ask_user` before recording the verdict. If the engine refuses,
 use its reason and next steps.
 
+Keep unrelated findings separate from the verdict's required fixes. Normally propose them
+as follow-ups in your notes. If explicitly authorized to file one, check `"$CORRAL" list --all --json`
+(including completed tasks) and `show <id> --json` for likely duplicates first. File unrelated
+issues separately; do not dispatch them or modify the candidate. Write the spec to a scratch
+Markdown file outside the worktree: Problem/Goal, Observed vs Expected, Repro steps (bugs only),
+Acceptance criteria, Relevant files/starting points, and Open questions or unknowns. Cite the
+source task, mark guesses as guesses, and do not invent evidence.
+
+Use `"$CORRAL" new "<title>" -p <project> --body-file <spec.md>` (add `--idea` if scope is
+unsettled), with `--size <xs|s|m|l|xl>` for work volume and separately assessed
+`--difficulty <routine|standard|hard>` for complexity or uncertainty. Repeat `--tag='<label>'`
+for relevant built-ins (`accessibility`, `bug`, `dependencies`, `documentation`, `performance`,
+`testing`) or exact existing custom labels. Omit a field only if explicitly requested or it cannot
+be assessed; explain why in the body. Verify with `show <id> --json` and cite the ID in your notes.
+
 If the deliverable is a plan document, use the `corral-plan` skill to judge the plan
 and the child tasks, not implementation code.

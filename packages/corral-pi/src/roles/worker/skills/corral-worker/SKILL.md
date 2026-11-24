@@ -18,6 +18,25 @@ description: Complete one dispatched Corral task in its worktree. Use to impleme
 5. If changes are sent back, read the new notes alongside the original task, address each
    finding and verify the revised candidate before calling `corral_done` again.
 
+## Filing a follow-up
+
+Keep out-of-scope work separate. If the run allows filing follow-ups, first check
+`"$CORRAL" list --all --json` (including completed tasks) and inspect likely matches with
+`show <id> --json`. Don't file duplicates. File unrelated findings separately and name the
+source task in each body. Do not dispatch the follow-up.
+
+Write the Markdown spec first: Problem/Goal, Observed vs Expected, Repro steps (bugs only),
+Acceptance criteria, Relevant files/starting points, and Open questions or unknowns. Make
+acceptance checkable and label guesses; don't invent evidence or fill in unknown details.
+File it with `"$CORRAL" new "<title>" -p <project> --body-file <spec.md>` (add `--idea` if
+scope is unsettled). Pass `--size <xs|s|m|l|xl>` for work volume and independently assess
+`--difficulty <routine|standard|hard>` for complexity or uncertainty. Repeat `--tag='<label>'`
+for relevant built-ins (`accessibility`, `bug`, `dependencies`, `documentation`, `performance`,
+`testing`) or exact existing custom labels. Omit a field only if explicitly requested or it
+cannot be assessed; explain why in the body. Verify with `show <id> --json` and report the ID.
+
+## Work by deliverable
+
 For a research task, deliver findings with sources and a recommendation rather than
 shipping unrelated code. For a bug fix, show that the smallest regression catches the
 defect. Use deterministic barriers rather than sleeps for asynchronous checks.

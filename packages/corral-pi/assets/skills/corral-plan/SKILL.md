@@ -16,21 +16,24 @@ normal plans location (or the path named by the task), and link it from the pare
 body. Describe the goal and non-goals, the approach and why, concrete steps, dependencies,
 verification and risks. Stop at the plan; do not implement or dispatch it.
 
-Use the existing planning task as the parent. When asked to file a new plan without a task,
-create the parent with `"$CORRAL" new "<plan title>" -p <project>`. For each independently
-verifiable slice, file `"$CORRAL" new "<child title>" -p <project> --parent <parent-id>`;
-add `--depends-on <id>,<id>` only for real prerequisites. Set the parent and child Markdown
-bodies with `"$CORRAL" edit <id> --body-file <file>`. State the goal, scope, acceptance and
-checks of each child so it can run without this conversation.
+Use the existing planning task as the parent. Before filing a parent or children, check
+`"$CORRAL" list --all --json` and `show <id> --json` for likely duplicates, including completed
+work. Use existing work instead of filing it again. Keep unrelated problems out of the plan.
 
-When proposing or creating a task, normally estimate `--size <xs|s|m|l|xl>` by scope and
-`--difficulty <routine|standard|hard>` by technical complexity or uncertainty, independently
-of size and priority. Prefer applicable tags from the built-ins (`accessibility`, `bug`,
-`dependencies`, `documentation`, `performance`, `testing`) or existing custom labels seen in
-`"$CORRAL" list --json` or `show`. Repeat `--tag='<label>'` for each label, preserving its case
-and internal spaces. Honor the owner's supplied fields, including requests to omit them.
-If an estimate or label is unknown, omit it and mention the omission in the plan or handoff;
-do not invent filler. Do not rewrite metadata on the existing parent or other tasks unless asked.
+When asked to file a plan without a parent task, use
+`"$CORRAL" new "<plan title>" -p <project> --body-file <parent.md>`. For each independently
+verifiable child use `"$CORRAL" new "<child title>" -p <project> --parent <parent-id> --body-file <child.md>`;
+add `--depends-on <id>,<id>` only for real prerequisites. Write every new body's Problem/Goal,
+Observed vs Expected, Repro steps (bugs only), Acceptance criteria, Relevant files/starting
+points, and Open questions or unknowns. Make each child runnable without this conversation;
+mark guesses and do not invent facts.
+
+Pass `--size <xs|s|m|l|xl>` for work volume and independently assess
+`--difficulty <routine|standard|hard>` for technical complexity or uncertainty. Repeat `--tag='<label>'`
+for relevant built-ins (`accessibility`, `bug`, `dependencies`, `documentation`, `performance`,
+`testing`) or exact existing custom labels. Honor explicit owner values. Omit a field only if
+explicitly requested or it cannot be assessed; explain why in the body. Verify each new task's
+body and fields with `show <id> --json`. Do not rewrite metadata on existing tasks unless asked.
 
 Report the document and task IDs. A worker finishes the planning task with its normal
 `corral_done`.
