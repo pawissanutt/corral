@@ -183,6 +183,21 @@ posixTest("agy rebuilds on Pi compaction and reselects the exact model after a s
   });
 });
 
+posixTest("agy retires a resident after an in-turn mode update without dropping the Pi reply", async () => {
+  await withHistoryPeer("history", async peer => {
+    const { ask } = await peer.open();
+    await ask(remember("before_mode_change"));
+    expect(await ask(remember("mode_change"))).toContain(marker("reply_mode_change"));
+    expect(await ask(recall)).toContain("reply_mode_change");
+    const [first, changed, fresh] = peer.prompts();
+    expect(changed!.sessionId).toBe(first!.sessionId);
+    expect(fresh!.sessionId).not.toBe(changed!.sessionId);
+    const seed = priorText(fresh!, recall);
+    expect(seed).toContain(marker("reply_before_mode_change"));
+    expect(seed).toContain(marker("reply_mode_change"));
+  });
+});
+
 posixTest("agy drops an idle session that emits unrecorded conversation updates", async () => {
   await withHistoryPeer("history", async peer => {
     const { ask } = await peer.open();

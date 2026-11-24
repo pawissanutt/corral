@@ -347,8 +347,10 @@ export async function driveAgy(launch: AgyLaunch, model: Model<string>, turn: Ag
         if (update) {
           try { selectedSession.checkUpdate(update); }
           catch (error) { exchange?.stop(); throw error; }
-          // Native tools add history Pi cannot account for. The session cannot be reused.
-          if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") retainable = false;
+          // Native tools add history Pi cannot account for. A native mode update can
+          // also change instructions or tools independently of the Pi transcript.
+          if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update" ||
+            update.sessionUpdate === "current_mode_update") retainable = false;
           // Retain the sanitized warning, but drain to the terminal reply for usage.
           const executorFailure = warningFrom(update);
           warning ??= executorFailure;

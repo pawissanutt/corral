@@ -204,6 +204,7 @@ for await (const line of createInterface({ input: process.stdin })) {
           const reply = marker ? `Remembered [[agy:reply_${marker}]]` : `Seen: ${[...memory].sort().join(", ")}`;
           remember(reply);
           send(chunk("message", reply));
+          if (marker === "mode_change") send(update("current_mode_update", { currentModeId: "plan" }));
           if (marker === "idle_drift") {
             // Already buffered at the terminal boundary: no timing race or sleep needed.
             process.stdout.write(encode({ id, result: { stopReason: "end_turn" } }) +
