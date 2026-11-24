@@ -1,16 +1,18 @@
-// Dormant, one-prompt ACP transport. Do not register this as a selectable provider: T-2007
+// Dormant ACP transport. Do not register this as a selectable provider: T-2007
 // found that agy 1.5.14 can bypass host tool mediation. Role instructions are not isolation.
 import {
   createAssistantMessageEventStream, type AssistantMessage, type AssistantMessageEventStream,
   type Model, type SimpleStreamOptions, type Tool, type ToolCall,
 } from "@earendil-works/pi-ai";
 import { AcpFailure, AcpPeer, bounded, deadlineMs, executorWarning, record, rpcFailure, type AcpPermission, type AgyLaunch } from "./acp.ts";
+import { isDeepStrictEqual } from "node:util";
+import type { AgyPromptBlock } from "./history.ts";
 import { openAgyMcp, type AgyMcp } from "./mcp.ts";
 
 export interface AgyTurn {
   /** Trusted Corral role instructions; sent in the negotiated system-prompt extension. */
   instructions: string;
-  prompt: string;
+  prompt: string | readonly AgyPromptBlock[];
 }
 
 // ACP has no HTTP status/headers, and credentials and environment are not borrowed from Pi.
@@ -68,13 +70,29 @@ function observableFrame(wire: Wire): Wire {
   } };
 }
 
+export interface AgySession {
+  peer: AcpPeer;
+  sessionId: string;
+  images: boolean;
+  updateForSession(wire: Wire): Wire | undefined;
+  checkUpdate(update: Wire): boolean;
+}
+
+export interface SessionHandoff {
+  ready?: Promise<void>;
+  reuse?: { session: AgySession; seed(): readonly AgyPromptBlock[] };
+  /** Takes ownership before the terminal message is published to Pi. */
+  retain?(session: AgySession, message: AssistantMessage): boolean;
+}
+
 async function openSession(peer: AcpPeer, modelId: string, instructions: string, observe: (wire: Wire) => Promise<void>,
-  bridge?: AgyMcp["descriptor"]) {
+  bridge?: AgyMcp["descriptor"]): Promise<AgySession> {
   const init = await peer.request("initialize", {
     protocolVersion: 1, clientInfo: { name: "corral-pi", version: "1" },
     clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
   }, observe);
-  const meta = record(record(init.agentCapabilities)?._meta);
+  const capabilities = record(init.agentCapabilities);
+  const meta = record(capabilities?._meta);
   if (init.protocolVersion !== 1 || record(record(meta?.antigravity)?.systemPrompt)?.append !== true) {
     throw new AcpFailure("protocol", "server does not support ACP v1 and role instructions");
   }
@@ -114,7 +132,7 @@ async function openSession(peer: AcpPeer, modelId: string, instructions: string,
     // publishes model + thought_level in config_option_update, even before session/prompt.
     await peer.updatesUntil(() => confirmed, observeSelection);
   }
-  return { sessionId, updateForSession, checkUpdate };
+  return { peer, sessionId, images: record(capabilities?.promptCapabilities)?.image === true, updateForSession, checkUpdate };
 }
 
 function initialMessage(model: Model<string>): AssistantMessage {
@@ -185,10 +203,12 @@ export class AgyOutput {
 
   constructor(private readonly model: Model<string>) { this.current = new ContentEvents(model); }
 
-  handoff(call: ToolCall): void {
-    this.current.tool(call);
+  handoff(call: ToolCall): AssistantMessage {
+    const previous = this.current;
+    previous.tool(call);
     this.current = new ContentEvents(this.model);
     this.current.start();
+    return previous.message;
   }
 }
 
@@ -237,8 +257,11 @@ export function streamAgy(launch: AgyLaunch, model: Model<string>, turn: AgyTurn
 }
 
 export async function driveAgy(launch: AgyLaunch, model: Model<string>, turn: AgyTurn, output: AgyOutput,
-  options?: StreamOptions, exchange?: ToolExchange): Promise<void> {
-  let peer: AcpPeer | undefined;
+  options?: StreamOptions, exchange?: ToolExchange, handoff?: SessionHandoff): Promise<void> {
+  const reuse = handoff?.reuse;
+  let peer = reuse?.session.peer;
+  let session: AgySession | undefined;
+  let retainable = handoff?.retain !== undefined && !exchange?.tools.length;
   const host: { bridge?: AgyMcp } = {};
   const lifetime = new AbortController();
   let active = true;
@@ -253,44 +276,79 @@ export async function driveAgy(launch: AgyLaunch, model: Model<string>, turn: Ag
     if (active && options?.onProviderStreamEvent) await options.onProviderStreamEvent(observableFrame(wire), model);
   };
   try {
+    await handoff?.ready;
     if (signal?.aborted) throw new AcpFailure("aborted", "turn cancelled");
     const setupMs = deadlineMs(launch.setupTimeoutMs, 15_000, 60_000);
     const turnMs = deadlineMs(launch.turnTimeoutMs, 300_000, 600_000);
     cancelMs = deadlineMs(launch.cancelTimeoutMs, 250, 2000);
     if (!turn.instructions.trim() || !model.id.trim()) throw new AcpFailure("protocol", "role instructions and exact model ID are required");
-    const connection = peer = new AcpPeer(launch);
-    if (exchange) void connection.exited.then(() => exchange.stop());
-    const session = await bounded(async () => {
+    const assertActive = () => {
+      if (!active || signal?.aborted) throw new AcpFailure("aborted", "turn cancelled");
+    };
+    const setup = () => bounded(async () => {
+      assertActive();
+      const connection = peer = new AcpPeer(launch);
       if (exchange?.tools.length) {
+        void connection.exited.then(() => exchange.stop());
         const mcpSignal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
         host.bridge = await openAgyMcp(exchange.tools, exchange.call, mcpSignal);
       }
-      if (!active || signal?.aborted) throw new AcpFailure("aborted", "turn cancelled");
+      assertActive();
       return openSession(connection, model.id, turn.instructions, observe, host.bridge?.descriptor);
     }, setupMs, "session setup", signal);
-    sessionId = session.sessionId;
-    result = await bounded(async () => {
-      const payload = { sessionId: session.sessionId, prompt: [{ type: "text", text: turn.prompt }] };
+    const initialSession = session = reuse?.session ?? await setup();
+    const prepare = async (selected: AgySession, basePrompt: readonly AgyPromptBlock[]) => {
+      if (selected === reuse?.session && !selected.peer.live) return;
+      const payload = { sessionId: selected.sessionId, prompt: structuredClone(basePrompt) };
       const replacement = await options?.onPayload?.(payload, model);
+      assertActive();
+      if (selected === reuse?.session && !selected.peer.live) return;
       const edited = record(replacement === undefined ? payload : replacement);
-      if (!active || signal?.aborted) throw new AcpFailure("aborted", "turn cancelled");
-      if (edited?.sessionId !== session.sessionId || !Array.isArray(edited.prompt) || edited.prompt.length === 0) {
+      if (edited?.sessionId !== selected.sessionId || !Array.isArray(edited.prompt) || edited.prompt.length === 0) {
         throw new AcpFailure("protocol", "invalid prompt payload");
       }
       const blocks = edited.prompt.map(block => {
         const item = record(block);
-        if (item?.type !== "text" || typeof item.text !== "string") throw new AcpFailure("protocol", "expected text prompt content");
-        return { type: "text", text: item.text };
+        if (item?.type === "text" && typeof item.text === "string") return { type: "text", text: item.text };
+        if (item?.type === "image" && typeof item.data === "string" && typeof item.mimeType === "string") {
+          if (!selected.images) throw new AcpFailure("protocol", "session does not support image prompt content");
+          return { type: "image", data: item.data, mimeType: item.mimeType };
+        }
+        throw new AcpFailure("protocol", "invalid prompt content block");
       });
+      return { blocks, unchanged: isDeepStrictEqual(blocks, basePrompt) };
+    };
+    result = await bounded(async () => {
+      let selectedSession = initialSession;
+      const basePrompt: readonly AgyPromptBlock[] = typeof turn.prompt === "string" ? [{ type: "text", text: turn.prompt }] : turn.prompt;
+      let prepared = await prepare(selectedSession, basePrompt);
+      if (reuse && !selectedSession.peer.live) {
+        // No session/prompt has been sent yet. Discard any edited delta and give the
+        // payload hook the new session's Pi seed instead, within this same turn deadline.
+        await selectedSession.peer.close();
+        assertActive();
+        const seed = reuse.seed();
+        selectedSession = session = await setup();
+        prepared = await prepare(selectedSession, seed);
+      }
+      assertActive();
+      const connection = selectedSession.peer;
+      if (!prepared || !connection.live) throw new AcpFailure("protocol", "session closed before the prompt");
+      // A provider payload hook may edit what ACP sees without changing Pi's history.
+      retainable &&= prepared.unchanged;
+      connection.resume();
+      sessionId = selectedSession.sessionId;
       output.current.start();
-      if (host.bridge) exchange?.activate(session.sessionId, host.bridge.descriptor.name);
+      if (host.bridge) exchange?.activate(selectedSession.sessionId, host.bridge.descriptor.name);
       const controls = host.bridge && exchange ? { permit: exchange.permit, beforeResponse: () => exchange.stop() } : undefined;
-      prompt = connection.request("session/prompt", { sessionId: session.sessionId, prompt: blocks }, async wire => {
+      prompt = connection.request("session/prompt", { sessionId: selectedSession.sessionId, prompt: prepared.blocks }, async wire => {
         if (!controls) await observe(wire);
-        const update = active && !signal?.aborted ? session.updateForSession(wire) : undefined;
+        const update = active && !signal?.aborted ? selectedSession.updateForSession(wire) : undefined;
         if (update) {
-          try { session.checkUpdate(update); }
+          try { selectedSession.checkUpdate(update); }
           catch (error) { exchange?.stop(); throw error; }
+          // Native tools add history Pi cannot account for. The session cannot be reused.
+          if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") retainable = false;
           // Retain the sanitized warning, but drain to the terminal reply for usage.
           const executorFailure = warningFrom(update);
           warning ??= executorFailure;
@@ -302,6 +360,7 @@ export async function driveAgy(launch: AgyLaunch, model: Model<string>, turn: Ag
       }, controls);
       return await prompt;
     }, turnMs, "prompt", signal);
+    if (signal?.aborted) throw new AcpFailure("aborted", "turn cancelled");
     applyStop(output.current.message, result.stopReason);
     failure = warning;
   } catch (error) {
@@ -319,8 +378,13 @@ export async function driveAgy(launch: AgyLaunch, model: Model<string>, turn: Ag
         }, cancelMs, "cancellation");
       } catch { /* process-group cleanup does not require a cooperative agent */ }
     }
-    try { await peer?.close(); }
-    catch { failure = new AcpFailure("cleanup", "subprocess cleanup failed"); }
+    const message = output.current.message;
+    const retained = retainable && !failure && !signal?.aborted && message.stopReason === "stop" && session?.peer.live &&
+      handoff?.retain?.(session, message);
+    if (!retained) {
+      try { await peer?.close(); }
+      catch { failure = new AcpFailure("cleanup", "subprocess cleanup failed"); }
+    }
     await host.bridge?.close();
   }
   const segment = output.current;

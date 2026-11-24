@@ -1,25 +1,38 @@
-// A dormant one-prompt lane. Pi executes and records ordinary model-issued tool calls;
+// A dormant lane bound to one Pi conversation. Pi executes and records model-issued tool calls;
 // the MCP server only joins an ACP proposal to its HTTP request and returns Pi's result.
 import type { Agent, AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   declarationsEqual, getCurrentSystemPrompt, getCurrentTools, type JsonObject,
-  type Model, type SimpleStreamOptions, type Tool, type ToolCall, type TranscriptContext,
+  type Model, type SimpleStreamOptions, type Tool, type ToolCall, type ToolResultMessage, type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { bounded, record, type AgyLaunch } from "./acp.ts";
+import { AcpFailure, bounded, record, type AgyLaunch } from "./acp.ts";
+import { renderPrompt, transcriptKeys } from "./history.ts";
 import type { McpResult } from "./mcp.ts";
-import { AgyOutput, driveAgy, type AgyTurn, type ToolExchange } from "./stream.ts";
+import { AgyOutput, driveAgy, type AgySession, type AgyTurn, type SessionHandoff, type ToolExchange } from "./stream.ts";
 import { flatObjectSchema, type JsonSchema } from "../tools/schema.ts";
 
 const CONVERSATION_ID = "antigravity.google/conversation_id";
 const MAX_CALLS = 128;
 const TERMINAL_RESULT_DRAIN_MS = 1_000;
+const IDLE_SESSION_MS = 60_000;
 const denied = (text: string): McpResult => ({ content: [{ type: "text", text }], isError: true });
 const stale = () => denied("Corral tool session is no longer active.");
 
 type RunOwner = Pick<Agent, "signal" | "abort" | "subscribe" | "state">;
-type Pending = { call: ToolCall; reply: (result: McpResult) => void; responseDrained: Promise<void> };
+type Scope = Pick<Model<string>, "id" | "api" | "provider"> & Pick<SimpleStreamOptions, "sessionId" | "reasoning" | "toolChoice"> & {
+  instructions: string;
+  tools: readonly Tool[];
+};
+type Pending = {
+  call: ToolCall;
+  reply: (result: McpResult) => void;
+  responseDrained: Promise<void>;
+  assistantKey?: string;
+  recorded?: ToolResultMessage;
+};
+type Resident = { session: AgySession; scope: Scope; history: readonly string[]; timer: ReturnType<typeof setTimeout> };
 
 class Exchange implements ToolExchange {
   private readonly prefix = `agy_${randomUUID()}_`;
@@ -35,13 +48,15 @@ class Exchange implements ToolExchange {
   readonly finished: Promise<void>;
   private readonly turnSignal: AbortSignal;
 
-  constructor(launch: AgyLaunch, private readonly model: Model<string>, private readonly turn: AgyTurn,
-    readonly tools: readonly Tool[], private readonly owner: RunOwner, readonly runSignal: AbortSignal,
-    options: SimpleStreamOptions) {
+  constructor(launch: AgyLaunch, model: Model<string>, turn: AgyTurn, private readonly binding: Scope,
+    private history: readonly string[], private readonly owner: RunOwner, readonly runSignal: AbortSignal,
+    options: SimpleStreamOptions, handoff: SessionHandoff) {
     this.output = new AgyOutput(model);
     this.turnSignal = AbortSignal.any([runSignal, this.controller.signal]);
-    this.finished = driveAgy(launch, model, turn, this.output, { ...options, signal: this.turnSignal }, this);
+    this.finished = driveAgy(launch, model, turn, this.output, { ...options, signal: this.turnSignal }, this, handoff);
   }
+
+  get tools(): readonly Tool[] { return this.binding.tools; }
 
   private live(): boolean {
     return !this.stopped && !this.turnSignal.aborted && this.owner.signal === this.runSignal;
@@ -100,38 +115,56 @@ class Exchange implements ToolExchange {
     const expected = structuredClone(call);
     this.dispatched.push(expected);
     const reply = await new Promise<McpResult>(resolve => {
-      this.pending = { call: expected, reply: resolve, responseDrained };
+      const pending: Pending = this.pending = { call: expected, reply: resolve, responseDrained };
       signal.addEventListener("abort", this.revoke, { once: true });
-      this.output.handoff(call);
+      pending.assistantKey = transcriptKeys([this.output.handoff(call)])[0];
     });
     signal.removeEventListener("abort", this.revoke);
     return reply;
   };
 
-  private complete(messages: readonly AgentMessage[]): Pending | undefined {
+  recordResult(message: AgentMessage, signal: AbortSignal): void {
     const pending = this.pending;
-    const result = messages.at(-1);
-    const previous = messages.at(-2);
-    if (!this.live() || !pending || previous?.role !== "assistant" ||
-      !previous.content.some(part => part.type === "toolCall" && isDeepStrictEqual(part, pending.call)) ||
-      result?.role !== "toolResult" || result.toolCallId !== pending.call.id || result.toolName !== pending.call.name) return;
+    if (signal === this.runSignal && pending && message.role === "toolResult" &&
+      pending.call.id === message.toolCallId && pending.call.name === message.toolName) {
+      pending.recorded = structuredClone(message);
+    }
+  }
+
+  private complete(): Pending | undefined {
+    const pending = this.pending;
+    const result = pending?.recorded;
+    if (!this.live() || !result) return;
     this.pending = undefined;
     pending.reply({ content: result.content, isError: result.isError });
     return pending;
   }
 
-  resume(model: Model<string>, context: TranscriptContext, tools: readonly Tool[], signal: AbortSignal) {
-    if (signal !== this.runSignal || model.id !== this.model.id || model.api !== this.model.api ||
-      model.provider !== this.model.provider || !isDeepStrictEqual(tools, this.tools) ||
-      getCurrentSystemPrompt(context.messages) !== this.turn.instructions) return;
-    if (this.complete(context.messages)) return this.output.current.stream;
+  resume(binding: Scope, history: readonly string[], signal: AbortSignal) {
+    const pending = this.pending;
+    if (signal !== this.runSignal || !pending?.recorded || !isDeepStrictEqual(binding, this.binding) ||
+      history.at(-2) !== pending.assistantKey || history.at(-1) !== transcriptKeys([pending.recorded])[0] ||
+      !isDeepStrictEqual(history.slice(0, -2), this.history) || !this.complete()) return;
+    this.history = history;
+    return this.output.current.stream;
   }
 
-  async settle(messages: readonly AgentMessage[], signal: AbortSignal): Promise<void> {
+  /** Pi completed the effect, but edited/compacted the context before its next model call.
+   * Do not send a result to the old model and do not abort Pi's new request. */
+  discardAfterResult(signal: AbortSignal): boolean {
+    const pending = this.pending;
+    if (signal !== this.runSignal || !this.live() || !pending?.recorded) return false;
+    this.pending = undefined;
+    pending.reply(stale());
+    this.revoke();
+    return true;
+  }
+
+  async settle(signal: AbortSignal): Promise<void> {
     if (signal !== this.runSignal) return;
     // Pi may terminate after recording the tool result, without requesting another model
     // segment. Return that same result, but close admission before yielding to the HTTP writer.
-    const answered = this.complete(messages);
+    const answered = this.complete();
     this.stop();
     if (answered) {
       try {
@@ -169,18 +202,47 @@ function rejected(model: Model<string>, why: string) {
   return stream;
 }
 
-/** Bind to one Pi agent. Close on session replacement/shutdown; Pi settlement also revokes the
- * bridge if the loop stops without a continuation. Not registered in any provider catalog. */
+/** Bind to one Pi agent, never shared between a parent and child. Close on session replacement
+ * or shutdown. The caller still owns workspace/process-state isolation (see AgyLaunch).
+ * Not registered in any provider catalog. */
 export class AgyToolLane {
   private active: Exchange | undefined;
+  private resident: Resident | undefined;
+  private disposal: Promise<void> | undefined;
   private closed = false;
   private readonly unsubscribe: () => void;
-  private readonly runs = new WeakSet<AbortSignal>();
+  private readonly requests = new WeakMap<AbortSignal, readonly string[]>();
 
   constructor(private readonly launch: AgyLaunch, private readonly owner: RunOwner) {
     this.unsubscribe = owner.subscribe((event, signal) => {
-      if (event.type === "agent_end") return this.active?.settle(event.messages, signal);
+      if (event.type === "message_end") this.active?.recordResult(event.message, signal);
+      if (event.type === "agent_end") {
+        if (signal.aborted) this.retireResident();
+        return this.active?.settle(signal);
+      }
     });
+  }
+
+  private retireResident(): void {
+    const resident = this.resident;
+    if (!resident) return;
+    this.resident = undefined;
+    clearTimeout(resident.timer);
+    this.disposal = resident.session.peer.close();
+    // Keep the rejection for the next acquisition/close, without an unhandled idle rejection.
+    void this.disposal.catch(() => undefined);
+  }
+
+  private takeResident(scope: Scope, history: readonly string[], context: TranscriptContext): AgySession | undefined {
+    const resident = this.resident;
+    if (!resident) return;
+    if (resident.session.peer.live && isDeepStrictEqual(scope, resident.scope) &&
+      context.messages.at(-1)?.role === "user" && isDeepStrictEqual(history.slice(0, -1), resident.history)) {
+      this.resident = undefined;
+      clearTimeout(resident.timer);
+      return resident.session;
+    }
+    this.retireResident();
   }
 
   stream = (model: Model<string>, context: TranscriptContext, options?: SimpleStreamOptions) => {
@@ -193,21 +255,50 @@ export class AgyToolLane {
     const activeTools = this.owner.state.tools;
     const tools = options.toolChoice === "none" ? [] : getCurrentTools(context.messages)
       .filter(tool => activeTools.some(active => declarationsEqual(active, tool)));
-    if (this.active) {
-      const continuation = this.active.resume(model, context, tools, signal);
+    const { id, api, provider } = model;
+    const { sessionId, reasoning, toolChoice } = options;
+    const scope: Scope = structuredClone({ id, api, provider, sessionId, reasoning, toolChoice, tools,
+      instructions: getCurrentSystemPrompt(context.messages) });
+    const history = transcriptKeys(context.messages);
+    const previous = this.active;
+    if (previous) {
+      const continuation = previous.resume(scope, history, signal);
       if (continuation) return continuation;
-      this.active.revoke();
-      return rejected(model, "tool continuation does not match the pending ACP call");
+      if (!previous.discardAfterResult(signal)) {
+        previous.revoke();
+        return rejected(model, "tool continuation does not match the pending ACP call");
+      }
     }
-    const user = context.messages.at(-1);
-    if (this.runs.has(signal) || user?.role !== "user" ||
-      (Array.isArray(user.content) && user.content.some(part => part.type !== "text"))) {
-      return rejected(model, "expected one new text prompt, not a replay or stale tool result");
+    if (!context.messages.some(message => message.role !== "system") || isDeepStrictEqual(this.requests.get(signal), history)) {
+      return rejected(model, "expected a new Pi transcript request");
     }
-    const prompt = typeof user.content === "string" ? user.content : user.content.map(part => part.type === "text" ? part.text : "").join("\n");
-    const turn = { instructions: getCurrentSystemPrompt(context.messages), prompt };
-    this.runs.add(signal);
-    const active = this.active = new Exchange(this.launch, model, turn, tools, this.owner, signal, options);
+    const resident = this.takeResident(scope, history, context);
+    const messages = context.messages.slice();
+    const turn = { instructions: scope.instructions, prompt: renderPrompt(messages, resident !== undefined) };
+    const seed = () => {
+      // A payload hook can yield to an extension holding the same Pi message objects.
+      // Recheck before reseeding so the recovered payload and its retained keys agree.
+      if (!isDeepStrictEqual(transcriptKeys(messages), history)) {
+        throw new AcpFailure("protocol", "Pi transcript changed while preparing the prompt");
+      }
+      return renderPrompt(messages, false);
+    };
+    this.requests.set(signal, history);
+    const active = this.active = new Exchange(this.launch, model, turn, scope, history, this.owner, signal, options, {
+      ready: Promise.all([previous?.finished, this.disposal]).then(() => undefined),
+      reuse: resident ? { session: resident, seed } : undefined,
+      retain: (session, message) => {
+        // ACP permission requests and the MCP conversation ID carry no prompt epoch. A
+        // bridged session cannot safely carry authority over to the next prompt, even if
+        // tools are unchanged. Its next turn is seeded from Pi's recorded results instead.
+        if (scope.tools.length || this.closed || signal.aborted) return false;
+        const timer = setTimeout(() => this.retireResident(), IDLE_SESSION_MS);
+        timer.unref();
+        const resident = this.resident = { session, scope, history: [...history, ...transcriptKeys([message])], timer };
+        session.peer.watchIdle(() => { if (this.resident === resident) this.retireResident(); });
+        return true;
+      },
+    });
     void active.finished.then(() => { if (this.active === active) this.active = undefined; });
     return active.output.current.stream;
   };
@@ -217,6 +308,7 @@ export class AgyToolLane {
     this.unsubscribe();
     const active = this.active;
     active?.revoke();
-    await active?.finished;
+    this.retireResident();
+    await Promise.all([active?.finished, this.disposal]);
   }
 }

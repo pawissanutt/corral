@@ -60,6 +60,10 @@ export function executorWarning(text: string): AcpFailure | undefined {
 }
 
 const FRAME_BYTES = 1024 * 1024;
+// Pi can record an 8 MiB MCP tool response. An outbound prompt must be able to carry
+// one such result even after wrapping it in JSON history inside the JSON-RPC frame.
+// Keep the original bounds on inbound frames and on other request types.
+const PROMPT_FRAME_BYTES = 32 * FRAME_BYTES;
 const OUTPUT_BYTES = 8 * FRAME_BYTES;
 const OUTPUT_FRAMES = 8192;
 const TERMINATE_GRACE_MS = 150;
@@ -157,10 +161,19 @@ export class AcpPeer {
   readonly cwd: string;
   private readonly child: Child;
   private readonly input: AsyncGenerator<Json>;
+  private pendingFrame: Promise<IteratorResult<Json>> | undefined;
+  private idleInvalidation: (() => void) | undefined;
   readonly exited: Promise<void>;
+  private idleInvalidated = false;
   private closed = false;
+  private closing: Promise<void> | undefined;
   private spawnFailed = false;
   private requestId = 0;
+
+  get live(): boolean {
+    return !this.idleInvalidated && !this.closed && !this.spawnFailed &&
+      this.child.exitCode === null && this.child.signalCode === null;
+  }
 
   constructor(launch: AgyLaunch) {
     if (process.platform === "win32") throw new AcpFailure("launch", "requires POSIX process groups");
@@ -190,7 +203,12 @@ export class AcpPeer {
   private async send(value: Json): Promise<void> {
     if (this.closed) throw new AcpFailure("protocol", "connection closed");
     const line = JSON.stringify({ jsonrpc: "2.0", ...value }) + "\n";
-    if (Buffer.byteLength(line) - 1 > FRAME_BYTES) throw new AcpFailure("protocol", "request frame too large");
+    const prompt = value.method === "session/prompt";
+    if (Buffer.byteLength(line) - 1 > (prompt ? PROMPT_FRAME_BYTES : FRAME_BYTES)) {
+      throw new AcpFailure("protocol", prompt
+        ? "Pi context exceeds the ACP prompt size limit; compact the Pi conversation or reduce attachments before retrying"
+        : "request frame too large");
+    }
     await new Promise<void>((resolve, reject) => this.child.stdin.write(line, error => error
       ? reject(new AcpFailure(this.child.pid === undefined ? "launch" : "protocol", "could not write to subprocess"))
       : resolve()));
@@ -198,8 +216,23 @@ export class AcpPeer {
 
   async notify(method: string, params: Json): Promise<void> { await this.send({ method, params }); }
 
+  /** A completed prompt should not modify its history or configuration while idle. */
+  watchIdle(invalidate: () => void): void {
+    this.idleInvalidation = invalidate;
+    const invalidateIfIdle = () => {
+      if (this.idleInvalidation !== invalidate) return;
+      this.idleInvalidated = true;
+      invalidate();
+    };
+    const next = this.pendingFrame ??= this.input.next();
+    void next.then(invalidateIfIdle, invalidateIfIdle);
+  }
+
+  resume(): void { this.idleInvalidation = undefined; }
+
   private async receive(observe: Observe): Promise<Json> {
-    const next = await this.input.next();
+    const next = await (this.pendingFrame ?? this.input.next());
+    this.pendingFrame = undefined;
     if (next.done || this.closed) throw new AcpFailure("protocol", "connection closed");
     const message = next.value;
     await observe(message);
@@ -245,8 +278,11 @@ export class AcpPeer {
     while (!ready()) await this.handleMethod(await this.receive(observe));
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> { return this.closing ??= this.terminate(); }
+
+  private async terminate(): Promise<void> {
     this.closed = true;
+    this.idleInvalidation = undefined;
     const { child } = this;
     const signalGroup = (signal: NodeJS.Signals | 0): boolean => {
       if (!child.pid || this.spawnFailed) return false;

@@ -1,11 +1,13 @@
 // Disposable ACP v1 peer. Network access is limited to the supplied fixture bridge.
+import { randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 export type FakeAgyCase = "stream" | "cancel" | "timeout" | "unavailable" | "mismatch" | "current-mismatch"
   | "unchanged-variant" | "auth" | "quota" | "warning" | "bad-error" | "oversize"
-  | "mcp-build" | "mcp-reviewer" | "mcp-stale" | "mcp-terminal" | "mcp-cancel" | "mcp-terminate";
+  | "mcp-build" | "mcp-reviewer" | "mcp-stale" | "mcp-terminal" | "mcp-cancel" | "mcp-terminate"
+  | "history" | "mcp-history";
 
 type Id = string | number;
 type Packet = { jsonrpc: "2.0"; id?: Id; method?: string; params?: any; result?: any };
@@ -24,7 +26,12 @@ const watchdog = setTimeout(() => process.exit(70), 8_000);
 const stubborn = scenario === "cancel" || scenario === "timeout";
 if (stubborn) process.on("SIGTERM", () => {});
 
-const sessionId = "fake-session";
+const historyScenario = scenario === "history" || scenario === "mcp-history";
+let sessionId = "fake-session";
+const memory = new Set<string>();
+function remember(text: string) {
+  for (const match of text.matchAll(/\[\[agy:([a-z_]+)\]\]/g)) memory.add(match[1]!);
+}
 const exactModel = "gemini-4-neon-high";
 const baseModel = "gemini-4-neon";
 const encode = (message: object) => `${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`;
@@ -108,6 +115,9 @@ async function runBridge() {
   } else if (scenario === "mcp-reviewer") {
     await call("read", "read", { path: "review.txt" }, "read-review");
     await call("unlisted-write", "write", { path: "reviewer-denied.txt", content: "no" }, "write-unlisted");
+  } else if (scenario === "mcp-history") {
+    await call("history-write", "write", { path: "history.txt", content: "written once" }, "history-write");
+    send(chunk("message", "Write completed."));
   } else if (scenario === "mcp-terminate") {
     await call("terminate", "write", { path: "allowed.txt", content: "once" }, "write-terminates-run");
     send(chunk("message", "ACP follow-up after a terminal Pi tool"));
@@ -153,9 +163,14 @@ for await (const line of createInterface({ input: process.stdin })) {
   }
   switch (method ?? id) {
     case "initialize":
-      ack(id, { protocolVersion: 1, agentCapabilities: { _meta: { antigravity: { systemPrompt: { append: true } } } } });
+      ack(id, { protocolVersion: 1, agentCapabilities: { ...(historyScenario ? { loadSession: true } : {}),
+        _meta: { antigravity: { systemPrompt: { append: true } } } } });
       break;
     case "session/new":
+      if (historyScenario) {
+        sessionId = `fixture-${randomUUID()}`;
+        memory.clear();
+      }
       if (bridgeScenario) bridge = packet.params?.mcpServers?.[0];
       ack(id, { sessionId, models: {
         currentModelId: ["stream", "mismatch", "unavailable"].includes(scenario) ? baseModel : exactModel,
@@ -163,13 +178,40 @@ for await (const line of createInterface({ input: process.stdin })) {
       }, ...(scenario === "current-mismatch" ? { configOptions: [{ id: "thought_level", currentValue: "low" }] } : {}) });
       break;
     case "session/set_model":
+      if (historyScenario && packet.params?.modelId === baseModel) {
+        ack(id, { currentModelId: baseModel });
+        break;
+      }
       // agy 1.5.14 acknowledges the RPC with an empty result and reports its choice by notification.
       ack(id, {});
       send(update("config_option_update", { configOptions: [{ id: "model", currentValue: baseModel },
         { id: "thought_level", currentValue: scenario === "mismatch" ? "low" : "high" }] }));
       break;
-    case "session/prompt":
+    case "session/prompt": {
       promptId = id;
+      if (historyScenario) {
+        if (packet.params?.sessionId !== sessionId) throw new Error("prompt used a stale ACP session ID");
+        const blocks: { type: string; text: string }[] = packet.params.prompt;
+        const latest = blocks.at(-1)?.text;
+        for (const block of blocks) if (block.type === "text") remember(block.text);
+        if (latest?.startsWith("interrupt ")) {
+          // No terminal reply until the client cancels this prompt.
+          send(chunk("message", "Interruption barrier"));
+          break;
+        }
+        if (scenario !== "mcp-history" || latest !== "exercise write") {
+          const marker = /^remember \[\[agy:([a-z_]+)\]\]$/.exec(latest ?? "")?.[1];
+          const reply = marker ? `Remembered [[agy:reply_${marker}]]` : `Seen: ${[...memory].sort().join(", ")}`;
+          remember(reply);
+          send(chunk("message", reply));
+          if (marker === "idle_drift") {
+            // Already buffered at the terminal boundary: no timing race or sleep needed.
+            process.stdout.write(encode({ id, result: { stopReason: "end_turn" } }) +
+              encode(chunk("message", "[[agy:late_unrecorded]]")));
+          } else ack(id, { stopReason: "end_turn" });
+          break;
+        }
+      }
       if (bridgeScenario) {
         // Keep consuming ACP while permission responses and cancellation arrive.
         void runBridge().catch(error => {
@@ -211,6 +253,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         throw new Error("fake agy received a prompt without the requested model");
       }
       break;
+    }
     case permissionId:
       if (!remainingFragment) throw new Error("unexpected permission response");
       process.stdout.write(remainingFragment);
@@ -222,7 +265,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       break;
     case "session/cancel":
       // The wire log records receipt before this reply, even if the adapter kills us immediately afterwards.
-      if (scenario === "cancel") ack(promptId, { stopReason: "cancelled" });
+      if (scenario === "cancel" || historyScenario) ack(promptId, { stopReason: "cancelled" });
       if (scenario === "mcp-cancel") pendingFetch?.abort();
       break;
     default:
