@@ -4,10 +4,12 @@
 //! reference.
 
 use corral_protocol::detail::*;
-use corral_types::{Artifact, ArtifactKind, CheckKind, CheckResult, Status};
+use corral_types::{Actor, Artifact, ArtifactKind, CheckKind, CheckResult, Status};
 
 use super::details::{files, patch};
-use super::{record, records, stamp};
+
+use super::{ago, record, records, stamp};
+use crate::model::artifacts::shown_by_default;
 use crate::model::daemon::{DetailCache, Feed, detail_key};
 
 /// The sample pages at ten rows, so its two dozen artifacts walk past a page and a second;
@@ -54,14 +56,20 @@ fn kept(target: &DetailRef, row: &Artifact) -> bool {
             value.is_some_and(|value| lower(value).starts_with(&lower(wanted)))
         })
     };
-    let narrowed = narrowing.as_ref().is_none_or(|narrowing| {
-        prefix(Some(kind), &narrowing.kind)
-            && prefix(row.project.as_deref(), &narrowing.project)
-            && narrowing
-                .task
-                .as_deref()
-                .is_none_or(|task| row.task == task)
-    });
+    // corrald hides submissions, records and replaced rows unless asked for all or a kind.
+    let hidden = !shown_by_default(row)
+        && narrowing
+            .as_ref()
+            .is_none_or(|narrowing| !narrowing.all && narrowing.kind.is_none());
+    let narrowed = !hidden
+        && narrowing.as_ref().is_none_or(|narrowing| {
+            prefix(Some(kind), &narrowing.kind)
+                && prefix(row.project.as_deref(), &narrowing.project)
+                && narrowing
+                    .task
+                    .as_deref()
+                    .is_none_or(|task| row.task == task)
+        });
     let title = lower(&row.title);
     let reference = lower(&row.reference());
     narrowed
@@ -83,6 +91,7 @@ fn serve(feed: &mut Feed, target: &DetailRef, pages: usize) {
                 ..row
             })
         })
+        .chain(library(feed))
         .filter(|row| kept(target, row))
         .collect();
     rows.sort_by(|a, b| {
@@ -126,11 +135,47 @@ fn serve(feed: &mut Feed, target: &DetailRef, pages: usize) {
     );
 }
 
+/// The project `corral`'s library: what every task of it may refer to.
+const LIBRARY: &str = "corral";
+const LIBRARY_NOTES: &str = "# Architecture notes\n\nThe app reaches corrald only through its socket; every engine operation stays enabled and corrald decides.\n";
+
+/// The sample's project-owned library rows.
+fn library(feed: &Feed) -> Vec<Artifact> {
+    vec![Artifact {
+        task: LIBRARY.into(),
+        id: 1,
+        sha256: "4c1b".repeat(16),
+        bytes: LIBRARY_NOTES.len() as u64,
+        kind: ArtifactKind::Reference,
+        title: "architecture-notes.md".into(),
+        at: ago(feed, 6 * super::sample::DAY),
+        by: Actor::Owner,
+        project: Some(LIBRARY.into()),
+        run: None,
+        replaces: None,
+        replaced_by: None,
+    }]
+}
+
 /// The artifact `reference` names, its content made from the sample's own facts.
 pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, String> {
     let (task, key) = reference
         .rsplit_once(':')
         .ok_or_else(|| format!("invalid: artifact reference {reference}"))?;
+    if task == LIBRARY {
+        library(feed)
+            .iter()
+            .find(|row| row.id.to_string() == key)
+            .ok_or_else(|| format!("not_found: artifact {reference}"))?;
+        return Ok(ArtifactPage {
+            task: task.into(),
+            key: key.into(),
+            media_type: Some("text/markdown".into()),
+            encoding: ArtifactEncoding::Text,
+            content: LIBRARY_NOTES.into(),
+            truncated: false,
+        });
+    }
     let record = record(feed, task).ok_or_else(|| format!("not_found: task {task}"))?;
     let row = record
         .artifacts
@@ -146,7 +191,7 @@ pub(super) fn content(feed: &Feed, reference: &str) -> Result<ArtifactPage, Stri
                 .map(|(path, ..)| patch(task, path))
                 .collect(),
         ),
-        ArtifactKind::Log => text("text/plain", gate_log(&record)),
+        ArtifactKind::Gate => text("text/plain", gate_log(&record)),
         ArtifactKind::Evidence if row.title.ends_with(".png") => (
             "image/png".to_owned(),
             ArtifactEncoding::Base64,

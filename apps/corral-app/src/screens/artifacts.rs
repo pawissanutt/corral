@@ -17,14 +17,14 @@ use nsh_core::prelude::*;
 
 use crate::model::artifacts::{
     self, Action, FIELD_LABEL, HINT, LOAD_MORE, LOADING, LOADING_MORE, More, PLACEHOLDER, Page,
-    Query, RETRY, Row, SUBTITLE, Status, TITLE, Walk,
+    RETRY, Row, SHOW, SUBTITLE, Status, TITLE, Walk,
 };
 use crate::model::{Effect, Form, Hue};
 use crate::screens::activity::subnav;
 use crate::state::AppState;
 use crate::ui::composer::copyable_input;
 use crate::ui::icons::{Icon, icon};
-use crate::ui::kit::button::{ButtonKind, button};
+use crate::ui::kit::button::{ButtonKind, button, seg};
 use crate::ui::kit::notice::notice;
 use crate::ui::kit::page::{Width, columns, context, head, pane};
 use crate::ui::kit::rows::{list_row_tall, revealing, titled, walked_row};
@@ -71,10 +71,8 @@ pub fn screen(app: AppState) -> AnyElement {
 /// page requested.
 fn keep_loaded(app: AppState, page: Memo<Page>) {
     let list = computed(move || {
-        app.daemon().then(|| {
-            app.artifacts
-                .with(|state| Query::parse(&state.query).request())
-        })
+        app.daemon()
+            .then(|| app.artifacts.with(|state| state.request()))
     });
     effect(move || {
         if let Some(list) = list.get() {
@@ -171,6 +169,8 @@ fn field_bar(app: AppState, page: Memo<Page>) -> AnyElement {
             .child(field(app))
             .child(term::space(2.0))
             .child(count)
+            .child(term::space(2.0))
+            .child(show(app, page))
             .into_element(),
         Form::Desktop | Form::Phone => {
             let small = if form == Form::Phone { 12.5 } else { 11.5 };
@@ -191,7 +191,8 @@ fn field_bar(app: AppState, page: Memo<Page>) -> AnyElement {
                         .max_w(px(MEASURE_FORM))
                         .gap(px(10.0))
                         .child(field(app))
-                        .child(count.font_family(FONT_TEXT).text_size(px(small))),
+                        .child(count.font_family(FONT_TEXT).text_size(px(small)))
+                        .child(show(app, page)),
                 )
                 .child(
                     text(HINT)
@@ -203,6 +204,18 @@ fn field_bar(app: AppState, page: Memo<Page>) -> AnyElement {
                 .into_element()
         }
     }
+}
+
+/// The All switch: the owner's artifacts, or submissions, records and replaced ones too
+/// (test ids "seg-artifacts-0", "seg-artifacts-1").
+fn show(app: AppState, page: Memo<Page>) -> AnyElement {
+    seg(
+        app,
+        &SHOW,
+        move || page.with(|page| page.all),
+        move |all| app.artifacts_act(Action::All(all)),
+        "seg-artifacts",
+    )
 }
 
 /// The filter field. While it has the keyboard focus ↑ ↓ and Page Up/Down walk the results and
@@ -362,9 +375,7 @@ fn below(app: AppState, status: Status, empty: Option<String>, more: More) -> An
                 ButtonKind::Ghost,
                 "btn-retry-artifacts",
                 move || {
-                    let list = app
-                        .artifacts
-                        .with_untracked(|state| Query::parse(&state.query).request());
+                    let list = app.artifacts.with_untracked(|state| state.request());
                     app.refresh(list);
                 },
             );
@@ -419,7 +430,7 @@ fn result(app: AppState, row: &Row, selected: Memo<Option<String>>) -> AnyElemen
                 .flex_1()
                 .min_w(px(0.0))
                 .gap(px(2.0))
-                .child(plain(app, row.title.clone()).truncate())
+                .child(plain(app, title_of(row)).truncate())
                 .child(dim(app, facts).truncate())
                 .into_element(),
         ];
@@ -443,7 +454,7 @@ fn result(app: AppState, row: &Row, selected: Memo<Option<String>>) -> AnyElemen
     };
     let content = vec![
         fixed(dim(app, row.kind.clone()), KIND_CELLS, 74.0),
-        titled(app, plain(app, row.title.clone()).truncate(), None),
+        titled(app, plain(app, title_of(row)).truncate(), None),
         fixed(
             mono(app, row.task.to_string()).text_color(color(Token::Ink2)),
             TASK_CELLS,
@@ -472,4 +483,12 @@ fn result(app: AppState, row: &Row, selected: Memo<Option<String>>) -> AnyElemen
             content,
         ),
     )
+}
+
+/// A result's title, led by what replaced it when something did, so a cut title still says so.
+fn title_of(row: &Row) -> String {
+    match &row.replaced {
+        Some(replaced) => format!("{replaced} · {}", row.title),
+        None => row.title.clone(),
+    }
 }

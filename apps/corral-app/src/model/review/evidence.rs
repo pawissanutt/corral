@@ -6,9 +6,8 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use corral_protocol::detail::{ArtifactEncoding, ArtifactPage, DetailBody};
-use corral_types::ArtifactKind;
 
-use crate::model::artifacts::{plain_text, utf8_text};
+use crate::model::artifacts::{by_group, plain_text, utf8_text};
 use crate::model::assistant::sniff_image;
 use crate::model::daemon::Feed;
 use crate::model::effect::Env;
@@ -113,23 +112,27 @@ fn content(feed: &Feed, reference: &str, env: Env) -> ArtifactContent {
 const BINARY: &str =
     "This artifact is binary and not an image, so the app lists it without showing its contents.";
 
-/// The Artifacts tab: the task's records from its detail, opened ones with their contents.
+/// The Artifacts tab: what the task refers to, delivers and proves, by group, opened ones with
+/// their contents. Its diff, report and gate log have their own tabs.
 pub(super) fn artifacts(state: &State, feed: &Feed, shown: &Shown, env: Env) -> Body {
     let Some(detail) = shown.detail else {
         return Body::Notice("Loading the task's artifacts…".into());
     };
     let task: &Id = shown.id();
+    let listed: Vec<_> = by_group(&detail.artifacts)
+        .into_iter()
+        .flat_map(|(_, rows)| rows)
+        .collect();
     Body::Artifacts(ArtifactsView {
-        rows: detail
-            .artifacts
-            .iter()
+        empty: listed
+            .is_empty()
+            .then_some("No reference, report or proof is recorded for this task."),
+        rows: listed
+            .into_iter()
             .map(|artifact| {
                 let reference = artifact.reference();
                 let open = state.opened.contains(&(task.clone(), reference.clone()));
-                let kind = match artifact.kind {
-                    ArtifactKind::Legacy => "unknown kind",
-                    kind => kind.as_str(),
-                };
+                let kind = artifact.kind.as_str();
                 ArtifactView {
                     title: artifact.title.clone(),
                     kind: format!("{kind} · by {}", actor(artifact.by)),
@@ -155,10 +158,6 @@ pub(super) fn artifacts(state: &State, feed: &Feed, shown: &Shown, env: Env) -> 
                 }
             })
             .collect(),
-        empty: detail
-            .artifacts
-            .is_empty()
-            .then_some("No artifacts are recorded for this task."),
         note: "Contents come from corrald's artifact catalog in bounded pages, never from a file path on this device.",
     })
 }

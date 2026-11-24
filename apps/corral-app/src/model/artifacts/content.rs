@@ -7,7 +7,7 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use corral_protocol::detail::{ArtifactEncoding, ArtifactPage, DetailBody, DetailRef};
-use corral_types::Artifact;
+use corral_types::{Artifact, ArtifactKind};
 
 use crate::model::assistant::sniff_image;
 use crate::model::daemon::Feed;
@@ -76,7 +76,6 @@ fn ends_with(title: &str, endings: &[&str]) -> bool {
 
 /// What the text is, from corrald's media type, then the artifact's kind and title.
 fn shape(artifact: &Artifact, media: Option<&str>) -> Shape {
-    let kind = artifact.kind.as_str();
     let title = artifact.title.as_str();
     match media.unwrap_or_default() {
         "text/markdown" => return Shape::Markdown,
@@ -84,11 +83,13 @@ fn shape(artifact: &Artifact, media: Option<&str>) -> Shape {
         "text/html" => return Shape::Html,
         _ => {}
     }
+    let diff = matches!(artifact.kind, ArtifactKind::Diff);
+    let log = matches!(artifact.kind, ArtifactKind::Gate | ArtifactKind::Log);
     if ends_with(title, &[".md", ".markdown"]) {
         Shape::Markdown
-    } else if kind == "diff" || ends_with(title, &[".diff", ".patch"]) {
+    } else if diff || ends_with(title, &[".diff", ".patch"]) {
         Shape::Diff
-    } else if kind.contains("log") || ends_with(title, &[".log"]) {
+    } else if log || ends_with(title, &[".log"]) {
         Shape::Log
     } else if ends_with(title, &[".html", ".htm"]) {
         Shape::Html

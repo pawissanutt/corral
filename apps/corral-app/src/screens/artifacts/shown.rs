@@ -77,14 +77,16 @@ pub(super) fn preview(app: AppState, page: Memo<Page>) -> AnyElement {
 /// Open full size (or Back) and Open its task, in a row.
 fn actions(app: AppState, preview: &Preview, first: AnyElement) -> AnyElement {
     let task = preview.task.clone();
-    let open_task = button_with(
-        app,
-        preview.open_task.clone(),
-        ButtonKind::Ghost,
-        ButtonOptions::default(),
-        "btn-open-task",
-        move || app.artifacts_act(Action::OpenTask(task.clone())),
-    );
+    let open_task = preview.open_task.clone().map(|label| {
+        button_with(
+            app,
+            label,
+            ButtonKind::Ghost,
+            ButtonOptions::default(),
+            "btn-open-task",
+            move || app.artifacts_act(Action::OpenTask(task.clone())),
+        )
+    });
     view()
         .flex_row()
         .flex_wrap()
@@ -95,7 +97,7 @@ fn actions(app: AppState, preview: &Preview, first: AnyElement) -> AnyElement {
             8.0
         }))
         .child(first)
-        .child(open_task)
+        .children(open_task)
         .into_element()
 }
 

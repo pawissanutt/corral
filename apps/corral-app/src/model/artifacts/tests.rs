@@ -102,7 +102,7 @@ fn tokens_go_into_the_narrowing_and_words_into_the_filter() {
         "a field still being typed narrows nothing"
     );
     assert_eq!(
-        query.request(),
+        query.request(false),
         DetailRef::Artifacts {
             filter: Some("coverage".into()),
             narrowing: Some(ArtifactNarrowing {
@@ -114,7 +114,7 @@ fn tokens_go_into_the_narrowing_and_words_into_the_filter() {
         }
     );
     assert_eq!(
-        Query::parse("gate log project:si").request(),
+        Query::parse("gate log project:si").request(false),
         DetailRef::Artifacts {
             filter: Some("gate log".into()),
             narrowing: Some(ArtifactNarrowing {
@@ -124,7 +124,7 @@ fn tokens_go_into_the_narrowing_and_words_into_the_filter() {
         }
     );
     assert_eq!(
-        Query::parse("  ").request(),
+        Query::parse("  ").request(false),
         DetailRef::Artifacts {
             filter: None,
             narrowing: None,
@@ -137,7 +137,7 @@ fn tokens_go_into_the_narrowing_and_words_into_the_filter() {
         query: "kind:report kind:re".into(),
         ..State::default()
     };
-    let target = Query::parse(&state.query).request();
+    let target = Query::parse(&state.query).request(false);
     served(
         &mut feed,
         &target,
@@ -156,7 +156,7 @@ fn tokens_go_into_the_narrowing_and_words_into_the_filter() {
 fn walking_to_the_last_result_asks_for_the_next_page() {
     let mut feed = Feed::default();
     let mut state = State::default();
-    let target = Query::parse("").request();
+    let target = Query::parse("").request(false);
     served(
         &mut feed,
         &target,
@@ -206,7 +206,7 @@ fn a_result_opens_its_task_and_a_task_opens_the_finder_on_itself() {
     let mut feed = Feed::default();
     task(&mut feed, "T-6", "site");
     let mut state = State::default();
-    let target = Query::parse("").request();
+    let target = Query::parse("").request(false);
     served(
         &mut feed,
         &target,
@@ -232,4 +232,30 @@ fn a_result_opens_its_task_and_a_task_opens_the_finder_on_itself() {
         [Effect::Go(Destination::Artifacts)]
     ));
     assert_eq!(Query::parse(&state.query).tasks, ["T-12"]);
+}
+
+/// A project's library is narrowed by its own name, not an upper-cased one corrald never
+/// matches; All reaches the rows corrald hides; a library row has no task to open.
+#[test]
+fn a_library_is_found_by_its_project_and_offers_no_task() {
+    let mut state = State {
+        query: "task:corral".into(),
+        ..State::default()
+    };
+    let narrowing = |state: &State| match state.request() {
+        DetailRef::Artifacts { narrowing, .. } => narrowing.unwrap_or_default(),
+        _ => ArtifactNarrowing::default(),
+    };
+    assert_eq!(narrowing(&state).task.as_deref(), Some("corral"));
+    assert!(!narrowing(&state).all);
+    let mut feed = Feed::default();
+    state.act(Action::All(true), &feed);
+    assert!(narrowing(&state).all);
+    let mut row = artifact("corral", 3, ArtifactKind::Reference, "notes.md", 1);
+    row.project = Some("corral".into());
+    served(&mut feed, &state.request(), vec![vec![row]], false);
+    let shown = page(&state, &feed, Form::Desktop);
+    let preview = shown.preview.expect("the library row is selected");
+    assert_eq!(preview.reference, "corral:3");
+    assert_eq!(preview.open_task, None);
 }

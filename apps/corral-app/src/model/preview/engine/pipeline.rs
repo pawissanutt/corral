@@ -70,7 +70,7 @@ pub(super) fn run_gate(feed: &mut Feed, mut rec: TaskDetail) -> Result<(), Fail>
         ));
     };
     let mut check = gate(feed, &rec, true, None, 0);
-    let log = artifact(feed, &rec, ArtifactKind::Log, "gate log", 0);
+    let log = artifact(feed, &rec, ArtifactKind::Gate, "gate log", 0);
     check.log = Some(log.reference());
     rec.artifacts.push(log);
     rec.checks.push(check.clone());

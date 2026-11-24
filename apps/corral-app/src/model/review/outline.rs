@@ -2,6 +2,7 @@
 
 use corral_types::CheckKind;
 
+use crate::model::artifacts::shown_by_default;
 use crate::model::effect::Effect;
 use crate::model::id::Id;
 use crate::model::live::Live;
@@ -19,7 +20,7 @@ fn has_summary(shown: &Shown) -> bool {
 fn has_artifacts(shown: &Shown) -> bool {
     shown
         .detail
-        .is_some_and(|detail| !detail.artifacts.is_empty())
+        .is_some_and(|detail| detail.artifacts.iter().any(shown_by_default))
 }
 
 fn has_log(shown: &Shown) -> bool {

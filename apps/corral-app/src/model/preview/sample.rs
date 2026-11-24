@@ -352,6 +352,12 @@ fn papers(feed: &Feed, record: &mut TaskDetail) {
     let papers: &[(ArtifactKind, &str, u64)] = match record.task.id.as_str() {
         "T-1" => &[(ArtifactKind::Reference, "plan.md", 8 * DAY - 30 * MINUTE)],
         "T-2" => &[
+            (ArtifactKind::Reference, "actions-menu-brief.md", 30 * HOUR),
+            (
+                ArtifactKind::Report,
+                "actions-menu-report-draft.md",
+                3 * HOUR,
+            ),
             (
                 ArtifactKind::Summary,
                 "worker-summary.md",
@@ -406,6 +412,35 @@ fn papers(feed: &Feed, record: &mut TaskDetail) {
         let paper = artifact(feed, record, *kind, title, *at);
         record.artifacts.push(paper);
     }
+    if record.task.id == "T-2" {
+        replace(
+            record,
+            "actions-menu-report-draft.md",
+            "actions-menu-report.md",
+        );
+    }
+}
+
+/// The artifact titled `newer` replaces the one titled `older`, linked both ways as corrald's
+/// catalog serves them.
+fn replace(record: &mut TaskDetail, older: &str, newer: &str) {
+    let reference = |title: &str| {
+        record
+            .artifacts
+            .iter()
+            .find(|row| row.title == title)
+            .map(Artifact::reference)
+    };
+    let (Some(old), Some(new)) = (reference(older), reference(newer)) else {
+        return;
+    };
+    for row in &mut record.artifacts {
+        if row.reference() == old {
+            row.replaced_by = Some(new.clone());
+        } else if row.reference() == new {
+            row.replaces = Some(old.clone());
+        }
+    }
 }
 
 /// Runs, checks, artifacts and blocks for the tasks that have been worked on.
@@ -428,7 +463,7 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
         record.artifacts.push(artifact(
             feed,
             record,
-            ArtifactKind::Log,
+            ArtifactKind::Gate,
             "gate log",
             landed + 40 * MINUTE,
         ));
@@ -540,7 +575,7 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
                 Some("usage::coverage::uncovered_runs_are_named: left 3, right 2"),
                 30 * MINUTE,
             );
-            let log = artifact(feed, record, ArtifactKind::Log, "gate log", 30 * MINUTE);
+            let log = artifact(feed, record, ArtifactKind::Gate, "gate log", 30 * MINUTE);
             red.log = Some(log.reference());
             record.artifacts.push(log);
             record.checks.push(red);
@@ -574,7 +609,7 @@ fn work(feed: &Feed, record: &mut TaskDetail) {
             record.artifacts.push(artifact(
                 feed,
                 record,
-                ArtifactKind::Log,
+                ArtifactKind::Gate,
                 "gate log",
                 2 * HOUR + 50 * MINUTE,
             ));
@@ -809,7 +844,7 @@ pub(super) fn artifact(
         kind,
         title: title.into(),
         at: ago(feed, at),
-        by: if kind == ArtifactKind::Log {
+        by: if kind == ArtifactKind::Gate {
             Actor::Auto
         } else {
             Actor::Agent
@@ -822,7 +857,7 @@ pub(super) fn artifact(
         run: record
             .runs
             .last()
-            .filter(|_| kind != ArtifactKind::Log)
+            .filter(|_| kind != ArtifactKind::Gate)
             .map(|run| run.id.clone()),
     }
 }

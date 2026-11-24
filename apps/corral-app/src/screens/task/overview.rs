@@ -260,7 +260,8 @@ fn runs(app: AppState, id: Id) -> AnyElement {
     })
 }
 
-/// The task's artifacts, then the finder narrowed to the task.
+/// The task's References, Reports and Proof, each a short list left out when empty, then the
+/// finder narrowed to the task.
 fn artifacts(app: AppState, id: Id) -> AnyElement {
     let list = {
         let id = id.clone();
@@ -278,22 +279,35 @@ fn artifacts(app: AppState, id: Id) -> AnyElement {
                 press(app, Press::FindArtifacts(id.clone()));
             },
         );
-        let rows: Vec<AnyElement> = if list.is_empty() {
-            vec![quiet(app, page::NO_ARTIFACTS)]
-        } else {
-            list.iter()
-                .map(|line| plain_row(app, line.kind.clone(), line.title.clone(), line.at.clone()))
-                .collect()
-        };
-        let content = view()
-            .children(rows)
-            .child(
-                view()
-                    .flex_row()
-                    .pt(px(if app.form == Form::Terminal { 0.0 } else { 8.0 }))
-                    .child(find),
-            )
+        let find = view()
+            .flex_row()
+            .pt(px(if app.form == Form::Terminal { 0.0 } else { 8.0 }))
+            .child(find)
             .into_element();
-        block(app, page::ARTIFACTS, None, content)
+        if list.is_empty() {
+            let content = view()
+                .child(quiet(app, page::NO_ARTIFACTS))
+                .child(find)
+                .into_element();
+            return block(app, page::ARTIFACTS, None, content);
+        }
+        let last = list.len() - 1;
+        let mut find = Some(find);
+        let blocks: Vec<AnyElement> = list
+            .iter()
+            .enumerate()
+            .map(|(at, group)| {
+                let lines = group.lines.iter().map(|line| {
+                    plain_row(app, line.kind.clone(), line.title.clone(), line.at.clone())
+                });
+                let content = view()
+                    .children(lines)
+                    .children(group.more.clone().map(|more| quiet(app, more)))
+                    .children(if at == last { find.take() } else { None })
+                    .into_element();
+                block(app, group.heading, None, content)
+            })
+            .collect();
+        view().children(blocks).into_element()
     })
 }

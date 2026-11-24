@@ -3,10 +3,10 @@
 //! and the task's artifacts.
 
 use corral_protocol::detail::{DetailBody, DetailRef, TaskDetail};
-use corral_types::ArtifactKind;
 
 use crate::model::Id;
 use crate::model::act;
+use crate::model::artifacts::by_group;
 use crate::model::daemon::{self, Feed, Link};
 use crate::model::hue::Hue;
 
@@ -127,7 +127,7 @@ pub struct LiveEvidence {
 }
 
 /// Said when the task has no artifacts.
-pub const NO_ARTIFACTS: &str = "No artifacts recorded for this task.";
+pub const NO_ARTIFACTS: &str = "No reference, report or proof recorded for this task.";
 
 /// The reply box's field (`field-reply`).
 pub const REPLY_FIELD: &str = "field-reply";
@@ -185,14 +185,11 @@ pub fn live_evidence(feed: &Feed, id: &str) -> LiveEvidence {
     let detail = loaded_task(feed, id);
     let rows: Vec<(String, String)> = detail
         .map(|detail| {
-            detail
-                .artifacts
-                .iter()
+            by_group(&detail.artifacts)
+                .into_iter()
+                .flat_map(|(_, rows)| rows)
                 .map(|artifact| {
-                    let source = match artifact.kind {
-                        ArtifactKind::Legacy => artifact.reference(),
-                        kind => format!("{} · {}", artifact.reference(), kind.as_str()),
-                    };
+                    let source = format!("{} · {}", artifact.reference(), artifact.kind.as_str());
                     (artifact.title.clone(), source)
                 })
                 .collect()

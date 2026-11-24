@@ -14,7 +14,7 @@ pub use content::{Body, Content, Line, PREVIEW_LINES, content, target as content
 pub(crate) use content::{log_hue, plain_text, utf8_text};
 
 use corral_protocol::detail::{ArtifactNarrowing, DetailBody, DetailGet, DetailRef};
-use corral_types::{Artifact, ArtifactKind};
+use corral_types::{Artifact, ArtifactGroup, ArtifactKind};
 
 use crate::model::daemon::{DetailCache, Feed};
 use crate::model::work::{stamp_at, when_at};
@@ -25,7 +25,9 @@ pub const SUBTITLE: &str = "Every task's artifacts, newest first";
 pub const PLACEHOLDER: &str = "Filter: words, kind:report, task:T-12, project:site";
 /// What a screen reader calls the filter field.
 pub const FIELD_LABEL: &str = "Filter artifacts";
-pub const HINT: &str = "Words match title, kind and reference; kind:, task: and project: narrow by that field. Every token must match.";
+pub const HINT: &str = "Words match title, kind and reference; kind:, task: and project: narrow by that field. Every token must match. Submissions, records and replaced artifacts show under All or a kind: token.";
+/// The switch between the owner's artifacts and every artifact.
+pub const SHOW: [(bool, &str); 2] = [(false, "Default"), (true, "All")];
 pub const OPEN_FULL: &str = "Open full size";
 pub const BACK: &str = "Back to results";
 pub const LOAD_MORE: &str = "Load older artifacts";
@@ -58,6 +60,8 @@ pub struct State {
     /// The filter has the keyboard focus: letters type into it, and the terminal's key line
     /// gives the filter's keys rather than the destinations'.
     pub typing: bool,
+    /// Ask corrald for submissions, records and replaced artifacts too.
+    pub all: bool,
 }
 
 /// A move of the selection through the results.
@@ -85,6 +89,8 @@ pub enum Action {
     Find(Id),
     /// Ask corrald for the page after the last served one.
     LoadMore,
+    /// Show every artifact, or only the owner's.
+    All(bool),
 }
 
 /// The filter, read into the fields it narrows and the words left over (all lower case; a task
@@ -97,14 +103,50 @@ pub struct Query {
     pub projects: Vec<String>,
 }
 
-/// `T-12` from `t-12`, `T-12` or `12`.
+/// `T-12` from `t-12`, `T-12` or `12`; anything else, such as a project owning a library, as
+/// typed.
 fn task_id(value: &str) -> String {
     let number = value.strip_prefix("t-").unwrap_or(value);
     if !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()) {
         format!("T-{number}")
     } else {
-        value.to_uppercase()
+        value.to_owned()
     }
+}
+
+/// The groups an owner reads, in the order they are listed: what a task refers to, what it
+/// delivers and what proves it. Submissions and records show only when asked for.
+pub const OWNER_GROUPS: [ArtifactGroup; 3] = [
+    ArtifactGroup::Reference,
+    ArtifactGroup::Deliverable,
+    ArtifactGroup::Proof,
+];
+
+/// Whether the artifact shows without All, as corrald's list serves by default: an owner's
+/// group and not replaced by a newer one.
+pub fn shown_by_default(artifact: &Artifact) -> bool {
+    OWNER_GROUPS.contains(&artifact.kind.group()) && artifact.replaced_by.is_none()
+}
+
+/// The artifacts that show by default, by owner group in [`OWNER_GROUPS`]' order, each group
+/// keeping the order given; a group with none is left out.
+pub fn by_group(artifacts: &[Artifact]) -> Vec<(ArtifactGroup, Vec<&Artifact>)> {
+    OWNER_GROUPS
+        .into_iter()
+        .map(|group| {
+            let rows = artifacts
+                .iter()
+                .filter(|row| row.kind.group() == group && shown_by_default(row))
+                .collect::<Vec<_>>();
+            (group, rows)
+        })
+        .filter(|(_, rows)| !rows.is_empty())
+        .collect()
+}
+
+/// Whether a project owns the artifact (a library row such as `corral:3`) rather than a task.
+pub fn library(artifact: &Artifact) -> bool {
+    artifact.project.as_deref() == Some(artifact.task.as_str())
 }
 
 impl Query {
@@ -136,14 +178,15 @@ impl Query {
 
     /// The list request: the words as corrald's filter and one value of each field as its
     /// narrowing (the longest prefix of a kind or project, the first task); a second value of
-    /// the same field narrows the served rows here.
-    pub fn request(&self) -> DetailRef {
+    /// the same field narrows the served rows here. `all` asks for the rows corrald hides by
+    /// default (submissions, records, replaced rows); a kind narrowing reaches them anyway.
+    pub fn request(&self, all: bool) -> DetailRef {
         let longest = |values: &[String]| values.iter().max_by_key(|value| value.len()).cloned();
         let narrowing = ArtifactNarrowing {
+            all,
             kind: longest(&self.kinds),
             task: self.tasks.first().cloned(),
             project: longest(&self.projects),
-            ..Default::default()
         };
         DetailRef::Artifacts {
             filter: (!self.words.is_empty()).then(|| self.words.join(" ")),
@@ -212,6 +255,13 @@ fn task_title(feed: &Feed, task: &str) -> Option<String> {
     }
 }
 
+impl State {
+    /// The list request the filter and the All switch make.
+    pub fn request(&self) -> DetailRef {
+        Query::parse(&self.query).request(self.all)
+    }
+}
+
 /// The served rows in served order (corrald's, newest first across pages), and the next page's
 /// token while nothing is loading or failed.
 fn served<'a>(feed: &'a Feed, target: &DetailRef) -> (Vec<&'a Artifact>, Option<&'a str>) {
@@ -238,7 +288,7 @@ fn served<'a>(feed: &'a Feed, target: &DetailRef) -> (Vec<&'a Artifact>, Option<
 /// The served rows the filter keeps, and the next page's token.
 fn visible<'a>(state: &State, feed: &'a Feed) -> (Vec<&'a Artifact>, Option<&'a str>) {
     let query = Query::parse(&state.query);
-    let (rows, next) = served(feed, &query.request());
+    let (rows, next) = served(feed, &state.request());
     let rows = rows
         .into_iter()
         .filter(|row| query.matches(row, project_of(feed, row).as_deref()))
@@ -258,7 +308,7 @@ fn selected_at(state: &State, rows: &[&Artifact]) -> Option<usize> {
 /// The request for the page after the last served one, while one exists and none is on its
 /// way.
 fn next_page(state: &State, feed: &Feed) -> Option<DetailGet> {
-    let target = Query::parse(&state.query).request();
+    let target = state.request();
     let (_, next) = served(feed, &target);
     Some(DetailGet {
         target,
@@ -331,6 +381,10 @@ impl State {
                 self.focus = self.focus.wrapping_add(1);
                 return vec![Effect::Go(Destination::Artifacts)];
             }
+            Action::All(all) => {
+                self.all = all;
+                self.selected = None;
+            }
             Action::LoadMore => {
                 return next_page(self, feed)
                     .map(Effect::Detail)
@@ -366,6 +420,8 @@ pub struct Row {
     pub project: Option<String>,
     /// The run that recorded it, when a run did (`R2`).
     pub run: Option<String>,
+    /// What replaced it, when a newer artifact did: `replaced by T-12:4`.
+    pub replaced: Option<String>,
     /// When it was added: the clock today, else the day.
     pub at: String,
     /// What a screen reader hears for the row.
@@ -415,8 +471,8 @@ pub struct Preview {
     /// The same facts on one line: kind, size, task (and run), project, when, the hash's start.
     pub summary: String,
     pub content: Content,
-    /// The button that opens its task.
-    pub open_task: String,
+    /// The button that opens its task; none for a project's library artifact.
+    pub open_task: Option<String>,
 }
 
 /// The finder as every form shows it: the results and the selected artifact's preview, or that
@@ -426,6 +482,8 @@ pub struct Page {
     pub results: Results,
     pub preview: Option<Preview>,
     pub full: Option<Preview>,
+    /// The All switch is on.
+    pub all: bool,
 }
 
 /// The task, and the run that recorded it where one did: `T-12 R2`.
@@ -444,17 +502,29 @@ fn display_kind(kind: ArtifactKind) -> String {
     .to_owned()
 }
 
+fn replaced(artifact: &Artifact) -> Option<String> {
+    artifact
+        .replaced_by
+        .as_ref()
+        .map(|by| format!("replaced by {by}"))
+}
+
 fn row(feed: &Feed, artifact: &Artifact) -> Row {
     let kind = display_kind(artifact.kind);
     let project = project_of(feed, artifact);
     let at = stamp_at(artifact.at, feed);
+    let replaced = replaced(artifact);
     let label = format!(
-        "{kind} {}, {}{}, added {at}",
+        "{kind} {}, {}{}{}, added {at}",
         artifact.title,
         source(artifact),
         project
             .as_deref()
             .map(|project| format!(" in {project}"))
+            .unwrap_or_default(),
+        replaced
+            .as_deref()
+            .map(|replaced| format!(", {replaced}"))
             .unwrap_or_default()
     );
     Row {
@@ -464,6 +534,7 @@ fn row(feed: &Feed, artifact: &Artifact) -> Row {
         title: artifact.title.clone(),
         project,
         run: artifact.run.clone(),
+        replaced,
         at,
         label,
     }
@@ -484,10 +555,12 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
         when_at(artifact.at, feed),
         crate::model::review::actor(artifact.by)
     );
+    let library = library(artifact);
     let summary = [
+        replaced(artifact),
         Some(kind.clone()),
         Some(size.clone()),
-        Some(source(artifact)),
+        (!library).then(|| source(artifact)),
         project.clone(),
         Some(added.clone()),
         Some(format!("sha256 {hash}")),
@@ -496,17 +569,16 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
     .flatten()
     .collect::<Vec<_>>()
     .join(" · ");
-    let mut facts = vec![
-        ("Kind", kind),
-        ("Size", size),
-        (
+    let mut facts = vec![("Kind", kind), ("Size", size)];
+    if !library {
+        facts.push((
             "Task",
             match task_title(feed, &artifact.task) {
                 Some(title) => format!("{task} · {title}"),
                 None => task.to_string(),
             },
-        ),
-    ];
+        ));
+    }
     if let Some(run) = &artifact.run {
         facts.push(("Run", run.clone()));
     }
@@ -515,10 +587,13 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
     }
     facts.push(("Added", added));
     facts.push(("SHA-256", hash));
+    if let Some(by) = &artifact.replaced_by {
+        facts.push(("Replaced by", by.clone()));
+    }
     Preview {
         reference: artifact.reference(),
         title: artifact.title.clone(),
-        open_task: format!("Open {task}"),
+        open_task: (!library).then(|| format!("Open {task}")),
         task,
         facts,
         summary,
@@ -528,8 +603,7 @@ fn preview(feed: &Feed, artifact: &Artifact, form: Form, full: bool) -> Preview 
 
 /// The finder now.
 pub fn page(state: &State, feed: &Feed, form: Form) -> Page {
-    let query = Query::parse(&state.query);
-    let target = query.request();
+    let target = state.request();
     let (rows, next) = visible(state, feed);
     let cache = feed.detail(&target);
     let status = match cache {
@@ -562,8 +636,10 @@ pub fn page(state: &State, feed: &Feed, form: Form) -> Page {
         (n, _) => format!("{n} so far · older ones load as you walk down"),
     };
     let empty = (status == Status::Ready && rows.is_empty() && more == More::Done).then(|| {
-        if state.query.trim().is_empty() {
+        if state.query.trim().is_empty() && state.all {
             "No task has recorded an artifact yet.".to_owned()
+        } else if state.query.trim().is_empty() {
+            "No reference, report or proof yet; All shows submissions and records too.".to_owned()
         } else {
             format!("No artifact matches “{}”.", state.query.trim())
         }
@@ -579,5 +655,6 @@ pub fn page(state: &State, feed: &Feed, form: Form) -> Page {
         },
         preview: shown.map(|artifact| preview(feed, artifact, form, false)),
         full,
+        all: state.all,
     }
 }

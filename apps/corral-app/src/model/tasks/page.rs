@@ -4,9 +4,10 @@
 //! detail or the task's detail; what none of them serves is left out.
 
 use corral_protocol::detail::{DetailBody, DetailRef, PlanDetail};
-use corral_types::{ArtifactKind, Op, Outcome, Role, Run, Status};
+use corral_types::{ArtifactGroup, Op, Outcome, Role, Run, Status};
 
 use crate::model::act::Act;
+use crate::model::artifacts::by_group;
 use crate::model::daemon::Feed;
 use crate::model::effect::Effect;
 use crate::model::id::IdSupply;
@@ -235,23 +236,53 @@ pub struct ArtifactLine {
     pub at: String,
 }
 
-/// The artifacts the task's detail lists, newest first.
-pub fn artifacts(feed: &Feed, id: &str) -> Vec<ArtifactLine> {
+/// One short list of the task's artifacts: its heading, its newest lines, and how many more
+/// the finder holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactList {
+    pub heading: &'static str,
+    pub lines: Vec<ArtifactLine>,
+    pub more: Option<String>,
+}
+
+/// Lines a short list shows before it points to the finder.
+const SHORT: usize = 5;
+
+fn heading(group: ArtifactGroup) -> &'static str {
+    match group {
+        ArtifactGroup::Reference => "References",
+        ArtifactGroup::Deliverable => "Reports",
+        ArtifactGroup::Proof => "Proof",
+        ArtifactGroup::Submission => "Submissions",
+        ArtifactGroup::Record => "Records",
+    }
+}
+
+/// What the task refers to, delivers and proves, as the finder shows by default: a short list
+/// each, newest first, a group with none left out. Diffs, summaries, logs and replaced
+/// artifacts stay in the finder under All.
+pub fn artifacts(feed: &Feed, id: &str) -> Vec<ArtifactList> {
     let Some(detail) = work::loaded_task(feed, id) else {
         return Vec::new();
     };
-    let mut artifacts: Vec<_> = detail.artifacts.iter().collect();
-    artifacts.sort_by(|a, b| b.at.cmp(&a.at));
-    artifacts
+    by_group(&detail.artifacts)
         .into_iter()
-        .map(|artifact| ArtifactLine {
-            kind: match artifact.kind {
-                ArtifactKind::Legacy => "file",
-                kind => kind.as_str(),
+        .map(|(group, mut rows)| {
+            rows.sort_by_key(|row| std::cmp::Reverse(row.at));
+            let more = rows.len().saturating_sub(SHORT);
+            ArtifactList {
+                heading: heading(group),
+                lines: rows
+                    .into_iter()
+                    .take(SHORT)
+                    .map(|artifact| ArtifactLine {
+                        kind: artifact.kind.as_str().to_owned(),
+                        title: artifact.title.clone(),
+                        at: work::when_at(artifact.at, feed),
+                    })
+                    .collect(),
+                more: (more > 0).then(|| format!("{more} more in Artifacts")),
             }
-            .to_owned(),
-            title: artifact.title.clone(),
-            at: work::when_at(artifact.at, feed),
         })
         .collect()
 }
