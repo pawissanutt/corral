@@ -87,11 +87,22 @@ pub struct Row {
     pub file: String,
 }
 
+impl Row {
+    /// Its kind; a readable lens an older corrald served without one is just a lens.
+    pub const fn kind_word(&self) -> &'static str {
+        match (self.kind, self.status) {
+            (None, LensStatus::Malformed) | (Some(_), _) => kind_word(self.kind),
+            (None, _) => "Lens",
+        }
+    }
+}
+
 pub fn rows(list: &SystemLenses) -> Vec<Row> {
     list.rows
         .iter()
         .map(|row| Row {
-            key: row.id.clone().unwrap_or_else(|| row.file.clone()),
+            // The file names one lens exactly; an ID could equal another lens's path.
+            key: row.file.clone(),
             title: row.title.clone().unwrap_or_else(|| row.file.clone()),
             kind: row.kind,
             status: row.status,
@@ -111,6 +122,8 @@ pub enum Mark {
     Touched,
     /// The change under review adds it.
     Added,
+    /// The change under review removes it (drawn on the lens as it was at the base).
+    Removed,
 }
 
 impl Mark {
@@ -120,6 +133,7 @@ impl Mark {
             Mark::Extra => "?",
             Mark::Touched => "Δ",
             Mark::Added => "+",
+            Mark::Removed => "−",
         }
     }
     pub const fn word(self) -> &'static str {
@@ -128,6 +142,7 @@ impl Mark {
             Mark::Extra => "not in the code",
             Mark::Touched => "touched",
             Mark::Added => "added",
+            Mark::Removed => "removed",
         }
     }
     pub const fn hue(self) -> Hue {
@@ -136,6 +151,7 @@ impl Mark {
             Mark::Extra => Hue::Held,
             Mark::Touched => Hue::Worker,
             Mark::Added => Hue::Ok,
+            Mark::Removed => Hue::Fail,
         }
     }
 }
@@ -160,8 +176,14 @@ pub struct Element {
 }
 
 impl Element {
+    /// The strongest mark, which colours it.
     pub fn marked(&self) -> Option<Mark> {
         self.marks.iter().min().copied()
+    }
+
+    /// Every mark's glyph, so a failing element the change touches shows both.
+    pub fn glyphs(&self) -> Option<String> {
+        (!self.marks.is_empty()).then(|| self.marks.iter().map(|m| m.glyph()).collect())
     }
 }
 
@@ -205,6 +227,7 @@ pub struct Diagram {
 pub struct Touch {
     pub touched: Vec<String>,
     pub added: Vec<String>,
+    pub removed: Vec<String>,
 }
 
 fn node_name(kind: LensKind, id: &str) -> String {
@@ -299,6 +322,9 @@ pub fn diagram(
         }
         if touch.added.iter().any(|t| t == name) {
             marks.push(Mark::Added);
+        }
+        if touch.removed.iter().any(|t| t == name) {
+            marks.push(Mark::Removed);
         }
         marks
     };
@@ -507,7 +533,11 @@ pub struct Line {
     pub lead: Option<String>,
     pub main: String,
     pub sub: Option<String>,
+    /// The strongest mark, and every mark's glyph.
     pub mark: Option<Mark>,
+    pub glyphs: Option<String>,
+    /// Every mark's word, for a screen reader: ", failing, touched".
+    pub words: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -532,6 +562,8 @@ pub fn listing(diagram: &Diagram) -> Vec<Listing> {
             main: e.label.clone(),
             sub: None,
             mark: e.marked(),
+            glyphs: e.glyphs(),
+            words: mark_words(e),
         })
         .collect();
     let edge_lines = diagram
@@ -554,6 +586,8 @@ pub fn listing(diagram: &Diagram) -> Vec<Listing> {
                 main: format!("{ends}: {}", e.label),
                 sub,
                 mark: e.marked(),
+                glyphs: e.glyphs(),
+                words: mark_words(e),
             }
         })
         .collect();
@@ -567,6 +601,10 @@ pub fn listing(diagram: &Diagram) -> Vec<Listing> {
             lines: edge_lines,
         },
     ]
+}
+
+fn mark_words(e: &Element) -> String {
+    e.marks.iter().map(|m| format!(", {}", m.word())).collect()
 }
 
 /// What the inspector says about one element.
@@ -672,6 +710,9 @@ pub fn inspect(diagram: &Diagram, name: &str) -> Option<Inspect> {
     }
     if element.marks.contains(&Mark::Added) {
         checks.push((Hue::Ok, "The change under review adds it.".into()));
+    }
+    if element.marks.contains(&Mark::Removed) {
+        checks.push((Hue::Fail, "The change under review removes it.".into()));
     }
     Some(Inspect {
         what: element.what.clone(),

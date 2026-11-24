@@ -102,12 +102,14 @@ pub struct Item {
     pub lens: Option<LensItem>,
 }
 
-/// A touched lens: which to read, at which commit, and the elements the change touched,
-/// added and removed, by the checker's names.
+/// A touched lens: its file, the review's two commits, and the elements the change touched,
+/// added and removed, by the checker's names. It is drawn at the head, or at the base when the
+/// change removed it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LensItem {
-    pub id: String,
-    pub at: String,
+    pub file: String,
+    pub head: String,
+    pub base: String,
     pub touched: Vec<String>,
     pub added: Vec<String>,
     pub removed: Vec<String>,
@@ -605,8 +607,9 @@ fn lens_item(cx: &Ctx, key: String, impact: &corral_types::lenses::LensImpact) -
         sub: (!sub.is_empty()).then_some(sub),
         anchor: cx.anchor(&impact.path, None, only_removed),
         lens: Some(LensItem {
-            id: impact.id.clone(),
-            at: if only_removed { cx.base } else { cx.head }.to_owned(),
+            file: impact.path.clone(),
+            head: cx.head.to_owned(),
+            base: cx.base.to_owned(),
             touched: impact.touched.clone(),
             added: impact.added.clone(),
             removed: impact.removed.clone(),

@@ -6,9 +6,11 @@
 //! far enough apart for the widest message between them, and each message on its own row in
 //! file order, a note under its words. Text is measured by the caller's text engine.
 
+use std::collections::BTreeMap;
+
 use super::layered::{LEdge, layered};
 use super::layout::{Font, Measure, Rect};
-use super::lens::Diagram;
+use super::lens::{Diagram, Element};
 use corral_types::lenses::LensKind;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,7 +60,19 @@ pub fn label_lines(diagram: &Diagram, edge: usize) -> (String, Option<String>) {
         LensKind::Sequence => format!("{}. {}", edge + 1, e.label),
         LensKind::State => e.label.clone(),
     };
+    let lead = match e.glyphs() {
+        Some(glyphs) => format!("{glyphs} {lead}"),
+        None => lead,
+    };
     (lead, detail)
+}
+
+/// A state's or participant's words: its marks' glyphs, then its label.
+pub fn node_words(e: &Element) -> String {
+    match e.glyphs() {
+        Some(glyphs) => format!("{glyphs} {}", e.label),
+        None => e.label.clone(),
+    }
 }
 
 fn label_size(diagram: &Diagram, edge: usize, measure: Measure) -> (f32, f32) {
@@ -84,7 +98,7 @@ fn state(diagram: &Diagram, room: f32, measure: Measure) -> LensLayout {
     let sizes: Vec<(f32, f32)> = diagram
         .nodes
         .iter()
-        .map(|n| (node_width(&n.label, measure), NODE_H))
+        .map(|n| (node_width(&node_words(n), measure), NODE_H))
         .collect();
     let edges: Vec<LEdge> = diagram
         .edges
@@ -124,27 +138,39 @@ fn state(diagram: &Diagram, room: f32, measure: Measure) -> LensLayout {
     let mut width = g.width + 2.0 * PAD;
     let mut height = g.height + 2.0 * PAD;
     let mut taken: Vec<Rect> = out.nodes.iter().map(|n| n.rect).collect();
+    // Transitions between the same two states (either way) share a route, and repeats on one
+    // state share a loop: each takes its own lane so no stroke or mark hides another.
+    let mut lanes: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     // Routes arrive by edge index; one from a state to itself has none.
     for (edge, e) in diagram.edges.iter().enumerate() {
         let Some((a, b)) = e.ends else { continue };
         let (w, h) = label_size(diagram, edge, measure);
+        let lane = lanes.entry((a.min(b), a.max(b))).or_default();
+        let k = *lane;
+        *lane += 1;
         let (points, at) = if a == b {
             let Some(r) = out.nodes.get(a).map(|n| n.rect) else {
                 continue;
             };
             let (x, cy) = (r.x + r.w, r.y + r.h / 2.0);
+            let reach = LOOP + 14.0 * k as f32;
+            let rise = 16.0 + 4.0 * k as f32;
             let points = vec![
                 (x, cy - 8.0),
-                (x + LOOP, cy - 16.0),
-                (x + LOOP, cy + 16.0),
+                (x + reach, cy - rise),
+                (x + reach, cy + rise),
                 (x, cy + 8.0),
             ];
-            (points, (x + LOOP + 6.0 + w / 2.0, cy))
+            (points, (x + reach + 6.0 + w / 2.0, cy))
         } else {
             let Some((_, points)) = g.routes.iter().find(|(i, _)| *i == edge) else {
                 continue;
             };
-            let points: Vec<(f32, f32)> = points.iter().map(|(x, y)| (x + PAD, y + PAD)).collect();
+            let dx = lane_offset(k);
+            let points: Vec<(f32, f32)> = points
+                .iter()
+                .map(|(x, y)| (x + PAD + dx, y + PAD))
+                .collect();
             let at = middle(&points);
             (points, at)
         };
@@ -169,6 +195,13 @@ fn state(diagram: &Diagram, room: f32, measure: Measure) -> LensLayout {
     out.width = width.ceil();
     out.height = height.ceil();
     out
+}
+
+/// The sideways shift of the k-th transition between one pair of states: none, then
+/// alternately right and left in widening steps.
+fn lane_offset(k: usize) -> f32 {
+    let step = 14.0 * k.div_ceil(2) as f32;
+    if k % 2 == 1 { step } else { -step }
 }
 
 /// The middle of a path: halfway along its middle segment.
@@ -216,7 +249,7 @@ fn sequence(diagram: &Diagram, _room: f32, measure: Measure) -> LensLayout {
     let widths: Vec<f32> = diagram
         .nodes
         .iter()
-        .map(|p| node_width(&p.label, measure))
+        .map(|p| node_width(&node_words(p), measure))
         .collect();
     // Centres: each next column clears the boxes, then every message's words fit between its
     // ends; the nearest spans first so a wide one widens only the gap it crosses last.

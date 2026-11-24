@@ -158,10 +158,6 @@ fn paint(layout: &LensLayout, d: &Diagram, picked: Option<&str>) -> Painter {
 
 fn label(p: Painter, r: Rect, d: &Diagram, edge: usize, e: &Element, picked: bool) -> Painter {
     let (lead, detail) = label_lines(d, edge);
-    let lead = match e.marked() {
-        Some(mark) => format!("{} {lead}", mark.glyph()),
-        None => lead,
-    };
     let mut p = p
         .fill_color(ink(Token::Bg))
         .begin_path()
@@ -194,10 +190,7 @@ fn node(p: Painter, r: Rect, kind: LensKind, e: &Element, picked: bool) -> Paint
     } else {
         element_ink(e, Token::Rule2)
     };
-    let words = match e.marked() {
-        Some(mark) => format!("{} {}", mark.glyph(), e.label),
-        None => e.label.clone(),
-    };
+    let words = lens_layout::node_words(e);
     p.fill_color(ink(Token::Surface))
         .begin_path()
         .round_rect(bounds(r), px(radius))

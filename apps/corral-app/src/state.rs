@@ -548,6 +548,12 @@ impl AppState {
             self.share.set(false);
             self.lock.set(false);
             self.confirm.set(None);
+            // A lens draft or receipt belongs to the source it was made on: Send must not
+            // file a sample draft as a real task.
+            self.system.update(|state| {
+                state.draft = None;
+                state.filed = None;
+            });
             self.refusal.set(None);
             let uploads = self.ask_staged.with_untracked(|staged| {
                 staged

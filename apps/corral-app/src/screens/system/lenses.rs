@@ -100,13 +100,16 @@ pub(super) fn page(app: AppState, project: String) -> AnyElement {
                 .map(|key| lens::lens_request(&project, &key, None))
         })
     };
-    effect(move || {
-        if let Some(target) = target.get()
-            && untracked(|| app.daemon())
-        {
-            untracked(|| app.load(target));
-        }
-    });
+    // Pinned while shown, so neither read is evicted from under the page.
+    let kept = {
+        let project = project.clone();
+        computed(move || {
+            let mut targets = vec![lens::list_request(&project)];
+            targets.extend(target.get());
+            targets
+        })
+    };
+    crate::screens::task::keep::keep_details(app, kept, None);
     let read = computed(move || {
         let Some(target) = target.get() else {
             return Read::Loading;
@@ -279,9 +282,10 @@ fn lens_row(app: AppState, listed: Memo<Listed>, n: usize, row: Row) -> AnyEleme
     let label = format!(
         "{}, {} lens, {}",
         row.title,
-        lens::kind_word(row.kind),
+        row.kind_word(),
         lens::status_word(row.status)
     );
+    let facts = format!("{} · {}", row.kind_word(), lens::status_word(row.status));
     list_row(
         app,
         label,
@@ -305,17 +309,7 @@ fn lens_row(app: AppState, listed: Memo<Listed>, n: usize, row: Row) -> AnyEleme
                 .flex_1()
                 .min_w(px(0.0))
                 .child(plain(app, row.title).number_of_lines(1u32))
-                .child(
-                    quiet(
-                        app,
-                        format!(
-                            "{} · {}",
-                            lens::kind_word(row.kind),
-                            lens::status_word(row.status)
-                        ),
-                    )
-                    .number_of_lines(1u32),
-                )
+                .child(quiet(app, facts).number_of_lines(1u32))
                 .into_element(),
         ],
     )
@@ -385,7 +379,9 @@ fn head(app: AppState, d: Diagram, project: String) -> AnyElement {
     ))
     .text_color(hue_ink(lens::status_hue(d.status)));
     let repair = (d.status != LensStatus::Current).then(|| {
-        let id = d.id.clone();
+        // The engine resolves an exact file before an ID, so the file names this lens.
+        let id = d.file.clone();
+        let name = d.id.clone();
         let project = project.clone();
         view()
             .gap(px(4.0))
@@ -403,7 +399,7 @@ fn head(app: AppState, d: Diagram, project: String) -> AnyElement {
                             id: id.clone(),
                             ready: false,
                         },
-                        format!("repair lens {id}"),
+                        format!("repair lens {name}"),
                     )
                 },
             ))
@@ -537,11 +533,8 @@ fn line_row(
         Some(lead) => format!("{lead} {}", line.main),
         None => line.main.clone(),
     };
-    let spoken = format!(
-        "{main}{}",
-        mark.map(|m| format!(", {}", m.word())).unwrap_or_default()
-    );
-    let glyph = text(mark.map_or(" ", |m| m.glyph()))
+    let spoken = format!("{main}{}", line.words);
+    let glyph = text(line.glyphs.clone().unwrap_or_default())
         .text_color(hue_ink(mark.map_or(Hue::Neutral, |m| m.hue())));
     list_row(
         app,
@@ -553,9 +546,9 @@ fn line_row(
             view()
                 .flex_shrink_0()
                 .w(if app.form == Form::Terminal {
-                    term::cells(2.0)
+                    term::cells(3.0)
                 } else {
-                    px(16.0)
+                    px(24.0)
                 })
                 .child(glyph)
                 .into_element(),
@@ -619,12 +612,34 @@ pub(crate) fn inspector(
 /// marked, the picked element's inspector under it.
 pub(crate) fn touched_lens(
     app: AppState,
-    target: corral_protocol::detail::DetailRef,
+    head: corral_protocol::detail::DetailRef,
+    base: corral_protocol::detail::DetailRef,
     touch: Touch,
 ) -> AnyElement {
     let form = app.form;
-    let read = computed(move || app.feed.with(|feed| read_of(feed, &target, &touch)));
-    let shown = computed(move || match read.get() {
+    // A lens the change removed is read at the base, its removed elements marked there.
+    let read = computed(move || {
+        app.feed.with(|feed| {
+            let at_head = Touch {
+                removed: Vec::new(),
+                ..touch.clone()
+            };
+            match read_of(feed, &head, &at_head) {
+                Read::Failed(why) => {
+                    let at_base = Touch {
+                        added: Vec::new(),
+                        ..touch.clone()
+                    };
+                    match read_of(feed, &base, &at_base) {
+                        Read::Ready(d, stale) => (Read::Ready(d, stale), true),
+                        _ => (Read::Failed(why), false),
+                    }
+                }
+                read => (read, false),
+            }
+        })
+    });
+    let shown = computed(move || match read.get().0 {
         Read::Ready(d, _) => Some(*d),
         _ => None,
     });
@@ -634,13 +649,18 @@ pub(crate) fn touched_lens(
         chosen.update(|p| *p = (p.as_ref() != Some(&name)).then_some(name));
     });
     let said = dynamic(move || {
-        let (hue, words) = match read.get() {
+        let (read, at_base) = read.get();
+        let (hue, words) = match read {
             Read::Loading => (
                 Hue::Neutral,
                 "Reading the lens at the task's head…".to_owned(),
             ),
             Read::Failed(why) => (Hue::Fail, format!("The lens could not be read: {why}")),
             Read::Malformed(why) => (Hue::Fail, format!("Malformed: {}", why.join(" "))),
+            Read::Ready(_, _) if at_base => (
+                Hue::Held,
+                "The change removes this lens; drawn as it was at the base.".to_owned(),
+            ),
             Read::Ready(d, _) => (lens::status_hue(d.status), d.verdict()),
         };
         Some(untracked(|| hued(app, hue, words)))

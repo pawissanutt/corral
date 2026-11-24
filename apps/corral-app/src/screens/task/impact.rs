@@ -127,11 +127,13 @@ fn keep(
             }
             // A touched lens is drawn as checked at the commit the item names.
             if let Some(touched) = selected.and_then(|i| i.lens.as_ref()) {
-                targets.push(lens::lens_request(
-                    project.as_str(),
-                    &touched.id,
-                    Some(&touched.at),
-                ));
+                for at in [&touched.head, &touched.base] {
+                    targets.push(lens::lens_request(
+                        project.as_str(),
+                        &touched.file,
+                        Some(at),
+                    ));
+                }
             }
         });
         targets
@@ -351,12 +353,14 @@ fn row(app: AppState, at: At, item: Item) -> AnyElement {
         }
         let (sub, anchor, note) = (item.sub.clone(), item.anchor.clone(), item.note.clone());
         let drawn = item.lens.clone().map(|touched| {
-            let target = lens::lens_request(project.as_str(), &touched.id, Some(&touched.at));
+            let head = lens::lens_request(project.as_str(), &touched.file, Some(&touched.head));
+            let base = lens::lens_request(project.as_str(), &touched.file, Some(&touched.base));
             let touch = Touch {
                 touched: touched.touched,
                 added: touched.added,
+                removed: touched.removed,
             };
-            untracked(|| lenses::touched_lens(app, target, touch))
+            untracked(|| lenses::touched_lens(app, head, base, touch))
         });
         // A lens has no node on the map; it is drawn here instead.
         let to_system = if item.lens.is_some() {

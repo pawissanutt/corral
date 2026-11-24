@@ -121,15 +121,18 @@ pub(super) fn read(
             let (etag, offset) = selection(shared, query, snapshot.revision, &())?;
             let found = match (offset, snapshot.results.as_deref()) {
                 (Some(_), Some(results)) => Some(
+                    // An exact file names one lens; an ID could equal another lens's path.
                     results
                         .iter()
-                        .position(|result| {
-                            result
-                                .lens
-                                .as_ref()
-                                .is_some_and(|lens| lens.id() == id.as_str())
+                        .position(|result| result.file == *id)
+                        .or_else(|| {
+                            results.iter().position(|result| {
+                                result
+                                    .lens
+                                    .as_ref()
+                                    .is_some_and(|lens| lens.id() == id.as_str())
+                            })
                         })
-                        .or_else(|| results.iter().position(|result| result.file == *id))
                         .context(NotFound("lens not found"))?,
                 ),
                 _ => None,
